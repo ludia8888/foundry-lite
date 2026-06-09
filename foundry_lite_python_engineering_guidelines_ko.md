@@ -194,6 +194,42 @@ infrastructure
 → domain
 ```
 
+### 4.2 디자인 패턴 적용 원칙
+
+디자인 패턴은 “멋있어 보이는 구조”가 아니라, 변경 이유를 분리하고 장애 추적 경계를 선명하게 만드는 도구다. Foundry-lite에서는 아래 패턴을 적극적으로 사용하되, 패턴 이름을 붙이기 위해 불필요한 계층을 만들지 않는다.
+
+| 패턴 | Foundry-lite에서 쓰는 위치 | 왜 쓰는가 |
+|---|---|---|
+| Facade | `FoundryLiteCore` 같은 public application entrypoint | API/CLI/test가 보는 입구는 안정적으로 유지하고 내부 구현은 service로 분해한다. |
+| Application Service / Use Case Service | Dataset, Transform, Ontology, Object, Action, Materialization service | use case별 transaction, 권한, audit, run state를 한 책임 안에 묶는다. |
+| Repository | dataset version, object record, action run 같은 DB read/write 경계 | SQLAlchemy 세부 구현과 비즈니스 판단을 분리한다. |
+| Unit of Work | dataset commit, action apply, materialization commit | 함께 성공해야 하는 DB write, audit, outbox를 하나의 transaction 경계에 둔다. |
+| Adapter | storage, compute, connector, writeback, auth provider | SQLite/PostgreSQL, local filesystem/S3, mock/real ERP처럼 구현체를 교체 가능하게 한다. |
+| Strategy | filter evaluator, precondition evaluator, connector sync mode | 조건 평가나 실행 방식을 if/else 덩어리 대신 교체 가능한 전략으로 둔다. |
+| Specification | object query filter, action precondition, permission condition | “이 객체가 조건을 만족하는가”를 테스트 가능한 규칙 객체/함수로 분리한다. |
+| Template Method | dataset transaction protocol, materialization commit protocol | staging → check → manifest → version commit → audit/outbox 순서를 고정하고 세부 단계만 바꾼다. |
+| Outbox | state change와 event publish 경계 | DB 변경과 이벤트 발행의 불일치를 막고 replay 가능성을 확보한다. |
+| DTO / Command Object | API request, CLI command, worker input | raw dict가 시스템 안쪽으로 흘러 규칙을 흐리는 것을 막는다. |
+
+패턴 적용 체크리스트:
+
+- [ ] Facade는 얇아야 한다. public 호환성을 지키는 입구 역할을 하되, 실제 로직은 책임별 service에 둔다.
+- [ ] Service는 use case 하나 또는 매우 가까운 use case 묶음만 맡는다.
+- [ ] Repository는 DB read/write만 맡고 permission, precondition, mutation policy를 판단하지 않는다.
+- [ ] Adapter는 외부 시스템 세부를 숨기되, 실패/timeout/retry/idempotency 정보를 application layer로 돌려준다.
+- [ ] Strategy나 Specification은 테스트가 쉬워야 한다. 조건 하나를 검증하기 위해 전체 API 서버를 띄우게 만들지 않는다.
+- [ ] Template Method는 순서를 고정해야 할 때만 쓴다. 순서가 중요하지 않은 단순 helper에 억지로 적용하지 않는다.
+- [ ] 패턴을 적용한 뒤에도 trace id, run id, audit event, outbox event가 끊기면 실패한 설계로 본다.
+
+금지하는 패턴 오남용:
+
+- [ ] 이름만 Repository이고 실제로는 비즈니스 규칙을 판단하는 DB 클래스.
+- [ ] 모든 일을 Manager, Handler, Processor 하나에 넣는 가짜 service.
+- [ ] 상속 계층이 깊어져서 어느 메서드가 실행되는지 추적하기 어려운 구조.
+- [ ] Adapter가 외부 실패를 숨기고 성공처럼 반환하는 구조.
+- [ ] Strategy를 만들었지만 실제 구현체가 하나뿐이고 테스트성도 좋아지지 않는 구조.
+- [ ] DTO 없이 `dict[str, Any]`를 계속 전달하면서 패턴 이름만 붙이는 구조.
+
 ---
 
 ## 5. 코드 컨벤션

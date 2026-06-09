@@ -69,9 +69,15 @@ def internal_edges(modules: dict[str, ModuleInfo]) -> dict[str, list[str]]:
     for name, info in modules.items():
         linked: set[str] = set()
         for imported in info.imports:
+            matches: set[str] = set()
             for candidate in names:
                 if imported == candidate or imported.startswith(f"{candidate}."):
-                    linked.add(candidate)
+                    matches.add(candidate)
+            linked.update(
+                candidate
+                for candidate in matches
+                if not any(other != candidate and other.startswith(f"{candidate}.") for other in matches)
+            )
         edges[name] = sorted(linked - {name})
     return edges
 

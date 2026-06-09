@@ -19,6 +19,7 @@ pnpm ci:gate
 | 포맷/린트 | Ruff | 잘못된 코드 스타일, import 문제, 흔한 버그 패턴 |
 | 타입 검사 | mypy, pyright | 값의 타입이 맞지 않아 런타임에서 터질 문제 |
 | 의존성 구조 | `scripts/quality/check_dependency_graph.py` | domain이 app을 import하는 식의 레이어 침범, 순환 의존성 |
+| 모듈 크기 | `check_application_module_size.py` | application core/service 파일이 다시 god file로 커지는 문제 |
 | 테스트 우회 방지 | `check_no_test_bypasses.py` | skip/xfail로 release gate를 우회하는 테스트 |
 | private 테스트 부채 | `check_private_test_references.py` | private helper 직접 테스트가 현재 baseline보다 늘어나는 문제 |
 | 보안 정적 분석 | Bandit | 위험한 Python 코드 패턴 |
@@ -97,6 +98,7 @@ pnpm quality:architecture
 
 - `artifacts/quality/dependency_graph.json`
 - `artifacts/quality/dependency_graph.md`
+- `artifacts/quality/application_module_size.json`
 - `artifacts/quality/radon_cc.json`
 - `artifacts/quality/private_test_references.json`
 
@@ -109,6 +111,8 @@ pnpm quality:architecture
 - 문서의 레이어 규칙 위반 여부
 
 CI에서는 fan-out이 `10`을 넘는 내부 모듈을 막는다. 쉽게 말해, 한 파일이 너무 많은 내부 파일을 직접 알고 있으면 구조가 커질수록 고치기 어려워지기 때문이다.
+
+CI에서는 application module이 `500`줄을 넘는 것도 막는다. `FoundryLiteCore`는 Facade로 유지하고, 실제 구현은 Dataset, Transform, Ontology, Object, Action, Materialization, Runtime event, Demo orchestration service로 나눈다.
 
 현재 일부 테스트는 private helper를 직접 호출한다. 이는 남은 기술부채이며 CI는 baseline `17`개를 넘지 못하게 막는다. 모듈 분리 후 이 숫자는 점진적으로 `0`으로 낮춰야 한다.
 

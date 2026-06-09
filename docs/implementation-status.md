@@ -16,6 +16,7 @@
 - CLI: current implementation uses Python `argparse`; Typer is not installed in the current runtime.
 - Worker: `apps/worker` is a placeholder for a future Temporal worker.
 - Migrations: schema bootstraps through SQLAlchemy `metadata.create_all`; Alembic migrations are not implemented yet.
+- Application structure: `FoundryLiteCore` is now a Facade. Dataset, Transform, Ontology, Object, Action, Materialization, runtime event, and demo orchestration logic live in focused service modules. CI blocks application modules above 500 lines.
 
 ## Still Targeted, Not Yet Implemented
 
@@ -26,6 +27,7 @@
 - Temporal workflow/worker execution.
 - Alembic migration history and upgrade/rollback tests.
 - Full object set APIs and operations UI.
+- Repository/port extraction beneath the current service modules, especially for production PostgreSQL and external connector adapters.
 
 ## Quality Signal Boundaries
 

@@ -19,6 +19,9 @@ uv run pyright
 echo "== Static: dependency graph and layer rules =="
 uv run python scripts/quality/check_dependency_graph.py
 
+echo "== Static: application module size guard =="
+uv run python scripts/quality/check_application_module_size.py --max-lines 500
+
 echo "== Static: no skipped/flaky/xfail release bypasses =="
 uv run python scripts/quality/check_no_test_bypasses.py
 

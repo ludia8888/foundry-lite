@@ -62,12 +62,15 @@ def trace_operation[F: Callable[..., Any]](operation: str, func: F) -> F:
 
 
 def trace_public_methods[T](cls: type[T]) -> type[T]:
-    for name, value in list(cls.__dict__.items()):
-        if name.startswith("_") or not callable(value):
+    for base in reversed(cls.mro()):
+        if base is object:
             continue
-        if isinstance(value, staticmethod | classmethod):
-            continue
-        setattr(cls, name, trace_operation(f"{cls.__name__}.{name}", value))
+        for name, value in list(base.__dict__.items()):
+            if name.startswith("_") or not callable(value):
+                continue
+            if isinstance(value, staticmethod | classmethod):
+                continue
+            setattr(cls, name, trace_operation(f"{cls.__name__}.{name}", value))
     return cls
 
 

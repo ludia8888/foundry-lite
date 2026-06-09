@@ -1,0 +1,179 @@
+from __future__ import annotations
+
+from typing import Any
+
+import duckdb
+from foundry_lite.application.primitives import (
+    _dataset_ref_parts,
+    _new_id,
+    _now,
+)
+from foundry_lite.application.services.base import CoreServiceMixin
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import (
+    ConflictDetected,
+    NotFound,
+)
+from foundry_lite.infrastructure import schema as db
+from sqlalchemy import and_, insert, select
+from sqlalchemy.exc import IntegrityError
+
+
+class DatasetRegistryMixin(CoreServiceMixin):
+    def create_dataset(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+        primary_key: list[str] | None = None,
+        storage_kind: str = "parquet_manifest",
+        description: str | None = None,
+        owner_team: str | None = None,
+        classification: str | None = None,
+    ) -> dict[str, Any]:
+        ctx = ctx or RequestContext()
+        self._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        namespace, name = _dataset_ref_parts(dataset_ref)
+        dataset_id = _new_id("ds")
+        now = _now()
+        with self.engine.begin() as conn:
+            try:
+                conn.execute(
+                    insert(db.datasets).values(
+                        id=dataset_id,
+                        tenant_id=ctx.tenant_id,
+                        namespace=namespace,
+                        name=name,
+                        description=description,
+                        storage_kind=storage_kind,
+                        storage_uri=str(self.storage_root / ctx.tenant_id / "datasets" / dataset_id),
+                        owner_team=owner_team,
+                        classification=classification,
+                        status="active",
+                        primary_key=primary_key or [],
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            except IntegrityError as exc:
+                raise ConflictDetected(
+                    "dataset already exists in this tenant",
+                    details={"dataset_ref": dataset_ref},
+                ) from exc
+            self._audit(
+                conn,
+                ctx,
+                event_type="dataset.created",
+                resource_type="dataset",
+                resource_id=dataset_id,
+                action="create",
+                after_ref={"dataset_ref": dataset_ref},
+            )
+        return self.get_dataset(dataset_ref, ctx=ctx)
+
+    def ensure_dataset(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+        primary_key: list[str] | None = None,
+        storage_kind: str = "parquet_manifest",
+    ) -> dict[str, Any]:
+        ctx = ctx or RequestContext()
+        existing = self.find_dataset(dataset_ref, ctx=ctx)
+        if existing is not None:
+            return existing
+        return self.create_dataset(
+            dataset_ref,
+            ctx=ctx,
+            primary_key=primary_key,
+            storage_kind=storage_kind,
+        )
+
+    def find_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> dict[str, Any] | None:
+        ctx = ctx or RequestContext()
+        namespace, name = _dataset_ref_parts(dataset_ref)
+        with self.engine.begin() as conn:
+            row = (
+                conn.execute(
+                    select(db.datasets).where(
+                        and_(
+                            db.datasets.c.tenant_id == ctx.tenant_id,
+                            db.datasets.c.namespace == namespace,
+                            db.datasets.c.name == name,
+                            db.datasets.c.status == "active",
+                        )
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            return dict(row) if row else None
+
+    def get_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> dict[str, Any]:
+        ctx = ctx or RequestContext()
+        self._require_or_audit(ctx, "dataset:read", "dataset", dataset_ref)
+        dataset = self.find_dataset(dataset_ref, ctx=ctx)
+        if dataset is None:
+            raise NotFound("dataset not found", details={"dataset_ref": dataset_ref})
+        return dataset
+
+    def list_dataset_versions(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> list[dict[str, Any]]:
+        ctx = ctx or RequestContext()
+        dataset = self.get_dataset(dataset_ref, ctx=ctx)
+        with self.engine.begin() as conn:
+            rows = (
+                conn.execute(
+                    select(db.dataset_versions)
+                    .where(db.dataset_versions.c.dataset_id == dataset["id"])
+                    .order_by(db.dataset_versions.c.version_number)
+                )
+                .mappings()
+                .all()
+            )
+            return [dict(row) for row in rows]
+
+    def preview_dataset(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+        limit: int = 100,
+        version: str = "latest",
+    ) -> list[dict[str, Any]]:
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "dataset:read")
+        dataset = self.get_dataset(dataset_ref, ctx=ctx)
+        version_row = self._get_version(dataset["id"], version, ctx=ctx)
+        parquet_path = self._version_file_path(version_row)
+        con = duckdb.connect()
+        try:
+            result = con.execute("select * from read_parquet(?) limit ?", [str(parquet_path), int(limit)])
+            columns = [column[0] for column in result.description]
+            return [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
+        finally:
+            con.close()
+
+    def inspect_dataset(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+        version: str = "latest",
+    ) -> dict[str, Any]:
+        ctx = ctx or RequestContext()
+        dataset = self.get_dataset(dataset_ref, ctx=ctx)
+        version_row = self._get_version(dataset["id"], version, ctx=ctx)
+        schema_row = self._schema_for_version(dataset["id"], version_row["schema_version"])
+        return {
+            "dataset": dataset_ref,
+            "dataset_id": dataset["id"],
+            "version": dict(version_row),
+            "schema": schema_row["schema_json"],
+            "manifest": self._load_manifest(version_row["manifest_uri"]),
+        }
