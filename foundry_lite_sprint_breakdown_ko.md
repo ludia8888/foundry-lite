@@ -4,6 +4,8 @@
 
 이 문서는 Foundry-lite 문서 체계의 **스프린트 실행 계획 원본**이다. [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 실제 구현 가능한 작은 스프린트 단위로 나누고, 각 스프린트가 반드시 통과해야 하는 제품/기술 Goal을 정의한다.
 
+> 현재 구현 상태 주의: 2026-06-10 기준 코드 커밋은 Sprint 00~36 전체 Acceptance Gate 완료가 아니라 로컬 core vertical slice 완료 상태다. SQLite adapter, CSV ingest, 제한된 `safeExpression`, `mock_erp_simulator`가 현재 구현이며 PostgreSQL JSONB, PostgreSQL snapshot, Temporal, Alembic, real CEL/JSON Logic, real writeback은 아직 남은 작업이다. 정확한 현황은 [Implementation Status](./docs/implementation-status.md)를 따른다.
+
 ## 문서 지도
 
 - [ ] 이 문서는 스프린트 순서, Must-Win Goal, Acceptance Gate의 원본이다.

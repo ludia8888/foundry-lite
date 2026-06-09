@@ -6,7 +6,7 @@ documents in this repository.
 The MVP core proves this loop:
 
 ```text
-CSV/PostgreSQL snapshot
+CSV/local snapshot
 -> raw dataset
 -> DuckDB SQL transform
 -> clean dataset
@@ -17,6 +17,10 @@ CSV/PostgreSQL snapshot
 -> downstream transform
 -> Customer object refresh
 ```
+
+Current implementation note: this commit is a local core vertical slice. It uses SQLite plus
+filesystem storage; PostgreSQL JSONB storage, PostgreSQL snapshot ingest, Temporal, Alembic, real
+CEL, and real external writeback are still future work.
 
 Local demo:
 
@@ -38,3 +42,6 @@ docker compose -f infra/docker-compose.dev.yml up -d prometheus tempo grafana
 
 See [docs/quality-observability.md](docs/quality-observability.md) for static analysis, dynamic
 diagnostics, OpenTelemetry, Grafana, Playwright, and CI/CD gates.
+
+See [docs/implementation-status.md](docs/implementation-status.md) for the exact line between what
+is implemented now and what remains a target.

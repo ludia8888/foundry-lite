@@ -2,7 +2,9 @@
 
 ## Included In V1 Core
 
-- CSV upload and PostgreSQL snapshot boundary for raw datasets.
+- CSV upload for raw datasets.
+- PostgreSQL snapshot connector boundary is documented but not implemented in the current local slice.
+- SQLite plus local filesystem storage for the current local adapter.
 - Immutable dataset transaction and manifest commit protocol.
 - DuckDB SQL transforms with input version binding and lineage.
 - Ontology YAML import, validation, and activation.
@@ -14,6 +16,12 @@
 
 ## Explicitly Deferred
 
+- PostgreSQL JSONB production object store.
+- PostgreSQL snapshot connector implementation.
+- Alembic migration history.
+- Temporal worker execution.
+- Real CEL or JSON Logic evaluator.
+- Real external ERP/webhook writeback.
 - Kafka/Redpanda streaming ingest.
 - Debezium CDC.
 - OpenSearch production search.
@@ -22,4 +30,3 @@
 - Full visual pipeline builder.
 - Complex CBAC/ABAC security.
 - Functions on Objects runtime.
-

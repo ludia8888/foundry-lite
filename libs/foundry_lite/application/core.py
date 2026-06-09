@@ -5,7 +5,6 @@ import hashlib
 import json
 import re
 import shutil
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -19,7 +18,17 @@ from sqlalchemy import and_, create_engine, desc, func, insert, select, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
-from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID, RequestContext
+from foundry_lite.application import (
+    SUPPLY_CHAIN_DEMO_ROOT,
+    ensure_supply_chain_demo_files,
+    evaluate_safe_expression,
+    matches_filter,
+    precondition_expression,
+    register_supply_chain_demo_transforms,
+    require_csv_size_limit,
+    validate_action_request,
+)
+from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID, RequestContext, demo_admin_context
 from foundry_lite.domain.errors import (
     ConflictDetected,
     ExternalSystemError,
@@ -34,10 +43,7 @@ from foundry_lite.security.policy import PolicyService
 
 INPUT_PATTERN = re.compile(r"\{\{\s*input\('([^']+)'\)\s*\}\}")
 SQL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-OBJECT_IN_PATTERN = re.compile(r"^object\.([A-Za-z_][A-Za-z0-9_]*)\s+in\s+\[(.*)]$")
-OBJECT_EQ_PATTERN = re.compile(r"^object\.([A-Za-z_][A-Za-z0-9_]*)\s*==\s*'([^']*)'$")
-
-FilterEvaluator = Callable[[Any, Any], bool]
+MOCK_WRITEBACK_CONNECTOR = "mock_erp_simulator"
 
 
 @dataclass(frozen=True)
@@ -153,35 +159,6 @@ def _write_rows_to_csv(rows: list[dict[str, Any]], path: Path, fieldnames: list[
             writer.writerow({field: row.get(field) for field in fieldnames})
 
 
-def _filter_eq(current: Any, value: Any) -> bool:
-    return current == value
-
-
-def _filter_in(current: Any, value: Any) -> bool:
-    return current in value
-
-
-def _filter_gte(current: Any, value: Any) -> bool:
-    return current is not None and current >= value
-
-
-def _filter_lte(current: Any, value: Any) -> bool:
-    return current is not None and current <= value
-
-
-def _filter_contains(current: Any, value: Any) -> bool:
-    return current is not None and str(value).lower() in str(current).lower()
-
-
-FILTER_OPERATIONS: dict[str, FilterEvaluator] = {
-    "eq": _filter_eq,
-    "in": _filter_in,
-    "gte": _filter_gte,
-    "lte": _filter_lte,
-    "contains": _filter_contains,
-}
-
-
 def _normalize_duckdb_type(duckdb_type: str) -> str:
     normalized = duckdb_type.upper()
     if any(token in normalized for token in ["INT", "BIGINT", "HUGEINT", "SMALLINT"]):
@@ -219,7 +196,9 @@ class FoundryLiteCore:
         self.policy = PolicyService()
         self.bootstrap()
 
-    def reset(self) -> None:
+    def reset(self, *, confirm_dev: bool = False) -> None:
+        if not confirm_dev:
+            raise ValidationFailed("reset is destructive and requires confirm_dev=True")
         db.metadata.drop_all(self.engine)
         db.create_database(self.engine)
         if self.storage_root.exists():
@@ -360,6 +339,7 @@ class FoundryLiteCore:
         source_path = Path(csv_path).resolve()
         if not source_path.exists():
             raise NotFound("csv file not found", details={"path": str(source_path)})
+        require_csv_size_limit(source_path)
 
         with self.engine.begin() as conn:
             tx_id = self._open_dataset_transaction(conn, ctx, dataset, "SNAPSHOT")
@@ -1142,7 +1122,7 @@ class FoundryLiteCore:
     ) -> ExternalSystemError:
         error = ExternalSystemError(
             "mock before-commit writeback failed",
-            details={"connector": "mock_erp"},
+            details={"connector": MOCK_WRITEBACK_CONNECTOR, "simulated": True},
         )
         self._record_writeback(
             conn,
@@ -1263,13 +1243,14 @@ class FoundryLiteCore:
                 "transformRuns": self._rows_for_tenant(conn, db.transform_runs, ctx),
                 "indexRuns": self._rows_for_tenant(conn, db.index_runs, ctx),
                 "actionRuns": self._rows_for_tenant(conn, db.action_runs, ctx),
+                "actionWritebacks": self._rows_for_tenant(conn, db.action_writebacks, ctx),
                 "materializationRuns": self._rows_for_tenant(conn, db.materialization_runs, ctx),
                 "outboxEvents": self._rows_for_tenant(conn, db.outbox_events, ctx),
                 "auditEvents": self._rows_for_tenant(conn, db.audit_events, ctx),
             }
 
     def run_supply_chain_demo(self, *, ctx: RequestContext | None = None) -> dict[str, Any]:
-        ctx = ctx or RequestContext()
+        ctx = ctx or demo_admin_context()
         self.seed_supply_chain_demo_files()
         self.ensure_dataset("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
         self.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
@@ -1281,19 +1262,19 @@ class FoundryLiteCore:
 
         orders_raw = self.upload_csv(
             "raw.erp_orders",
-            "examples/supply-chain-demo/data/orders.csv",
+            SUPPLY_CHAIN_DEMO_ROOT / "data" / "orders.csv",
             ctx=ctx,
             sync_name="sync_orders_pg",
         )
         customers_raw = self.upload_csv(
             "raw.crm_customers",
-            "examples/supply-chain-demo/data/customers.csv",
+            SUPPLY_CHAIN_DEMO_ROOT / "data" / "customers.csv",
             ctx=ctx,
             sync_name="upload_customers_csv",
         )
         clean_orders = self.run_transform("clean_orders", ctx=ctx)
         clean_customers = self.run_transform("clean_customers", ctx=ctx)
-        ontology = self.apply_ontology("examples/supply-chain-demo/ontology/order-customer.yaml", ctx=ctx)
+        ontology = self.apply_ontology(SUPPLY_CHAIN_DEMO_ROOT / "ontology" / "order-customer.yaml", ctx=ctx)
         order_index = self.index_rebuild("Order", ctx=ctx)
         customer_index = self.index_rebuild("Customer", ctx=ctx)
         order_before = self.get_object("Order", "O-1001", ctx=ctx)
@@ -1327,285 +1308,14 @@ class FoundryLiteCore:
             "customer": customer,
         }
 
-    def seed_supply_chain_demo_files(self) -> None:  # pragma: no cover - demo fixture asset writer
-        data_dir = Path("examples/supply-chain-demo/data")
-        transform_dir = Path("examples/supply-chain-demo/transforms")
-        ontology_dir = Path("examples/supply-chain-demo/ontology")
-        data_dir.mkdir(parents=True, exist_ok=True)
-        transform_dir.mkdir(parents=True, exist_ok=True)
-        ontology_dir.mkdir(parents=True, exist_ok=True)
-        orders_path = data_dir / "orders.csv"
-        customers_path = data_dir / "customers.csv"
-        if not orders_path.exists():
-            _write_rows_to_csv(
-                [
-                    {
-                        "order_id": "O-1001",
-                        "customer_id": "C-100",
-                        "source_status": "PENDING",
-                        "amount": 1200.0,
-                        "margin": 230.0,
-                        "order_ts": "2026-06-09T10:00:00Z",
-                        "region": "NA",
-                    },
-                    {
-                        "order_id": "O-1002",
-                        "customer_id": "C-101",
-                        "source_status": "REVIEW",
-                        "amount": 800.0,
-                        "margin": 80.0,
-                        "order_ts": "2026-06-09T11:00:00Z",
-                        "region": "EU",
-                    },
-                    {
-                        "order_id": "O-1003",
-                        "customer_id": "C-100",
-                        "source_status": "APPROVED",
-                        "amount": 300.0,
-                        "margin": 20.0,
-                        "order_ts": "2026-06-09T12:00:00Z",
-                        "region": "NA",
-                    },
-                ],
-                orders_path,
-                ["order_id", "customer_id", "source_status", "amount", "margin", "order_ts", "region"],
-            )
-        if not customers_path.exists():
-            _write_rows_to_csv(
-                [
-                    {
-                        "customer_id": "C-100",
-                        "customer_name": "Acme Supply",
-                        "segment": "enterprise",
-                        "region": "NA",
-                        "risk_score": 0.2,
-                        "approved_order_count": 0,
-                    },
-                    {
-                        "customer_id": "C-101",
-                        "customer_name": "Blue River Retail",
-                        "segment": "midmarket",
-                        "region": "EU",
-                        "risk_score": 0.5,
-                        "approved_order_count": 0,
-                    },
-                ],
-                customers_path,
-                [
-                    "customer_id",
-                    "customer_name",
-                    "segment",
-                    "region",
-                    "risk_score",
-                    "approved_order_count",
-                ],
-            )
-        (transform_dir / "clean_orders.sql").write_text(
-            """
-select
-  order_id,
-  customer_id,
-  source_status,
-  cast(amount as double) as amount,
-  cast(margin as double) as margin,
-  cast(order_ts as timestamp) as order_ts,
-  region,
-  case when cast(amount as double) >= 1000 then 0.8 else 0.3 end as risk_score
-from {{ input('raw.erp_orders') }}
-""".strip(),
-            encoding="utf-8",
-        )
-        (transform_dir / "clean_customers.sql").write_text(
-            """
-select
-  customer_id,
-  customer_name,
-  segment,
-  region,
-  cast(risk_score as double) as risk_score,
-  cast(approved_order_count as integer) as approved_order_count
-from {{ input('raw.crm_customers') }}
-""".strip(),
-            encoding="utf-8",
-        )
-        (transform_dir / "customer_risk.sql").write_text(
-            """
-select
-  c.customer_id,
-  c.customer_name,
-  c.segment,
-  c.region,
-  case
-    when coalesce(sum(case when o.status = 'APPROVED' then 1 else 0 end), 0) >= 2 then 0.1
-    when coalesce(sum(case when o.status = 'APPROVED' then 1 else 0 end), 0) = 1 then 0.25
-    else c.risk_score
-  end as risk_score,
-  cast(coalesce(sum(case when o.status = 'APPROVED' then 1 else 0 end), 0) as integer)
-    as approved_order_count
-from {{ input('clean.customers') }} c
-left join {{ input('ops.order_current') }} o
-  on c.customer_id = o.customerId
-group by c.customer_id, c.customer_name, c.segment, c.region, c.risk_score
-""".strip(),
-            encoding="utf-8",
-        )
-        (ontology_dir / "order-customer.yaml").write_text(
-            """
-objectTypes:
-  - apiName: Order
-    displayName: Order
-    primaryKey: orderId
-    backing:
-      dataset: clean.orders
-      mode: snapshot
-      primaryKeyColumns: [order_id]
-    properties:
-      - apiName: orderId
-        column: order_id
-        type: string
-        indexed: true
-        nullable: false
-      - apiName: customerId
-        column: customer_id
-        type: string
-        indexed: true
-        nullable: false
-      - apiName: status
-        column: source_status
-        type: string
-        indexed: true
-        editable: true
-        editPolicy: edit_wins
-      - apiName: amount
-        column: amount
-        type: float
-      - apiName: margin
-        column: margin
-        type: float
-        classification: finance
-      - apiName: riskScore
-        column: risk_score
-        type: float
-        indexed: true
-      - apiName: operatorNote
-        type: string
-        editable: true
-        source: edit_layer
-        editPolicy: edit_only
-  - apiName: Customer
-    displayName: Customer
-    primaryKey: customerId
-    backing:
-      dataset: clean.customers
-      mode: snapshot
-      primaryKeyColumns: [customer_id]
-    properties:
-      - apiName: customerId
-        column: customer_id
-        type: string
-        indexed: true
-        nullable: false
-      - apiName: name
-        column: customer_name
-        type: string
-      - apiName: segment
-        column: segment
-        type: string
-      - apiName: region
-        column: region
-        type: string
-      - apiName: riskScore
-        column: risk_score
-        type: float
-        indexed: true
-      - apiName: approvedOrderCount
-        column: approved_order_count
-        type: integer
-        indexed: true
-linkTypes:
-  - apiName: OrderCustomer
-    displayName: Order belongs to Customer
-    from: Order
-    to: Customer
-    cardinality: many_to_one
-    backing:
-      dataset: clean.orders
-      fromKey: order_id
-      toKey: customer_id
-actionTypes:
-  - apiName: ApproveOrder
-    displayName: Approve order
-    target: Order
-    parameters:
-      - apiName: reason
-        type: string
-        required: true
-    permissions:
-      allowedRoles: [ops_manager]
-    preconditions:
-      - cel: "object.status in ['PENDING', 'REVIEW']"
-        message: "Only pending/review orders can be approved"
-    mutations:
-      - type: setProperty
-        property: status
-        value: APPROVED
-      - type: setProperty
-        property: operatorNote
-        valueFrom: params.reason
-    writebacks:
-      - apiName: erpApproveOrder
-        mode: beforeCommit
-        connector: mock_erp
-    sideEffects:
-      - type: event
-        topic: ops.order.approved
-""".strip()
-            + "\n",
-            encoding="utf-8",
-        )
-        readme = Path("examples/supply-chain-demo/README.md")
-        if not readme.exists():
-            readme.write_text(
-                "# Supply Chain Demo\n\n"
-                "This demo proves the Foundry-lite closed loop with Order, Customer, "
-                "ApproveOrder, ops.action_log, and ops.order_current.\n",
-                encoding="utf-8",
-            )
+    def register_supply_chain_demo_transforms(self, ctx: RequestContext | None = None) -> None:
+        self._register_demo_transforms(ctx or demo_admin_context())
+
+    def seed_supply_chain_demo_files(self) -> None:
+        ensure_supply_chain_demo_files()
 
     def _register_demo_transforms(self, ctx: RequestContext) -> None:
-        self.register_transform(
-            "clean_orders",
-            entrypoint="examples/supply-chain-demo/transforms/clean_orders.sql",
-            inputs={"orders": "raw.erp_orders"},
-            output_dataset_ref="clean.orders",
-            checks=[
-                {"type": "unique", "column": "order_id"},
-                {"type": "not_null", "columns": ["order_id", "customer_id"]},
-            ],
-            ctx=ctx,
-        )
-        self.register_transform(
-            "clean_customers",
-            entrypoint="examples/supply-chain-demo/transforms/clean_customers.sql",
-            inputs={"customers": "raw.crm_customers"},
-            output_dataset_ref="clean.customers",
-            checks=[
-                {"type": "unique", "column": "customer_id"},
-                {"type": "not_null", "columns": ["customer_id"]},
-            ],
-            ctx=ctx,
-        )
-        self.register_transform(
-            "customer_risk",
-            entrypoint="examples/supply-chain-demo/transforms/customer_risk.sql",
-            inputs={"customers": "clean.customers", "orders": "ops.order_current"},
-            output_dataset_ref="clean.customers",
-            checks=[
-                {"type": "unique", "column": "customer_id"},
-                {"type": "not_null", "columns": ["customer_id"]},
-            ],
-            ctx=ctx,
-        )
+        register_supply_chain_demo_transforms(self.register_transform, ctx)
 
     def _require_or_audit(
         self,
@@ -3001,29 +2711,7 @@ actionTypes:
         return dict(row) if row else None
 
     def _matches_filter(self, properties: dict[str, Any], filter_ast: dict[str, Any]) -> bool:
-        logical_result = self._matches_logical_filter(properties, filter_ast)
-        if logical_result is not None:
-            return logical_result
-        return self._matches_property_filter(properties, filter_ast)
-
-    def _matches_logical_filter(
-        self,
-        properties: dict[str, Any],
-        filter_ast: dict[str, Any],
-    ) -> bool | None:
-        if "and" in filter_ast:
-            return all(self._matches_filter(properties, item) for item in filter_ast["and"])
-        if "or" in filter_ast:
-            return any(self._matches_filter(properties, item) for item in filter_ast["or"])
-        return None
-
-    def _matches_property_filter(self, properties: dict[str, Any], filter_ast: dict[str, Any]) -> bool:
-        prop = filter_ast["property"]
-        op = filter_ast["op"]
-        evaluator = FILTER_OPERATIONS.get(op)
-        if evaluator is None:
-            raise ValidationFailed("unsupported filter operation", details={"op": op})
-        return evaluator(properties.get(prop), filter_ast["value"])
+        return matches_filter(properties, filter_ast)
 
     def _validate_action_request(
         self,
@@ -3031,30 +2719,13 @@ actionTypes:
         record: dict[str, Any],
         params: dict[str, Any],
     ) -> Exception | None:
-        schema = action_type["parameter_schema"]
-        missing = [name for name in schema["required"] if name not in params]
-        if missing:
-            return ValidationFailed("missing required action parameters", details={"missing": missing})
-        for precondition in action_type["definition"].get("preconditions", []):
-            expression = precondition.get("cel", "")
-            if not self._evaluate_precondition(expression, record["properties"]):
-                return ValidationFailed(
-                    precondition.get("message", "action precondition failed"),
-                    details={"expression": expression},
-                )
-        return None
+        return validate_action_request(action_type, record, params)
+
+    def _precondition_expression(self, precondition: dict[str, Any]) -> str:
+        return precondition_expression(precondition)
 
     def _evaluate_precondition(self, expression: str, properties: dict[str, Any]) -> bool:
-        match = OBJECT_IN_PATTERN.match(expression)
-        if match:
-            prop = match.group(1)
-            raw_values = match.group(2)
-            values = [part.strip().strip("'\"") for part in raw_values.split(",")]
-            return properties.get(prop) in values
-        match = OBJECT_EQ_PATTERN.match(expression)
-        if match:
-            return properties.get(match.group(1)) == match.group(2)
-        raise ValidationFailed("unsupported safe expression", details={"expression": expression})
+        return evaluate_safe_expression(expression, properties)
 
     def _record_writeback(
         self,
@@ -3072,9 +2743,9 @@ actionTypes:
                 tenant_id=ctx.tenant_id,
                 action_run_id=action_run_id,
                 mode="before_commit",
-                connector_id="mock_erp",
-                request={"connector": "mock_erp"},
-                response=response,
+                connector_id=MOCK_WRITEBACK_CONNECTOR,
+                request={"connector": MOCK_WRITEBACK_CONNECTOR, "simulated": True, "networkCall": False},
+                response={**response, "simulated": True},
                 status=status,
                 idempotency_key=idempotency_key,
                 attempts=1,

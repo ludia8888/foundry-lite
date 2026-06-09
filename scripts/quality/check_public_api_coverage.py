@@ -99,11 +99,11 @@ def main(argv: list[str] | None = None) -> int:
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
 
     if percent < args.threshold:
-        print(f"Public callable coverage {percent:.2f}% is below {args.threshold:.2f}%")
+        print(f"Public callable smoke coverage {percent:.2f}% is below {args.threshold:.2f}%")
         for missed_item in missed:
             print(f"- {missed_item['file']}:{missed_item['start']} {missed_item['name']}")
         return 1
-    print(f"Public callable coverage {percent:.2f}% >= {args.threshold:.2f}%")
+    print(f"Public callable smoke coverage {percent:.2f}% >= {args.threshold:.2f}%")
     return 0
 
 

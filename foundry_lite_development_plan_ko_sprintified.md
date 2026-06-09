@@ -5,6 +5,8 @@
 **목표:** Palantir Foundry 전체를 복제하는 것이 아니라, 핵심 철학인 “데이터 유입 → 변환 → 온톨로지 인덱싱 → 운영 객체 조회 → 액션 실행 → 데이터셋으로 환류”가 실제로 반복 실행되는 **재현 가능한 운영 폐루프 MVP**를 단일 모노레포 안에 구현한다.  
 **개정 원칙:** v1은 기능 나열식 MVP가 아니라, replay 가능한 최소 폐루프를 안정적으로 구현하는 vertical slice로 제한한다. Kafka/CDC/OpenSearch/Spark/복잡한 보안 모델은 설계 경계를 열어두되 v1.5 이후로 이관한다.
 
+> 현재 구현 상태 주의: 2026-06-10 기준 코드 커밋은 로컬 core vertical slice다. 실제 구현은 SQLite + filesystem adapter, CSV ingest, 제한된 `safeExpression`, `mock_erp_simulator`를 사용한다. PostgreSQL JSONB object store, PostgreSQL snapshot connector, Temporal worker, Alembic migration, real CEL/JSON Logic, real ERP writeback은 아직 목표/설계 단계이며 현재 구현 완료로 보지 않는다. 정확한 현황은 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다.
+
 ---
 
 ## 문서 지도
@@ -1311,7 +1313,7 @@ actionTypes:
     permissions:
       allowedRoles: [ops_manager]
     preconditions:
-      - cel: "object.status in ['PENDING', 'REVIEW']"
+      - safeExpression: "object.status in ['PENDING', 'REVIEW']"
         message: "Only pending/review orders can be approved"
     mutations:
       - type: setProperty
@@ -1377,13 +1379,13 @@ Ontology draft를 active로 전환하기 전 다음 검증을 반드시 통과�
 
 ### 8.8 Safe expression language
 
-Action precondition, policy condition, derived property는 임의 JS/Python eval을 쓰지 않는다. v1은 CEL 또는 JSON Logic 중 하나를 채택한다.
+Action precondition, policy condition, derived property는 임의 JS/Python eval을 쓰지 않는다. 현재 로컬 slice는 `safeExpression`이라는 제한된 subset을 쓰며, v1 target은 CEL 또는 JSON Logic 중 하나를 채택하는 것이다.
 
 권장 기본값:
 
 ```yaml
 preconditions:
-  - cel: "object.status in ['PENDING', 'REVIEW']"
+  - safeExpression: "object.status in ['PENDING', 'REVIEW']"
 ```
 
 expression evaluator는 pure function이어야 하며 network/file/database access를 금지한다.
@@ -2220,13 +2222,13 @@ policies:
     effect: allow
     actions: [read]
     condition:
-      cel: "user.role == 'admin' || object.region in user.allowedRegions"
+      safeExpression: "user.role == 'admin' || object.region in user.allowedRegions"
 
   - apiName: order_margin_masking
     appliesTo: Order.margin
     effect: mask
     condition:
-      cel: "!(user.role in ['finance', 'admin'])"
+      safeExpression: "!(user.role in ['finance', 'admin'])"
 ```
 
 Expression은 CEL/JSON Logic 같은 safe expression engine만 허용한다.

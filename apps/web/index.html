@@ -347,6 +347,10 @@
       const metricStatus = document.querySelector("#metricStatus");
 
       let currentObject = null;
+      const demoHeaders = {
+        "X-User-ID": "web-demo-operator",
+        "X-Roles": "ops_manager,data_engineer,finance",
+      };
 
       function show(value) {
         objectResult.textContent = JSON.stringify(value, null, 2);
@@ -358,7 +362,8 @@
       }
 
       async function request(path, options = {}) {
-        const response = await fetch(`${apiBase.value}${path}`, options);
+        const headers = { ...demoHeaders, ...(options.headers ?? {}) };
+        const response = await fetch(`${apiBase.value}${path}`, { ...options, headers });
         const body = await response.json().catch(() => ({}));
         if (!response.ok) {
           throw body;
@@ -410,4 +415,3 @@
     </script>
   </body>
 </html>
-

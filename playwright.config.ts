@@ -27,13 +27,13 @@ export default defineConfig({
     {
       command: "bash scripts/e2e_start_api.sh",
       url: "http://127.0.0.1:8000/healthz",
-      reuseExistingServer: false,
+      reuseExistingServer: !process.env.CI,
       timeout: 30_000,
     },
     {
       command: "uv run python -m http.server 4173 --directory apps/web",
       url: "http://127.0.0.1:4173",
-      reuseExistingServer: false,
+      reuseExistingServer: !process.env.CI,
       timeout: 30_000,
     },
   ],

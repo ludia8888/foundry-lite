@@ -12,7 +12,7 @@ from foundry_lite.application.core import (
     _normalize_duckdb_type,
     _required_row,
 )
-from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import (
     ConflictDetected,
     InvariantViolation,
@@ -86,22 +86,23 @@ def test_dataset_not_found_duplicate_reset_preview_and_transform_update(
     core: FoundryLiteCore,
     tmp_path: Path,
 ) -> None:
+    ctx = demo_admin_context()
     core.seed_supply_chain_demo_files()
     with pytest.raises(NotFound):
         core.get_dataset("raw.missing")
     with pytest.raises(NotFound):
         core.preview_dataset("raw.missing")
 
-    core.ensure_dataset("raw.crm_customers", primary_key=["customer_id"])
-    assert core.ensure_dataset("raw.crm_customers", primary_key=["customer_id"])["name"] == "crm_customers"
+    core.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    assert core.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])["name"] == "crm_customers"
     with pytest.raises(ConflictDetected):
-        core.create_dataset("raw.crm_customers", primary_key=["customer_id"])
+        core.create_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
     with pytest.raises(NotFound):
-        core.upload_csv("raw.crm_customers", tmp_path / "missing.csv")
-    core.ensure_dataset("clean.customers", primary_key=["customer_id"])
-    committed = core.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv")
-    assert core.preview_dataset("raw.crm_customers", version=committed.version_id)
-    assert core.inspect_dataset("raw.crm_customers", version=committed.version_id)["manifest"]
+        core.upload_csv("raw.crm_customers", tmp_path / "missing.csv", ctx=ctx)
+    core.ensure_dataset("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    committed = core.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
+    assert core.preview_dataset("raw.crm_customers", ctx=ctx, version=committed.version_id)
+    assert core.inspect_dataset("raw.crm_customers", ctx=ctx, version=committed.version_id)["manifest"]
     sql_path = tmp_path / "noop.sql"
     sql_path.write_text("select * from {{ input('raw.crm_customers') }}", encoding="utf-8")
     created = core.register_transform(
@@ -109,15 +110,19 @@ def test_dataset_not_found_duplicate_reset_preview_and_transform_update(
         entrypoint=sql_path,
         inputs={"customers": "raw.crm_customers"},
         output_dataset_ref="clean.customers",
+        ctx=ctx,
     )
     updated = core.register_transform(
         "noop",
         entrypoint=sql_path,
         inputs={"customers": "raw.crm_customers"},
         output_dataset_ref="clean.customers",
+        ctx=ctx,
     )
     assert updated["id"] == created["id"]
-    core.reset()
+    with pytest.raises(ValidationFailed):
+        core.reset()
+    core.reset(confirm_dev=True)
     assert core.find_dataset("raw.crm_customers") is None
 
 
@@ -133,7 +138,8 @@ def test_csv_upload_wraps_unexpected_internal_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    core.ensure_dataset("raw.wraps_error", primary_key=["id"])
+    ctx = demo_admin_context()
+    core.ensure_dataset("raw.wraps_error", ctx=ctx, primary_key=["id"])
     csv_path = tmp_path / "rows.csv"
     csv_path.write_text("id,value\nA,1\n", encoding="utf-8")
 
@@ -143,11 +149,16 @@ def test_csv_upload_wraps_unexpected_internal_error(
     monkeypatch.setattr(core, "_csv_to_parquet", fail_csv_to_parquet)
 
     with pytest.raises(ValidationFailed, match="csv upload failed"):
-        core.upload_csv("raw.wraps_error", csv_path)
+        core.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
+
+    monkeypatch.undo()
+    monkeypatch.setenv("FOUNDRY_LITE_MAX_CSV_UPLOAD_BYTES", "4")
+    with pytest.raises(ValidationFailed, match="size limit"):
+        core.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
 
 
 def test_action_validation_not_found_and_precondition_paths(core: FoundryLiteCore) -> None:
-    prepare_indexed_demo(core)
+    ctx = prepare_indexed_demo(core)
     with pytest.raises(ValidationFailed):
         core.apply_action(
             "ApproveOrder",
@@ -156,6 +167,7 @@ def test_action_validation_not_found_and_precondition_paths(core: FoundryLiteCor
             expected_object_version=1,
             params={"reason": "Inventory confirmed"},
             idempotency_key="",
+            ctx=ctx,
         )
     with pytest.raises(NotFound):
         core.apply_action(
@@ -165,8 +177,9 @@ def test_action_validation_not_found_and_precondition_paths(core: FoundryLiteCor
             expected_object_version=1,
             params={"reason": "Inventory confirmed"},
             idempotency_key="missing-object",
+            ctx=ctx,
         )
-    order = core.get_object("Order", "O-1001")
+    order = core.get_object("Order", "O-1001", ctx=ctx)
     with pytest.raises(ValidationFailed):
         core.apply_action(
             "ApproveOrder",
@@ -175,8 +188,9 @@ def test_action_validation_not_found_and_precondition_paths(core: FoundryLiteCor
             expected_object_version=order["objectVersion"],
             params={},
             idempotency_key="missing-param",
+            ctx=ctx,
         )
-    approved = core.get_object("Order", "O-1003")
+    approved = core.get_object("Order", "O-1003", ctx=ctx)
     with pytest.raises(ValidationFailed):
         core.apply_action(
             "ApproveOrder",
@@ -185,6 +199,7 @@ def test_action_validation_not_found_and_precondition_paths(core: FoundryLiteCor
             expected_object_version=approved["objectVersion"],
             params={"reason": "Already approved"},
             idempotency_key="precondition-false",
+            ctx=ctx,
         )
     assert core._evaluate_precondition("object.status == 'PENDING'", {"status": "PENDING"}) is True
     with pytest.raises(ValidationFailed):
@@ -192,12 +207,13 @@ def test_action_validation_not_found_and_precondition_paths(core: FoundryLiteCor
 
 
 def test_ontology_and_materialization_error_paths(core: FoundryLiteCore, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
     non_mapping_yaml = tmp_path / "list.yaml"
     non_mapping_yaml.write_text("- bad\n", encoding="utf-8")
     with pytest.raises(ValidationFailed):
-        core.apply_ontology(non_mapping_yaml)
+        core.apply_ontology(non_mapping_yaml, ctx=ctx)
     with pytest.raises(NotFound):
-        core.materialize("missing")
+        core.materialize("missing", ctx=ctx)
     with pytest.raises(NotFound):
         core.get_object("Order", "missing")
 
@@ -206,37 +222,39 @@ def test_dataset_schema_drift_not_null_and_empty_file_failures(
     core: FoundryLiteCore,
     tmp_path: Path,
 ) -> None:
-    core.ensure_dataset("raw.schema_drift", primary_key=["id"])
+    ctx = demo_admin_context()
+    core.ensure_dataset("raw.schema_drift", ctx=ctx, primary_key=["id"])
     first = tmp_path / "first.csv"
     first.write_text("id,value\nA,1\n", encoding="utf-8")
-    core.upload_csv("raw.schema_drift", first)
+    core.upload_csv("raw.schema_drift", first, ctx=ctx)
 
     missing_column = tmp_path / "missing_column.csv"
     missing_column.write_text("id\nA\n", encoding="utf-8")
     with pytest.raises(ValidationFailed):
-        core.upload_csv("raw.schema_drift", missing_column)
+        core.upload_csv("raw.schema_drift", missing_column, ctx=ctx)
 
-    core.ensure_dataset("raw.null_pk", primary_key=["id"])
+    core.ensure_dataset("raw.null_pk", ctx=ctx, primary_key=["id"])
     null_pk = tmp_path / "null_pk.csv"
     null_pk.write_text("id,value\n,1\n", encoding="utf-8")
     with pytest.raises(ValidationFailed):
-        core.upload_csv("raw.null_pk", null_pk)
+        core.upload_csv("raw.null_pk", null_pk, ctx=ctx)
 
-    core.ensure_dataset("raw.empty", primary_key=["id"])
+    core.ensure_dataset("raw.empty", ctx=ctx, primary_key=["id"])
     empty = tmp_path / "empty.csv"
     empty.write_text("id,value\n", encoding="utf-8")
     with pytest.raises(ValidationFailed):
-        core.upload_csv("raw.empty", empty)
+        core.upload_csv("raw.empty", empty, ctx=ctx)
 
 
 def test_transform_and_private_guard_failures(core: FoundryLiteCore, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
     core.seed_supply_chain_demo_files()
-    core.ensure_dataset("raw.crm_customers", primary_key=["customer_id"])
-    core.ensure_dataset("clean.customers", primary_key=["customer_id"])
-    commit = core.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv")
+    core.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    core.ensure_dataset("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    commit = core.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
 
     with pytest.raises(NotFound):
-        core.run_transform("missing")
+        core.run_transform("missing", ctx=ctx)
 
     bad_sql = tmp_path / "bad.sql"
     bad_sql.write_text("select * from definitely_missing_table", encoding="utf-8")
@@ -245,21 +263,22 @@ def test_transform_and_private_guard_failures(core: FoundryLiteCore, tmp_path: P
         entrypoint=bad_sql,
         inputs={"customers": "raw.crm_customers"},
         output_dataset_ref="clean.customers",
+        ctx=ctx,
     )
     with pytest.raises(ValidationFailed):
-        core.run_transform("bad_sql")
+        core.run_transform("bad_sql", ctx=ctx)
 
     with core.engine.begin() as conn:
         with pytest.raises(NotFound):
             core._require_open_transaction(conn, "missing")
         with pytest.raises(ConflictDetected):
             core._require_open_transaction(conn, commit.transaction_id)
-        dataset = core.get_dataset("raw.crm_customers")
+        dataset = core.get_dataset("raw.crm_customers", ctx=ctx)
         with pytest.raises(ValidationFailed):
-            core._open_dataset_transaction(conn, RequestContext(), dataset, "UPDATE")
+            core._open_dataset_transaction(conn, ctx, dataset, "UPDATE")
         core._outbox(
             conn,
-            RequestContext(),
+            ctx,
             "test.event",
             "test",
             "1",
@@ -269,7 +288,7 @@ def test_transform_and_private_guard_failures(core: FoundryLiteCore, tmp_path: P
         )
         core._outbox(
             conn,
-            RequestContext(),
+            ctx,
             "test.event",
             "test",
             "1",
@@ -286,9 +305,9 @@ def test_transform_and_private_guard_failures(core: FoundryLiteCore, tmp_path: P
     with pytest.raises(NotFound):
         core._schema_for_version("missing", 1)
     with pytest.raises(NotFound):
-        core._get_version("missing", "latest", ctx=RequestContext())
+        core._get_version("missing", "latest", ctx=ctx)
     with pytest.raises(NotFound):
-        core._get_version("missing", "dsv_missing", ctx=RequestContext())
+        core._get_version("missing", "dsv_missing", ctx=ctx)
     with pytest.raises(NotFound):
         core._get_version_by_id("dsv_missing")
     with pytest.raises(ValidationFailed):
@@ -299,12 +318,13 @@ def test_ontology_import_validation_edges_and_missing_active_types(
     core: FoundryLiteCore,
     tmp_path: Path,
 ) -> None:
+    ctx = demo_admin_context()
     with pytest.raises(NotFound):
-        core.index_rebuild("Order")
+        core.index_rebuild("Order", ctx=ctx)
 
-    prepare_indexed_demo(core)
+    ctx = prepare_indexed_demo(core)
     with pytest.raises(NotFound):
-        core.index_rebuild("MissingType")
+        core.index_rebuild("MissingType", ctx=ctx)
     with pytest.raises(NotFound):
         core.apply_action(
             "MissingAction",
@@ -313,6 +333,7 @@ def test_ontology_import_validation_edges_and_missing_active_types(
             expected_object_version=1,
             params={"reason": "x"},
             idempotency_key="missing-action",
+            ctx=ctx,
         )
 
     duplicate_property = tmp_path / "duplicate.yaml"
@@ -338,7 +359,7 @@ objectTypes:
         encoding="utf-8",
     )
     with pytest.raises(ValidationFailed):
-        core.apply_ontology(duplicate_property)
+        core.apply_ontology(duplicate_property, ctx=ctx)
 
     bad_link = tmp_path / "bad-link.yaml"
     bad_link.write_text(
@@ -356,7 +377,7 @@ linkTypes:
         encoding="utf-8",
     )
     with pytest.raises(ValidationFailed):
-        core.apply_ontology(bad_link)
+        core.apply_ontology(bad_link, ctx=ctx)
 
 
 def test_link_skips_missing_target_object(core: FoundryLiteCore) -> None:

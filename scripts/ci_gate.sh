@@ -22,6 +22,9 @@ uv run python scripts/quality/check_dependency_graph.py
 echo "== Static: no skipped/flaky/xfail release bypasses =="
 uv run python scripts/quality/check_no_test_bypasses.py
 
+echo "== Static: private test reference baseline =="
+uv run python scripts/quality/check_private_test_references.py --max-count 17
+
 echo "== Static: Bandit security scan =="
 uv run bandit -c pyproject.toml -r libs apps scripts
 
@@ -42,7 +45,7 @@ uv run pytest tests \
   --cov-fail-under=95 \
   --junitxml=artifacts/test-results/pytest.xml
 
-echo "== Dynamic: public callable coverage gate =="
+echo "== Dynamic: public callable smoke coverage gate =="
 uv run coverage json -o artifacts/coverage/coverage.json
 uv run python scripts/quality/check_public_api_coverage.py artifacts/coverage/coverage.json --threshold 95
 

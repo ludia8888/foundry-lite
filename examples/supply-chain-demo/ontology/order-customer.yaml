@@ -90,7 +90,7 @@ actionTypes:
     permissions:
       allowedRoles: [ops_manager]
     preconditions:
-      - cel: "object.status in ['PENDING', 'REVIEW']"
+      - safeExpression: "object.status in ['PENDING', 'REVIEW']"
         message: "Only pending/review orders can be approved"
     mutations:
       - type: setProperty
@@ -102,7 +102,7 @@ actionTypes:
     writebacks:
       - apiName: erpApproveOrder
         mode: beforeCommit
-        connector: mock_erp
+        connector: mock_erp_simulator
     sideEffects:
       - type: event
         topic: ops.order.approved

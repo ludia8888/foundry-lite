@@ -20,11 +20,12 @@ pnpm ci:gate
 | 타입 검사 | mypy, pyright | 값의 타입이 맞지 않아 런타임에서 터질 문제 |
 | 의존성 구조 | `scripts/quality/check_dependency_graph.py` | domain이 app을 import하는 식의 레이어 침범, 순환 의존성 |
 | 테스트 우회 방지 | `check_no_test_bypasses.py` | skip/xfail로 release gate를 우회하는 테스트 |
+| private 테스트 부채 | `check_private_test_references.py` | private helper 직접 테스트가 현재 baseline보다 늘어나는 문제 |
 | 보안 정적 분석 | Bandit | 위험한 Python 코드 패턴 |
 | 의존성 취약점 | pip-audit | 설치 패키지의 알려진 보안 취약점 |
 | 복잡도 | Radon, Xenon | 너무 복잡해서 장애 추적이 어려운 함수. CI는 block complexity `B` 초과를 막는다. |
 | 동적 테스트 | pytest + coverage | 실제 기능/실패 경로 검증, branch coverage 95% |
-| public callable coverage | `check_public_api_coverage.py` | 공개 함수/메서드가 테스트에서 실제 실행됐는지 |
+| public callable coverage | `check_public_api_coverage.py` | 공개 함수/메서드가 최소 한 번 실행됐는지. 분기 검증은 branch coverage가 담당한다. |
 | 제품 데모 | `pnpm demo:supply-chain` | 문서의 MVP 폐루프가 실제로 끝까지 도는지 |
 | 런타임 진단 | `run_runtime_diagnostics.py` | 메모리, 프로파일, 경고, Python 장애 로그 |
 | 브라우저 E2E | Playwright | 화면, API, core가 함께 동작하는지 |
@@ -42,6 +43,8 @@ Foundry-lite는 다음 ID를 최대한 끊기지 않게 남긴다.
 - `object_type`, `object_id`, `object_version`: 어떤 운영 객체가 바뀌었는지
 
 API 에러 응답에는 `request_id`가 들어간다. 운영자는 이 값을 기준으로 trace, metrics, audit event를 이어서 볼 수 있다.
+
+현재 API는 실제 인증 시스템을 갖고 있지 않다. 헤더가 없으면 `viewer` 역할로 처리되며, Web/CLI 데모는 명시적인 demo role header/context를 사용한다.
 
 ## 3. OpenTelemetry
 
@@ -95,6 +98,7 @@ pnpm quality:architecture
 - `artifacts/quality/dependency_graph.json`
 - `artifacts/quality/dependency_graph.md`
 - `artifacts/quality/radon_cc.json`
+- `artifacts/quality/private_test_references.json`
 
 여기에서 볼 수 있는 것:
 
@@ -105,6 +109,8 @@ pnpm quality:architecture
 - 문서의 레이어 규칙 위반 여부
 
 CI에서는 fan-out이 `10`을 넘는 내부 모듈을 막는다. 쉽게 말해, 한 파일이 너무 많은 내부 파일을 직접 알고 있으면 구조가 커질수록 고치기 어려워지기 때문이다.
+
+현재 일부 테스트는 private helper를 직접 호출한다. 이는 남은 기술부채이며 CI는 baseline `17`개를 넘지 못하게 막는다. 모듈 분리 후 이 숫자는 점진적으로 `0`으로 낮춰야 한다.
 
 복잡도 기준:
 
@@ -150,7 +156,17 @@ uv run python -m pdb -m foundry_lite_cli.main demo run-supply-chain
 uv run python -m trace --count --summary apps/cli/foundry_lite_cli/main.py demo run-supply-chain
 ```
 
-## 7. Playwright E2E
+## 7. Current Implementation Limits
+
+현재 커밋은 로컬 core slice다.
+
+- object store는 PostgreSQL JSONB가 아니라 SQLite + SQLAlchemy JSON column이다.
+- PostgreSQL snapshot connector는 아직 없다.
+- action precondition은 CEL이 아니라 제한된 `safeExpression` subset이다.
+- ERP writeback은 실제 외부 호출이 아니라 `mock_erp_simulator` 기록이다.
+- Alembic migration과 Temporal worker는 아직 구현되지 않았다.
+
+## 8. Playwright E2E
 
 브라우저 테스트:
 

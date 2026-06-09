@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from foundry_lite.application.core import FoundryLiteCore
-from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.context import RequestContext, demo_admin_context
 
 Handler = Callable[[FoundryLiteCore, RequestContext, argparse.Namespace], Any]
 
@@ -195,7 +195,7 @@ def _dispatch(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespa
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    _print(_dispatch(_core(), RequestContext(), args))
+    _print(_dispatch(_core(), demo_admin_context(), args))
 
 
 if __name__ == "__main__":

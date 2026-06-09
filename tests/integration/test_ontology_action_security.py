@@ -19,7 +19,7 @@ def test_ontology_activation_rejects_missing_backing_column(
     core: FoundryLiteCore,
     tmp_path: Path,
 ) -> None:
-    prepare_indexed_demo(core)
+    ctx = prepare_indexed_demo(core)
     bad_yaml = tmp_path / "bad-ontology.yaml"
     bad_yaml.write_text(
         """
@@ -44,14 +44,14 @@ objectTypes:
     )
 
     with pytest.raises(ValidationFailed):
-        core.apply_ontology(bad_yaml)
+        core.apply_ontology(bad_yaml, ctx=ctx)
 
 
 def test_action_apply_is_idempotent_and_rejects_stale_object_version(
     core: FoundryLiteCore,
 ) -> None:
-    prepare_indexed_demo(core)
-    order = core.get_object("Order", "O-1001")
+    ctx = prepare_indexed_demo(core)
+    order = core.get_object("Order", "O-1001", ctx=ctx)
     first = core.apply_action(
         "ApproveOrder",
         object_type="Order",
@@ -59,6 +59,7 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
         expected_object_version=order["objectVersion"],
         params={"reason": "Inventory confirmed"},
         idempotency_key="same-key",
+        ctx=ctx,
     )
     replay = core.apply_action(
         "ApproveOrder",
@@ -67,6 +68,7 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
         expected_object_version=order["objectVersion"],
         params={"reason": "Inventory confirmed"},
         idempotency_key="same-key",
+        ctx=ctx,
     )
 
     assert replay["idempotentReplay"] is True
@@ -79,14 +81,15 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
             expected_object_version=order["objectVersion"],
             params={"reason": "Inventory confirmed again"},
             idempotency_key="different-key",
+            ctx=ctx,
         )
 
 
 def test_before_commit_writeback_failure_does_not_edit_object(
     core: FoundryLiteCore,
 ) -> None:
-    prepare_indexed_demo(core)
-    order = core.get_object("Order", "O-1001")
+    ctx = prepare_indexed_demo(core)
+    order = core.get_object("Order", "O-1001", ctx=ctx)
 
     with pytest.raises(ExternalSystemError):
         core.apply_action(
@@ -97,11 +100,16 @@ def test_before_commit_writeback_failure_does_not_edit_object(
             params={"reason": "Inventory confirmed"},
             idempotency_key="writeback-fails",
             simulate_writeback_failure=True,
+            ctx=ctx,
         )
 
-    after = core.get_object("Order", "O-1001")
+    after = core.get_object("Order", "O-1001", ctx=ctx)
     assert after["objectVersion"] == order["objectVersion"]
     assert after["properties"]["status"] == "PENDING"
+    writeback = core.list_runs(ctx=ctx)["actionWritebacks"][0]
+    assert writeback["connector_id"] == "mock_erp_simulator"
+    assert writeback["request"]["networkCall"] is False
+    assert writeback["response"]["simulated"] is True
 
 
 def test_viewer_sees_masked_margin_and_cannot_approve_order(

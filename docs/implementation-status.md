@@ -1,0 +1,34 @@
+# Implementation Status
+
+이 문서는 현재 커밋이 실제로 보장하는 것과, 계획 문서에 남아 있는 다음 목표를 구분한다.
+
+## Current Reality
+
+- Storage adapter: local SQLite database plus filesystem object storage.
+- Object properties: SQLAlchemy `JSON` columns, not PostgreSQL `JSONB`.
+- Ingestion: CSV upload is implemented. PostgreSQL snapshot is a documented boundary, not an implemented connector.
+- CSV upload size: default local limit is 50 MiB via `FOUNDRY_LITE_MAX_CSV_UPLOAD_BYTES`.
+- Preconditions: `safeExpression` supports a small safe subset only:
+  - `object.status in ['PENDING', 'REVIEW']`
+  - `object.status == 'PENDING'`
+- Writeback: `mock_erp_simulator` records simulated before-commit writeback rows. It does not call an external ERP.
+- Security default: API requests without role headers resolve to `viewer`. CLI and demo scripts use an explicit demo admin context.
+- CLI: current implementation uses Python `argparse`; Typer is not installed in the current runtime.
+- Worker: `apps/worker` is a placeholder for a future Temporal worker.
+- Migrations: schema bootstraps through SQLAlchemy `metadata.create_all`; Alembic migrations are not implemented yet.
+
+## Still Targeted, Not Yet Implemented
+
+- PostgreSQL JSONB object store with production indexes and row-level security.
+- PostgreSQL snapshot connector integration test.
+- Real CEL or JSON Logic evaluator.
+- Real ERP/webhook writeback connector and retry worker.
+- Temporal workflow/worker execution.
+- Alembic migration history and upgrade/rollback tests.
+- Full object set APIs and operations UI.
+
+## Quality Signal Boundaries
+
+- Branch coverage is the main behavior gate.
+- Public callable coverage means "a public callable was executed at least once"; it is not a substitute for branch/path coverage.
+- Some unit tests still exercise private helpers to pin failure edges. CI records this as a baseline and blocks increases; these should be replaced with public API tests as modules are split out.
