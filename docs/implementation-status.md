@@ -18,6 +18,7 @@
 - Worker: `apps/worker` is a placeholder for a future Temporal worker.
 - Migrations: schema bootstraps through SQLAlchemy `metadata.create_all`; Alembic migrations are not implemented yet.
 - Application structure: `FoundryLiteCore` is now a Facade. Dataset, Transform, Ontology, Object, Action, Materialization, runtime event, and demo orchestration logic live in focused service modules. CI blocks application modules above 500 lines.
+- Scale foundation status: the planning docs now require an explicit Sprint 02A for infra-swap boundaries, contract tests, trace keys, and composition-root injection. The current code is not yet fully port/adapter extracted.
 
 ## Still Targeted, Not Yet Implemented
 
@@ -28,7 +29,7 @@
 - Temporal workflow/worker execution.
 - Alembic migration history and upgrade/rollback tests.
 - Operations UI beyond the current object explorer/object-set controls, especially failed run retry and DLQ workflows.
-- Repository/port extraction beneath the current service modules, especially for production PostgreSQL and external connector adapters.
+- Sprint 02A Scale Foundation implementation: repository/port extraction beneath the current service modules, contract tests for fake/local adapters, and CI import guards for production PostgreSQL, S3/MinIO, Spark/Flink, Kafka/Redpanda, OpenSearch, Temporal, connector, and auth adapters.
 
 ## Quality Signal Boundaries
 

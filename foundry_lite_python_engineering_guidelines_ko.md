@@ -221,6 +221,45 @@ infrastructure
 - [ ] Template Method는 순서를 고정해야 할 때만 쓴다. 순서가 중요하지 않은 단순 helper에 억지로 적용하지 않는다.
 - [ ] 패턴을 적용한 뒤에도 trace id, run id, audit event, outbox event가 끊기면 실패한 설계로 본다.
 
+### 4.3 Scale Foundation과 Infra Swap 규칙
+
+Scale Foundation은 “처음부터 Spark, Flink, Kafka, S3를 모두 붙인다”는 뜻이 아니다. 뜻은 더 실용적이다. 작은 로컬 구현으로 시작하더라도, 나중에 큰 인프라로 바꿀 때 업무 규칙과 추적 체계가 흔들리지 않도록 경계를 먼저 고정한다.
+
+비개발자에게 설명하면, Foundry-lite의 핵심 제품 로직은 “운영 규칙과 감사 장부”이고 인프라는 “장비”다. 장비가 바뀌어도 운영 규칙과 감사 장부는 바뀌면 안 된다.
+
+| Boundary | 현재 작은 구현 | 나중의 큰 구현 | code가 지켜야 하는 규칙 |
+|---|---|---|---|
+| MetadataRepository | SQLite/SQLAlchemy local DB | PostgreSQL, partitioned tables | service는 DB dialect 세부를 알지 않는다. |
+| DatasetStorageAdapter | local filesystem, MinIO | S3/GCS/Azure Blob, Iceberg storage | dataset commit protocol은 storage 종류와 무관해야 한다. |
+| DatasetTransactionRepository | 단일 DB transaction | PostgreSQL transaction + Alembic | OPEN/COMMITTED/ABORTED 상태 전이는 동일해야 한다. |
+| ComputeAdapter | DuckDB | Spark, Flink bounded job, Ray | input version, output staging, lineage, health gate는 동일해야 한다. |
+| EventPublisher/StreamAdapter | PostgreSQL outbox | Kafka/Redpanda | event idempotency, DLQ, replay cursor는 동일해야 한다. |
+| SearchAdapter | PostgreSQL JSON/generated column | OpenSearch | search는 projection이고 object store가 source of truth다. |
+| WorkflowAdapter | direct call/local worker | Temporal | retry, timeout, run state, replay key를 잃지 않는다. |
+| ConnectorAdapter | CSV/local/mock connector | REST, webhook, CDC, SaaS connector | sync run lifecycle과 cursor/checkpoint 의미가 동일해야 한다. |
+| AuthProvider/PolicyAdapter | dev header + RBAC | OIDC/SSO, ABAC/CBAC | permission decision과 audit deny 형식이 동일해야 한다. |
+
+Infra swap 체크리스트:
+
+- [ ] application/domain layer는 concrete infra SDK를 직접 import하지 않는다.
+- [ ] infrastructure adapter만 concrete SDK, filesystem, DB dialect, external API client를 안다.
+- [ ] concrete implementation 선택은 composition root에서만 한다: `apps/api`, `apps/worker`, `apps/cli`, test fixture.
+- [ ] port/interface input/output DTO는 vendor-specific 필드를 숨긴다.
+- [ ] adapter error는 typed error로 변환하되, retryability, timeout, idempotency key, external reference, correlation id를 버리지 않는다.
+- [ ] fake adapter와 local adapter가 같은 contract test suite를 통과한다.
+- [ ] adapter를 교체해도 public API response, audit event, outbox event, lineage edge의 의미가 바뀌지 않는다.
+- [ ] trace key는 boundary를 넘을 때 유지된다: `tenant_id`, `actor_user_id`, `request_id`, `run_id`, `correlation_id`, domain id, cursor/checkpoint.
+- [ ] 새 infra boundary를 추가하면 문서에 local implementation, scale implementation, owner, failure mode, contract test를 같이 추가한다.
+- [ ] “나중에 바꿀 예정”이라는 말만 있고 port/interface와 contract test가 없으면 완료로 보지 않는다.
+
+Scale Foundation 이후 금지:
+
+- [ ] application service가 `boto3`, `pyspark`, Kafka client, OpenSearch client, Temporal client, vendor SaaS SDK를 직접 import한다.
+- [ ] repository가 permission, precondition, merge policy 같은 비즈니스 판단을 한다.
+- [ ] adapter가 외부 실패를 숨기고 성공처럼 반환한다.
+- [ ] Spark/Kafka/S3 같은 대형 도구를 붙였지만 dataset transaction, audit, lineage, replay contract를 우회한다.
+- [ ] vendor-specific payload가 core DTO로 흘러들어 다른 adapter 구현을 어렵게 만든다.
+
 금지하는 패턴 오남용:
 
 - [ ] 이름만 Repository이고 실제로는 비즈니스 규칙을 판단하는 DB 클래스.

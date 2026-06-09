@@ -169,6 +169,7 @@ uv run python -m trace --count --summary apps/cli/foundry_lite_cli/main.py demo 
 - action precondition은 CEL이 아니라 제한된 `safeExpression` subset이다.
 - ERP writeback은 실제 외부 호출이 아니라 `mock_erp_simulator` 기록이다.
 - Alembic migration과 Temporal worker는 아직 구현되지 않았다.
+- Scale Foundation은 문서상 Sprint 02A 목표로 명시되었지만, 현재 코드가 모든 infra boundary를 port/adapter로 완전히 추출한 상태는 아니다. 이후 구현에서는 storage/metadata/compute/event/search/workflow/connector/auth adapter 교체가 trace key와 contract test를 유지하는지 CI에서 확인해야 한다.
 
 ## 8. Playwright E2E
 

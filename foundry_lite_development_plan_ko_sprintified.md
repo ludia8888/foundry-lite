@@ -3,7 +3,7 @@
 **작성일:** 2026-06-09  
 **개정 상태:** 2026-06-09 심층리뷰 반영본  
 **목표:** Palantir Foundry 전체를 복제하는 것이 아니라, 핵심 철학인 “데이터 유입 → 변환 → 온톨로지 인덱싱 → 운영 객체 조회 → 액션 실행 → 데이터셋으로 환류”가 실제로 반복 실행되는 **재현 가능한 운영 폐루프 MVP**를 단일 모노레포 안에 구현한다.  
-**개정 원칙:** v1은 기능 나열식 MVP가 아니라, replay 가능한 최소 폐루프를 안정적으로 구현하는 vertical slice로 제한한다. Kafka/CDC/OpenSearch/Spark/복잡한 보안 모델은 설계 경계를 열어두되 v1.5 이후로 이관한다.
+**개정 원칙:** v1은 기능 나열식 MVP가 아니라, replay 가능한 최소 폐루프를 안정적으로 구현하는 vertical slice로 제한한다. Kafka/CDC/OpenSearch/Spark/복잡한 보안 모델은 production 구현을 v1.5 이후로 이관하되, 나중에 쉽게 갈아끼울 수 있는 port/interface, adapter contract, trace key, composition root 경계는 Sprint 02A Scale Foundation에서 먼저 고정한다.
 
 > 현재 구현 상태 주의: 2026-06-10 기준 코드 커밋은 로컬 core vertical slice다. 실제 구현은 SQLite + filesystem adapter, CSV ingest, 제한된 `safeExpression`, `mock_erp_simulator`를 사용한다. PostgreSQL JSONB object store, PostgreSQL snapshot connector, Temporal worker, Alembic migration, real CEL/JSON Logic, real ERP writeback은 아직 목표/설계 단계이며 현재 구현 완료로 보지 않는다. 정확한 현황은 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다.
 
@@ -35,6 +35,7 @@
 - [ ] 구현 품질 기준이 Python 백엔드 엔지니어링 가이드와 연결되어 있다.
 - [ ] 안티패턴 방지, 단순 패치 금지, 에러 추적 가능성 기준이 구현 완료 조건에 포함되어 있다.
 - [ ] 테스트 커버리지 95% 이상, 필수 통합/스모크 테스트 100% 통과 기준이 구현 완료 조건에 포함되어 있다.
+- [ ] Scale Foundation이 v1 초기에 고정되어 storage/compute/event/search/workflow/auth 인프라를 나중에 교체해도 core 제품 로직을 대수술하지 않는 구조를 요구한다.
 
 ---
 
@@ -87,6 +88,7 @@ P0 결정:
 - Reindex/replay를 위해 `index_runs`, cursor, count/hash validation, shadow swap 전략을 명시한다.
 - Materialization은 v1에서 `action_log`와 `object_snapshot` 두 종류만 필수로 구현한다.
 - 보안은 v1에서 tenant isolation, RBAC, object read/action execute, property masking, audit-all-writes로 제한한다.
+- Scale Foundation은 Sprint 02A에서 먼저 고정한다. Spark/Flink/Kafka/Iceberg/OpenSearch를 바로 구현하지 않더라도, `StorageAdapter`, `MetadataRepository`, `ComputeAdapter`, `EventPublisher`, `WorkflowAdapter`, `SearchAdapter`, `ConnectorAdapter`, `AuthProvider`의 port/contract/test boundary는 MVP 초기에 만든다.
 
 ### 0.2 설계-스프린트 연결표
 
@@ -95,6 +97,7 @@ P0 결정:
 | 설계 구간 | 실행 스프린트 | 외부 근거 |
 |---|---|---|
 | [데이터 저장 계층 설계](#5-데이터-저장-계층-설계) | [Sprint 03~08](./foundry_lite_sprint_breakdown_ko.md#sprint-03--dataset-논리-자산-crud) | [Dataset/Data as Code 근거](./deep-research-report.md#기술-스택) |
+| [Scale Foundation / Infra Swap Boundary](#35-v1-adapter-boundary) | [Sprint 02A](./foundry_lite_sprint_breakdown_ko.md#sprint-02a--scale-foundationinfra-swap-boundary) | 유지보수성, traceability, scale-out workers, adapter/port 교체 가능성 |
 | [Data Connection-lite 설계](#6-data-connection-lite-설계) | [Sprint 09~10](./foundry_lite_sprint_breakdown_ko.md#sprint-09--sourcesyncrun-framework) | [Data Connection 근거](./deep-research-report.md#종단간-데이터-흐름) |
 | [Transform Engine 설계](#7-transform-engine-설계) | [Sprint 11~14](./foundry_lite_sprint_breakdown_ko.md#sprint-11--transform-registry와-sqlduckdb-runner) | [Pipeline/compute 근거](./deep-research-report.md#기술-스택) |
 | [Ontology Metadata Service-lite](#8-ontology-metadata-service-lite) | [Sprint 15~16](./foundry_lite_sprint_breakdown_ko.md#sprint-15--ontology-draftobjectproperty-yaml-import) | [Ontology 중심성 근거](./deep-research-report.md#공개문서-기반-참조-아키텍처) |
@@ -367,6 +370,7 @@ CSV upload 또는 PostgreSQL snapshot sync
 - Docker Compose로 로컬 완전 실행
 - Kubernetes로 scale-out 가능
 - storage/queue/compute는 interface로 추상화
+- infra swap 가능성은 나중으로 미루지 않고 Foundation 단계에서 port, adapter, contract test, composition root로 고정
 - Clean Code, SRP, 테스트, 트랜잭션 기준은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)를 따른다.
 
 
@@ -468,6 +472,45 @@ AuthProvider
 ```
 
 domain/application layer는 adapter interface만 알고, concrete implementation은 `apps/api` 또는 `apps/worker` composition root에서 주입한다.
+
+#### Scale Foundation 의도
+
+Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻이 아니다. 의미는 더 작고 더 중요하다. v1 초기에 core 제품 로직과 concrete infrastructure를 분리해서, 데이터가 커졌을 때 아래 교체가 제품 로직 대수술이 아니라 adapter 교체와 contract test 확장으로 끝나게 만드는 것이다.
+
+비개발자 관점으로 말하면, Foundry-lite의 업무 규칙은 “주방 레시피”이고 인프라는 “주방 장비”다. 장비가 가정용 오븐에서 공장용 오븐으로 바뀌어도 레시피와 품질 검사표가 유지되어야 한다.
+
+#### Infra Swap Readiness Matrix
+
+| Boundary | Local/MVP implementation | Scale implementation | 반드시 유지할 product contract | 필수 trace key |
+|---|---|---|---|---|
+| MetadataRepository | SQLite 또는 local SQLAlchemy | PostgreSQL primary/replica, partitioned tables | tenant, dataset, ontology, action, audit metadata 의미 불변 | `tenant_id`, `request_id`, `resource_id` |
+| DatasetStorageAdapter | local filesystem / MinIO-compatible manifest | S3/GCS/Azure Blob + Iceberg catalog | staging → manifest → committed version protocol 불변 | `dataset_id`, `transaction_id`, `version_id` |
+| DatasetTransactionRepository | 단일 DB transaction | PostgreSQL transaction + Alembic migration | OPEN → COMMITTED/ABORTED 상태 전이 불변 | `transaction_id`, `run_id` |
+| ComputeAdapter | DuckDB SQL runner | Spark batch, later Flink bounded job | input version binding, output staging, health gate, lineage 불변 | `transform_run_id`, `input_version_id`, `output_version_id` |
+| StreamAdapter/EventPublisher | PostgreSQL outbox | Kafka/Redpanda publisher and consumer | event idempotency, DLQ, replay cursor 의미 불변 | `event_id`, `correlation_id`, `cursor` |
+| SearchAdapter | PostgreSQL JSON/generated index | OpenSearch projection | object store가 source of truth이고 search는 재생성 가능한 projection | `object_type`, `object_id`, `index_version` |
+| WorkflowAdapter | direct call or local worker skeleton | Temporal workflow/activity | retry, timeout, durable run state, replay 가능성 불변 | `workflow_id`, `run_id`, `attempt` |
+| ConnectorAdapter | CSV/local file, mock REST/ERP | REST, webhook, CDC, SaaS connector | sync run lifecycle, cursor, transaction commit protocol 불변 | `source_id`, `sync_run_id`, `cursor` |
+| AuthProvider/PolicyAdapter | dev header context + RBAC | OIDC/SSO, ABAC/CBAC extension | tenant isolation, permission decision, audit deny 의미 불변 | `actor_user_id`, `tenant_id`, `policy_decision_id` |
+
+#### Scale Foundation Checklist
+
+- [ ] 각 boundary는 `Protocol` 또는 명시적 interface로 정의되고, application service는 concrete SDK가 아니라 이 boundary를 호출한다.
+- [ ] concrete 구현 선택은 `apps/api`, `apps/worker`, `apps/cli` 같은 composition root에서만 한다.
+- [ ] local adapter와 fake adapter가 같은 contract test suite를 통과한다.
+- [ ] adapter error는 숨기지 않고 typed error, retryability, timeout, idempotency 정보를 application layer로 돌려준다.
+- [ ] adapter를 교체해도 audit/outbox/lineage/run state의 key 이름과 의미가 바뀌지 않는다.
+- [ ] CI는 domain/application이 금지된 concrete infra SDK를 직접 import하면 실패한다.
+- [ ] 최소 하나의 swap rehearsal test가 있다. 예: local filesystem adapter 대신 fake/S3-compatible adapter를 끼워도 dataset commit use case가 같은 결과를 만든다.
+- [ ] scale adapter를 아직 구현하지 않았더라도, 미래 구현이 따라야 할 DTO, state transition, trace key, failure contract는 문서와 테스트로 고정한다.
+
+#### 이러면 Scale Foundation으로 치지 않는다
+
+- interface 이름만 만들고 실제 application service가 여전히 SQLite/file/DuckDB/Kafka/Spark SDK를 직접 호출한다.
+- adapter 교체 테스트 없이 “나중에 교체 가능”이라고 문서에만 적는다.
+- Spark, Kafka, S3 같은 대형 도구를 바로 붙였지만 dataset transaction, lineage, audit, replay contract가 깨진다.
+- adapter가 실패를 성공처럼 반환하거나 retry/DLQ 판단에 필요한 정보를 버린다.
+- vendor-specific 필드가 core DTO 안쪽으로 새어 들어와 다른 인프라 구현을 막는다.
 
 
 ## 4. 시스템 아키텍처
@@ -3283,6 +3326,7 @@ flite lineage dataset clean.orders
 ### 스프린트 단계 요약
 
 - [ ] Sprint 00~02: 제품 경계, 로컬 런타임, 테넌트/감사 기반을 고정한다.
+- [ ] Sprint 02A: Scale Foundation으로 infra swap boundary, contract test, trace key, composition root를 고정한다.
 - [ ] Sprint 03~10: Dataset Registry와 Data Connection-lite로 raw dataset commit 경로를 완성한다.
 - [ ] Sprint 11~14: DuckDB SQL transform과 lineage로 clean dataset 생성 경로를 완성한다.
 - [ ] Sprint 15~23: Ontology, Object Store, Object Query, Outbox로 운영 객체 조회 기반을 만든다.
@@ -3295,9 +3339,10 @@ flite lineage dataset clean.orders
 
 ### MVP Core Completion Gate
 
-Sprint 00~36이 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 상세 acceptance는 [스프린트 실행 계획의 MVP Core Completion Gate](./foundry_lite_sprint_breakdown_ko.md#mvp-core-completion-gate)를 원본으로 본다.
+Sprint 00~36과 Sprint 02A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 상세 acceptance는 [스프린트 실행 계획의 MVP Core Completion Gate](./foundry_lite_sprint_breakdown_ko.md#mvp-core-completion-gate)를 원본으로 본다.
 
 - [ ] CSV 또는 PostgreSQL snapshot으로 raw dataset을 commit한다.
+- [ ] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다.
 - [ ] SQL/DuckDB 또는 Python transform으로 clean dataset을 만든다.
 - [ ] Ontology draft를 validate/activate한다.
 - [ ] clean dataset rows를 Order/Customer objects로 index한다.

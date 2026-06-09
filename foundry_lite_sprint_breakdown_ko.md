@@ -26,7 +26,7 @@
 - [ ] 각 스프린트는 이전 스프린트의 결과를 실제로 사용한다.
 - [ ] 모든 write는 audit 가능하다.
 - [ ] 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능하다.
-- [ ] Sprint 00~36은 MVP core, Sprint 37~45는 MVP 이후 확장으로 구분된다.
+- [ ] Sprint 00~36은 MVP core, Sprint 02A는 scale-ready foundation 보강, Sprint 37~45는 MVP 이후 확장으로 구분된다.
 - [ ] Python 백엔드 코드는 `ruff`, `mypy` 또는 `pyright`, `pytest` 품질 게이트를 통과한다.
 - [ ] 안티패턴 금지 기준을 위반한 단순 패치는 완료로 보지 않는다.
 - [ ] 에러 발생 시 request/run/dataset/object/action 단위로 원인을 추적할 수 있다.
@@ -40,7 +40,7 @@
 3. 성공은 코드 완료가 아니라 CLI/API/UI/테스트 중 하나로 증명해야 한다.
 4. 모든 write는 audit 가능해야 한다.
 5. 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능해야 한다.
-6. MVP core에서는 CSV/PostgreSQL snapshot, SQL/DuckDB transform, Ontology/Object, Action, Materialization 폐루프에 집중한다. CDC, Kafka streaming, OpenSearch, Iceberg, Spark, Kubernetes production hardening은 MVP 이후 스프린트로 둔다.
+6. MVP core에서는 CSV/PostgreSQL snapshot, SQL/DuckDB transform, Ontology/Object, Action, Materialization 폐루프에 집중한다. CDC, Kafka streaming, OpenSearch, Iceberg, Spark, Kubernetes production hardening은 MVP 이후 스프린트로 둔다. 단, 이것들을 나중에 쉽게 붙이기 위한 port/adapter boundary는 Sprint 02A에서 먼저 고정한다.
 7. 장애나 버그는 간단한 증상 제거 패치로 끝내지 않고, 원인 분석, 추적 가능성, regression test까지 포함해 해결한다.
 
 ---
@@ -60,6 +60,7 @@
 - [ ] Python 백엔드 변경은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)의 SRP, typing, transaction, test checklist를 통과한다.
 - [ ] [안티패턴 방지와 강제 대응 원칙](./foundry_lite_python_engineering_guidelines_ko.md#18-안티패턴-방지와-강제-대응-원칙)을 위반하지 않는다.
 - [ ] 실패 케이스는 request id, run id, domain id, error type 중 필요한 추적 키를 남긴다.
+- [ ] storage, metadata DB, compute, event, search, workflow, connector, auth 같은 인프라와 닿는 변경은 port/interface, adapter, contract test, trace key를 함께 정의한다.
 - [ ] Python 백엔드 line/branch/function coverage가 모두 95% 이상이다.
 - [ ] 해당 스프린트의 필수 integration/smoke 시나리오가 100% 실행되고 100% 통과한다.
 
@@ -72,6 +73,7 @@
 | 00 | Foundation | 제품 경계·데모 도메인·성공 정의 고정 | Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들기 위한 제품 경계, 데모 도메인, MVP 합격 기준을 고정한다. | [제품 범위](./foundry_lite_development_plan_ko_sprintified.md#2-제품-범위) |
 | 01 | Scaffold | 모노레포와 로컬 런타임 골격 | 개발자가 저장소를 clone한 뒤 하나의 명령으로 API, Web, Worker, DB, Object Storage를 띄울 수 있게 한다. | [Monorepo 구조](./foundry_lite_development_plan_ko_sprintified.md#18-monorepo-구조), [Python 가이드](./foundry_lite_python_engineering_guidelines_ko.md) |
 | 02 | Scaffold | DB 마이그레이션·테넌트·인증 Stub·감사 골격 | 모든 리소스가 `tenant_id`, `actor_user_id`, `request_id`를 기준으로 기록되는 최소 control plane 기반을 만든다. | [Security / Governance](./foundry_lite_development_plan_ko_sprintified.md#14-security--governance-설계) |
+| 02A | Foundation | Scale Foundation·Infra Swap Boundary | 유지보수성, traceability, scale-out을 위해 storage/metadata/compute/event/search/workflow/connector/auth 경계를 port와 adapter contract로 먼저 고정한다. | [v1 adapter boundary](./foundry_lite_development_plan_ko_sprintified.md#35-v1-adapter-boundary), [Python 가이드](./foundry_lite_python_engineering_guidelines_ko.md#42-디자인-패턴-적용-원칙) |
 | 03 | Dataset Registry | Dataset 논리 자산 CRUD | Dataset을 단순 파일 업로드가 아니라 namespace/name/schema/storage_kind를 가진 논리 자산으로 등록한다. | [데이터 저장 계층](./foundry_lite_development_plan_ko_sprintified.md#5-데이터-저장-계층-설계) |
 | 04 | Dataset Registry | Dataset Transaction 상태 머신 | Dataset 변경을 반드시 `OPEN → COMMITTED | ABORTED` transaction으로만 일어나게 만든다. | [Dataset transaction](./foundry_lite_development_plan_ko_sprintified.md#52-dataset-transaction-types) |
 | 05 | Dataset Registry | StorageAdapter와 Manifest Commit Protocol | S3/MinIO 같은 object storage에서 원자적 rename에 의존하지 않고, staging path와 manifest pointer를 통해 안전하게 dataset version을 commit한다. | [Dataset commit protocol](./foundry_lite_development_plan_ko_sprintified.md#57-dataset-commit-protocol) |
@@ -237,6 +239,54 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - 도메인 테이블에 tenant_id가 빠진다.
 - audit가 각 모듈에서 제각각 구현된다.
 - request id가 API, Worker, audit 사이에서 이어지지 않는다.
+
+---
+
+### Sprint 02A — Scale Foundation·Infra Swap Boundary
+
+**Phase:** Foundation
+
+**문서 연결:** [v1 adapter boundary](./foundry_lite_development_plan_ko_sprintified.md#35-v1-adapter-boundary), [시스템 아키텍처](./foundry_lite_development_plan_ko_sprintified.md#4-시스템-아키텍처), [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md#42-디자인-패턴-적용-원칙)
+
+**무조건 성공시켜야 하는 Goal**
+
+초기 MVP가 작더라도 나중에 팔란티어급 대용량 데이터, Spark/Flink/Kafka/S3/Iceberg/OpenSearch 같은 인프라로 확장할 수 있게 core 제품 로직과 concrete infrastructure를 분리한다. 이 스프린트의 목표는 대형 인프라를 지금 모두 붙이는 것이 아니라, 나중에 갈아끼울 때 유지보수 비용과 추적 손실이 폭발하지 않도록 port/interface, adapter contract, composition root, trace key, contract test를 먼저 고정하는 것이다.
+
+비개발자 관점으로 말하면, Foundry-lite의 업무 규칙은 “운영 매뉴얼”이고 인프라는 “장비”다. 장비가 작은 장비에서 공장 장비로 바뀌어도 운영 매뉴얼, 품질 검사, 사고 추적표는 유지되어야 한다.
+
+**반드시 완성해야 하는 것**
+
+- Infra Swap Readiness Matrix를 작성한다: boundary, local implementation, scale implementation, product contract, trace key, owner를 명시한다.
+- `MetadataRepository`, `DatasetStorageAdapter`, `DatasetTransactionRepository`, `ComputeAdapter`, `StreamAdapter/EventPublisher`, `SearchAdapter`, `WorkflowAdapter`, `ConnectorAdapter`, `AuthProvider` boundary를 정의한다.
+- application service가 concrete infra SDK를 직접 import하지 않고 port/interface를 통하도록 하는 의존성 규칙을 정한다.
+- concrete 구현 선택은 `apps/api`, `apps/worker`, `apps/cli` 같은 composition root에서만 하도록 한다.
+- local adapter와 fake adapter가 같은 contract test를 통과하는 구조를 만든다.
+- adapter error contract를 정의한다: retryable 여부, timeout 여부, idempotency key, external reference, raw error masking, operator-facing message.
+- 모든 boundary에 trace key contract를 둔다: `tenant_id`, `request_id`, `run_id`, `correlation_id`, domain id, cursor/checkpoint 중 필요한 값을 잃지 않는다.
+- CI gate에 architecture import rule을 둔다. domain/application이 금지된 concrete infra SDK를 직접 import하면 실패해야 한다.
+- 최소 하나의 swap rehearsal test를 만든다. 예: local filesystem storage 대신 fake/S3-compatible adapter를 끼워도 같은 dataset commit use case가 통과한다.
+- 구현 현황 문서에 “정의된 boundary”와 “아직 local-only인 implementation”을 분리해서 기록한다.
+
+**Acceptance Gate**
+
+- [ ] Infra Swap Readiness Matrix가 문서에 있고, 각 boundary의 local/scale 구현 후보와 trace key가 적혀 있다.
+- [ ] core use case가 infra를 직접 부르지 않고 port/interface를 통해 호출한다는 architecture rule이 있다.
+- [ ] fake adapter contract test와 local adapter contract test가 같은 테스트 시나리오를 공유한다.
+- [ ] adapter를 하나 교체해도 application service public API와 product response shape이 바뀌지 않는다.
+- [ ] adapter 실패가 run/audit/outbox/diagnostics 중 적절한 곳에 추적 가능한 error type과 correlation id로 남는다.
+- [ ] CI가 금지 import 또는 boundary 우회를 잡는다.
+
+**Demo / Proof**
+
+`flite demo run-supply-chain --adapter-profile fake-storage`처럼 adapter profile만 바꾸거나, 테스트에서 composition root만 바꿔 같은 dataset commit 또는 transform use case가 통과하는 것을 증명한다.
+
+**이러면 성공으로 치지 않는다**
+
+- interface 파일만 만들고 실제 service는 여전히 SQLite/file/DuckDB/Spark/Kafka SDK를 직접 호출한다.
+- adapter 교체 테스트 없이 “나중에 교체 가능”이라고 문서에만 적는다.
+- Spark, Kafka, S3 같은 대형 도구를 붙였지만 dataset transaction, lineage, audit, replay contract가 깨진다.
+- adapter가 외부 실패를 숨기거나 모든 실패를 같은 generic error로 반환한다.
+- vendor-specific 필드가 core DTO 안쪽으로 흘러들어 다른 구현체를 막는다.
 
 ---
 
@@ -1929,9 +1979,10 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 
 ## MVP Core Completion Gate
 
-Sprint 00~36이 끝났을 때 아래가 모두 가능해야 MVP core 완료다.
+Sprint 00~36과 Sprint 02A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다.
 
 - [ ] CSV 또는 PostgreSQL snapshot으로 raw dataset을 commit한다.
+- [ ] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다.
 - [ ] SQL/DuckDB 또는 Python transform으로 clean dataset을 만든다.
 - [ ] Ontology draft를 validate/activate한다.
 - [ ] clean dataset rows를 Order/Customer objects로 index한다.

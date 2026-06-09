@@ -22,6 +22,13 @@ Current implementation note: this commit is a local core vertical slice. It uses
 filesystem storage; PostgreSQL JSONB storage, PostgreSQL snapshot ingest, Temporal, Alembic, real
 CEL, and real external writeback are still future work.
 
+Scale architecture note: the planning docs now treat `Scale Foundation / Infra Swap Boundary` as an
+early foundation requirement. The intent is that storage, metadata DB, compute, event, search,
+workflow, connector, and auth implementations can later move from local adapters to S3/PostgreSQL,
+Spark/Flink, Kafka/Redpanda, OpenSearch, Temporal, and enterprise auth without rewriting the core
+product logic. The current implementation has not completed that extraction yet; see
+[docs/implementation-status.md](docs/implementation-status.md).
+
 Local demo:
 
 ```bash

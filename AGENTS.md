@@ -19,6 +19,7 @@
 - Dataset, Transform, Ontology, Object, Action, Materialization, Runtime event, Demo orchestration 책임을 다시 한 파일로 합치지 않는다.
 - application module은 500줄 이하를 유지한다. 필요하면 책임별 service, strategy, specification, adapter, repository로 분리한다.
 - 디자인 패턴은 `foundry_lite_python_engineering_guidelines_ko.md`의 “디자인 패턴 적용 원칙”을 따른다.
+- infra와 닿는 변경은 Sprint 02A Scale Foundation 원칙을 먼저 확인한다. storage, metadata DB, compute, event, search, workflow, connector, auth 변경은 port/interface, adapter, contract test, trace key를 함께 고려한다.
 - 새 mutation은 transaction, audit, outbox, idempotency, error traceability를 함께 고려한다.
 - 변경 후에는 최소한 관련 테스트와 정적 검사를 실행하고, 가능하면 `pnpm ci:gate`로 전체 품질 게이트를 확인한다.
 
