@@ -10,7 +10,11 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await expect(page.locator("#metricStatus")).toHaveText("PENDING");
   await expect(page.locator("#objectResult")).toContainText('"objectType": "Order"');
 
+  await page.locator("#saveSetBtn").click();
+  await expect(page.locator("#setResult")).toContainText('"name": "Pending Orders"');
+
   await page.locator("#approveBtn").click();
   await expect(page.locator("#metricStatus")).toHaveText("APPROVED");
   await expect(page.locator("#metricVersion")).toHaveText("2");
+  await expect(page.locator("#setResult")).toContainText('"objectIds": []');
 });

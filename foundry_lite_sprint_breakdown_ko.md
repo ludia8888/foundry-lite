@@ -964,11 +964,11 @@ Object API와 CLI로 pending high-risk orders를 조회한다.
 
 **Acceptance Gate**
 
-- [ ] 현재 pending orders query를 dynamic object set으로 저장할 수 있다.
-- [ ] static set은 저장 시점의 ids를 유지한다.
-- [ ] dynamic set은 query 실행 시점의 최신 object state를 반영한다.
-- [ ] 권한 없는 사용자는 다른 사용자의 private set을 볼 수 없다.
-- [ ] 만료된 temporary set은 조회되지 않거나 cleanup 대상이 된다.
+- [x] 현재 pending orders query를 dynamic object set으로 저장할 수 있다.
+- [x] static set은 저장 시점의 ids를 유지한다.
+- [x] dynamic set은 query 실행 시점의 최신 object state를 반영한다.
+- [x] 권한 없는 사용자는 다른 사용자의 private set을 볼 수 없다.
+- [x] 만료된 temporary set은 조회되지 않거나 cleanup 대상이 된다.
 
 **Demo / Proof**
 

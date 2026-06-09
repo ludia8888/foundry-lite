@@ -13,6 +13,7 @@
   - `object.status == 'PENDING'`
 - Writeback: `mock_erp_simulator` records simulated before-commit writeback rows. It does not call an external ERP.
 - Security default: API requests without role headers resolve to `viewer`. CLI and demo scripts use an explicit demo admin context.
+- Object sets: static and dynamic saved object sets are implemented through core service, HTTP API, CLI, and Object Explorer list/create controls. Private owner visibility and temporary expiry are enforced.
 - CLI: current implementation uses Python `argparse`; Typer is not installed in the current runtime.
 - Worker: `apps/worker` is a placeholder for a future Temporal worker.
 - Migrations: schema bootstraps through SQLAlchemy `metadata.create_all`; Alembic migrations are not implemented yet.
@@ -26,7 +27,7 @@
 - Real ERP/webhook writeback connector and retry worker.
 - Temporal workflow/worker execution.
 - Alembic migration history and upgrade/rollback tests.
-- Full object set APIs and operations UI.
+- Operations UI beyond the current object explorer/object-set controls, especially failed run retry and DLQ workflows.
 - Repository/port extraction beneath the current service modules, especially for production PostgreSQL and external connector adapters.
 
 ## Quality Signal Boundaries

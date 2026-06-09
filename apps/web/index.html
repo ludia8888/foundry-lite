@@ -208,6 +208,10 @@
         white-space: pre-wrap;
       }
 
+      .result.compact {
+        min-height: 160px;
+      }
+
       .object-card {
         border: 1px solid var(--line);
         display: grid;
@@ -296,10 +300,16 @@
               Reason
               <textarea id="reason">Inventory confirmed</textarea>
             </label>
+            <label>
+              Saved Set Name
+              <input id="setName" value="Pending Orders" />
+            </label>
             <div class="actions">
               <button id="healthBtn" type="button">Check</button>
               <button id="loadBtn" type="button" class="secondary">Load Object</button>
               <button id="approveBtn" type="button" class="danger">ApproveOrder</button>
+              <button id="saveSetBtn" type="button" class="secondary">Save Pending Set</button>
+              <button id="setsBtn" type="button" class="secondary">Load Sets</button>
             </div>
           </div>
         </aside>
@@ -330,6 +340,15 @@
               </div>
             </div>
           </div>
+
+          <div class="panel">
+            <header>
+              <h2>Saved Object Sets</h2>
+            </header>
+            <div class="panel-body">
+              <pre id="setResult" class="result compact">{}</pre>
+            </div>
+          </div>
         </section>
       </section>
     </main>
@@ -341,7 +360,9 @@
       const objectType = document.querySelector("#objectType");
       const objectId = document.querySelector("#objectId");
       const reason = document.querySelector("#reason");
+      const setName = document.querySelector("#setName");
       const objectResult = document.querySelector("#objectResult");
+      const setResult = document.querySelector("#setResult");
       const metricObject = document.querySelector("#metricObject");
       const metricVersion = document.querySelector("#metricVersion");
       const metricStatus = document.querySelector("#metricStatus");
@@ -359,6 +380,10 @@
           metricVersion.textContent = value.objectVersion ?? "-";
           metricStatus.textContent = value.properties?.status ?? "-";
         }
+      }
+
+      function showSet(value) {
+        setResult.textContent = JSON.stringify(value, null, 2);
       }
 
       async function request(path, options = {}) {
@@ -406,11 +431,34 @@
         });
         show(action);
         await loadObject();
+        await loadSets();
+      }
+
+      async function savePendingSet() {
+        const created = await request("/api/object-sets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: setName.value,
+            objectType: objectType.value,
+            setType: "dynamic",
+            visibility: "private",
+            filter: { property: "status", op: "eq", value: "PENDING" },
+          }),
+        });
+        showSet(created);
+      }
+
+      async function loadSets() {
+        const sets = await request(`/api/object-sets?objectType=${encodeURIComponent(objectType.value)}`);
+        showSet(sets);
       }
 
       document.querySelector("#healthBtn").addEventListener("click", checkHealth);
       document.querySelector("#loadBtn").addEventListener("click", () => loadObject().catch(show));
       document.querySelector("#approveBtn").addEventListener("click", () => approveOrder().catch(show));
+      document.querySelector("#saveSetBtn").addEventListener("click", () => savePendingSet().catch(showSet));
+      document.querySelector("#setsBtn").addEventListener("click", () => loadSets().catch(showSet));
       checkHealth();
     </script>
   </body>

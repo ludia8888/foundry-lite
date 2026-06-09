@@ -4,7 +4,7 @@ import os
 import time
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.domain.context import RequestContext
@@ -15,7 +15,7 @@ from foundry_lite.observability.tracing import (
     instrument_fastapi_app,
     instrument_sqlalchemy_engine,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 configure_observability("foundry-lite-api")
 app = FastAPI(title="Foundry-lite API", version="0.1.0")
@@ -37,6 +37,18 @@ class ActionApplyRequest(BaseModel):
     target: dict[str, str]
     expected_object_version: int = Field(alias="expectedObjectVersion")
     params: dict[str, Any]
+
+
+class ObjectSetCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: str
+    object_type: str = Field(alias="objectType")
+    set_type: str = Field(alias="setType")
+    visibility: str = "private"
+    ids: list[str] | None = None
+    filter_ast: dict[str, Any] | None = Field(default=None, alias="filter")
+    ttl_seconds: int | None = Field(default=None, alias="ttlSeconds")
 
 
 @app.middleware("http")
@@ -132,6 +144,42 @@ def preview_dataset(request: Request, namespace: str, name: str, limit: int = 10
 def get_object(request: Request, object_type: str, object_id: str) -> dict[str, Any]:
     try:
         return core.get_object(object_type, object_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/object-sets")
+def query_object_sets(
+    request: Request,
+    object_type: str | None = Query(default=None, alias="objectType"),
+) -> dict[str, list[dict[str, Any]]]:
+    try:
+        return core.query_object_sets(ctx=_ctx(request), object_type_api_name=object_type)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/object-sets")
+def create_object_set(request: Request, payload: ObjectSetCreateRequest) -> dict[str, Any]:
+    try:
+        return core.create_object_set(
+            payload.name,
+            payload.object_type,
+            set_type=payload.set_type,
+            object_ids=payload.ids,
+            filter_ast=payload.filter_ast,
+            visibility=payload.visibility,
+            ttl_seconds=payload.ttl_seconds,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/object-sets/{set_id}")
+def get_object_set(request: Request, set_id: str) -> dict[str, Any]:
+    try:
+        return core.get_object_set(set_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

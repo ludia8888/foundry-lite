@@ -34,6 +34,13 @@ def _params(values: list[str]) -> dict[str, str]:
     return params
 
 
+def _json_arg(value: str) -> dict[str, Any]:
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise SystemExit("JSON argument must be an object")
+    return parsed
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="flite")
     sub = parser.add_subparsers(dest="group", required=True)
@@ -100,6 +107,26 @@ def _build_parser() -> argparse.ArgumentParser:
     obj_links.add_argument("object_id")
     obj_links.add_argument("link_type")
 
+    object_set = sub.add_parser("object-set")
+    object_set_sub = object_set.add_subparsers(dest="command", required=True)
+    set_list = object_set_sub.add_parser("list")
+    set_list.add_argument("--object-type")
+    set_get = object_set_sub.add_parser("get")
+    set_get.add_argument("set_id")
+    set_static = object_set_sub.add_parser("create-static")
+    set_static.add_argument("name")
+    set_static.add_argument("object_type")
+    set_static.add_argument("--id", action="append", required=True)
+    set_static.add_argument("--visibility", default="private")
+    set_static.add_argument("--ttl-seconds", type=int)
+    set_dynamic = object_set_sub.add_parser("create-dynamic")
+    set_dynamic.add_argument("name")
+    set_dynamic.add_argument("object_type")
+    set_dynamic.add_argument("--filter-json", required=True)
+    set_dynamic.add_argument("--visibility", default="private")
+    set_dynamic.add_argument("--ttl-seconds", type=int)
+    object_set_sub.add_parser("cleanup-expired")
+
     lineage = sub.add_parser("lineage")
     lineage.add_argument("resource_id")
 
@@ -153,6 +180,30 @@ def _action_apply(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Nam
     )
 
 
+def _object_set_create_static(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
+    return core.create_object_set(
+        args.name,
+        args.object_type,
+        set_type="static",
+        object_ids=args.id,
+        visibility=args.visibility,
+        ttl_seconds=args.ttl_seconds,
+        ctx=ctx,
+    )
+
+
+def _object_set_create_dynamic(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
+    return core.create_object_set(
+        args.name,
+        args.object_type,
+        set_type="dynamic",
+        filter_ast=_json_arg(args.filter_json),
+        visibility=args.visibility,
+        ttl_seconds=args.ttl_seconds,
+        ctx=ctx,
+    )
+
+
 def _handlers() -> dict[tuple[str, str], Handler]:
     return {
         ("demo", "seed"): _demo_seed,
@@ -179,6 +230,14 @@ def _handlers() -> dict[tuple[str, str], Handler]:
             args.link_type,
             ctx=ctx,
         ),
+        ("object-set", "list"): lambda core, ctx, args: core.query_object_sets(
+            ctx=ctx,
+            object_type_api_name=args.object_type,
+        ),
+        ("object-set", "get"): lambda core, ctx, args: core.get_object_set(args.set_id, ctx=ctx),
+        ("object-set", "create-static"): _object_set_create_static,
+        ("object-set", "create-dynamic"): _object_set_create_dynamic,
+        ("object-set", "cleanup-expired"): lambda core, ctx, args: core.cleanup_expired_object_sets(ctx=ctx),
         ("lineage", ""): lambda core, ctx, args: core.lineage_for_resource(args.resource_id, ctx=ctx),
         ("operations", "runs"): lambda core, ctx, args: core.list_runs(ctx=ctx),
     }
