@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Foundry-lite Operations</title>
+    <style>
+      :root {
+        --ink: #18201d;
+        --muted: #68736e;
+        --line: #d7ddd7;
+        --paper: #f7f8f4;
+        --panel: #ffffff;
+        --field: #eef2ed;
+        --accent: #0f766e;
+        --accent-2: #b12f2f;
+        --ok: #127047;
+        --warn: #9b6115;
+        --shadow: 0 18px 45px rgba(24, 32, 29, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          linear-gradient(90deg, rgba(24, 32, 29, 0.055) 1px, transparent 1px),
+          linear-gradient(rgba(24, 32, 29, 0.04) 1px, transparent 1px), var(--paper);
+        background-size: 28px 28px;
+        color: var(--ink);
+        font-family:
+          "Avenir Next",
+          "Segoe UI",
+          sans-serif;
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      .shell {
+        min-height: 100vh;
+        padding: 24px;
+      }
+
+      .topbar {
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        gap: 18px;
+        justify-content: space-between;
+        padding-bottom: 18px;
+      }
+
+      .brand {
+        display: grid;
+        gap: 3px;
+      }
+
+      .brand strong {
+        font-family: Georgia, "Times New Roman", serif;
+        font-size: 26px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .brand span,
+      .status-line {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .status-line {
+        align-items: center;
+        display: flex;
+        gap: 9px;
+      }
+
+      .dot {
+        background: var(--warn);
+        border-radius: 999px;
+        display: inline-block;
+        height: 10px;
+        width: 10px;
+      }
+
+      .dot.ok {
+        background: var(--ok);
+      }
+
+      .grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+        margin-top: 20px;
+      }
+
+      .panel {
+        background: rgba(255, 255, 255, 0.92);
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow);
+      }
+
+      .panel header {
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        padding: 14px 16px;
+      }
+
+      .panel h2 {
+        font-size: 14px;
+        letter-spacing: 0;
+        margin: 0;
+        text-transform: uppercase;
+      }
+
+      .panel-body {
+        padding: 16px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 14px;
+      }
+
+      label {
+        color: var(--muted);
+        display: grid;
+        font-size: 12px;
+        gap: 6px;
+      }
+
+      input,
+      textarea {
+        background: var(--field);
+        border: 1px solid transparent;
+        color: var(--ink);
+        min-height: 40px;
+        outline: none;
+        padding: 10px 11px;
+        width: 100%;
+      }
+
+      textarea {
+        min-height: 82px;
+        resize: vertical;
+      }
+
+      input:focus,
+      textarea:focus {
+        border-color: var(--accent);
+        background: #fff;
+      }
+
+      .row {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      button {
+        align-items: center;
+        background: var(--ink);
+        border: 0;
+        color: #fff;
+        cursor: pointer;
+        display: inline-flex;
+        gap: 8px;
+        min-height: 38px;
+        padding: 9px 13px;
+      }
+
+      button.secondary {
+        background: #dfe7df;
+        color: var(--ink);
+      }
+
+      button.danger {
+        background: var(--accent-2);
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.48;
+      }
+
+      .result {
+        background: #111815;
+        color: #dcefe5;
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.55;
+        min-height: 270px;
+        overflow: auto;
+        padding: 16px;
+        white-space: pre-wrap;
+      }
+
+      .object-card {
+        border: 1px solid var(--line);
+        display: grid;
+        gap: 12px;
+        padding: 14px;
+      }
+
+      .metric-strip {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .metric {
+        background: #eef2ed;
+        border-left: 4px solid var(--accent);
+        min-height: 74px;
+        padding: 12px;
+      }
+
+      .metric span {
+        color: var(--muted);
+        display: block;
+        font-size: 12px;
+      }
+
+      .metric strong {
+        display: block;
+        font-size: 20px;
+        margin-top: 8px;
+      }
+
+      @media (max-width: 860px) {
+        .shell {
+          padding: 16px;
+        }
+
+        .topbar,
+        .grid,
+        .row,
+        .metric-strip {
+          grid-template-columns: 1fr;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          display: grid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="topbar">
+        <div class="brand">
+          <strong>Foundry-lite</strong>
+          <span>Operational object loop</span>
+        </div>
+        <div class="status-line">
+          <span id="statusDot" class="dot"></span>
+          <span id="statusText">API unknown</span>
+        </div>
+      </section>
+
+      <section class="grid">
+        <aside class="panel">
+          <header>
+            <h2>Control</h2>
+          </header>
+          <div class="panel-body stack">
+            <label>
+              API Base
+              <input id="apiBase" value="http://127.0.0.1:8000" />
+            </label>
+            <div class="row">
+              <label>
+                Object Type
+                <input id="objectType" value="Order" />
+              </label>
+              <label>
+                Object ID
+                <input id="objectId" value="O-1001" />
+              </label>
+            </div>
+            <label>
+              Reason
+              <textarea id="reason">Inventory confirmed</textarea>
+            </label>
+            <div class="actions">
+              <button id="healthBtn" type="button">Check</button>
+              <button id="loadBtn" type="button" class="secondary">Load Object</button>
+              <button id="approveBtn" type="button" class="danger">ApproveOrder</button>
+            </div>
+          </div>
+        </aside>
+
+        <section class="stack">
+          <div class="metric-strip">
+            <div class="metric">
+              <span>Object</span>
+              <strong id="metricObject">-</strong>
+            </div>
+            <div class="metric">
+              <span>Version</span>
+              <strong id="metricVersion">-</strong>
+            </div>
+            <div class="metric">
+              <span>Status</span>
+              <strong id="metricStatus">-</strong>
+            </div>
+          </div>
+
+          <div class="panel">
+            <header>
+              <h2>Object Explorer</h2>
+            </header>
+            <div class="panel-body">
+              <div class="object-card">
+                <pre id="objectResult" class="result">{}</pre>
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script>
+      const apiBase = document.querySelector("#apiBase");
+      const statusDot = document.querySelector("#statusDot");
+      const statusText = document.querySelector("#statusText");
+      const objectType = document.querySelector("#objectType");
+      const objectId = document.querySelector("#objectId");
+      const reason = document.querySelector("#reason");
+      const objectResult = document.querySelector("#objectResult");
+      const metricObject = document.querySelector("#metricObject");
+      const metricVersion = document.querySelector("#metricVersion");
+      const metricStatus = document.querySelector("#metricStatus");
+
+      let currentObject = null;
+
+      function show(value) {
+        objectResult.textContent = JSON.stringify(value, null, 2);
+        if (value.objectId) {
+          metricObject.textContent = value.objectId;
+          metricVersion.textContent = value.objectVersion ?? "-";
+          metricStatus.textContent = value.properties?.status ?? "-";
+        }
+      }
+
+      async function request(path, options = {}) {
+        const response = await fetch(`${apiBase.value}${path}`, options);
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw body;
+        }
+        return body;
+      }
+
+      async function checkHealth() {
+        try {
+          const health = await request("/healthz");
+          statusDot.classList.add("ok");
+          statusText.textContent = health.status;
+        } catch (error) {
+          statusDot.classList.remove("ok");
+          statusText.textContent = "API unavailable";
+          show(error);
+        }
+      }
+
+      async function loadObject() {
+        currentObject = await request(`/api/objects/${objectType.value}/${objectId.value}`);
+        show(currentObject);
+      }
+
+      async function approveOrder() {
+        if (!currentObject) {
+          await loadObject();
+        }
+        const action = await request("/api/actions/ApproveOrder/apply", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": `ui-${objectId.value}-${Date.now()}`,
+          },
+          body: JSON.stringify({
+            target: { objectType: objectType.value, objectId: objectId.value },
+            expectedObjectVersion: currentObject.objectVersion,
+            params: { reason: reason.value },
+          }),
+        });
+        show(action);
+        await loadObject();
+      }
+
+      document.querySelector("#healthBtn").addEventListener("click", checkHealth);
+      document.querySelector("#loadBtn").addEventListener("click", () => loadObject().catch(show));
+      document.querySelector("#approveBtn").addEventListener("click", () => approveOrder().catch(show));
+      checkHealth();
+    </script>
+  </body>
+</html>
+

@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+import os
+import time
+from typing import Any
+
+from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import FoundryLiteError
+from foundry_lite.observability.metrics import prometheus_payload, record_http_request
+from foundry_lite.observability.tracing import (
+    configure_observability,
+    instrument_fastapi_app,
+    instrument_sqlalchemy_engine,
+)
+from pydantic import BaseModel, Field
+
+configure_observability("foundry-lite-api")
+app = FastAPI(title="Foundry-lite API", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:4173", "http://localhost:4173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+core = FoundryLiteCore(
+    db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
+    storage_root=os.getenv("FOUNDRY_LITE_HOME", ".foundry-lite"),
+)
+instrument_fastapi_app(app)
+instrument_sqlalchemy_engine(core.engine)
+
+
+class ActionApplyRequest(BaseModel):
+    target: dict[str, str]
+    expected_object_version: int = Field(alias="expectedObjectVersion")
+    params: dict[str, Any]
+
+
+@app.middleware("http")
+async def telemetry_middleware(request: Request, call_next: Any) -> Response:
+    started_at = time.perf_counter()
+    request_id = request.headers.get("X-Request-ID") or f"api-{time.time_ns()}"
+    request.state.request_id = request_id
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        return response
+    finally:
+        record_http_request(
+            request.method,
+            request.url.path,
+            status_code,
+            time.perf_counter() - started_at,
+        )
+
+
+def _ctx(
+    request: Request | None = None,
+    x_tenant_id: str | None = Header(default=None),
+    x_user_id: str | None = Header(default=None),
+    x_roles: str | None = Header(default=None),
+) -> RequestContext:
+    x_tenant_id = x_tenant_id if isinstance(x_tenant_id, str) else None
+    x_user_id = x_user_id if isinstance(x_user_id, str) else None
+    x_roles = x_roles if isinstance(x_roles, str) else None
+    if request is not None:
+        x_tenant_id = x_tenant_id or request.headers.get("X-Tenant-ID")
+        x_user_id = x_user_id or request.headers.get("X-User-ID")
+        x_roles = x_roles or request.headers.get("X-Roles")
+
+    roles = tuple(role.strip() for role in x_roles.split(",")) if x_roles else RequestContext().roles
+    return RequestContext(
+        tenant_id=x_tenant_id or RequestContext().tenant_id,
+        actor_user_id=x_user_id or RequestContext().actor_user_id,
+        request_id=getattr(getattr(request, "state", None), "request_id", RequestContext().request_id),
+        roles=roles,
+    )
+
+
+def _handle_error(exc: FoundryLiteError, request: Request | None = None) -> HTTPException:
+    status_by_code = {
+        "NOT_FOUND": 404,
+        "CONFLICT": 409,
+        "PERMISSION_DENIED": 403,
+    }
+    status = status_by_code.get(exc.code, 400)
+    request_id = getattr(getattr(request, "state", None), "request_id", None)
+    return HTTPException(
+        status_code=status,
+        detail={"code": exc.code, "message": exc.message, "details": exc.details, "request_id": request_id},
+    )
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    payload, media_type = prometheus_payload()
+    return Response(content=payload, media_type=media_type)
+
+
+@app.get("/api/datasets/{namespace}/{name}/preview")
+def preview_dataset(request: Request, namespace: str, name: str, limit: int = 100) -> list[dict[str, Any]]:
+    try:
+        return core.preview_dataset(f"{namespace}.{name}", limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/objects/{object_type}/{object_id}")
+def get_object(request: Request, object_type: str, object_id: str) -> dict[str, Any]:
+    try:
+        return core.get_object(object_type, object_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/actions/{action_type}/apply")
+def apply_action(
+    request: Request,
+    action_type: str,
+    payload: ActionApplyRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> dict[str, Any]:
+    try:
+        return core.apply_action(
+            action_type,
+            object_type=payload.target["objectType"],
+            object_id=payload.target["objectId"],
+            expected_object_version=payload.expected_object_version,
+            params=payload.params,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8000)

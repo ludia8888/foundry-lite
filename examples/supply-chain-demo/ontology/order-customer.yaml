@@ -1,0 +1,108 @@
+objectTypes:
+  - apiName: Order
+    displayName: Order
+    primaryKey: orderId
+    backing:
+      dataset: clean.orders
+      mode: snapshot
+      primaryKeyColumns: [order_id]
+    properties:
+      - apiName: orderId
+        column: order_id
+        type: string
+        indexed: true
+        nullable: false
+      - apiName: customerId
+        column: customer_id
+        type: string
+        indexed: true
+        nullable: false
+      - apiName: status
+        column: source_status
+        type: string
+        indexed: true
+        editable: true
+        editPolicy: edit_wins
+      - apiName: amount
+        column: amount
+        type: float
+      - apiName: margin
+        column: margin
+        type: float
+        classification: finance
+      - apiName: riskScore
+        column: risk_score
+        type: float
+        indexed: true
+      - apiName: operatorNote
+        type: string
+        editable: true
+        source: edit_layer
+        editPolicy: edit_only
+  - apiName: Customer
+    displayName: Customer
+    primaryKey: customerId
+    backing:
+      dataset: clean.customers
+      mode: snapshot
+      primaryKeyColumns: [customer_id]
+    properties:
+      - apiName: customerId
+        column: customer_id
+        type: string
+        indexed: true
+        nullable: false
+      - apiName: name
+        column: customer_name
+        type: string
+      - apiName: segment
+        column: segment
+        type: string
+      - apiName: region
+        column: region
+        type: string
+      - apiName: riskScore
+        column: risk_score
+        type: float
+        indexed: true
+      - apiName: approvedOrderCount
+        column: approved_order_count
+        type: integer
+        indexed: true
+linkTypes:
+  - apiName: OrderCustomer
+    displayName: Order belongs to Customer
+    from: Order
+    to: Customer
+    cardinality: many_to_one
+    backing:
+      dataset: clean.orders
+      fromKey: order_id
+      toKey: customer_id
+actionTypes:
+  - apiName: ApproveOrder
+    displayName: Approve order
+    target: Order
+    parameters:
+      - apiName: reason
+        type: string
+        required: true
+    permissions:
+      allowedRoles: [ops_manager]
+    preconditions:
+      - cel: "object.status in ['PENDING', 'REVIEW']"
+        message: "Only pending/review orders can be approved"
+    mutations:
+      - type: setProperty
+        property: status
+        value: APPROVED
+      - type: setProperty
+        property: operatorNote
+        valueFrom: params.reason
+    writebacks:
+      - apiName: erpApproveOrder
+        mode: beforeCommit
+        connector: mock_erp
+    sideEffects:
+      - type: event
+        topic: ops.order.approved

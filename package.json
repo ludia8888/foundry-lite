@@ -1,0 +1,23 @@
+{
+  "name": "foundry-lite",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "ci:gate": "bash scripts/ci_gate.sh",
+    "dev": "PYTHONPATH=.:libs:apps/api:apps/cli uv run python -m foundry_lite_api.main",
+    "demo:supply-chain": "PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m foundry_lite_cli.main demo run-supply-chain",
+    "diagnostics": "uv run python scripts/diagnostics/run_runtime_diagnostics.py",
+    "diagnostics:trace": "uv run python scripts/diagnostics/run_runtime_diagnostics.py --console-traces",
+    "quality:architecture": "uv run python scripts/quality/check_dependency_graph.py",
+    "quality:no-bypasses": "uv run python scripts/quality/check_no_test_bypasses.py",
+    "quality:static": "uv run ruff check . && uv run ruff format --check . && uv run mypy libs apps/api apps/cli apps/worker scripts && uv run pyright && uv run python scripts/quality/check_dependency_graph.py && uv run python scripts/quality/check_no_test_bypasses.py",
+    "test": "PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m pytest",
+    "test:coverage": "PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m pytest tests --cov=libs/foundry_lite --cov-branch --cov-fail-under=95",
+    "test:e2e": "pnpm exec playwright test",
+    "web:static": "uv run python -m http.server 4173 --directory apps/web",
+    "lint": "PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m compileall libs apps tests"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.0"
+  }
+}

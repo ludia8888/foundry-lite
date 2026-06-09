@@ -1,0 +1,1 @@
+"""Foundry-lite FastAPI app."""
