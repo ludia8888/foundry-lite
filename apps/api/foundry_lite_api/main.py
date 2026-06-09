@@ -65,21 +65,34 @@ def _ctx(
     x_user_id: str | None = Header(default=None),
     x_roles: str | None = Header(default=None),
 ) -> RequestContext:
-    x_tenant_id = x_tenant_id if isinstance(x_tenant_id, str) else None
-    x_user_id = x_user_id if isinstance(x_user_id, str) else None
-    x_roles = x_roles if isinstance(x_roles, str) else None
-    if request is not None:
-        x_tenant_id = x_tenant_id or request.headers.get("X-Tenant-ID")
-        x_user_id = x_user_id or request.headers.get("X-User-ID")
-        x_roles = x_roles or request.headers.get("X-Roles")
-
-    roles = tuple(role.strip() for role in x_roles.split(",")) if x_roles else RequestContext().roles
+    defaults = RequestContext()
+    tenant_id = _header_or_request(x_tenant_id, request, "X-Tenant-ID") or defaults.tenant_id
+    user_id = _header_or_request(x_user_id, request, "X-User-ID") or defaults.actor_user_id
+    roles = _roles_from_header(_header_or_request(x_roles, request, "X-Roles"), defaults.roles)
     return RequestContext(
-        tenant_id=x_tenant_id or RequestContext().tenant_id,
-        actor_user_id=x_user_id or RequestContext().actor_user_id,
-        request_id=getattr(getattr(request, "state", None), "request_id", RequestContext().request_id),
+        tenant_id=tenant_id,
+        actor_user_id=user_id,
+        request_id=_request_id(request, defaults.request_id),
         roles=roles,
     )
+
+
+def _header_or_request(value: str | None, request: Request | None, header_name: str) -> str | None:
+    normalized = value if isinstance(value, str) else None
+    if normalized or request is None:
+        return normalized
+    return request.headers.get(header_name)
+
+
+def _roles_from_header(value: str | None, default_roles: tuple[str, ...]) -> tuple[str, ...]:
+    if not value:
+        return default_roles
+    return tuple(role.strip() for role in value.split(",") if role.strip())
+
+
+def _request_id(request: Request | None, default_request_id: str) -> str:
+    state = getattr(request, "state", None)
+    return getattr(state, "request_id", default_request_id)
 
 
 def _handle_error(exc: FoundryLiteError, request: Request | None = None) -> HTTPException:

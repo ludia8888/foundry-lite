@@ -24,22 +24,41 @@ def _is_public(name: str) -> bool:
 
 def collect_public_callables(path: Path) -> list[PublicCallable]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    callables: list[PublicCallable] = []
+    return _public_module_functions(path, tree) + _public_class_methods(path, tree)
+
+
+def _public_module_functions(path: Path, tree: ast.AST) -> list[PublicCallable]:
+    if not isinstance(tree, ast.Module):
+        return []
+    return [
+        _callable_record(path, node.name, node)
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _is_public(node.name)
+    ]
+
+
+def _public_class_methods(path: Path, tree: ast.AST) -> list[PublicCallable]:
+    methods: list[PublicCallable] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _is_public(node.name):
-            callables.append(PublicCallable(path, node.name, node.lineno, node.end_lineno or node.lineno))
-        elif isinstance(node, ast.ClassDef) and _is_public(node.name):
-            for child in node.body:
-                if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) and _is_public(child.name):
-                    callables.append(
-                        PublicCallable(
-                            path,
-                            f"{node.name}.{child.name}",
-                            child.lineno,
-                            child.end_lineno or child.lineno,
-                        )
-                    )
-    return callables
+        if isinstance(node, ast.ClassDef) and _is_public(node.name):
+            methods.extend(_public_methods_for_class(path, node))
+    return methods
+
+
+def _public_methods_for_class(path: Path, node: ast.ClassDef) -> list[PublicCallable]:
+    return [
+        _callable_record(path, f"{node.name}.{child.name}", child)
+        for child in node.body
+        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef) and _is_public(child.name)
+    ]
+
+
+def _callable_record(
+    path: Path,
+    name: str,
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> PublicCallable:
+    return PublicCallable(path, name, node.lineno, node.end_lineno or node.lineno)
 
 
 def main(argv: list[str] | None = None) -> int:

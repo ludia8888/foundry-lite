@@ -8,6 +8,7 @@
     "demo:supply-chain": "PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m foundry_lite_cli.main demo run-supply-chain",
     "diagnostics": "uv run python scripts/diagnostics/run_runtime_diagnostics.py",
     "diagnostics:trace": "uv run python scripts/diagnostics/run_runtime_diagnostics.py --console-traces",
+    "quality:complexity": "uv run radon cc libs apps scripts -s -a && uv run xenon --max-absolute B --max-modules B --max-average A libs apps scripts",
     "quality:architecture": "uv run python scripts/quality/check_dependency_graph.py",
     "quality:no-bypasses": "uv run python scripts/quality/check_no_test_bypasses.py",
     "quality:static": "uv run ruff check . && uv run ruff format --check . && uv run mypy libs apps/api apps/cli apps/worker scripts && uv run pyright && uv run python scripts/quality/check_dependency_graph.py && uv run python scripts/quality/check_no_test_bypasses.py",

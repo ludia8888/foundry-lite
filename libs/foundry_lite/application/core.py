@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -35,6 +36,8 @@ INPUT_PATTERN = re.compile(r"\{\{\s*input\('([^']+)'\)\s*\}\}")
 SQL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 OBJECT_IN_PATTERN = re.compile(r"^object\.([A-Za-z_][A-Za-z0-9_]*)\s+in\s+\[(.*)]$")
 OBJECT_EQ_PATTERN = re.compile(r"^object\.([A-Za-z_][A-Za-z0-9_]*)\s*==\s*'([^']*)'$")
+
+FilterEvaluator = Callable[[Any, Any], bool]
 
 
 @dataclass(frozen=True)
@@ -148,6 +151,35 @@ def _write_rows_to_csv(rows: list[dict[str, Any]], path: Path, fieldnames: list[
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field) for field in fieldnames})
+
+
+def _filter_eq(current: Any, value: Any) -> bool:
+    return current == value
+
+
+def _filter_in(current: Any, value: Any) -> bool:
+    return current in value
+
+
+def _filter_gte(current: Any, value: Any) -> bool:
+    return current is not None and current >= value
+
+
+def _filter_lte(current: Any, value: Any) -> bool:
+    return current is not None and current <= value
+
+
+def _filter_contains(current: Any, value: Any) -> bool:
+    return current is not None and str(value).lower() in str(current).lower()
+
+
+FILTER_OPERATIONS: dict[str, FilterEvaluator] = {
+    "eq": _filter_eq,
+    "in": _filter_in,
+    "gte": _filter_gte,
+    "lte": _filter_lte,
+    "contains": _filter_contains,
+}
 
 
 def _normalize_duckdb_type(duckdb_type: str) -> str:
@@ -764,47 +796,92 @@ class FoundryLiteCore:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
         with self.engine.begin() as conn:
-            rows = (
-                conn.execute(
-                    select(db.object_records)
-                    .where(
-                        and_(
-                            db.object_records.c.tenant_id == ctx.tenant_id,
-                            db.object_records.c.object_type_api_name == object_type_api_name,
-                            db.object_records.c.deleted == False,  # noqa: E712
-                        )
-                    )
-                    .order_by(db.object_records.c.object_id)
-                )
-                .mappings()
-                .all()
-            )
-        records = [dict(row) for row in rows]
-        if cursor is not None:
-            records = [row for row in records if row["object_id"] > cursor]
-        if filter_ast:
-            records = [row for row in records if self._matches_filter(row["properties"], filter_ast)]
-        if order_by:
-            for order in reversed(order_by):
-                prop = order["property"]
-                reverse = order.get("direction", "asc") == "desc"
-                records.sort(key=lambda item: item["properties"].get(prop), reverse=reverse)
+            records = self._object_query_rows(conn, ctx, object_type_api_name)
+        records = self._apply_object_query_options(records, cursor=cursor, filter_ast=filter_ast, order_by=order_by)
         page = records[:limit]
         return {
-            "items": [
-                {
-                    "objectType": object_type_api_name,
-                    "objectId": row["object_id"],
-                    "objectVersion": row["object_version"],
-                    "properties": self.policy.mask_properties(
-                        ctx,
-                        object_type_api_name,
-                        dict(row["properties"]),
-                    ),
-                }
-                for row in page
-            ],
+            "items": [self._object_query_item(ctx, object_type_api_name, row) for row in page],
             "nextCursor": page[-1]["object_id"] if len(records) > len(page) and page else None,
+        }
+
+    def _object_query_rows(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+        object_type_api_name: str,
+    ) -> list[dict[str, Any]]:
+        rows = (
+            conn.execute(
+                select(db.object_records)
+                .where(
+                    and_(
+                        db.object_records.c.tenant_id == ctx.tenant_id,
+                        db.object_records.c.object_type_api_name == object_type_api_name,
+                        db.object_records.c.deleted == False,  # noqa: E712
+                    )
+                )
+                .order_by(db.object_records.c.object_id)
+            )
+            .mappings()
+            .all()
+        )
+        return [dict(row) for row in rows]
+
+    def _apply_object_query_options(
+        self,
+        records: list[dict[str, Any]],
+        *,
+        cursor: str | None,
+        filter_ast: dict[str, Any] | None,
+        order_by: list[dict[str, str]] | None,
+    ) -> list[dict[str, Any]]:
+        filtered = self._apply_object_cursor(records, cursor)
+        filtered = self._apply_object_filter(filtered, filter_ast)
+        return self._apply_object_sort(filtered, order_by)
+
+    def _apply_object_cursor(
+        self,
+        records: list[dict[str, Any]],
+        cursor: str | None,
+    ) -> list[dict[str, Any]]:
+        if cursor is None:
+            return records
+        return [row for row in records if row["object_id"] > cursor]
+
+    def _apply_object_filter(
+        self,
+        records: list[dict[str, Any]],
+        filter_ast: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        if not filter_ast:
+            return records
+        return [row for row in records if self._matches_filter(row["properties"], filter_ast)]
+
+    def _apply_object_sort(
+        self,
+        records: list[dict[str, Any]],
+        order_by: list[dict[str, str]] | None,
+    ) -> list[dict[str, Any]]:
+        if not order_by:
+            return records
+        sorted_records = list(records)
+        for order in reversed(order_by):
+            prop = order["property"]
+            reverse = order.get("direction", "asc") == "desc"
+            sorted_records.sort(key=lambda item: item["properties"].get(prop), reverse=reverse)
+        return sorted_records
+
+    def _object_query_item(
+        self,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        row: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "objectType": object_type_api_name,
+            "objectId": row["object_id"],
+            "objectVersion": row["object_version"],
+            "properties": self.policy.mask_properties(ctx, object_type_api_name, dict(row["properties"])),
         }
 
     def get_links(
@@ -870,6 +947,63 @@ class FoundryLiteCore:
         ctx = ctx or RequestContext()
         if not idempotency_key:
             raise ValidationFailed("idempotency key is required")
+        self._require_action_permission(ctx, action_api_name)
+        action_run_id = _new_id("action_run")
+        deferred_error: Exception | None = None
+        response: dict[str, Any] | None = None
+
+        with self.engine.begin() as conn:
+            action_type = self._active_action_type(conn, ctx, action_api_name)
+            existing = self._existing_action_run(conn, ctx, action_type, idempotency_key)
+            if existing is not None:
+                return self._action_replay_response(existing)
+
+            self._insert_action_run(
+                conn,
+                ctx,
+                action_type=action_type,
+                action_api_name=action_api_name,
+                action_run_id=action_run_id,
+                object_type=object_type,
+                object_id=object_id,
+                expected_object_version=expected_object_version,
+                params=params,
+                idempotency_key=idempotency_key,
+            )
+            record = self._object_record(conn, ctx, object_type, object_id)
+            deferred_error = self._action_request_error(action_type, record, expected_object_version, params)
+
+            if deferred_error is not None:
+                self._fail_action_run(conn, ctx, action_run_id, deferred_error)
+            elif simulate_writeback_failure:
+                deferred_error = self._fail_before_commit_writeback(conn, ctx, action_run_id, idempotency_key)
+            else:
+                if record is None:
+                    raise InvariantViolation("action target record disappeared before commit")
+                self._record_writeback(
+                    conn,
+                    ctx,
+                    action_run_id,
+                    status="succeeded",
+                    idempotency_key=idempotency_key,
+                    response={"status_code": 200},
+                )
+                response = self._commit_action_mutations(
+                    conn,
+                    ctx,
+                    action_type=action_type,
+                    action_run_id=action_run_id,
+                    record=record,
+                    params=params,
+                    idempotency_key=idempotency_key,
+                )
+        if deferred_error is not None:
+            raise deferred_error
+        if response is None:
+            raise InvariantViolation("action did not produce a response")
+        return response
+
+    def _require_action_permission(self, ctx: RequestContext, action_api_name: str) -> None:
         permission = f"action:execute:{action_api_name}"
         try:
             self.policy.require(ctx, permission)
@@ -887,131 +1021,143 @@ class FoundryLiteCore:
                 )
             raise
 
-        action_run_id = _new_id("action_run")
-        deferred_error: Exception | None = None
-        response: dict[str, Any] | None = None
-        with self.engine.begin() as conn:
-            action_type = self._active_action_type(conn, ctx, action_api_name)
-            existing = (
-                conn.execute(
-                    select(db.action_runs).where(
-                        and_(
-                            db.action_runs.c.tenant_id == ctx.tenant_id,
-                            db.action_runs.c.action_type_id == action_type["id"],
-                            db.action_runs.c.actor_user_id == ctx.actor_user_id,
-                            db.action_runs.c.idempotency_key == idempotency_key,
-                        )
-                    )
-                )
-                .mappings()
-                .first()
-            )
-            if existing is not None:
-                return {
-                    "actionRunId": existing["id"],
-                    "status": existing["status"],
-                    "idempotentReplay": True,
-                    "target": {
-                        "objectType": existing["target_object_type_api_name"],
-                        "objectId": existing["target_object_id"],
-                    },
-                }
-
+    def _existing_action_run(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+        action_type: dict[str, Any],
+        idempotency_key: str,
+    ) -> dict[str, Any] | None:
+        row = (
             conn.execute(
-                insert(db.action_runs).values(
-                    id=action_run_id,
-                    tenant_id=ctx.tenant_id,
-                    action_type_id=action_type["id"],
-                    action_type_api_name=action_api_name,
-                    actor_user_id=ctx.actor_user_id,
-                    target_object_type_id=action_type["target_object_type_id"],
-                    target_object_type_api_name=object_type,
-                    target_object_id=object_id,
-                    expected_object_version=expected_object_version,
-                    parameters=params,
-                    status="received",
-                    idempotency_key=idempotency_key,
-                    error=None,
-                    created_at=_now(),
-                    completed_at=None,
+                select(db.action_runs).where(
+                    and_(
+                        db.action_runs.c.tenant_id == ctx.tenant_id,
+                        db.action_runs.c.action_type_id == action_type["id"],
+                        db.action_runs.c.actor_user_id == ctx.actor_user_id,
+                        db.action_runs.c.idempotency_key == idempotency_key,
+                    )
                 )
             )
-            record = self._object_record(conn, ctx, object_type, object_id)
-            if record is None:
-                deferred_error = NotFound("target object not found")
-            elif record["object_version"] != expected_object_version:
-                deferred_error = ConflictDetected(
-                    "object version conflict",
-                    details={
-                        "currentObjectVersion": record["object_version"],
-                        "expectedObjectVersion": expected_object_version,
-                    },
-                )
-            else:
-                deferred_error = self._validate_action_request(action_type, record, params)
+            .mappings()
+            .first()
+        )
+        return dict(row) if row else None
 
-            if deferred_error is not None:
-                status = "conflict" if isinstance(deferred_error, ConflictDetected) else "failed"
-                conn.execute(
-                    update(db.action_runs)
-                    .where(db.action_runs.c.id == action_run_id)
-                    .values(status=status, error=self._error_payload(deferred_error), completed_at=_now())
-                )
-                self._audit(
-                    conn,
-                    ctx,
-                    event_type="action.run.failed",
-                    resource_type="action_run",
-                    resource_id=action_run_id,
-                    action="apply",
-                    decision="deny" if isinstance(deferred_error, PermissionDenied) else "allow",
-                    after_ref=self._error_payload(deferred_error),
-                    correlation_id=action_run_id,
-                )
-            else:
-                if simulate_writeback_failure:
-                    deferred_error = ExternalSystemError(
-                        "mock before-commit writeback failed",
-                        details={"connector": "mock_erp"},
-                    )
-                    self._record_writeback(
-                        conn,
-                        ctx,
-                        action_run_id,
-                        status="failed",
-                        idempotency_key=idempotency_key,
-                        response={"status_code": 500},
-                    )
-                    conn.execute(
-                        update(db.action_runs)
-                        .where(db.action_runs.c.id == action_run_id)
-                        .values(status="failed", error=self._error_payload(deferred_error), completed_at=_now())
-                    )
-                else:
-                    self._record_writeback(
-                        conn,
-                        ctx,
-                        action_run_id,
-                        status="succeeded",
-                        idempotency_key=idempotency_key,
-                        response={"status_code": 200},
-                    )
-                    if record is None:
-                        raise InvariantViolation("action target record disappeared before commit")
-                    response = self._commit_action_mutations(
-                        conn,
-                        ctx,
-                        action_type=action_type,
-                        action_run_id=action_run_id,
-                        record=record,
-                        params=params,
-                        idempotency_key=idempotency_key,
-                    )
-        if deferred_error is not None:
-            raise deferred_error
-        if response is None:
-            raise InvariantViolation("action did not produce a response")
-        return response
+    def _action_replay_response(self, existing: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "actionRunId": existing["id"],
+            "status": existing["status"],
+            "idempotentReplay": True,
+            "target": {
+                "objectType": existing["target_object_type_api_name"],
+                "objectId": existing["target_object_id"],
+            },
+        }
+
+    def _insert_action_run(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+        *,
+        action_type: dict[str, Any],
+        action_api_name: str,
+        action_run_id: str,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: dict[str, Any],
+        idempotency_key: str,
+    ) -> None:
+        conn.execute(
+            insert(db.action_runs).values(
+                id=action_run_id,
+                tenant_id=ctx.tenant_id,
+                action_type_id=action_type["id"],
+                action_type_api_name=action_api_name,
+                actor_user_id=ctx.actor_user_id,
+                target_object_type_id=action_type["target_object_type_id"],
+                target_object_type_api_name=object_type,
+                target_object_id=object_id,
+                expected_object_version=expected_object_version,
+                parameters=params,
+                status="received",
+                idempotency_key=idempotency_key,
+                error=None,
+                created_at=_now(),
+                completed_at=None,
+            )
+        )
+
+    def _action_request_error(
+        self,
+        action_type: dict[str, Any],
+        record: dict[str, Any] | None,
+        expected_object_version: int,
+        params: dict[str, Any],
+    ) -> Exception | None:
+        if record is None:
+            return NotFound("target object not found")
+        if record["object_version"] != expected_object_version:
+            return ConflictDetected(
+                "object version conflict",
+                details={
+                    "currentObjectVersion": record["object_version"],
+                    "expectedObjectVersion": expected_object_version,
+                },
+            )
+        return self._validate_action_request(action_type, record, params)
+
+    def _fail_action_run(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+        action_run_id: str,
+        error: Exception,
+    ) -> None:
+        status = "conflict" if isinstance(error, ConflictDetected) else "failed"
+        conn.execute(
+            update(db.action_runs)
+            .where(db.action_runs.c.id == action_run_id)
+            .values(status=status, error=self._error_payload(error), completed_at=_now())
+        )
+        self._audit(
+            conn,
+            ctx,
+            event_type="action.run.failed",
+            resource_type="action_run",
+            resource_id=action_run_id,
+            action="apply",
+            decision="deny" if isinstance(error, PermissionDenied) else "allow",
+            after_ref=self._error_payload(error),
+            correlation_id=action_run_id,
+        )
+
+    def _fail_before_commit_writeback(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+        action_run_id: str,
+        idempotency_key: str,
+    ) -> ExternalSystemError:
+        error = ExternalSystemError(
+            "mock before-commit writeback failed",
+            details={"connector": "mock_erp"},
+        )
+        self._record_writeback(
+            conn,
+            ctx,
+            action_run_id,
+            status="failed",
+            idempotency_key=idempotency_key,
+            response={"status_code": 500},
+        )
+        conn.execute(
+            update(db.action_runs)
+            .where(db.action_runs.c.id == action_run_id)
+            .values(status="failed", error=self._error_payload(error), completed_at=_now())
+        )
+        return error
 
     def materialize(
         self,
@@ -1892,11 +2038,32 @@ actionTypes:
         if latest_version is None:
             return None
         current_schema = self._schema_for_version(dataset["id"], latest_version["schema_version"])["schema_json"]
-        current_columns = {column["name"]: column for column in current_schema["columns"]}
-        next_columns = {column["name"]: column for column in next_schema["columns"]}
+        current_columns = self._schema_columns_by_name(current_schema)
+        next_columns = self._schema_columns_by_name(next_schema)
+        return (
+            self._missing_columns_error(current_columns, next_columns)
+            or self._type_change_error(current_columns, next_columns)
+            or self._missing_primary_key_error(dataset, next_columns)
+        )
+
+    def _schema_columns_by_name(self, schema: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        return {column["name"]: column for column in schema["columns"]}
+
+    def _missing_columns_error(
+        self,
+        current_columns: dict[str, dict[str, Any]],
+        next_columns: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
         missing = sorted(set(current_columns) - set(next_columns))
-        if missing:
-            return {"check": "schema_compatibility", "status": "failed", "missing_columns": missing}
+        if not missing:
+            return None
+        return {"check": "schema_compatibility", "status": "failed", "missing_columns": missing}
+
+    def _type_change_error(
+        self,
+        current_columns: dict[str, dict[str, Any]],
+        next_columns: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
         for name, column in current_columns.items():
             if name in next_columns and column["type"] != next_columns[name]["type"]:
                 return {
@@ -1906,6 +2073,13 @@ actionTypes:
                     "from": column["type"],
                     "to": next_columns[name]["type"],
                 }
+        return None
+
+    def _missing_primary_key_error(
+        self,
+        dataset: dict[str, Any],
+        next_columns: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
         for pk in dataset["primary_key"]:
             if pk not in next_columns:
                 return {"check": "schema_compatibility", "status": "failed", "missing_primary_key": pk}
@@ -1994,52 +2168,77 @@ actionTypes:
     ) -> dict[str, Any]:
         check_type = check["type"]
         if check_type == "row_count_min":
-            status = "passed" if row_count >= int(check["min"]) else "failed"
-            return {"check": check_type, "status": status, "row_count": row_count, "min": check["min"]}
+            return self._row_count_min_check(row_count, check)
         con = duckdb.connect()
         try:
             if check_type == "not_null":
-                failures: dict[str, int] = {}
-                for column in check["columns"]:
-                    column_identifier = _sql_identifier(column)
-                    # column_identifier is validated and parquet path is a bound parameter.
-                    null_check_sql = f"select count(*) from read_parquet(?) where {column_identifier} is null"  # nosec B608
-                    count = int(
-                        _required_row(
-                            con.execute(null_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
-                            "not null health check",
-                        )[0]
-                    )
-                    if count:
-                        failures[column] = count
-                return {
-                    "check": check_type,
-                    "status": "failed" if failures else "passed",
-                    "failures": failures,
-                }
+                return self._not_null_check(con, parquet_path, check)
             if check_type == "unique":
-                column = check["column"]
-                column_identifier = _sql_identifier(column)
-                duplicate_count = int(
-                    _required_row(
-                        con.execute(
-                            "select count(*) from (select "  # nosec B608
-                            f"{column_identifier}, count(*) c from read_parquet(?) "
-                            f"group by {column_identifier} having c > 1)",
-                            [str(parquet_path)],
-                        ).fetchone(),  # nosec B608
-                        "unique health check",
-                    )[0]
-                )
-                return {
-                    "check": check_type,
-                    "status": "failed" if duplicate_count else "passed",
-                    "column": column,
-                    "duplicate_groups": duplicate_count,
-                }
+                return self._unique_check(con, parquet_path, check)
         finally:
             con.close()
         return {"check": check_type, "status": "passed", "note": "unsupported check treated as noop"}
+
+    def _row_count_min_check(self, row_count: int, check: dict[str, Any]) -> dict[str, Any]:
+        status = "passed" if row_count >= int(check["min"]) else "failed"
+        return {"check": check["type"], "status": status, "row_count": row_count, "min": check["min"]}
+
+    def _not_null_check(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        parquet_path: Path,
+        check: dict[str, Any],
+    ) -> dict[str, Any]:
+        failures: dict[str, int] = {}
+        for column in check["columns"]:
+            count = self._null_count(con, parquet_path, column)
+            if count:
+                failures[column] = count
+        return {
+            "check": check["type"],
+            "status": "failed" if failures else "passed",
+            "failures": failures,
+        }
+
+    def _null_count(self, con: duckdb.DuckDBPyConnection, parquet_path: Path, column: str) -> int:
+        column_identifier = _sql_identifier(column)
+        # column_identifier is validated and parquet path is a bound parameter.
+        null_check_sql = f"select count(*) from read_parquet(?) where {column_identifier} is null"  # nosec B608
+        return int(
+            _required_row(
+                con.execute(null_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
+                "not null health check",
+            )[0]
+        )
+
+    def _unique_check(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        parquet_path: Path,
+        check: dict[str, Any],
+    ) -> dict[str, Any]:
+        column = check["column"]
+        duplicate_count = self._duplicate_group_count(con, parquet_path, column)
+        return {
+            "check": check["type"],
+            "status": "failed" if duplicate_count else "passed",
+            "column": column,
+            "duplicate_groups": duplicate_count,
+        }
+
+    def _duplicate_group_count(self, con: duckdb.DuckDBPyConnection, parquet_path: Path, column: str) -> int:
+        column_identifier = _sql_identifier(column)
+        duplicate_check_sql = (
+            "select count(*) from (select "  # nosec B608
+            f"{column_identifier}, count(*) c from read_parquet(?) "
+            f"group by {column_identifier} having c > 1)"
+        )
+        return int(
+            _required_row(
+                con.execute(duplicate_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
+                "unique health check",
+            )[0]
+        )
 
     def _next_dataset_version_number(self, conn: Connection, dataset_id: str) -> int:
         latest = (
@@ -2347,45 +2546,99 @@ actionTypes:
         object_rows = self._object_types_for_version(conn, ctx, ontology_version_id)
         object_by_api = {row["api_name"]: row for row in object_rows}
         for object_type in object_rows:
-            backing_dataset = self.get_dataset(object_type["backing"]["dataset"], ctx=ctx)
-            latest_version = self._latest_version_by_dataset_id(conn, backing_dataset["id"])
-            schema = self._schema_for_version(backing_dataset["id"], latest_version["schema_version"])["schema_json"]
-            columns = {column["name"]: column for column in schema["columns"]}
-            properties = self._properties_for_object_type(conn, object_type["id"])
-            property_by_api = {prop["api_name"]: prop for prop in properties}
-            pk_prop = object_type["primary_key_property"]
-            if pk_prop not in property_by_api:
-                raise ValidationFailed("primary key property missing", details={"objectType": object_type["api_name"]})
-            pk_column = property_by_api[pk_prop]["column_name"]
-            if pk_column not in columns:
-                raise ValidationFailed("primary key column missing", details={"column": pk_column})
-            if columns[pk_column]["nullable"]:
-                raise ValidationFailed("primary key column must be non-null", details={"column": pk_column})
-            for prop in properties:
-                if prop["source"] == "dataset":
-                    column = prop["column_name"]
-                    if column not in columns:
-                        raise ValidationFailed(
-                            "property column missing",
-                            details={"objectType": object_type["api_name"], "property": prop["api_name"]},
-                        )
-            actions = self._actions_for_target(conn, object_type["id"])
-            for action in actions:
-                for mutation in action["definition"].get("mutations", []):
-                    prop = mutation.get("property")
-                    if prop not in property_by_api:
-                        raise ValidationFailed("action mutation property missing", details=mutation)
-                    if not property_by_api[prop]["editable"]:
-                        raise ValidationFailed("action mutation property must be editable", details=mutation)
+            self._validate_ontology_object_type(conn, ctx, object_type)
         for link in self._link_types_for_version(conn, ctx, ontology_version_id):
-            if link["from_api_name"] not in object_by_api or link["to_api_name"] not in object_by_api:
-                raise ValidationFailed("link object type missing", details={"linkType": link["api_name"]})
-            dataset = self.get_dataset(link["backing"]["dataset"], ctx=ctx)
-            latest_version = self._latest_version_by_dataset_id(conn, dataset["id"])
-            schema = self._schema_for_version(dataset["id"], latest_version["schema_version"])["schema_json"]
-            link_columns = {column["name"] for column in schema["columns"]}
-            if link["backing"]["fromKey"] not in link_columns or link["backing"]["toKey"] not in link_columns:
-                raise ValidationFailed("link backing key missing", details={"linkType": link["api_name"]})
+            self._validate_ontology_link(conn, ctx, link, object_by_api)
+
+    def _validate_ontology_object_type(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+        object_type: dict[str, Any],
+    ) -> None:
+        columns = self._dataset_columns_for_ref(conn, ctx, object_type["backing"]["dataset"])
+        properties = self._properties_for_object_type(conn, object_type["id"])
+        property_by_api = {prop["api_name"]: prop for prop in properties}
+        self._validate_primary_key_property(object_type, property_by_api, columns)
+        self._validate_dataset_backed_properties(object_type, properties, columns)
+        self._validate_ontology_action_mutations(conn, object_type, property_by_api)
+
+    def _dataset_columns_for_ref(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+        dataset_ref: str,
+    ) -> dict[str, dict[str, Any]]:
+        dataset = self.get_dataset(dataset_ref, ctx=ctx)
+        latest_version = self._latest_version_by_dataset_id(conn, dataset["id"])
+        schema = self._schema_for_version(dataset["id"], latest_version["schema_version"])["schema_json"]
+        return {column["name"]: column for column in schema["columns"]}
+
+    def _validate_primary_key_property(
+        self,
+        object_type: dict[str, Any],
+        property_by_api: dict[str, dict[str, Any]],
+        columns: dict[str, dict[str, Any]],
+    ) -> None:
+        pk_prop = object_type["primary_key_property"]
+        if pk_prop not in property_by_api:
+            raise ValidationFailed("primary key property missing", details={"objectType": object_type["api_name"]})
+        pk_column = property_by_api[pk_prop]["column_name"]
+        if pk_column not in columns:
+            raise ValidationFailed("primary key column missing", details={"column": pk_column})
+        if columns[pk_column]["nullable"]:
+            raise ValidationFailed("primary key column must be non-null", details={"column": pk_column})
+
+    def _validate_dataset_backed_properties(
+        self,
+        object_type: dict[str, Any],
+        properties: list[dict[str, Any]],
+        columns: dict[str, dict[str, Any]],
+    ) -> None:
+        for prop in properties:
+            if prop["source"] == "dataset" and prop["column_name"] not in columns:
+                raise ValidationFailed(
+                    "property column missing",
+                    details={"objectType": object_type["api_name"], "property": prop["api_name"]},
+                )
+
+    def _validate_ontology_action_mutations(
+        self,
+        conn: Connection,
+        object_type: dict[str, Any],
+        property_by_api: dict[str, dict[str, Any]],
+    ) -> None:
+        for action in self._actions_for_target(conn, object_type["id"]):
+            for mutation in action["definition"].get("mutations", []):
+                self._validate_action_mutation_property(mutation, property_by_api)
+
+    def _validate_action_mutation_property(
+        self,
+        mutation: dict[str, Any],
+        property_by_api: dict[str, dict[str, Any]],
+    ) -> None:
+        prop = mutation.get("property")
+        if prop not in property_by_api:
+            raise ValidationFailed("action mutation property missing", details=mutation)
+        if not property_by_api[prop]["editable"]:
+            raise ValidationFailed("action mutation property must be editable", details=mutation)
+
+    def _validate_ontology_link(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+        link: dict[str, Any],
+        object_by_api: dict[str, dict[str, Any]],
+    ) -> None:
+        if link["from_api_name"] not in object_by_api or link["to_api_name"] not in object_by_api:
+            raise ValidationFailed("link object type missing", details={"linkType": link["api_name"]})
+        columns = set(self._dataset_columns_for_ref(conn, ctx, link["backing"]["dataset"]))
+        missing_keys = [key for key in [link["backing"]["fromKey"], link["backing"]["toKey"]] if key not in columns]
+        if missing_keys:
+            raise ValidationFailed(
+                "link backing key missing",
+                details={"linkType": link["api_name"], "missing": missing_keys},
+            )
 
     def _object_types_for_version(
         self,
@@ -2748,25 +3001,29 @@ actionTypes:
         return dict(row) if row else None
 
     def _matches_filter(self, properties: dict[str, Any], filter_ast: dict[str, Any]) -> bool:
+        logical_result = self._matches_logical_filter(properties, filter_ast)
+        if logical_result is not None:
+            return logical_result
+        return self._matches_property_filter(properties, filter_ast)
+
+    def _matches_logical_filter(
+        self,
+        properties: dict[str, Any],
+        filter_ast: dict[str, Any],
+    ) -> bool | None:
         if "and" in filter_ast:
             return all(self._matches_filter(properties, item) for item in filter_ast["and"])
         if "or" in filter_ast:
             return any(self._matches_filter(properties, item) for item in filter_ast["or"])
+        return None
+
+    def _matches_property_filter(self, properties: dict[str, Any], filter_ast: dict[str, Any]) -> bool:
         prop = filter_ast["property"]
         op = filter_ast["op"]
-        value = filter_ast["value"]
-        current = properties.get(prop)
-        if op == "eq":
-            return current == value
-        if op == "in":
-            return current in value
-        if op == "gte":
-            return current is not None and current >= value
-        if op == "lte":
-            return current is not None and current <= value
-        if op == "contains":
-            return current is not None and str(value).lower() in str(current).lower()
-        raise ValidationFailed("unsupported filter operation", details={"op": op})
+        evaluator = FILTER_OPERATIONS.get(op)
+        if evaluator is None:
+            raise ValidationFailed("unsupported filter operation", details={"op": op})
+        return evaluator(properties.get(prop), filter_ast["value"])
 
     def _validate_action_request(
         self,
@@ -2837,15 +3094,58 @@ actionTypes:
         params: dict[str, Any],
         idempotency_key: str,
     ) -> dict[str, Any]:
+        patch = self._action_patch(action_type, params)
+        previous_values = self._previous_action_values(record, patch)
+        self._update_action_target(conn, record, patch)
+        edit_id = self._insert_object_edit(conn, ctx, action_run_id, record, patch, previous_values, idempotency_key)
+        conn.execute(
+            update(db.action_runs)
+            .where(db.action_runs.c.id == action_run_id)
+            .values(status="succeeded", error=None, completed_at=_now())
+        )
+        self._publish_action_commit_events(conn, ctx, action_run_id, record, edit_id)
+        self._audit(
+            conn,
+            ctx,
+            event_type="action.run.committed",
+            resource_type="action_run",
+            resource_id=action_run_id,
+            action="apply",
+            before_ref=previous_values,
+            after_ref={"patch": patch, "object_edit_id": edit_id},
+            correlation_id=action_run_id,
+        )
+        return {
+            "actionRunId": action_run_id,
+            "status": "succeeded",
+            "objectEditId": edit_id,
+            "target": {"objectType": record["object_type_api_name"], "objectId": record["object_id"]},
+            "newObjectVersion": record["object_version"] + 1,
+            "patch": patch,
+        }
+
+    def _action_patch(self, action_type: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         patch: dict[str, Any] = {}
         for mutation in action_type["definition"].get("mutations", []):
             if mutation["type"] != "setProperty":
                 raise ValidationFailed("v1 action supports setProperty only", details=mutation)
-            if "valueFrom" in mutation:
-                patch[mutation["property"]] = self._resolve_value_from(mutation["valueFrom"], params)
-            else:
-                patch[mutation["property"]] = mutation.get("value")
-        previous_values = {key: record["properties"].get(key) for key in patch}
+            patch[mutation["property"]] = self._mutation_value(mutation, params)
+        return patch
+
+    def _mutation_value(self, mutation: dict[str, Any], params: dict[str, Any]) -> Any:
+        if "valueFrom" in mutation:
+            return self._resolve_value_from(mutation["valueFrom"], params)
+        return mutation.get("value")
+
+    def _previous_action_values(self, record: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+        return {key: record["properties"].get(key) for key in patch}
+
+    def _update_action_target(
+        self,
+        conn: Connection,
+        record: dict[str, Any],
+        patch: dict[str, Any],
+    ) -> None:
         edit_properties = dict(record["edit_properties"])
         edit_properties.update(patch)
         current = self._merge_properties(conn, record["object_type_id"], record["base_properties"], edit_properties)
@@ -2866,6 +3166,17 @@ actionTypes:
         )
         if result.rowcount != 1:
             raise ConflictDetected("object version conflict during commit")
+
+    def _insert_object_edit(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+        action_run_id: str,
+        record: dict[str, Any],
+        patch: dict[str, Any],
+        previous_values: dict[str, Any],
+        idempotency_key: str,
+    ) -> str:
         edit_id = _new_id("edit")
         conn.execute(
             insert(db.object_edits).values(
@@ -2883,46 +3194,35 @@ actionTypes:
                 created_at=_now(),
             )
         )
-        conn.execute(
-            update(db.action_runs)
-            .where(db.action_runs.c.id == action_run_id)
-            .values(status="succeeded", error=None, completed_at=_now())
-        )
+        return edit_id
+
+    def _publish_action_commit_events(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+        action_run_id: str,
+        record: dict[str, Any],
+        edit_id: str,
+    ) -> None:
+        payload = {
+            "actionRunId": action_run_id,
+            "objectType": record["object_type_api_name"],
+            "objectId": record["object_id"],
+            "editId": edit_id,
+        }
         for event_type in ["action.run.committed", "object.edit.committed", "object.changed"]:
+            aggregate_type = "action_run" if event_type == "action.run.committed" else "object"
+            aggregate_id = action_run_id if event_type == "action.run.committed" else record["object_id"]
             self._outbox(
                 conn,
                 ctx,
                 event_type,
-                "action_run" if event_type == "action.run.committed" else "object",
-                action_run_id if event_type == "action.run.committed" else record["object_id"],
-                {
-                    "actionRunId": action_run_id,
-                    "objectType": record["object_type_api_name"],
-                    "objectId": record["object_id"],
-                    "editId": edit_id,
-                },
+                aggregate_type,
+                aggregate_id,
+                payload,
                 idempotency_key=f"{event_type}:{action_run_id}",
                 correlation_id=action_run_id,
             )
-        self._audit(
-            conn,
-            ctx,
-            event_type="action.run.committed",
-            resource_type="action_run",
-            resource_id=action_run_id,
-            action="apply",
-            before_ref=previous_values,
-            after_ref={"patch": patch, "object_edit_id": edit_id},
-            correlation_id=action_run_id,
-        )
-        return {
-            "actionRunId": action_run_id,
-            "status": "succeeded",
-            "objectEditId": edit_id,
-            "target": {"objectType": record["object_type_api_name"], "objectId": record["object_id"]},
-            "newObjectVersion": record["object_version"] + 1,
-            "patch": patch,
-        }
 
     def _resolve_value_from(self, expression: str, params: dict[str, Any]) -> Any:
         if expression.startswith("params."):
@@ -3003,68 +3303,79 @@ actionTypes:
     ) -> tuple[list[dict[str, Any]], list[str]]:
         with self.engine.begin() as conn:
             if materialization["materialization_type"] == "action_log":
-                action_rows = self._rows_for_tenant(conn, db.action_runs, ctx)
-                edit_rows = self._rows_for_tenant(conn, db.object_edits, ctx)
-                edit_by_action = {row["action_run_id"]: row for row in edit_rows}
-                rows = []
-                for action in action_rows:
-                    edit = edit_by_action.get(action["id"], {})
-                    rows.append(
-                        {
-                            "action_run_id": action["id"],
-                            "actor_user_id": action["actor_user_id"],
-                            "action_type": action["action_type_api_name"],
-                            "target_object_type": action["target_object_type_api_name"],
-                            "target_object_id": action["target_object_id"],
-                            "status": action["status"],
-                            "parameters_json": json.dumps(action["parameters"], sort_keys=True),
-                            "edit_patch_json": json.dumps(edit.get("patch", {}), sort_keys=True),
-                            "created_at": action["created_at"],
-                        }
-                    )
-                return rows, [
-                    "action_run_id",
-                    "actor_user_id",
-                    "action_type",
-                    "target_object_type",
-                    "target_object_id",
-                    "status",
-                    "parameters_json",
-                    "edit_patch_json",
-                    "created_at",
-                ]
-            records = [
-                row
-                for row in self._rows_for_tenant(conn, db.object_records, ctx)
-                if row["object_type_api_name"] == "Order" and not row["deleted"]
-            ]
-            rows = []
-            for record in records:
-                props = record["properties"]
-                rows.append(
-                    {
-                        "orderId": props.get("orderId"),
-                        "customerId": props.get("customerId"),
-                        "status": props.get("status"),
-                        "operatorNote": props.get("operatorNote"),
-                        "amount": props.get("amount"),
-                        "margin": props.get("margin"),
-                        "riskScore": props.get("riskScore"),
-                        "objectVersion": record["object_version"],
-                        "updatedAt": record["updated_at"],
-                    }
-                )
-            return rows, [
-                "orderId",
-                "customerId",
-                "status",
-                "operatorNote",
-                "amount",
-                "margin",
-                "riskScore",
-                "objectVersion",
-                "updatedAt",
-            ]
+                return self._action_log_materialization_rows(conn, ctx)
+            return self._order_current_materialization_rows(conn, ctx)
+
+    def _action_log_materialization_rows(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        action_rows = self._rows_for_tenant(conn, db.action_runs, ctx)
+        edit_rows = self._rows_for_tenant(conn, db.object_edits, ctx)
+        edit_by_action = {row["action_run_id"]: row for row in edit_rows}
+        rows = [self._action_log_row(action, edit_by_action.get(action["id"], {})) for action in action_rows]
+        return rows, [
+            "action_run_id",
+            "actor_user_id",
+            "action_type",
+            "target_object_type",
+            "target_object_id",
+            "status",
+            "parameters_json",
+            "edit_patch_json",
+            "created_at",
+        ]
+
+    def _action_log_row(self, action: dict[str, Any], edit: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "action_run_id": action["id"],
+            "actor_user_id": action["actor_user_id"],
+            "action_type": action["action_type_api_name"],
+            "target_object_type": action["target_object_type_api_name"],
+            "target_object_id": action["target_object_id"],
+            "status": action["status"],
+            "parameters_json": json.dumps(action["parameters"], sort_keys=True),
+            "edit_patch_json": json.dumps(edit.get("patch", {}), sort_keys=True),
+            "created_at": action["created_at"],
+        }
+
+    def _order_current_materialization_rows(
+        self,
+        conn: Connection,
+        ctx: RequestContext,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        records = [
+            row
+            for row in self._rows_for_tenant(conn, db.object_records, ctx)
+            if row["object_type_api_name"] == "Order" and not row["deleted"]
+        ]
+        rows = [self._order_current_row(record) for record in records]
+        return rows, [
+            "orderId",
+            "customerId",
+            "status",
+            "operatorNote",
+            "amount",
+            "margin",
+            "riskScore",
+            "objectVersion",
+            "updatedAt",
+        ]
+
+    def _order_current_row(self, record: dict[str, Any]) -> dict[str, Any]:
+        props = record["properties"]
+        return {
+            "orderId": props.get("orderId"),
+            "customerId": props.get("customerId"),
+            "status": props.get("status"),
+            "operatorNote": props.get("operatorNote"),
+            "amount": props.get("amount"),
+            "margin": props.get("margin"),
+            "riskScore": props.get("riskScore"),
+            "objectVersion": record["object_version"],
+            "updatedAt": record["updated_at"],
+        }
 
     def _error_payload(self, exc: Exception) -> dict[str, Any]:
         if hasattr(exc, "code"):

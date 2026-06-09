@@ -22,7 +22,7 @@ pnpm ci:gate
 | 테스트 우회 방지 | `check_no_test_bypasses.py` | skip/xfail로 release gate를 우회하는 테스트 |
 | 보안 정적 분석 | Bandit | 위험한 Python 코드 패턴 |
 | 의존성 취약점 | pip-audit | 설치 패키지의 알려진 보안 취약점 |
-| 복잡도 | Radon, Xenon | 너무 복잡해서 장애 추적이 어려운 함수 |
+| 복잡도 | Radon, Xenon | 너무 복잡해서 장애 추적이 어려운 함수. CI는 block complexity `B` 초과를 막는다. |
 | 동적 테스트 | pytest + coverage | 실제 기능/실패 경로 검증, branch coverage 95% |
 | public callable coverage | `check_public_api_coverage.py` | 공개 함수/메서드가 테스트에서 실제 실행됐는지 |
 | 제품 데모 | `pnpm demo:supply-chain` | 문서의 MVP 폐루프가 실제로 끝까지 도는지 |
@@ -94,6 +94,7 @@ pnpm quality:architecture
 
 - `artifacts/quality/dependency_graph.json`
 - `artifacts/quality/dependency_graph.md`
+- `artifacts/quality/radon_cc.json`
 
 여기에서 볼 수 있는 것:
 
@@ -102,6 +103,16 @@ pnpm quality:architecture
 - fan-out: 이 모듈이 얼마나 많은 모듈을 참조하는지
 - 순환 의존성 여부
 - 문서의 레이어 규칙 위반 여부
+
+CI에서는 fan-out이 `10`을 넘는 내부 모듈을 막는다. 쉽게 말해, 한 파일이 너무 많은 내부 파일을 직접 알고 있으면 구조가 커질수록 고치기 어려워지기 때문이다.
+
+복잡도 기준:
+
+```bash
+pnpm quality:complexity
+```
+
+이 명령은 Radon으로 복잡도 리포트를 만들고, Xenon으로 `C`, `D`, `E`, `F` 등급 함수가 들어오지 못하게 막는다.
 
 ## 6. Python Runtime Debugging
 

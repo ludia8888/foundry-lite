@@ -185,7 +185,7 @@ def write_reports(output: Path, modules: dict[str, ModuleInfo], edges: dict[str,
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--max-fan-out", type=int, default=20)
+    parser.add_argument("--max-fan-out", type=int, default=10)
     args = parser.parse_args(argv)
 
     modules = collect_modules()

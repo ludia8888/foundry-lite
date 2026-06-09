@@ -30,9 +30,10 @@ uv run pip-audit --progress-spinner off
 
 echo "== Static: Radon complexity =="
 uv run radon cc libs apps scripts -s -a
+uv run radon cc libs apps scripts -s -a -j -O artifacts/quality/radon_cc.json
 
-echo "== Static: Xenon complexity gate =="
-uv run xenon --max-absolute D --max-modules B --max-average A libs apps scripts
+echo "== Static: Xenon complexity gate, max block B =="
+uv run xenon --max-absolute B --max-modules B --max-average A libs apps scripts
 
 echo "== Dynamic: pytest with branch coverage =="
 uv run pytest tests \
