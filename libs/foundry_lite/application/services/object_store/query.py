@@ -8,9 +8,6 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     NotFound,
 )
-from foundry_lite.infrastructure import schema as db
-from sqlalchemy import and_, select
-from sqlalchemy.engine import Connection
 
 
 class ObjectQueryMixin(CoreServiceMixin):
@@ -76,26 +73,15 @@ class ObjectQueryMixin(CoreServiceMixin):
 
     def _object_query_rows(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         object_type_api_name: str,
     ) -> list[dict[str, Any]]:
-        rows = (
-            conn.execute(
-                select(db.object_records)
-                .where(
-                    and_(
-                        db.object_records.c.tenant_id == ctx.tenant_id,
-                        db.object_records.c.object_type_api_name == object_type_api_name,
-                        db.object_records.c.deleted == False,  # noqa: E712
-                    )
-                )
-                .order_by(db.object_records.c.object_id)
-            )
-            .mappings()
-            .all()
+        return self.object_read_repository.active_object_rows(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_api_name=object_type_api_name,
         )
-        return [dict(row) for row in rows]
 
     def _apply_object_query_options(
         self,

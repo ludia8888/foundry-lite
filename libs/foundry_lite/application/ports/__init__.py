@@ -18,6 +18,7 @@ from foundry_lite.application.ports.dataset_transaction_repository import (
 )
 from foundry_lite.application.ports.dataset_version_repository import DatasetVersionRepository
 from foundry_lite.application.ports.metadata_repository import MetadataRepository
+from foundry_lite.application.ports.object_read_repository import ObjectReadRepository
 from foundry_lite.application.ports.runtime_repository import (
     AuditEventRecord,
     LineageEdgeRecord,
@@ -41,6 +42,7 @@ __all__ = [
     "DatasetVersionRecord",
     "LineageEdgeRecord",
     "MetadataRepository",
+    "ObjectReadRepository",
     "OutboxEventRecord",
     "RuntimeLookupTable",
     "RuntimeRepository",
