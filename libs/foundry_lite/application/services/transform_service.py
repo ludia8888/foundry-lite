@@ -3,9 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import and_, insert, select, update
-from sqlalchemy.engine import Connection
-
+from foundry_lite.application.ports.transform_repository import (
+    TransformRecord,
+    TransformRunRecord,
+)
 from foundry_lite.application.primitives import (
     INPUT_PATTERN,
     CommitResult,
@@ -20,7 +21,6 @@ from foundry_lite.domain.errors import (
     NotFound,
     ValidationFailed,
 )
-from foundry_lite.infrastructure import schema as db
 
 
 class TransformServiceMixin(CoreServiceMixin):
@@ -39,36 +39,29 @@ class TransformServiceMixin(CoreServiceMixin):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "transform:run")
         transform_id = _new_id("tf")
+        normalized_checks = checks or []
         with self.engine.begin() as conn:
-            existing = (
-                conn.execute(
-                    select(db.transforms).where(
-                        and_(
-                            db.transforms.c.tenant_id == ctx.tenant_id,
-                            db.transforms.c.api_name == api_name,
-                        )
-                    )
-                )
-                .mappings()
-                .first()
+            existing = self.transform_repository.transform_by_api_name(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                api_name=api_name,
             )
             if existing:
-                conn.execute(
-                    update(db.transforms)
-                    .where(db.transforms.c.id == existing["id"])
-                    .values(
-                        language=language,
-                        entrypoint=str(entrypoint),
-                        mode=mode,
-                        inputs=inputs,
-                        output_dataset_ref=output_dataset_ref,
-                        checks=checks or [],
-                    )
+                self.transform_repository.update_transform_definition(
+                    transaction=conn,
+                    transform_id=existing["id"],
+                    language=language,
+                    entrypoint=str(entrypoint),
+                    mode=mode,
+                    inputs=inputs,
+                    output_dataset_ref=output_dataset_ref,
+                    checks=normalized_checks,
                 )
                 return dict(existing)
-            conn.execute(
-                insert(db.transforms).values(
-                    id=transform_id,
+            self.transform_repository.insert_transform(
+                transaction=conn,
+                record=TransformRecord(
+                    transform_id=transform_id,
                     tenant_id=ctx.tenant_id,
                     api_name=api_name,
                     language=language,
@@ -76,10 +69,10 @@ class TransformServiceMixin(CoreServiceMixin):
                     mode=mode,
                     inputs=inputs,
                     output_dataset_ref=output_dataset_ref,
-                    checks=checks or [],
-                )
+                    checks=normalized_checks,
+                ),
             )
-            return self._select_by_id(conn, "transforms", transform_id) or {}
+            return self.transform_repository.transform_by_id(transaction=conn, transform_id=transform_id) or {}
 
     def run_transform(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         ctx = ctx or RequestContext()
@@ -90,9 +83,10 @@ class TransformServiceMixin(CoreServiceMixin):
             input_versions = self._resolve_transform_inputs(conn, ctx, transform)
             tx_id = self._open_dataset_transaction(conn, ctx, output_dataset, "SNAPSHOT")
             run_id = _new_id("transform_run")
-            conn.execute(
-                insert(db.transform_runs).values(
-                    id=run_id,
+            self.transform_repository.insert_transform_run(
+                transaction=conn,
+                record=TransformRunRecord(
+                    transform_run_id=run_id,
                     tenant_id=ctx.tenant_id,
                     transform_id=transform["id"],
                     status="RUNNING",
@@ -102,7 +96,7 @@ class TransformServiceMixin(CoreServiceMixin):
                     error=None,
                     created_at=_now(),
                     completed_at=None,
-                )
+                ),
             )
 
         staged = self._staging_file(output_dataset, tx_id, "part-00000.parquet")
@@ -131,14 +125,13 @@ class TransformServiceMixin(CoreServiceMixin):
                         "input_to",
                         run_id,
                     )
-                conn.execute(
-                    update(db.transform_runs)
-                    .where(db.transform_runs.c.id == run_id)
-                    .values(
-                        status="SUCCESS",
-                        output_version_id=result.version_id,
-                        completed_at=_now(),
-                    )
+                self.transform_repository.update_transform_run_terminal(
+                    transaction=conn,
+                    transform_run_id=run_id,
+                    status="SUCCESS",
+                    output_version_id=result.version_id,
+                    error=None,
+                    completed_at=_now(),
                 )
                 return result
         except Exception as exc:
@@ -147,26 +140,19 @@ class TransformServiceMixin(CoreServiceMixin):
                 raise
             raise ValidationFailed("transform failed", details={"error": str(exc)}) from exc
 
-    def _get_transform(self, conn: Connection, ctx: RequestContext, api_name: str) -> dict[str, Any]:
-        row = (
-            conn.execute(
-                select(db.transforms).where(
-                    and_(
-                        db.transforms.c.tenant_id == ctx.tenant_id,
-                        db.transforms.c.api_name == api_name,
-                    )
-                )
-            )
-            .mappings()
-            .first()
+    def _get_transform(self, conn: Any, ctx: RequestContext, api_name: str) -> dict[str, Any]:
+        row = self.transform_repository.transform_by_api_name(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            api_name=api_name,
         )
         if row is None:
             raise NotFound("transform not found", details={"api_name": api_name})
-        return dict(row)
+        return row
 
     def _resolve_transform_inputs(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         transform: dict[str, Any],
     ) -> dict[str, str]:

@@ -192,6 +192,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--max-fan-out", type=int, default=10)
+    parser.add_argument(
+        "--max-aggregation-fan-out",
+        type=int,
+        default=20,
+        help="Higher fan-out budget for explicit aggregation roots (ports/repositories __init__).",
+    )
+    parser.add_argument(
+        "--aggregation-root",
+        action="append",
+        default=[
+            "foundry_lite.application.ports",
+            "foundry_lite.infrastructure.repositories",
+            "foundry_lite.infrastructure.adapters",
+        ],
+    )
     args = parser.parse_args(argv)
 
     modules = collect_modules()
@@ -200,7 +215,12 @@ def main(argv: list[str] | None = None) -> int:
 
     cycles = find_cycles(edges)
     violations = layer_violations(edges)
-    over_coupled = [name for name, targets in edges.items() if len(targets) > args.max_fan_out]
+    aggregation_roots = set(args.aggregation_root)
+    over_coupled = [
+        name
+        for name, targets in edges.items()
+        if (len(targets) > (args.max_aggregation_fan_out if name in aggregation_roots else args.max_fan_out))
+    ]
     if cycles or violations or over_coupled:
         print(f"Dependency graph report: {args.output / 'dependency_graph.md'}")
         for violation in violations:

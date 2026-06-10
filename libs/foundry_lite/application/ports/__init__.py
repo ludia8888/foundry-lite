@@ -39,6 +39,11 @@ from foundry_lite.application.ports.runtime_repository import (
     RuntimeRepository,
     RuntimeRowsTable,
 )
+from foundry_lite.application.ports.transform_repository import (
+    TransformRecord,
+    TransformRepository,
+    TransformRunRecord,
+)
 
 __all__ = [
     "AuditEventRecord",
@@ -68,4 +73,7 @@ __all__ = [
     "RuntimeRepository",
     "RuntimeRowsTable",
     "StoredDatasetCommit",
+    "TransformRecord",
+    "TransformRepository",
+    "TransformRunRecord",
 ]

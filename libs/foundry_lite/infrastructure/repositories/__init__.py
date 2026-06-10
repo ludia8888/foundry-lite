@@ -12,6 +12,7 @@ from foundry_lite.infrastructure.repositories.object_read_repository import SqlA
 from foundry_lite.infrastructure.repositories.object_set_repository import SqlAlchemyObjectSetRepository
 from foundry_lite.infrastructure.repositories.ontology_repository import SqlAlchemyOntologyRepository
 from foundry_lite.infrastructure.repositories.runtime_repository import SqlAlchemyRuntimeRepository
+from foundry_lite.infrastructure.repositories.transform_repository import SqlAlchemyTransformRepository
 
 __all__ = [
     "SqlAlchemyActionRepository",
@@ -24,4 +25,5 @@ __all__ = [
     "SqlAlchemyObjectSetRepository",
     "SqlAlchemyOntologyRepository",
     "SqlAlchemyRuntimeRepository",
+    "SqlAlchemyTransformRepository",
 ]

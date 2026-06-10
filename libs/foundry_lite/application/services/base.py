@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.action_repository import ActionRepository
 from foundry_lite.application.ports.ontology_repository import OntologyRepository
+from foundry_lite.application.ports.transform_repository import TransformRepository
 from foundry_lite.security.policy import PolicyService
 
 
@@ -37,6 +38,7 @@ class CoreServiceMixin:
     policy: PolicyService
     action_repository: ActionRepository
     ontology_repository: OntologyRepository
+    transform_repository: TransformRepository
 
     def __getattr__(self, name: str) -> Any:
         raise AttributeError(name)
