@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, insert, select
-from sqlalchemy.engine import Connection
-from sqlalchemy.exc import IntegrityError
-
+from foundry_lite.application.ports import (
+    AuditEventRecord,
+    LineageEdgeRecord,
+    OutboxEventRecord,
+    RuntimeLookupTable,
+    RuntimeRowsTable,
+)
 from foundry_lite.application.primitives import (
     _new_id,
     _now,
@@ -15,7 +18,6 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     PermissionDenied,
 )
-from foundry_lite.infrastructure import schema as db
 
 
 class RuntimeServiceMixin(CoreServiceMixin):
@@ -26,37 +28,11 @@ class RuntimeServiceMixin(CoreServiceMixin):
         ctx: RequestContext | None = None,
     ) -> list[dict[str, Any]]:
         ctx = ctx or RequestContext()
-        with self.engine.begin() as conn:
-            rows = (
-                conn.execute(
-                    select(db.lineage_edges).where(
-                        and_(
-                            db.lineage_edges.c.tenant_id == ctx.tenant_id,
-                            (
-                                (db.lineage_edges.c.from_resource_id == resource_id)
-                                | (db.lineage_edges.c.to_resource_id == resource_id)
-                            ),
-                        )
-                    )
-                )
-                .mappings()
-                .all()
-            )
-            return [dict(row) for row in rows]
+        return self.runtime_repository.lineage_for_resource(tenant_id=ctx.tenant_id, resource_id=resource_id)
 
     def list_runs(self, *, ctx: RequestContext | None = None) -> dict[str, list[dict[str, Any]]]:
         ctx = ctx or RequestContext()
-        with self.engine.begin() as conn:
-            return {
-                "syncRuns": self._rows_for_tenant(conn, db.sync_runs, ctx),
-                "transformRuns": self._rows_for_tenant(conn, db.transform_runs, ctx),
-                "indexRuns": self._rows_for_tenant(conn, db.index_runs, ctx),
-                "actionRuns": self._rows_for_tenant(conn, db.action_runs, ctx),
-                "actionWritebacks": self._rows_for_tenant(conn, db.action_writebacks, ctx),
-                "materializationRuns": self._rows_for_tenant(conn, db.materialization_runs, ctx),
-                "outboxEvents": self._rows_for_tenant(conn, db.outbox_events, ctx),
-                "auditEvents": self._rows_for_tenant(conn, db.audit_events, ctx),
-            }
+        return self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
 
     def _require_or_audit(
         self,
@@ -80,18 +56,15 @@ class RuntimeServiceMixin(CoreServiceMixin):
                 )
             raise
 
-    def _select_by_id(self, conn: Connection, table: Any, row_id: str) -> dict[str, Any] | None:
-        row = conn.execute(select(table).where(table.c.id == row_id)).mappings().first()
-        return dict(row) if row else None
+    def _select_by_id(self, conn: Any, table: RuntimeLookupTable, row_id: str) -> dict[str, Any] | None:
+        return self.runtime_repository.row_by_id(transaction=conn, table=table, row_id=row_id)
 
-    def _rows_for_tenant(self, conn: Connection, table: Any, ctx: RequestContext) -> list[dict[str, Any]]:
-        return [
-            dict(row) for row in conn.execute(select(table).where(table.c.tenant_id == ctx.tenant_id)).mappings().all()
-        ]
+    def _rows_for_tenant(self, conn: Any, table: RuntimeRowsTable, ctx: RequestContext) -> list[dict[str, Any]]:
+        return self.runtime_repository.rows_for_tenant(transaction=conn, table=table, tenant_id=ctx.tenant_id)
 
     def _audit(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         *,
         event_type: str,
@@ -104,9 +77,10 @@ class RuntimeServiceMixin(CoreServiceMixin):
         after_ref: dict[str, Any] | None = None,
         correlation_id: str | None = None,
     ) -> None:
-        conn.execute(
-            insert(db.audit_events).values(
-                id=_new_id("audit"),
+        self.runtime_repository.insert_audit_event(
+            transaction=conn,
+            record=AuditEventRecord(
+                event_id=_new_id("audit"),
                 tenant_id=ctx.tenant_id,
                 actor_user_id=ctx.actor_user_id,
                 event_type=event_type,
@@ -121,12 +95,12 @@ class RuntimeServiceMixin(CoreServiceMixin):
                 request_id=ctx.request_id,
                 metadata={},
                 created_at=_now(),
-            )
+            ),
         )
 
     def _outbox(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         event_type: str,
         aggregate_type: str,
@@ -136,29 +110,27 @@ class RuntimeServiceMixin(CoreServiceMixin):
         idempotency_key: str,
         correlation_id: str,
     ) -> None:
-        try:
-            conn.execute(
-                insert(db.outbox_events).values(
-                    id=_new_id("outbox"),
-                    tenant_id=ctx.tenant_id,
-                    event_type=event_type,
-                    aggregate_type=aggregate_type,
-                    aggregate_id=aggregate_id,
-                    payload=payload,
-                    status="pending",
-                    attempts=0,
-                    idempotency_key=idempotency_key,
-                    correlation_id=correlation_id,
-                    created_at=_now(),
-                    published_at=None,
-                )
-            )
-        except IntegrityError:
-            return
+        self.runtime_repository.insert_outbox_event(
+            transaction=conn,
+            record=OutboxEventRecord(
+                event_id=_new_id("outbox"),
+                tenant_id=ctx.tenant_id,
+                event_type=event_type,
+                aggregate_type=aggregate_type,
+                aggregate_id=aggregate_id,
+                payload=payload,
+                status="pending",
+                attempts=0,
+                idempotency_key=idempotency_key,
+                correlation_id=correlation_id,
+                created_at=_now(),
+                published_at=None,
+            ),
+        )
 
     def _lineage(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         from_type: str,
         from_id: str,
@@ -167,9 +139,10 @@ class RuntimeServiceMixin(CoreServiceMixin):
         relation: str,
         run_id: str,
     ) -> None:
-        conn.execute(
-            insert(db.lineage_edges).values(
-                id=_new_id("lineage"),
+        self.runtime_repository.insert_lineage_edge(
+            transaction=conn,
+            record=LineageEdgeRecord(
+                edge_id=_new_id("lineage"),
                 tenant_id=ctx.tenant_id,
                 from_resource_type=from_type,
                 from_resource_id=from_id,
@@ -178,7 +151,7 @@ class RuntimeServiceMixin(CoreServiceMixin):
                 relation=relation,
                 created_by_run_id=run_id,
                 created_at=_now(),
-            )
+            ),
         )
 
     def _error_payload(self, exc: Exception) -> dict[str, Any]:

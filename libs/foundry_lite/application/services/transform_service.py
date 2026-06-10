@@ -82,7 +82,7 @@ class TransformServiceMixin(CoreServiceMixin):
                     checks=checks or [],
                 )
             )
-            return self._select_by_id(conn, db.transforms, transform_id) or {}
+            return self._select_by_id(conn, "transforms", transform_id) or {}
 
     def run_transform(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         ctx = ctx or RequestContext()

@@ -17,8 +17,17 @@ from foundry_lite.application.ports.dataset_transaction_repository import (
 )
 from foundry_lite.application.ports.dataset_version_repository import DatasetVersionRepository
 from foundry_lite.application.ports.metadata_repository import MetadataRepository
+from foundry_lite.application.ports.runtime_repository import (
+    AuditEventRecord,
+    LineageEdgeRecord,
+    OutboxEventRecord,
+    RuntimeLookupTable,
+    RuntimeRepository,
+    RuntimeRowsTable,
+)
 
 __all__ = [
+    "AuditEventRecord",
     "DatasetAlreadyExistsError",
     "DatasetFileRecord",
     "DatasetRepository",
@@ -28,6 +37,11 @@ __all__ = [
     "DatasetTransactionRepository",
     "DatasetVersionRepository",
     "DatasetVersionRecord",
+    "LineageEdgeRecord",
     "MetadataRepository",
+    "OutboxEventRecord",
+    "RuntimeLookupTable",
+    "RuntimeRepository",
+    "RuntimeRowsTable",
     "StoredDatasetCommit",
 ]

@@ -77,6 +77,7 @@ class FoundryLiteCore(
         self.dataset_repository = dependencies.dataset_repository
         self.dataset_transaction_repository = dependencies.dataset_transaction_repository
         self.dataset_version_repository = dependencies.dataset_version_repository
+        self.runtime_repository = dependencies.runtime_repository
         self.dataset_storage = dependencies.dataset_storage
         self.metadata_repository.initialize_schema()
         self.bootstrap()

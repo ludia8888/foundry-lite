@@ -141,7 +141,7 @@ class MaterializationServiceMixin(CoreServiceMixin):
                     enabled=True,
                 )
             )
-            row = self._select_by_id(conn, db.materializations, materialization_id)
+            row = self._select_by_id(conn, "materializations", materialization_id)
             if row is None:
                 raise InvariantViolation("materialization insert failed")
             return row
@@ -173,8 +173,8 @@ class MaterializationServiceMixin(CoreServiceMixin):
         conn: Connection,
         ctx: RequestContext,
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        action_rows = self._rows_for_tenant(conn, db.action_runs, ctx)
-        edit_rows = self._rows_for_tenant(conn, db.object_edits, ctx)
+        action_rows = self._rows_for_tenant(conn, "action_runs", ctx)
+        edit_rows = self._rows_for_tenant(conn, "object_edits", ctx)
         edit_by_action = {row["action_run_id"]: row for row in edit_rows}
         rows = [self._action_log_row(action, edit_by_action.get(action["id"], {})) for action in action_rows]
         return rows, [
@@ -209,7 +209,7 @@ class MaterializationServiceMixin(CoreServiceMixin):
     ) -> tuple[list[dict[str, Any]], list[str]]:
         records = [
             row
-            for row in self._rows_for_tenant(conn, db.object_records, ctx)
+            for row in self._rows_for_tenant(conn, "object_records", ctx)
             if row["object_type_api_name"] == "Order" and not row["deleted"]
         ]
         rows = [self._order_current_row(record) for record in records]

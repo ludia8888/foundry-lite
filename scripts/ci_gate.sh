@@ -20,7 +20,7 @@ echo "== Static: dependency graph and layer rules =="
 uv run python scripts/quality/check_dependency_graph.py
 
 echo "== Static: infra import and mixin conflict boundaries =="
-uv run python scripts/quality/check_infra_import_boundary.py --max-application-imports 28
+uv run python scripts/quality/check_infra_import_boundary.py --max-application-imports 25
 uv run python scripts/quality/check_mixin_method_conflicts.py
 
 echo "== Static: application module size guard =="

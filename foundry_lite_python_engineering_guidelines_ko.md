@@ -232,6 +232,7 @@ Scale Foundation은 “처음부터 Spark, Flink, Kafka, S3를 모두 붙인다�
 | MetadataRepository | SQLite/SQLAlchemy local DB | PostgreSQL, partitioned tables | service는 DB dialect 세부를 알지 않는다. |
 | DatasetStorageAdapter | local filesystem, MinIO | S3/GCS/Azure Blob, Iceberg storage | dataset commit protocol은 storage 종류와 무관해야 한다. |
 | DatasetTransactionRepository | 단일 DB transaction | PostgreSQL transaction + Alembic | OPEN/COMMITTED/ABORTED 상태 전이는 동일해야 한다. |
+| RuntimeRepository | SQLAlchemy audit/outbox/lineage/run table | PostgreSQL partitioned audit/outbox, later stream publisher state | audit, outbox, lineage, run state의 key 의미가 동일해야 한다. |
 | ComputeAdapter | DuckDB | Spark, Flink bounded job, Ray | input version, output staging, lineage, health gate는 동일해야 한다. |
 | EventPublisher/StreamAdapter | PostgreSQL outbox | Kafka/Redpanda | event idempotency, DLQ, replay cursor는 동일해야 한다. |
 | SearchAdapter | PostgreSQL JSON/generated column | OpenSearch | search는 projection이고 object store가 source of truth다. |

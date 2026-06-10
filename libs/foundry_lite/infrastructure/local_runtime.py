@@ -11,6 +11,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyDatasetTransactionRepository,
     SqlAlchemyDatasetVersionRepository,
     SqlAlchemyMetadataRepository,
+    SqlAlchemyRuntimeRepository,
 )
 from foundry_lite.security.policy import PolicyService
 
@@ -40,6 +41,7 @@ def create_local_core_dependencies(
         dataset_repository=SqlAlchemyDatasetRepository(engine),
         dataset_transaction_repository=SqlAlchemyDatasetTransactionRepository(engine),
         dataset_version_repository=SqlAlchemyDatasetVersionRepository(engine),
+        runtime_repository=SqlAlchemyRuntimeRepository(engine),
         dataset_storage=storage_adapter,
     )
 
