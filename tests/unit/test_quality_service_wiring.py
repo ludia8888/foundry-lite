@@ -21,6 +21,7 @@ def test_service_dependency_gate_requires_exact_declared_dependencies(tmp_path, 
         """
 class ExampleService:
     required_dependencies = ("engine",)
+    required_collaborators = ("runtime_service",)
 
     def run(self):
         self.engine.begin()
@@ -31,7 +32,7 @@ class ExampleService:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     method_names = check_service_dependencies._collect_service_method_names(tree)
     declared_attrs = check_service_dependencies._collect_declared_class_attributes(tree)
-    findings, accesses = check_service_dependencies._check_attribute_accesses(
+    findings, dependency_accesses, _ = check_service_dependencies._check_attribute_accesses(
         path,
         tree,
         dependency_attrs={"engine", "dataset_storage"},
@@ -45,7 +46,7 @@ class ExampleService:
         tree,
         dependency_attrs={"engine", "dataset_storage"},
         declarations=check_service_dependencies._collect_required_dependencies(tree),
-        dependency_accesses=accesses,
+        dependency_accesses=dependency_accesses,
     )
 
     assert findings == []
@@ -62,13 +63,14 @@ def test_service_dependency_gate_rejects_unused_declared_dependencies(tmp_path, 
         """
 class ExampleService:
     required_dependencies = ("engine", "dataset_storage")
+    required_collaborators = ()
 
     def run(self):
         self.engine.begin()
 """,
     )
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    _, accesses = check_service_dependencies._check_attribute_accesses(
+    _, dependency_accesses, _ = check_service_dependencies._check_attribute_accesses(
         path,
         tree,
         dependency_attrs={"engine", "dataset_storage"},
@@ -82,11 +84,86 @@ class ExampleService:
         tree,
         dependency_attrs={"engine", "dataset_storage"},
         declarations=check_service_dependencies._collect_required_dependencies(tree),
-        dependency_accesses=accesses,
+        dependency_accesses=dependency_accesses,
     )
 
     assert [finding.message for finding in declaration_findings] == [
         "declares unused dependencies: ['dataset_storage']"
+    ]
+
+
+def test_service_dependency_gate_requires_exact_declared_collaborators(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(check_service_dependencies, "ROOT", tmp_path)
+    path = _write(
+        tmp_path,
+        "libs/foundry_lite/application/services/example.py",
+        """
+class ExampleService:
+    required_dependencies = ()
+    required_collaborators = ("runtime_service",)
+
+    def run(self):
+        self.runtime_service._audit()
+        self.ontology_service._active_object_type()
+""",
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    _, _, collaborator_accesses = check_service_dependencies._check_attribute_accesses(
+        path,
+        tree,
+        dependency_attrs=set(),
+        collaborator_attrs={"runtime_service", "ontology_service"},
+        method_names=check_service_dependencies._collect_service_method_names(tree),
+        declared_class_attrs=check_service_dependencies._collect_declared_class_attributes(tree),
+    )
+
+    declaration_findings = check_service_dependencies._check_collaborator_declarations(
+        path,
+        tree,
+        collaborator_attrs={"runtime_service", "ontology_service"},
+        declarations=check_service_dependencies._collect_required_collaborators(tree),
+        collaborator_accesses=collaborator_accesses,
+    )
+
+    assert [finding.message for finding in declaration_findings] == [
+        "uses undeclared collaborators: ['ontology_service']"
+    ]
+
+
+def test_service_dependency_gate_rejects_unused_declared_collaborators(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(check_service_dependencies, "ROOT", tmp_path)
+    path = _write(
+        tmp_path,
+        "libs/foundry_lite/application/services/example.py",
+        """
+class ExampleService:
+    required_dependencies = ()
+    required_collaborators = ("runtime_service", "ontology_service")
+
+    def run(self):
+        self.runtime_service._audit()
+""",
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    _, _, collaborator_accesses = check_service_dependencies._check_attribute_accesses(
+        path,
+        tree,
+        dependency_attrs=set(),
+        collaborator_attrs={"runtime_service", "ontology_service"},
+        method_names=check_service_dependencies._collect_service_method_names(tree),
+        declared_class_attrs=check_service_dependencies._collect_declared_class_attributes(tree),
+    )
+
+    declaration_findings = check_service_dependencies._check_collaborator_declarations(
+        path,
+        tree,
+        collaborator_attrs={"runtime_service", "ontology_service"},
+        declarations=check_service_dependencies._collect_required_collaborators(tree),
+        collaborator_accesses=collaborator_accesses,
+    )
+
+    assert [finding.message for finding in declaration_findings] == [
+        "declares unused collaborators: ['ontology_service']"
     ]
 
 

@@ -49,15 +49,15 @@ class CoreService:
     """Base class for constructor-injected application services.
 
     Each concrete service declares only the infrastructure dependencies it
-    directly uses through ``required_dependencies``. ``CoreServices`` wires
-    cross-service collaborators as named service attributes such as
-    ``runtime_service`` or ``dataset_registry_service``.
+    directly uses through ``required_dependencies`` and only the service
+    collaborators it directly calls through ``required_collaborators``.
 
     This keeps ``FoundryLiteCore`` as a thin facade rather than a multiple
     inheritance host, while making service coupling visible in code.
     """
 
     required_dependencies: ClassVar[tuple[str, ...]] = ()
+    required_collaborators: ClassVar[tuple[str, ...]] = ()
 
     root: Path
     storage_root: Path
@@ -108,7 +108,7 @@ class CoreService:
             setattr(self, name, value)
 
     def bind_collaborators(self, collaborators: CollaboratorMap) -> None:
-        expected = set(SERVICE_COLLABORATORS)
+        expected = set(self.required_collaborators)
         provided = set(collaborators)
         missing = sorted(expected - provided)
         unexpected = sorted(provided - expected)
@@ -126,3 +126,7 @@ def dependency_kwargs(service_type: type[CoreService], dependencies: CoreDepende
 
 def build_service[ServiceT: CoreService](service_type: type[ServiceT], dependencies: CoreDependencies) -> ServiceT:
     return service_type(**dependency_kwargs(service_type, dependencies))
+
+
+def collaborator_kwargs(service: CoreService, collaborators: CollaboratorMap) -> dict[str, Any]:
+    return {name: collaborators[name] for name in service.required_collaborators}

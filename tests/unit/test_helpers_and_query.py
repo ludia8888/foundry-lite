@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
@@ -12,6 +13,8 @@ from foundry_lite.application.core import (
     _normalize_duckdb_type,
     _required_row,
 )
+from foundry_lite.application.core_services import CoreServices
+from foundry_lite.application.safe_expression import evaluate_safe_expression
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -21,10 +24,17 @@ from foundry_lite.domain.errors import (
     ValidationFailed,
 )
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.observability.logging import configure_logging, log_event
 from foundry_lite.transforms_sdk import Input, Output, transform
 
 from tests.conftest import prepare_indexed_demo
+
+
+class ExplodingCsvComputeAdapter(DuckDBComputeAdapter):
+    def csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
+        raise RuntimeError("duckdb exploded")
 
 
 def test_helper_normalization_and_dataset_ref_validation() -> None:
@@ -134,27 +144,24 @@ def test_permission_deny_on_dataset_write_is_audited(core: FoundryLiteCore) -> N
 
 
 def test_csv_upload_wraps_unexpected_internal_error(
-    core: FoundryLiteCore,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = demo_admin_context()
-    core.ensure_dataset("raw.wraps_error", ctx=ctx, primary_key=["id"])
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "exploding-core")
+    exploding_core = FoundryLiteCore(dependencies=replace(dependencies, compute_adapter=ExplodingCsvComputeAdapter()))
+    exploding_core.ensure_dataset("raw.wraps_error", ctx=ctx, primary_key=["id"])
     csv_path = tmp_path / "rows.csv"
     csv_path.write_text("id,value\nA,1\n", encoding="utf-8")
 
-    def fail_csv_to_parquet(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("duckdb exploded")
-
-    monkeypatch.setattr(core, "_csv_to_parquet", fail_csv_to_parquet)
-
     with pytest.raises(ValidationFailed, match="csv upload failed"):
-        core.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
+        exploding_core.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
 
-    monkeypatch.undo()
+    normal_core = FoundryLiteCore(storage_root=tmp_path / "normal-core")
+    normal_core.ensure_dataset("raw.wraps_error", ctx=ctx, primary_key=["id"])
     monkeypatch.setenv("FOUNDRY_LITE_MAX_CSV_UPLOAD_BYTES", "4")
     with pytest.raises(ValidationFailed, match="size limit"):
-        core.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
+        normal_core.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
 
 
 def test_action_validation_not_found_and_precondition_paths(core: FoundryLiteCore) -> None:
@@ -201,9 +208,9 @@ def test_action_validation_not_found_and_precondition_paths(core: FoundryLiteCor
             idempotency_key="precondition-false",
             ctx=ctx,
         )
-    assert core._evaluate_precondition("object.status == 'PENDING'", {"status": "PENDING"}) is True
+    assert evaluate_safe_expression("object.status == 'PENDING'", {"status": "PENDING"}) is True
     with pytest.raises(ValidationFailed):
-        core._evaluate_precondition("object.status matches 'PENDING'", {"status": "PENDING"})
+        evaluate_safe_expression("object.status matches 'PENDING'", {"status": "PENDING"})
 
 
 def test_ontology_and_materialization_error_paths(core: FoundryLiteCore, tmp_path: Path) -> None:
@@ -246,7 +253,10 @@ def test_dataset_schema_drift_not_null_and_empty_file_failures(
         core.upload_csv("raw.empty", empty, ctx=ctx)
 
 
-def test_transform_and_private_guard_failures(core: FoundryLiteCore, tmp_path: Path) -> None:
+def test_transform_and_private_guard_failures(tmp_path: Path) -> None:
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "service-edge-core")
+    core = FoundryLiteCore(dependencies=dependencies)
+    services = CoreServices.create(dependencies)
     ctx = demo_admin_context()
     core.seed_supply_chain_demo_files()
     core.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
@@ -268,15 +278,21 @@ def test_transform_and_private_guard_failures(core: FoundryLiteCore, tmp_path: P
     with pytest.raises(ValidationFailed):
         core.run_transform("bad_sql", ctx=ctx)
 
+    dataset_transactions = services.dataset.transaction
+    dataset_versions = services.dataset.version
+    dataset_quality = services.dataset.quality
+    dataset_ingest = services.dataset.ingest
+    runtime = services.runtime
+
     with core.engine.begin() as conn:
         with pytest.raises(NotFound):
-            core._require_open_transaction(conn, "missing")
+            dataset_transactions._require_open_transaction(conn, "missing")
         with pytest.raises(ConflictDetected):
-            core._require_open_transaction(conn, commit.transaction_id)
+            dataset_transactions._require_open_transaction(conn, commit.transaction_id)
         dataset = core.get_dataset("raw.crm_customers", ctx=ctx)
         with pytest.raises(ValidationFailed):
-            core._open_dataset_transaction(conn, ctx, dataset, "UPDATE")
-        core._outbox(
+            dataset_transactions._open_dataset_transaction(conn, ctx, dataset, "UPDATE")
+        runtime._outbox(
             conn,
             ctx,
             "test.event",
@@ -286,7 +302,7 @@ def test_transform_and_private_guard_failures(core: FoundryLiteCore, tmp_path: P
             idempotency_key="same",
             correlation_id="same",
         )
-        core._outbox(
+        runtime._outbox(
             conn,
             ctx,
             "test.event",
@@ -297,21 +313,21 @@ def test_transform_and_private_guard_failures(core: FoundryLiteCore, tmp_path: P
             correlation_id="same",
         )
         with pytest.raises(NotFound):
-            core._latest_version_by_dataset_id(conn, "missing")
-        assert core._latest_version_by_dataset_id(conn, "missing", allow_missing=True) is None
-        version_path = core._version_file_path(core._get_version_by_id(commit.version_id))
-        assert core._execute_check(version_path, 1, {"type": "custom"})["status"] == "passed"
+            dataset_versions._latest_version_by_dataset_id(conn, "missing")
+        assert dataset_versions._latest_version_by_dataset_id(conn, "missing", allow_missing=True) is None
+        version_path = dataset_transactions._version_file_path(dataset_versions._get_version_by_id(commit.version_id))
+        assert dataset_quality._execute_check(version_path, 1, {"type": "custom"})["status"] == "passed"
 
     with pytest.raises(NotFound):
-        core._schema_for_version("missing", 1)
+        dataset_versions._schema_for_version("missing", 1)
     with pytest.raises(NotFound):
-        core._get_version("missing", "latest", ctx=ctx)
+        dataset_versions._get_version("missing", "latest", ctx=ctx)
     with pytest.raises(NotFound):
-        core._get_version("missing", "dsv_missing", ctx=ctx)
+        dataset_versions._get_version("missing", "dsv_missing", ctx=ctx)
     with pytest.raises(NotFound):
-        core._get_version_by_id("dsv_missing")
+        dataset_versions._get_version_by_id("dsv_missing")
     with pytest.raises(ValidationFailed):
-        core._csv_to_parquet(tmp_path / "bad.csv", tmp_path / "bad.parquet")
+        dataset_ingest._csv_to_parquet(tmp_path / "bad.csv", tmp_path / "bad.parquet")
 
 
 def test_ontology_import_validation_edges_and_missing_active_types(

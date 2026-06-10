@@ -284,7 +284,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] `tests/contracts/test_dataset_storage_adapter_contract.py`가 local/fake adapter에 같은 contract test를 적용한다.
 - [x] `tests/integration/test_scale_foundation.py`가 `fake-storage` profile로 CSV commit, inspect, preview public API가 유지되는지 검증한다.
 - [x] `scripts/quality/check_infra_import_boundary.py`를 application baseline `0`으로 CI와 로컬 `pnpm quality:infra-boundaries`에 연결했다.
-- [x] `scripts/quality/check_service_method_conflicts.py`, `check_service_dependencies.py`, `check_service_call_graph.py`를 CI와 로컬 `pnpm quality:infra-boundaries`에 연결했다.
+- [x] `check_service_dependencies.py`, `check_service_call_graph.py`를 CI와 로컬 `pnpm quality:infra-boundaries`에 연결했다. 과거 flat method registry용 service method conflict gate는 registry 제거와 함께 폐기했다.
 - [x] application concrete infra import baseline을 `37`에서 `32`로 낮췄다.
 - [x] core bootstrap/reset DB write를 `MetadataRepository` port로 이동했다.
 - [x] dataset registry create/find DB read/write를 `DatasetRepository` port로 이동하고 local/fake contract test를 추가했다.
@@ -308,8 +308,9 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] application concrete infra import baseline을 `9`에서 `7`로 낮췄다.
 - [x] application concrete infra import baseline을 `7`에서 `0`으로 낮췄다.
 - [x] PostgreSQL repository contract testcontainer 축은 로컬 opt-out만 허용하고, `pnpm ci:gate`에서는 `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1`을 실패 처리한다.
-- [x] `FoundryLiteCore`의 facade-level service multiple inheritance를 제거하고 `CoreServices` constructor-injected service graph로 전환했다. Public API forwarder는 유지하고 private helper 호환은 service method delegation으로 보존했다.
+- [x] `FoundryLiteCore`의 facade-level service multiple inheritance를 제거하고 `CoreServices` constructor-injected service graph로 전환했다. Public API forwarder는 유지하되, flat method registry와 `__getattr__`/`__setattr__` private helper delegation bridge는 제거했다.
 - [x] 각 application service가 직접 쓰는 `CoreDependencies` 필드만 `required_dependencies`로 선언하고 주입받게 했다. `check_service_dependencies.py`는 선언 누락과 불필요 선언을 모두 실패 처리한다.
+- [x] 각 application service가 직접 호출하는 collaborator만 `required_collaborators`로 선언하고 주입받게 했다. `check_service_dependencies.py`는 undeclared/unused collaborator도 실패 처리한다.
 - [x] service 내부 cross-service 호출을 `self.runtime_service._audit(...)`처럼 명시적 collaborator attribute로 바꿨다. `check_service_call_graph.py`는 이 명시적 호출 그래프를 기준으로 cycle/depth/fan-out을 검증한다.
 - [ ] Event/Search/Workflow/Connector/Auth boundary에도 fake/local contract test를 붙인다.
 - [ ] adapter failure contract를 typed error, retryability, timeout, idempotency, operator message까지 구현한다.

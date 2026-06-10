@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from typing import Any
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.action_service import ActionService
-from foundry_lite.application.services.base import CoreService, build_service
+from foundry_lite.application.services.base import CoreService, build_service, collaborator_kwargs
 from foundry_lite.application.services.dataset_service import DatasetServices
 from foundry_lite.application.services.demo_service import DemoService
 from foundry_lite.application.services.materialization_service import MaterializationService
@@ -45,8 +43,6 @@ class CoreServices:
     ontology: OntologyService
     runtime: RuntimeService
     transform: TransformService
-    methods: dict[str, Callable[..., Any]]
-    method_owners: dict[str, CoreService]
 
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> CoreServices:
@@ -68,12 +64,11 @@ class CoreServices:
             runtime,
             transform,
         ]
-        methods, method_owners = _method_registry(services)
         collaborators = _collaborator_map(
             action, dataset, demo, materialization, object_store, ontology, runtime, transform
         )
         for service in services:
-            service.bind_collaborators(collaborators)
+            service.bind_collaborators(collaborator_kwargs(service, collaborators))
         return cls(
             action=action,
             dataset=dataset,
@@ -83,38 +78,7 @@ class CoreServices:
             ontology=ontology,
             runtime=runtime,
             transform=transform,
-            methods=methods,
-            method_owners=method_owners,
         )
-
-    def method(self, name: str) -> Callable[..., Any]:
-        return self.methods[name]
-
-    def override_method(self, name: str, value: Callable[..., Any]) -> None:
-        service = self.method_owners[name]
-        setattr(service, name, value)
-        self.methods[name] = value
-
-
-def _method_registry(
-    services: Iterable[CoreService],
-) -> tuple[dict[str, Callable[..., Any]], dict[str, CoreService]]:
-    registry: dict[str, Callable[..., Any]] = {}
-    owners: dict[str, str] = {}
-    owner_services: dict[str, CoreService] = {}
-    for service in services:
-        for cls in service.__class__.mro():
-            if cls in {CoreService, object}:
-                continue
-            for name, value in cls.__dict__.items():
-                if name.startswith("__") or not callable(value):
-                    continue
-                if name in registry:
-                    raise RuntimeError(f"service method {name!r} is defined by both {owners[name]} and {cls.__name__}")
-                registry[name] = getattr(service, name)
-                owners[name] = cls.__name__
-                owner_services[name] = service
-    return registry, owner_services
 
 
 def _collaborator_map(

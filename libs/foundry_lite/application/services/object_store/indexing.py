@@ -23,6 +23,14 @@ from foundry_lite.domain.errors import (
 
 class ObjectIndexingService(CoreService):
     required_dependencies = ("engine", "compute_adapter", "object_index_repository")
+    required_collaborators = (
+        "dataset_registry_service",
+        "dataset_transaction_service",
+        "dataset_version_service",
+        "object_records_service",
+        "ontology_service",
+        "runtime_service",
+    )
 
     def index_rebuild(
         self,

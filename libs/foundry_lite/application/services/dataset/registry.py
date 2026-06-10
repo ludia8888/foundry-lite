@@ -25,6 +25,11 @@ class DatasetRegistryService(CoreService):
         "dataset_version_repository",
         "dataset_storage",
     )
+    required_collaborators = (
+        "dataset_transaction_service",
+        "dataset_version_service",
+        "runtime_service",
+    )
 
     def create_dataset(
         self,

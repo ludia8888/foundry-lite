@@ -22,6 +22,11 @@ from foundry_lite.domain.errors import (
 
 class DatasetIngestService(CoreService):
     required_dependencies = ("engine", "compute_adapter", "dataset_transaction_repository")
+    required_collaborators = (
+        "dataset_registry_service",
+        "dataset_transaction_service",
+        "runtime_service",
+    )
 
     def upload_csv(
         self,

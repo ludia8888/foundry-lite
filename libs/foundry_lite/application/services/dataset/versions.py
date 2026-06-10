@@ -9,6 +9,7 @@ from foundry_lite.domain.errors import NotFound
 
 class DatasetVersionService(CoreService):
     required_dependencies = ("engine", "dataset_version_repository")
+    required_collaborators = ()
 
     def _next_dataset_version_number(self, conn: Any, dataset_id: str) -> int:
         return self.dataset_version_repository.next_version_number(transaction=conn, dataset_id=dataset_id)

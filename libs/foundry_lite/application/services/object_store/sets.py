@@ -18,6 +18,11 @@ PRIVATE_OBJECT_SET_VISIBILITIES = {"private", "temporary"}
 
 class ObjectSetsService(CoreService):
     required_dependencies = ("engine", "policy", "object_set_repository")
+    required_collaborators = (
+        "object_query_service",
+        "ontology_service",
+        "runtime_service",
+    )
 
     def create_object_set(
         self,

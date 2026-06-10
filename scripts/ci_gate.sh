@@ -26,7 +26,6 @@ uv run python scripts/quality/check_dependency_graph.py
 
 echo "== Static: infra import and service collaborator boundaries =="
 uv run python scripts/quality/check_infra_import_boundary.py --max-application-imports 0
-uv run python scripts/quality/check_service_method_conflicts.py
 uv run python scripts/quality/check_service_dependencies.py
 uv run python scripts/quality/check_service_call_graph.py --max-depth 7 --max-fan-out 10
 
@@ -37,7 +36,7 @@ echo "== Static: no skipped/flaky/xfail release bypasses =="
 uv run python scripts/quality/check_no_test_bypasses.py
 
 echo "== Static: private test reference baseline =="
-uv run python scripts/quality/check_private_test_references.py --max-count 17
+uv run python scripts/quality/check_private_test_references.py --max-count 0
 
 echo "== Static: Bandit security scan =="
 uv run bandit -c pyproject.toml -r libs apps scripts

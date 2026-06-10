@@ -8,6 +8,7 @@ from foundry_lite.domain.context import RequestContext
 
 class ObjectRecordsService(CoreService):
     required_dependencies = ("object_read_repository",)
+    required_collaborators = ()
 
     def _object_record(
         self,

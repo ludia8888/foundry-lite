@@ -26,6 +26,11 @@ from foundry_lite.domain.errors import (
 
 class OntologyService(CoreService):
     required_dependencies = ("engine", "ontology_repository")
+    required_collaborators = (
+        "dataset_registry_service",
+        "dataset_version_service",
+        "runtime_service",
+    )
 
     def apply_ontology(
         self,

@@ -20,12 +20,11 @@ pnpm ci:gate
 | 타입 검사 | mypy, pyright | 값의 타입이 맞지 않아 런타임에서 터질 문제 |
 | 의존성 구조 | `scripts/quality/check_dependency_graph.py` | domain이 app을 import하는 식의 레이어 침범, 순환 의존성 |
 | 인프라 경계 | `check_infra_import_boundary.py` | domain/application이 concrete infra SDK에 묶이는 문제. 현재 application baseline은 `0`이며 새 infra 접근은 repository/adapter port를 통과해야 한다. |
-| service 메서드 충돌 | `check_service_method_conflicts.py` | facade public method registry 호환 때문에 service 메서드명이 충돌하는 문제 |
-| service 의존성 | `check_service_dependencies.py` | service의 `required_dependencies` 선언과 실제 `CoreDependencies` 직접 접근이 다르거나, 숨은 `self.<attr>`에 기대는 문제 |
+| service 의존성 | `check_service_dependencies.py` | service의 `required_dependencies`/`required_collaborators` 선언과 실제 dependency/collaborator 접근이 다르거나, 숨은 `self.<attr>`에 기대는 문제 |
 | service call graph | `check_service_call_graph.py` | `self.runtime_service._audit(...)` 같은 명시적 collaborator call이 순환하거나 depth/fan-out 한계를 넘는 문제 |
 | 모듈 크기 | `check_application_module_size.py` | application core/service 파일이 다시 god file로 커지는 문제 |
 | 테스트 우회 방지 | `check_no_test_bypasses.py` | `tests/**/*.py`에서 skip/xfail로 release gate를 우회하는 테스트. PostgreSQL 로컬 opt-out만 명시적으로 허용하고 `pnpm ci:gate`에서 차단한다. |
-| private 테스트 부채 | `check_private_test_references.py` | private helper 직접 테스트가 현재 baseline보다 늘어나는 문제 |
+| Facade private 테스트 부채 | `check_private_test_references.py` | 테스트가 `core._...` private facade 위임에 다시 기대는 문제. 현재 baseline은 `0`이다. |
 | 보안 정적 분석 | Bandit | 위험한 Python 코드 패턴 |
 | 의존성 취약점 | pip-audit | 설치 패키지의 알려진 보안 취약점 |
 | 복잡도 | Radon, Xenon | 너무 복잡해서 장애 추적이 어려운 함수. CI는 block complexity `B` 초과를 막는다. |
@@ -121,7 +120,7 @@ CI에서는 fan-out이 `10`을 넘는 내부 모듈을 막는다. 쉽게 말해,
 
 CI에서는 application module이 `500`줄을 넘는 것도 막는다. `FoundryLiteCore`는 Facade로 유지하고, 실제 구현은 Dataset, Transform, Ontology, Object, Action, Materialization, Runtime event, Demo orchestration service로 나눈다.
 
-현재 일부 테스트는 private helper를 직접 호출한다. 이는 남은 기술부채이며 CI는 baseline `17`개를 넘지 못하게 막는다. 모듈 분리 후 이 숫자는 점진적으로 `0`으로 낮춰야 한다.
+현재 CI는 `core._...` private facade 위임 테스트를 `0`개로 강제한다. 내부 service/helper 테스트는 필요한 경우 책임 소유 module을 직접 대상으로 삼되, `FoundryLiteCore`가 숨은 private delegation layer로 되살아나면 안 된다.
 
 Repository contract test 중 PostgreSQL testcontainer 축은 release/CI evidence에 반드시 포함되어야 한다. Docker가 꺼진 로컬 개발 환경에서는 `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1`로 임시 우회할 수 있지만, `pnpm ci:gate`는 이 값을 발견하면 즉시 실패한다. 즉, “로컬 편의”와 “출시 증거”를 분리한다.
 

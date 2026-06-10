@@ -26,6 +26,11 @@ from foundry_lite.domain.errors import (
 
 class DatasetTransactionService(CoreService):
     required_dependencies = ("dataset_storage", "dataset_transaction_repository")
+    required_collaborators = (
+        "dataset_quality_service",
+        "dataset_version_service",
+        "runtime_service",
+    )
 
     def _open_dataset_transaction(
         self,

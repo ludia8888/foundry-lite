@@ -100,18 +100,6 @@ class FoundryLiteCore:
             created_at=now,
         )
 
-    def __getattr__(self, name: str) -> Any:
-        services = self.__dict__.get("_services")
-        if services is not None and name in services.methods:
-            return services.method(name)
-        raise AttributeError(name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        object.__setattr__(self, name, value)
-        services = self.__dict__.get("_services")
-        if services is not None and name in services.methods and callable(value):
-            services.override_method(name, value)
-
     def create_dataset(
         self,
         dataset_ref: str,

@@ -26,6 +26,12 @@ from foundry_lite.domain.errors import (
 
 class TransformService(CoreService):
     required_dependencies = ("engine", "policy", "compute_adapter", "transform_repository")
+    required_collaborators = (
+        "dataset_registry_service",
+        "dataset_transaction_service",
+        "dataset_version_service",
+        "runtime_service",
+    )
 
     def register_transform(
         self,

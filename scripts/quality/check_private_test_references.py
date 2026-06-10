@@ -40,10 +40,10 @@ def main(argv: list[str] | None = None) -> int:
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
 
     if len(references) > args.max_count:
-        print(f"Private test references increased: {len(references)} > {args.max_count}")
+        print(f"Facade private test references increased: {len(references)} > {args.max_count}")
         print(f"Report: {args.output.relative_to(ROOT)}")
         return 1
-    print(f"Private test references {len(references)} <= {args.max_count}")
+    print(f"Facade private test references {len(references)} <= {args.max_count}")
     return 0
 
 

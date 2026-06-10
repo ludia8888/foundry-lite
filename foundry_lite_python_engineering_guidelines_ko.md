@@ -214,8 +214,10 @@ infrastructure
 패턴 적용 체크리스트:
 
 - [ ] Facade는 얇아야 한다. public 호환성을 지키는 입구 역할을 하되, 실제 로직은 책임별 service에 둔다.
+- [ ] Facade는 private helper를 `__getattr__`나 method registry로 대신 노출하지 않는다. 외부 entrypoint는 명시적 public forwarder만 사용한다.
 - [ ] Service는 use case 하나 또는 매우 가까운 use case 묶음만 맡는다.
 - [ ] Service는 `CoreDependencies` 전체 bag을 service locator처럼 들고 있지 않는다. 각 service는 직접 쓰는 dependency만 `required_dependencies`에 선언하고, 선언하지 않은 dependency에 접근하지 않는다.
+- [ ] Service는 collaborator 전체 bag을 들고 있지 않는다. 각 service는 직접 호출하는 collaborator만 `required_collaborators`에 선언하고, 선언하지 않은 collaborator에 접근하지 않는다.
 - [ ] Service 사이 협력은 `self.runtime_service._audit(...)`처럼 소유 service가 드러나는 collaborator attribute로 호출한다. `self._audit(...)`처럼 어느 service에서 온 메서드인지 숨기는 호출을 만들지 않는다.
 - [ ] Repository는 DB read/write만 맡고 permission, precondition, mutation policy를 판단하지 않는다.
 - [ ] Adapter는 외부 시스템 세부를 숨기되, 실패/timeout/retry/idempotency 정보를 application layer로 돌려준다.

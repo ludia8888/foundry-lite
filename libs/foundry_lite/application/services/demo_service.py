@@ -13,6 +13,16 @@ from foundry_lite.domain.context import RequestContext, demo_admin_context
 
 class DemoService(CoreService):
     required_dependencies = ()
+    required_collaborators = (
+        "action_service",
+        "dataset_ingest_service",
+        "dataset_registry_service",
+        "materialization_service",
+        "object_indexing_service",
+        "object_query_service",
+        "ontology_service",
+        "transform_service",
+    )
 
     def run_supply_chain_demo(self, *, ctx: RequestContext | None = None) -> dict[str, Any]:
         ctx = ctx or demo_admin_context()

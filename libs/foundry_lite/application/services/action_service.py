@@ -32,6 +32,12 @@ from foundry_lite.domain.errors import (
 
 class ActionService(CoreService):
     required_dependencies = ("engine", "policy", "action_repository")
+    required_collaborators = (
+        "object_indexing_service",
+        "object_records_service",
+        "ontology_service",
+        "runtime_service",
+    )
 
     def apply_action(
         self,

@@ -22,13 +22,13 @@
 - infra와 닿는 변경은 Sprint 02A Scale Foundation 원칙을 먼저 확인한다. storage, metadata DB, compute, event, search, workflow, connector, auth 변경은 port/interface, adapter, contract test, trace key를 함께 고려한다.
 - 새 mutation은 transaction, audit, outbox, idempotency, error traceability를 함께 고려한다.
 - 새 infra dependency는 항상 `CoreDependencies` (`libs/foundry_lite/application/dependencies.py`)에 먼저 선언하고, 실제로 그 dependency를 직접 쓰는 service의 `required_dependencies`에만 추가한다. service가 선언하지 않은 CoreDependencies 필드에 접근하면 안 된다 — `scripts/quality/check_service_dependencies.py`가 이를 강제한다.
-- service 사이의 collaborator call은 `self.runtime_service._audit(...)`처럼 소유 service가 보이는 명시적 attribute를 통해 호출한다. `self._audit(...)`처럼 글로벌 method registry에 기대는 숨은 호출을 만들지 않는다. collaborator 그래프는 DAG로 유지한다. cycle 0, depth ≤ 7, service당 fan-out ≤ 10 — `scripts/quality/check_service_call_graph.py`가 강제한다.
+- service 사이의 collaborator call은 `self.runtime_service._audit(...)`처럼 소유 service가 보이는 명시적 attribute를 통해 호출한다. 각 service는 실제로 직접 호출하는 collaborator만 `required_collaborators`에 선언한다. `self._audit(...)`처럼 글로벌 method registry에 기대는 숨은 호출을 만들지 않는다. collaborator 그래프는 DAG로 유지한다. cycle 0, depth ≤ 7, service당 fan-out ≤ 10 — `scripts/quality/check_service_call_graph.py`와 `check_service_dependencies.py`가 강제한다.
 - 변경 후에는 최소한 관련 테스트와 정적 검사를 실행하고, 가능하면 `pnpm ci:gate`로 전체 품질 게이트를 확인한다.
 
 ## 금지
 
 - 엔지니어링 문서를 읽지 않고 구조 변경을 시작하지 않는다.
 - god-class, god-service, fat-router를 만들지 않는다.
-- private helper 직접 테스트를 늘리지 않는다.
+- `core._...` private facade helper 테스트를 만들지 않는다. facade는 public forwarder만 제공하고, 내부 실패 경계는 public API, service 소유 module, port/adapter contract test 중 가장 좁고 정직한 경계에서 검증한다.
 - 문서에 아직 구현되지 않은 PostgreSQL JSONB, real CEL, real ERP writeback, Temporal, Alembic을 구현 완료처럼 쓰지 않는다.
 - 테스트/CI 실패를 skip, xfail, flaky 처리로 우회하지 않는다.

@@ -22,6 +22,12 @@ from foundry_lite.domain.errors import (
 
 class MaterializationService(CoreService):
     required_dependencies = ("engine", "materialization_repository")
+    required_collaborators = (
+        "dataset_ingest_service",
+        "dataset_registry_service",
+        "dataset_transaction_service",
+        "runtime_service",
+    )
 
     def materialize(
         self,
