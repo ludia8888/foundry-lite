@@ -4,9 +4,14 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from sqlalchemy import and_, func, insert, select, update
-from sqlalchemy.engine import Connection
 
+from foundry_lite.application.ports.ontology_repository import (
+    ActionTypeRecord,
+    LinkTypeRecord,
+    ObjectTypeRecord,
+    OntologyVersionRecord,
+    PropertyTypeRecord,
+)
 from foundry_lite.application.primitives import (
     _new_id,
     _now,
@@ -17,7 +22,6 @@ from foundry_lite.domain.errors import (
     NotFound,
     ValidationFailed,
 )
-from foundry_lite.infrastructure import schema as db
 
 
 class OntologyServiceMixin(CoreServiceMixin):
@@ -35,35 +39,27 @@ class OntologyServiceMixin(CoreServiceMixin):
         with self.engine.begin() as conn:
             version_number = self._next_ontology_version(conn, ctx)
             ontology_version_id = _new_id("ont")
-            conn.execute(
-                insert(db.ontology_versions).values(
-                    id=ontology_version_id,
+            self.ontology_repository.insert_ontology_version(
+                transaction=conn,
+                record=OntologyVersionRecord(
+                    ontology_version_id=ontology_version_id,
                     tenant_id=ctx.tenant_id,
                     version_number=version_number,
                     status="draft",
                     created_by=ctx.actor_user_id,
                     created_at=_now(),
                     activated_at=None,
-                )
+                ),
             )
             object_map = self._import_object_types(conn, ctx, ontology_version_id, definition)
             self._import_link_types(conn, ctx, ontology_version_id, definition, object_map)
             self._import_action_types(conn, ctx, ontology_version_id, definition, object_map)
             self._validate_ontology(conn, ctx, ontology_version_id)
-            conn.execute(
-                update(db.ontology_versions)
-                .where(
-                    and_(
-                        db.ontology_versions.c.tenant_id == ctx.tenant_id,
-                        db.ontology_versions.c.status == "active",
-                    )
-                )
-                .values(status="archived")
-            )
-            conn.execute(
-                update(db.ontology_versions)
-                .where(db.ontology_versions.c.id == ontology_version_id)
-                .values(status="active", activated_at=_now())
+            self.ontology_repository.archive_active_ontology_versions(transaction=conn, tenant_id=ctx.tenant_id)
+            self.ontology_repository.activate_ontology_version(
+                transaction=conn,
+                ontology_version_id=ontology_version_id,
+                activated_at=_now(),
             )
             self._outbox(
                 conn,
@@ -86,20 +82,12 @@ class OntologyServiceMixin(CoreServiceMixin):
             )
             return {"ontology_version_id": ontology_version_id, "version_number": version_number}
 
-    def _next_ontology_version(self, conn: Connection, ctx: RequestContext) -> int:
-        current = (
-            conn.execute(
-                select(func.max(db.ontology_versions.c.version_number)).where(
-                    db.ontology_versions.c.tenant_id == ctx.tenant_id
-                )
-            ).scalar()
-            or 0
-        )
-        return int(current) + 1
+    def _next_ontology_version(self, conn: Any, ctx: RequestContext) -> int:
+        return self.ontology_repository.next_ontology_version_number(transaction=conn, tenant_id=ctx.tenant_id)
 
     def _import_object_types(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         ontology_version_id: str,
         definition: dict[str, Any],
@@ -108,9 +96,10 @@ class OntologyServiceMixin(CoreServiceMixin):
         for item in definition.get("objectTypes", []):
             object_id = _new_id("otype")
             api_name = item["apiName"]
-            conn.execute(
-                insert(db.object_types).values(
-                    id=object_id,
+            self.ontology_repository.insert_object_type(
+                transaction=conn,
+                record=ObjectTypeRecord(
+                    object_type_id=object_id,
                     tenant_id=ctx.tenant_id,
                     ontology_version_id=ontology_version_id,
                     api_name=api_name,
@@ -119,7 +108,7 @@ class OntologyServiceMixin(CoreServiceMixin):
                     primary_key_property=item["primaryKey"],
                     backing=item["backing"],
                     config={},
-                )
+                ),
             )
             object_map[api_name] = object_id
             seen_properties: set[str] = set()
@@ -129,9 +118,10 @@ class OntologyServiceMixin(CoreServiceMixin):
                     raise ValidationFailed("duplicate property apiName", details={"property": prop_api})
                 seen_properties.add(prop_api)
                 source = prop.get("source", "dataset" if "column" in prop else "edit_layer")
-                conn.execute(
-                    insert(db.property_types).values(
-                        id=_new_id("ptype"),
+                self.ontology_repository.insert_property_type(
+                    transaction=conn,
+                    record=PropertyTypeRecord(
+                        property_type_id=_new_id("ptype"),
                         tenant_id=ctx.tenant_id,
                         object_type_id=object_id,
                         api_name=prop_api,
@@ -146,13 +136,13 @@ class OntologyServiceMixin(CoreServiceMixin):
                         column_name=prop.get("column"),
                         edit_policy=prop.get("editPolicy", "edit_only" if source == "edit_layer" else "source_wins"),
                         derivation=prop.get("derivation"),
-                    )
+                    ),
                 )
         return object_map
 
     def _import_link_types(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         ontology_version_id: str,
         definition: dict[str, Any],
@@ -161,9 +151,10 @@ class OntologyServiceMixin(CoreServiceMixin):
         for item in definition.get("linkTypes", []):
             if item["from"] not in object_map or item["to"] not in object_map:
                 raise ValidationFailed("link references unknown object type", details=item)
-            conn.execute(
-                insert(db.link_types).values(
-                    id=_new_id("ltype"),
+            self.ontology_repository.insert_link_type(
+                transaction=conn,
+                record=LinkTypeRecord(
+                    link_type_id=_new_id("ltype"),
                     tenant_id=ctx.tenant_id,
                     ontology_version_id=ontology_version_id,
                     api_name=item["apiName"],
@@ -174,12 +165,12 @@ class OntologyServiceMixin(CoreServiceMixin):
                     to_api_name=item["to"],
                     cardinality=item.get("cardinality", "many_to_one"),
                     backing=item["backing"],
-                )
+                ),
             )
 
     def _import_action_types(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         ontology_version_id: str,
         definition: dict[str, Any],
@@ -198,9 +189,10 @@ class OntologyServiceMixin(CoreServiceMixin):
                     parameter["apiName"]: {"type": parameter["type"]} for parameter in item.get("parameters", [])
                 },
             }
-            conn.execute(
-                insert(db.action_types).values(
-                    id=_new_id("atype"),
+            self.ontology_repository.insert_action_type(
+                transaction=conn,
+                record=ActionTypeRecord(
+                    action_type_id=_new_id("atype"),
                     tenant_id=ctx.tenant_id,
                     ontology_version_id=ontology_version_id,
                     api_name=item["apiName"],
@@ -210,10 +202,10 @@ class OntologyServiceMixin(CoreServiceMixin):
                     parameter_schema=parameter_schema,
                     definition=item,
                     enabled=True,
-                )
+                ),
             )
 
-    def _validate_ontology(self, conn: Connection, ctx: RequestContext, ontology_version_id: str) -> None:
+    def _validate_ontology(self, conn: Any, ctx: RequestContext, ontology_version_id: str) -> None:
         object_rows = self._object_types_for_version(conn, ctx, ontology_version_id)
         object_by_api = {row["api_name"]: row for row in object_rows}
         for object_type in object_rows:
@@ -223,7 +215,7 @@ class OntologyServiceMixin(CoreServiceMixin):
 
     def _validate_ontology_object_type(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         object_type: dict[str, Any],
     ) -> None:
@@ -236,7 +228,7 @@ class OntologyServiceMixin(CoreServiceMixin):
 
     def _dataset_columns_for_ref(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         dataset_ref: str,
     ) -> dict[str, dict[str, Any]]:
@@ -275,7 +267,7 @@ class OntologyServiceMixin(CoreServiceMixin):
 
     def _validate_ontology_action_mutations(
         self,
-        conn: Connection,
+        conn: Any,
         object_type: dict[str, Any],
         property_by_api: dict[str, dict[str, Any]],
     ) -> None:
@@ -296,7 +288,7 @@ class OntologyServiceMixin(CoreServiceMixin):
 
     def _validate_ontology_link(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         link: dict[str, Any],
         object_by_api: dict[str, dict[str, Any]],
@@ -313,126 +305,70 @@ class OntologyServiceMixin(CoreServiceMixin):
 
     def _object_types_for_version(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         ontology_version_id: str,
     ) -> list[dict[str, Any]]:
-        return [
-            dict(row)
-            for row in conn.execute(
-                select(db.object_types).where(
-                    and_(
-                        db.object_types.c.tenant_id == ctx.tenant_id,
-                        db.object_types.c.ontology_version_id == ontology_version_id,
-                    )
-                )
-            )
-            .mappings()
-            .all()
-        ]
+        return self.ontology_repository.object_types_for_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=ontology_version_id,
+        )
 
     def _link_types_for_version(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         ontology_version_id: str,
     ) -> list[dict[str, Any]]:
-        return [
-            dict(row)
-            for row in conn.execute(
-                select(db.link_types).where(
-                    and_(
-                        db.link_types.c.tenant_id == ctx.tenant_id,
-                        db.link_types.c.ontology_version_id == ontology_version_id,
-                    )
-                )
-            )
-            .mappings()
-            .all()
-        ]
-
-    def _properties_for_object_type(self, conn: Connection, object_type_id: str) -> list[dict[str, Any]]:
-        return [
-            dict(row)
-            for row in conn.execute(
-                select(db.property_types).where(db.property_types.c.object_type_id == object_type_id)
-            )
-            .mappings()
-            .all()
-        ]
-
-    def _actions_for_target(self, conn: Connection, object_type_id: str) -> list[dict[str, Any]]:
-        return [
-            dict(row)
-            for row in conn.execute(
-                select(db.action_types).where(db.action_types.c.target_object_type_id == object_type_id)
-            )
-            .mappings()
-            .all()
-        ]
-
-    def _active_ontology_version(self, conn: Connection, ctx: RequestContext) -> dict[str, Any]:
-        row = (
-            conn.execute(
-                select(db.ontology_versions).where(
-                    and_(
-                        db.ontology_versions.c.tenant_id == ctx.tenant_id,
-                        db.ontology_versions.c.status == "active",
-                    )
-                )
-            )
-            .mappings()
-            .first()
+        return self.ontology_repository.link_types_for_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=ontology_version_id,
         )
+
+    def _properties_for_object_type(self, conn: Any, object_type_id: str) -> list[dict[str, Any]]:
+        return self.ontology_repository.properties_for_object_type(transaction=conn, object_type_id=object_type_id)
+
+    def _actions_for_target(self, conn: Any, object_type_id: str) -> list[dict[str, Any]]:
+        return self.ontology_repository.actions_for_target(transaction=conn, object_type_id=object_type_id)
+
+    def _active_ontology_version(self, conn: Any, ctx: RequestContext) -> dict[str, Any]:
+        row = self.ontology_repository.active_ontology_version(transaction=conn, tenant_id=ctx.tenant_id)
         if row is None:
             raise NotFound("active ontology not found")
-        return dict(row)
+        return row
 
     def _active_object_type(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         api_name: str,
     ) -> dict[str, Any]:
         active = self._active_ontology_version(conn, ctx)
-        row = (
-            conn.execute(
-                select(db.object_types).where(
-                    and_(
-                        db.object_types.c.tenant_id == ctx.tenant_id,
-                        db.object_types.c.ontology_version_id == active["id"],
-                        db.object_types.c.api_name == api_name,
-                    )
-                )
-            )
-            .mappings()
-            .first()
+        row = self.ontology_repository.object_type_for_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=active["id"],
+            api_name=api_name,
         )
         if row is None:
             raise NotFound("object type not found", details={"api_name": api_name})
-        return dict(row)
+        return row
 
     def _active_action_type(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         api_name: str,
     ) -> dict[str, Any]:
         active = self._active_ontology_version(conn, ctx)
-        row = (
-            conn.execute(
-                select(db.action_types).where(
-                    and_(
-                        db.action_types.c.tenant_id == ctx.tenant_id,
-                        db.action_types.c.ontology_version_id == active["id"],
-                        db.action_types.c.api_name == api_name,
-                        db.action_types.c.enabled == True,  # noqa: E712
-                    )
-                )
-            )
-            .mappings()
-            .first()
+        row = self.ontology_repository.enabled_action_type_for_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=active["id"],
+            api_name=api_name,
         )
         if row is None:
             raise NotFound("action type not found", details={"api_name": api_name})
-        return dict(row)
+        return row

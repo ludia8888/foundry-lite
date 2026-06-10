@@ -74,6 +74,7 @@ class FoundryLiteCore(
         self.engine = dependencies.engine
         self.policy = dependencies.policy
         self.action_repository = dependencies.action_repository
+        self.ontology_repository = dependencies.ontology_repository
         self.compute_adapter = dependencies.compute_adapter
         self.metadata_repository = dependencies.metadata_repository
         self.dataset_repository = dependencies.dataset_repository

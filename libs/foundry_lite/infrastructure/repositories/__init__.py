@@ -10,6 +10,7 @@ from foundry_lite.infrastructure.repositories.metadata_repository import SqlAlch
 from foundry_lite.infrastructure.repositories.object_index_repository import SqlAlchemyObjectIndexRepository
 from foundry_lite.infrastructure.repositories.object_read_repository import SqlAlchemyObjectReadRepository
 from foundry_lite.infrastructure.repositories.object_set_repository import SqlAlchemyObjectSetRepository
+from foundry_lite.infrastructure.repositories.ontology_repository import SqlAlchemyOntologyRepository
 from foundry_lite.infrastructure.repositories.runtime_repository import SqlAlchemyRuntimeRepository
 
 __all__ = [
@@ -21,5 +22,6 @@ __all__ = [
     "SqlAlchemyObjectIndexRepository",
     "SqlAlchemyObjectReadRepository",
     "SqlAlchemyObjectSetRepository",
+    "SqlAlchemyOntologyRepository",
     "SqlAlchemyRuntimeRepository",
 ]
