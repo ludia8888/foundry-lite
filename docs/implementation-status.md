@@ -32,8 +32,8 @@
 - Temporal workflow/worker execution.
 - Alembic migration history and upgrade/rollback tests.
 - Operations UI beyond the current object explorer/object-set controls, especially failed run retry and DLQ workflows.
-- Sprint 02A Scale Foundation completion: WorkflowAdapter, StreamAdapter, SearchAdapter, ConnectorAdapter, and AuthProvider ports remain unextracted; the local repositories still rely on SQLAlchemy under the hood without a PostgreSQL contract-test pairing.
-- Postgres testcontainer contract tests so that every repository contract suite runs against both SQLite and PostgreSQL, closing the "Repository pattern complete" gap.
+- Sprint 02A Scale Foundation completion: WorkflowAdapter, StreamAdapter, SearchAdapter, ConnectorAdapter, and AuthProvider ports remain unextracted; the local repositories still rely on SQLAlchemy under the hood.
+- Postgres testcontainer contract pairing now covers `dataset_transaction`, `dataset_quality`, `runtime`, and `object_index` repositories (Sprint 9.4). The remaining repository contract suites still run against SQLite + fake only.
 
 ## Refactor Pointers
 

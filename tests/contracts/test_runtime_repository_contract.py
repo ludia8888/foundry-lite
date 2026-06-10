@@ -295,13 +295,19 @@ def _action_run_row(*, run_id: str, tenant_id: str) -> dict[str, Any]:
     }
 
 
-@pytest.fixture(params=["sqlalchemy", "fake"])
+@pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> RuntimeRepositoryHarness:
     if request.param == "fake":
         return FakeRuntimeRepositoryHarness(FakeRuntimeRepository())
-    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
-    db.create_database(engine)
-    return SqlAlchemyRuntimeRepositoryHarness(SqlAlchemyRuntimeRepository(engine), engine)
+    if request.param == "sqlalchemy":
+        engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+        db.create_database(engine)
+        return SqlAlchemyRuntimeRepositoryHarness(SqlAlchemyRuntimeRepository(engine), engine)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyRuntimeRepositoryHarness(
+        SqlAlchemyRuntimeRepository(postgres_fixture.engine),
+        postgres_fixture.engine,
+    )
 
 
 def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(

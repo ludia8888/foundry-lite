@@ -303,13 +303,19 @@ def _run_values(run_kind: DatasetRunKind, run_id: str, transaction_id: str) -> d
     }
 
 
-@pytest.fixture(params=["sqlalchemy", "fake"])
+@pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path) -> TransactionHarness:
     if request.param == "fake":
         return FakeTransactionHarness(FakeDatasetTransactionRepository())
-    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
-    db.create_database(engine)
-    return SqlAlchemyTransactionHarness(SqlAlchemyDatasetTransactionRepository(engine), engine)
+    if request.param == "sqlalchemy":
+        engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+        db.create_database(engine)
+        return SqlAlchemyTransactionHarness(SqlAlchemyDatasetTransactionRepository(engine), engine)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyTransactionHarness(
+        SqlAlchemyDatasetTransactionRepository(postgres_fixture.engine),
+        postgres_fixture.engine,
+    )
 
 
 def test_dataset_transaction_repository_contract_commit_flow(harness: TransactionHarness) -> None:

@@ -98,6 +98,13 @@ class SqlAlchemyRuntimeRepository:
         )
 
     def insert_outbox_event(self, *, transaction: Any, record: OutboxEventRecord) -> bool:
+        # PostgreSQL aborts the whole transaction on IntegrityError, unlike
+        # SQLite which lets the caller keep using the same connection. To make
+        # the duplicate-insert path safe on both backends we wrap the attempt
+        # in a SAVEPOINT (begin_nested) so a unique-violation only rolls back
+        # the savepoint and leaves the outer transaction usable. This is what
+        # the Postgres contract-test pairing (Sprint 9.4) caught.
+        savepoint = transaction.begin_nested()
         try:
             transaction.execute(
                 insert(db.outbox_events).values(
@@ -116,7 +123,9 @@ class SqlAlchemyRuntimeRepository:
                 )
             )
         except IntegrityError:
+            savepoint.rollback()
             return False
+        savepoint.commit()
         return True
 
     def insert_lineage_edge(self, *, transaction: Any, record: LineageEdgeRecord) -> None:

@@ -168,11 +168,20 @@ class SqlAlchemyDatasetQualityHarness:
             return [dict(row) for row in conn.execute(select(db.dataset_check_results)).mappings().all()]
 
 
-@pytest.fixture(params=["fake", "sqlalchemy"])
-def harness(request: pytest.FixtureRequest, tmp_path: Path) -> QualityHarness:
+@pytest.fixture(params=["fake", "sqlalchemy", "postgres"])
+def harness(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> QualityHarness:
     if request.param == "fake":
         return FakeDatasetQualityHarness()
-    return SqlAlchemyDatasetQualityHarness.create(tmp_path)
+    if request.param == "sqlalchemy":
+        return SqlAlchemyDatasetQualityHarness.create(tmp_path)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyDatasetQualityHarness(
+        engine=postgres_fixture.engine,
+        repository=SqlAlchemyDatasetQualityRepository(postgres_fixture.engine),
+    )
 
 
 def _schema_record(version: int = 1, schema_hash: str = "hash-a") -> DatasetSchemaRecord:

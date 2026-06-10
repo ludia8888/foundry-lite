@@ -418,13 +418,19 @@ def _link_row(record: ObjectLinkInsert) -> dict[str, Any]:
     }
 
 
-@pytest.fixture(params=["sqlalchemy", "fake"])
+@pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> ObjectIndexHarness:
     if request.param == "fake":
         return FakeObjectIndexHarness(FakeObjectIndexRepository())
-    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
-    db.create_database(engine)
-    return SqlAlchemyObjectIndexHarness(SqlAlchemyObjectIndexRepository(engine), engine)
+    if request.param == "sqlalchemy":
+        engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+        db.create_database(engine)
+        return SqlAlchemyObjectIndexHarness(SqlAlchemyObjectIndexRepository(engine), engine)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyObjectIndexHarness(
+        SqlAlchemyObjectIndexRepository(postgres_fixture.engine),
+        postgres_fixture.engine,
+    )
 
 
 def test_object_index_repository_contract_records_index_run_lifecycle(
