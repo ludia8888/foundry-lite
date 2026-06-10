@@ -15,6 +15,7 @@ from foundry_lite.application.ports.dataset_transaction_repository import (
     DatasetTransactionRepository,
     DatasetVersionRecord,
 )
+from foundry_lite.application.ports.dataset_version_repository import DatasetVersionRepository
 from foundry_lite.application.ports.metadata_repository import MetadataRepository
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "DatasetStorageAdapter",
     "DatasetTransactionRecord",
     "DatasetTransactionRepository",
+    "DatasetVersionRepository",
     "DatasetVersionRecord",
     "MetadataRepository",
     "StoredDatasetCommit",

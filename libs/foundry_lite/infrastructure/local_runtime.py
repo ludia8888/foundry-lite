@@ -9,6 +9,7 @@ from foundry_lite.infrastructure.adapters import FakeDatasetStorageAdapter, Loca
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyDatasetRepository,
     SqlAlchemyDatasetTransactionRepository,
+    SqlAlchemyDatasetVersionRepository,
     SqlAlchemyMetadataRepository,
 )
 from foundry_lite.security.policy import PolicyService
@@ -38,6 +39,7 @@ def create_local_core_dependencies(
         metadata_repository=SqlAlchemyMetadataRepository(engine),
         dataset_repository=SqlAlchemyDatasetRepository(engine),
         dataset_transaction_repository=SqlAlchemyDatasetTransactionRepository(engine),
+        dataset_version_repository=SqlAlchemyDatasetVersionRepository(engine),
         dataset_storage=storage_adapter,
     )
 

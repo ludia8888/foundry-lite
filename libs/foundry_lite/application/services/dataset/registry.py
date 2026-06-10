@@ -109,7 +109,7 @@ class DatasetRegistryMixin(CoreServiceMixin):
     ) -> list[dict[str, Any]]:
         ctx = ctx or RequestContext()
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
-        return self.dataset_repository.list_versions(dataset_id=dataset["id"])
+        return self.dataset_version_repository.list_versions(dataset_id=dataset["id"])
 
     def preview_dataset(
         self,

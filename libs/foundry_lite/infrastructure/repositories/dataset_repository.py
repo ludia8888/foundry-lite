@@ -71,16 +71,3 @@ class SqlAlchemyDatasetRepository:
                 .first()
             )
             return dict(row) if row else None
-
-    def list_versions(self, *, dataset_id: str) -> list[dict[str, Any]]:
-        with self.engine.begin() as conn:
-            rows = (
-                conn.execute(
-                    select(db.dataset_versions)
-                    .where(db.dataset_versions.c.dataset_id == dataset_id)
-                    .order_by(db.dataset_versions.c.version_number)
-                )
-                .mappings()
-                .all()
-            )
-            return [dict(row) for row in rows]

@@ -8,6 +8,7 @@ from foundry_lite.application.ports import (
     DatasetRepository,
     DatasetStorageAdapter,
     DatasetTransactionRepository,
+    DatasetVersionRepository,
     MetadataRepository,
 )
 from foundry_lite.security.policy import PolicyService
@@ -24,4 +25,5 @@ class CoreDependencies:
     metadata_repository: MetadataRepository
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
+    dataset_version_repository: DatasetVersionRepository
     dataset_storage: DatasetStorageAdapter

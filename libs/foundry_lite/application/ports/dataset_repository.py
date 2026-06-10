@@ -33,7 +33,3 @@ class DatasetRepository(Protocol):
     def find_active_dataset(self, *, tenant_id: str, namespace: str, name: str) -> dict[str, Any] | None:
         """Return the active dataset row for a tenant/ref pair."""
         ...
-
-    def list_versions(self, *, dataset_id: str) -> list[dict[str, Any]]:
-        """Return committed dataset versions in version order."""
-        ...

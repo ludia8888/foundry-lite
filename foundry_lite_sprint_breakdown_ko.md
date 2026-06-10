@@ -257,7 +257,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 **반드시 완성해야 하는 것**
 
 - Infra Swap Readiness Matrix를 작성한다: boundary, local implementation, scale implementation, product contract, trace key, owner를 명시한다.
-- `MetadataRepository`, `DatasetStorageAdapter`, `DatasetTransactionRepository`, `ComputeAdapter`, `StreamAdapter/EventPublisher`, `SearchAdapter`, `WorkflowAdapter`, `ConnectorAdapter`, `AuthProvider` boundary를 정의한다.
+- `MetadataRepository`, `DatasetStorageAdapter`, `DatasetTransactionRepository`, `DatasetVersionRepository`, `ComputeAdapter`, `StreamAdapter/EventPublisher`, `SearchAdapter`, `WorkflowAdapter`, `ConnectorAdapter`, `AuthProvider` boundary를 정의한다.
 - application service가 concrete infra SDK를 직접 import하지 않고 port/interface를 통하도록 하는 의존성 규칙을 정한다.
 - concrete 구현 선택은 `apps/api`, `apps/worker`, `apps/cli` 같은 composition root에서만 하도록 한다.
 - local adapter와 fake adapter가 같은 contract test를 통과하는 구조를 만든다.
@@ -286,10 +286,12 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] `scripts/quality/check_infra_import_boundary.py`와 `scripts/quality/check_mixin_method_conflicts.py`를 CI gate에 연결했다.
 - [x] application concrete infra import baseline을 `37`에서 `32`로 낮췄다.
 - [x] core bootstrap/reset DB write를 `MetadataRepository` port로 이동했다.
-- [x] dataset registry create/find/version-list DB read/write를 `DatasetRepository` port로 이동하고 local/fake contract test를 추가했다.
+- [x] dataset registry create/find DB read/write를 `DatasetRepository` port로 이동하고 local/fake contract test를 추가했다.
 - [x] Dataset transaction DB state change와 run failure update를 `DatasetTransactionRepository` port로 이동하고 local/fake contract test를 추가했다.
+- [x] Dataset committed version/schema DB read를 `DatasetVersionRepository` port로 이동하고 local/fake contract test를 추가했다.
 - [x] application concrete infra import baseline을 `32`에서 `30`으로 낮췄다.
-- [ ] application concrete infra import baseline `30`을 repository/adapter 추출로 계속 낮춘다.
+- [x] application concrete infra import baseline을 `30`에서 `28`로 낮췄다.
+- [ ] application concrete infra import baseline `28`을 repository/adapter 추출로 계속 낮춘다.
 - [ ] Compute/Event/Search/Workflow/Connector/Auth boundary에도 fake/local contract test를 붙인다.
 - [ ] adapter failure contract를 typed error, retryability, timeout, idempotency, operator message까지 구현한다.
 
