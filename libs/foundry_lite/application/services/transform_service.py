@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from foundry_lite.application.ports.compute_adapter import SqlTransformPlan
 from foundry_lite.application.ports.transform_repository import (
     TransformRecord,
     TransformRunRecord,
@@ -177,8 +178,10 @@ class TransformServiceMixin(CoreServiceMixin):
             dataset_ref: self._version_file_path(self._get_version_by_id(version_id))
             for dataset_ref, version_id in input_versions.items()
         }
-        self.compute_adapter.execute_sql_transform(
-            sql_template=sql,
-            input_paths_by_ref=input_paths_by_ref,
-            target_path=staged,
+        self.compute_adapter.execute_transform(
+            SqlTransformPlan(
+                sql_template=sql,
+                input_paths_by_ref=input_paths_by_ref,
+                target_path=staged,
+            )
         )

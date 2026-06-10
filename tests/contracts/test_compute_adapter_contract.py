@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from foundry_lite.application.ports import ComputeAdapter
+from foundry_lite.application.ports.compute_adapter import SqlTransformPlan
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter, FakeComputeAdapter
 
@@ -77,10 +78,12 @@ def test_compute_adapter_contract_sql_transform_and_unresolved_inputs(
         ["order_id", "amount"],
     )
 
-    adapter.execute_sql_transform(
-        sql_template="select order_id, amount * 2 as doubled from {{ input('raw.orders') }}",
-        input_paths_by_ref={"raw.orders": source_path},
-        target_path=target_path,
+    adapter.execute_transform(
+        SqlTransformPlan(
+            sql_template="select order_id, amount * 2 as doubled from {{ input('raw.orders') }}",
+            input_paths_by_ref={"raw.orders": source_path},
+            target_path=target_path,
+        )
     )
 
     assert adapter.rows_from_parquet(target_path) == [
@@ -88,8 +91,27 @@ def test_compute_adapter_contract_sql_transform_and_unresolved_inputs(
         {"order_id": "O-2", "doubled": 40},
     ]
     with pytest.raises(ValidationFailed):
-        adapter.execute_sql_transform(
-            sql_template="select * from {{ input('missing.dataset') }}",
-            input_paths_by_ref={"raw.orders": source_path},
-            target_path=tmp_path / "missing.parquet",
+        adapter.execute_transform(
+            SqlTransformPlan(
+                sql_template="select * from {{ input('missing.dataset') }}",
+                input_paths_by_ref={"raw.orders": source_path},
+                target_path=tmp_path / "missing.parquet",
+            )
         )
+
+
+def test_compute_adapter_contract_unsupported_transform_plan_raises_typed_error(
+    adapter: ComputeAdapter,
+) -> None:
+    """Future TransformPlan kinds must raise a typed ValidationFailed rather
+    than silently degrade. This pins the Sprint 02A boundary semantic:
+    'adapter failures are typed; no silent vendor coercion'."""
+    from dataclasses import dataclass
+    from pathlib import Path as _Path
+
+    @dataclass(frozen=True)
+    class _UnsupportedPlan:
+        target_path: _Path
+
+    with pytest.raises(ValidationFailed):
+        adapter.execute_transform(_UnsupportedPlan(target_path=_Path("/tmp/never.parquet")))  # type: ignore[arg-type]

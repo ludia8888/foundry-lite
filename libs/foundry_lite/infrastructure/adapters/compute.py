@@ -5,6 +5,7 @@ from typing import Any
 
 import duckdb
 
+from foundry_lite.application.ports.compute_adapter import SqlTransformPlan, TransformPlan
 from foundry_lite.application.primitives import (
     INPUT_PATTERN,
     StagedFileStats,
@@ -103,17 +104,17 @@ class DuckDBComputeAdapter:
             con.close()
         return {"check": check_type, "status": "passed", "note": "unsupported check treated as noop"}
 
-    def execute_sql_transform(
-        self,
-        *,
-        sql_template: str,
-        input_paths_by_ref: dict[str, Path],
-        target_path: Path,
-    ) -> None:
-        sql = sql_template
+    def execute_transform(self, plan: TransformPlan) -> None:
+        if not isinstance(plan, SqlTransformPlan):
+            raise ValidationFailed(
+                "DuckDBComputeAdapter only supports SqlTransformPlan today",
+                details={"plan_kind": type(plan).__name__},
+            )
+        sql = plan.sql_template
+        target_path = plan.target_path
         con = duckdb.connect()
         try:
-            for index, (dataset_ref, parquet_path) in enumerate(input_paths_by_ref.items()):
+            for index, (dataset_ref, parquet_path) in enumerate(plan.input_paths_by_ref.items()):
                 view = f"input_{index}"
                 _sql_identifier(view)
                 con.read_parquet(str(parquet_path)).create_view(view, replace=True)
