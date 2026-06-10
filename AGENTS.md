@@ -8,6 +8,7 @@
 2. 변경 범위가 제품/스프린트 목표와 연결되면 `foundry_lite_development_plan_ko_sprintified.md`
 3. 변경 범위가 sprint acceptance나 MVP core 완료 조건과 연결되면 `foundry_lite_sprint_breakdown_ko.md`
 4. 현재 구현 상태와 문서상 목표를 구분해야 하면 `docs/implementation-status.md`
+5. 새 정적/동적 분석 도구를 추가하거나 기존 게이트를 약화/삭제하려 하면 `docs/quality-gate-roadmap.md`
 
 특히 `foundry_lite_python_engineering_guidelines_ko.md`는 이 repo의 Python 백엔드 구현 표준 원본이다. 개발 시작 전에 읽지 않은 상태로 구현을 진행하면 안 된다.
 
