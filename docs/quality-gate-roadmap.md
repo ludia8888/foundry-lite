@@ -184,6 +184,28 @@ AGENTS.md 정독에 의존한다. 이 로드맵의 목표는 그 의존을 줄�
 
 ## 2. 신규 게이트 — Tier 분류
 
+### Tier P7 — CodeQL data-flow taint analysis (✅ 완료 2026-06-10 P7)
+
+CodeQL은 정적 분석 중 유일하게 **interprocedural taint propagation**을
+직접 모델링한다. Semgrep은 한 함수 안의 패턴만 보고, import-linter는
+모듈 의존만 보지만, CodeQL은 "FastAPI Request의 헤더 값이 5단계 함수
+호출을 거쳐 SQL `execute()`까지 흐르는지"를 그래프로 추적한다.
+
+`scripts/quality/codeql/queries/` 4개 쿼리 + `qlpack.yml`:
+
+| 쿼리 | 헌법 조항 | 추적하는 흐름 |
+|---|---|---|
+| `header-flows-to-sql.ql` | §10.2 (no raw SQL interpolation) | Request → header → `text()`/`execute()` |
+| `mutation-without-audit.ql` | §10.2 (no mutation without audit) | `session.execute(insert/update/delete)` 뒤에 audit 이벤트 없음 |
+| `http-exception-without-request-id.ql` | §8.3 (error carries request_id) | `HTTPException` 생성 시 detail에 request_id 없음 |
+| `raw-json-to-service.ql` | §5.2 / §6.3 (no dict[str,Any] passthrough) | Request body → service method (Pydantic 우회) |
+
+실행:
+- 로컬: `bash scripts/quality/codeql/run.sh` (codeql 미설치 시 WARN+exit 0 — heavyweight 1GB CLI를 강요하지 않음)
+- CI: `.github/workflows/codeql.yml`이 push/PR/weekly로 GitHub-hosted runner에서 무료 실행 + SARIF 업로드
+
+Self-test: `tests/unit/test_quality_codeql_queries.py` 5건이 qlpack 매니페스트, § 인용, @id/@kind/@problem.severity 메타, run.sh 실행권한, codeql 미설치 시 graceful skip 동작을 검증한다.
+
 ### Tier P6 — Pyright strict (✅ 부분 완료 2026-06-10 P6)
 
 `pyright`는 디폴트 `basic` 모드로 전체 코드베이스를 보지만 `[tool.pyright]

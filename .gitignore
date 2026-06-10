@@ -16,3 +16,7 @@ playwright-report/
 # mutmut working directory
 mutants/
 .mutmut-cache
+
+# CodeQL P7 artifacts
+.codeql-db/
+.codeql/

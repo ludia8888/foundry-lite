@@ -58,6 +58,12 @@ else
   echo "WARN: gitleaks not on PATH; install with 'brew install gitleaks' (P9 gate skipped locally)." >&2
 fi
 
+echo "== Static: CodeQL data-flow analysis =="
+# P7 CodeQL is heavy (~5 minutes for a fresh DB build). Locally, skipping
+# is acceptable when codeql is not on PATH; CI builds the DB on every push.
+# Re-build the DB with FOUNDRY_LITE_CODEQL_FRESH=1.
+bash scripts/quality/codeql/run.sh
+
 echo "== Static: pip-audit dependency vulnerability scan =="
 # pyjwt PYSEC-2026-175/177/178/179 are pinned <2.13 by semgrep 1.165 (dev-only
 # transitive). We do not import pyjwt directly; we ignore these CVEs at the

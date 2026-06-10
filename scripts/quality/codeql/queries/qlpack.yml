@@ -1,0 +1,15 @@
+name: foundry-lite/queries
+version: 0.1.0
+description: |
+  CodeQL queries that encode Foundry-lite engineering guideline rules as
+  data-flow constraints. Each query cites the guideline section it enforces.
+  Unlike static linters (ruff, semgrep), these queries trace how a value
+  moves through the program — so they catch hazards like a header that
+  reaches SQL execution without parameter binding, or a mutation that
+  reaches the database without an accompanying audit event.
+
+  Root-cause principle: a finding cannot be silenced by changing a metric.
+  The offending data-flow path itself must be removed.
+
+dependencies:
+  codeql/python-all: "*"

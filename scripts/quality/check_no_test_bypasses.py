@@ -30,11 +30,14 @@ SELF_TEST_OPT_OUT_FILES = {
     Path("tests/unit/test_quality_random_and_parallel.py"),
     Path("tests/unit/test_quality_semgrep_rules.py"),
     Path("tests/unit/test_quality_service_wiring.py"),
+    Path("tests/unit/test_quality_codeql_queries.py"),
 }
 SELF_TEST_OPT_OUT_MARKERS = (
     "quality self-tests require the scripts/ tree",
+    "quality self-tests require the scripts/quality/codeql/queries tree",
     "scripts/quality",
     "mutants",
+    "codeql is installed",
 )
 
 # Hypothesis property tests opt out under mutmut because per-mutant runs
