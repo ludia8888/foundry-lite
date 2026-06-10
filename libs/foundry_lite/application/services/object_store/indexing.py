@@ -6,7 +6,6 @@ from foundry_lite.application.primitives import (
     _json_hash,
     _new_id,
     _now,
-    _rows_from_parquet,
 )
 from foundry_lite.application.services.base import CoreServiceMixin
 from foundry_lite.domain.context import RequestContext
@@ -53,7 +52,7 @@ class ObjectIndexingMixin(CoreServiceMixin):
                 )
             )
 
-        rows = _rows_from_parquet(self._version_file_path(version))
+        rows = self.compute_adapter.rows_from_parquet(self._version_file_path(version))
         objects_upserted = 0
         links_upserted = 0
         try:

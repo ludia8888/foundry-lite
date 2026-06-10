@@ -3,12 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import duckdb
 from foundry_lite.application.primitives import (
     CommitResult,
     _new_id,
     _now,
-    _write_rows_to_csv,
 )
 from foundry_lite.application.services.base import CoreServiceMixin
 from foundry_lite.application.upload_limits import require_csv_size_limit
@@ -90,16 +88,7 @@ class DatasetIngestMixin(CoreServiceMixin):
             raise ValidationFailed("csv upload failed", details={"error": str(exc)}) from exc
 
     def _csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        con = duckdb.connect()
-        try:
-            con.read_csv(str(source_path), header=True).write_parquet(str(target_path))
-        except Exception as exc:
-            raise ValidationFailed("invalid csv input", details={"path": str(source_path)}) from exc
-        finally:
-            con.close()
+        self.compute_adapter.csv_to_parquet(source_path, target_path)
 
     def _rows_to_parquet(self, rows: list[dict[str, Any]], target_path: Path, fieldnames: list[str]) -> None:
-        csv_path = target_path.with_suffix(".csv")
-        _write_rows_to_csv(rows, csv_path, fieldnames)
-        self._csv_to_parquet(csv_path, target_path)
+        self.compute_adapter.rows_to_parquet(rows, target_path, fieldnames)

@@ -19,7 +19,7 @@ pnpm ci:gate
 | 포맷/린트 | Ruff | 잘못된 코드 스타일, import 문제, 흔한 버그 패턴 |
 | 타입 검사 | mypy, pyright | 값의 타입이 맞지 않아 런타임에서 터질 문제 |
 | 의존성 구조 | `scripts/quality/check_dependency_graph.py` | domain이 app을 import하는 식의 레이어 침범, 순환 의존성 |
-| 인프라 경계 | `check_infra_import_boundary.py` | domain/application이 concrete infra SDK에 더 강하게 묶이는 문제. 현재 application baseline은 `25`이며 Sprint 02A에서 낮춘다. |
+| 인프라 경계 | `check_infra_import_boundary.py` | domain/application이 concrete infra SDK에 더 강하게 묶이는 문제. 현재 application baseline은 `20`이며 Sprint 02A에서 낮춘다. |
 | mixin 충돌 | `check_mixin_method_conflicts.py` | service mixin 메서드명이 충돌해 MRO로 조용히 덮어써지는 문제 |
 | 모듈 크기 | `check_application_module_size.py` | application core/service 파일이 다시 god file로 커지는 문제 |
 | 테스트 우회 방지 | `check_no_test_bypasses.py` | skip/xfail로 release gate를 우회하는 테스트 |

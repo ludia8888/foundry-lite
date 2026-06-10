@@ -1,5 +1,6 @@
 """Application port contracts used by infrastructure adapters."""
 
+from foundry_lite.application.ports.compute_adapter import ComputeAdapter
 from foundry_lite.application.ports.dataset_repository import (
     DatasetAlreadyExistsError,
     DatasetRepository,
@@ -28,6 +29,7 @@ from foundry_lite.application.ports.runtime_repository import (
 
 __all__ = [
     "AuditEventRecord",
+    "ComputeAdapter",
     "DatasetAlreadyExistsError",
     "DatasetFileRecord",
     "DatasetRepository",

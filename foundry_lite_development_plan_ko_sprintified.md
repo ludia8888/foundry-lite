@@ -504,7 +504,8 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
   - [x] `DatasetTransactionRepository`는 dataset transaction/version/file DB state change와 run failure update 경계를 맡고 local/fake contract test를 통과한다.
   - [x] `DatasetVersionRepository`는 committed version/schema DB read 경계를 맡고 local/fake contract test를 통과한다.
   - [x] `RuntimeRepository`는 audit/outbox/lineage/list-runs DB 경계를 맡고 local/fake contract test를 통과한다.
-  - [ ] `ComputeAdapter`, `StreamAdapter`, `SearchAdapter`, `WorkflowAdapter`, `ConnectorAdapter`, `AuthProvider`는 아직 application service에서 완전히 포트화되지 않았다.
+  - [x] `ComputeAdapter`는 CSV/Parquet/SQL transform/health-check 실행 경계를 맡고 DuckDB local/fake contract test를 통과한다.
+  - [ ] `StreamAdapter`, `SearchAdapter`, `WorkflowAdapter`, `ConnectorAdapter`, `AuthProvider`는 아직 application service에서 완전히 포트화되지 않았다.
 - [ ] concrete 구현 선택은 `apps/api`, `apps/worker`, `apps/cli` 같은 composition root에서만 한다.
   - [x] API와 CLI는 `create_local_core_dependencies(...)` composition root에서 adapter profile을 선택한다.
   - [x] DB schema bootstrap/reset 구현 선택은 `SqlAlchemyMetadataRepository`를 통해 local runtime에 주입된다.
@@ -515,16 +516,18 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
   - [x] `DatasetTransactionRepository`의 local/fake 구현은 `tests/contracts/test_dataset_transaction_repository_contract.py`의 같은 시나리오를 통과한다.
   - [x] `DatasetVersionRepository`의 local/fake 구현은 `tests/contracts/test_dataset_version_repository_contract.py`의 같은 시나리오를 통과한다.
   - [x] `RuntimeRepository`의 local/fake 구현은 `tests/contracts/test_runtime_repository_contract.py`의 같은 시나리오를 통과한다.
+  - [x] `ComputeAdapter`의 DuckDB/fake 구현은 `tests/contracts/test_compute_adapter_contract.py`의 같은 시나리오를 통과한다.
   - [ ] 나머지 boundary의 fake/local contract test는 아직 남아 있다.
 - [ ] adapter error는 숨기지 않고 typed error, retryability, timeout, idempotency 정보를 application layer로 돌려준다.
 - [ ] adapter를 교체해도 audit/outbox/lineage/run state의 key 이름과 의미가 바뀌지 않는다.
 - [ ] CI는 domain/application이 금지된 concrete infra SDK를 직접 import하면 실패한다.
-  - [x] 현재 CI는 domain concrete infra import 0개, application concrete infra import baseline 25개 초과, scale SDK 직접 import, mixin method 충돌을 잡는다.
+  - [x] 현재 CI는 domain concrete infra import 0개, application concrete infra import baseline 20개 초과, scale SDK 직접 import, mixin method 충돌을 잡는다.
   - [x] application concrete infra import baseline을 37에서 32로 낮췄다.
   - [x] application concrete infra import baseline을 32에서 30으로 낮췄다.
   - [x] application concrete infra import baseline을 30에서 28로 낮췄다.
   - [x] application concrete infra import baseline을 28에서 25로 낮췄다.
-  - [ ] application concrete infra import baseline을 25에서 0으로 낮추는 repository/adapter 추출은 남아 있다.
+  - [x] application concrete infra import baseline을 25에서 20으로 낮췄다.
+  - [ ] application concrete infra import baseline을 20에서 0으로 낮추는 repository/adapter 추출은 남아 있다.
 - [x] 최소 하나의 swap rehearsal test가 있다. 예: local filesystem adapter 대신 fake/S3-compatible adapter를 끼워도 dataset commit use case가 같은 결과를 만든다.
   - [x] `tests/integration/test_scale_foundation.py`가 fake-storage profile로 CSV commit, inspect, preview public API가 같은 shape로 동작함을 검증한다.
 - [ ] scale adapter를 아직 구현하지 않았더라도, 미래 구현이 따라야 할 DTO, state transition, trace key, failure contract는 문서와 테스트로 고정한다.

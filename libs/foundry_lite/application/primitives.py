@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import duckdb
-
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 
 SQL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -112,16 +110,6 @@ def _dataset_ref_parts(dataset_ref: str) -> tuple[str, str]:
 
 def _dataset_ref(row: dict[str, Any]) -> str:
     return f"{row['namespace']}.{row['name']}"
-
-
-def _rows_from_parquet(path: Path) -> list[dict[str, Any]]:
-    con = duckdb.connect()
-    try:
-        result = con.execute("select * from read_parquet(?)", [str(path)])
-        names = [column[0] for column in result.description]
-        return [_json_ready(dict(zip(names, row, strict=True))) for row in result.fetchall()]
-    finally:
-        con.close()
 
 
 def _write_rows_to_csv(rows: list[dict[str, Any]], path: Path, fieldnames: list[str]) -> None:

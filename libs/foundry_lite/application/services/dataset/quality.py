@@ -4,17 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-import duckdb
-from foundry_lite.application.primitives import (
-    StagedFileStats,
-    _file_hash,
-    _json_hash,
-    _new_id,
-    _normalize_duckdb_type,
-    _now,
-    _required_row,
-    _sql_identifier,
-)
+from foundry_lite.application.primitives import StagedFileStats, _new_id, _now
 from foundry_lite.application.services.base import CoreServiceMixin
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
@@ -24,34 +14,7 @@ from sqlalchemy.engine import Connection
 
 class DatasetQualityMixin(CoreServiceMixin):
     def _inspect_parquet(self, parquet_path: Path, primary_key: list[str]) -> StagedFileStats:
-        con = duckdb.connect()
-        try:
-            row_count = int(
-                _required_row(
-                    con.execute("select count(*) from read_parquet(?)", [str(parquet_path)]).fetchone(),
-                    "parquet row count",
-                )[0]
-            )
-            describe = con.execute("describe select * from read_parquet(?)", [str(parquet_path)]).fetchall()
-        finally:
-            con.close()
-        columns = [
-            {
-                "name": row[0],
-                "type": _normalize_duckdb_type(row[1]),
-                "nullable": row[0] not in set(primary_key),
-            }
-            for row in describe
-        ]
-        schema_json = {"columns": columns, "primary_key": primary_key, "cdc": {"enabled": False}}
-        return StagedFileStats(
-            parquet_path=parquet_path,
-            row_count=int(row_count),
-            byte_size=parquet_path.stat().st_size,
-            content_hash=_file_hash(parquet_path),
-            schema_json=schema_json,
-            schema_hash=_json_hash(schema_json),
-        )
+        return self.compute_adapter.inspect_parquet(parquet_path, primary_key)
 
     def _ensure_schema(
         self,
@@ -231,76 +194,4 @@ class DatasetQualityMixin(CoreServiceMixin):
         row_count: int,
         check: dict[str, Any],
     ) -> dict[str, Any]:
-        check_type = check["type"]
-        if check_type == "row_count_min":
-            return self._row_count_min_check(row_count, check)
-        con = duckdb.connect()
-        try:
-            if check_type == "not_null":
-                return self._not_null_check(con, parquet_path, check)
-            if check_type == "unique":
-                return self._unique_check(con, parquet_path, check)
-        finally:
-            con.close()
-        return {"check": check_type, "status": "passed", "note": "unsupported check treated as noop"}
-
-    def _row_count_min_check(self, row_count: int, check: dict[str, Any]) -> dict[str, Any]:
-        status = "passed" if row_count >= int(check["min"]) else "failed"
-        return {"check": check["type"], "status": status, "row_count": row_count, "min": check["min"]}
-
-    def _not_null_check(
-        self,
-        con: duckdb.DuckDBPyConnection,
-        parquet_path: Path,
-        check: dict[str, Any],
-    ) -> dict[str, Any]:
-        failures: dict[str, int] = {}
-        for column in check["columns"]:
-            count = self._null_count(con, parquet_path, column)
-            if count:
-                failures[column] = count
-        return {
-            "check": check["type"],
-            "status": "failed" if failures else "passed",
-            "failures": failures,
-        }
-
-    def _null_count(self, con: duckdb.DuckDBPyConnection, parquet_path: Path, column: str) -> int:
-        column_identifier = _sql_identifier(column)
-        # column_identifier is validated and parquet path is a bound parameter.
-        null_check_sql = f"select count(*) from read_parquet(?) where {column_identifier} is null"  # nosec B608
-        return int(
-            _required_row(
-                con.execute(null_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
-                "not null health check",
-            )[0]
-        )
-
-    def _unique_check(
-        self,
-        con: duckdb.DuckDBPyConnection,
-        parquet_path: Path,
-        check: dict[str, Any],
-    ) -> dict[str, Any]:
-        column = check["column"]
-        duplicate_count = self._duplicate_group_count(con, parquet_path, column)
-        return {
-            "check": check["type"],
-            "status": "failed" if duplicate_count else "passed",
-            "column": column,
-            "duplicate_groups": duplicate_count,
-        }
-
-    def _duplicate_group_count(self, con: duckdb.DuckDBPyConnection, parquet_path: Path, column: str) -> int:
-        column_identifier = _sql_identifier(column)
-        duplicate_check_sql = (
-            "select count(*) from (select "  # nosec B608
-            f"{column_identifier}, count(*) c from read_parquet(?) "
-            f"group by {column_identifier} having c > 1)"
-        )
-        return int(
-            _required_row(
-                con.execute(duplicate_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
-                "unique health check",
-            )[0]
-        )
+        return self.compute_adapter.execute_check(parquet_path, row_count, check)

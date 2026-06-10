@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import duckdb
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.engine import Connection
 
@@ -12,8 +11,6 @@ from foundry_lite.application.primitives import (
     CommitResult,
     _new_id,
     _now,
-    _sql_identifier,
-    _sql_literal,
 )
 from foundry_lite.application.services.base import CoreServiceMixin
 from foundry_lite.domain.context import RequestContext
@@ -190,18 +187,12 @@ class TransformServiceMixin(CoreServiceMixin):
         staged: Path,
     ) -> None:
         sql = Path(transform["entrypoint"]).read_text(encoding="utf-8")
-        con = duckdb.connect()
-        try:
-            for index, (dataset_ref, version_id) in enumerate(input_versions.items()):
-                version = self._get_version_by_id(version_id)
-                view = f"input_{index}"
-                _sql_identifier(view)
-                con.read_parquet(str(self._version_file_path(version))).create_view(view, replace=True)
-                sql = sql.replace(f"{{{{ input('{dataset_ref}') }}}}", view)
-            unresolved = INPUT_PATTERN.findall(sql)
-            if unresolved:
-                raise ValidationFailed("transform has unresolved inputs", details={"inputs": unresolved})
-            staged.parent.mkdir(parents=True, exist_ok=True)
-            con.execute(f"copy ({sql}) to {_sql_literal(staged)} (format parquet)")
-        finally:
-            con.close()
+        input_paths_by_ref = {
+            dataset_ref: self._version_file_path(self._get_version_by_id(version_id))
+            for dataset_ref, version_id in input_versions.items()
+        }
+        self.compute_adapter.execute_sql_transform(
+            sql_template=sql,
+            input_paths_by_ref=input_paths_by_ref,
+            target_path=staged,
+        )

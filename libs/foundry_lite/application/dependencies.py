@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from foundry_lite.application.ports import (
+    ComputeAdapter,
     DatasetRepository,
     DatasetStorageAdapter,
     DatasetTransactionRepository,
@@ -23,6 +24,7 @@ class CoreDependencies:
     storage_root: Path
     engine: Any
     policy: PolicyService
+    compute_adapter: ComputeAdapter
     metadata_repository: MetadataRepository
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository

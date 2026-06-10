@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import duckdb
 from foundry_lite.application.ports import DatasetAlreadyExistsError
 from foundry_lite.application.primitives import (
     _dataset_ref_parts,
@@ -124,13 +123,7 @@ class DatasetRegistryMixin(CoreServiceMixin):
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
         version_row = self._get_version(dataset["id"], version, ctx=ctx)
         parquet_path = self._version_file_path(version_row)
-        con = duckdb.connect()
-        try:
-            result = con.execute("select * from read_parquet(?) limit ?", [str(parquet_path), int(limit)])
-            columns = [column[0] for column in result.description]
-            return [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
-        finally:
-            con.close()
+        return self.compute_adapter.preview_parquet(parquet_path, limit=int(limit))
 
     def inspect_dataset(
         self,

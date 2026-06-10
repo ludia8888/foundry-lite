@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from foundry_lite.application.ports import (
+    ComputeAdapter,
     DatasetRepository,
     DatasetStorageAdapter,
     DatasetTransactionRepository,
@@ -18,6 +19,7 @@ class CoreServiceMixin:
 
     root: Path
     storage_root: Path
+    compute_adapter: ComputeAdapter
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
