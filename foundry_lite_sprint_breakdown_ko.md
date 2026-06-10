@@ -293,13 +293,15 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] CSV/Parquet/SQL transform/health-check 실행 경계를 `ComputeAdapter` port로 이동하고 DuckDB/fake contract test를 추가했다.
 - [x] Object record/link read DB 경계를 `ObjectReadRepository` port로 이동하고 local/fake contract test를 추가했다.
 - [x] Object index run/object record conflict/link write DB 경계를 `ObjectIndexRepository` port로 이동하고 local/fake contract test를 추가했다.
+- [x] Object set row/membership metadata DB 경계를 `ObjectSetRepository` port로 이동하고 local/fake contract test를 추가했다.
 - [x] application concrete infra import baseline을 `32`에서 `30`으로 낮췄다.
 - [x] application concrete infra import baseline을 `30`에서 `28`로 낮췄다.
 - [x] application concrete infra import baseline을 `28`에서 `25`로 낮췄다.
 - [x] application concrete infra import baseline을 `25`에서 `20`으로 낮췄다.
 - [x] application concrete infra import baseline을 `20`에서 `15`로 낮췄다.
 - [x] application concrete infra import baseline을 `15`에서 `13`으로 낮췄다.
-- [ ] application concrete infra import baseline `13`을 repository/adapter 추출로 계속 낮춘다.
+- [x] application concrete infra import baseline을 `13`에서 `11`로 낮췄다.
+- [ ] application concrete infra import baseline `11`을 repository/adapter 추출로 계속 낮춘다.
 - [ ] Event/Search/Workflow/Connector/Auth boundary에도 fake/local contract test를 붙인다.
 - [ ] adapter failure contract를 typed error, retryability, timeout, idempotency, operator message까지 구현한다.
 

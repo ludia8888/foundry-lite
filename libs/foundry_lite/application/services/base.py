@@ -11,6 +11,7 @@ from foundry_lite.application.ports import (
     DatasetVersionRepository,
     ObjectIndexRepository,
     ObjectReadRepository,
+    ObjectSetRepository,
     RuntimeRepository,
 )
 from foundry_lite.security.policy import PolicyService
@@ -27,6 +28,7 @@ class CoreServiceMixin:
     dataset_version_repository: DatasetVersionRepository
     object_index_repository: ObjectIndexRepository
     object_read_repository: ObjectReadRepository
+    object_set_repository: ObjectSetRepository
     runtime_repository: RuntimeRepository
     dataset_storage: DatasetStorageAdapter
     engine: Any

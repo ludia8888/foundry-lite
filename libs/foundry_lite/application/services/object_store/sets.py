@@ -3,14 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from foundry_lite.application.ports import ObjectSetRecord
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.query_filters import FILTER_OPERATIONS
 from foundry_lite.application.services.base import CoreServiceMixin
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
-from foundry_lite.infrastructure import schema as db
-from sqlalchemy import and_, delete, insert, select
-from sqlalchemy.engine import Connection
 
 OBJECT_SET_TYPES = {"static", "dynamic"}
 OBJECT_SET_VISIBILITIES = {"private", "public", "temporary", "permanent"}
@@ -48,9 +46,10 @@ class ObjectSetsMixin(CoreServiceMixin):
             self._validate_object_set_definition(conn, ctx, object_type, normalized)
             set_id = _new_id("oset")
             now = _now()
-            conn.execute(
-                insert(db.object_sets).values(
-                    id=set_id,
+            self.object_set_repository.create_object_set(
+                transaction=conn,
+                record=ObjectSetRecord(
+                    set_id=set_id,
                     tenant_id=ctx.tenant_id,
                     name=name.strip(),
                     object_type_id=object_type["id"],
@@ -60,7 +59,7 @@ class ObjectSetsMixin(CoreServiceMixin):
                     owner_user_id=ctx.actor_user_id,
                     expires_at=normalized["expires_at"],
                     created_at=now,
-                )
+                ),
             )
             self._audit(
                 conn,
@@ -114,15 +113,9 @@ class ObjectSetsMixin(CoreServiceMixin):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
         with self.engine.begin() as conn:
-            expired_ids = [
-                row["id"]
-                for row in conn.execute(select(db.object_sets).where(db.object_sets.c.tenant_id == ctx.tenant_id))
-                .mappings()
-                .all()
-                if self._object_set_is_expired(dict(row))
-            ]
-            if expired_ids:
-                conn.execute(delete(db.object_sets).where(db.object_sets.c.id.in_(expired_ids)))
+            rows = self.object_set_repository.object_sets(transaction=conn, tenant_id=ctx.tenant_id)
+            expired_ids = [row["id"] for row in rows if self._object_set_is_expired(row)]
+            self.object_set_repository.delete_object_sets(transaction=conn, set_ids=expired_ids)
             return {"deleted": len(expired_ids)}
 
     def _normalize_object_set_definition(
@@ -174,7 +167,7 @@ class ObjectSetsMixin(CoreServiceMixin):
 
     def _validate_object_set_definition(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         object_type: dict[str, Any],
         normalized: dict[str, Any],
@@ -192,48 +185,35 @@ class ObjectSetsMixin(CoreServiceMixin):
 
     def _validate_static_object_set_ids(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         object_type: dict[str, Any],
         object_ids: Any,
     ) -> None:
         if not isinstance(object_ids, list) or not all(isinstance(item, str) and item for item in object_ids):
             raise ValidationFailed("static object set ids must be non-empty strings")
-        existing = {
-            row["object_id"]
-            for row in conn.execute(
-                select(db.object_records.c.object_id).where(
-                    and_(
-                        db.object_records.c.tenant_id == ctx.tenant_id,
-                        db.object_records.c.object_type_api_name == object_type["api_name"],
-                        db.object_records.c.object_id.in_(object_ids),
-                        db.object_records.c.deleted == False,  # noqa: E712
-                    )
-                )
-            )
-            .mappings()
-            .all()
-        }
+        existing = self.object_set_repository.active_object_ids(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_api_name=object_type["api_name"],
+            object_ids=object_ids,
+        )
         missing = [object_id for object_id in object_ids if object_id not in existing]
         if missing:
             raise ValidationFailed("static object set references missing objects", details={"objectIds": missing})
 
     def _validate_dynamic_object_set_filter(
         self,
-        conn: Connection,
+        conn: Any,
         object_type: dict[str, Any],
         filter_ast: Any,
     ) -> None:
         if not isinstance(filter_ast, dict) or not filter_ast:
             raise ValidationFailed("dynamic object set filter is required")
-        property_names = {
-            row["api_name"]
-            for row in conn.execute(
-                select(db.property_types.c.api_name).where(db.property_types.c.object_type_id == object_type["id"])
-            )
-            .mappings()
-            .all()
-        }
+        property_names = self.object_set_repository.property_names_for_object_type(
+            transaction=conn,
+            object_type_id=object_type["id"],
+        )
         self._validate_filter_ast(filter_ast, property_names)
 
     def _validate_filter_ast(self, filter_ast: dict[str, Any], property_names: set[str]) -> None:
@@ -262,7 +242,7 @@ class ObjectSetsMixin(CoreServiceMixin):
 
     def _object_set_payload(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         set_id: str,
         *,
@@ -275,7 +255,7 @@ class ObjectSetsMixin(CoreServiceMixin):
 
     def _object_set_payload_from_row(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         row: dict[str, Any],
         *,
@@ -301,7 +281,7 @@ class ObjectSetsMixin(CoreServiceMixin):
 
     def _object_set_members(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         object_type_api_name: str,
         row: dict[str, Any],
@@ -313,7 +293,7 @@ class ObjectSetsMixin(CoreServiceMixin):
 
     def _static_object_set_members(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         object_type_api_name: str,
         row: dict[str, Any],
@@ -324,18 +304,12 @@ class ObjectSetsMixin(CoreServiceMixin):
             return object_ids, []
         records = {
             record["object_id"]: record
-            for record in conn.execute(
-                select(db.object_records).where(
-                    and_(
-                        db.object_records.c.tenant_id == ctx.tenant_id,
-                        db.object_records.c.object_type_api_name == object_type_api_name,
-                        db.object_records.c.object_id.in_(object_ids),
-                        db.object_records.c.deleted == False,  # noqa: E712
-                    )
-                )
+            for record in self.object_set_repository.active_object_records_by_ids(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_api_name=object_type_api_name,
+                object_ids=object_ids,
             )
-            .mappings()
-            .all()
         }
         items = [
             self._object_query_item(ctx, object_type_api_name, dict(records[object_id]))
@@ -357,20 +331,15 @@ class ObjectSetsMixin(CoreServiceMixin):
 
     def _visible_object_set_row(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         set_id: str,
     ) -> dict[str, Any] | None:
-        row = (
-            conn.execute(
-                select(db.object_sets).where(
-                    and_(db.object_sets.c.tenant_id == ctx.tenant_id, db.object_sets.c.id == set_id)
-                )
-            )
-            .mappings()
-            .first()
+        normalized = self.object_set_repository.object_set_by_id(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            set_id=set_id,
         )
-        normalized = dict(row) if row else None
         if (
             normalized is None
             or self._object_set_is_expired(normalized)
@@ -381,16 +350,20 @@ class ObjectSetsMixin(CoreServiceMixin):
 
     def _visible_object_set_rows(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         *,
         object_type_api_name: str | None,
     ) -> list[dict[str, Any]]:
-        query = select(db.object_sets).where(db.object_sets.c.tenant_id == ctx.tenant_id)
+        object_type_id = None
         if object_type_api_name is not None:
             object_type = self._active_object_type(conn, ctx, object_type_api_name)
-            query = query.where(db.object_sets.c.object_type_id == object_type["id"])
-        rows = [dict(row) for row in conn.execute(query.order_by(db.object_sets.c.created_at)).mappings().all()]
+            object_type_id = object_type["id"]
+        rows = self.object_set_repository.object_sets(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_id=object_type_id,
+        )
         return [row for row in rows if not self._object_set_is_expired(row) and self._can_read_object_set(ctx, row)]
 
     def _can_read_object_set(self, ctx: RequestContext, row: dict[str, Any]) -> bool:
@@ -411,19 +384,12 @@ class ObjectSetsMixin(CoreServiceMixin):
             return None
         return (datetime.now().astimezone() + timedelta(seconds=ttl_seconds)).isoformat()
 
-    def _object_type_by_id(self, conn: Connection, ctx: RequestContext, object_type_id: str) -> dict[str, Any]:
-        row = (
-            conn.execute(
-                select(db.object_types).where(
-                    and_(
-                        db.object_types.c.tenant_id == ctx.tenant_id,
-                        db.object_types.c.id == object_type_id,
-                    )
-                )
-            )
-            .mappings()
-            .first()
+    def _object_type_by_id(self, conn: Any, ctx: RequestContext, object_type_id: str) -> dict[str, Any]:
+        row = self.object_set_repository.object_type_by_id(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_id=object_type_id,
         )
         if row is None:
             raise NotFound("object type not found", details={"object_type_id": object_type_id})
-        return dict(row)
+        return row

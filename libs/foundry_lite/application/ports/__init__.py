@@ -27,6 +27,10 @@ from foundry_lite.application.ports.object_index_repository import (
     ObjectRecordSourceUpdate,
 )
 from foundry_lite.application.ports.object_read_repository import ObjectReadRepository
+from foundry_lite.application.ports.object_set_repository import (
+    ObjectSetRecord,
+    ObjectSetRepository,
+)
 from foundry_lite.application.ports.runtime_repository import (
     AuditEventRecord,
     LineageEdgeRecord,
@@ -57,6 +61,8 @@ __all__ = [
     "ObjectReadRepository",
     "ObjectRecordInsert",
     "ObjectRecordSourceUpdate",
+    "ObjectSetRecord",
+    "ObjectSetRepository",
     "OutboxEventRecord",
     "RuntimeLookupTable",
     "RuntimeRepository",
