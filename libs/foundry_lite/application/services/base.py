@@ -9,6 +9,7 @@ from foundry_lite.application.ports import (
     DatasetStorageAdapter,
     DatasetTransactionRepository,
     DatasetVersionRepository,
+    ObjectIndexRepository,
     ObjectReadRepository,
     RuntimeRepository,
 )
@@ -24,6 +25,7 @@ class CoreServiceMixin:
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
+    object_index_repository: ObjectIndexRepository
     object_read_repository: ObjectReadRepository
     runtime_repository: RuntimeRepository
     dataset_storage: DatasetStorageAdapter

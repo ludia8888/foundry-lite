@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from foundry_lite.application.ports import (
+    IndexRunRecord,
+    ObjectConflictRecord,
+    ObjectLinkInsert,
+    ObjectRecordInsert,
+    ObjectRecordSourceUpdate,
+)
 from foundry_lite.application.primitives import (
     _json_hash,
     _new_id,
@@ -12,9 +19,6 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ValidationFailed,
 )
-from foundry_lite.infrastructure import schema as db
-from sqlalchemy import and_, insert, select, update
-from sqlalchemy.engine import Connection
 
 
 class ObjectIndexingMixin(CoreServiceMixin):
@@ -31,9 +35,11 @@ class ObjectIndexingMixin(CoreServiceMixin):
             dataset = self.get_dataset(backing["dataset"], ctx=ctx)
             version = self._latest_version_by_dataset_id(conn, dataset["id"])
             run_id = _new_id("index_run")
-            conn.execute(
-                insert(db.index_runs).values(
-                    id=run_id,
+            now = _now()
+            self.object_index_repository.create_index_run(
+                transaction=conn,
+                record=IndexRunRecord(
+                    run_id=run_id,
                     tenant_id=ctx.tenant_id,
                     object_type_id=object_type["id"],
                     object_type_api_name=object_type_api_name,
@@ -46,10 +52,10 @@ class ObjectIndexingMixin(CoreServiceMixin):
                     objects_deleted=0,
                     links_upserted=0,
                     error=None,
-                    started_at=_now(),
+                    started_at=now,
                     completed_at=None,
-                    created_at=_now(),
-                )
+                    created_at=now,
+                ),
             )
 
         rows = self.compute_adapter.rows_from_parquet(self._version_file_path(version))
@@ -67,17 +73,14 @@ class ObjectIndexingMixin(CoreServiceMixin):
                     rows,
                     version["id"],
                 )
-                conn.execute(
-                    update(db.index_runs)
-                    .where(db.index_runs.c.id == run_id)
-                    .values(
-                        status="succeeded",
-                        rows_read=len(rows),
-                        objects_upserted=objects_upserted,
-                        links_upserted=links_upserted,
-                        cursor={"last_row": len(rows)},
-                        completed_at=_now(),
-                    )
+                self.object_index_repository.mark_index_run_succeeded(
+                    transaction=conn,
+                    run_id=run_id,
+                    rows_read=len(rows),
+                    objects_upserted=objects_upserted,
+                    links_upserted=links_upserted,
+                    cursor={"last_row": len(rows)},
+                    completed_at=_now(),
                 )
                 self._audit(
                     conn,
@@ -97,16 +100,17 @@ class ObjectIndexingMixin(CoreServiceMixin):
             }
         except Exception as exc:
             with self.engine.begin() as conn:
-                conn.execute(
-                    update(db.index_runs)
-                    .where(db.index_runs.c.id == run_id)
-                    .values(status="failed", error=self._error_payload(exc), completed_at=_now())
+                self.object_index_repository.mark_index_run_failed(
+                    transaction=conn,
+                    run_id=run_id,
+                    error=self._error_payload(exc),
+                    completed_at=_now(),
                 )
             raise
 
     def _index_object_row(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         object_type: dict[str, Any],
         row: dict[str, Any],
@@ -125,9 +129,10 @@ class ObjectIndexingMixin(CoreServiceMixin):
         now = _now()
         if existing is None:
             current = self._merge_properties(conn, object_type["id"], base_patch, {})
-            conn.execute(
-                insert(db.object_records).values(
-                    id=_new_id("obj"),
+            self.object_index_repository.insert_object_record(
+                transaction=conn,
+                record=ObjectRecordInsert(
+                    record_id=_new_id("obj"),
                     tenant_id=ctx.tenant_id,
                     object_type_id=object_type["id"],
                     object_type_api_name=object_type["api_name"],
@@ -143,7 +148,7 @@ class ObjectIndexingMixin(CoreServiceMixin):
                     deletion_reason=None,
                     created_at=now,
                     updated_at=now,
-                )
+                ),
             )
         else:
             self._record_conflicts_for_base_update(
@@ -156,17 +161,17 @@ class ObjectIndexingMixin(CoreServiceMixin):
                 source_dataset_version_id,
             )
             current = self._merge_properties(conn, object_type["id"], base_patch, existing["edit_properties"])
-            conn.execute(
-                update(db.object_records)
-                .where(db.object_records.c.id == existing["id"])
-                .values(
+            self.object_index_repository.update_object_record_from_source(
+                transaction=conn,
+                record=ObjectRecordSourceUpdate(
+                    record_id=existing["id"],
                     properties=current,
                     base_properties=base_patch,
                     source_dataset_version_id=source_dataset_version_id,
                     source_hash=_json_hash(base_patch),
                     object_version=existing["object_version"] + 1,
                     updated_at=now,
-                )
+                ),
             )
         self._outbox(
             conn,
@@ -181,7 +186,7 @@ class ObjectIndexingMixin(CoreServiceMixin):
 
     def _record_conflicts_for_base_update(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         object_type: dict[str, Any],
         object_id: str,
@@ -197,9 +202,10 @@ class ObjectIndexingMixin(CoreServiceMixin):
                 api_name
             ] != base_patch.get(api_name)
             if has_conflicting_edit:
-                conn.execute(
-                    insert(db.object_conflicts).values(
-                        id=_new_id("conflict"),
+                self.object_index_repository.insert_object_conflict(
+                    transaction=conn,
+                    record=ObjectConflictRecord(
+                        conflict_id=_new_id("conflict"),
                         tenant_id=ctx.tenant_id,
                         object_type_id=object_type["id"],
                         object_id=object_id,
@@ -210,12 +216,12 @@ class ObjectIndexingMixin(CoreServiceMixin):
                         edit_id=None,
                         status="open",
                         created_at=_now(),
-                    )
+                    ),
                 )
 
     def _merge_properties(
         self,
-        conn: Connection,
+        conn: Any,
         object_type_id: str,
         base: dict[str, Any],
         edits: dict[str, Any],
@@ -237,27 +243,19 @@ class ObjectIndexingMixin(CoreServiceMixin):
 
     def _index_links_for_object_type(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         object_type: dict[str, Any],
         rows: list[dict[str, Any]],
         source_dataset_version_id: str,
     ) -> int:
         active = self._active_ontology_version(conn, ctx)
-        links = [
-            dict(row)
-            for row in conn.execute(
-                select(db.link_types).where(
-                    and_(
-                        db.link_types.c.tenant_id == ctx.tenant_id,
-                        db.link_types.c.ontology_version_id == active["id"],
-                        db.link_types.c.from_object_type_id == object_type["id"],
-                    )
-                )
-            )
-            .mappings()
-            .all()
-        ]
+        links = self.object_index_repository.link_types_for_object_type(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=active["id"],
+            from_object_type_id=object_type["id"],
+        )
         count = 0
         for link in links:
             from_key = link["backing"]["fromKey"]
@@ -267,35 +265,26 @@ class ObjectIndexingMixin(CoreServiceMixin):
                 to_id = row.get(to_key)
                 if from_id in {None, ""} or to_id in {None, ""}:
                     continue
-                existing = (
-                    conn.execute(
-                        select(db.object_links).where(
-                            and_(
-                                db.object_links.c.tenant_id == ctx.tenant_id,
-                                db.object_links.c.link_type_id == link["id"],
-                                db.object_links.c.from_object_id == str(from_id),
-                                db.object_links.c.to_object_id == str(to_id),
-                            )
-                        )
-                    )
-                    .mappings()
-                    .first()
+                existing = self.object_index_repository.object_link(
+                    transaction=conn,
+                    tenant_id=ctx.tenant_id,
+                    link_type_id=link["id"],
+                    from_object_id=str(from_id),
+                    to_object_id=str(to_id),
                 )
                 if existing:
-                    conn.execute(
-                        update(db.object_links)
-                        .where(db.object_links.c.id == existing["id"])
-                        .values(
-                            link_version=existing["link_version"] + 1,
-                            source_dataset_version_id=source_dataset_version_id,
-                            deleted=False,
-                            updated_at=_now(),
-                        )
+                    self.object_index_repository.refresh_object_link(
+                        transaction=conn,
+                        link_id=existing["id"],
+                        link_version=existing["link_version"] + 1,
+                        source_dataset_version_id=source_dataset_version_id,
+                        updated_at=_now(),
                     )
                 else:
-                    conn.execute(
-                        insert(db.object_links).values(
-                            id=_new_id("olink"),
+                    self.object_index_repository.insert_object_link(
+                        transaction=conn,
+                        record=ObjectLinkInsert(
+                            link_id=_new_id("olink"),
                             tenant_id=ctx.tenant_id,
                             link_type_id=link["id"],
                             link_type_api_name=link["api_name"],
@@ -311,7 +300,7 @@ class ObjectIndexingMixin(CoreServiceMixin):
                             deleted=False,
                             deletion_reason=None,
                             updated_at=_now(),
-                        )
+                        ),
                     )
                 count += 1
         return count

@@ -16,6 +16,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyDatasetTransactionRepository,
     SqlAlchemyDatasetVersionRepository,
     SqlAlchemyMetadataRepository,
+    SqlAlchemyObjectIndexRepository,
     SqlAlchemyObjectReadRepository,
     SqlAlchemyRuntimeRepository,
 )
@@ -49,6 +50,7 @@ def create_local_core_dependencies(
         dataset_repository=SqlAlchemyDatasetRepository(engine),
         dataset_transaction_repository=SqlAlchemyDatasetTransactionRepository(engine),
         dataset_version_repository=SqlAlchemyDatasetVersionRepository(engine),
+        object_index_repository=SqlAlchemyObjectIndexRepository(engine),
         object_read_repository=SqlAlchemyObjectReadRepository(engine),
         runtime_repository=SqlAlchemyRuntimeRepository(engine),
         dataset_storage=storage_adapter,
