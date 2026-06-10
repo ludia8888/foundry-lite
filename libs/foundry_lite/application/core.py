@@ -3,8 +3,6 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from sqlalchemy import insert
-
 from foundry_lite.application.core_services import (
     ActionServiceMixin,
     DatasetServiceMixin,
@@ -27,7 +25,6 @@ from foundry_lite.application.primitives import (
 )
 from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID
 from foundry_lite.domain.errors import ValidationFailed
-from foundry_lite.infrastructure import schema as db
 from foundry_lite.observability.tracing import trace_public_methods
 
 __all__ = [
@@ -76,38 +73,32 @@ class FoundryLiteCore(
         self.storage_root = dependencies.storage_root
         self.engine = dependencies.engine
         self.policy = dependencies.policy
+        self.metadata_repository = dependencies.metadata_repository
+        self.dataset_repository = dependencies.dataset_repository
         self.dataset_storage = dependencies.dataset_storage
-        if dependencies.initialize_schema is not None:
-            dependencies.initialize_schema(self.engine)
+        self.metadata_repository.initialize_schema()
         self.bootstrap()
 
     def reset(self, *, confirm_dev: bool = False) -> None:
         if not confirm_dev:
             raise ValidationFailed("reset is destructive and requires confirm_dev=True")
-        db.metadata.drop_all(self.engine)
-        db.create_database(self.engine)
+        self.metadata_repository.reset_schema()
         if self.storage_root.exists():
             shutil.rmtree(self.storage_root)
         self.storage_root.mkdir(parents=True, exist_ok=True)
         self.bootstrap()
 
     def bootstrap(self) -> None:
-        with self.engine.begin() as conn:
-            if self._select_by_id(conn, db.tenants, DEFAULT_TENANT_ID) is None:
-                conn.execute(
-                    insert(db.tenants).values(
-                        id=DEFAULT_TENANT_ID,
-                        name="Demo Tenant",
-                        created_at=_now(),
-                    )
-                )
-            if self._select_by_id(conn, db.users, DEFAULT_ACTOR_USER_ID) is None:
-                conn.execute(
-                    insert(db.users).values(
-                        id=DEFAULT_ACTOR_USER_ID,
-                        tenant_id=DEFAULT_TENANT_ID,
-                        email="demo@foundry-lite.local",
-                        roles=["admin", "data_engineer", "ops_manager", "finance"],
-                        created_at=_now(),
-                    )
-                )
+        now = _now()
+        self.metadata_repository.ensure_tenant(
+            tenant_id=DEFAULT_TENANT_ID,
+            name="Demo Tenant",
+            created_at=now,
+        )
+        self.metadata_repository.ensure_user(
+            user_id=DEFAULT_ACTOR_USER_ID,
+            tenant_id=DEFAULT_TENANT_ID,
+            email="demo@foundry-lite.local",
+            roles=["admin", "data_engineer", "ops_manager", "finance"],
+            created_at=now,
+        )

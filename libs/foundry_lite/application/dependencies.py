@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy.engine import Engine
-
-from foundry_lite.application.ports import DatasetStorageAdapter
+from foundry_lite.application.ports import DatasetRepository, DatasetStorageAdapter, MetadataRepository
 from foundry_lite.security.policy import PolicyService
 
 
@@ -16,7 +14,8 @@ class CoreDependencies:
 
     root: Path
     storage_root: Path
-    engine: Engine
+    engine: Any
     policy: PolicyService
+    metadata_repository: MetadataRepository
+    dataset_repository: DatasetRepository
     dataset_storage: DatasetStorageAdapter
-    initialize_schema: Callable[[Engine], None] | None

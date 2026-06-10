@@ -3,9 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy.engine import Engine
-
-from foundry_lite.application.ports import DatasetStorageAdapter
+from foundry_lite.application.ports import DatasetRepository, DatasetStorageAdapter
 from foundry_lite.security.policy import PolicyService
 
 
@@ -14,8 +12,9 @@ class CoreServiceMixin:
 
     root: Path
     storage_root: Path
+    dataset_repository: DatasetRepository
     dataset_storage: DatasetStorageAdapter
-    engine: Engine
+    engine: Any
     policy: PolicyService
 
     def __getattr__(self, name: str) -> Any:

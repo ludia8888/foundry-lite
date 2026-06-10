@@ -284,8 +284,11 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] `tests/contracts/test_dataset_storage_adapter_contract.py`가 local/fake adapter에 같은 contract test를 적용한다.
 - [x] `tests/integration/test_scale_foundation.py`가 `fake-storage` profile로 CSV commit, inspect, preview public API가 유지되는지 검증한다.
 - [x] `scripts/quality/check_infra_import_boundary.py`와 `scripts/quality/check_mixin_method_conflicts.py`를 CI gate에 연결했다.
-- [ ] application concrete infra import baseline `37`을 repository/adapter 추출로 낮춘다.
-- [ ] DB read/write를 `MetadataRepository`/`DatasetTransactionRepository` port로 이동한다.
+- [x] application concrete infra import baseline을 `37`에서 `32`로 낮췄다.
+- [x] core bootstrap/reset DB write를 `MetadataRepository` port로 이동했다.
+- [x] dataset registry create/find/version-list DB read/write를 `DatasetRepository` port로 이동하고 local/fake contract test를 추가했다.
+- [ ] application concrete infra import baseline `32`를 repository/adapter 추출로 계속 낮춘다.
+- [ ] Dataset transaction DB read/write를 `DatasetTransactionRepository` port로 이동한다.
 - [ ] Compute/Event/Search/Workflow/Connector/Auth boundary에도 fake/local contract test를 붙인다.
 - [ ] adapter failure contract를 typed error, retryability, timeout, idempotency, operator message까지 구현한다.
 

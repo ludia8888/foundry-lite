@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import duckdb
+from foundry_lite.application.ports import DatasetAlreadyExistsError
 from foundry_lite.application.primitives import (
     _dataset_ref_parts,
     _new_id,
@@ -14,9 +15,6 @@ from foundry_lite.domain.errors import (
     ConflictDetected,
     NotFound,
 )
-from foundry_lite.infrastructure import schema as db
-from sqlalchemy import and_, insert, select
-from sqlalchemy.exc import IntegrityError
 
 
 class DatasetRegistryMixin(CoreServiceMixin):
@@ -36,26 +34,26 @@ class DatasetRegistryMixin(CoreServiceMixin):
         namespace, name = _dataset_ref_parts(dataset_ref)
         dataset_id = _new_id("ds")
         now = _now()
+        storage_uri = self.dataset_storage.dataset_uri(ctx.tenant_id, dataset_id)
+        primary_key = primary_key or []
         with self.engine.begin() as conn:
             try:
-                conn.execute(
-                    insert(db.datasets).values(
-                        id=dataset_id,
-                        tenant_id=ctx.tenant_id,
-                        namespace=namespace,
-                        name=name,
-                        description=description,
-                        storage_kind=storage_kind,
-                        storage_uri=self.dataset_storage.dataset_uri(ctx.tenant_id, dataset_id),
-                        owner_team=owner_team,
-                        classification=classification,
-                        status="active",
-                        primary_key=primary_key or [],
-                        created_at=now,
-                        updated_at=now,
-                    )
+                self.dataset_repository.create_dataset(
+                    transaction=conn,
+                    dataset_id=dataset_id,
+                    tenant_id=ctx.tenant_id,
+                    namespace=namespace,
+                    name=name,
+                    description=description,
+                    storage_kind=storage_kind,
+                    storage_uri=storage_uri,
+                    owner_team=owner_team,
+                    classification=classification,
+                    primary_key=primary_key,
+                    created_at=now,
+                    updated_at=now,
                 )
-            except IntegrityError as exc:
+            except DatasetAlreadyExistsError as exc:
                 raise ConflictDetected(
                     "dataset already exists in this tenant",
                     details={"dataset_ref": dataset_ref},
@@ -93,22 +91,7 @@ class DatasetRegistryMixin(CoreServiceMixin):
     def find_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> dict[str, Any] | None:
         ctx = ctx or RequestContext()
         namespace, name = _dataset_ref_parts(dataset_ref)
-        with self.engine.begin() as conn:
-            row = (
-                conn.execute(
-                    select(db.datasets).where(
-                        and_(
-                            db.datasets.c.tenant_id == ctx.tenant_id,
-                            db.datasets.c.namespace == namespace,
-                            db.datasets.c.name == name,
-                            db.datasets.c.status == "active",
-                        )
-                    )
-                )
-                .mappings()
-                .first()
-            )
-            return dict(row) if row else None
+        return self.dataset_repository.find_active_dataset(tenant_id=ctx.tenant_id, namespace=namespace, name=name)
 
     def get_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> dict[str, Any]:
         ctx = ctx or RequestContext()
@@ -126,17 +109,7 @@ class DatasetRegistryMixin(CoreServiceMixin):
     ) -> list[dict[str, Any]]:
         ctx = ctx or RequestContext()
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
-        with self.engine.begin() as conn:
-            rows = (
-                conn.execute(
-                    select(db.dataset_versions)
-                    .where(db.dataset_versions.c.dataset_id == dataset["id"])
-                    .order_by(db.dataset_versions.c.version_number)
-                )
-                .mappings()
-                .all()
-            )
-            return [dict(row) for row in rows]
+        return self.dataset_repository.list_versions(dataset_id=dataset["id"])
 
     def preview_dataset(
         self,
