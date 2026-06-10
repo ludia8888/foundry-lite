@@ -5,11 +5,12 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.domain.context import RequestContext, demo_admin_context
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
 
 @pytest.fixture
 def core(tmp_path: Path) -> FoundryLiteCore:
-    return FoundryLiteCore(storage_root=tmp_path / "flite")
+    return FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
 
 
 def prepare_indexed_demo(core: FoundryLiteCore) -> RequestContext:

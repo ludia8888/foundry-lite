@@ -43,16 +43,13 @@ class FoundryLiteCore:
     def __init__(
         self,
         *,
-        db_url: str | None = None,
-        storage_root: str | Path | None = None,
-        dependencies: CoreDependencies | None = None,
+        dependencies: CoreDependencies,
     ) -> None:
-        if dependencies is not None and (db_url is not None or storage_root is not None):
-            raise ValueError("pass either dependencies or db_url/storage_root, not both")
-        if dependencies is None:
-            from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
-
-            dependencies = create_local_core_dependencies(db_url=db_url, storage_root=storage_root)
+        # Sprint 02A §4.3: FoundryLiteCore accepts a fully-wired
+        # CoreDependencies bag only. Convenience constructors that take
+        # ``db_url``/``storage_root`` and pull infrastructure into the
+        # application layer live in apps/* composition roots and the
+        # test conftest, never inside the facade itself.
         self.root = dependencies.root
         self.storage_root = dependencies.storage_root
         self.engine = dependencies.engine

@@ -157,7 +157,7 @@ def test_csv_upload_wraps_unexpected_internal_error(
     with pytest.raises(ValidationFailed, match="csv upload failed"):
         exploding_core.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
 
-    normal_core = FoundryLiteCore(storage_root=tmp_path / "normal-core")
+    normal_core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=tmp_path / "normal-core"))
     normal_core.ensure_dataset("raw.wraps_error", ctx=ctx, primary_key=["id"])
     monkeypatch.setenv("FOUNDRY_LITE_MAX_CSV_UPLOAD_BYTES", "4")
     with pytest.raises(ValidationFailed, match="size limit"):

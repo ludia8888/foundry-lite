@@ -12,9 +12,10 @@ import os
 
 from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.domain.context import demo_admin_context
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
 ctx = demo_admin_context()
-core = FoundryLiteCore(storage_root=os.environ["FOUNDRY_LITE_HOME"])
+core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=os.environ["FOUNDRY_LITE_HOME"]))
 core.seed_supply_chain_demo_files()
 core.ensure_dataset("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
 core.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])

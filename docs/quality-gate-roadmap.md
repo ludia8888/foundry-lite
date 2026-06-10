@@ -184,6 +184,23 @@ AGENTS.md 정독에 의존한다. 이 로드맵의 목표는 그 의존을 줄�
 
 ## 2. 신규 게이트 — Tier 분류
 
+### Tier P2 — import-linter로 흡수된 게이트 (✅ 완료 2026-06-10 P2)
+
+`.importlinter` 4 contracts가 import graph 자체를 강제한다. 도구는 module-level이
+아니라 **transitive import 경로**를 본다 — `check_infra_import_boundary`가 놓친
+function-local lazy import (application/core.py:53)를 P2가 첫 시도에 검출해 정통화.
+
+| Contract | 강제 조항 |
+|---|---|
+| `layered-core` | §4.1 의존성 방향 (apps → infra → application → domain) |
+| `domain-purity` | §4.1 domain은 framework 0개 (fastapi/pydantic/sqlalchemy/duckdb/boto3/kafka/pyspark/temporalio) |
+| `application-no-vendor-sdk` | §4.3 application은 vendor SDK 0개 (위와 동일 + opensearchpy/elasticsearch) |
+| `apps-no-direct-infra` | §3.1 apps/* 가 infrastructure.repositories 직접 import 금지 (composition root 예외만 명시) |
+
+`scripts/quality/check_infra_import_boundary.py` 와 `check_dependency_graph.py` 는
+**보존**한다. import-linter는 transitive를 강제하고 우리 자체 게이트는
+module-level baseline(0)을 강제 — 서로 다른 사각지대를 잡는 이중 망.
+
 ### Tier P1 — Semgrep로 흡수된 게이트 (✅ 완료 2026-06-10 P1)
 
 다음 게이트들은 `scripts/quality/semgrep-rules/foundry-lite.yml`의 9개 rule로 흡수되어

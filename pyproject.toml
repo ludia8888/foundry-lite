@@ -34,6 +34,7 @@ dev = [
   "types-PyYAML>=6.0",
   "xenon>=0.9",
   "semgrep>=1.165.0",
+  "import-linter>=2.11",
 ]
 
 [project.scripts]

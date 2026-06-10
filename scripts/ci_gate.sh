@@ -24,6 +24,9 @@ uv run pyright
 echo "== Static: dependency graph and layer rules =="
 uv run python scripts/quality/check_dependency_graph.py
 
+echo "== Static: import-linter layered architecture contracts =="
+uv run lint-imports --config .importlinter
+
 echo "== Static: infra import and service collaborator boundaries =="
 uv run python scripts/quality/check_infra_import_boundary.py --max-application-imports 0
 uv run python scripts/quality/check_service_dependencies.py

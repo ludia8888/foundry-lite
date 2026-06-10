@@ -1,0 +1,92 @@
+# Foundry-lite layered architecture contracts.
+#
+# These contracts encode foundry_lite_python_engineering_guidelines_ko.md
+# §4.1 (의존성 방향) and §4.3 (Scale Foundation) as import-graph rules. Each
+# contract names the guideline clause it enforces.
+#
+# Root-cause principle: the contracts reject import shapes that allow a domain
+# module to depend on a framework, an application module to import a vendor
+# SDK directly, or an apps/* entrypoint to bypass the application layer. None
+# of these can be silenced by changing a counter; the offending import must be
+# removed.
+#
+[importlinter]
+root_packages =
+    foundry_lite
+    foundry_lite_api
+    foundry_lite_cli
+    foundry_lite_worker
+include_external_packages = True
+# Permit ignore_imports entries that don't currently match. This lets us
+# pre-declare the boundary we want without forcing the present codebase to
+# already produce every ignored edge.
+unmatched_ignore_imports_alerting = warn
+
+# ──────────────────────────────────────────────────────────────────────────
+# §4.1 — Strict layering: domain ← application ← infrastructure / apps.
+# ──────────────────────────────────────────────────────────────────────────
+[importlinter:contract:layered-core]
+name = Foundry-lite layered architecture (§4.1)
+type = layers
+layers =
+    foundry_lite_api | foundry_lite_cli | foundry_lite_worker
+    foundry_lite.infrastructure
+    foundry_lite.application
+    foundry_lite.domain
+
+# ──────────────────────────────────────────────────────────────────────────
+# §4.1 — Domain must not import any framework.
+# ──────────────────────────────────────────────────────────────────────────
+[importlinter:contract:domain-purity]
+name = Domain stays free of frameworks (§4.1)
+type = forbidden
+source_modules =
+    foundry_lite.domain
+forbidden_modules =
+    fastapi
+    pydantic
+    sqlalchemy
+    duckdb
+    boto3
+    kafka
+    pyspark
+    temporalio
+
+# ──────────────────────────────────────────────────────────────────────────
+# §4.3 — Application must not import vendor SDKs directly.
+# ──────────────────────────────────────────────────────────────────────────
+[importlinter:contract:application-no-vendor-sdk]
+name = Application stays vendor-neutral (§4.3)
+type = forbidden
+source_modules =
+    foundry_lite.application
+forbidden_modules =
+    sqlalchemy
+    duckdb
+    boto3
+    kafka
+    pyspark
+    temporalio
+    opensearchpy
+    elasticsearch
+
+# ──────────────────────────────────────────────────────────────────────────
+# §3.1 — apps/api must not reach into infrastructure.repositories directly.
+# Composition root passes repositories through the FoundryLiteCore facade
+# only; handlers call application services.
+# ──────────────────────────────────────────────────────────────────────────
+[importlinter:contract:apps-no-direct-infra]
+name = HTTP/CLI/Worker apps go through application services (§3.1)
+type = forbidden
+source_modules =
+    foundry_lite_api
+    foundry_lite_cli
+    foundry_lite_worker
+forbidden_modules =
+    foundry_lite.infrastructure.repositories
+ignore_imports =
+    # Composition root wires concrete adapters once; this is the intended
+    # boundary crossing where vendor concretion is allowed.
+    foundry_lite_api.main -> foundry_lite.infrastructure.local_runtime
+    foundry_lite_api.main -> foundry_lite.infrastructure.auth
+    foundry_lite_cli.main -> foundry_lite.infrastructure.local_runtime

@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     sys.path[:0] = [str(ROOT / "libs"), str(ROOT / "apps" / "cli"), str(ROOT / "apps" / "api")]
 
     from foundry_lite.application.core import FoundryLiteCore
+    from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
     from foundry_lite.observability.tracing import configure_observability
 
     configure_observability("foundry-lite-diagnostics")
@@ -70,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         started_at = time.perf_counter()
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("default")
-            core = FoundryLiteCore(storage_root=storage_root)
+            core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=storage_root))
             result = profiler.runcall(core.run_supply_chain_demo)
             captured_warnings.extend(caught)
         duration_seconds = time.perf_counter() - started_at
