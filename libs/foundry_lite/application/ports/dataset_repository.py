@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 
 class DatasetAlreadyExistsError(Exception):
     """Raised when the metadata store rejects a duplicate active dataset."""
@@ -13,7 +15,7 @@ class DatasetRepository(Protocol):
     def create_dataset(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         dataset_id: str,
         tenant_id: str,
         namespace: str,

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 
 @dataclass(frozen=True)
 class MaterializationRecord:
@@ -39,29 +41,31 @@ class MaterializationRepository(Protocol):
     def materialization_by_api_name(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         api_name: str,
     ) -> dict[str, Any] | None:
         """Return a materialization spec row by tenant + api_name, or None."""
         ...
 
-    def insert_materialization(self, *, transaction: Any, record: MaterializationRecord) -> None:
+    def insert_materialization(self, *, transaction: TransactionContext, record: MaterializationRecord) -> None:
         """Persist a newly registered materialization spec."""
         ...
 
-    def materialization_by_id(self, *, transaction: Any, materialization_id: str) -> dict[str, Any] | None:
+    def materialization_by_id(
+        self, *, transaction: TransactionContext, materialization_id: str
+    ) -> dict[str, Any] | None:
         """Return a materialization spec row by id, or None."""
         ...
 
-    def insert_materialization_run(self, *, transaction: Any, record: MaterializationRunRecord) -> None:
+    def insert_materialization_run(self, *, transaction: TransactionContext, record: MaterializationRunRecord) -> None:
         """Persist a newly received materialization run."""
         ...
 
     def update_materialization_run_terminal(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         materialization_run_id: str,
         status: str,
         target_dataset_version_id: str | None,
@@ -72,10 +76,10 @@ class MaterializationRepository(Protocol):
         """Mark a materialization run as terminal (succeeded/failed/aborted)."""
         ...
 
-    def latest_action_run_watermark(self, *, transaction: Any) -> str | None:
+    def latest_action_run_watermark(self, *, transaction: TransactionContext) -> str | None:
         """Return the latest action_runs.created_at watermark (or None if empty)."""
         ...
 
-    def latest_object_record_watermark(self, *, transaction: Any) -> str | None:
+    def latest_object_record_watermark(self, *, transaction: TransactionContext) -> str | None:
         """Return the latest object_records.updated_at watermark (or None if empty)."""
         ...

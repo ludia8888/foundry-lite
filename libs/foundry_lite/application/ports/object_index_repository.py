@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 
 @dataclass(frozen=True)
 class IndexRunRecord:
@@ -93,14 +95,14 @@ class ObjectLinkInsert:
 class ObjectIndexRepository(Protocol):
     """DB write boundary for object indexing runs, records, conflicts, and links."""
 
-    def create_index_run(self, *, transaction: Any, record: IndexRunRecord) -> None:
+    def create_index_run(self, *, transaction: TransactionContext, record: IndexRunRecord) -> None:
         """Persist a running index run row."""
         ...
 
     def mark_index_run_succeeded(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         run_id: str,
         rows_read: int,
         objects_upserted: int,
@@ -114,7 +116,7 @@ class ObjectIndexRepository(Protocol):
     def mark_index_run_failed(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         run_id: str,
         error: dict[str, Any],
         completed_at: str,
@@ -122,27 +124,27 @@ class ObjectIndexRepository(Protocol):
         """Mark an index run as failed."""
         ...
 
-    def insert_object_record(self, *, transaction: Any, record: ObjectRecordInsert) -> None:
+    def insert_object_record(self, *, transaction: TransactionContext, record: ObjectRecordInsert) -> None:
         """Insert a new object record."""
         ...
 
     def update_object_record_from_source(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         record: ObjectRecordSourceUpdate,
     ) -> None:
         """Update source-owned object fields after a dataset re-index."""
         ...
 
-    def insert_object_conflict(self, *, transaction: Any, record: ObjectConflictRecord) -> None:
+    def insert_object_conflict(self, *, transaction: TransactionContext, record: ObjectConflictRecord) -> None:
         """Persist a source-vs-edit conflict detected during re-index."""
         ...
 
     def link_types_for_object_type(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         ontology_version_id: str,
         from_object_type_id: str,
@@ -153,7 +155,7 @@ class ObjectIndexRepository(Protocol):
     def object_link(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         link_type_id: str,
         from_object_id: str,
@@ -165,7 +167,7 @@ class ObjectIndexRepository(Protocol):
     def refresh_object_link(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         link_id: str,
         link_version: int,
         source_dataset_version_id: str,
@@ -174,6 +176,6 @@ class ObjectIndexRepository(Protocol):
         """Refresh an existing object link and undelete it."""
         ...
 
-    def insert_object_link(self, *, transaction: Any, record: ObjectLinkInsert) -> None:
+    def insert_object_link(self, *, transaction: TransactionContext, record: ObjectLinkInsert) -> None:
         """Insert a new object link."""
         ...

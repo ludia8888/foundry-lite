@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 
 class ObjectReadRepository(Protocol):
     """DB read boundary for object records and object links."""
@@ -9,7 +11,7 @@ class ObjectReadRepository(Protocol):
     def object_record(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         object_type_api_name: str,
         object_id: str,
@@ -20,7 +22,7 @@ class ObjectReadRepository(Protocol):
     def active_object_rows(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         object_type_api_name: str,
     ) -> list[dict[str, Any]]:
@@ -30,7 +32,7 @@ class ObjectReadRepository(Protocol):
     def active_links_from(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         link_type_api_name: str,
         from_api_name: str,

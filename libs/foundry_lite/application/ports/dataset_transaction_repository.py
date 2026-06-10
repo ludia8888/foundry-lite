@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 DatasetRunKind = Literal["sync", "transform", "materialization"]
 
 
@@ -71,30 +73,32 @@ class SyncRunRecord:
 class DatasetTransactionRepository(Protocol):
     """DB boundary for dataset transaction state, committed versions, and files."""
 
-    def create_open_transaction(self, *, transaction: Any, record: DatasetTransactionRecord) -> None:
+    def create_open_transaction(self, *, transaction: TransactionContext, record: DatasetTransactionRecord) -> None:
         """Persist a new OPEN dataset transaction inside the caller transaction."""
         ...
 
-    def transaction_by_id(self, *, transaction: Any, transaction_id: str) -> dict[str, Any] | None:
+    def transaction_by_id(self, *, transaction: TransactionContext, transaction_id: str) -> dict[str, Any] | None:
         """Return a dataset transaction row by id inside the caller transaction."""
         ...
 
-    def abort_transaction(self, *, transaction: Any, transaction_id: str, metadata: dict[str, Any]) -> None:
+    def abort_transaction(
+        self, *, transaction: TransactionContext, transaction_id: str, metadata: dict[str, Any]
+    ) -> None:
         """Mark a dataset transaction aborted inside the caller transaction."""
         ...
 
-    def insert_version(self, *, transaction: Any, record: DatasetVersionRecord) -> None:
+    def insert_version(self, *, transaction: TransactionContext, record: DatasetVersionRecord) -> None:
         """Persist a committed dataset version row inside the caller transaction."""
         ...
 
-    def insert_file(self, *, transaction: Any, record: DatasetFileRecord) -> None:
+    def insert_file(self, *, transaction: TransactionContext, record: DatasetFileRecord) -> None:
         """Persist a dataset file row inside the caller transaction."""
         ...
 
     def commit_transaction(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         transaction_id: str,
         committed_version_id: str,
         schema_version: int,
@@ -115,14 +119,14 @@ class DatasetTransactionRepository(Protocol):
         """Best-effort abort for an OPEN transaction and the associated run row."""
         ...
 
-    def insert_sync_run(self, *, transaction: Any, record: SyncRunRecord) -> None:
+    def insert_sync_run(self, *, transaction: TransactionContext, record: SyncRunRecord) -> None:
         """Persist a newly received sync run inside the caller transaction."""
         ...
 
     def update_sync_run_terminal(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         sync_run_id: str,
         status: str,
         committed_version_id: str | None,

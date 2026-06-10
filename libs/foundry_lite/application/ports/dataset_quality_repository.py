@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 
 @dataclass(frozen=True)
 class DatasetSchemaRecord:
@@ -44,25 +46,25 @@ class DatasetQualityRepository(Protocol):
     def schema_by_hash(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         dataset_id: str,
         schema_hash: str,
     ) -> dict[str, Any] | None:
         """Return an existing schema row matching a dataset_id + schema_hash, or None."""
         ...
 
-    def latest_schema_version(self, *, transaction: Any, dataset_id: str) -> int | None:
+    def latest_schema_version(self, *, transaction: TransactionContext, dataset_id: str) -> int | None:
         """Return the highest schema version number for a dataset, or None when no schemas exist."""
         ...
 
-    def insert_schema(self, *, transaction: Any, record: DatasetSchemaRecord) -> None:
+    def insert_schema(self, *, transaction: TransactionContext, record: DatasetSchemaRecord) -> None:
         """Persist one dataset schema row inside the caller transaction."""
         ...
 
     def check_by_name(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         dataset_id: str,
         name: str,
@@ -70,10 +72,10 @@ class DatasetQualityRepository(Protocol):
         """Return an existing dataset check row by tenant + dataset + canonical name, or None."""
         ...
 
-    def insert_check(self, *, transaction: Any, record: DatasetCheckRecord) -> None:
+    def insert_check(self, *, transaction: TransactionContext, record: DatasetCheckRecord) -> None:
         """Persist one dataset check definition inside the caller transaction."""
         ...
 
-    def insert_check_result(self, *, transaction: Any, record: DatasetCheckResultRecord) -> None:
+    def insert_check_result(self, *, transaction: TransactionContext, record: DatasetCheckResultRecord) -> None:
         """Persist one dataset check result inside the caller transaction."""
         ...

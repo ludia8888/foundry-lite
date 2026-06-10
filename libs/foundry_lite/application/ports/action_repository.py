@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 
 @dataclass(frozen=True)
 class ActionRunRecord:
@@ -71,7 +73,7 @@ class ActionRepository(Protocol):
     def action_run_by_idempotency(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         action_type_id: str,
         actor_user_id: str,
@@ -80,14 +82,14 @@ class ActionRepository(Protocol):
         """Return an existing action run for an idempotency key."""
         ...
 
-    def insert_action_run(self, *, transaction: Any, record: ActionRunRecord) -> None:
+    def insert_action_run(self, *, transaction: TransactionContext, record: ActionRunRecord) -> None:
         """Persist a newly received action run."""
         ...
 
     def update_action_run_terminal(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         action_run_id: str,
         status: str,
         error: dict[str, Any] | None,
@@ -96,14 +98,14 @@ class ActionRepository(Protocol):
         """Mark an action run as failed, conflicted, or succeeded."""
         ...
 
-    def insert_action_writeback(self, *, transaction: Any, record: ActionWritebackRecord) -> None:
+    def insert_action_writeback(self, *, transaction: TransactionContext, record: ActionWritebackRecord) -> None:
         """Persist one before-commit writeback attempt."""
         ...
 
-    def update_object_target(self, *, transaction: Any, record: ObjectTargetUpdate) -> bool:
+    def update_object_target(self, *, transaction: TransactionContext, record: ObjectTargetUpdate) -> bool:
         """Apply an optimistic object update and report whether the expected version matched."""
         ...
 
-    def insert_object_edit(self, *, transaction: Any, record: ObjectEditRecord) -> None:
+    def insert_object_edit(self, *, transaction: TransactionContext, record: ObjectEditRecord) -> None:
         """Persist an object edit created by an action run."""
         ...

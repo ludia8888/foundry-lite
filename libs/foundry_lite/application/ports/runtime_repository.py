@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 RuntimeLookupTable = Literal["transforms", "materializations"]
 RuntimeRowsTable = Literal[
     "sync_runs",
@@ -77,22 +79,26 @@ class RuntimeRepository(Protocol):
         """Return operational run, audit, and outbox rows for one tenant."""
         ...
 
-    def row_by_id(self, *, transaction: Any, table: RuntimeLookupTable, row_id: str) -> dict[str, Any] | None:
+    def row_by_id(
+        self, *, transaction: TransactionContext, table: RuntimeLookupTable, row_id: str
+    ) -> dict[str, Any] | None:
         """Return a row by id from a small allowlisted runtime lookup table."""
         ...
 
-    def rows_for_tenant(self, *, transaction: Any, table: RuntimeRowsTable, tenant_id: str) -> list[dict[str, Any]]:
+    def rows_for_tenant(
+        self, *, transaction: TransactionContext, table: RuntimeRowsTable, tenant_id: str
+    ) -> list[dict[str, Any]]:
         """Return rows by tenant from an allowlisted runtime table."""
         ...
 
-    def insert_audit_event(self, *, transaction: Any, record: AuditEventRecord) -> None:
+    def insert_audit_event(self, *, transaction: TransactionContext, record: AuditEventRecord) -> None:
         """Persist an audit event inside the caller transaction."""
         ...
 
-    def insert_outbox_event(self, *, transaction: Any, record: OutboxEventRecord) -> bool:
+    def insert_outbox_event(self, *, transaction: TransactionContext, record: OutboxEventRecord) -> bool:
         """Persist an outbox event, returning False for idempotent duplicates."""
         ...
 
-    def insert_lineage_edge(self, *, transaction: Any, record: LineageEdgeRecord) -> None:
+    def insert_lineage_edge(self, *, transaction: TransactionContext, record: LineageEdgeRecord) -> None:
         """Persist a lineage edge inside the caller transaction."""
         ...

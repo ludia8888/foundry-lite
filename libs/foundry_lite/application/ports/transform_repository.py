@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 
 @dataclass(frozen=True)
 class TransformRecord:
@@ -37,21 +39,21 @@ class TransformRepository(Protocol):
     def transform_by_api_name(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         api_name: str,
     ) -> dict[str, Any] | None:
         """Return a transform row by tenant + api_name, or None."""
         ...
 
-    def insert_transform(self, *, transaction: Any, record: TransformRecord) -> None:
+    def insert_transform(self, *, transaction: TransactionContext, record: TransformRecord) -> None:
         """Persist a newly registered transform."""
         ...
 
     def update_transform_definition(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         transform_id: str,
         language: str,
         entrypoint: str,
@@ -63,18 +65,18 @@ class TransformRepository(Protocol):
         """Update an existing transform's definition fields."""
         ...
 
-    def transform_by_id(self, *, transaction: Any, transform_id: str) -> dict[str, Any] | None:
+    def transform_by_id(self, *, transaction: TransactionContext, transform_id: str) -> dict[str, Any] | None:
         """Return a transform row by id, or None."""
         ...
 
-    def insert_transform_run(self, *, transaction: Any, record: TransformRunRecord) -> None:
+    def insert_transform_run(self, *, transaction: TransactionContext, record: TransformRunRecord) -> None:
         """Persist a newly received transform run."""
         ...
 
     def update_transform_run_terminal(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         transform_run_id: str,
         status: str,
         output_version_id: str | None,

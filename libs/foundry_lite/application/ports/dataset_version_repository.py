@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 
 class DatasetVersionRepository(Protocol):
     """DB read boundary for committed dataset versions and schemas."""
 
-    def next_version_number(self, *, transaction: Any, dataset_id: str) -> int:
+    def next_version_number(self, *, transaction: TransactionContext, dataset_id: str) -> int:
         """Return the next committed version number inside the caller transaction."""
         ...
 
@@ -14,11 +16,13 @@ class DatasetVersionRepository(Protocol):
         """Return a dataset schema row by dataset id and schema version."""
         ...
 
-    def latest_version_by_dataset_id(self, *, transaction: Any, dataset_id: str) -> dict[str, Any] | None:
+    def latest_version_by_dataset_id(
+        self, *, transaction: TransactionContext, dataset_id: str
+    ) -> dict[str, Any] | None:
         """Return the latest committed dataset version row inside the caller transaction."""
         ...
 
-    def version_by_id(self, *, transaction: Any, version_id: str) -> dict[str, Any] | None:
+    def version_by_id(self, *, transaction: TransactionContext, version_id: str) -> dict[str, Any] | None:
         """Return a committed dataset version row by id inside the caller transaction."""
         ...
 

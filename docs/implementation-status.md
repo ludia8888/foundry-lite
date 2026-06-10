@@ -19,7 +19,9 @@
 - Migrations: schema bootstraps through SQLAlchemy `metadata.create_all`; Alembic migrations are not implemented yet.
 - Application structure: `FoundryLiteCore` is now a Facade. Dataset, Transform, Ontology, Object, Action, Materialization, runtime event, and demo orchestration logic live in focused service modules. CI blocks application modules above 500 lines.
 - Scale foundation status: Sprint 02A implementation has started. `DatasetStorageAdapter` is now a real port with local and fake-storage adapters, shared contract tests, a fake-storage swap rehearsal for CSV commit/inspect/preview, and API/CLI composition-root selection. `MetadataRepository` now owns schema bootstrap/reset/default tenant-user DB writes, `DatasetRepository` owns dataset registry create/find DB reads/writes, `DatasetTransactionRepository` owns dataset transaction/version/file DB state changes plus best-effort run failure updates, `DatasetVersionRepository` owns committed version/schema DB reads, `RuntimeRepository` owns audit/outbox/lineage/list-runs DB boundaries, `ComputeAdapter` owns CSV/Parquet/SQL transform/health-check execution behind DuckDB local and fake compute adapters, `ObjectReadRepository` owns object record/link read DB boundaries, `ObjectIndexRepository` owns object indexing run/object record/link write DB boundaries, `ObjectSetRepository` owns object set row/membership metadata DB boundaries, `ActionRepository` owns action run/writeback/object edit/object target update DB boundaries, and `OntologyRepository` owns ontology version/object/property/link/action type metadata DB boundaries. The current code is still not fully port/adapter extracted.
-- Infra boundary gates: CI now blocks domain concrete infra imports, application concrete infra imports above the current baseline `7`, scale SDK imports in domain/application, and service mixin method-name conflicts.
+- Infra boundary gates: CI now blocks domain concrete infra imports, application concrete infra imports above the current baseline `0`, scale SDK imports in domain/application, and service mixin method-name conflicts.
+- Transaction boundary: `TransactionContext` is now an explicit opaque Protocol in `application/ports`. All repository ports take `transaction: TransactionContext` instead of `transaction: Any`, so future scale adapters (PostgreSQL test containers, in-memory fakes, transactional Kafka outbox writers) can supply their own handle types without changing repository signatures.
+- Concrete infra imports in `application/`: now `0`. Every service module talks to repository ports only. The remaining concrete SQLAlchemy access lives behind `infrastructure/repositories/*`.
 
 ## Still Targeted, Not Yet Implemented
 
@@ -30,8 +32,8 @@
 - Temporal workflow/worker execution.
 - Alembic migration history and upgrade/rollback tests.
 - Operations UI beyond the current object explorer/object-set controls, especially failed run retry and DLQ workflows.
-- Sprint 02A Scale Foundation implementation: repository/port extraction beneath the current service modules, contract tests for fake/local adapters, and CI import guards for production PostgreSQL, S3/MinIO, Spark/Flink, Kafka/Redpanda, OpenSearch, Temporal, connector, and auth adapters.
-- Lower application concrete infra import baseline from `7` to `0` as SQLAlchemy and remaining DB access moves behind repositories/adapters.
+- Sprint 02A Scale Foundation completion: WorkflowAdapter, StreamAdapter, SearchAdapter, ConnectorAdapter, and AuthProvider ports remain unextracted; the local repositories still rely on SQLAlchemy under the hood without a PostgreSQL contract-test pairing.
+- Postgres testcontainer contract tests so that every repository contract suite runs against both SQLite and PostgreSQL, closing the "Repository pattern complete" gap.
 
 ## Quality Signal Boundaries
 

@@ -51,6 +51,7 @@ from foundry_lite.application.ports.runtime_repository import (
     RuntimeRepository,
     RuntimeRowsTable,
 )
+from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.application.ports.transform_repository import (
     TransformRecord,
     TransformRepository,
@@ -93,6 +94,7 @@ __all__ = [
     "RuntimeRowsTable",
     "StoredDatasetCommit",
     "SyncRunRecord",
+    "TransactionContext",
     "TransformRecord",
     "TransformRepository",
     "TransformRunRecord",

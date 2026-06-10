@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
 
 @dataclass(frozen=True)
 class OntologyVersionRecord:
@@ -79,48 +81,48 @@ class ActionTypeRecord:
 class OntologyRepository(Protocol):
     """DB boundary for ontology version and type metadata persistence."""
 
-    def next_ontology_version_number(self, *, transaction: Any, tenant_id: str) -> int:
+    def next_ontology_version_number(self, *, transaction: TransactionContext, tenant_id: str) -> int:
         """Return the next ontology version number for a tenant."""
         ...
 
-    def insert_ontology_version(self, *, transaction: Any, record: OntologyVersionRecord) -> None:
+    def insert_ontology_version(self, *, transaction: TransactionContext, record: OntologyVersionRecord) -> None:
         """Persist one ontology version row."""
         ...
 
-    def archive_active_ontology_versions(self, *, transaction: Any, tenant_id: str) -> None:
+    def archive_active_ontology_versions(self, *, transaction: TransactionContext, tenant_id: str) -> None:
         """Archive currently active ontology versions for a tenant."""
         ...
 
     def activate_ontology_version(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         ontology_version_id: str,
         activated_at: str,
     ) -> None:
         """Mark an ontology version active."""
         ...
 
-    def insert_object_type(self, *, transaction: Any, record: ObjectTypeRecord) -> None:
+    def insert_object_type(self, *, transaction: TransactionContext, record: ObjectTypeRecord) -> None:
         """Persist one object type."""
         ...
 
-    def insert_property_type(self, *, transaction: Any, record: PropertyTypeRecord) -> None:
+    def insert_property_type(self, *, transaction: TransactionContext, record: PropertyTypeRecord) -> None:
         """Persist one property type."""
         ...
 
-    def insert_link_type(self, *, transaction: Any, record: LinkTypeRecord) -> None:
+    def insert_link_type(self, *, transaction: TransactionContext, record: LinkTypeRecord) -> None:
         """Persist one link type."""
         ...
 
-    def insert_action_type(self, *, transaction: Any, record: ActionTypeRecord) -> None:
+    def insert_action_type(self, *, transaction: TransactionContext, record: ActionTypeRecord) -> None:
         """Persist one action type."""
         ...
 
     def object_types_for_version(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         ontology_version_id: str,
     ) -> list[dict[str, Any]]:
@@ -130,29 +132,31 @@ class OntologyRepository(Protocol):
     def link_types_for_version(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         ontology_version_id: str,
     ) -> list[dict[str, Any]]:
         """Return link types for an ontology version."""
         ...
 
-    def properties_for_object_type(self, *, transaction: Any, object_type_id: str) -> list[dict[str, Any]]:
+    def properties_for_object_type(
+        self, *, transaction: TransactionContext, object_type_id: str
+    ) -> list[dict[str, Any]]:
         """Return property types for one object type."""
         ...
 
-    def actions_for_target(self, *, transaction: Any, object_type_id: str) -> list[dict[str, Any]]:
+    def actions_for_target(self, *, transaction: TransactionContext, object_type_id: str) -> list[dict[str, Any]]:
         """Return action types for one target object type."""
         ...
 
-    def active_ontology_version(self, *, transaction: Any, tenant_id: str) -> dict[str, Any] | None:
+    def active_ontology_version(self, *, transaction: TransactionContext, tenant_id: str) -> dict[str, Any] | None:
         """Return the active ontology version for a tenant."""
         ...
 
     def object_type_for_version(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         ontology_version_id: str,
         api_name: str,
@@ -163,7 +167,7 @@ class OntologyRepository(Protocol):
     def enabled_action_type_for_version(
         self,
         *,
-        transaction: Any,
+        transaction: TransactionContext,
         tenant_id: str,
         ontology_version_id: str,
         api_name: str,
