@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.observability.metrics import prometheus_payload, record_http_request
 from foundry_lite.observability.tracing import (
     configure_observability,
@@ -26,8 +27,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 core = FoundryLiteCore(
-    db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
-    storage_root=os.getenv("FOUNDRY_LITE_HOME", ".foundry-lite"),
+    dependencies=create_local_core_dependencies(
+        db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
+        storage_root=os.getenv("FOUNDRY_LITE_HOME", ".foundry-lite"),
+        adapter_profile=os.getenv("FOUNDRY_LITE_ADAPTER_PROFILE", "local"),
+    )
 )
 instrument_fastapi_app(app)
 instrument_sqlalchemy_engine(core.engine)

@@ -496,12 +496,21 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
 #### Scale Foundation Checklist
 
 - [ ] 각 boundary는 `Protocol` 또는 명시적 interface로 정의되고, application service는 concrete SDK가 아니라 이 boundary를 호출한다.
+  - [x] `DatasetStorageAdapter`는 `Protocol`로 정의했고 dataset staging/manifest/version file 경로는 adapter를 통한다.
+  - [ ] `MetadataRepository`, `DatasetTransactionRepository`, `ComputeAdapter`, `StreamAdapter`, `SearchAdapter`, `WorkflowAdapter`, `ConnectorAdapter`, `AuthProvider`는 아직 application service에서 완전히 포트화되지 않았다.
 - [ ] concrete 구현 선택은 `apps/api`, `apps/worker`, `apps/cli` 같은 composition root에서만 한다.
+  - [x] API와 CLI는 `create_local_core_dependencies(...)` composition root에서 adapter profile을 선택한다.
+  - [ ] `FoundryLiteCore`의 하위 호환 fallback과 DB schema bootstrap은 아직 local runtime에 완전히 격리되지 않았다.
 - [ ] local adapter와 fake adapter가 같은 contract test suite를 통과한다.
+  - [x] `DatasetStorageAdapter`의 local/fake 구현은 `tests/contracts/test_dataset_storage_adapter_contract.py`의 같은 시나리오를 통과한다.
+  - [ ] 나머지 boundary의 fake/local contract test는 아직 남아 있다.
 - [ ] adapter error는 숨기지 않고 typed error, retryability, timeout, idempotency 정보를 application layer로 돌려준다.
 - [ ] adapter를 교체해도 audit/outbox/lineage/run state의 key 이름과 의미가 바뀌지 않는다.
 - [ ] CI는 domain/application이 금지된 concrete infra SDK를 직접 import하면 실패한다.
-- [ ] 최소 하나의 swap rehearsal test가 있다. 예: local filesystem adapter 대신 fake/S3-compatible adapter를 끼워도 dataset commit use case가 같은 결과를 만든다.
+  - [x] 현재 CI는 domain concrete infra import 0개, application concrete infra import baseline 37개 초과, scale SDK 직접 import, mixin method 충돌을 잡는다.
+  - [ ] application concrete infra import baseline을 37에서 0으로 낮추는 repository/adapter 추출은 남아 있다.
+- [x] 최소 하나의 swap rehearsal test가 있다. 예: local filesystem adapter 대신 fake/S3-compatible adapter를 끼워도 dataset commit use case가 같은 결과를 만든다.
+  - [x] `tests/integration/test_scale_foundation.py`가 fake-storage profile로 CSV commit, inspect, preview public API가 같은 shape로 동작함을 검증한다.
 - [ ] scale adapter를 아직 구현하지 않았더라도, 미래 구현이 따라야 할 DTO, state transition, trace key, failure contract는 문서와 테스트로 고정한다.
 
 #### 이러면 Scale Foundation으로 치지 않는다

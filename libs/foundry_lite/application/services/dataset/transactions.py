@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import json
-import shutil
 from pathlib import Path
 from typing import Any
 
 from foundry_lite.application.primitives import (
     CommitResult,
     _dataset_ref,
-    _file_hash,
     _new_id,
     _now,
 )
@@ -58,24 +55,18 @@ class DatasetTransactionMixin(CoreServiceMixin):
         return tx_id
 
     def _staging_file(self, dataset: dict[str, Any], transaction_id: str, file_name: str) -> Path:
-        path = (
-            self.storage_root
-            / dataset["tenant_id"]
-            / "datasets"
-            / dataset["id"]
-            / "_staging"
-            / transaction_id
-            / file_name
+        return self.dataset_storage.staging_file(
+            tenant_id=dataset["tenant_id"],
+            dataset_id=dataset["id"],
+            transaction_id=transaction_id,
+            file_name=file_name,
         )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
 
     def _version_file_path(self, version: dict[str, Any]) -> Path:
-        manifest = self._load_manifest(version["manifest_uri"])
-        return Path(manifest["files"][0]["uri"])
+        return self.dataset_storage.first_data_file_path(version["manifest_uri"])
 
     def _load_manifest(self, manifest_uri: str) -> dict[str, Any]:
-        return json.loads(Path(manifest_uri).read_text(encoding="utf-8"))
+        return self.dataset_storage.load_manifest(manifest_uri)
 
     def _finalize_open_transaction(
         self,
@@ -125,32 +116,17 @@ class DatasetTransactionMixin(CoreServiceMixin):
         schema_version = self._ensure_schema(conn, dataset, stats.schema_json, stats.schema_hash)
         version_number = self._next_dataset_version_number(conn, dataset["id"])
         version_id = _new_id("dsv")
-        version_dir = (
-            self.storage_root / ctx.tenant_id / "datasets" / dataset["id"] / "branch=main" / f"version={version_id}"
+        stored_commit = self.dataset_storage.commit_staged_file(
+            tenant_id=ctx.tenant_id,
+            dataset_id=dataset["id"],
+            branch=tx["branch"],
+            version_id=version_id,
+            dataset_ref=_dataset_ref(dataset),
+            schema_hash=stats.schema_hash,
+            staged_file=staged_parquet,
+            row_count=stats.row_count,
+            created_at=_now(),
         )
-        version_dir.mkdir(parents=True, exist_ok=True)
-        final_parquet = version_dir / "part-00000.parquet"
-        shutil.copy2(staged_parquet, final_parquet)
-        manifest_path = version_dir / "manifest.json"
-        manifest = {
-            "version_id": version_id,
-            "dataset": _dataset_ref(dataset),
-            "branch": tx["branch"],
-            "schema_hash": stats.schema_hash,
-            "files": [
-                {
-                    "uri": str(final_parquet),
-                    "format": "parquet",
-                    "row_count": stats.row_count,
-                    "byte_size": final_parquet.stat().st_size,
-                    "content_hash": _file_hash(final_parquet),
-                }
-            ],
-            "created_at": _now(),
-        }
-        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
-        byte_size = final_parquet.stat().st_size
-        content_hash = _file_hash(final_parquet)
         conn.execute(
             insert(db.dataset_versions).values(
                 id=version_id,
@@ -160,9 +136,9 @@ class DatasetTransactionMixin(CoreServiceMixin):
                 version_number=version_number,
                 transaction_id=transaction_id,
                 schema_version=schema_version,
-                manifest_uri=str(manifest_path),
+                manifest_uri=stored_commit.manifest_uri,
                 row_count=stats.row_count,
-                byte_size=byte_size,
+                byte_size=stored_commit.byte_size,
                 status="active",
                 superseded_by_version_id=None,
                 created_at=_now(),
@@ -173,11 +149,11 @@ class DatasetTransactionMixin(CoreServiceMixin):
                 id=_new_id("dsf"),
                 tenant_id=ctx.tenant_id,
                 dataset_version_id=version_id,
-                uri=str(final_parquet),
+                uri=stored_commit.data_file_uri,
                 format="parquet",
                 row_count=stats.row_count,
-                byte_size=byte_size,
-                content_hash=content_hash,
+                byte_size=stored_commit.byte_size,
+                content_hash=stored_commit.content_hash,
                 partition_values={},
             )
         )
@@ -223,7 +199,7 @@ class DatasetTransactionMixin(CoreServiceMixin):
             version_id=version_id,
             version_number=version_number,
             row_count=stats.row_count,
-            manifest_uri=str(manifest_path),
+            manifest_uri=stored_commit.manifest_uri,
             schema_hash=stats.schema_hash,
         )
 

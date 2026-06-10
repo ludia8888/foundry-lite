@@ -276,9 +276,22 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [ ] adapter 실패가 run/audit/outbox/diagnostics 중 적절한 곳에 추적 가능한 error type과 correlation id로 남는다.
 - [ ] CI가 금지 import 또는 boundary 우회를 잡는다.
 
+**Sprint 02A 구현 진행 체크**
+
+- [x] `DatasetStorageAdapter` port를 추가하고 dataset staging/manifest/version file 접근을 adapter 경계로 이동했다.
+- [x] `LocalDatasetStorageAdapter`와 `FakeDatasetStorageAdapter`를 추가했다. fake profile은 파일은 local에 두되 `fake-storage://...` logical URI를 노출해 S3류 object storage 교체 감각을 검증한다.
+- [x] API와 CLI가 `create_local_core_dependencies(...)` composition root에서 adapter profile을 선택한다.
+- [x] `tests/contracts/test_dataset_storage_adapter_contract.py`가 local/fake adapter에 같은 contract test를 적용한다.
+- [x] `tests/integration/test_scale_foundation.py`가 `fake-storage` profile로 CSV commit, inspect, preview public API가 유지되는지 검증한다.
+- [x] `scripts/quality/check_infra_import_boundary.py`와 `scripts/quality/check_mixin_method_conflicts.py`를 CI gate에 연결했다.
+- [ ] application concrete infra import baseline `37`을 repository/adapter 추출로 낮춘다.
+- [ ] DB read/write를 `MetadataRepository`/`DatasetTransactionRepository` port로 이동한다.
+- [ ] Compute/Event/Search/Workflow/Connector/Auth boundary에도 fake/local contract test를 붙인다.
+- [ ] adapter failure contract를 typed error, retryability, timeout, idempotency, operator message까지 구현한다.
+
 **Demo / Proof**
 
-`flite demo run-supply-chain --adapter-profile fake-storage`처럼 adapter profile만 바꾸거나, 테스트에서 composition root만 바꿔 같은 dataset commit 또는 transform use case가 통과하는 것을 증명한다.
+`flite --adapter-profile fake-storage demo run-supply-chain`처럼 adapter profile만 바꾸거나, 테스트에서 composition root만 바꿔 같은 dataset commit 또는 transform use case가 통과하는 것을 증명한다.
 
 **이러면 성공으로 치지 않는다**
 

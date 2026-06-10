@@ -18,7 +18,8 @@
 - Worker: `apps/worker` is a placeholder for a future Temporal worker.
 - Migrations: schema bootstraps through SQLAlchemy `metadata.create_all`; Alembic migrations are not implemented yet.
 - Application structure: `FoundryLiteCore` is now a Facade. Dataset, Transform, Ontology, Object, Action, Materialization, runtime event, and demo orchestration logic live in focused service modules. CI blocks application modules above 500 lines.
-- Scale foundation status: the planning docs now require an explicit Sprint 02A for infra-swap boundaries, contract tests, trace keys, and composition-root injection. The current code is not yet fully port/adapter extracted.
+- Scale foundation status: Sprint 02A implementation has started. `DatasetStorageAdapter` is now a real port with local and fake-storage adapters, shared contract tests, a fake-storage swap rehearsal for CSV commit/inspect/preview, and API/CLI composition-root selection. The current code is still not fully port/adapter extracted.
+- Infra boundary gates: CI now blocks domain concrete infra imports, application concrete infra imports above the current baseline `37`, scale SDK imports in domain/application, and service mixin method-name conflicts.
 
 ## Still Targeted, Not Yet Implemented
 
@@ -30,6 +31,7 @@
 - Alembic migration history and upgrade/rollback tests.
 - Operations UI beyond the current object explorer/object-set controls, especially failed run retry and DLQ workflows.
 - Sprint 02A Scale Foundation implementation: repository/port extraction beneath the current service modules, contract tests for fake/local adapters, and CI import guards for production PostgreSQL, S3/MinIO, Spark/Flink, Kafka/Redpanda, OpenSearch, Temporal, connector, and auth adapters.
+- Lower application concrete infra import baseline from `37` to `0` as SQLAlchemy and DuckDB access moves behind repositories/adapters.
 
 ## Quality Signal Boundaries
 

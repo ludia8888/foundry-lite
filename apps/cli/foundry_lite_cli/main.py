@@ -9,14 +9,19 @@ from typing import Any
 
 from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.domain.context import RequestContext, demo_admin_context
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
 Handler = Callable[[FoundryLiteCore, RequestContext, argparse.Namespace], Any]
 
 
-def _core() -> FoundryLiteCore:
+def _core(adapter_profile: str | None = None) -> FoundryLiteCore:
+    profile = adapter_profile if adapter_profile is not None else os.getenv("FOUNDRY_LITE_ADAPTER_PROFILE", "local")
     return FoundryLiteCore(
-        db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
-        storage_root=os.getenv("FOUNDRY_LITE_HOME", ".foundry-lite"),
+        dependencies=create_local_core_dependencies(
+            db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
+            storage_root=os.getenv("FOUNDRY_LITE_HOME", ".foundry-lite"),
+            adapter_profile=profile,
+        )
     )
 
 
@@ -43,6 +48,7 @@ def _json_arg(value: str) -> dict[str, Any]:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="flite")
+    parser.add_argument("--adapter-profile", default=os.getenv("FOUNDRY_LITE_ADAPTER_PROFILE", "local"))
     sub = parser.add_subparsers(dest="group", required=True)
 
     demo = sub.add_parser("demo")
@@ -254,7 +260,7 @@ def _dispatch(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespa
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    _print(_dispatch(_core(), demo_admin_context(), args))
+    _print(_dispatch(_core(args.adapter_profile), demo_admin_context(), args))
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ class DatasetRegistryMixin(CoreServiceMixin):
                         name=name,
                         description=description,
                         storage_kind=storage_kind,
-                        storage_uri=str(self.storage_root / ctx.tenant_id / "datasets" / dataset_id),
+                        storage_uri=self.dataset_storage.dataset_uri(ctx.tenant_id, dataset_id),
                         owner_team=owner_team,
                         classification=classification,
                         status="active",

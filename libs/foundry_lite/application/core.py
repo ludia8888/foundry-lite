@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from sqlalchemy import create_engine, insert
+from sqlalchemy import insert
 
 from foundry_lite.application.core_services import (
     ActionServiceMixin,
@@ -15,6 +15,7 @@ from foundry_lite.application.core_services import (
     RuntimeServiceMixin,
     TransformServiceMixin,
 )
+from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.primitives import (
     CommitResult,
     StagedFileStats,
@@ -28,7 +29,6 @@ from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.observability.tracing import trace_public_methods
-from foundry_lite.security.policy import PolicyService
 
 __all__ = [
     "CommitResult",
@@ -64,15 +64,21 @@ class FoundryLiteCore(
         *,
         db_url: str | None = None,
         storage_root: str | Path | None = None,
+        dependencies: CoreDependencies | None = None,
     ) -> None:
-        self.root = Path(storage_root or ".foundry-lite").resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.storage_root = self.root / "object-storage"
-        self.storage_root.mkdir(parents=True, exist_ok=True)
-        database_url = db_url or f"sqlite:///{self.root / 'foundry-lite.db'}"
-        self.engine = create_engine(database_url, future=True)
-        db.create_database(self.engine)
-        self.policy = PolicyService()
+        if dependencies is not None and (db_url is not None or storage_root is not None):
+            raise ValueError("pass either dependencies or db_url/storage_root, not both")
+        if dependencies is None:
+            from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+
+            dependencies = create_local_core_dependencies(db_url=db_url, storage_root=storage_root)
+        self.root = dependencies.root
+        self.storage_root = dependencies.storage_root
+        self.engine = dependencies.engine
+        self.policy = dependencies.policy
+        self.dataset_storage = dependencies.dataset_storage
+        if dependencies.initialize_schema is not None:
+            dependencies.initialize_schema(self.engine)
         self.bootstrap()
 
     def reset(self, *, confirm_dev: bool = False) -> None:
