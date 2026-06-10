@@ -30,6 +30,9 @@ class DatasetRegistryService(CoreService):
         "dataset_version_service",
         "runtime_service",
     )
+    dataset_transaction_service: Any
+    dataset_version_service: Any
+    runtime_service: Any
 
     def create_dataset(
         self,

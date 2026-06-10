@@ -17,6 +17,7 @@ from foundry_lite.domain.context import RequestContext
 class DatasetQualityService(CoreService):
     required_dependencies = ("compute_adapter", "dataset_quality_repository")
     required_collaborators = ("dataset_version_service",)
+    dataset_version_service: Any
 
     def _inspect_parquet(self, parquet_path: Path, primary_key: list[str]) -> StagedFileStats:
         return self.compute_adapter.inspect_parquet(parquet_path, primary_key)

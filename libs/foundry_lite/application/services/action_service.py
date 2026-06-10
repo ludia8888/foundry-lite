@@ -38,6 +38,10 @@ class ActionService(CoreService):
         "ontology_service",
         "runtime_service",
     )
+    object_indexing_service: Any
+    object_records_service: Any
+    ontology_service: Any
+    runtime_service: Any
 
     def apply_action(
         self,

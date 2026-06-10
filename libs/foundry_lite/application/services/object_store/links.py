@@ -9,6 +9,7 @@ from foundry_lite.domain.context import RequestContext
 class ObjectLinksService(CoreService):
     required_dependencies = ("engine", "policy", "object_read_repository")
     required_collaborators = ("object_records_service",)
+    object_records_service: Any
 
     def get_links(
         self,

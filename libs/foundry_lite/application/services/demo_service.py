@@ -23,6 +23,14 @@ class DemoService(CoreService):
         "ontology_service",
         "transform_service",
     )
+    action_service: Any
+    dataset_ingest_service: Any
+    dataset_registry_service: Any
+    materialization_service: Any
+    object_indexing_service: Any
+    object_query_service: Any
+    ontology_service: Any
+    transform_service: Any
 
     def run_supply_chain_demo(self, *, ctx: RequestContext | None = None) -> dict[str, Any]:
         ctx = ctx or demo_admin_context()

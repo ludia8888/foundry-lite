@@ -78,23 +78,6 @@ class CoreService:
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository
 
-    action_service: Any
-    dataset_ingest_service: Any
-    dataset_quality_service: Any
-    dataset_registry_service: Any
-    dataset_transaction_service: Any
-    dataset_version_service: Any
-    demo_service: Any
-    materialization_service: Any
-    object_indexing_service: Any
-    object_links_service: Any
-    object_query_service: Any
-    object_records_service: Any
-    object_sets_service: Any
-    ontology_service: Any
-    runtime_service: Any
-    transform_service: Any
-
     def __init__(self, **dependencies: Any) -> None:
         expected = set(self.required_dependencies)
         provided = set(dependencies)

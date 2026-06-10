@@ -32,6 +32,10 @@ class TransformService(CoreService):
         "dataset_version_service",
         "runtime_service",
     )
+    dataset_registry_service: Any
+    dataset_transaction_service: Any
+    dataset_version_service: Any
+    runtime_service: Any
 
     def register_transform(
         self,

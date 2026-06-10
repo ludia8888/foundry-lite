@@ -31,6 +31,9 @@ class OntologyService(CoreService):
         "dataset_version_service",
         "runtime_service",
     )
+    dataset_registry_service: Any
+    dataset_version_service: Any
+    runtime_service: Any
 
     def apply_ontology(
         self,

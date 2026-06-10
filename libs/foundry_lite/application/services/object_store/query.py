@@ -13,6 +13,8 @@ from foundry_lite.domain.errors import (
 class ObjectQueryService(CoreService):
     required_dependencies = ("engine", "policy", "object_read_repository")
     required_collaborators = ("object_records_service", "runtime_service")
+    object_records_service: Any
+    runtime_service: Any
 
     def get_object(
         self,

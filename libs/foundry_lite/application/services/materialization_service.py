@@ -28,6 +28,10 @@ class MaterializationService(CoreService):
         "dataset_transaction_service",
         "runtime_service",
     )
+    dataset_ingest_service: Any
+    dataset_registry_service: Any
+    dataset_transaction_service: Any
+    runtime_service: Any
 
     def materialize(
         self,

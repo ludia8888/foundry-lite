@@ -23,6 +23,9 @@ class ObjectSetsService(CoreService):
         "ontology_service",
         "runtime_service",
     )
+    object_query_service: Any
+    ontology_service: Any
+    runtime_service: Any
 
     def create_object_set(
         self,

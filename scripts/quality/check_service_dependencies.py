@@ -151,17 +151,37 @@ def _collect_required_collaborators(tree: ast.AST) -> dict[str, set[str]]:
     return _collect_required_names(tree, "required_collaborators")
 
 
+def _service_collaborators_value(node: ast.AST) -> ast.expr | None:
+    if isinstance(node, ast.Assign):
+        if any(isinstance(t, ast.Name) and t.id == "SERVICE_COLLABORATORS" for t in node.targets):
+            return node.value
+    elif isinstance(node, ast.AnnAssign):
+        if isinstance(node.target, ast.Name) and node.target.id == "SERVICE_COLLABORATORS":
+            return node.value
+    return None
+
+
 def _collect_collaborator_attributes(paths: list[Path]) -> set[str]:
+    """Read the SERVICE_COLLABORATORS registry in base.py as the source of truth.
+
+    Collaborator attributes used to be declared as 16 ``Any`` annotations on the
+    ``CoreService`` base class. They were retired so each concrete service only
+    annotates the collaborators it actually receives. The registry constant
+    ``SERVICE_COLLABORATORS`` in ``application/services/base.py`` now owns the
+    canonical name list; ``tests/unit/test_quality_service_wiring.py`` keeps it
+    in sync with this gate.
+    """
+
     collaborators: set[str] = set()
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ClassDef) or node.name != "CoreService":
+            value = _service_collaborators_value(node)
+            if not isinstance(value, ast.Dict):
                 continue
-            for item in node.body:
-                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
-                    if item.target.id.endswith("_service"):
-                        collaborators.add(item.target.id)
+            for key in value.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    collaborators.add(key.value)
     return collaborators
 
 

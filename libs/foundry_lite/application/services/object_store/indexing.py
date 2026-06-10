@@ -31,6 +31,12 @@ class ObjectIndexingService(CoreService):
         "ontology_service",
         "runtime_service",
     )
+    dataset_registry_service: Any
+    dataset_transaction_service: Any
+    dataset_version_service: Any
+    object_records_service: Any
+    ontology_service: Any
+    runtime_service: Any
 
     def index_rebuild(
         self,

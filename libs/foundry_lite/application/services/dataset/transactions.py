@@ -31,6 +31,9 @@ class DatasetTransactionService(CoreService):
         "dataset_version_service",
         "runtime_service",
     )
+    dataset_quality_service: Any
+    dataset_version_service: Any
+    runtime_service: Any
 
     def _open_dataset_transaction(
         self,
