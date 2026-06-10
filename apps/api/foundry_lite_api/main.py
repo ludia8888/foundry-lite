@@ -7,8 +7,10 @@ from typing import Any
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.ports.auth_provider import AuthProvider
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
+from foundry_lite.infrastructure.auth import HeaderTrustAuthProvider
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.observability.metrics import prometheus_payload, record_http_request
 from foundry_lite.observability.tracing import (
@@ -33,6 +35,11 @@ core = FoundryLiteCore(
         adapter_profile=os.getenv("FOUNDRY_LITE_ADAPTER_PROFILE", "local"),
     )
 )
+# Sprint 02A: HTTP requests authenticate through an explicit AuthProvider.
+# Today's adapter trusts X-Tenant-ID/X-User-ID/X-Roles headers verbatim - the
+# same posture as before, but now visible at the composition root so a JWT
+# adapter can swap in without touching any handler.
+auth_provider: AuthProvider = HeaderTrustAuthProvider()
 instrument_fastapi_app(app)
 instrument_sqlalchemy_engine(core.engine)
 
@@ -82,15 +89,34 @@ def _ctx(
     x_roles: str | None = Header(default=None),
 ) -> RequestContext:
     defaults = RequestContext()
-    tenant_id = _header_or_request(x_tenant_id, request, "X-Tenant-ID") or defaults.tenant_id
-    user_id = _header_or_request(x_user_id, request, "X-User-ID") or defaults.actor_user_id
-    roles = _roles_from_header(_header_or_request(x_roles, request, "X-Roles"), defaults.roles)
-    return RequestContext(
-        tenant_id=tenant_id,
-        actor_user_id=user_id,
-        request_id=_request_id(request, defaults.request_id),
-        roles=roles,
+    credentials = _collect_credentials(
+        request,
+        x_tenant_id=x_tenant_id,
+        x_user_id=x_user_id,
+        x_roles=x_roles,
     )
+    principal = auth_provider.authenticate(credentials) if credentials else auth_provider.anonymous()
+    return RequestContext(
+        tenant_id=principal.tenant_id,
+        actor_user_id=principal.actor_user_id,
+        request_id=_request_id(request, defaults.request_id),
+        roles=principal.roles,
+    )
+
+
+def _collect_credentials(
+    request: Request | None,
+    *,
+    x_tenant_id: str | None,
+    x_user_id: str | None,
+    x_roles: str | None,
+) -> dict[str, str]:
+    pairs = (
+        ("X-Tenant-ID", _header_or_request(x_tenant_id, request, "X-Tenant-ID")),
+        ("X-User-ID", _header_or_request(x_user_id, request, "X-User-ID")),
+        ("X-Roles", _header_or_request(x_roles, request, "X-Roles")),
+    )
+    return {key: value for key, value in pairs if value}
 
 
 def _header_or_request(value: str | None, request: Request | None, header_name: str) -> str | None:
@@ -98,12 +124,6 @@ def _header_or_request(value: str | None, request: Request | None, header_name: 
     if normalized or request is None:
         return normalized
     return request.headers.get(header_name)
-
-
-def _roles_from_header(value: str | None, default_roles: tuple[str, ...]) -> tuple[str, ...]:
-    if not value:
-        return default_roles
-    return tuple(role.strip() for role in value.split(",") if role.strip())
 
 
 def _request_id(request: Request | None, default_request_id: str) -> str:
