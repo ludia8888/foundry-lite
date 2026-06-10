@@ -13,14 +13,14 @@ from foundry_lite.application.primitives import (
     _new_id,
     _now,
 )
-from foundry_lite.application.services.base import CoreServiceMixin
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     PermissionDenied,
 )
 
 
-class RuntimeServiceMixin(CoreServiceMixin):
+class RuntimeService(CoreService):
     def lineage_for_resource(
         self,
         resource_id: str,

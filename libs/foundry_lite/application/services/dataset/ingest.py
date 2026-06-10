@@ -9,7 +9,7 @@ from foundry_lite.application.primitives import (
     _new_id,
     _now,
 )
-from foundry_lite.application.services.base import CoreServiceMixin
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.upload_limits import require_csv_size_limit
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -20,7 +20,7 @@ from foundry_lite.domain.errors import (
 )
 
 
-class DatasetIngestMixin(CoreServiceMixin):
+class DatasetIngestService(CoreService):
     def upload_csv(
         self,
         dataset_ref: str,

@@ -18,7 +18,7 @@ from foundry_lite.application.safe_expression import (
     precondition_expression,
     validate_action_request,
 )
-from foundry_lite.application.services.base import CoreServiceMixin
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -30,7 +30,7 @@ from foundry_lite.domain.errors import (
 )
 
 
-class ActionServiceMixin(CoreServiceMixin):
+class ActionService(CoreService):
     def apply_action(
         self,
         action_api_name: str,

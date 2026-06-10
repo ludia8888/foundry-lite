@@ -24,11 +24,11 @@ uv run pyright
 echo "== Static: dependency graph and layer rules =="
 uv run python scripts/quality/check_dependency_graph.py
 
-echo "== Static: infra import and mixin conflict boundaries =="
+echo "== Static: infra import and service collaborator boundaries =="
 uv run python scripts/quality/check_infra_import_boundary.py --max-application-imports 0
-uv run python scripts/quality/check_mixin_method_conflicts.py
-uv run python scripts/quality/check_service_mixin_dependencies.py
-uv run python scripts/quality/check_mixin_call_graph.py --max-depth 7 --max-fan-out 10
+uv run python scripts/quality/check_service_method_conflicts.py
+uv run python scripts/quality/check_service_dependencies.py
+uv run python scripts/quality/check_service_call_graph.py --max-depth 7 --max-fan-out 10
 
 echo "== Static: application module size guard =="
 uv run python scripts/quality/check_application_module_size.py --max-lines 500

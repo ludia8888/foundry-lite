@@ -7,11 +7,11 @@ from foundry_lite.application.demo_assets import (
     ensure_supply_chain_demo_files,
     register_supply_chain_demo_transforms,
 )
-from foundry_lite.application.services.base import CoreServiceMixin
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 
 
-class DemoServiceMixin(CoreServiceMixin):
+class DemoService(CoreService):
     def run_supply_chain_demo(self, *, ctx: RequestContext | None = None) -> dict[str, Any]:
         ctx = ctx or demo_admin_context()
         self.seed_supply_chain_demo_files()

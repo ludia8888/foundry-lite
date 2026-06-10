@@ -10,11 +10,11 @@ from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetSchemaRecord,
 )
 from foundry_lite.application.primitives import StagedFileStats, _new_id, _now
-from foundry_lite.application.services.base import CoreServiceMixin
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 
 
-class DatasetQualityMixin(CoreServiceMixin):
+class DatasetQualityService(CoreService):
     def _inspect_parquet(self, parquet_path: Path, primary_key: list[str]) -> StagedFileStats:
         return self.compute_adapter.inspect_parquet(parquet_path, primary_key)
 

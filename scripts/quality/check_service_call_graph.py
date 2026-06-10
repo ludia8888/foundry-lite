@@ -11,13 +11,14 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE_ROOT = ROOT / "libs" / "foundry_lite" / "application" / "services"
-DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "mixin_call_graph.json"
+DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "service_call_graph.json"
+NON_LEAF_SERVICE_CLASSES = {"CoreService", "CoreServices", "DatasetServices", "ObjectServices"}
 
 
 @dataclass(frozen=True)
-class CrossMixinCall:
-    caller_mixin: str
-    callee_mixin: str
+class CrossServiceCall:
+    caller_service: str
+    callee_service: str
     method_name: str
     path: str
     line: int
@@ -31,28 +32,32 @@ def _service_files() -> list[Path]:
     return sorted(p for p in SERVICE_ROOT.rglob("*.py") if "__pycache__" not in p.parts)
 
 
-def _collect_mixin_methods(paths: list[Path]) -> dict[str, set[str]]:
-    """Map mixin class name -> set of method names defined directly in that class."""
-    mixin_methods: dict[str, set[str]] = {}
+def _is_leaf_service_class(node: ast.ClassDef) -> bool:
+    return node.name.endswith("Service") and node.name not in NON_LEAF_SERVICE_CLASSES
+
+
+def _collect_service_methods(paths: list[Path]) -> dict[str, set[str]]:
+    """Map service class name -> set of method names defined directly in that class."""
+    service_methods: dict[str, set[str]] = {}
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ClassDef):
+            if not isinstance(node, ast.ClassDef) or not _is_leaf_service_class(node):
                 continue
             methods: set[str] = set()
             for item in node.body:
                 if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
                     methods.add(item.name)
-            mixin_methods[node.name] = methods
-    return mixin_methods
+            service_methods[node.name] = methods
+    return service_methods
 
 
-def _resolve_callee_mixin(attr: str, caller_mixin: str, mixin_methods: dict[str, set[str]]) -> str | None:
-    for owner_mixin, methods in mixin_methods.items():
-        if owner_mixin == caller_mixin:
+def _resolve_callee_service(attr: str, caller_service: str, service_methods: dict[str, set[str]]) -> str | None:
+    for owner_service, methods in service_methods.items():
+        if owner_service == caller_service:
             continue
         if attr in methods:
-            return owner_mixin
+            return owner_service
     return None
 
 
@@ -60,10 +65,10 @@ def _calls_in_class(
     node: ast.ClassDef,
     *,
     path: Path,
-    mixin_methods: dict[str, set[str]],
-) -> list[CrossMixinCall]:
-    local = mixin_methods.get(node.name, set())
-    calls: list[CrossMixinCall] = []
+    service_methods: dict[str, set[str]],
+) -> list[CrossServiceCall]:
+    local = service_methods.get(node.name, set())
+    calls: list[CrossServiceCall] = []
     for child in ast.walk(node):
         if not isinstance(child, ast.Attribute):
             continue
@@ -72,13 +77,13 @@ def _calls_in_class(
         attr = child.attr
         if attr in local:
             continue
-        owner = _resolve_callee_mixin(attr, node.name, mixin_methods)
+        owner = _resolve_callee_service(attr, node.name, service_methods)
         if owner is None:
             continue
         calls.append(
-            CrossMixinCall(
-                caller_mixin=node.name,
-                callee_mixin=owner,
+            CrossServiceCall(
+                caller_service=node.name,
+                callee_service=owner,
                 method_name=attr,
                 path=str(path.relative_to(ROOT)),
                 line=child.lineno,
@@ -87,25 +92,24 @@ def _calls_in_class(
     return calls
 
 
-def _collect_cross_mixin_calls(
+def _collect_cross_service_calls(
     paths: list[Path],
-    mixin_methods: dict[str, set[str]],
-) -> list[CrossMixinCall]:
-    """For each self.X() access inside a mixin, if X is defined in another mixin,
-    record a cross-mixin call edge."""
-    calls: list[CrossMixinCall] = []
+    service_methods: dict[str, set[str]],
+) -> list[CrossServiceCall]:
+    """Record self.X() calls that target another constructor-injected service."""
+    calls: list[CrossServiceCall] = []
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef):
-                calls.extend(_calls_in_class(node, path=path, mixin_methods=mixin_methods))
+            if isinstance(node, ast.ClassDef) and _is_leaf_service_class(node):
+                calls.extend(_calls_in_class(node, path=path, service_methods=service_methods))
     return calls
 
 
-def _adjacency(calls: list[CrossMixinCall]) -> dict[str, set[str]]:
+def _adjacency(calls: list[CrossServiceCall]) -> dict[str, set[str]]:
     graph: dict[str, set[str]] = defaultdict(set)
     for call in calls:
-        graph[call.caller_mixin].add(call.callee_mixin)
+        graph[call.caller_service].add(call.callee_service)
     return graph
 
 
@@ -182,12 +186,12 @@ def _topological_levels(graph: dict[str, set[str]]) -> dict[str, int]:
     return levels
 
 
-def _fan_out_per_mixin(graph: dict[str, set[str]]) -> dict[str, int]:
+def _fan_out_per_service(graph: dict[str, set[str]]) -> dict[str, int]:
     return {node: len(graph.get(node, set())) for node in set(graph) | {c for cs in graph.values() for c in cs}}
 
 
 def _build_report(
-    calls: list[CrossMixinCall],
+    calls: list[CrossServiceCall],
     graph: dict[str, set[str]],
     cycles: list[list[str]],
     levels: dict[str, int],
@@ -195,22 +199,22 @@ def _build_report(
 ) -> dict[str, Any]:
     return {
         "summary": {
-            "mixin_count": len({c.caller_mixin for c in calls} | {c.callee_mixin for c in calls}),
-            "cross_mixin_call_count": len(calls),
+            "service_count": len({c.caller_service for c in calls} | {c.callee_service for c in calls}),
+            "cross_service_call_count": len(calls),
             "cycle_count": len(cycles),
             "max_depth": max(levels.values()) if levels else 0,
             "max_fan_out": max(fan_out.values()) if fan_out else 0,
         },
         "cycles": cycles,
-        "levels": [{"mixin": m, "level": levels[m]} for m in sorted(levels, key=lambda x: (levels[x], x))],
+        "levels": [{"service": m, "level": levels[m]} for m in sorted(levels, key=lambda x: (levels[x], x))],
         "fan_out": [
-            {"mixin": m, "fan_out": fan_out[m], "callees": sorted(graph.get(m, set()))}
+            {"service": m, "fan_out": fan_out[m], "callees": sorted(graph.get(m, set()))}
             for m in sorted(fan_out, key=lambda x: (-fan_out[x], x))
         ],
         "edges": [
             {
-                "from": call.caller_mixin,
-                "to": call.callee_mixin,
+                "from": call.caller_service,
+                "to": call.callee_service,
                 "method": call.method_name,
                 "path": call.path,
                 "line": call.line,
@@ -221,7 +225,7 @@ def _build_report(
 
 
 def _cycle_failures(cycles: list[list[str]]) -> list[str]:
-    return [f"Mixin call cycle: {' -> '.join(cycle)} -> {cycle[0]}" for cycle in cycles]
+    return [f"Service call cycle: {' -> '.join(cycle)} -> {cycle[0]}" for cycle in cycles]
 
 
 def _depth_failure(levels: dict[str, int], max_depth: int) -> str | None:
@@ -231,16 +235,16 @@ def _depth_failure(levels: dict[str, int], max_depth: int) -> str | None:
     if actual <= max_depth:
         return None
     deep = sorted(m for m, lvl in levels.items() if lvl == actual)
-    return f"Mixin call depth {actual} exceeds --max-depth {max_depth}: {deep}"
+    return f"Service call depth {actual} exceeds --max-depth {max_depth}: {deep}"
 
 
 def _fan_out_failures(fan_out: dict[str, int], max_fan_out: int) -> list[str]:
     failures: list[str] = []
-    for mixin_name, count in fan_out.items():
+    for service_name, count in fan_out.items():
         if count > max_fan_out:
             failures.append(
-                f"Mixin {mixin_name} calls {count} other mixins; "
-                f"--max-fan-out {max_fan_out}. Extract a collaborator or split the mixin."
+                f"Service {service_name} calls {count} other services; "
+                f"--max-fan-out {max_fan_out}. Extract a collaborator or split the service."
             )
     return failures
 
@@ -252,23 +256,23 @@ def main(argv: list[str] | None = None) -> int:
         "--max-depth",
         type=int,
         default=7,
-        help="Maximum allowed cross-mixin call depth (root-to-leaf chain length).",
+        help="Maximum allowed cross-service call depth (root-to-leaf chain length).",
     )
     parser.add_argument(
         "--max-fan-out",
         type=int,
         default=10,
-        help="Maximum number of distinct other mixins a single mixin may call.",
+        help="Maximum number of distinct other services a single service may call.",
     )
     args = parser.parse_args(argv)
 
     paths = _service_files()
-    mixin_methods = _collect_mixin_methods(paths)
-    calls = _collect_cross_mixin_calls(paths, mixin_methods)
+    service_methods = _collect_service_methods(paths)
+    calls = _collect_cross_service_calls(paths, service_methods)
     graph = _adjacency(calls)
     cycles = _find_cycles(graph)
     levels: dict[str, int] = {} if cycles else _topological_levels(graph)
-    fan_out = _fan_out_per_mixin(graph)
+    fan_out = _fan_out_per_service(graph)
 
     report = _build_report(calls, graph, cycles, levels, fan_out)
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -282,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
     failures.extend(_fan_out_failures(fan_out, args.max_fan_out))
 
     if failures:
-        print("Mixin call graph guard failed:")
+        print("Service call graph guard failed:")
         for message in failures:
             print(f"- {message}")
         print(f"Report: {args.output.relative_to(ROOT)}")
@@ -290,9 +294,9 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = report["summary"]
     print(
-        "Mixin call graph guard OK: "
-        f"{summary['mixin_count']} mixins, "
-        f"{summary['cross_mixin_call_count']} cross-mixin calls, "
+        "Service call graph guard OK: "
+        f"{summary['service_count']} services, "
+        f"{summary['cross_service_call_count']} cross-service calls, "
         f"cycles={summary['cycle_count']}, "
         f"max_depth={summary['max_depth']}/{args.max_depth}, "
         f"max_fan_out={summary['max_fan_out']}/{args.max_fan_out}"

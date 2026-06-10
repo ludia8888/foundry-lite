@@ -19,7 +19,7 @@
 - Migrations: schema bootstraps through SQLAlchemy `metadata.create_all`; Alembic migrations are not implemented yet.
 - Application structure: `FoundryLiteCore` is now a Facade. Dataset, Transform, Ontology, Object, Action, Materialization, runtime event, and demo orchestration logic live in focused service modules. CI blocks application modules above 500 lines.
 - Scale foundation status: Sprint 02A implementation has started. `DatasetStorageAdapter` is now a real port with local and fake-storage adapters, shared contract tests, a fake-storage swap rehearsal for CSV commit/inspect/preview, and API/CLI composition-root selection. `MetadataRepository` now owns schema bootstrap/reset/default tenant-user DB writes, `DatasetRepository` owns dataset registry create/find DB reads/writes, `DatasetTransactionRepository` owns dataset transaction/version/file DB state changes plus best-effort run failure updates, `DatasetVersionRepository` owns committed version/schema DB reads, `RuntimeRepository` owns audit/outbox/lineage/list-runs DB boundaries, `ComputeAdapter` owns CSV/Parquet/SQL transform/health-check execution behind DuckDB local and fake compute adapters, `ObjectReadRepository` owns object record/link read DB boundaries, `ObjectIndexRepository` owns object indexing run/object record/link write DB boundaries, `ObjectSetRepository` owns object set row/membership metadata DB boundaries, `ActionRepository` owns action run/writeback/object edit/object target update DB boundaries, and `OntologyRepository` owns ontology version/object/property/link/action type metadata DB boundaries. The current code is still not fully port/adapter extracted.
-- Infra boundary gates: CI now blocks domain concrete infra imports, application concrete infra imports above the current baseline `0`, scale SDK imports in domain/application, service mixin method-name conflicts, hidden service-mixin dependency access, and cross-mixin call graph cycles/depth/fan-out regressions.
+- Infra boundary gates: CI now blocks domain concrete infra imports, application concrete infra imports above the current baseline `0`, scale SDK imports in domain/application, service method-name conflicts, hidden service dependency access, and cross-service call graph cycles/depth/fan-out regressions.
 - Transaction boundary: `TransactionContext` is now an explicit opaque Protocol in `application/ports`. All repository ports take `transaction: TransactionContext` instead of `transaction: Any`, so future scale adapters (PostgreSQL test containers, in-memory fakes, transactional Kafka outbox writers) can supply their own handle types without changing repository signatures.
 - Concrete infra imports in `application/`: now `0`. Every service module talks to repository ports only. The remaining concrete SQLAlchemy access lives behind `infrastructure/repositories/*`.
 
@@ -41,27 +41,17 @@ These are known design debts that are currently gated (so they cannot regress) b
 should be paid down on a planned timeline. They are not bugs; they are deliberate
 intermediate states.
 
-- **Mixin → constructor injection (Application Service canonicalization).**
-  Today `FoundryLiteCore` composes 8 service capabilities via Python multiple
-  inheritance (`ServiceMixin` classes) sharing a single `CoreDependencies` bag.
-  This is a Python idiom, not a name in the GoF / PEAA / DDD canon. Our
-  engineering guideline (`foundry_lite_python_engineering_guidelines_ko.md`
-  §197–256) promises Application Service as a standard pattern, and 8 of the 9
-  promised patterns (Facade, Repository, Unit of Work, Adapter, Strategy,
-  Specification, Template Method, Outbox, DTO) are implemented canonically.
-  Only Application Service is implemented as mixins. Risks (call-graph cycles,
-  fan-out explosion, depth blowup, method-name conflicts, hidden self.X
-  dependencies) are currently held in check by 4 static gates
-  (`check_mixin_method_conflicts`, `check_service_mixin_dependencies`,
-  `check_mixin_call_graph`, application-size cap). The longest mixin call chain
-  is already at the depth ceiling (7/7) with zero margin. Target state: each
-  service becomes a class with explicit constructor injection
-  (`class ActionService: def __init__(self, action_repository, ...)`), and
-  `FoundryLiteCore` wires them as attributes instead of inheriting from them.
-  This is a mechanical 1-week refactor with no public API change. Recommended
-  window: after Sprint 9.4 (Postgres testcontainer) lands and before the next
-  4 Sprint 02A boundaries (Workflow / Stream / Search / Connector / Auth) are
-  extracted, so the new ports land in canonical-shape services from day one.
+- **Application Service canonicalization.**
+  `FoundryLiteCore` no longer composes service capabilities through Python
+  multiple inheritance. It is a thin Facade with explicit public forwarders,
+  while `CoreServices` constructs `ActionService`, Dataset service group,
+  Object service group, Transform, Ontology, Materialization, Runtime, and Demo
+  services with the same `CoreDependencies` bag. Cross-service helper access is
+  routed through a collaborator registry and held in check by static gates:
+  `check_service_method_conflicts.py`, `check_service_dependencies.py`,
+  `check_service_call_graph.py`, and the application-size cap. This keeps the
+  public API stable while removing facade-level MRO risk before Workflow /
+  Stream / Search / Connector / Auth boundaries are extracted.
 
 ## Quality Signal Boundaries
 

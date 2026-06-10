@@ -3,14 +3,14 @@ from __future__ import annotations
 from typing import Any
 
 from foundry_lite.application.query_filters import matches_filter
-from foundry_lite.application.services.base import CoreServiceMixin
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     NotFound,
 )
 
 
-class ObjectQueryMixin(CoreServiceMixin):
+class ObjectQueryService(CoreService):
     def get_object(
         self,
         object_type_api_name: str,

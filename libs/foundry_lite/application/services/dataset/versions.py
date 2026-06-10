@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any, Literal, overload
 
-from foundry_lite.application.services.base import CoreServiceMixin
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound
 
 
-class DatasetVersionMixin(CoreServiceMixin):
+class DatasetVersionService(CoreService):
     def _next_dataset_version_number(self, conn: Any, dataset_id: str) -> int:
         return self.dataset_version_repository.next_version_number(transaction=conn, dataset_id=dataset_id)
 

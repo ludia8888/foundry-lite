@@ -1,1 +1,1 @@
-"""Focused service mixins used by the FoundryLiteCore facade."""
+"""Focused constructor-injected services used by the FoundryLiteCore facade."""

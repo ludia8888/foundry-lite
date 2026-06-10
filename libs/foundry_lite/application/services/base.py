@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
+from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports import (
     ComputeAdapter,
     DatasetRepository,
@@ -21,23 +24,19 @@ from foundry_lite.application.ports.ontology_repository import OntologyRepositor
 from foundry_lite.application.ports.transform_repository import TransformRepository
 from foundry_lite.security.policy import PolicyService
 
+CollaboratorMap = Mapping[str, Callable[..., Any]]
 
-class CoreServiceMixin:
-    """Dependency contract a service mixin can rely on from its FoundryLiteCore facade host.
 
-    The attributes declared here mirror :class:`CoreDependencies` (see
-    ``application/dependencies.py``). The mixin itself does not store the
-    handles -- ``FoundryLiteCore.__init__`` wires them after the composition
-    root builds a :class:`CoreDependencies` instance.
+class CoreService:
+    """Base class for constructor-injected application services.
 
-    A service mixin may freely access ``self.<attr>`` for any name declared
-    here, plus any method defined on another service mixin in the facade's
-    MRO. ``scripts/quality/check_service_mixin_dependencies.py`` enforces
-    that no service mixin invents an attribute outside this contract.
+    The attributes declared here mirror :class:`CoreDependencies`. Each service
+    receives the dependency bag at construction time and gets cross-service
+    helper methods through an explicit collaborator map owned by
+    ``CoreServices``.
 
-    The intent is to keep the mixin tree honest: dependency growth happens
-    in :class:`CoreDependencies` (the single composition-root container)
-    and is mirrored here, never invented inside individual service mixins.
+    This keeps ``FoundryLiteCore`` as a thin facade rather than a multiple
+    inheritance host, while preserving the current public API surface.
     """
 
     root: Path
@@ -59,5 +58,17 @@ class CoreServiceMixin:
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository
 
+    def __init__(self, dependencies: CoreDependencies) -> None:
+        self._dependencies = dependencies
+        self._collaborators: CollaboratorMap = {}
+        for field in fields(CoreDependencies):
+            setattr(self, field.name, getattr(dependencies, field.name))
+
+    def bind_collaborators(self, collaborators: CollaboratorMap) -> None:
+        self._collaborators = collaborators
+
     def __getattr__(self, name: str) -> Any:
+        collaborators = self.__dict__.get("_collaborators", {})
+        if name in collaborators:
+            return collaborators[name]
         raise AttributeError(name)

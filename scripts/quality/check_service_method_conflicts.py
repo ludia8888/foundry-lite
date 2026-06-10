@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE_ROOT = ROOT / "libs" / "foundry_lite" / "application" / "services"
+NON_LEAF_SERVICE_CLASSES = {"CoreService", "CoreServices", "DatasetServices", "ObjectServices"}
 
 
 @dataclass(frozen=True)
@@ -38,12 +39,16 @@ def _has_decorator(node: ast.FunctionDef | ast.AsyncFunctionDef, decorator_name:
     return False
 
 
+def _is_leaf_service_class(node: ast.ClassDef) -> bool:
+    return node.name.endswith("Service") and node.name not in NON_LEAF_SERVICE_CLASSES
+
+
 def collect_methods() -> dict[str, list[MethodDefinition]]:
     by_name: dict[str, list[MethodDefinition]] = defaultdict(list)
     for path in sorted(SERVICE_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name.endswith("Mixin"):
+            if isinstance(node, ast.ClassDef) and _is_leaf_service_class(node):
                 for method_name, line in _method_names(node):
                     by_name[method_name].append(
                         MethodDefinition(
@@ -59,14 +64,14 @@ def main() -> int:
     by_name = collect_methods()
     conflicts = {name: definitions for name, definitions in by_name.items() if len(definitions) > 1}
     if conflicts:
-        print("Mixin method name conflicts found. Rename or extract an explicit collaborator:")
+        print("Service method name conflicts found. Rename or extract an explicit collaborator:")
         for name, definitions in sorted(conflicts.items()):
             locations = ", ".join(
                 f"{definition.class_name} at {definition.path}:{definition.line}" for definition in definitions
             )
             print(f"- {name}: {locations}")
         return 1
-    print("Mixin method conflict guard OK")
+    print("Service method conflict guard OK")
     return 0
 
 

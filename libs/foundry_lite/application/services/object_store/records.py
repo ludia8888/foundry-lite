@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from foundry_lite.application.services.base import CoreServiceMixin
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 
 
-class ObjectRecordsMixin(CoreServiceMixin):
+class ObjectRecordsService(CoreService):
     def _object_record(
         self,
         conn: Any,

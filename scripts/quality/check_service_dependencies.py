@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE_ROOT = ROOT / "libs" / "foundry_lite" / "application" / "services"
 DEPENDENCIES_PATH = ROOT / "libs" / "foundry_lite" / "application" / "dependencies.py"
-DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "service_mixin_dependencies.json"
+DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "service_dependencies.json"
 
 ALLOWED_NON_DEPENDENCY_ATTRS = {
     # Built-in protocol/dunder access:
@@ -18,9 +18,9 @@ ALLOWED_NON_DEPENDENCY_ATTRS = {
     "__dict__",
     "__doc__",
     "__module__",
-    # Helper methods defined within service mixins themselves. Pattern
+    # Helper methods defined within services themselves. Pattern
     # `self._helper_method(...)` is allowed because pyright/mypy enforce
-    # method resolution against the mixin tree.
+    # method resolution against the service class.
 }
 
 
@@ -58,13 +58,12 @@ def _class_for_node(tree: ast.AST, target: ast.AST) -> str | None:
     return None
 
 
-def _collect_mixin_method_names(tree: ast.AST) -> set[str]:
-    """Collect method names defined within service mixin classes.
+def _collect_service_method_names(tree: ast.AST) -> set[str]:
+    """Collect method names defined within application service classes.
 
-    `self.method_name(...)` calls inside a service mixin should reference
-    methods defined in that same mixin or another service mixin in the
-    facade's MRO. We allow any name we see defined as a function inside any
-    class in the services tree.
+    ``self.method_name(...)`` calls inside a service should reference methods
+    defined in that same service or another constructor-injected service. We
+    allow any name we see defined as a function inside the services tree.
     """
     method_names: set[str] = set()
     for node in ast.walk(tree):
@@ -75,12 +74,32 @@ def _collect_mixin_method_names(tree: ast.AST) -> set[str]:
     return method_names
 
 
+def _collect_declared_class_attributes(tree: ast.AST) -> dict[str, set[str]]:
+    """Collect typed class attributes declared directly on each service class.
+
+    Constructor-injected service groups declare collaborators as dataclass
+    fields. Accessing those via ``self.<field>`` is an explicit dependency,
+    not hidden dynamic coupling.
+    """
+
+    declared: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        attributes: set[str] = set()
+        for item in node.body:
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                attributes.add(item.target.id)
+        declared[node.name] = attributes
+    return declared
+
+
 def _collect_all_method_names(paths: list[Path]) -> set[str]:
-    """Union of method names defined across the service mixin tree."""
+    """Union of method names defined across the service tree."""
     method_names: set[str] = set()
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        method_names |= _collect_mixin_method_names(tree)
+        method_names |= _collect_service_method_names(tree)
     return method_names
 
 
@@ -94,6 +113,7 @@ def _check_attribute_accesses(
     *,
     dependency_attrs: set[str],
     method_names: set[str],
+    declared_class_attrs: dict[str, set[str]],
 ) -> list[DependencyAccess]:
     findings: list[DependencyAccess] = []
     for node in ast.walk(tree):
@@ -102,14 +122,15 @@ def _check_attribute_accesses(
         if not _is_self_attribute(node):
             continue
         attr = node.attr
+        class_name = _class_for_node(tree, node) or ""
         if (
             attr in dependency_attrs
             or attr in method_names
+            or attr in declared_class_attrs.get(class_name, set())
             or attr in ALLOWED_NON_DEPENDENCY_ATTRS
             or attr.startswith("_")
         ):
             continue
-        class_name = _class_for_node(tree, node) or ""
         findings.append(
             DependencyAccess(
                 path=str(path.relative_to(ROOT)),
@@ -135,12 +156,14 @@ def main(argv: list[str] | None = None) -> int:
         if "__pycache__" in path.parts:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        declared_class_attrs = _collect_declared_class_attributes(tree)
         all_findings.extend(
             _check_attribute_accesses(
                 path,
                 tree,
                 dependency_attrs=dependency_attrs,
                 method_names=method_names,
+                declared_class_attrs=declared_class_attrs,
             )
         )
 
@@ -161,8 +184,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if all_findings:
         print(
-            "Service mixin uses self.<attr> that is neither a CoreDependencies field, "
-            "a service-mixin method, nor a private helper:"
+            "Service uses self.<attr> that is neither a CoreDependencies field, "
+            "a service method, declared constructor field, nor a private helper:"
         )
         for finding in all_findings:
             print(f"- {finding.path}:{finding.line} {finding.class_name}.{finding.attribute}")
@@ -170,9 +193,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(
-        "Service mixin dependency access OK: "
+        "Service dependency access OK: "
         f"all public self.<attr> in services match CoreDependencies "
-        f"({len(dependency_attrs)} fields) or another service mixin method "
+        f"({len(dependency_attrs)} fields) or another service method "
         f"({len(method_names)} methods)."
     )
     return 0

@@ -15,7 +15,7 @@ from foundry_lite.application.primitives import (
     _new_id,
     _now,
 )
-from foundry_lite.application.services.base import CoreServiceMixin
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -24,7 +24,7 @@ from foundry_lite.domain.errors import (
 )
 
 
-class DatasetTransactionMixin(CoreServiceMixin):
+class DatasetTransactionService(CoreService):
     def _open_dataset_transaction(
         self,
         conn: Any,

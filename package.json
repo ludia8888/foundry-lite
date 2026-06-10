@@ -11,7 +11,7 @@
     "diagnostics:trace": "uv run python scripts/diagnostics/run_runtime_diagnostics.py --console-traces",
     "quality:complexity": "uv run radon cc libs apps scripts -s -a && uv run xenon --max-absolute B --max-modules B --max-average A libs apps scripts",
     "quality:architecture": "uv run python scripts/quality/check_dependency_graph.py",
-    "quality:infra-boundaries": "uv run python scripts/quality/check_infra_import_boundary.py --max-application-imports 0 && uv run python scripts/quality/check_mixin_method_conflicts.py && uv run python scripts/quality/check_service_mixin_dependencies.py && uv run python scripts/quality/check_mixin_call_graph.py --max-depth 7 --max-fan-out 10",
+    "quality:infra-boundaries": "uv run python scripts/quality/check_infra_import_boundary.py --max-application-imports 0 && uv run python scripts/quality/check_service_method_conflicts.py && uv run python scripts/quality/check_service_dependencies.py && uv run python scripts/quality/check_service_call_graph.py --max-depth 7 --max-fan-out 10",
     "quality:module-size": "uv run python scripts/quality/check_application_module_size.py --max-lines 500",
     "quality:no-bypasses": "uv run python scripts/quality/check_no_test_bypasses.py",
     "quality:private-tests": "uv run python scripts/quality/check_private_test_references.py --max-count 17",
