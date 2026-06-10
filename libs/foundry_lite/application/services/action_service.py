@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import and_, insert, select, update
-from sqlalchemy.engine import Connection
-
+from foundry_lite.application.ports.action_repository import (
+    ActionRunRecord,
+    ActionWritebackRecord,
+    ObjectEditRecord,
+    ObjectTargetUpdate,
+)
 from foundry_lite.application.primitives import (
     MOCK_WRITEBACK_CONNECTOR,
     _new_id,
@@ -25,7 +28,6 @@ from foundry_lite.domain.errors import (
     PermissionDenied,
     ValidationFailed,
 )
-from foundry_lite.infrastructure import schema as db
 
 
 class ActionServiceMixin(CoreServiceMixin):
@@ -120,26 +122,18 @@ class ActionServiceMixin(CoreServiceMixin):
 
     def _existing_action_run(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         action_type: dict[str, Any],
         idempotency_key: str,
     ) -> dict[str, Any] | None:
-        row = (
-            conn.execute(
-                select(db.action_runs).where(
-                    and_(
-                        db.action_runs.c.tenant_id == ctx.tenant_id,
-                        db.action_runs.c.action_type_id == action_type["id"],
-                        db.action_runs.c.actor_user_id == ctx.actor_user_id,
-                        db.action_runs.c.idempotency_key == idempotency_key,
-                    )
-                )
-            )
-            .mappings()
-            .first()
+        return self.action_repository.action_run_by_idempotency(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            action_type_id=action_type["id"],
+            actor_user_id=ctx.actor_user_id,
+            idempotency_key=idempotency_key,
         )
-        return dict(row) if row else None
 
     def _action_replay_response(self, existing: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -154,7 +148,7 @@ class ActionServiceMixin(CoreServiceMixin):
 
     def _insert_action_run(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         *,
         action_type: dict[str, Any],
@@ -166,9 +160,10 @@ class ActionServiceMixin(CoreServiceMixin):
         params: dict[str, Any],
         idempotency_key: str,
     ) -> None:
-        conn.execute(
-            insert(db.action_runs).values(
-                id=action_run_id,
+        self.action_repository.insert_action_run(
+            transaction=conn,
+            record=ActionRunRecord(
+                action_run_id=action_run_id,
                 tenant_id=ctx.tenant_id,
                 action_type_id=action_type["id"],
                 action_type_api_name=action_api_name,
@@ -183,7 +178,7 @@ class ActionServiceMixin(CoreServiceMixin):
                 error=None,
                 created_at=_now(),
                 completed_at=None,
-            )
+            ),
         )
 
     def _action_request_error(
@@ -207,16 +202,18 @@ class ActionServiceMixin(CoreServiceMixin):
 
     def _fail_action_run(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         action_run_id: str,
         error: Exception,
     ) -> None:
         status = "conflict" if isinstance(error, ConflictDetected) else "failed"
-        conn.execute(
-            update(db.action_runs)
-            .where(db.action_runs.c.id == action_run_id)
-            .values(status=status, error=self._error_payload(error), completed_at=_now())
+        self.action_repository.update_action_run_terminal(
+            transaction=conn,
+            action_run_id=action_run_id,
+            status=status,
+            error=self._error_payload(error),
+            completed_at=_now(),
         )
         self._audit(
             conn,
@@ -232,7 +229,7 @@ class ActionServiceMixin(CoreServiceMixin):
 
     def _fail_before_commit_writeback(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         action_run_id: str,
         idempotency_key: str,
@@ -249,10 +246,12 @@ class ActionServiceMixin(CoreServiceMixin):
             idempotency_key=idempotency_key,
             response={"status_code": 500},
         )
-        conn.execute(
-            update(db.action_runs)
-            .where(db.action_runs.c.id == action_run_id)
-            .values(status="failed", error=self._error_payload(error), completed_at=_now())
+        self.action_repository.update_action_run_terminal(
+            transaction=conn,
+            action_run_id=action_run_id,
+            status="failed",
+            error=self._error_payload(error),
+            completed_at=_now(),
         )
         return error
 
@@ -272,7 +271,7 @@ class ActionServiceMixin(CoreServiceMixin):
 
     def _record_writeback(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         action_run_id: str,
         *,
@@ -280,9 +279,11 @@ class ActionServiceMixin(CoreServiceMixin):
         idempotency_key: str,
         response: dict[str, Any],
     ) -> None:
-        conn.execute(
-            insert(db.action_writebacks).values(
-                id=_new_id("writeback"),
+        now = _now()
+        self.action_repository.insert_action_writeback(
+            transaction=conn,
+            record=ActionWritebackRecord(
+                writeback_id=_new_id("writeback"),
                 tenant_id=ctx.tenant_id,
                 action_run_id=action_run_id,
                 mode="before_commit",
@@ -292,14 +293,14 @@ class ActionServiceMixin(CoreServiceMixin):
                 status=status,
                 idempotency_key=idempotency_key,
                 attempts=1,
-                created_at=_now(),
-                completed_at=_now(),
-            )
+                created_at=now,
+                completed_at=now,
+            ),
         )
 
     def _commit_action_mutations(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         *,
         action_type: dict[str, Any],
@@ -312,10 +313,12 @@ class ActionServiceMixin(CoreServiceMixin):
         previous_values = self._previous_action_values(record, patch)
         self._update_action_target(conn, record, patch)
         edit_id = self._insert_object_edit(conn, ctx, action_run_id, record, patch, previous_values, idempotency_key)
-        conn.execute(
-            update(db.action_runs)
-            .where(db.action_runs.c.id == action_run_id)
-            .values(status="succeeded", error=None, completed_at=_now())
+        self.action_repository.update_action_run_terminal(
+            transaction=conn,
+            action_run_id=action_run_id,
+            status="succeeded",
+            error=None,
+            completed_at=_now(),
         )
         self._publish_action_commit_events(conn, ctx, action_run_id, record, edit_id)
         self._audit(
@@ -356,34 +359,30 @@ class ActionServiceMixin(CoreServiceMixin):
 
     def _update_action_target(
         self,
-        conn: Connection,
+        conn: Any,
         record: dict[str, Any],
         patch: dict[str, Any],
     ) -> None:
         edit_properties = dict(record["edit_properties"])
         edit_properties.update(patch)
         current = self._merge_properties(conn, record["object_type_id"], record["base_properties"], edit_properties)
-        result = conn.execute(
-            update(db.object_records)
-            .where(
-                and_(
-                    db.object_records.c.id == record["id"],
-                    db.object_records.c.object_version == record["object_version"],
-                )
-            )
-            .values(
+        updated = self.action_repository.update_object_target(
+            transaction=conn,
+            record=ObjectTargetUpdate(
+                object_record_id=record["id"],
+                expected_object_version=record["object_version"],
                 edit_properties=edit_properties,
                 properties=current,
-                object_version=record["object_version"] + 1,
+                next_object_version=record["object_version"] + 1,
                 updated_at=_now(),
-            )
+            ),
         )
-        if result.rowcount != 1:
+        if not updated:
             raise ConflictDetected("object version conflict during commit")
 
     def _insert_object_edit(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         action_run_id: str,
         record: dict[str, Any],
@@ -392,9 +391,10 @@ class ActionServiceMixin(CoreServiceMixin):
         idempotency_key: str,
     ) -> str:
         edit_id = _new_id("edit")
-        conn.execute(
-            insert(db.object_edits).values(
-                id=edit_id,
+        self.action_repository.insert_object_edit(
+            transaction=conn,
+            record=ObjectEditRecord(
+                edit_id=edit_id,
                 tenant_id=ctx.tenant_id,
                 action_run_id=action_run_id,
                 object_type_id=record["object_type_id"],
@@ -406,13 +406,13 @@ class ActionServiceMixin(CoreServiceMixin):
                 actor_user_id=ctx.actor_user_id,
                 idempotency_key=idempotency_key,
                 created_at=_now(),
-            )
+            ),
         )
         return edit_id
 
     def _publish_action_commit_events(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         action_run_id: str,
         record: dict[str, Any],

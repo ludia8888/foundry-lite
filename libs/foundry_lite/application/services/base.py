@@ -14,6 +14,7 @@ from foundry_lite.application.ports import (
     ObjectSetRepository,
     RuntimeRepository,
 )
+from foundry_lite.application.ports.action_repository import ActionRepository
 from foundry_lite.security.policy import PolicyService
 
 
@@ -33,6 +34,7 @@ class CoreServiceMixin:
     dataset_storage: DatasetStorageAdapter
     engine: Any
     policy: PolicyService
+    action_repository: ActionRepository
 
     def __getattr__(self, name: str) -> Any:
         raise AttributeError(name)

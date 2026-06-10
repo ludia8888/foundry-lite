@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
     ObjectSetRepository,
     RuntimeRepository,
 )
+from foundry_lite.application.ports.action_repository import ActionRepository
 from foundry_lite.security.policy import PolicyService
 
 
@@ -27,6 +28,7 @@ class CoreDependencies:
     storage_root: Path
     engine: Any
     policy: PolicyService
+    action_repository: ActionRepository
     compute_adapter: ComputeAdapter
     metadata_repository: MetadataRepository
     dataset_repository: DatasetRepository

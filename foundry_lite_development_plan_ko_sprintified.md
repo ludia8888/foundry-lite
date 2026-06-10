@@ -520,11 +520,12 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
   - [x] `ObjectReadRepository`의 local/fake 구현은 `tests/contracts/test_object_read_repository_contract.py`의 같은 시나리오를 통과한다.
   - [x] `ObjectIndexRepository`의 local/fake 구현은 `tests/contracts/test_object_index_repository_contract.py`의 같은 시나리오를 통과한다.
   - [x] `ObjectSetRepository`의 local/fake 구현은 `tests/contracts/test_object_set_repository_contract.py`의 같은 시나리오를 통과한다.
+  - [x] `ActionRepository`의 local/fake 구현은 `tests/contracts/test_action_repository_contract.py`의 같은 시나리오를 통과한다.
   - [ ] 나머지 boundary의 fake/local contract test는 아직 남아 있다.
 - [ ] adapter error는 숨기지 않고 typed error, retryability, timeout, idempotency 정보를 application layer로 돌려준다.
 - [ ] adapter를 교체해도 audit/outbox/lineage/run state의 key 이름과 의미가 바뀌지 않는다.
 - [ ] CI는 domain/application이 금지된 concrete infra SDK를 직접 import하면 실패한다.
-  - [x] 현재 CI는 domain concrete infra import 0개, application concrete infra import baseline 11개 초과, scale SDK 직접 import, mixin method 충돌을 잡는다.
+  - [x] 현재 CI는 domain concrete infra import 0개, application concrete infra import baseline 9개 초과, scale SDK 직접 import, mixin method 충돌을 잡는다.
   - [x] application concrete infra import baseline을 37에서 32로 낮췄다.
   - [x] application concrete infra import baseline을 32에서 30으로 낮췄다.
   - [x] application concrete infra import baseline을 30에서 28로 낮췄다.
@@ -533,7 +534,8 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
   - [x] application concrete infra import baseline을 20에서 15로 낮췄다.
   - [x] application concrete infra import baseline을 15에서 13으로 낮췄다.
   - [x] application concrete infra import baseline을 13에서 11로 낮췄다.
-  - [ ] application concrete infra import baseline을 11에서 0으로 낮추는 repository/adapter 추출은 남아 있다.
+  - [x] application concrete infra import baseline을 11에서 9로 낮췄다.
+  - [ ] application concrete infra import baseline을 9에서 0으로 낮추는 repository/adapter 추출은 남아 있다.
 - [x] 최소 하나의 swap rehearsal test가 있다. 예: local filesystem adapter 대신 fake/S3-compatible adapter를 끼워도 dataset commit use case가 같은 결과를 만든다.
   - [x] `tests/integration/test_scale_foundation.py`가 fake-storage profile로 CSV commit, inspect, preview public API가 같은 shape로 동작함을 검증한다.
 - [ ] scale adapter를 아직 구현하지 않았더라도, 미래 구현이 따라야 할 DTO, state transition, trace key, failure contract는 문서와 테스트로 고정한다.

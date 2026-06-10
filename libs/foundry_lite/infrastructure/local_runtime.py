@@ -12,6 +12,7 @@ from foundry_lite.infrastructure.adapters import (
     LocalDatasetStorageAdapter,
 )
 from foundry_lite.infrastructure.repositories import (
+    SqlAlchemyActionRepository,
     SqlAlchemyDatasetRepository,
     SqlAlchemyDatasetTransactionRepository,
     SqlAlchemyDatasetVersionRepository,
@@ -46,6 +47,7 @@ def create_local_core_dependencies(
         storage_root=object_storage_root,
         engine=engine,
         policy=PolicyService(),
+        action_repository=SqlAlchemyActionRepository(engine),
         compute_adapter=compute_adapter,
         metadata_repository=SqlAlchemyMetadataRepository(engine),
         dataset_repository=SqlAlchemyDatasetRepository(engine),
