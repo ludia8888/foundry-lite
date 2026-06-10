@@ -10,6 +10,7 @@ from foundry_lite.application.ports import (
     DatasetRunKind,
     DatasetTransactionRecord,
     DatasetVersionRecord,
+    SyncRunRecord,
 )
 from foundry_lite.infrastructure import schema as db
 
@@ -134,6 +135,42 @@ class SqlAlchemyDatasetTransactionRepository:
                 .where(run_table.c.id == run_id)
                 .values(status="FAILED", error=error, completed_at=completed_at)
             )
+
+    def insert_sync_run(self, *, transaction: Any, record: SyncRunRecord) -> None:
+        transaction.execute(
+            insert(db.sync_runs).values(
+                id=record.sync_run_id,
+                tenant_id=record.tenant_id,
+                sync_name=record.sync_name,
+                source_type=record.source_type,
+                output_dataset_id=record.output_dataset_id,
+                transaction_id=record.transaction_id,
+                committed_version_id=record.committed_version_id,
+                status=record.status,
+                error=record.error,
+                created_at=record.created_at,
+                completed_at=record.completed_at,
+            )
+        )
+
+    def update_sync_run_terminal(
+        self,
+        *,
+        transaction: Any,
+        sync_run_id: str,
+        status: str,
+        committed_version_id: str | None,
+        completed_at: str,
+    ) -> None:
+        transaction.execute(
+            update(db.sync_runs)
+            .where(db.sync_runs.c.id == sync_run_id)
+            .values(
+                status=status,
+                committed_version_id=committed_version_id,
+                completed_at=completed_at,
+            )
+        )
 
 
 def _run_table(run_kind: DatasetRunKind) -> Any:

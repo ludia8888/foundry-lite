@@ -53,6 +53,21 @@ class DatasetFileRecord:
     partition_values: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class SyncRunRecord:
+    sync_run_id: str
+    tenant_id: str
+    sync_name: str
+    source_type: str
+    output_dataset_id: str
+    transaction_id: str
+    committed_version_id: str | None
+    status: str
+    error: dict[str, Any] | None
+    created_at: str
+    completed_at: str | None
+
+
 class DatasetTransactionRepository(Protocol):
     """DB boundary for dataset transaction state, committed versions, and files."""
 
@@ -98,4 +113,20 @@ class DatasetTransactionRepository(Protocol):
         completed_at: str,
     ) -> None:
         """Best-effort abort for an OPEN transaction and the associated run row."""
+        ...
+
+    def insert_sync_run(self, *, transaction: Any, record: SyncRunRecord) -> None:
+        """Persist a newly received sync run inside the caller transaction."""
+        ...
+
+    def update_sync_run_terminal(
+        self,
+        *,
+        transaction: Any,
+        sync_run_id: str,
+        status: str,
+        committed_version_id: str | None,
+        completed_at: str,
+    ) -> None:
+        """Mark a sync run terminal inside the caller transaction."""
         ...

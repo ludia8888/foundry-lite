@@ -10,6 +10,7 @@ from foundry_lite.application.ports import (
     DatasetTransactionRecord,
     DatasetTransactionRepository,
     DatasetVersionRecord,
+    SyncRunRecord,
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyDatasetTransactionRepository
@@ -30,6 +31,8 @@ class TransactionHarness(Protocol):
 
     def files(self) -> list[dict[str, Any]]: ...
 
+    def sync_run_row(self, *, sync_run_id: str) -> dict[str, Any] | None: ...
+
 
 @dataclass
 class FakeDatasetTransactionRepository:
@@ -37,6 +40,7 @@ class FakeDatasetTransactionRepository:
     versions_store: list[dict[str, Any]] = field(default_factory=list)
     files_store: list[dict[str, Any]] = field(default_factory=list)
     runs: dict[tuple[DatasetRunKind, str], dict[str, Any]] = field(default_factory=dict)
+    sync_runs_store: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def create_open_transaction(self, *, transaction: Any, record: DatasetTransactionRecord) -> None:
         del transaction
@@ -104,6 +108,38 @@ class FakeDatasetTransactionRepository:
             tx.update(status="ABORTED", metadata={"error": error})
         self.runs[(run_kind, run_id)].update(status="FAILED", error=error, completed_at=completed_at)
 
+    def insert_sync_run(self, *, transaction: Any, record: SyncRunRecord) -> None:
+        del transaction
+        self.sync_runs_store[record.sync_run_id] = {
+            "id": record.sync_run_id,
+            "tenant_id": record.tenant_id,
+            "sync_name": record.sync_name,
+            "source_type": record.source_type,
+            "output_dataset_id": record.output_dataset_id,
+            "transaction_id": record.transaction_id,
+            "committed_version_id": record.committed_version_id,
+            "status": record.status,
+            "error": record.error,
+            "created_at": record.created_at,
+            "completed_at": record.completed_at,
+        }
+
+    def update_sync_run_terminal(
+        self,
+        *,
+        transaction: Any,
+        sync_run_id: str,
+        status: str,
+        committed_version_id: str | None,
+        completed_at: str,
+    ) -> None:
+        del transaction
+        self.sync_runs_store[sync_run_id].update(
+            status=status,
+            committed_version_id=committed_version_id,
+            completed_at=completed_at,
+        )
+
 
 @dataclass
 class FakeTransactionHarness:
@@ -130,6 +166,10 @@ class FakeTransactionHarness:
 
     def files(self) -> list[dict[str, Any]]:
         return list(self.repository.files_store)
+
+    def sync_run_row(self, *, sync_run_id: str) -> dict[str, Any] | None:
+        row = self.repository.sync_runs_store.get(sync_run_id)
+        return dict(row) if row else None
 
 
 @dataclass
@@ -160,6 +200,11 @@ class SqlAlchemyTransactionHarness:
     def files(self) -> list[dict[str, Any]]:
         with self.engine.begin() as transaction:
             return [dict(row) for row in transaction.execute(select(db.dataset_files)).mappings().all()]
+
+    def sync_run_row(self, *, sync_run_id: str) -> dict[str, Any] | None:
+        with self.engine.begin() as transaction:
+            row = transaction.execute(select(db.sync_runs).where(db.sync_runs.c.id == sync_run_id)).mappings().first()
+            return dict(row) if row else None
 
 
 def _transaction_record(transaction_id: str, *, status: str = "OPEN") -> DatasetTransactionRecord:
@@ -343,3 +388,67 @@ def test_dataset_transaction_repository_contract_abort_open_transaction_and_fail
     assert failed_tx is not None
     assert failed_tx["status"] == "ABORTED"
     assert failed_tx["metadata"] == {"error": {"code": "VALIDATION_FAILED"}}
+
+
+def _sync_run_record(
+    sync_run_id: str = "sync_run_1",
+    *,
+    transaction_id: str = "dstx_sync",
+    status: str = "EXTRACTING",
+    committed_version_id: str | None = None,
+) -> SyncRunRecord:
+    return SyncRunRecord(
+        sync_run_id=sync_run_id,
+        tenant_id="tenant-demo",
+        sync_name="upload:raw.orders",
+        source_type="file.csv",
+        output_dataset_id="ds_orders",
+        transaction_id=transaction_id,
+        committed_version_id=committed_version_id,
+        status=status,
+        error=None,
+        created_at="2026-06-10T00:00:00Z",
+        completed_at=None,
+    )
+
+
+def test_dataset_transaction_repository_contract_sync_run_insert(harness: TransactionHarness) -> None:
+    repository = harness.repository
+
+    def insert(transaction: Any) -> None:
+        repository.insert_sync_run(transaction=transaction, record=_sync_run_record())
+
+    harness.call_in_transaction(insert)
+
+    row = harness.sync_run_row(sync_run_id="sync_run_1")
+    assert row is not None
+    assert row["status"] == "EXTRACTING"
+    assert row["sync_name"] == "upload:raw.orders"
+    assert row["source_type"] == "file.csv"
+    assert row["output_dataset_id"] == "ds_orders"
+    assert row["committed_version_id"] is None
+    assert row["completed_at"] is None
+
+
+def test_dataset_transaction_repository_contract_sync_run_terminal_committed(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def insert_then_commit(transaction: Any) -> None:
+        repository.insert_sync_run(transaction=transaction, record=_sync_run_record())
+        repository.update_sync_run_terminal(
+            transaction=transaction,
+            sync_run_id="sync_run_1",
+            status="COMMITTED",
+            committed_version_id="dsv_orders_1",
+            completed_at="2026-06-10T00:05:00Z",
+        )
+
+    harness.call_in_transaction(insert_then_commit)
+
+    row = harness.sync_run_row(sync_run_id="sync_run_1")
+    assert row is not None
+    assert row["status"] == "COMMITTED"
+    assert row["committed_version_id"] == "dsv_orders_1"
+    assert row["completed_at"] == "2026-06-10T00:05:00Z"

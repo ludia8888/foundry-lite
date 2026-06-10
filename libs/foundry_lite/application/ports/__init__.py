@@ -15,6 +15,7 @@ from foundry_lite.application.ports.dataset_transaction_repository import (
     DatasetTransactionRecord,
     DatasetTransactionRepository,
     DatasetVersionRecord,
+    SyncRunRecord,
 )
 from foundry_lite.application.ports.dataset_version_repository import DatasetVersionRepository
 from foundry_lite.application.ports.materialization_repository import (
@@ -81,6 +82,7 @@ __all__ = [
     "RuntimeRepository",
     "RuntimeRowsTable",
     "StoredDatasetCommit",
+    "SyncRunRecord",
     "TransformRecord",
     "TransformRepository",
     "TransformRunRecord",

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from foundry_lite.application.ports.dataset_transaction_repository import SyncRunRecord
 from foundry_lite.application.primitives import (
     CommitResult,
     _new_id,
@@ -17,8 +18,6 @@ from foundry_lite.domain.errors import (
     NotFound,
     ValidationFailed,
 )
-from foundry_lite.infrastructure import schema as db
-from sqlalchemy import insert, update
 
 
 class DatasetIngestMixin(CoreServiceMixin):
@@ -41,9 +40,10 @@ class DatasetIngestMixin(CoreServiceMixin):
         with self.engine.begin() as conn:
             tx_id = self._open_dataset_transaction(conn, ctx, dataset, "SNAPSHOT")
             run_id = _new_id("sync_run")
-            conn.execute(
-                insert(db.sync_runs).values(
-                    id=run_id,
+            self.dataset_transaction_repository.insert_sync_run(
+                transaction=conn,
+                record=SyncRunRecord(
+                    sync_run_id=run_id,
                     tenant_id=ctx.tenant_id,
                     sync_name=sync_name or f"upload:{dataset_ref}",
                     source_type="file.csv",
@@ -54,7 +54,7 @@ class DatasetIngestMixin(CoreServiceMixin):
                     error=None,
                     created_at=_now(),
                     completed_at=None,
-                )
+                ),
             )
 
         staged = self._staging_file(dataset, tx_id, "part-00000.parquet")
@@ -71,14 +71,12 @@ class DatasetIngestMixin(CoreServiceMixin):
                     audit_action="csv_upload_commit",
                     outbox_event_type="dataset.version.committed",
                 )
-                conn.execute(
-                    update(db.sync_runs)
-                    .where(db.sync_runs.c.id == run_id)
-                    .values(
-                        status="COMMITTED",
-                        committed_version_id=result.version_id,
-                        completed_at=_now(),
-                    )
+                self.dataset_transaction_repository.update_sync_run_terminal(
+                    transaction=conn,
+                    sync_run_id=run_id,
+                    status="COMMITTED",
+                    committed_version_id=result.version_id,
+                    completed_at=_now(),
                 )
                 return result
         except Exception as exc:
