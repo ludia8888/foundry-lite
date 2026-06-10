@@ -70,11 +70,21 @@ echo "== Static: Xenon complexity gate, max block B =="
 uv run xenon --max-absolute B --max-modules B --max-average A libs apps scripts
 
 echo "== Dynamic: pytest with branch coverage =="
+# pytest-randomly is auto-loaded and shuffles test order per run, exposing
+# hidden inter-test dependencies (state leaks across fixtures, shared module
+# globals, etc.). A consistent --randomly-seed is logged so failures can be
+# reproduced exactly.
 uv run pytest tests \
   --cov=libs/foundry_lite \
   --cov-branch \
   --cov-fail-under=95 \
   --junitxml=artifacts/test-results/pytest.xml
+
+echo "== Dynamic: pytest stability under random order + parallel =="
+# Re-run the suite without coverage instrumentation under pytest-xdist to
+# surface race conditions and shared-resource contention that the serial
+# coverage run cannot expose. A fresh random seed each run is the point.
+uv run pytest tests -n auto --no-header -q
 
 echo "== Dynamic: public callable smoke coverage gate =="
 uv run coverage json -o artifacts/coverage/coverage.json

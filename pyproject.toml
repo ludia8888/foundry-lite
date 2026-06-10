@@ -35,6 +35,8 @@ dev = [
   "xenon>=0.9",
   "semgrep>=1.165.0",
   "import-linter>=2.11",
+  "pytest-randomly>=4.1.0",
+  "pytest-xdist>=3.8.0",
 ]
 
 [project.scripts]

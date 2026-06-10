@@ -184,6 +184,19 @@ AGENTS.md 정독에 의존한다. 이 로드맵의 목표는 그 의존을 줄�
 
 ## 2. 신규 게이트 — Tier 분류
 
+### Tier P3 — pytest-randomly + pytest-xdist (✅ 완료 2026-06-10 P3)
+
+두 plugin이 *동적* root cause를 잡는다. 자체 self-test는
+`tests/unit/test_quality_random_and_parallel.py`.
+
+| Plugin | 잡는 root cause |
+|---|---|
+| `pytest-randomly` | **테스트 순서 의존성** — 한 테스트가 다른 테스트의 부작용에 암묵적으로 의존. seed가 매번 바뀌므로 PR에 들어오면 즉시 실패. |
+| `pytest-xdist` | **race / 공유 자원 충돌** — 같은 파일 경로/env var/tmp 디렉토리에 두 테스트가 동시 쓰기. `-n auto`로 매 게이트 실행마다 검증. |
+
+`ci_gate.sh`는 (a) coverage 측정용 serial pytest 1회 + (b) `-n auto` parallel
+pytest 1회를 둘 다 돈다. parallel run은 coverage 산출 없이 통과/실패만 본다.
+
 ### Tier P2 — import-linter로 흡수된 게이트 (✅ 완료 2026-06-10 P2)
 
 `.importlinter` 4 contracts가 import graph 자체를 강제한다. 도구는 module-level이
