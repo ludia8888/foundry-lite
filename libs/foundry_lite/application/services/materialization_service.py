@@ -21,6 +21,8 @@ from foundry_lite.domain.errors import (
 
 
 class MaterializationService(CoreService):
+    required_dependencies = ("engine", "materialization_repository")
+
     def materialize(
         self,
         api_name: str,
@@ -28,11 +30,11 @@ class MaterializationService(CoreService):
         ctx: RequestContext | None = None,
     ) -> CommitResult:
         ctx = ctx or RequestContext()
-        self._require_or_audit(ctx, "materialization:run", "materialization", api_name)
+        self.runtime_service._require_or_audit(ctx, "materialization:run", "materialization", api_name)
         materialization = self._ensure_materialization(api_name, ctx=ctx)
-        target_dataset = self.get_dataset(materialization["target_ref"]["dataset"], ctx=ctx)
+        target_dataset = self.dataset_registry_service.get_dataset(materialization["target_ref"]["dataset"], ctx=ctx)
         with self.engine.begin() as conn:
-            tx_id = self._open_dataset_transaction(conn, ctx, target_dataset, "SNAPSHOT")
+            tx_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, target_dataset, "SNAPSHOT")
             run_id = _new_id("mat_run")
             watermark = self._materialization_watermark(conn, materialization)
             self.materialization_repository.insert_materialization_run(
@@ -54,11 +56,11 @@ class MaterializationService(CoreService):
                 ),
             )
         rows, fieldnames = self._materialization_rows(materialization, ctx=ctx)
-        staged = self._staging_file(target_dataset, tx_id, "part-00000.parquet")
-        self._rows_to_parquet(rows, staged, fieldnames)
+        staged = self.dataset_transaction_service._staging_file(target_dataset, tx_id, "part-00000.parquet")
+        self.dataset_ingest_service._rows_to_parquet(rows, staged, fieldnames)
         try:
             with self.engine.begin() as conn:
-                result = self._finalize_open_transaction(
+                result = self.dataset_transaction_service._finalize_open_transaction(
                     conn,
                     ctx,
                     dataset=target_dataset,
@@ -77,7 +79,7 @@ class MaterializationService(CoreService):
                     error=None,
                     completed_at=_now(),
                 )
-                self._lineage(
+                self.runtime_service._lineage(
                     conn,
                     ctx,
                     "materialization",
@@ -89,7 +91,7 @@ class MaterializationService(CoreService):
                 )
                 return result
         except Exception as exc:
-            self._abort_transaction_after_error(ctx, tx_id, run_id, exc, "materialization")
+            self.dataset_transaction_service._abort_transaction_after_error(ctx, tx_id, run_id, exc, "materialization")
             raise
 
     def _ensure_materialization(
@@ -170,8 +172,8 @@ class MaterializationService(CoreService):
         conn: Any,
         ctx: RequestContext,
     ) -> tuple[list[dict[str, Any]], list[str]]:
-        action_rows = self._rows_for_tenant(conn, "action_runs", ctx)
-        edit_rows = self._rows_for_tenant(conn, "object_edits", ctx)
+        action_rows = self.runtime_service._rows_for_tenant(conn, "action_runs", ctx)
+        edit_rows = self.runtime_service._rows_for_tenant(conn, "object_edits", ctx)
         edit_by_action = {row["action_run_id"]: row for row in edit_rows}
         rows = [self._action_log_row(action, edit_by_action.get(action["id"], {})) for action in action_rows]
         return rows, [
@@ -206,7 +208,7 @@ class MaterializationService(CoreService):
     ) -> tuple[list[dict[str, Any]], list[str]]:
         records = [
             row
-            for row in self._rows_for_tenant(conn, "object_records", ctx)
+            for row in self.runtime_service._rows_for_tenant(conn, "object_records", ctx)
             if row["object_type_api_name"] == "Order" and not row["deleted"]
         ]
         rows = [self._order_current_row(record) for record in records]

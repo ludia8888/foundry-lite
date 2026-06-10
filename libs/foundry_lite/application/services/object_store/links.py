@@ -7,6 +7,8 @@ from foundry_lite.domain.context import RequestContext
 
 
 class ObjectLinksService(CoreService):
+    required_dependencies = ("engine", "policy", "object_read_repository")
+
     def get_links(
         self,
         object_type_api_name: str,
@@ -27,7 +29,9 @@ class ObjectLinksService(CoreService):
             )
             results = []
             for link in links:
-                target = self._object_record(conn, ctx, link["to_api_name"], link["to_object_id"])
+                target = self.object_records_service._object_record(
+                    conn, ctx, link["to_api_name"], link["to_object_id"]
+                )
                 if target is None:
                     continue
                 results.append(

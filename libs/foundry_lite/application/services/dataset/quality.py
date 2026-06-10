@@ -15,6 +15,8 @@ from foundry_lite.domain.context import RequestContext
 
 
 class DatasetQualityService(CoreService):
+    required_dependencies = ("compute_adapter", "dataset_quality_repository")
+
     def _inspect_parquet(self, parquet_path: Path, primary_key: list[str]) -> StagedFileStats:
         return self.compute_adapter.inspect_parquet(parquet_path, primary_key)
 
@@ -56,10 +58,14 @@ class DatasetQualityService(CoreService):
         dataset: dict[str, Any],
         next_schema: dict[str, Any],
     ) -> dict[str, Any] | None:
-        latest_version = self._latest_version_by_dataset_id(conn, dataset["id"], allow_missing=True)
+        latest_version = self.dataset_version_service._latest_version_by_dataset_id(
+            conn, dataset["id"], allow_missing=True
+        )
         if latest_version is None:
             return None
-        current_schema = self._schema_for_version(dataset["id"], latest_version["schema_version"])["schema_json"]
+        current_schema = self.dataset_version_service._schema_for_version(
+            dataset["id"], latest_version["schema_version"]
+        )["schema_json"]
         current_columns = self._schema_columns_by_name(current_schema)
         next_columns = self._schema_columns_by_name(next_schema)
         return (

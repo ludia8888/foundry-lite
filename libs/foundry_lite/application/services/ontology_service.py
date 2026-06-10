@@ -25,6 +25,8 @@ from foundry_lite.domain.errors import (
 
 
 class OntologyService(CoreService):
+    required_dependencies = ("engine", "ontology_repository")
+
     def apply_ontology(
         self,
         yaml_path: str | Path,
@@ -32,7 +34,7 @@ class OntologyService(CoreService):
         ctx: RequestContext | None = None,
     ) -> dict[str, Any]:
         ctx = ctx or RequestContext()
-        self._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
+        self.runtime_service._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
         definition = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8"))
         if not isinstance(definition, dict):
             raise ValidationFailed("ontology yaml must be a mapping")
@@ -61,7 +63,7 @@ class OntologyService(CoreService):
                 ontology_version_id=ontology_version_id,
                 activated_at=_now(),
             )
-            self._outbox(
+            self.runtime_service._outbox(
                 conn,
                 ctx,
                 "ontology.version.activated",
@@ -71,7 +73,7 @@ class OntologyService(CoreService):
                 idempotency_key=ontology_version_id,
                 correlation_id=ctx.request_id,
             )
-            self._audit(
+            self.runtime_service._audit(
                 conn,
                 ctx,
                 event_type="ontology.version.activated",
@@ -232,9 +234,11 @@ class OntologyService(CoreService):
         ctx: RequestContext,
         dataset_ref: str,
     ) -> dict[str, dict[str, Any]]:
-        dataset = self.get_dataset(dataset_ref, ctx=ctx)
-        latest_version = self._latest_version_by_dataset_id(conn, dataset["id"])
-        schema = self._schema_for_version(dataset["id"], latest_version["schema_version"])["schema_json"]
+        dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
+        latest_version = self.dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
+        schema = self.dataset_version_service._schema_for_version(dataset["id"], latest_version["schema_version"])[
+            "schema_json"
+        ]
         return {column["name"]: column for column in schema["columns"]}
 
     def _validate_primary_key_property(

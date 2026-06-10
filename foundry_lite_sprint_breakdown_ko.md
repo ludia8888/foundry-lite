@@ -309,6 +309,8 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] application concrete infra import baseline을 `7`에서 `0`으로 낮췄다.
 - [x] PostgreSQL repository contract testcontainer 축은 로컬 opt-out만 허용하고, `pnpm ci:gate`에서는 `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1`을 실패 처리한다.
 - [x] `FoundryLiteCore`의 facade-level service multiple inheritance를 제거하고 `CoreServices` constructor-injected service graph로 전환했다. Public API forwarder는 유지하고 private helper 호환은 service method delegation으로 보존했다.
+- [x] 각 application service가 직접 쓰는 `CoreDependencies` 필드만 `required_dependencies`로 선언하고 주입받게 했다. `check_service_dependencies.py`는 선언 누락과 불필요 선언을 모두 실패 처리한다.
+- [x] service 내부 cross-service 호출을 `self.runtime_service._audit(...)`처럼 명시적 collaborator attribute로 바꿨다. `check_service_call_graph.py`는 이 명시적 호출 그래프를 기준으로 cycle/depth/fan-out을 검증한다.
 - [ ] Event/Search/Workflow/Connector/Auth boundary에도 fake/local contract test를 붙인다.
 - [ ] adapter failure contract를 typed error, retryability, timeout, idempotency, operator message까지 구현한다.
 

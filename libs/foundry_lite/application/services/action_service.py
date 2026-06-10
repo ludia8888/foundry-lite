@@ -31,6 +31,8 @@ from foundry_lite.domain.errors import (
 
 
 class ActionService(CoreService):
+    required_dependencies = ("engine", "policy", "action_repository")
+
     def apply_action(
         self,
         action_api_name: str,
@@ -52,7 +54,7 @@ class ActionService(CoreService):
         response: dict[str, Any] | None = None
 
         with self.engine.begin() as conn:
-            action_type = self._active_action_type(conn, ctx, action_api_name)
+            action_type = self.ontology_service._active_action_type(conn, ctx, action_api_name)
             existing = self._existing_action_run(conn, ctx, action_type, idempotency_key)
             if existing is not None:
                 return self._action_replay_response(existing)
@@ -69,7 +71,7 @@ class ActionService(CoreService):
                 params=params,
                 idempotency_key=idempotency_key,
             )
-            record = self._object_record(conn, ctx, object_type, object_id)
+            record = self.object_records_service._object_record(conn, ctx, object_type, object_id)
             deferred_error = self._action_request_error(action_type, record, expected_object_version, params)
 
             if deferred_error is not None:
@@ -108,7 +110,7 @@ class ActionService(CoreService):
             self.policy.require(ctx, permission)
         except PermissionDenied:
             with self.engine.begin() as conn:
-                self._audit(
+                self.runtime_service._audit(
                     conn,
                     ctx,
                     event_type="permission.denied",
@@ -212,10 +214,10 @@ class ActionService(CoreService):
             transaction=conn,
             action_run_id=action_run_id,
             status=status,
-            error=self._error_payload(error),
+            error=self.runtime_service._error_payload(error),
             completed_at=_now(),
         )
-        self._audit(
+        self.runtime_service._audit(
             conn,
             ctx,
             event_type="action.run.failed",
@@ -223,7 +225,7 @@ class ActionService(CoreService):
             resource_id=action_run_id,
             action="apply",
             decision="deny" if isinstance(error, PermissionDenied) else "allow",
-            after_ref=self._error_payload(error),
+            after_ref=self.runtime_service._error_payload(error),
             correlation_id=action_run_id,
         )
 
@@ -250,7 +252,7 @@ class ActionService(CoreService):
             transaction=conn,
             action_run_id=action_run_id,
             status="failed",
-            error=self._error_payload(error),
+            error=self.runtime_service._error_payload(error),
             completed_at=_now(),
         )
         return error
@@ -321,7 +323,7 @@ class ActionService(CoreService):
             completed_at=_now(),
         )
         self._publish_action_commit_events(conn, ctx, action_run_id, record, edit_id)
-        self._audit(
+        self.runtime_service._audit(
             conn,
             ctx,
             event_type="action.run.committed",
@@ -365,7 +367,9 @@ class ActionService(CoreService):
     ) -> None:
         edit_properties = dict(record["edit_properties"])
         edit_properties.update(patch)
-        current = self._merge_properties(conn, record["object_type_id"], record["base_properties"], edit_properties)
+        current = self.object_indexing_service._merge_properties(
+            conn, record["object_type_id"], record["base_properties"], edit_properties
+        )
         updated = self.action_repository.update_object_target(
             transaction=conn,
             record=ObjectTargetUpdate(
@@ -427,7 +431,7 @@ class ActionService(CoreService):
         for event_type in ["action.run.committed", "object.edit.committed", "object.changed"]:
             aggregate_type = "action_run" if event_type == "action.run.committed" else "object"
             aggregate_id = action_run_id if event_type == "action.run.committed" else record["object_id"]
-            self._outbox(
+            self.runtime_service._outbox(
                 conn,
                 ctx,
                 event_type,

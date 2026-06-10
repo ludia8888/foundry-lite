@@ -12,36 +12,40 @@ from foundry_lite.domain.context import RequestContext, demo_admin_context
 
 
 class DemoService(CoreService):
+    required_dependencies = ()
+
     def run_supply_chain_demo(self, *, ctx: RequestContext | None = None) -> dict[str, Any]:
         ctx = ctx or demo_admin_context()
         self.seed_supply_chain_demo_files()
-        self.ensure_dataset("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
-        self.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
-        self.ensure_dataset("clean.orders", ctx=ctx, primary_key=["order_id"])
-        self.ensure_dataset("clean.customers", ctx=ctx, primary_key=["customer_id"])
-        self.ensure_dataset("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
-        self.ensure_dataset("ops.order_current", ctx=ctx, primary_key=["orderId"])
+        self.dataset_registry_service.ensure_dataset("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
+        self.dataset_registry_service.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+        self.dataset_registry_service.ensure_dataset("clean.orders", ctx=ctx, primary_key=["order_id"])
+        self.dataset_registry_service.ensure_dataset("clean.customers", ctx=ctx, primary_key=["customer_id"])
+        self.dataset_registry_service.ensure_dataset("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
+        self.dataset_registry_service.ensure_dataset("ops.order_current", ctx=ctx, primary_key=["orderId"])
         self._register_demo_transforms(ctx)
 
-        orders_raw = self.upload_csv(
+        orders_raw = self.dataset_ingest_service.upload_csv(
             "raw.erp_orders",
             SUPPLY_CHAIN_DEMO_ROOT / "data" / "orders.csv",
             ctx=ctx,
             sync_name="sync_orders_pg",
         )
-        customers_raw = self.upload_csv(
+        customers_raw = self.dataset_ingest_service.upload_csv(
             "raw.crm_customers",
             SUPPLY_CHAIN_DEMO_ROOT / "data" / "customers.csv",
             ctx=ctx,
             sync_name="upload_customers_csv",
         )
-        clean_orders = self.run_transform("clean_orders", ctx=ctx)
-        clean_customers = self.run_transform("clean_customers", ctx=ctx)
-        ontology = self.apply_ontology(SUPPLY_CHAIN_DEMO_ROOT / "ontology" / "order-customer.yaml", ctx=ctx)
-        order_index = self.index_rebuild("Order", ctx=ctx)
-        customer_index = self.index_rebuild("Customer", ctx=ctx)
-        order_before = self.get_object("Order", "O-1001", ctx=ctx)
-        action = self.apply_action(
+        clean_orders = self.transform_service.run_transform("clean_orders", ctx=ctx)
+        clean_customers = self.transform_service.run_transform("clean_customers", ctx=ctx)
+        ontology = self.ontology_service.apply_ontology(
+            SUPPLY_CHAIN_DEMO_ROOT / "ontology" / "order-customer.yaml", ctx=ctx
+        )
+        order_index = self.object_indexing_service.index_rebuild("Order", ctx=ctx)
+        customer_index = self.object_indexing_service.index_rebuild("Customer", ctx=ctx)
+        order_before = self.object_query_service.get_object("Order", "O-1001", ctx=ctx)
+        action = self.action_service.apply_action(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -50,11 +54,11 @@ class DemoService(CoreService):
             idempotency_key="approve-O-1001-demo",
             ctx=ctx,
         )
-        action_log = self.materialize("action_log", ctx=ctx)
-        order_current = self.materialize("order_current", ctx=ctx)
-        customer_risk = self.run_transform("customer_risk", ctx=ctx)
-        customer_reindex = self.index_rebuild("Customer", ctx=ctx)
-        customer = self.get_object("Customer", "C-100", ctx=ctx, explain=True)
+        action_log = self.materialization_service.materialize("action_log", ctx=ctx)
+        order_current = self.materialization_service.materialize("order_current", ctx=ctx)
+        customer_risk = self.transform_service.run_transform("customer_risk", ctx=ctx)
+        customer_reindex = self.object_indexing_service.index_rebuild("Customer", ctx=ctx)
+        customer = self.object_query_service.get_object("Customer", "C-100", ctx=ctx, explain=True)
         return {
             "rawOrdersVersion": orders_raw.version_id,
             "rawCustomersVersion": customers_raw.version_id,
@@ -78,4 +82,4 @@ class DemoService(CoreService):
         ensure_supply_chain_demo_files()
 
     def _register_demo_transforms(self, ctx: RequestContext) -> None:
-        register_supply_chain_demo_transforms(self.register_transform, ctx)
+        register_supply_chain_demo_transforms(self.transform_service.register_transform, ctx)

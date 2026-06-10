@@ -21,6 +21,8 @@ from foundry_lite.domain.errors import (
 
 
 class RuntimeService(CoreService):
+    required_dependencies = ("engine", "policy", "runtime_repository")
+
     def lineage_for_resource(
         self,
         resource_id: str,

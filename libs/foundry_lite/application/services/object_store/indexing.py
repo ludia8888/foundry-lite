@@ -22,6 +22,8 @@ from foundry_lite.domain.errors import (
 
 
 class ObjectIndexingService(CoreService):
+    required_dependencies = ("engine", "compute_adapter", "object_index_repository")
+
     def index_rebuild(
         self,
         object_type_api_name: str,
@@ -30,10 +32,10 @@ class ObjectIndexingService(CoreService):
     ) -> dict[str, Any]:
         ctx = ctx or RequestContext()
         with self.engine.begin() as conn:
-            object_type = self._active_object_type(conn, ctx, object_type_api_name)
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
             backing = object_type["backing"]
-            dataset = self.get_dataset(backing["dataset"], ctx=ctx)
-            version = self._latest_version_by_dataset_id(conn, dataset["id"])
+            dataset = self.dataset_registry_service.get_dataset(backing["dataset"], ctx=ctx)
+            version = self.dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
             run_id = _new_id("index_run")
             now = _now()
             self.object_index_repository.create_index_run(
@@ -58,7 +60,7 @@ class ObjectIndexingService(CoreService):
                 ),
             )
 
-        rows = self.compute_adapter.rows_from_parquet(self._version_file_path(version))
+        rows = self.compute_adapter.rows_from_parquet(self.dataset_transaction_service._version_file_path(version))
         objects_upserted = 0
         links_upserted = 0
         try:
@@ -82,7 +84,7 @@ class ObjectIndexingService(CoreService):
                     cursor={"last_row": len(rows)},
                     completed_at=_now(),
                 )
-                self._audit(
+                self.runtime_service._audit(
                     conn,
                     ctx,
                     event_type="object.index.rebuilt",
@@ -103,7 +105,7 @@ class ObjectIndexingService(CoreService):
                 self.object_index_repository.mark_index_run_failed(
                     transaction=conn,
                     run_id=run_id,
-                    error=self._error_payload(exc),
+                    error=self.runtime_service._error_payload(exc),
                     completed_at=_now(),
                 )
             raise
@@ -116,7 +118,7 @@ class ObjectIndexingService(CoreService):
         row: dict[str, Any],
         source_dataset_version_id: str,
     ) -> None:
-        properties = self._properties_for_object_type(conn, object_type["id"])
+        properties = self.ontology_service._properties_for_object_type(conn, object_type["id"])
         pk_prop = next(prop for prop in properties if prop["api_name"] == object_type["primary_key_property"])
         object_id = row.get(pk_prop["column_name"])
         if object_id in {None, ""}:
@@ -125,7 +127,7 @@ class ObjectIndexingService(CoreService):
         for prop in properties:
             if prop["source"] == "dataset":
                 base_patch[prop["api_name"]] = row.get(prop["column_name"])
-        existing = self._object_record(conn, ctx, object_type["api_name"], str(object_id))
+        existing = self.object_records_service._object_record(conn, ctx, object_type["api_name"], str(object_id))
         now = _now()
         if existing is None:
             current = self._merge_properties(conn, object_type["id"], base_patch, {})
@@ -173,7 +175,7 @@ class ObjectIndexingService(CoreService):
                     updated_at=now,
                 ),
             )
-        self._outbox(
+        self.runtime_service._outbox(
             conn,
             ctx,
             "object.changed",
@@ -194,7 +196,7 @@ class ObjectIndexingService(CoreService):
         base_patch: dict[str, Any],
         source_dataset_version_id: str,
     ) -> None:
-        for prop in self._properties_for_object_type(conn, object_type["id"]):
+        for prop in self.ontology_service._properties_for_object_type(conn, object_type["id"]):
             if prop["edit_policy"] != "conflict_requires_review":
                 continue
             api_name = prop["api_name"]
@@ -227,7 +229,7 @@ class ObjectIndexingService(CoreService):
         edits: dict[str, Any],
     ) -> dict[str, Any]:
         current: dict[str, Any] = {}
-        for prop in self._properties_for_object_type(conn, object_type_id):
+        for prop in self.ontology_service._properties_for_object_type(conn, object_type_id):
             name = prop["api_name"]
             policy = prop["edit_policy"]
             if policy == "edit_only":
@@ -249,7 +251,7 @@ class ObjectIndexingService(CoreService):
         rows: list[dict[str, Any]],
         source_dataset_version_id: str,
     ) -> int:
-        active = self._active_ontology_version(conn, ctx)
+        active = self.ontology_service._active_ontology_version(conn, ctx)
         links = self.object_index_repository.link_types_for_object_type(
             transaction=conn,
             tenant_id=ctx.tenant_id,

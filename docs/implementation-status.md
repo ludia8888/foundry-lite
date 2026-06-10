@@ -18,9 +18,9 @@
 - CLI: current implementation uses Python `argparse`; Typer is not installed in the current runtime.
 - Worker: `apps/worker` is a placeholder for a future Temporal worker.
 - Migrations: schema bootstraps through SQLAlchemy `metadata.create_all`; Alembic migrations are not implemented yet.
-- Application structure: `FoundryLiteCore` is now a Facade. Dataset, Transform, Ontology, Object, Action, Materialization, runtime event, and demo orchestration logic live in focused service modules. CI blocks application modules above 500 lines.
+- Application structure: `FoundryLiteCore` is now a Facade. Dataset, Transform, Ontology, Object, Action, Materialization, runtime event, and demo orchestration logic live in focused service modules. Each service declares the exact `CoreDependencies` fields it directly uses through `required_dependencies`, and cross-service calls use explicit collaborator attributes such as `runtime_service` or `dataset_registry_service`. CI blocks application modules above 500 lines.
 - Scale foundation status: Sprint 02A implementation has started. `DatasetStorageAdapter` is now a real port with local and fake-storage adapters, shared contract tests, a fake-storage swap rehearsal for CSV commit/inspect/preview, and API/CLI composition-root selection. `MetadataRepository` now owns schema bootstrap/reset/default tenant-user DB writes, `DatasetRepository` owns dataset registry create/find DB reads/writes, `DatasetTransactionRepository` owns dataset transaction/version/file DB state changes plus best-effort run failure updates, `DatasetVersionRepository` owns committed version/schema DB reads, `RuntimeRepository` owns audit/outbox/lineage/list-runs DB boundaries, `ComputeAdapter` owns CSV/Parquet/SQL transform/health-check execution behind DuckDB local and fake compute adapters, `ObjectReadRepository` owns object record/link read DB boundaries, `ObjectIndexRepository` owns object indexing run/object record/link write DB boundaries, `ObjectSetRepository` owns object set row/membership metadata DB boundaries, `ActionRepository` owns action run/writeback/object edit/object target update DB boundaries, and `OntologyRepository` owns ontology version/object/property/link/action type metadata DB boundaries. The current code is still not fully port/adapter extracted.
-- Infra boundary gates: CI now blocks domain concrete infra imports, application concrete infra imports above the current baseline `0`, scale SDK imports in domain/application, service method-name conflicts, hidden service dependency access, and cross-service call graph cycles/depth/fan-out regressions.
+- Infra boundary gates: CI now blocks domain concrete infra imports, application concrete infra imports above the current baseline `0`, scale SDK imports in domain/application, service method-name conflicts, undeclared/unused service dependencies, hidden service attribute access, and explicit collaborator call graph cycles/depth/fan-out regressions.
 - Transaction boundary: `TransactionContext` is now an explicit opaque Protocol in `application/ports`. All repository ports take `transaction: TransactionContext` instead of `transaction: Any`, so future scale adapters (PostgreSQL test containers, in-memory fakes, transactional Kafka outbox writers) can supply their own handle types without changing repository signatures.
 - Concrete infra imports in `application/`: now `0`. Every service module talks to repository ports only. The remaining concrete SQLAlchemy access lives behind `infrastructure/repositories/*`.
 
@@ -48,12 +48,22 @@ intermediate states.
   multiple inheritance. It is a thin Facade with explicit public forwarders,
   while `CoreServices` constructs `ActionService`, Dataset service group,
   Object service group, Transform, Ontology, Materialization, Runtime, and Demo
-  services with the same `CoreDependencies` bag. Cross-service helper access is
-  routed through a collaborator registry and held in check by static gates:
+  services with service-specific dependency injection. A service receives only
+  the `CoreDependencies` fields listed in its `required_dependencies`; for
+  example, `ActionService` receives `engine`, `policy`, and `action_repository`,
+  not storage or transform adapters. Cross-service helper access now uses
+  explicit collaborator attributes such as `runtime_service._audit(...)` rather
+  than `__getattr__` method lookup. These rules are held in check by static gates:
   `check_service_method_conflicts.py`, `check_service_dependencies.py`,
   `check_service_call_graph.py`, and the application-size cap. This keeps the
   public API stable while removing facade-level MRO risk before Workflow /
   Stream / Search / Connector / Auth boundaries are extracted.
+- **Remaining Facade compatibility debt.**
+  `FoundryLiteCore` still keeps a flat method registry for public/private helper
+  compatibility, and `FoundryLiteCore.__setattr__` still forwards monkeypatched
+  facade methods to the owning service for existing tests. This is no longer the
+  service-to-service wiring path, but it remains a compatibility bridge until
+  private-helper tests are replaced with public API tests.
 
 ## Quality Signal Boundaries
 

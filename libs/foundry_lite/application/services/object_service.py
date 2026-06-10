@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from foundry_lite.application.dependencies import CoreDependencies
-from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.base import CoreService, build_service
 from foundry_lite.application.services.object_store.indexing import ObjectIndexingService
 from foundry_lite.application.services.object_store.links import ObjectLinksService
 from foundry_lite.application.services.object_store.query import ObjectQueryService
@@ -24,11 +24,11 @@ class ObjectServices:
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> ObjectServices:
         return cls(
-            indexing=ObjectIndexingService(dependencies),
-            links=ObjectLinksService(dependencies),
-            query=ObjectQueryService(dependencies),
-            records=ObjectRecordsService(dependencies),
-            sets=ObjectSetsService(dependencies),
+            indexing=build_service(ObjectIndexingService, dependencies),
+            links=build_service(ObjectLinksService, dependencies),
+            query=build_service(ObjectQueryService, dependencies),
+            records=build_service(ObjectRecordsService, dependencies),
+            sets=build_service(ObjectSetsService, dependencies),
         )
 
     def items(self) -> tuple[CoreService, ...]:

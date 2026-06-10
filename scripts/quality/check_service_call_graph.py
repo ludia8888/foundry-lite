@@ -52,6 +52,45 @@ def _collect_service_methods(paths: list[Path]) -> dict[str, set[str]]:
     return service_methods
 
 
+def _service_collaborator_dict(node: ast.AST) -> ast.Dict | None:
+    value: ast.AST | None = None
+    if isinstance(node, ast.Assign) and any(
+        isinstance(target, ast.Name) and target.id == "SERVICE_COLLABORATORS" for target in node.targets
+    ):
+        value = node.value
+    if (
+        isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "SERVICE_COLLABORATORS"
+    ):
+        value = node.value
+    return value if isinstance(value, ast.Dict) else None
+
+
+def _string_dict_items(node: ast.Dict) -> dict[str, str]:
+    items: dict[str, str] = {}
+    for key, value in zip(node.keys, node.values, strict=True):
+        if (
+            isinstance(key, ast.Constant)
+            and isinstance(key.value, str)
+            and isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+        ):
+            items[key.value] = value.value
+    return items
+
+
+def _collect_collaborator_service_classes(paths: list[Path]) -> dict[str, str]:
+    collaborators: dict[str, str] = {}
+    for path in paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            collaborator_dict = _service_collaborator_dict(node)
+            if collaborator_dict is not None:
+                collaborators.update(_string_dict_items(collaborator_dict))
+    return collaborators
+
+
 def _resolve_callee_service(attr: str, caller_service: str, service_methods: dict[str, set[str]]) -> str | None:
     for owner_service, methods in service_methods.items():
         if owner_service == caller_service:
@@ -61,48 +100,124 @@ def _resolve_callee_service(attr: str, caller_service: str, service_methods: dic
     return None
 
 
+def _cross_service_call(
+    *,
+    caller_service: str,
+    callee_service: str,
+    method_name: str,
+    path: Path,
+    line: int,
+) -> CrossServiceCall:
+    return CrossServiceCall(
+        caller_service=caller_service,
+        callee_service=callee_service,
+        method_name=method_name,
+        path=str(path.relative_to(ROOT)),
+        line=line,
+    )
+
+
+def _explicit_collaborator_call(
+    call: ast.Call,
+    *,
+    caller_service: str,
+    path: Path,
+    collaborator_service_classes: dict[str, str],
+) -> CrossServiceCall | None:
+    if not isinstance(call.func, ast.Attribute):
+        return None
+    owner = call.func.value
+    if not isinstance(owner, ast.Attribute) or not _is_self_attribute(owner):
+        return None
+    callee_service = collaborator_service_classes.get(owner.attr)
+    if callee_service is None or callee_service == caller_service:
+        return None
+    return _cross_service_call(
+        caller_service=caller_service,
+        callee_service=callee_service,
+        method_name=call.func.attr,
+        path=path,
+        line=call.lineno,
+    )
+
+
+def _legacy_flat_method_call(
+    call: ast.Call,
+    *,
+    caller_service: str,
+    path: Path,
+    local_methods: set[str],
+    service_methods: dict[str, set[str]],
+) -> CrossServiceCall | None:
+    if not isinstance(call.func, ast.Attribute) or not _is_self_attribute(call.func):
+        return None
+    method_name = call.func.attr
+    if method_name in local_methods:
+        return None
+    owner_service = _resolve_callee_service(method_name, caller_service, service_methods)
+    if owner_service is None:
+        return None
+    return _cross_service_call(
+        caller_service=caller_service,
+        callee_service=owner_service,
+        method_name=method_name,
+        path=path,
+        line=call.lineno,
+    )
+
+
 def _calls_in_class(
     node: ast.ClassDef,
     *,
     path: Path,
     service_methods: dict[str, set[str]],
+    collaborator_service_classes: dict[str, str],
 ) -> list[CrossServiceCall]:
     local = service_methods.get(node.name, set())
     calls: list[CrossServiceCall] = []
     for child in ast.walk(node):
-        if not isinstance(child, ast.Attribute):
+        if not isinstance(child, ast.Call):
             continue
-        if not _is_self_attribute(child):
-            continue
-        attr = child.attr
-        if attr in local:
-            continue
-        owner = _resolve_callee_service(attr, node.name, service_methods)
-        if owner is None:
-            continue
-        calls.append(
-            CrossServiceCall(
-                caller_service=node.name,
-                callee_service=owner,
-                method_name=attr,
-                path=str(path.relative_to(ROOT)),
-                line=child.lineno,
-            )
+        explicit_call = _explicit_collaborator_call(
+            child,
+            caller_service=node.name,
+            path=path,
+            collaborator_service_classes=collaborator_service_classes,
         )
+        if explicit_call is not None:
+            calls.append(explicit_call)
+            continue
+        legacy_call = _legacy_flat_method_call(
+            child,
+            caller_service=node.name,
+            path=path,
+            local_methods=local,
+            service_methods=service_methods,
+        )
+        if legacy_call is not None:
+            calls.append(legacy_call)
     return calls
 
 
 def _collect_cross_service_calls(
     paths: list[Path],
     service_methods: dict[str, set[str]],
+    collaborator_service_classes: dict[str, str],
 ) -> list[CrossServiceCall]:
-    """Record self.X() calls that target another constructor-injected service."""
+    """Record explicit self.<collaborator>.<method>() service calls."""
     calls: list[CrossServiceCall] = []
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef) and _is_leaf_service_class(node):
-                calls.extend(_calls_in_class(node, path=path, service_methods=service_methods))
+                calls.extend(
+                    _calls_in_class(
+                        node,
+                        path=path,
+                        service_methods=service_methods,
+                        collaborator_service_classes=collaborator_service_classes,
+                    )
+                )
     return calls
 
 
@@ -268,7 +383,11 @@ def main(argv: list[str] | None = None) -> int:
 
     paths = _service_files()
     service_methods = _collect_service_methods(paths)
-    calls = _collect_cross_service_calls(paths, service_methods)
+    collaborator_service_classes = _collect_collaborator_service_classes(paths)
+    if not collaborator_service_classes:
+        print("Service call graph guard failed: SERVICE_COLLABORATORS registry is empty.")
+        return 1
+    calls = _collect_cross_service_calls(paths, service_methods, collaborator_service_classes)
     graph = _adjacency(calls)
     cycles = _find_cycles(graph)
     levels: dict[str, int] = {} if cycles else _topological_levels(graph)

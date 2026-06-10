@@ -6,7 +6,7 @@ from typing import Any
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.action_service import ActionService
-from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.base import CoreService, build_service
 from foundry_lite.application.services.dataset_service import DatasetServices
 from foundry_lite.application.services.demo_service import DemoService
 from foundry_lite.application.services.materialization_service import MaterializationService
@@ -33,8 +33,8 @@ class CoreServices:
     """Constructor-injected application service graph.
 
     ``FoundryLiteCore`` delegates to this graph. Each service is a concrete
-    object with the same ``CoreDependencies`` instance and an explicit
-    collaborator method registry, replacing the previous facade-level MRO.
+    object with only the dependencies it declares and explicit collaborator
+    service attributes, replacing the previous facade-level MRO.
     """
 
     action: ActionService
@@ -50,14 +50,14 @@ class CoreServices:
 
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> CoreServices:
-        action = ActionService(dependencies)
+        action = build_service(ActionService, dependencies)
         dataset = DatasetServices.create(dependencies)
-        demo = DemoService(dependencies)
-        materialization = MaterializationService(dependencies)
+        demo = build_service(DemoService, dependencies)
+        materialization = build_service(MaterializationService, dependencies)
         object_store = ObjectServices.create(dependencies)
-        ontology = OntologyService(dependencies)
-        runtime = RuntimeService(dependencies)
-        transform = TransformService(dependencies)
+        ontology = build_service(OntologyService, dependencies)
+        runtime = build_service(RuntimeService, dependencies)
+        transform = build_service(TransformService, dependencies)
         services = [
             action,
             *dataset.items(),
@@ -69,8 +69,11 @@ class CoreServices:
             transform,
         ]
         methods, method_owners = _method_registry(services)
+        collaborators = _collaborator_map(
+            action, dataset, demo, materialization, object_store, ontology, runtime, transform
+        )
         for service in services:
-            service.bind_collaborators(methods)
+            service.bind_collaborators(collaborators)
         return cls(
             action=action,
             dataset=dataset,
@@ -112,3 +115,33 @@ def _method_registry(
                 owners[name] = cls.__name__
                 owner_services[name] = service
     return registry, owner_services
+
+
+def _collaborator_map(
+    action: ActionService,
+    dataset: DatasetServices,
+    demo: DemoService,
+    materialization: MaterializationService,
+    object_store: ObjectServices,
+    ontology: OntologyService,
+    runtime: RuntimeService,
+    transform: TransformService,
+) -> dict[str, CoreService]:
+    return {
+        "action_service": action,
+        "dataset_ingest_service": dataset.ingest,
+        "dataset_quality_service": dataset.quality,
+        "dataset_registry_service": dataset.registry,
+        "dataset_transaction_service": dataset.transaction,
+        "dataset_version_service": dataset.version,
+        "demo_service": demo,
+        "materialization_service": materialization,
+        "object_indexing_service": object_store.indexing,
+        "object_links_service": object_store.links,
+        "object_query_service": object_store.query,
+        "object_records_service": object_store.records,
+        "object_sets_service": object_store.sets,
+        "ontology_service": ontology,
+        "runtime_service": runtime,
+        "transform_service": transform,
+    }

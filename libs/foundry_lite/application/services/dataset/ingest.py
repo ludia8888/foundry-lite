@@ -21,6 +21,8 @@ from foundry_lite.domain.errors import (
 
 
 class DatasetIngestService(CoreService):
+    required_dependencies = ("engine", "compute_adapter", "dataset_transaction_repository")
+
     def upload_csv(
         self,
         dataset_ref: str,
@@ -30,15 +32,15 @@ class DatasetIngestService(CoreService):
         sync_name: str | None = None,
     ) -> CommitResult:
         ctx = ctx or RequestContext()
-        self._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
-        dataset = self.get_dataset(dataset_ref, ctx=ctx)
+        self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
         source_path = Path(csv_path).resolve()
         if not source_path.exists():
             raise NotFound("csv file not found", details={"path": str(source_path)})
         require_csv_size_limit(source_path)
 
         with self.engine.begin() as conn:
-            tx_id = self._open_dataset_transaction(conn, ctx, dataset, "SNAPSHOT")
+            tx_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, dataset, "SNAPSHOT")
             run_id = _new_id("sync_run")
             self.dataset_transaction_repository.insert_sync_run(
                 transaction=conn,
@@ -57,11 +59,11 @@ class DatasetIngestService(CoreService):
                 ),
             )
 
-        staged = self._staging_file(dataset, tx_id, "part-00000.parquet")
+        staged = self.dataset_transaction_service._staging_file(dataset, tx_id, "part-00000.parquet")
         try:
             self._csv_to_parquet(source_path, staged)
             with self.engine.begin() as conn:
-                result = self._finalize_open_transaction(
+                result = self.dataset_transaction_service._finalize_open_transaction(
                     conn,
                     ctx,
                     dataset=dataset,
@@ -80,7 +82,7 @@ class DatasetIngestService(CoreService):
                 )
                 return result
         except Exception as exc:
-            self._abort_transaction_after_error(ctx, tx_id, run_id, exc, "sync")
+            self.dataset_transaction_service._abort_transaction_after_error(ctx, tx_id, run_id, exc, "sync")
             if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
                 raise
             raise ValidationFailed("csv upload failed", details={"error": str(exc)}) from exc

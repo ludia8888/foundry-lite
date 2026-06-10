@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import fields
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports import (
@@ -24,20 +23,41 @@ from foundry_lite.application.ports.ontology_repository import OntologyRepositor
 from foundry_lite.application.ports.transform_repository import TransformRepository
 from foundry_lite.security.policy import PolicyService
 
-CollaboratorMap = Mapping[str, Callable[..., Any]]
+CollaboratorMap = Mapping[str, Any]
+
+SERVICE_COLLABORATORS: Mapping[str, str] = {
+    "action_service": "ActionService",
+    "dataset_ingest_service": "DatasetIngestService",
+    "dataset_quality_service": "DatasetQualityService",
+    "dataset_registry_service": "DatasetRegistryService",
+    "dataset_transaction_service": "DatasetTransactionService",
+    "dataset_version_service": "DatasetVersionService",
+    "demo_service": "DemoService",
+    "materialization_service": "MaterializationService",
+    "object_indexing_service": "ObjectIndexingService",
+    "object_links_service": "ObjectLinksService",
+    "object_query_service": "ObjectQueryService",
+    "object_records_service": "ObjectRecordsService",
+    "object_sets_service": "ObjectSetsService",
+    "ontology_service": "OntologyService",
+    "runtime_service": "RuntimeService",
+    "transform_service": "TransformService",
+}
 
 
 class CoreService:
     """Base class for constructor-injected application services.
 
-    The attributes declared here mirror :class:`CoreDependencies`. Each service
-    receives the dependency bag at construction time and gets cross-service
-    helper methods through an explicit collaborator map owned by
-    ``CoreServices``.
+    Each concrete service declares only the infrastructure dependencies it
+    directly uses through ``required_dependencies``. ``CoreServices`` wires
+    cross-service collaborators as named service attributes such as
+    ``runtime_service`` or ``dataset_registry_service``.
 
     This keeps ``FoundryLiteCore`` as a thin facade rather than a multiple
-    inheritance host, while preserving the current public API surface.
+    inheritance host, while making service coupling visible in code.
     """
+
+    required_dependencies: ClassVar[tuple[str, ...]] = ()
 
     root: Path
     storage_root: Path
@@ -58,17 +78,51 @@ class CoreService:
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository
 
-    def __init__(self, dependencies: CoreDependencies) -> None:
-        self._dependencies = dependencies
-        self._collaborators: CollaboratorMap = {}
-        for field in fields(CoreDependencies):
-            setattr(self, field.name, getattr(dependencies, field.name))
+    action_service: Any
+    dataset_ingest_service: Any
+    dataset_quality_service: Any
+    dataset_registry_service: Any
+    dataset_transaction_service: Any
+    dataset_version_service: Any
+    demo_service: Any
+    materialization_service: Any
+    object_indexing_service: Any
+    object_links_service: Any
+    object_query_service: Any
+    object_records_service: Any
+    object_sets_service: Any
+    ontology_service: Any
+    runtime_service: Any
+    transform_service: Any
+
+    def __init__(self, **dependencies: Any) -> None:
+        expected = set(self.required_dependencies)
+        provided = set(dependencies)
+        missing = sorted(expected - provided)
+        unexpected = sorted(provided - expected)
+        if missing or unexpected:
+            raise TypeError(
+                f"{self.__class__.__name__} dependency mismatch: missing={missing}, unexpected={unexpected}"
+            )
+        for name, value in dependencies.items():
+            setattr(self, name, value)
 
     def bind_collaborators(self, collaborators: CollaboratorMap) -> None:
-        self._collaborators = collaborators
+        expected = set(SERVICE_COLLABORATORS)
+        provided = set(collaborators)
+        missing = sorted(expected - provided)
+        unexpected = sorted(provided - expected)
+        if missing or unexpected:
+            raise TypeError(
+                f"{self.__class__.__name__} collaborator mismatch: missing={missing}, unexpected={unexpected}"
+            )
+        for name, collaborator in collaborators.items():
+            setattr(self, name, collaborator)
 
-    def __getattr__(self, name: str) -> Any:
-        collaborators = self.__dict__.get("_collaborators", {})
-        if name in collaborators:
-            return collaborators[name]
-        raise AttributeError(name)
+
+def dependency_kwargs(service_type: type[CoreService], dependencies: CoreDependencies) -> dict[str, Any]:
+    return {name: getattr(dependencies, name) for name in service_type.required_dependencies}
+
+
+def build_service[ServiceT: CoreService](service_type: type[ServiceT], dependencies: CoreDependencies) -> ServiceT:
+    return service_type(**dependency_kwargs(service_type, dependencies))

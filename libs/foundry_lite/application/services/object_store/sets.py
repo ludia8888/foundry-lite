@@ -17,6 +17,8 @@ PRIVATE_OBJECT_SET_VISIBILITIES = {"private", "temporary"}
 
 
 class ObjectSetsService(CoreService):
+    required_dependencies = ("engine", "policy", "object_set_repository")
+
     def create_object_set(
         self,
         name: str,
@@ -31,7 +33,7 @@ class ObjectSetsService(CoreService):
         ttl_seconds: int | None = None,
     ) -> dict[str, Any]:
         ctx = ctx or RequestContext()
-        self._require_or_audit(ctx, "object:read", "object_set", name)
+        self.runtime_service._require_or_audit(ctx, "object:read", "object_set", name)
         normalized = self._normalize_object_set_definition(
             name,
             set_type=set_type,
@@ -42,7 +44,7 @@ class ObjectSetsService(CoreService):
             ttl_seconds=ttl_seconds,
         )
         with self.engine.begin() as conn:
-            object_type = self._active_object_type(conn, ctx, object_type_api_name)
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
             self._validate_object_set_definition(conn, ctx, object_type, normalized)
             set_id = _new_id("oset")
             now = _now()
@@ -61,7 +63,7 @@ class ObjectSetsService(CoreService):
                     created_at=now,
                 ),
             )
-            self._audit(
+            self.runtime_service._audit(
                 conn,
                 ctx,
                 event_type="object_set.created",
@@ -70,7 +72,7 @@ class ObjectSetsService(CoreService):
                 action="create",
                 after_ref={"name": name.strip(), "objectType": object_type_api_name, "setType": set_type},
             )
-            self._outbox(
+            self.runtime_service._outbox(
                 conn,
                 ctx,
                 "object_set.created",
@@ -90,7 +92,7 @@ class ObjectSetsService(CoreService):
         include_items: bool = True,
     ) -> dict[str, Any]:
         ctx = ctx or RequestContext()
-        self._require_or_audit(ctx, "object:read", "object_set", set_id)
+        self.runtime_service._require_or_audit(ctx, "object:read", "object_set", set_id)
         with self.engine.begin() as conn:
             row = self._visible_object_set_row(conn, ctx, set_id)
             if row is None:
@@ -312,7 +314,7 @@ class ObjectSetsService(CoreService):
             )
         }
         items = [
-            self._object_query_item(ctx, object_type_api_name, dict(records[object_id]))
+            self.object_query_service._object_query_item(ctx, object_type_api_name, dict(records[object_id]))
             for object_id in object_ids
             if object_id in records
         ]
@@ -325,7 +327,9 @@ class ObjectSetsService(CoreService):
         row: dict[str, Any],
         include_items: bool,
     ) -> tuple[list[str], list[dict[str, Any]]]:
-        result = self.query_objects(object_type_api_name, ctx=ctx, filter_ast=row["definition"]["filter"], limit=10_000)
+        result = self.object_query_service.query_objects(
+            object_type_api_name, ctx=ctx, filter_ast=row["definition"]["filter"], limit=10_000
+        )
         object_ids = [item["objectId"] for item in result["items"]]
         return object_ids, result["items"] if include_items else []
 
@@ -357,7 +361,7 @@ class ObjectSetsService(CoreService):
     ) -> list[dict[str, Any]]:
         object_type_id = None
         if object_type_api_name is not None:
-            object_type = self._active_object_type(conn, ctx, object_type_api_name)
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
             object_type_id = object_type["id"]
         rows = self.object_set_repository.object_sets(
             transaction=conn,

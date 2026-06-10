@@ -215,6 +215,8 @@ infrastructure
 
 - [ ] Facade는 얇아야 한다. public 호환성을 지키는 입구 역할을 하되, 실제 로직은 책임별 service에 둔다.
 - [ ] Service는 use case 하나 또는 매우 가까운 use case 묶음만 맡는다.
+- [ ] Service는 `CoreDependencies` 전체 bag을 service locator처럼 들고 있지 않는다. 각 service는 직접 쓰는 dependency만 `required_dependencies`에 선언하고, 선언하지 않은 dependency에 접근하지 않는다.
+- [ ] Service 사이 협력은 `self.runtime_service._audit(...)`처럼 소유 service가 드러나는 collaborator attribute로 호출한다. `self._audit(...)`처럼 어느 service에서 온 메서드인지 숨기는 호출을 만들지 않는다.
 - [ ] Repository는 DB read/write만 맡고 permission, precondition, mutation policy를 판단하지 않는다.
 - [ ] Adapter는 외부 시스템 세부를 숨기되, 실패/timeout/retry/idempotency 정보를 application layer로 돌려준다.
 - [ ] Strategy나 Specification은 테스트가 쉬워야 한다. 조건 하나를 검증하기 위해 전체 API 서버를 띄우게 만들지 않는다.

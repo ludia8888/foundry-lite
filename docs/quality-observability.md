@@ -20,9 +20,9 @@ pnpm ci:gate
 | 타입 검사 | mypy, pyright | 값의 타입이 맞지 않아 런타임에서 터질 문제 |
 | 의존성 구조 | `scripts/quality/check_dependency_graph.py` | domain이 app을 import하는 식의 레이어 침범, 순환 의존성 |
 | 인프라 경계 | `check_infra_import_boundary.py` | domain/application이 concrete infra SDK에 묶이는 문제. 현재 application baseline은 `0`이며 새 infra 접근은 repository/adapter port를 통과해야 한다. |
-| service 메서드 충돌 | `check_service_method_conflicts.py` | service 메서드명이 충돌해 collaborator registry에서 조용히 덮어써지는 문제 |
-| service 의존성 | `check_service_dependencies.py` | service가 `CoreDependencies`나 선언된 constructor field에 없는 숨은 `self.<attr>`에 기대는 문제 |
-| service call graph | `check_service_call_graph.py` | service 사이의 collaborator call이 순환하거나 depth/fan-out 한계를 넘는 문제 |
+| service 메서드 충돌 | `check_service_method_conflicts.py` | facade public method registry 호환 때문에 service 메서드명이 충돌하는 문제 |
+| service 의존성 | `check_service_dependencies.py` | service의 `required_dependencies` 선언과 실제 `CoreDependencies` 직접 접근이 다르거나, 숨은 `self.<attr>`에 기대는 문제 |
+| service call graph | `check_service_call_graph.py` | `self.runtime_service._audit(...)` 같은 명시적 collaborator call이 순환하거나 depth/fan-out 한계를 넘는 문제 |
 | 모듈 크기 | `check_application_module_size.py` | application core/service 파일이 다시 god file로 커지는 문제 |
 | 테스트 우회 방지 | `check_no_test_bypasses.py` | `tests/**/*.py`에서 skip/xfail로 release gate를 우회하는 테스트. PostgreSQL 로컬 opt-out만 명시적으로 허용하고 `pnpm ci:gate`에서 차단한다. |
 | private 테스트 부채 | `check_private_test_references.py` | private helper 직접 테스트가 현재 baseline보다 늘어나는 문제 |

@@ -25,6 +25,8 @@ from foundry_lite.domain.errors import (
 
 
 class TransformService(CoreService):
+    required_dependencies = ("engine", "policy", "compute_adapter", "transform_repository")
+
     def register_transform(
         self,
         api_name: str,
@@ -77,12 +79,12 @@ class TransformService(CoreService):
 
     def run_transform(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         ctx = ctx or RequestContext()
-        self._require_or_audit(ctx, "transform:run", "transform", api_name)
+        self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
         with self.engine.begin() as conn:
             transform = self._get_transform(conn, ctx, api_name)
-            output_dataset = self.get_dataset(transform["output_dataset_ref"], ctx=ctx)
+            output_dataset = self.dataset_registry_service.get_dataset(transform["output_dataset_ref"], ctx=ctx)
             input_versions = self._resolve_transform_inputs(conn, ctx, transform)
-            tx_id = self._open_dataset_transaction(conn, ctx, output_dataset, "SNAPSHOT")
+            tx_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, output_dataset, "SNAPSHOT")
             run_id = _new_id("transform_run")
             self.transform_repository.insert_transform_run(
                 transaction=conn,
@@ -100,11 +102,11 @@ class TransformService(CoreService):
                 ),
             )
 
-        staged = self._staging_file(output_dataset, tx_id, "part-00000.parquet")
+        staged = self.dataset_transaction_service._staging_file(output_dataset, tx_id, "part-00000.parquet")
         try:
             self._execute_sql_transform(transform, input_versions, staged)
             with self.engine.begin() as conn:
-                result = self._finalize_open_transaction(
+                result = self.dataset_transaction_service._finalize_open_transaction(
                     conn,
                     ctx,
                     dataset=output_dataset,
@@ -116,7 +118,7 @@ class TransformService(CoreService):
                     extra_checks=transform["checks"],
                 )
                 for version_id in input_versions.values():
-                    self._lineage(
+                    self.runtime_service._lineage(
                         conn,
                         ctx,
                         "dataset_version",
@@ -136,7 +138,7 @@ class TransformService(CoreService):
                 )
                 return result
         except Exception as exc:
-            self._abort_transaction_after_error(ctx, tx_id, run_id, exc, "transform")
+            self.dataset_transaction_service._abort_transaction_after_error(ctx, tx_id, run_id, exc, "transform")
             if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
                 raise
             raise ValidationFailed("transform failed", details={"error": str(exc)}) from exc
@@ -162,8 +164,8 @@ class TransformService(CoreService):
         referenced = set(INPUT_PATTERN.findall(template))
         configured = set(transform["inputs"].values())
         for dataset_ref in sorted(referenced | configured):
-            dataset = self.get_dataset(dataset_ref, ctx=ctx)
-            version = self._latest_version_by_dataset_id(conn, dataset["id"])
+            dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
+            version = self.dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
             resolved[dataset_ref] = version["id"]
         return resolved
 
@@ -175,7 +177,9 @@ class TransformService(CoreService):
     ) -> None:
         sql = Path(transform["entrypoint"]).read_text(encoding="utf-8")
         input_paths_by_ref = {
-            dataset_ref: self._version_file_path(self._get_version_by_id(version_id))
+            dataset_ref: self.dataset_transaction_service._version_file_path(
+                self.dataset_version_service._get_version_by_id(version_id)
+            )
             for dataset_ref, version_id in input_versions.items()
         }
         self.compute_adapter.execute_transform(

@@ -11,6 +11,8 @@ from foundry_lite.domain.errors import (
 
 
 class ObjectQueryService(CoreService):
+    required_dependencies = ("engine", "policy", "object_read_repository")
+
     def get_object(
         self,
         object_type_api_name: str,
@@ -20,9 +22,9 @@ class ObjectQueryService(CoreService):
         explain: bool = False,
     ) -> dict[str, Any]:
         ctx = ctx or RequestContext()
-        self._require_or_audit(ctx, "object:read", object_type_api_name, object_id)
+        self.runtime_service._require_or_audit(ctx, "object:read", object_type_api_name, object_id)
         with self.engine.begin() as conn:
-            record = self._object_record(conn, ctx, object_type_api_name, object_id)
+            record = self.object_records_service._object_record(conn, ctx, object_type_api_name, object_id)
             if record is None:
                 raise NotFound(
                     "object not found",
@@ -44,7 +46,7 @@ class ObjectQueryService(CoreService):
                 payload["explain"] = {
                     "baseProperties": record["base_properties"],
                     "editProperties": record["edit_properties"],
-                    "lineage": self.lineage_for_resource(record["source_dataset_version_id"], ctx=ctx)
+                    "lineage": self.runtime_service.lineage_for_resource(record["source_dataset_version_id"], ctx=ctx)
                     if record["source_dataset_version_id"]
                     else [],
                 }

@@ -17,6 +17,15 @@ from foundry_lite.domain.errors import (
 
 
 class DatasetRegistryService(CoreService):
+    required_dependencies = (
+        "engine",
+        "policy",
+        "compute_adapter",
+        "dataset_repository",
+        "dataset_version_repository",
+        "dataset_storage",
+    )
+
     def create_dataset(
         self,
         dataset_ref: str,
@@ -29,7 +38,7 @@ class DatasetRegistryService(CoreService):
         classification: str | None = None,
     ) -> dict[str, Any]:
         ctx = ctx or RequestContext()
-        self._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
         namespace, name = _dataset_ref_parts(dataset_ref)
         dataset_id = _new_id("ds")
         now = _now()
@@ -57,7 +66,7 @@ class DatasetRegistryService(CoreService):
                     "dataset already exists in this tenant",
                     details={"dataset_ref": dataset_ref},
                 ) from exc
-            self._audit(
+            self.runtime_service._audit(
                 conn,
                 ctx,
                 event_type="dataset.created",
@@ -94,7 +103,7 @@ class DatasetRegistryService(CoreService):
 
     def get_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> dict[str, Any]:
         ctx = ctx or RequestContext()
-        self._require_or_audit(ctx, "dataset:read", "dataset", dataset_ref)
+        self.runtime_service._require_or_audit(ctx, "dataset:read", "dataset", dataset_ref)
         dataset = self.find_dataset(dataset_ref, ctx=ctx)
         if dataset is None:
             raise NotFound("dataset not found", details={"dataset_ref": dataset_ref})
@@ -121,8 +130,8 @@ class DatasetRegistryService(CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "dataset:read")
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
-        version_row = self._get_version(dataset["id"], version, ctx=ctx)
-        parquet_path = self._version_file_path(version_row)
+        version_row = self.dataset_version_service._get_version(dataset["id"], version, ctx=ctx)
+        parquet_path = self.dataset_transaction_service._version_file_path(version_row)
         return self.compute_adapter.preview_parquet(parquet_path, limit=int(limit))
 
     def inspect_dataset(
@@ -134,12 +143,12 @@ class DatasetRegistryService(CoreService):
     ) -> dict[str, Any]:
         ctx = ctx or RequestContext()
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
-        version_row = self._get_version(dataset["id"], version, ctx=ctx)
-        schema_row = self._schema_for_version(dataset["id"], version_row["schema_version"])
+        version_row = self.dataset_version_service._get_version(dataset["id"], version, ctx=ctx)
+        schema_row = self.dataset_version_service._schema_for_version(dataset["id"], version_row["schema_version"])
         return {
             "dataset": dataset_ref,
             "dataset_id": dataset["id"],
             "version": dict(version_row),
             "schema": schema_row["schema_json"],
-            "manifest": self._load_manifest(version_row["manifest_uri"]),
+            "manifest": self.dataset_transaction_service._load_manifest(version_row["manifest_uri"]),
         }

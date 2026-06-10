@@ -22,6 +22,7 @@ ALLOWED_NON_DEPENDENCY_ATTRS = {
     # `self._helper_method(...)` is allowed because pyright/mypy enforce
     # method resolution against the service class.
 }
+NON_LEAF_SERVICE_CLASSES = {"CoreService", "CoreServices", "DatasetServices", "ObjectServices"}
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,13 @@ class DependencyAccess:
     line: int
     class_name: str
     attribute: str
+
+
+@dataclass(frozen=True)
+class DependencyDeclarationFinding:
+    path: str
+    class_name: str
+    message: str
 
 
 def _core_dependency_attributes() -> set[str]:
@@ -48,6 +56,10 @@ def _is_self_attribute(node: ast.Attribute) -> bool:
     return isinstance(node.value, ast.Name) and node.value.id == "self"
 
 
+def _is_leaf_service_class(node: ast.ClassDef) -> bool:
+    return node.name.endswith("Service") and node.name not in NON_LEAF_SERVICE_CLASSES
+
+
 def _class_for_node(tree: ast.AST, target: ast.AST) -> str | None:
     """Return the enclosing class name for a node, or None."""
     for node in ast.walk(tree):
@@ -58,19 +70,21 @@ def _class_for_node(tree: ast.AST, target: ast.AST) -> str | None:
     return None
 
 
-def _collect_service_method_names(tree: ast.AST) -> set[str]:
-    """Collect method names defined within application service classes.
+def _collect_service_method_names(tree: ast.AST) -> dict[str, set[str]]:
+    """Collect method names defined directly within each service class.
 
-    ``self.method_name(...)`` calls inside a service should reference methods
-    defined in that same service or another constructor-injected service. We
-    allow any name we see defined as a function inside the services tree.
+    ``self.method_name(...)`` should be local to the current service. Calls to
+    another service must go through an explicit collaborator attribute such as
+    ``self.runtime_service._audit(...)``.
     """
-    method_names: set[str] = set()
+    method_names: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
+            methods: set[str] = set()
             for item in node.body:
                 if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
-                    method_names.add(item.name)
+                    methods.add(item.name)
+            method_names[node.name] = methods
     return method_names
 
 
@@ -94,17 +108,68 @@ def _collect_declared_class_attributes(tree: ast.AST) -> dict[str, set[str]]:
     return declared
 
 
-def _collect_all_method_names(paths: list[Path]) -> set[str]:
-    """Union of method names defined across the service tree."""
-    method_names: set[str] = set()
+def _required_dependency_names(node: ast.AST) -> set[str] | None:
+    if isinstance(node, ast.Tuple | ast.List | ast.Set):
+        values: set[str] = set()
+        for item in node.elts:
+            if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+                return None
+            values.add(item.value)
+        return values
+    return None
+
+
+def _collect_required_dependencies(tree: ast.AST) -> dict[str, set[str]]:
+    declarations: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or not _is_leaf_service_class(node):
+            continue
+        for item in node.body:
+            if not isinstance(item, ast.Assign):
+                continue
+            if not any(
+                isinstance(target, ast.Name) and target.id == "required_dependencies" for target in item.targets
+            ):
+                continue
+            dependencies = _required_dependency_names(item.value)
+            if dependencies is not None:
+                declarations[node.name] = dependencies
+    return declarations
+
+
+def _collect_collaborator_attributes(paths: list[Path]) -> set[str]:
+    collaborators: set[str] = set()
     for path in paths:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        method_names |= _collect_service_method_names(tree)
-    return method_names
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef) or node.name != "CoreService":
+                continue
+            for item in node.body:
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    if item.target.id.endswith("_service"):
+                        collaborators.add(item.target.id)
+    return collaborators
 
 
 def _service_files() -> list[Path]:
     return sorted(SERVICE_ROOT.rglob("*.py"))
+
+
+def _is_allowed_non_dependency_attribute(
+    attr: str,
+    class_name: str,
+    *,
+    collaborator_attrs: set[str],
+    method_names: dict[str, set[str]],
+    declared_class_attrs: dict[str, set[str]],
+) -> bool:
+    return (
+        attr in collaborator_attrs
+        or attr in method_names.get(class_name, set())
+        or attr in declared_class_attrs.get(class_name, set())
+        or attr in ALLOWED_NON_DEPENDENCY_ATTRS
+        or attr.startswith("_")
+    )
 
 
 def _check_attribute_accesses(
@@ -112,10 +177,12 @@ def _check_attribute_accesses(
     tree: ast.AST,
     *,
     dependency_attrs: set[str],
-    method_names: set[str],
+    collaborator_attrs: set[str],
+    method_names: dict[str, set[str]],
     declared_class_attrs: dict[str, set[str]],
-) -> list[DependencyAccess]:
+) -> tuple[list[DependencyAccess], dict[str, set[str]]]:
     findings: list[DependencyAccess] = []
+    dependency_accesses: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Attribute):
             continue
@@ -123,12 +190,15 @@ def _check_attribute_accesses(
             continue
         attr = node.attr
         class_name = _class_for_node(tree, node) or ""
-        if (
-            attr in dependency_attrs
-            or attr in method_names
-            or attr in declared_class_attrs.get(class_name, set())
-            or attr in ALLOWED_NON_DEPENDENCY_ATTRS
-            or attr.startswith("_")
+        if attr in dependency_attrs:
+            dependency_accesses.setdefault(class_name, set()).add(attr)
+            continue
+        if _is_allowed_non_dependency_attribute(
+            attr,
+            class_name,
+            collaborator_attrs=collaborator_attrs,
+            method_names=method_names,
+            declared_class_attrs=declared_class_attrs,
         ):
             continue
         findings.append(
@@ -139,6 +209,59 @@ def _check_attribute_accesses(
                 attribute=attr,
             )
         )
+    return findings, dependency_accesses
+
+
+def _check_dependency_declarations(
+    path: Path,
+    tree: ast.AST,
+    *,
+    dependency_attrs: set[str],
+    declarations: dict[str, set[str]],
+    dependency_accesses: dict[str, set[str]],
+) -> list[DependencyDeclarationFinding]:
+    findings: list[DependencyDeclarationFinding] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or not _is_leaf_service_class(node):
+            continue
+        declared = declarations.get(node.name)
+        if declared is None:
+            findings.append(
+                DependencyDeclarationFinding(
+                    path=str(path.relative_to(ROOT)),
+                    class_name=node.name,
+                    message="missing required_dependencies declaration",
+                )
+            )
+            continue
+        unknown = sorted(declared - dependency_attrs)
+        used = dependency_accesses.get(node.name, set())
+        undeclared = sorted(used - declared)
+        unused = sorted(declared - used)
+        if unknown:
+            findings.append(
+                DependencyDeclarationFinding(
+                    path=str(path.relative_to(ROOT)),
+                    class_name=node.name,
+                    message=f"declares unknown CoreDependencies fields: {unknown}",
+                )
+            )
+        if undeclared:
+            findings.append(
+                DependencyDeclarationFinding(
+                    path=str(path.relative_to(ROOT)),
+                    class_name=node.name,
+                    message=f"uses undeclared dependencies: {undeclared}",
+                )
+            )
+        if unused:
+            findings.append(
+                DependencyDeclarationFinding(
+                    path=str(path.relative_to(ROOT)),
+                    class_name=node.name,
+                    message=f"declares unused dependencies: {unused}",
+                )
+            )
     return findings
 
 
@@ -149,27 +272,43 @@ def main(argv: list[str] | None = None) -> int:
 
     dependency_attrs = _core_dependency_attributes()
     service_files = _service_files()
-    method_names = _collect_all_method_names(service_files)
+    collaborator_attrs = _collect_collaborator_attributes(service_files)
 
     all_findings: list[DependencyAccess] = []
+    declaration_findings: list[DependencyDeclarationFinding] = []
+    declarations_report: dict[str, list[str]] = {}
     for path in service_files:
         if "__pycache__" in path.parts:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         declared_class_attrs = _collect_declared_class_attributes(tree)
-        all_findings.extend(
-            _check_attribute_accesses(
+        method_names = _collect_service_method_names(tree)
+        declarations = _collect_required_dependencies(tree)
+        findings, dependency_accesses = _check_attribute_accesses(
+            path,
+            tree,
+            dependency_attrs=dependency_attrs,
+            collaborator_attrs=collaborator_attrs,
+            method_names=method_names,
+            declared_class_attrs=declared_class_attrs,
+        )
+        all_findings.extend(findings)
+        declaration_findings.extend(
+            _check_dependency_declarations(
                 path,
                 tree,
                 dependency_attrs=dependency_attrs,
-                method_names=method_names,
-                declared_class_attrs=declared_class_attrs,
+                declarations=declarations,
+                dependency_accesses=dependency_accesses,
             )
         )
+        declarations_report.update({class_name: sorted(names) for class_name, names in declarations.items()})
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     report = {
         "core_dependency_attributes": sorted(dependency_attrs),
+        "collaborator_attributes": sorted(collaborator_attrs),
+        "service_required_dependencies": declarations_report,
         "findings": [
             {
                 "path": finding.path,
@@ -179,24 +318,35 @@ def main(argv: list[str] | None = None) -> int:
             }
             for finding in all_findings
         ],
+        "declaration_findings": [
+            {
+                "path": finding.path,
+                "class": finding.class_name,
+                "message": finding.message,
+            }
+            for finding in declaration_findings
+        ],
     }
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
 
-    if all_findings:
+    if all_findings or declaration_findings:
         print(
             "Service uses self.<attr> that is neither a CoreDependencies field, "
-            "a service method, declared constructor field, nor a private helper:"
+            "an explicit collaborator, local method, declared constructor field, nor a private helper:"
         )
-        for finding in all_findings:
-            print(f"- {finding.path}:{finding.line} {finding.class_name}.{finding.attribute}")
+        for access_finding in all_findings:
+            print(
+                f"- {access_finding.path}:{access_finding.line} {access_finding.class_name}.{access_finding.attribute}"
+            )
+        for declaration_finding in declaration_findings:
+            print(f"- {declaration_finding.path} {declaration_finding.class_name}: {declaration_finding.message}")
         print(f"Report: {args.output.relative_to(ROOT)}")
         return 1
 
     print(
         "Service dependency access OK: "
-        f"all public self.<attr> in services match CoreDependencies "
-        f"({len(dependency_attrs)} fields) or another service method "
-        f"({len(method_names)} methods)."
+        f"{len(declarations_report)} services declare only the CoreDependencies fields they use; "
+        f"{len(collaborator_attrs)} explicit collaborator attributes are allowed."
     )
     return 0
 
