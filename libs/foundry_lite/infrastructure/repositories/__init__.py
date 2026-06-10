@@ -1,6 +1,7 @@
 """Concrete metadata repositories."""
 
 from foundry_lite.infrastructure.repositories.action_repository import SqlAlchemyActionRepository
+from foundry_lite.infrastructure.repositories.dataset_quality_repository import SqlAlchemyDatasetQualityRepository
 from foundry_lite.infrastructure.repositories.dataset_repository import SqlAlchemyDatasetRepository
 from foundry_lite.infrastructure.repositories.dataset_transaction_repository import (
     SqlAlchemyDatasetTransactionRepository,
@@ -17,6 +18,7 @@ from foundry_lite.infrastructure.repositories.transform_repository import SqlAlc
 
 __all__ = [
     "SqlAlchemyActionRepository",
+    "SqlAlchemyDatasetQualityRepository",
     "SqlAlchemyDatasetRepository",
     "SqlAlchemyDatasetTransactionRepository",
     "SqlAlchemyDatasetVersionRepository",

@@ -17,6 +17,7 @@ from foundry_lite.application.ports import (
     RuntimeRepository,
 )
 from foundry_lite.application.ports.action_repository import ActionRepository
+from foundry_lite.application.ports.dataset_quality_repository import DatasetQualityRepository
 from foundry_lite.application.ports.materialization_repository import MaterializationRepository
 from foundry_lite.application.ports.ontology_repository import OntologyRepository
 from foundry_lite.application.ports.transform_repository import TransformRepository
@@ -35,6 +36,7 @@ class CoreDependencies:
     ontology_repository: OntologyRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
+    dataset_quality_repository: DatasetQualityRepository
     compute_adapter: ComputeAdapter
     metadata_repository: MetadataRepository
     dataset_repository: DatasetRepository

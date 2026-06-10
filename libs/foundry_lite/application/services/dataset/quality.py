@@ -4,12 +4,14 @@ import json
 from pathlib import Path
 from typing import Any
 
+from foundry_lite.application.ports.dataset_quality_repository import (
+    DatasetCheckRecord,
+    DatasetCheckResultRecord,
+    DatasetSchemaRecord,
+)
 from foundry_lite.application.primitives import StagedFileStats, _new_id, _now
 from foundry_lite.application.services.base import CoreServiceMixin
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.infrastructure import schema as db
-from sqlalchemy import and_, func, insert, select
-from sqlalchemy.engine import Connection
 
 
 class DatasetQualityMixin(CoreServiceMixin):
@@ -18,47 +20,39 @@ class DatasetQualityMixin(CoreServiceMixin):
 
     def _ensure_schema(
         self,
-        conn: Connection,
+        conn: Any,
         dataset: dict[str, Any],
         schema_json: dict[str, Any],
         schema_hash: str,
     ) -> int:
-        existing = (
-            conn.execute(
-                select(db.dataset_schemas).where(
-                    and_(
-                        db.dataset_schemas.c.dataset_id == dataset["id"],
-                        db.dataset_schemas.c.schema_hash == schema_hash,
-                    )
-                )
-            )
-            .mappings()
-            .first()
+        existing = self.dataset_quality_repository.schema_by_hash(
+            transaction=conn,
+            dataset_id=dataset["id"],
+            schema_hash=schema_hash,
         )
         if existing:
             return int(existing["version"])
-        latest = (
-            conn.execute(
-                select(func.max(db.dataset_schemas.c.version)).where(db.dataset_schemas.c.dataset_id == dataset["id"])
-            ).scalar()
-            or 0
+        latest = self.dataset_quality_repository.latest_schema_version(
+            transaction=conn,
+            dataset_id=dataset["id"],
         )
-        version = int(latest) + 1
-        conn.execute(
-            insert(db.dataset_schemas).values(
-                id=_new_id("schema"),
+        version = (latest or 0) + 1
+        self.dataset_quality_repository.insert_schema(
+            transaction=conn,
+            record=DatasetSchemaRecord(
+                schema_id=_new_id("schema"),
                 dataset_id=dataset["id"],
                 version=version,
                 schema_json=schema_json,
                 schema_hash=schema_hash,
                 created_at=_now(),
-            )
+            ),
         )
         return version
 
     def _schema_compatibility_error(
         self,
-        conn: Connection,
+        conn: Any,
         dataset: dict[str, Any],
         next_schema: dict[str, Any],
     ) -> dict[str, Any] | None:
@@ -115,7 +109,7 @@ class DatasetQualityMixin(CoreServiceMixin):
 
     def _run_dataset_checks(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         dataset: dict[str, Any],
         parquet_path: Path,
@@ -134,9 +128,10 @@ class DatasetQualityMixin(CoreServiceMixin):
         for check in checks:
             check_id = self._ensure_dataset_check(conn, ctx, dataset, check)
             result = self._execute_check(parquet_path, row_count, check)
-            conn.execute(
-                insert(db.dataset_check_results).values(
-                    id=_new_id("check_result"),
+            self.dataset_quality_repository.insert_check_result(
+                transaction=conn,
+                record=DatasetCheckResultRecord(
+                    check_result_id=_new_id("check_result"),
                     tenant_id=ctx.tenant_id,
                     check_id=check_id,
                     run_id=run_id,
@@ -144,7 +139,7 @@ class DatasetQualityMixin(CoreServiceMixin):
                     status=result["status"],
                     details=result,
                     created_at=_now(),
-                )
+                ),
             )
             if result["status"] == "failed":
                 failures.append(result)
@@ -152,31 +147,25 @@ class DatasetQualityMixin(CoreServiceMixin):
 
     def _ensure_dataset_check(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         dataset: dict[str, Any],
         check: dict[str, Any],
     ) -> str:
         name = json.dumps(check, sort_keys=True)
-        row = (
-            conn.execute(
-                select(db.dataset_checks).where(
-                    and_(
-                        db.dataset_checks.c.tenant_id == ctx.tenant_id,
-                        db.dataset_checks.c.dataset_id == dataset["id"],
-                        db.dataset_checks.c.name == name,
-                    )
-                )
-            )
-            .mappings()
-            .first()
+        row = self.dataset_quality_repository.check_by_name(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            dataset_id=dataset["id"],
+            name=name,
         )
         if row:
             return row["id"]
         check_id = _new_id("check")
-        conn.execute(
-            insert(db.dataset_checks).values(
-                id=check_id,
+        self.dataset_quality_repository.insert_check(
+            transaction=conn,
+            record=DatasetCheckRecord(
+                check_id=check_id,
                 tenant_id=ctx.tenant_id,
                 dataset_id=dataset["id"],
                 name=name,
@@ -184,7 +173,7 @@ class DatasetQualityMixin(CoreServiceMixin):
                 config=check,
                 severity="error",
                 enabled=True,
-            )
+            ),
         )
         return check_id
 

@@ -77,6 +77,7 @@ class FoundryLiteCore(
         self.ontology_repository = dependencies.ontology_repository
         self.transform_repository = dependencies.transform_repository
         self.materialization_repository = dependencies.materialization_repository
+        self.dataset_quality_repository = dependencies.dataset_quality_repository
         self.compute_adapter = dependencies.compute_adapter
         self.metadata_repository = dependencies.metadata_repository
         self.dataset_repository = dependencies.dataset_repository
