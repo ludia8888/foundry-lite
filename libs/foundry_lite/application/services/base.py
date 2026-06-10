@@ -23,7 +23,22 @@ from foundry_lite.security.policy import PolicyService
 
 
 class CoreServiceMixin:
-    """Shared dependency contract for service mixins behind the FoundryLiteCore facade."""
+    """Dependency contract a service mixin can rely on from its FoundryLiteCore facade host.
+
+    The attributes declared here mirror :class:`CoreDependencies` (see
+    ``application/dependencies.py``). The mixin itself does not store the
+    handles -- ``FoundryLiteCore.__init__`` wires them after the composition
+    root builds a :class:`CoreDependencies` instance.
+
+    A service mixin may freely access ``self.<attr>`` for any name declared
+    here, plus any method defined on another service mixin in the facade's
+    MRO. ``scripts/quality/check_service_mixin_dependencies.py`` enforces
+    that no service mixin invents an attribute outside this contract.
+
+    The intent is to keep the mixin tree honest: dependency growth happens
+    in :class:`CoreDependencies` (the single composition-root container)
+    and is mirrored here, never invented inside individual service mixins.
+    """
 
     root: Path
     storage_root: Path

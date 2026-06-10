@@ -21,6 +21,7 @@
 - 디자인 패턴은 `foundry_lite_python_engineering_guidelines_ko.md`의 “디자인 패턴 적용 원칙”을 따른다.
 - infra와 닿는 변경은 Sprint 02A Scale Foundation 원칙을 먼저 확인한다. storage, metadata DB, compute, event, search, workflow, connector, auth 변경은 port/interface, adapter, contract test, trace key를 함께 고려한다.
 - 새 mutation은 transaction, audit, outbox, idempotency, error traceability를 함께 고려한다.
+- 새 dependency는 항상 `CoreDependencies` (`libs/foundry_lite/application/dependencies.py`)에 먼저 선언한 뒤 `CoreServiceMixin`(`application/services/base.py`)에 미러링한다. service mixin이 facade에서 받지 않은 attribute를 `self.<x>`로 부르지 않는다 — `scripts/quality/check_service_mixin_dependencies.py`가 이를 강제한다.
 - 변경 후에는 최소한 관련 테스트와 정적 검사를 실행하고, 가능하면 `pnpm ci:gate`로 전체 품질 게이트를 확인한다.
 
 ## 금지
