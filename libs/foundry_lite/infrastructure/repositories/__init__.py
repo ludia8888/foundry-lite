@@ -6,6 +6,7 @@ from foundry_lite.infrastructure.repositories.dataset_transaction_repository imp
     SqlAlchemyDatasetTransactionRepository,
 )
 from foundry_lite.infrastructure.repositories.dataset_version_repository import SqlAlchemyDatasetVersionRepository
+from foundry_lite.infrastructure.repositories.materialization_repository import SqlAlchemyMaterializationRepository
 from foundry_lite.infrastructure.repositories.metadata_repository import SqlAlchemyMetadataRepository
 from foundry_lite.infrastructure.repositories.object_index_repository import SqlAlchemyObjectIndexRepository
 from foundry_lite.infrastructure.repositories.object_read_repository import SqlAlchemyObjectReadRepository
@@ -19,6 +20,7 @@ __all__ = [
     "SqlAlchemyDatasetRepository",
     "SqlAlchemyDatasetTransactionRepository",
     "SqlAlchemyDatasetVersionRepository",
+    "SqlAlchemyMaterializationRepository",
     "SqlAlchemyMetadataRepository",
     "SqlAlchemyObjectIndexRepository",
     "SqlAlchemyObjectReadRepository",

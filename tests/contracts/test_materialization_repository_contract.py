@@ -1,0 +1,392 @@
+from __future__ import annotations
+
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Protocol
+
+import pytest
+from foundry_lite.application.ports.materialization_repository import (
+    MaterializationRecord,
+    MaterializationRepository,
+    MaterializationRunRecord,
+)
+from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories import SqlAlchemyMaterializationRepository
+from sqlalchemy import create_engine, select
+from sqlalchemy.engine import Engine
+
+
+class MaterializationHarness(Protocol):
+    repository: MaterializationRepository
+
+    def transaction(self) -> AbstractContextManager[Any]: ...
+
+    def materialization_rows(self) -> list[dict[str, Any]]: ...
+
+    def materialization_run_rows(self) -> list[dict[str, Any]]: ...
+
+    def seed_action_run(self, *, run_id: str, created_at: str) -> None: ...
+
+    def seed_object_record(self, *, record_id: str, updated_at: str) -> None: ...
+
+
+@dataclass
+class FakeMaterializationRepository:
+    materializations: list[dict[str, Any]] = field(default_factory=list)
+    materialization_runs: list[dict[str, Any]] = field(default_factory=list)
+    action_run_watermarks: list[str] = field(default_factory=list)
+    object_record_watermarks: list[str] = field(default_factory=list)
+
+    def materialization_by_api_name(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        api_name: str,
+    ) -> dict[str, Any] | None:
+        del transaction
+        for row in self.materializations:
+            if row["tenant_id"] == tenant_id and row["api_name"] == api_name:
+                return dict(row)
+        return None
+
+    def insert_materialization(self, *, transaction: Any, record: MaterializationRecord) -> None:
+        del transaction
+        self.materializations.append(
+            {
+                "id": record.materialization_id,
+                "tenant_id": record.tenant_id,
+                "api_name": record.api_name,
+                "materialization_type": record.materialization_type,
+                "source_ref": dict(record.source_ref),
+                "target_ref": dict(record.target_ref),
+                "trigger_config": dict(record.trigger_config),
+                "enabled": record.enabled,
+            }
+        )
+
+    def materialization_by_id(self, *, transaction: Any, materialization_id: str) -> dict[str, Any] | None:
+        del transaction
+        for row in self.materializations:
+            if row["id"] == materialization_id:
+                return dict(row)
+        return None
+
+    def insert_materialization_run(self, *, transaction: Any, record: MaterializationRunRecord) -> None:
+        del transaction
+        self.materialization_runs.append(
+            {
+                "id": record.materialization_run_id,
+                "tenant_id": record.tenant_id,
+                "materialization_id": record.materialization_id,
+                "api_name": record.api_name,
+                "status": record.status,
+                "source_cursor": dict(record.source_cursor),
+                "object_store_watermark": dict(record.object_store_watermark),
+                "consistency_level": record.consistency_level,
+                "target_dataset_version_id": record.target_dataset_version_id,
+                "row_count": record.row_count,
+                "error": record.error,
+                "created_at": record.created_at,
+                "completed_at": record.completed_at,
+            }
+        )
+
+    def update_materialization_run_terminal(
+        self,
+        *,
+        transaction: Any,
+        materialization_run_id: str,
+        status: str,
+        target_dataset_version_id: str | None,
+        row_count: int | None,
+        error: dict[str, Any] | None,
+        completed_at: str,
+    ) -> None:
+        del transaction
+        for row in self.materialization_runs:
+            if row["id"] == materialization_run_id:
+                row.update(
+                    {
+                        "status": status,
+                        "target_dataset_version_id": target_dataset_version_id,
+                        "row_count": row_count,
+                        "error": error,
+                        "completed_at": completed_at,
+                    }
+                )
+                return
+
+    def latest_action_run_watermark(self, *, transaction: Any) -> str | None:
+        del transaction
+        return max(self.action_run_watermarks) if self.action_run_watermarks else None
+
+    def latest_object_record_watermark(self, *, transaction: Any) -> str | None:
+        del transaction
+        return max(self.object_record_watermarks) if self.object_record_watermarks else None
+
+
+@dataclass
+class FakeMaterializationHarness:
+    repository: FakeMaterializationRepository = field(default_factory=FakeMaterializationRepository)
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        yield self
+
+    def materialization_rows(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.repository.materializations]
+
+    def materialization_run_rows(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.repository.materialization_runs]
+
+    def seed_action_run(self, *, run_id: str, created_at: str) -> None:
+        del run_id
+        self.repository.action_run_watermarks.append(created_at)
+
+    def seed_object_record(self, *, record_id: str, updated_at: str) -> None:
+        del record_id
+        self.repository.object_record_watermarks.append(updated_at)
+
+
+@dataclass
+class SqlAlchemyMaterializationHarness:
+    engine: Engine
+    repository: SqlAlchemyMaterializationRepository
+
+    @classmethod
+    def create(cls, tmp_path: Path) -> SqlAlchemyMaterializationHarness:
+        engine = create_engine(f"sqlite:///{tmp_path / 'materialization.db'}", future=True)
+        db.create_database(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                db.tenants.insert().values(
+                    id="tenant-test",
+                    name="Test",
+                    created_at="2025-01-01T00:00:00Z",
+                )
+            )
+        return cls(engine=engine, repository=SqlAlchemyMaterializationRepository(engine))
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        with self.engine.begin() as conn:
+            yield conn
+
+    def materialization_rows(self) -> list[dict[str, Any]]:
+        with self.engine.begin() as conn:
+            return [dict(row) for row in conn.execute(select(db.materializations)).mappings().all()]
+
+    def materialization_run_rows(self) -> list[dict[str, Any]]:
+        with self.engine.begin() as conn:
+            return [dict(row) for row in conn.execute(select(db.materialization_runs)).mappings().all()]
+
+    def seed_action_run(self, *, run_id: str, created_at: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                db.action_runs.insert().values(
+                    id=run_id,
+                    tenant_id="tenant-test",
+                    action_type_id="at_test",
+                    action_type_api_name="TestAction",
+                    actor_user_id="user-test",
+                    target_object_type_id="ot_test",
+                    target_object_type_api_name="TestObject",
+                    target_object_id="obj_test",
+                    expected_object_version=1,
+                    parameters={},
+                    status="succeeded",
+                    idempotency_key=f"key-{run_id}",
+                    error=None,
+                    created_at=created_at,
+                    completed_at=created_at,
+                )
+            )
+
+    def seed_object_record(self, *, record_id: str, updated_at: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                db.object_records.insert().values(
+                    id=record_id,
+                    tenant_id="tenant-test",
+                    object_type_id="ot_test",
+                    object_type_api_name="TestObject",
+                    object_id=record_id,
+                    object_version=1,
+                    base_properties={},
+                    edit_properties={},
+                    properties={},
+                    property_versions={},
+                    source_dataset_version_id="dsv_test",
+                    deleted=False,
+                    created_at=updated_at,
+                    updated_at=updated_at,
+                )
+            )
+
+
+@pytest.fixture(params=["fake", "sqlalchemy"])
+def harness(request: pytest.FixtureRequest, tmp_path: Path) -> MaterializationHarness:
+    if request.param == "fake":
+        return FakeMaterializationHarness()
+    return SqlAlchemyMaterializationHarness.create(tmp_path)
+
+
+def _materialization_record(api_name: str = "action_log") -> MaterializationRecord:
+    return MaterializationRecord(
+        materialization_id="mat_test",
+        tenant_id="tenant-test",
+        api_name=api_name,
+        materialization_type="action_log",
+        source_ref={"type": "action_runs"},
+        target_ref={"dataset": "ops.action_log"},
+        trigger_config={"type": "manual"},
+        enabled=True,
+    )
+
+
+def _materialization_run_record() -> MaterializationRunRecord:
+    return MaterializationRunRecord(
+        materialization_run_id="mrun_test",
+        tenant_id="tenant-test",
+        materialization_id="mat_test",
+        api_name="action_log",
+        status="running",
+        source_cursor={"action_run_created_at_lte": None},
+        object_store_watermark={"action_run_created_at_lte": None},
+        consistency_level="watermark",
+        target_dataset_version_id=None,
+        row_count=None,
+        error=None,
+        created_at="2025-01-01T00:00:00Z",
+        completed_at=None,
+    )
+
+
+def test_materialization_by_api_name_returns_none_when_absent(harness: MaterializationHarness) -> None:
+    with harness.transaction() as txn:
+        assert (
+            harness.repository.materialization_by_api_name(transaction=txn, tenant_id="tenant-test", api_name="missing")
+            is None
+        )
+
+
+def test_insert_materialization_round_trips_via_id(harness: MaterializationHarness) -> None:
+    record = _materialization_record()
+    with harness.transaction() as txn:
+        harness.repository.insert_materialization(transaction=txn, record=record)
+        row = harness.repository.materialization_by_id(transaction=txn, materialization_id=record.materialization_id)
+    assert row is not None
+    assert row["api_name"] == "action_log"
+    assert row["target_ref"] == {"dataset": "ops.action_log"}
+    assert row["enabled"] is True
+
+
+def test_materialization_by_api_name_isolated_by_tenant(harness: MaterializationHarness) -> None:
+    if isinstance(harness, SqlAlchemyMaterializationHarness):
+        with harness.engine.begin() as conn:
+            conn.execute(
+                db.tenants.insert().values(
+                    id="tenant-other",
+                    name="Other",
+                    created_at="2025-01-01T00:00:00Z",
+                )
+            )
+    record_a = _materialization_record()
+    record_b = MaterializationRecord(
+        materialization_id="mat_other",
+        tenant_id="tenant-other",
+        api_name="action_log",
+        materialization_type="action_log",
+        source_ref={"type": "action_runs"},
+        target_ref={"dataset": "ops.action_log"},
+        trigger_config={"type": "manual"},
+        enabled=True,
+    )
+    with harness.transaction() as txn:
+        harness.repository.insert_materialization(transaction=txn, record=record_a)
+        harness.repository.insert_materialization(transaction=txn, record=record_b)
+        found_a = harness.repository.materialization_by_api_name(
+            transaction=txn, tenant_id="tenant-test", api_name="action_log"
+        )
+        found_b = harness.repository.materialization_by_api_name(
+            transaction=txn, tenant_id="tenant-other", api_name="action_log"
+        )
+    assert found_a is not None and found_a["id"] == "mat_test"
+    assert found_b is not None and found_b["id"] == "mat_other"
+
+
+def test_insert_materialization_run_persists(harness: MaterializationHarness) -> None:
+    with harness.transaction() as txn:
+        harness.repository.insert_materialization(transaction=txn, record=_materialization_record())
+        harness.repository.insert_materialization_run(transaction=txn, record=_materialization_run_record())
+    rows = harness.materialization_run_rows()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "running"
+    assert rows[0]["consistency_level"] == "watermark"
+
+
+def test_update_materialization_run_terminal_succeeded(harness: MaterializationHarness) -> None:
+    with harness.transaction() as txn:
+        harness.repository.insert_materialization(transaction=txn, record=_materialization_record())
+        harness.repository.insert_materialization_run(transaction=txn, record=_materialization_run_record())
+        harness.repository.update_materialization_run_terminal(
+            transaction=txn,
+            materialization_run_id="mrun_test",
+            status="succeeded",
+            target_dataset_version_id="dsv_target",
+            row_count=42,
+            error=None,
+            completed_at="2025-01-01T01:00:00Z",
+        )
+    row = harness.materialization_run_rows()[0]
+    assert row["status"] == "succeeded"
+    assert row["row_count"] == 42
+    assert row["target_dataset_version_id"] == "dsv_target"
+
+
+def test_update_materialization_run_terminal_failed(harness: MaterializationHarness) -> None:
+    with harness.transaction() as txn:
+        harness.repository.insert_materialization(transaction=txn, record=_materialization_record())
+        harness.repository.insert_materialization_run(transaction=txn, record=_materialization_run_record())
+        harness.repository.update_materialization_run_terminal(
+            transaction=txn,
+            materialization_run_id="mrun_test",
+            status="failed",
+            target_dataset_version_id=None,
+            row_count=None,
+            error={"message": "boom"},
+            completed_at="2025-01-01T01:00:00Z",
+        )
+    row = harness.materialization_run_rows()[0]
+    assert row["status"] == "failed"
+    assert row["error"] == {"message": "boom"}
+
+
+def test_latest_action_run_watermark_handles_empty(harness: MaterializationHarness) -> None:
+    with harness.transaction() as txn:
+        assert harness.repository.latest_action_run_watermark(transaction=txn) is None
+
+
+def test_latest_action_run_watermark_returns_max(harness: MaterializationHarness) -> None:
+    harness.seed_action_run(run_id="ar_a", created_at="2025-01-01T00:00:00Z")
+    harness.seed_action_run(run_id="ar_b", created_at="2025-01-02T00:00:00Z")
+    harness.seed_action_run(run_id="ar_c", created_at="2025-01-01T12:00:00Z")
+    with harness.transaction() as txn:
+        watermark = harness.repository.latest_action_run_watermark(transaction=txn)
+    assert watermark == "2025-01-02T00:00:00Z"
+
+
+def test_latest_object_record_watermark_handles_empty(harness: MaterializationHarness) -> None:
+    with harness.transaction() as txn:
+        assert harness.repository.latest_object_record_watermark(transaction=txn) is None
+
+
+def test_latest_object_record_watermark_returns_max(harness: MaterializationHarness) -> None:
+    harness.seed_object_record(record_id="or_a", updated_at="2025-01-01T00:00:00Z")
+    harness.seed_object_record(record_id="or_b", updated_at="2025-01-03T00:00:00Z")
+    with harness.transaction() as txn:
+        watermark = harness.repository.latest_object_record_watermark(transaction=txn)
+    assert watermark == "2025-01-03T00:00:00Z"

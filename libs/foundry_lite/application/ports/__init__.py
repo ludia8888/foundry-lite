@@ -17,6 +17,11 @@ from foundry_lite.application.ports.dataset_transaction_repository import (
     DatasetVersionRecord,
 )
 from foundry_lite.application.ports.dataset_version_repository import DatasetVersionRepository
+from foundry_lite.application.ports.materialization_repository import (
+    MaterializationRecord,
+    MaterializationRepository,
+    MaterializationRunRecord,
+)
 from foundry_lite.application.ports.metadata_repository import MetadataRepository
 from foundry_lite.application.ports.object_index_repository import (
     IndexRunRecord,
@@ -59,6 +64,9 @@ __all__ = [
     "DatasetVersionRecord",
     "IndexRunRecord",
     "LineageEdgeRecord",
+    "MaterializationRecord",
+    "MaterializationRepository",
+    "MaterializationRunRecord",
     "MetadataRepository",
     "ObjectConflictRecord",
     "ObjectIndexRepository",
