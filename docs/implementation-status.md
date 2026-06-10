@@ -35,6 +35,34 @@
 - Sprint 02A Scale Foundation completion: WorkflowAdapter, StreamAdapter, SearchAdapter, ConnectorAdapter, and AuthProvider ports remain unextracted; the local repositories still rely on SQLAlchemy under the hood without a PostgreSQL contract-test pairing.
 - Postgres testcontainer contract tests so that every repository contract suite runs against both SQLite and PostgreSQL, closing the "Repository pattern complete" gap.
 
+## Refactor Pointers
+
+These are known design debts that are currently gated (so they cannot regress) but
+should be paid down on a planned timeline. They are not bugs; they are deliberate
+intermediate states.
+
+- **Mixin → constructor injection (Application Service canonicalization).**
+  Today `FoundryLiteCore` composes 8 service capabilities via Python multiple
+  inheritance (`ServiceMixin` classes) sharing a single `CoreDependencies` bag.
+  This is a Python idiom, not a name in the GoF / PEAA / DDD canon. Our
+  engineering guideline (`foundry_lite_python_engineering_guidelines_ko.md`
+  §197–256) promises Application Service as a standard pattern, and 8 of the 9
+  promised patterns (Facade, Repository, Unit of Work, Adapter, Strategy,
+  Specification, Template Method, Outbox, DTO) are implemented canonically.
+  Only Application Service is implemented as mixins. Risks (call-graph cycles,
+  fan-out explosion, depth blowup, method-name conflicts, hidden self.X
+  dependencies) are currently held in check by 4 static gates
+  (`check_mixin_method_conflicts`, `check_service_mixin_dependencies`,
+  `check_mixin_call_graph`, application-size cap). The longest mixin call chain
+  is already at the depth ceiling (7/7) with zero margin. Target state: each
+  service becomes a class with explicit constructor injection
+  (`class ActionService: def __init__(self, action_repository, ...)`), and
+  `FoundryLiteCore` wires them as attributes instead of inheriting from them.
+  This is a mechanical 1-week refactor with no public API change. Recommended
+  window: after Sprint 9.4 (Postgres testcontainer) lands and before the next
+  4 Sprint 02A boundaries (Workflow / Stream / Search / Connector / Auth) are
+  extracted, so the new ports land in canonical-shape services from day one.
+
 ## Quality Signal Boundaries
 
 - Branch coverage is the main behavior gate.
