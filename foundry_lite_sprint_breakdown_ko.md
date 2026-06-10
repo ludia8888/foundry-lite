@@ -283,7 +283,8 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] API와 CLI가 `create_local_core_dependencies(...)` composition root에서 adapter profile을 선택한다.
 - [x] `tests/contracts/test_dataset_storage_adapter_contract.py`가 local/fake adapter에 같은 contract test를 적용한다.
 - [x] `tests/integration/test_scale_foundation.py`가 `fake-storage` profile로 CSV commit, inspect, preview public API가 유지되는지 검증한다.
-- [x] `scripts/quality/check_infra_import_boundary.py`와 `scripts/quality/check_mixin_method_conflicts.py`를 CI gate에 연결했다.
+- [x] `scripts/quality/check_infra_import_boundary.py`를 application baseline `0`으로 CI와 로컬 `pnpm quality:infra-boundaries`에 연결했다.
+- [x] `scripts/quality/check_mixin_method_conflicts.py`, `check_service_mixin_dependencies.py`, `check_mixin_call_graph.py`를 CI와 로컬 `pnpm quality:infra-boundaries`에 연결했다.
 - [x] application concrete infra import baseline을 `37`에서 `32`로 낮췄다.
 - [x] core bootstrap/reset DB write를 `MetadataRepository` port로 이동했다.
 - [x] dataset registry create/find DB read/write를 `DatasetRepository` port로 이동하고 local/fake contract test를 추가했다.
@@ -305,7 +306,8 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] application concrete infra import baseline을 `13`에서 `11`로 낮췄다.
 - [x] application concrete infra import baseline을 `11`에서 `9`로 낮췄다.
 - [x] application concrete infra import baseline을 `9`에서 `7`로 낮췄다.
-- [ ] application concrete infra import baseline `7`을 repository/adapter 추출로 계속 낮춘다.
+- [x] application concrete infra import baseline을 `7`에서 `0`으로 낮췄다.
+- [x] PostgreSQL repository contract testcontainer 축은 로컬 opt-out만 허용하고, `pnpm ci:gate`에서는 `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1`을 실패 처리한다.
 - [ ] Event/Search/Workflow/Connector/Auth boundary에도 fake/local contract test를 붙인다.
 - [ ] adapter failure contract를 typed error, retryability, timeout, idempotency, operator message까지 구현한다.
 

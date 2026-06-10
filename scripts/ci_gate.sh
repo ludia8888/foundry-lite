@@ -4,6 +4,11 @@ set -euo pipefail
 export PYTHONPATH=".:libs:apps/cli:apps/api:apps/worker"
 mkdir -p artifacts/coverage artifacts/demo artifacts/test-results artifacts/quality
 
+if [[ "${FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS:-}" == "1" ]]; then
+  echo "ERROR: FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1 is local-only; ci:gate requires PostgreSQL contract suites." >&2
+  exit 1
+fi
+
 echo "== Static: Ruff lint =="
 uv run ruff check .
 

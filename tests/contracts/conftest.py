@@ -36,7 +36,8 @@ def postgres_enabled() -> bool:
     """Sprint 9.4 contract: postgres pairing runs unless explicitly opted out.
 
     The skip flag exists only for environments without Docker (e.g. a developer
-    laptop with colima paused). CI is required to run with postgres enabled.
+    laptop with colima paused). ``scripts/ci_gate.sh`` rejects the flag so
+    release/CI evidence cannot accidentally omit PostgreSQL parity.
     """
 
     return os.environ.get("FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS") != "1"
