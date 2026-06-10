@@ -84,7 +84,7 @@ class DatasetIngestMixin(CoreServiceMixin):
                 )
                 return result
         except Exception as exc:
-            self._abort_transaction_after_error(ctx, tx_id, run_id, exc, db.sync_runs)
+            self._abort_transaction_after_error(ctx, tx_id, run_id, exc, "sync")
             if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
                 raise
             raise ValidationFailed("csv upload failed", details={"error": str(exc)}) from exc

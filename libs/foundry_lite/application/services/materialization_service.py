@@ -89,7 +89,7 @@ class MaterializationServiceMixin(CoreServiceMixin):
                 )
                 return result
         except Exception as exc:
-            self._abort_transaction_after_error(ctx, tx_id, run_id, exc, db.materialization_runs)
+            self._abort_transaction_after_error(ctx, tx_id, run_id, exc, "materialization")
             raise
 
     def _ensure_materialization(

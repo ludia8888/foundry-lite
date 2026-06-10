@@ -3,6 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from foundry_lite.application.ports import (
+    DatasetFileRecord,
+    DatasetRunKind,
+    DatasetTransactionRecord,
+    DatasetVersionRecord,
+)
 from foundry_lite.application.primitives import (
     CommitResult,
     _dataset_ref,
@@ -16,15 +22,12 @@ from foundry_lite.domain.errors import (
     NotFound,
     ValidationFailed,
 )
-from foundry_lite.infrastructure import schema as db
-from sqlalchemy import and_, insert, update
-from sqlalchemy.engine import Connection
 
 
 class DatasetTransactionMixin(CoreServiceMixin):
     def _open_dataset_transaction(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         dataset: dict[str, Any],
         tx_type: str,
@@ -35,9 +38,10 @@ class DatasetTransactionMixin(CoreServiceMixin):
             raise ValidationFailed("v1 supports only SNAPSHOT and APPEND transactions")
         tx_id = _new_id("dstx")
         latest = self._latest_version_by_dataset_id(conn, dataset["id"], allow_missing=True)
-        conn.execute(
-            insert(db.dataset_transactions).values(
-                id=tx_id,
+        self.dataset_transaction_repository.create_open_transaction(
+            transaction=conn,
+            record=DatasetTransactionRecord(
+                transaction_id=tx_id,
                 tenant_id=ctx.tenant_id,
                 dataset_id=dataset["id"],
                 branch=branch,
@@ -50,7 +54,7 @@ class DatasetTransactionMixin(CoreServiceMixin):
                 created_at=_now(),
                 committed_at=None,
                 metadata={},
-            )
+            ),
         )
         return tx_id
 
@@ -70,7 +74,7 @@ class DatasetTransactionMixin(CoreServiceMixin):
 
     def _finalize_open_transaction(
         self,
-        conn: Connection,
+        conn: Any,
         ctx: RequestContext,
         *,
         dataset: dict[str, Any],
@@ -97,10 +101,10 @@ class DatasetTransactionMixin(CoreServiceMixin):
         if compatibility_error:
             failures.append(compatibility_error)
         if failures:
-            conn.execute(
-                update(db.dataset_transactions)
-                .where(db.dataset_transactions.c.id == transaction_id)
-                .values(status="ABORTED", metadata={"validationFailures": failures})
+            self.dataset_transaction_repository.abort_transaction(
+                transaction=conn,
+                transaction_id=transaction_id,
+                metadata={"validationFailures": failures},
             )
             self._audit(
                 conn,
@@ -127,9 +131,10 @@ class DatasetTransactionMixin(CoreServiceMixin):
             row_count=stats.row_count,
             created_at=_now(),
         )
-        conn.execute(
-            insert(db.dataset_versions).values(
-                id=version_id,
+        self.dataset_transaction_repository.insert_version(
+            transaction=conn,
+            record=DatasetVersionRecord(
+                version_id=version_id,
                 tenant_id=ctx.tenant_id,
                 dataset_id=dataset["id"],
                 branch=tx["branch"],
@@ -142,30 +147,28 @@ class DatasetTransactionMixin(CoreServiceMixin):
                 status="active",
                 superseded_by_version_id=None,
                 created_at=_now(),
-            )
+            ),
         )
-        conn.execute(
-            insert(db.dataset_files).values(
-                id=_new_id("dsf"),
+        self.dataset_transaction_repository.insert_file(
+            transaction=conn,
+            record=DatasetFileRecord(
+                file_id=_new_id("dsf"),
                 tenant_id=ctx.tenant_id,
                 dataset_version_id=version_id,
                 uri=stored_commit.data_file_uri,
-                format="parquet",
+                file_format="parquet",
                 row_count=stats.row_count,
                 byte_size=stored_commit.byte_size,
                 content_hash=stored_commit.content_hash,
                 partition_values={},
-            )
+            ),
         )
-        conn.execute(
-            update(db.dataset_transactions)
-            .where(db.dataset_transactions.c.id == transaction_id)
-            .values(
-                status="COMMITTED",
-                committed_version_id=version_id,
-                schema_version=schema_version,
-                committed_at=_now(),
-            )
+        self.dataset_transaction_repository.commit_transaction(
+            transaction=conn,
+            transaction_id=transaction_id,
+            committed_version_id=version_id,
+            schema_version=schema_version,
+            committed_at=_now(),
         )
         self._outbox(
             conn,
@@ -203,8 +206,8 @@ class DatasetTransactionMixin(CoreServiceMixin):
             schema_hash=stats.schema_hash,
         )
 
-    def _require_open_transaction(self, conn: Connection, transaction_id: str) -> dict[str, Any]:
-        tx = self._select_by_id(conn, db.dataset_transactions, transaction_id)
+    def _require_open_transaction(self, conn: Any, transaction_id: str) -> dict[str, Any]:
+        tx = self.dataset_transaction_repository.transaction_by_id(transaction=conn, transaction_id=transaction_id)
         if tx is None:
             raise NotFound("dataset transaction not found", details={"transaction_id": transaction_id})
         if tx["status"] != "OPEN":
@@ -220,21 +223,12 @@ class DatasetTransactionMixin(CoreServiceMixin):
         transaction_id: str,
         run_id: str,
         exc: Exception,
-        run_table: Any,
+        run_kind: DatasetRunKind,
     ) -> None:
-        with self.engine.begin() as conn:
-            conn.execute(
-                update(db.dataset_transactions)
-                .where(
-                    and_(
-                        db.dataset_transactions.c.id == transaction_id,
-                        db.dataset_transactions.c.status == "OPEN",
-                    )
-                )
-                .values(status="ABORTED", metadata={"error": self._error_payload(exc)})
-            )
-            conn.execute(
-                update(run_table)
-                .where(run_table.c.id == run_id)
-                .values(status="FAILED", error=self._error_payload(exc), completed_at=_now())
-            )
+        self.dataset_transaction_repository.abort_open_transaction_and_fail_run(
+            transaction_id=transaction_id,
+            run_id=run_id,
+            run_kind=run_kind,
+            error=self._error_payload(exc),
+            completed_at=_now(),
+        )

@@ -145,7 +145,7 @@ class TransformServiceMixin(CoreServiceMixin):
                 )
                 return result
         except Exception as exc:
-            self._abort_transaction_after_error(ctx, tx_id, run_id, exc, db.transform_runs)
+            self._abort_transaction_after_error(ctx, tx_id, run_id, exc, "transform")
             if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
                 raise
             raise ValidationFailed("transform failed", details={"error": str(exc)}) from exc

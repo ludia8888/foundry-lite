@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from foundry_lite.application.ports import DatasetRepository, DatasetStorageAdapter
+from foundry_lite.application.ports import DatasetRepository, DatasetStorageAdapter, DatasetTransactionRepository
 from foundry_lite.security.policy import PolicyService
 
 
@@ -13,6 +13,7 @@ class CoreServiceMixin:
     root: Path
     storage_root: Path
     dataset_repository: DatasetRepository
+    dataset_transaction_repository: DatasetTransactionRepository
     dataset_storage: DatasetStorageAdapter
     engine: Any
     policy: PolicyService

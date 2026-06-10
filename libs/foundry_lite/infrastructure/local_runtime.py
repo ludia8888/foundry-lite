@@ -6,7 +6,11 @@ from sqlalchemy import create_engine
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.infrastructure.adapters import FakeDatasetStorageAdapter, LocalDatasetStorageAdapter
-from foundry_lite.infrastructure.repositories import SqlAlchemyDatasetRepository, SqlAlchemyMetadataRepository
+from foundry_lite.infrastructure.repositories import (
+    SqlAlchemyDatasetRepository,
+    SqlAlchemyDatasetTransactionRepository,
+    SqlAlchemyMetadataRepository,
+)
 from foundry_lite.security.policy import PolicyService
 
 
@@ -33,6 +37,7 @@ def create_local_core_dependencies(
         policy=PolicyService(),
         metadata_repository=SqlAlchemyMetadataRepository(engine),
         dataset_repository=SqlAlchemyDatasetRepository(engine),
+        dataset_transaction_repository=SqlAlchemyDatasetTransactionRepository(engine),
         dataset_storage=storage_adapter,
     )
 

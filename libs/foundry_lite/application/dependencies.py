@@ -4,7 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from foundry_lite.application.ports import DatasetRepository, DatasetStorageAdapter, MetadataRepository
+from foundry_lite.application.ports import (
+    DatasetRepository,
+    DatasetStorageAdapter,
+    DatasetTransactionRepository,
+    MetadataRepository,
+)
 from foundry_lite.security.policy import PolicyService
 
 
@@ -18,4 +23,5 @@ class CoreDependencies:
     policy: PolicyService
     metadata_repository: MetadataRepository
     dataset_repository: DatasetRepository
+    dataset_transaction_repository: DatasetTransactionRepository
     dataset_storage: DatasetStorageAdapter
