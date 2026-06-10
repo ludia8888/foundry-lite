@@ -32,13 +32,18 @@ product logic. The current implementation has not completed that extraction yet;
 Local demo:
 
 ```bash
-PYTHONPATH=libs:apps/cli python3.12 -m foundry_lite_cli.main demo run-supply-chain
+pnpm demo:supply-chain
 ```
 
-The local adapter uses SQLite plus local object storage under `.foundry-lite/`. The domain and
-application contracts keep the same boundaries described in the planning docs: dataset versions are
-immutable, writes are audited, action apply requires `expectedObjectVersion`, and all outputs are
-committed through the dataset transaction/manifest protocol.
+The one-command demo uses an isolated `.foundry-lite-demo/` home and starts fresh by default, so it
+can be run repeatedly without depending on a previous developer database state. If
+`FOUNDRY_LITE_HOME` is set explicitly, the CLI respects that home and does not reset it unless
+`demo run-supply-chain --fresh` is passed.
+
+The local adapter uses SQLite plus local object storage. The domain and application contracts keep
+the same boundaries described in the planning docs: dataset versions are immutable, writes are
+audited, action apply requires `expectedObjectVersion`, and all outputs are committed through the
+dataset transaction/manifest protocol.
 
 Quality and observability:
 

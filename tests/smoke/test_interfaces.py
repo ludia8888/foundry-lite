@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 from fastapi.testclient import TestClient
@@ -33,6 +34,22 @@ def test_cli_demo_seed_smoke(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_HOME", str(tmp_path / "cli"))
     main(["demo", "seed"])
     assert os.path.exists("examples/supply-chain-demo/README.md")
+
+
+def test_cli_supply_chain_demo_repeats_with_parseable_json_output(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FOUNDRY_LITE_HOME", raising=False)
+
+    main(["demo", "run-supply-chain"])
+    first = json.loads(capsys.readouterr().out)
+
+    main(["demo", "run-supply-chain"])
+    second = json.loads(capsys.readouterr().out)
+
+    assert first["action"]["status"] == "succeeded"
+    assert second["action"]["status"] == "succeeded"
+    assert second["customer"]["properties"]["approvedOrderCount"] == 2
+    assert (tmp_path / ".foundry-lite-demo" / "foundry-lite.db").exists()
 
 
 def test_api_object_set_create_and_query(core, monkeypatch) -> None:

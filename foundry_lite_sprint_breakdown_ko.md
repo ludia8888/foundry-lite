@@ -1648,6 +1648,12 @@ MVP 폐루프가 문서가 아니라 반복 가능한 자동 테스트와 데모
 - [ ] 필수 integration test와 smoke test가 100% 실행되고 100% 통과한다.
 - [ ] MVP release tag를 찍을 수 있는 상태다.
 
+**Sprint 36 구현 진행 체크**
+
+- [x] `pnpm demo:supply-chain`은 `FOUNDRY_LITE_HOME`이 명시되지 않은 경우 `.foundry-lite-demo/` 격리 저장소에서 fresh 실행되어, 이전 로컬 DB 상태에 의존하지 않는다.
+- [x] CLI smoke regression test가 같은 supply-chain demo 명령을 두 번 연속 실행하고 두 출력 모두 JSON으로 파싱되는지 검증한다.
+- [x] `pnpm ci:gate`는 supply-chain demo smoke 산출물 `artifacts/demo/supply-chain.json`을 `python -m json.tool`로 다시 파싱해, 로그가 섞인 가짜 JSON 산출물을 release evidence로 인정하지 않는다.
+
 **Demo / Proof**
 
 `pnpm demo:supply-chain` 실행 후 Web에서 full closed-loop 결과를 확인한다.

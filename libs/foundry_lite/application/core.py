@@ -354,7 +354,9 @@ class FoundryLiteCore:
     def list_runs(self, *, ctx: RequestContext | None = None) -> dict[str, list[dict[str, Any]]]:
         return self._services.runtime.list_runs(ctx=ctx)
 
-    def run_supply_chain_demo(self, *, ctx: RequestContext | None = None) -> dict[str, Any]:
+    def run_supply_chain_demo(self, *, ctx: RequestContext | None = None, fresh: bool = False) -> dict[str, Any]:
+        if fresh:
+            self.reset(confirm_dev=True)
         return self._services.demo.run_supply_chain_demo(ctx=ctx)
 
     def register_supply_chain_demo_transforms(self, ctx: RequestContext | None = None) -> None:

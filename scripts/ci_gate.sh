@@ -65,7 +65,8 @@ uv run python scripts/quality/check_public_api_coverage.py artifacts/coverage/co
 
 echo "== Dynamic: supply-chain demo smoke =="
 rm -rf .foundry-lite-ci-smoke
-FOUNDRY_LITE_HOME=.foundry-lite-ci-smoke pnpm demo:supply-chain > artifacts/demo/supply-chain.json
+FOUNDRY_LITE_HOME=.foundry-lite-ci-smoke pnpm --silent demo:supply-chain --fresh > artifacts/demo/supply-chain.json
+uv run python -m json.tool artifacts/demo/supply-chain.json > /dev/null
 
 echo "== Dynamic: runtime diagnostics =="
 rm -rf .foundry-lite-diagnostics

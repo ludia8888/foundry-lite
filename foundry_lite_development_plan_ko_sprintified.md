@@ -2870,6 +2870,7 @@ Actions:
 - `ops.action_log` dataset receives action record.
 - Downstream transform uses action log and updates another object.
 - Full path is observable in lineage/audit.
+- One-command demo is repeatable from a clean isolated demo home and does not depend on a specific developer's local DB state.
 
 ---
 
@@ -3134,6 +3135,7 @@ Testcontainers로 다음을 띄운다.
 - ontology import → object index
 - action apply → object edit + outbox
 - materialization → dataset output
+- one-command closed-loop demo repeated twice from the same checkout
 - 필수 integration scenario 100% 실행/100% 통과
 
 ### 24.3 End-to-end tests
@@ -3146,6 +3148,7 @@ Playwright:
 - object query
 - action apply
 - action log 확인
+- demo smoke output is parseable JSON release evidence
 - smoke checklist 100% 실행/100% 통과
 
 ### 24.4 Data correctness tests

@@ -31,7 +31,7 @@ pnpm ci:gate
 | 복잡도 | Radon, Xenon | 너무 복잡해서 장애 추적이 어려운 함수. CI는 block complexity `B` 초과를 막는다. |
 | 동적 테스트 | pytest + coverage | 실제 기능/실패 경로 검증, branch coverage 95% |
 | public callable coverage | `check_public_api_coverage.py` | 공개 함수/메서드가 최소 한 번 실행됐는지. 분기 검증은 branch coverage가 담당한다. |
-| 제품 데모 | `pnpm demo:supply-chain` | 문서의 MVP 폐루프가 실제로 끝까지 도는지 |
+| 제품 데모 | `pnpm demo:supply-chain` | 문서의 MVP 폐루프가 실제로 끝까지 도는지. 기본 CLI 데모는 `.foundry-lite-demo/`에서 fresh 실행되어 반복 실행이 로컬 DB 상태에 의존하지 않는다. |
 | 런타임 진단 | `run_runtime_diagnostics.py` | 메모리, 프로파일, 경고, Python 장애 로그 |
 | 브라우저 E2E | Playwright | 화면, API, core가 함께 동작하는지 |
 
@@ -68,6 +68,8 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318/v1/traces pnpm dev
 FOUNDRY_LITE_OTEL_CONSOLE=1 pnpm demo:supply-chain
 pnpm diagnostics:trace
 ```
+
+CI의 demo smoke는 `artifacts/demo/supply-chain.json`을 남긴 뒤 `python -m json.tool`로 다시 파싱한다. 따라서 데모가 성공하더라도 산출물에 `pnpm` 실행 로그나 사람이 읽는 문구가 섞이면 release gate에서 실패한다.
 
 ## 4. Metrics And Grafana
 

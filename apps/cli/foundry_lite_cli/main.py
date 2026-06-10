@@ -12,14 +12,16 @@ from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
 Handler = Callable[[FoundryLiteCore, RequestContext, argparse.Namespace], Any]
+DEFAULT_STORAGE_ROOT = ".foundry-lite"
+DEFAULT_DEMO_STORAGE_ROOT = ".foundry-lite-demo"
 
 
-def _core(adapter_profile: str | None = None) -> FoundryLiteCore:
+def _core(adapter_profile: str | None = None, *, storage_root: str | None = None) -> FoundryLiteCore:
     profile = adapter_profile if adapter_profile is not None else os.getenv("FOUNDRY_LITE_ADAPTER_PROFILE", "local")
     return FoundryLiteCore(
         dependencies=create_local_core_dependencies(
             db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
-            storage_root=os.getenv("FOUNDRY_LITE_HOME", ".foundry-lite"),
+            storage_root=storage_root or os.getenv("FOUNDRY_LITE_HOME", DEFAULT_STORAGE_ROOT),
             adapter_profile=profile,
         )
     )
@@ -46,6 +48,30 @@ def _json_arg(value: str) -> dict[str, Any]:
     return parsed
 
 
+def _is_supply_chain_demo(args: argparse.Namespace) -> bool:
+    return args.group == "demo" and getattr(args, "command", "") == "run-supply-chain"
+
+
+def _storage_root_for_args(args: argparse.Namespace) -> str | None:
+    if os.getenv("FOUNDRY_LITE_HOME") is not None:
+        return None
+    if _is_supply_chain_demo(args):
+        return DEFAULT_DEMO_STORAGE_ROOT
+    return DEFAULT_STORAGE_ROOT
+
+
+def _fresh_supply_chain_demo(args: argparse.Namespace) -> bool:
+    if not _is_supply_chain_demo(args):
+        return False
+    if args.fresh and args.reuse_state:
+        raise SystemExit("--fresh and --reuse-state cannot be used together")
+    if args.reuse_state:
+        return False
+    if args.fresh:
+        return True
+    return os.getenv("FOUNDRY_LITE_HOME") is None
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="flite")
     parser.add_argument("--adapter-profile", default=os.getenv("FOUNDRY_LITE_ADAPTER_PROFILE", "local"))
@@ -54,7 +80,9 @@ def _build_parser() -> argparse.ArgumentParser:
     demo = sub.add_parser("demo")
     demo_sub = demo.add_subparsers(dest="command", required=True)
     demo_sub.add_parser("seed")
-    demo_sub.add_parser("run-supply-chain")
+    demo_run = demo_sub.add_parser("run-supply-chain")
+    demo_run.add_argument("--fresh", action="store_true")
+    demo_run.add_argument("--reuse-state", action="store_true")
 
     dataset = sub.add_parser("dataset")
     dataset_sub = dataset.add_subparsers(dest="command", required=True)
@@ -148,8 +176,7 @@ def _demo_seed(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namesp
 
 
 def _demo_run_supply_chain(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
-    del args
-    return core.run_supply_chain_demo(ctx=ctx)
+    return core.run_supply_chain_demo(ctx=ctx, fresh=_fresh_supply_chain_demo(args))
 
 
 def _dataset_create(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
@@ -260,7 +287,13 @@ def _dispatch(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespa
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    _print(_dispatch(_core(args.adapter_profile), demo_admin_context(), args))
+    _print(
+        _dispatch(
+            _core(args.adapter_profile, storage_root=_storage_root_for_args(args)),
+            demo_admin_context(),
+            args,
+        )
+    )
 
 
 if __name__ == "__main__":

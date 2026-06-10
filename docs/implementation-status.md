@@ -14,6 +14,7 @@
 - Writeback: `mock_erp_simulator` records simulated before-commit writeback rows. It does not call an external ERP.
 - Security default: API requests without role headers resolve to `viewer`. CLI and demo scripts use an explicit demo admin context.
 - Object sets: static and dynamic saved object sets are implemented through core service, HTTP API, CLI, and Object Explorer list/create controls. Private owner visibility and temporary expiry are enforced.
+- Demo execution: `pnpm demo:supply-chain` uses an isolated `.foundry-lite-demo/` home and fresh execution by default when `FOUNDRY_LITE_HOME` is not explicitly set. This keeps the one-command demo repeatable and prevents old local action/object state from blocking the closed loop. Explicit `FOUNDRY_LITE_HOME` runs are preserved unless the caller passes `demo run-supply-chain --fresh`.
 - CLI: current implementation uses Python `argparse`; Typer is not installed in the current runtime.
 - Worker: `apps/worker` is a placeholder for a future Temporal worker.
 - Migrations: schema bootstraps through SQLAlchemy `metadata.create_all`; Alembic migrations are not implemented yet.
@@ -34,6 +35,7 @@
 - Operations UI beyond the current object explorer/object-set controls, especially failed run retry and DLQ workflows.
 - Sprint 02A Scale Foundation completion: WorkflowAdapter, StreamAdapter, SearchAdapter, ConnectorAdapter, and AuthProvider ports remain unextracted; the local repositories still rely on SQLAlchemy under the hood.
 - Postgres testcontainer contract pairing now covers `dataset_transaction`, `dataset_quality`, `runtime`, and `object_index` repositories (Sprint 9.4). The remaining repository contract suites still run against SQLite + fake only. The local escape hatch `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1` exists only for Docker-unavailable developer machines; `pnpm ci:gate` rejects it so release/CI evidence cannot skip PostgreSQL parity.
+- The closed-loop demo is repeatable as a fresh one-command smoke, but replay operations such as retrying failed runs, DLQ replay, and action-edit reindex replay remain future Operations UI/CLI work.
 
 ## Refactor Pointers
 
