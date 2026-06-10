@@ -33,6 +33,7 @@ dev = [
   "ruff>=0.5",
   "types-PyYAML>=6.0",
   "xenon>=0.9",
+  "semgrep>=1.165.0",
 ]
 
 [project.scripts]

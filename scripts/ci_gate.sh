@@ -41,8 +41,23 @@ uv run python scripts/quality/check_private_test_references.py --max-count 0
 echo "== Static: Bandit security scan =="
 uv run bandit -c pyproject.toml -r libs apps scripts
 
+echo "== Static: Semgrep design-pattern rules =="
+mkdir -p artifacts/quality
+uv run semgrep --config scripts/quality/semgrep-rules/foundry-lite.yml \
+  --error --metrics off --quiet \
+  --json --output artifacts/quality/semgrep.json \
+  .
+
 echo "== Static: pip-audit dependency vulnerability scan =="
-uv run pip-audit --progress-spinner off
+# pyjwt PYSEC-2026-175/177/178/179 are pinned <2.13 by semgrep 1.165 (dev-only
+# transitive). We do not import pyjwt directly; we ignore these CVEs at the
+# audit boundary and re-evaluate when semgrep lifts the pin or we ship a
+# dedicated JwtAuthProvider that brings pyjwt in via the application layer.
+uv run pip-audit --progress-spinner off \
+  --ignore-vuln PYSEC-2026-175 \
+  --ignore-vuln PYSEC-2026-177 \
+  --ignore-vuln PYSEC-2026-178 \
+  --ignore-vuln PYSEC-2026-179
 
 echo "== Static: Radon complexity =="
 uv run radon cc libs apps scripts -s -a

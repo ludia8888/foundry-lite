@@ -184,6 +184,23 @@ AGENTS.md 정독에 의존한다. 이 로드맵의 목표는 그 의존을 줄�
 
 ## 2. 신규 게이트 — Tier 분류
 
+### Tier P1 — Semgrep로 흡수된 게이트 (✅ 완료 2026-06-10 P1)
+
+다음 게이트들은 `scripts/quality/semgrep-rules/foundry-lite.yml`의 9개 rule로 흡수되어
+코드 모양 자체를 차단한다. 자체 self-test는 `tests/unit/test_quality_semgrep_rules.py`.
+G9 (test sleep)는 Semgrep의 default tests 제외 동작 때문에 Semgrep으로 흡수하지 않고
+AST 게이트로 유지한다.
+
+| 흡수된 게이트 | Semgrep rule |
+|---|---|
+| G1 router transaction/repo 직접 호출 | `router-no-direct-transaction`, `router-no-repository-access` |
+| G10 repository domain errors raise | `repository-no-domain-errors` |
+| §4.2 cross-service bare helper call | `action-service-no-bare-audit`, `object-services-no-bare-runtime-helpers`, `dataset-services-no-bare-runtime-helpers` |
+| §18.1 silent failure / bare except | `no-bare-except-pass` |
+| §10.2 eval/exec | `no-eval-exec` |
+| §10.2 f-string SQL | `no-fstring-sql` |
+| §4.3 application/domain vendor SDK | `application-no-vendor-sdk` |
+
 ### Tier 0 — 즉시 추출 가능 (정적 분석, 각 30~60분)
 
 | ID | 게이트 | 매핑 조항 | 정량 기준 | Root cause |

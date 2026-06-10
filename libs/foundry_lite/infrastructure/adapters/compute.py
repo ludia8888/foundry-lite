@@ -123,7 +123,11 @@ class DuckDBComputeAdapter:
             if unresolved:
                 raise ValidationFailed("transform has unresolved inputs", details={"inputs": unresolved})
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            # target_path is SQL-escaped by _sql_literal; transform SQL is trusted local project code.
+            # target_path is SQL-escaped by _sql_literal; transform SQL is
+            # trusted local project code authored by registered transforms.
+            # If transform SQL ever becomes user-supplied, this must be
+            # replaced with parameterised DuckDB execution.
+            # nosemgrep: foundry-lite-no-fstring-sql
             con.execute(f"copy ({sql}) to {_sql_literal(target_path)} (format parquet)")  # nosec B608
         finally:
             con.close()

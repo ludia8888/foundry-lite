@@ -25,6 +25,7 @@
 - 새 infra dependency는 항상 `CoreDependencies` (`libs/foundry_lite/application/dependencies.py`)에 먼저 선언하고, 실제로 그 dependency를 직접 쓰는 service의 `required_dependencies`에만 추가한다. service가 선언하지 않은 CoreDependencies 필드에 접근하면 안 된다 — `scripts/quality/check_service_dependencies.py`가 이를 강제한다.
 - service 사이의 collaborator call은 `self.runtime_service._audit(...)`처럼 소유 service가 보이는 명시적 attribute를 통해 호출한다. 각 service는 실제로 직접 호출하는 collaborator만 `required_collaborators`에 선언한다. `self._audit(...)`처럼 글로벌 method registry에 기대는 숨은 호출을 만들지 않는다. collaborator 그래프는 DAG로 유지한다. cycle 0, depth ≤ 7, service당 fan-out ≤ 10 — `scripts/quality/check_service_call_graph.py`와 `check_service_dependencies.py`가 강제한다.
 - 변경 후에는 최소한 관련 테스트와 정적 검사를 실행하고, 가능하면 `pnpm ci:gate`로 전체 품질 게이트를 확인한다.
+- 디자인 패턴/안티패턴 위반은 Semgrep rule (`scripts/quality/semgrep-rules/foundry-lite.yml`)로 코드 모양 자체를 차단한다. 위반을 우회하려고 `# nosemgrep:` 주석을 다는 경우 같은 줄에 정직한 사유와 미래 제거 조건을 적는다.
 
 ## 금지
 

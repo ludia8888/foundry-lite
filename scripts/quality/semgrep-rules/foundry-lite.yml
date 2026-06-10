@@ -1,0 +1,221 @@
+# Foundry-lite Semgrep rules
+#
+# These rules encode the Foundry-lite engineering guidelines as code-shape
+# constraints. Each rule cites the guideline section it enforces so that the
+# rule, the source code, and the doctrine document can be cross-referenced.
+#
+# Root-cause principle: every rule rejects the offending code shape, not just
+# a count. A violation can only be resolved by fixing the design, not by
+# silencing the linter.
+#
+# Run locally:
+#   uv run semgrep --config scripts/quality/semgrep-rules/foundry-lite.yml \
+#                  --error --metrics off .
+#
+# To add a rule, follow docs/quality-gate-roadmap.md §5.
+
+rules:
+  # ──────────────────────────────────────────────────────────────────────────
+  # §3.1, §6.1, §4.1 — Fat Router antipattern.
+  # API routers must call application services. They may not start DB
+  # transactions, hold an Engine, or talk to repositories directly.
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: foundry-lite-router-no-direct-transaction
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Fat Router antipattern (§3.1, §6.1): apps/api handlers must call
+      application services, never start a DB transaction. Move this to a
+      service method that owns the transaction boundary.
+    paths:
+      include:
+        - "**/apps/api"
+    pattern-either:
+      - pattern: $X.engine.begin()
+      - pattern: $X.engine.connect()
+
+  - id: foundry-lite-router-no-repository-access
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Fat Router antipattern (§3.1, §4.1): routers must not hit repositories
+      directly. Call an application service that owns the use case instead.
+    paths:
+      include:
+        - "**/apps/api"
+    pattern-either:
+      - pattern: $X.action_repository
+      - pattern: $X.dataset_repository
+      - pattern: $X.dataset_quality_repository
+      - pattern: $X.dataset_transaction_repository
+      - pattern: $X.dataset_version_repository
+      - pattern: $X.materialization_repository
+      - pattern: $X.object_index_repository
+      - pattern: $X.object_read_repository
+      - pattern: $X.object_set_repository
+      - pattern: $X.ontology_repository
+      - pattern: $X.runtime_repository
+      - pattern: $X.transform_repository
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # §3.1, §7.1, §18.3 — Repository must not carry business decisions.
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: foundry-lite-repository-no-domain-errors
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Repository business-leak (§3.1, §7.1, §18.3): infrastructure repositories
+      must not raise domain errors. They translate storage errors into typed
+      adapter errors; permission/precondition/validation decisions belong to
+      domain or application services.
+    paths:
+      include:
+        - "**/libs/foundry_lite/infrastructure/repositories"
+    pattern-either:
+      - pattern: raise ValidationFailed(...)
+      - pattern: raise PermissionDenied(...)
+      - pattern: raise ConflictDetected(...)
+      - pattern: raise InvariantViolation(...)
+      - pattern: raise NotFound(...)
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # §4.2 — Cross-service helper calls must name their owner service.
+  # We only fire on call sites OUTSIDE the owning service module: ActionService
+  # must not call self._audit (RuntimeService owns it). RuntimeService's own
+  # use of self._audit is fine. The rule list pins each helper to a specific
+  # path exclude so we don't false-positive on the owner.
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: foundry-lite-action-service-no-bare-audit
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Hidden collaborator call (§4.2): ActionService must call
+      self.runtime_service._audit(...) — _audit belongs to RuntimeService.
+    paths:
+      include:
+        - "**/libs/foundry_lite/application/services/action_service.py"
+    pattern-either:
+      - pattern: self._audit(...)
+      - pattern: self._outbox(...)
+      - pattern: self._error_payload(...)
+
+  - id: foundry-lite-object-services-no-bare-runtime-helpers
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Hidden collaborator call (§4.2): Object* services must call
+      self.runtime_service._audit / _outbox — both belong to RuntimeService.
+    paths:
+      include:
+        - "**/libs/foundry_lite/application/services/object_store"
+    pattern-either:
+      - pattern: self._audit(...)
+      - pattern: self._outbox(...)
+      - pattern: self._error_payload(...)
+
+  - id: foundry-lite-dataset-services-no-bare-runtime-helpers
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Hidden collaborator call (§4.2): Dataset* services must call
+      self.runtime_service._audit / _outbox — both belong to RuntimeService.
+    paths:
+      include:
+        - "**/libs/foundry_lite/application/services/dataset"
+    pattern-either:
+      - pattern: self._audit(...)
+      - pattern: self._outbox(...)
+      - pattern: self._error_payload(...)
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # §18.1, §18.3 — Silent failure / bare except.
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: foundry-lite-no-bare-except-pass
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Silent failure (§18.1 60, §18.3): swallowing exceptions hides the root
+      cause. Re-raise with `raise X from exc`, log with structured trace keys,
+      or convert to a typed error.
+    pattern-either:
+      - pattern: |
+          try:
+              ...
+          except Exception:
+              pass
+      - pattern: |
+          try:
+              ...
+          except:
+              pass
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # §18.1, §18.3 — Race condition disguised as time.sleep in tests.
+  # NOTE: Semgrep's default .semgrepignore excludes tests/ from scans, so
+  # enforcing this via Semgrep would require a second invocation. We leave
+  # test-sleep enforcement to a dedicated AST gate (planned as G9 in
+  # docs/quality-gate-roadmap.md) and remove the rule here so the gate stays
+  # honest about what each tool covers.
+  # ──────────────────────────────────────────────────────────────────────────
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # §10.2 — eval/exec/raw SQL.
+  # Bandit already catches some of these; Semgrep adds f-string SQL detection.
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: foundry-lite-no-eval-exec
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Dynamic code execution (§10.2 41): eval/exec are forbidden. Use a
+      Strategy or explicit safe expression evaluator.
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+
+  - id: foundry-lite-no-fstring-sql
+    languages: [python]
+    severity: WARNING
+    message: >-
+      SQL injection risk (§10.2 42): f-string interpolated into a SQL execute
+      call. Use SQLAlchemy parameter binding or text() with bound parameters.
+    paths:
+      include:
+        - "**/libs/foundry_lite"
+        - "**/apps"
+    pattern-either:
+      - pattern: |
+          $X.execute(f"...{$Y}...")
+      - pattern: |
+          $X.execute(f"...{$Y}...", ...)
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # §4.3 — Application layer must not import vendor SDKs directly.
+  # check_infra_import_boundary already does this for our SDK list at module
+  # level; the Semgrep variant doubles as a fast IDE-time lint.
+  # ──────────────────────────────────────────────────────────────────────────
+  - id: foundry-lite-application-no-vendor-sdk
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Layer violation (§4.3): application/domain code must not import vendor
+      SDKs directly. Use a port + adapter so the SDK choice stays at the
+      composition root.
+    paths:
+      include:
+        - "**/libs/foundry_lite/application"
+        - "**/libs/foundry_lite/domain"
+    pattern-either:
+      - pattern: import sqlalchemy
+      - pattern: import sqlalchemy.$X
+      - pattern: import duckdb
+      - pattern: import boto3
+      - pattern: import kafka
+      - pattern: import pyspark
+      - pattern: import temporalio
+      - pattern: from sqlalchemy import $X
+      - pattern: from sqlalchemy.$Y import $X
+      - pattern: from duckdb import $X
+      - pattern: from boto3 import $X
+      - pattern: from kafka import $X
+      - pattern: from pyspark import $X
+      - pattern: from temporalio import $X
