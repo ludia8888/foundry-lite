@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -30,6 +31,19 @@ from foundry_lite.observability.logging import configure_logging, log_event
 from foundry_lite.transforms_sdk import Input, Output, transform
 
 from tests.conftest import prepare_indexed_demo
+
+
+# Local DEMO_ROOT so each test module is self-contained and mutmut-friendly.
+# Same heuristic as tests/conftest.py.
+def _demo_root() -> Path:
+    override = os.environ.get("FOUNDRY_LITE_REPO_ROOT")
+    base = Path(override) if override else Path(__file__).resolve().parents[2]
+    if base.name == "mutants":
+        base = base.parent
+    return base / "examples" / "supply-chain-demo"
+
+
+DEMO_ROOT = _demo_root()
 
 
 class ExplodingCsvComputeAdapter(DuckDBComputeAdapter):
@@ -110,7 +124,7 @@ def test_dataset_not_found_duplicate_reset_preview_and_transform_update(
     with pytest.raises(NotFound):
         core.upload_csv("raw.crm_customers", tmp_path / "missing.csv", ctx=ctx)
     core.ensure_dataset("clean.customers", ctx=ctx, primary_key=["customer_id"])
-    committed = core.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
+    committed = core.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
     assert core.preview_dataset("raw.crm_customers", ctx=ctx, version=committed.version_id)
     assert core.inspect_dataset("raw.crm_customers", ctx=ctx, version=committed.version_id)["manifest"]
     sql_path = tmp_path / "noop.sql"
@@ -261,7 +275,7 @@ def test_transform_and_private_guard_failures(tmp_path: Path) -> None:
     core.seed_supply_chain_demo_files()
     core.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
     core.ensure_dataset("clean.customers", ctx=ctx, primary_key=["customer_id"])
-    commit = core.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
+    commit = core.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
 
     with pytest.raises(NotFound):
         core.run_transform("missing", ctx=ctx)

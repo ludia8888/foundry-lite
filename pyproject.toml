@@ -37,6 +37,10 @@ dev = [
   "import-linter>=2.11",
   "pytest-randomly>=4.1.0",
   "pytest-xdist>=3.8.0",
+  "mutmut>=3.6.0",
+  "hypothesis>=6.155.2",
+  "vulture>=2.16",
+  "interrogate>=1.7.0",
 ]
 
 [project.scripts]
@@ -61,6 +65,7 @@ exclude_also = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+extend-exclude = ["mutants"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -82,10 +87,16 @@ exclude = [
   ".mypy_cache",
   ".pytest_cache",
   ".ruff_cache",
+  "mutants",
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
+# Strict mode is enabled for the domain layer where business rules live —
+# the same layer §4.1 forbids from importing any framework. We tighten the
+# nets here first because the strict checks are tractable (small surface,
+# no Any), then expand to application once the new boundary catches up.
+strict = ["libs/foundry_lite/domain", "libs/foundry_lite/application/ports", "libs/foundry_lite/security", "libs/foundry_lite/application/services/base.py"]
 
 [tool.bandit]
 exclude_dirs = ["tests", ".venv", ".mypy_cache", ".pytest_cache", ".ruff_cache"]
@@ -93,3 +104,31 @@ skips = ["B101"]
 
 [tool.radon]
 exclude = ".venv,.mypy_cache,.pytest_cache,.ruff_cache"
+
+[tool.mutmut]
+# Mutation testing — Sprint quality-gate roadmap P4.
+#
+# Mutmut deliberately mutates source code (>= becomes >, +1 becomes -1, etc.)
+# then runs the test suite. Surviving mutants prove that 97% line coverage
+# can still hide untested branches; killed mutants prove the suite actually
+# catches the bug class.
+#
+# CURRENT STATE (2026-06-10): the baseline pytest run inside mutants/ passes,
+# meaning the tree copies and tests pass against unmodified source. The stat
+# collection step (mutmut 4.x's new mechanism to figure out which test covers
+# which mutant) reports "no test case for any mutant" even though tests
+# exercise these modules. This is an open issue with mutmut 4.x and the
+# pytest plugin layering; the gate is staged but not yet wired into ci_gate.sh
+# until upstream fixes or we move to alternative (e.g. cosmic-ray).
+#
+# Until then, `uv run mutmut run` validates that the tree is mutmut-ready and
+# can be re-enabled in CI in a single line change once the stat issue is
+# resolved.
+source_paths = [
+  "libs/foundry_lite/domain",
+  "libs/foundry_lite/application/safe_expression.py",
+  "libs/foundry_lite/application/primitives.py",
+  "libs/foundry_lite/security",
+]
+runner = "uv run pytest -x -q --no-header -p no:randomly -p no:cacheprovider"
+pytest_add_cli_args_test_selection = ["tests/contracts", "tests/unit"]

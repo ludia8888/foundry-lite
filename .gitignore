@@ -12,3 +12,7 @@ artifacts/
 node_modules/
 test-results/
 playwright-report/
+
+# mutmut working directory
+mutants/
+.mutmut-cache

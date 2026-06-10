@@ -51,6 +51,13 @@ uv run semgrep --config scripts/quality/semgrep-rules/foundry-lite.yml \
   --json --output artifacts/quality/semgrep.json \
   .
 
+echo "== Static: gitleaks secret scan =="
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks dir --no-banner --config .gitleaks.toml --report-path artifacts/quality/gitleaks.json --report-format json
+else
+  echo "WARN: gitleaks not on PATH; install with 'brew install gitleaks' (P9 gate skipped locally)." >&2
+fi
+
 echo "== Static: pip-audit dependency vulnerability scan =="
 # pyjwt PYSEC-2026-175/177/178/179 are pinned <2.13 by semgrep 1.165 (dev-only
 # transitive). We do not import pyjwt directly; we ignore these CVEs at the
@@ -65,6 +72,19 @@ uv run pip-audit --progress-spinner off \
 echo "== Static: Radon complexity =="
 uv run radon cc libs apps scripts -s -a
 uv run radon cc libs apps scripts -s -a -j -O artifacts/quality/radon_cc.json
+
+echo "== Static: Vulture dead code (80% confidence baseline) =="
+# Vulture finds unreachable functions/variables/imports. We start at the
+# 80% confidence threshold because lower confidence levels report Protocol
+# methods and public API surfaces. Future P10 work narrows this with
+# per-file allowlist as the project shrinks.
+uv run vulture libs/foundry_lite --min-confidence 80
+
+echo "== Static: Interrogate docstring coverage (baseline 25%) =="
+# Interrogate enforces a minimum docstring coverage. We pin the current
+# baseline (25%) and require monotonic increase: lowering it requires
+# a docs/quality-gate-roadmap.md amendment.
+uv run interrogate libs/foundry_lite --fail-under 25 --quiet
 
 echo "== Static: Xenon complexity gate, max block B =="
 uv run xenon --max-absolute B --max-modules B --max-average A libs apps scripts

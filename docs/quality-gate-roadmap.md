@@ -184,6 +184,88 @@ AGENTS.md 정독에 의존한다. 이 로드맵의 목표는 그 의존을 줄�
 
 ## 2. 신규 게이트 — Tier 분류
 
+### Tier P6 — Pyright strict (✅ 부분 완료 2026-06-10 P6)
+
+`pyright`는 디폴트 `basic` 모드로 전체 코드베이스를 보지만 `[tool.pyright]
+strict = [...]` 리스트의 경로는 **strict 모드**로 격상된다. 이 리스트가
+헌법화된다.
+
+현재 strict 적용 경로 (모두 0 errors):
+
+| 경로 | 의미 |
+|---|---|
+| `libs/foundry_lite/domain` | §4.1 framework 0 영역 — strict가 가장 자연스러움 |
+| `libs/foundry_lite/application/ports` | Protocol 정의 — strict로 Any 누출 자동 검출 |
+| `libs/foundry_lite/security` | 보안 결정 영역 — Any 사용 금지 |
+| `libs/foundry_lite/application/services/base.py` | CoreService DI 토대 |
+
+남은 application/services/* 와 infrastructure 어댑터는 점진적으로 strict
+리스트에 추가. 새 boundary 추출 시 ports/* 가 strict이므로 Protocol 위반이
+즉시 fail — 정통화 강제 메커니즘.
+
+### Tier P11 — interrogate docstring coverage (✅ 완료 2026-06-10 P11)
+
+`interrogate` measures the fraction of public functions, methods, and classes
+with docstrings. ci_gate pins the current baseline (25.4%) at `--fail-under 25`
+and we treat the threshold as **monotonic increasing only** — raising it
+requires no doc amendment; lowering it requires editing this roadmap §5.
+
+The point is not "documentation completeness" but **forcing the author to
+write down intent at the point of definition**, which doubles as a
+root-cause aid when later readers grep for "why does this exist".
+
+### Tier P10 — vulture dead code (✅ 완료 2026-06-10 P10)
+
+`vulture` walks the AST to find unreachable functions, unused variables,
+and dead imports. We run at `--min-confidence 80` because the lower
+thresholds (60–70%) flag Protocol method stubs and public-API surface that
+look unused by static analysis but exist by design. Anything that fires at
+80% is real dead code that must be removed or explicitly retained with a
+documented reason.
+
+### Tier P9 — gitleaks (✅ 완료 2026-06-10 P9)
+
+`gitleaks` (Homebrew install) scans the working tree for strings that look
+like API keys / tokens / credentials. Unlike Bandit (Python source) and
+Semgrep (code shape), gitleaks inspects strings as data — so it catches
+secrets pasted into docs, configs, scripts, YAML.
+
+`.gitleaks.toml` extends the upstream default ruleset and documents
+Foundry-lite specific allowlist entries with reasons (one entry for the
+Idempotency-Key header example in the development plan).
+
+ci_gate.sh skips gracefully when gitleaks is not on PATH (`WARN` with install
+hint) so a missing local tool doesn't block development; CI must have it.
+
+### Tier P5 — hypothesis (✅ 완료 2026-06-10 P5)
+
+Property-based tests at `tests/unit/test_safe_expression_properties.py`
+exercise the safe-expression evaluator with thousands of randomised inputs:
+identifiers, values, IN lists, EQ comparisons, and the validate_action_request
+parameter contract. The properties encode the invariants the evaluator must
+hold under any input.
+
+P5 surfaced one real root-cause defect on first run:
+`precondition_expression` used `or` chaining (`a or b or c`), so an
+intentional empty-string `safeExpression` silently fell back to `expression`
+or `cel`. Hypothesis generated `safe=''`, `expr=''`, `cel='0'` and showed
+the function returned `'0'` instead of `''`. Fix: explicit `in` membership
+checks.
+
+### Tier P4 — mutmut (🟡 staged, not yet in ci_gate)
+
+`uv run mutmut run` is wired up via `[tool.mutmut]` in pyproject.toml and
+the test tree is mutmut-friendly (REPO_ROOT heuristic in conftest.py + the
+helpers module both honour the `mutants/` parent path and a
+`FOUNDRY_LITE_REPO_ROOT` env override). Baseline pytest passes inside the
+mutants tree.
+
+mutmut 4.x's stat-collection step ("which test covers which mutant") reports
+no coverage even though the same tests obviously exercise the modules, so
+the mutation cycle exits before scoring. Upstream issue; gate is staged but
+not yet in `ci_gate.sh`. Either a future mutmut release or a migration to
+`cosmic-ray` will unblock without re-doing the conftest work done in P4.
+
 ### Tier P3 — pytest-randomly + pytest-xdist (✅ 완료 2026-06-10 P3)
 
 두 plugin이 *동적* root cause를 잡는다. 자체 self-test는

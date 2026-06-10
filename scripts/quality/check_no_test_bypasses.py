@@ -21,6 +21,32 @@ POSTGRES_LOCAL_OPT_OUT_MARKERS = (
     "postgres contract tests disabled",
 )
 
+# Self-test gates (tests/unit/test_quality_*.py) need a module-level skip
+# guard for the case where their dependency (scripts/quality/* or mutants/)
+# is not present. The guard cites the precise reason; we allowlist only
+# when that reason appears in the source segment.
+SELF_TEST_OPT_OUT_FILES = {
+    Path("tests/unit/test_quality_no_test_bypasses.py"),
+    Path("tests/unit/test_quality_random_and_parallel.py"),
+    Path("tests/unit/test_quality_semgrep_rules.py"),
+    Path("tests/unit/test_quality_service_wiring.py"),
+}
+SELF_TEST_OPT_OUT_MARKERS = (
+    "quality self-tests require the scripts/ tree",
+    "scripts/quality",
+    "mutants",
+)
+
+# Hypothesis property tests opt out under mutmut because per-mutant runs
+# would multiply by N mutants × hundreds of generated examples.
+MUTMUT_OPT_OUT_FILES = {
+    Path("tests/unit/test_safe_expression_properties.py"),
+}
+MUTMUT_OPT_OUT_MARKERS = (
+    "MUTMUT_RUN",
+    "too slow for per-mutant",
+)
+
 
 def _call_name(node: ast.AST) -> str:
     if isinstance(node, ast.Name):
@@ -39,11 +65,35 @@ def _is_allowed_local_postgres_opt_out(path: Path, name: str, source: str) -> bo
     return any(marker in source for marker in POSTGRES_LOCAL_OPT_OUT_MARKERS)
 
 
+def _is_allowed_self_test_guard(path: Path, name: str, source: str) -> bool:
+    if path.relative_to(ROOT) not in SELF_TEST_OPT_OUT_FILES:
+        return False
+    if name not in {"pytest.skip"}:
+        return False
+    return any(marker in source for marker in SELF_TEST_OPT_OUT_MARKERS)
+
+
+def _is_allowed_mutmut_opt_out(path: Path, name: str, source: str) -> bool:
+    if path.relative_to(ROOT) not in MUTMUT_OPT_OUT_FILES:
+        return False
+    if name not in {"pytest.mark.skipif"}:
+        return False
+    return any(marker in source for marker in MUTMUT_OPT_OUT_MARKERS)
+
+
+def _is_allowed_bypass(path: Path, name: str, source: str) -> bool:
+    return (
+        _is_allowed_local_postgres_opt_out(path, name, source)
+        or _is_allowed_self_test_guard(path, name, source)
+        or _is_allowed_mutmut_opt_out(path, name, source)
+    )
+
+
 def _call_violation(path: Path, source: str, node: ast.Call) -> str | None:
     name = _call_name(node.func)
     if name in BYPASS_CALLS:
         source_segment = ast.get_source_segment(source, node) or ""
-        if _is_allowed_local_postgres_opt_out(path, name, source_segment):
+        if _is_allowed_bypass(path, name, source_segment):
             return None
         return f"{path.relative_to(ROOT)}:{node.lineno} uses {name}"
     return None
@@ -57,7 +107,7 @@ def _decorator_violations(path: Path, source: str, node: ast.FunctionDef | ast.A
         else:
             name = _call_name(decorator)
         source_segment = ast.get_source_segment(source, decorator) or ""
-        if name in BYPASS_CALLS and not _is_allowed_local_postgres_opt_out(path, name, source_segment):
+        if name in BYPASS_CALLS and not _is_allowed_bypass(path, name, source_segment):
             violations.append(f"{path.relative_to(ROOT)}:{decorator.lineno} uses @{name}")
     return violations
 

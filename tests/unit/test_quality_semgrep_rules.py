@@ -12,6 +12,16 @@ false-positive regression.
 
 from __future__ import annotations
 
+import os as _os
+
+if not _os.path.exists(_os.path.join(_os.path.dirname(__file__), "..", "..", "scripts", "quality")):
+    import pytest
+
+    pytest.skip(
+        "quality self-tests require the scripts/ tree; skipped under mutmut's mutants/ copy.",
+        allow_module_level=True,
+    )
+
 import json
 import shutil
 import subprocess

@@ -1,0 +1,22 @@
+# gitleaks configuration — Sprint quality-gate roadmap P9.
+#
+# gitleaks scans the working tree (and optionally the full git history) for
+# strings that look like API keys, tokens, or credentials. Unlike Bandit and
+# Semgrep, it inspects strings as data, not as code shape, so it catches
+# secrets pasted into docs, configs, scripts, and YAML.
+#
+# Inherit the upstream default rule set, then add Foundry-lite-specific
+# allowlist entries with explicit reasons. Every entry must cite the rule
+# that fires and the reason the value is not a real secret.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Foundry-lite documented false positives"
+paths = [
+  # The development plan documents the Idempotency-Key HTTP header with an
+  # illustrative value (e.g. ABC123). gitleaks' generic-api-key heuristic
+  # would otherwise flag it. The value is shown only as a header example.
+  '''foundry_lite_development_plan_ko_sprintified\.md''',
+]

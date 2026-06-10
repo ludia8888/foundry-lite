@@ -21,6 +21,16 @@ test file inside a tmp directory, so the bug never enters the real suite.
 
 from __future__ import annotations
 
+import os as _os
+
+if not _os.path.exists(_os.path.join(_os.path.dirname(__file__), "..", "..", "scripts", "quality")):
+    import pytest
+
+    pytest.skip(
+        "quality self-tests require the scripts/ tree; skipped under mutmut's mutants/ copy.",
+        allow_module_level=True,
+    )
+
 import os
 import subprocess
 import sys
@@ -91,11 +101,7 @@ def test_xdist_runs_tests_in_parallel(tmp_path: Path) -> None:
     """
 
     target = tmp_path / "test_parallel.py"
-    target.write_text(
-        "import time\n"
-        "def test_one(): time.sleep(1)\n"
-        "def test_two(): time.sleep(1)\n"
-    )
+    target.write_text("import time\ndef test_one(): time.sleep(1)\ndef test_two(): time.sleep(1)\n")
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-n", "2", str(tmp_path)],
         capture_output=True,

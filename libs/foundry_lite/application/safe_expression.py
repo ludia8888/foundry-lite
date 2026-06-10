@@ -10,7 +10,14 @@ OBJECT_EQ_PATTERN = re.compile(r"^object\.([A-Za-z_][A-Za-z0-9_]*)\s*==\s*'([^']
 
 
 def precondition_expression(precondition: dict[str, Any]) -> str:
-    return precondition.get("safeExpression") or precondition.get("expression") or precondition.get("cel", "")
+    # Use explicit None checks so an empty-string safeExpression does not
+    # silently fall back to ``expression`` or ``cel`` — root-cause hardening
+    # surfaced by hypothesis P5 property tests.
+    if "safeExpression" in precondition:
+        return precondition["safeExpression"]
+    if "expression" in precondition:
+        return precondition["expression"]
+    return precondition.get("cel", "")
 
 
 def evaluate_safe_expression(expression: str, properties: dict[str, Any]) -> bool:

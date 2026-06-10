@@ -27,6 +27,9 @@
 - 변경 후에는 최소한 관련 테스트와 정적 검사를 실행하고, 가능하면 `pnpm ci:gate`로 전체 품질 게이트를 확인한다.
 - 디자인 패턴/안티패턴 위반은 Semgrep rule (`scripts/quality/semgrep-rules/foundry-lite.yml`)로 코드 모양 자체를 차단한다. 위반을 우회하려고 `# nosemgrep:` 주석을 다는 경우 같은 줄에 정직한 사유와 미래 제거 조건을 적는다.
 - Layer/import 경계는 `.importlinter` 4 contracts가 transitive 그래프로 강제한다. function-local lazy import도 잡힌다. contract 변경/약화는 `docs/quality-gate-roadmap.md` §5 워크플로를 따른다.
+- Secret/credential 노출은 `.gitleaks.toml`로 차단한다. 새 false positive를 발견하면 allowlist에 사유와 함께 등록한다. 시크릿이 실제로 들어왔다면 즉시 revoke + git history 정리한다.
+- 테스트 순서 의존성과 race condition은 pytest-randomly + pytest-xdist 두 plugin이 동적으로 강제한다. unit/contract test는 cwd에 의존하지 않는다. assets path는 conftest의 `DEMO_ROOT` 헬퍼를 쓰거나 `Path(__file__).resolve().parents[N]` 휴리스틱과 `mutants/` 부모 fallback을 같이 박는다.
+- 안전 표현식, parser, 비즈니스 규칙 같은 작은 함수에는 hypothesis property test를 추가한다 (`tests/unit/test_*_properties.py`). 예시 기반 테스트가 못 잡는 엣지 케이스를 강제로 검증한다.
 
 ## 금지
 
