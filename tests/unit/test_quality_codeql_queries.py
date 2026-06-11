@@ -105,8 +105,22 @@ def test_run_script_skips_gracefully_when_codeql_missing() -> None:
         ["bash", str(RUN_SCRIPT)],
         capture_output=True,
         text=True,
-        env={**os.environ, "PATH": "/usr/bin:/bin"},
+        env={**os.environ, "PATH": "/usr/bin:/bin", "CI": "", "FOUNDRY_LITE_STRICT_EXTERNAL_TOOLS": "0"},
         check=False,
     )
     assert result.returncode == 0, result.stderr
     assert "WARN" in result.stderr or "WARN" in result.stdout
+
+
+def test_run_script_blocks_missing_codeql_in_strict_mode() -> None:
+    if shutil.which("codeql"):
+        pytest.skip("codeql is installed; the strict missing-tool path is not exercised here")
+    result = subprocess.run(
+        ["bash", str(RUN_SCRIPT)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PATH": "/usr/bin:/bin", "CI": "", "FOUNDRY_LITE_STRICT_EXTERNAL_TOOLS": "1"},
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "cannot skip the P7 data-flow gate" in result.stderr
