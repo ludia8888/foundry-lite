@@ -60,8 +60,8 @@
 
 | # | 조항 | 게이트 | 정량 | 상태 |
 |---|---|---|---|---|
-| 15 | domain → framework 0 | `check_dependency_graph` | 0건 | ✅ |
-| 16 | application → port만 | `check_infra_import_boundary` | baseline 0 | ✅ |
+| 15 | domain → framework 0 | `check_dependency_graph` + `.importlinter` + `tach` | 0건 + DAG pass | ✅ |
+| 16 | application → port만 | `check_infra_import_boundary` + `.importlinter` + `tach` | baseline 0 + DAG pass | ✅ |
 | 17 | api → repository 직접 호출 금지 | (예정 G1) | 0건 | ❌ |
 
 ### §4.2 디자인 패턴
@@ -158,26 +158,26 @@
 |---|---|---|---|---|
 | 58 | 증상 제거 패치 금지 | (예정 G21/G22) | PR diff + git log | ❌ |
 | 59 | `except Exception: pass` 금지 | ruff `E722`+`BLE001` (부분) | 정적 | △ |
-| 60 | `sleep`/magic으로 race condition 덮기 | (예정 G9) | tests 0 | ❌ |
+| 60 | `sleep`/magic으로 race condition 덮기 | `check_no_test_sleep` | tests 0 | ✅ |
 | 61 | `dict[str, Any]` 우회 | (예정 G4) | baseline + decrease | ❌ |
 | 62 | migration 없이 DB 모양 가정 | (예정 — `check_alembic_revision_on_schema.py`) | static | ❌ |
 | 63 | Fat Router | (예정 G1) | 0건 | ❌ |
 | 64 | God Service | `check_service_call_graph` | fan-out ≤10 | ✅ |
 | 65 | Silent Failure | (예정 G17) | dynamic audit | ❌ |
 | 66 | Log-only Audit | (예정 G2/G17) | static + dynamic | ❌ |
-| 67 | Magic fallback | — (추후 §18.3 패턴 인코딩) | — | ❌ |
+| 67 | Magic fallback | AST-grep `foundry-lite-no-facade-magic-dispatch` | 0건 | ✅ |
 
 ### 매핑 점수 요약
 
 | 상태 | 개수 | 비율 |
 |---|---|---|
-| ✅ 강제 | 26 | 39% |
+| ✅ 강제 | 28 | 42% |
 | △ 부분 | 6 | 9% |
-| ❌ 미강제 | 33 | 49% |
+| ❌ 미강제 | 31 | 46% |
 | ⏳ 미해당 (구현 전) | 2 | 3% |
 | **합계** | **67** | **100%** |
 
-**현재 게이트는 문서 약속의 ~48%만 정량적으로 강제한다.** 나머지는 PR 리뷰어와
+**현재 게이트는 문서 약속의 ~51%를 정량적으로 강제한다.** 나머지는 PR 리뷰어와
 AGENTS.md 정독에 의존한다. 이 로드맵의 목표는 그 의존을 줄이는 것이다.
 
 ---
@@ -201,10 +201,11 @@ CodeQL은 정적 분석 중 유일하게 **interprocedural taint propagation**�
 | `raw-json-to-service.ql` | §5.2 / §6.3 (no dict[str,Any] passthrough) | Request body → service method (Pydantic 우회) |
 
 실행:
-- 로컬: `bash scripts/quality/codeql/run.sh` (codeql 미설치 시 WARN+exit 0 — heavyweight 1GB CLI를 강요하지 않음)
-- CI: `.github/workflows/codeql.yml`이 push/PR/weekly로 GitHub-hosted runner에서 무료 실행 + SARIF 업로드
+- 로컬 `pnpm ci:gate`: 실행하지 않음. Python 코드베이스 기준 fresh DB build 3~5분 + analyze 1~2분이므로 매 로컬 피드백 루프에 넣지 않는다.
+- 수동 디버그: `bash scripts/quality/codeql/run.sh` (로컬 codeql 미설치 시 WARN+exit 0, CI/strict mode에서는 missing tool이 실패)
+- CI: `.github/workflows/codeql.yml`이 push/PR/weekly로 GitHub-hosted runner에서 실행 + SARIF 업로드 + `fail_on_sarif_findings.py`로 finding 1개 이상이면 hard failure
 
-Self-test: `tests/unit/test_quality_codeql_queries.py` 5건이 qlpack 매니페스트, § 인용, @id/@kind/@problem.severity 메타, run.sh 실행권한, codeql 미설치 시 graceful skip 동작을 검증한다.
+Self-test: `tests/unit/test_quality_codeql_queries.py`가 qlpack 매니페스트, § 인용, @id/@kind/@problem.severity 메타, run.sh 실행권한, codeql 미설치 시 graceful local skip, 알려진 CodeQL API 호환성(`getAnInstance`)을 검증한다. `tests/unit/test_quality_codeql_sarif_gate.py`는 SARIF finding을 workflow failure로 바꾸는 hard gate를 검증한다.
 
 ### Tier P6 — Pyright strict (✅ 부분 완료 2026-06-10 P6)
 
@@ -256,8 +257,9 @@ secrets pasted into docs, configs, scripts, YAML.
 Foundry-lite specific allowlist entries with reasons (one entry for the
 Idempotency-Key header example in the development plan).
 
-ci_gate.sh skips gracefully when gitleaks is not on PATH (`WARN` with install
-hint) so a missing local tool doesn't block development; CI must have it.
+ci_gate.sh skips gracefully only on local machines when gitleaks is not on PATH
+(`WARN` with install hint). CI/release evidence sets `CI=true`, installs
+gitleaks in `.github/workflows/ci.yml`, and missing gitleaks is a hard failure.
 
 ### Tier P5 — hypothesis (✅ 완료 2026-06-10 P5)
 
@@ -318,12 +320,26 @@ function-local lazy import (application/core.py:53)를 P2가 첫 시도에 검�
 **보존**한다. import-linter는 transitive를 강제하고 우리 자체 게이트는
 module-level baseline(0)을 강제 — 서로 다른 사각지대를 잡는 이중 망.
 
+### Tier P2.5 — Tach module DAG (✅ 완료 2026-06-11)
+
+`tach.toml`은 import-linter보다 더 읽기 쉬운 **모듈 의존성 지도**를 제공한다.
+import-linter가 "금지된 transitive import 경로"를 정밀 차단한다면, Tach는
+`domain`, `application`, `infrastructure`, `apps/*`가 어떤 방향으로만 의존할 수
+있는지 선언한다. 그래서 새 scale-foundation boundary가 추가될 때 "어느 층이 어느
+층을 알아야 하는가"를 리뷰 감각이 아니라 DAG로 검증한다.
+
+실행:
+- 로컬/CI release gate: `uv run tach check --dependencies`
+- package script: `pnpm quality:architecture`
+- Self-test: `tests/unit/test_quality_ci_workflows.py`가 `ci_gate.sh`, `package.json`,
+  `tach.toml`이 서로 끊기지 않았는지 검증한다.
+
 ### Tier P1 — Semgrep로 흡수된 게이트 (✅ 완료 2026-06-10 P1)
 
 다음 게이트들은 `scripts/quality/semgrep-rules/foundry-lite.yml`의 9개 rule로 흡수되어
 코드 모양 자체를 차단한다. 자체 self-test는 `tests/unit/test_quality_semgrep_rules.py`.
 G9 (test sleep)는 Semgrep의 default tests 제외 동작 때문에 Semgrep으로 흡수하지 않고
-AST 게이트로 유지한다.
+`check_no_test_sleep.py` AST 게이트로 유지한다.
 
 | 흡수된 게이트 | Semgrep rule |
 |---|---|
@@ -334,6 +350,23 @@ AST 게이트로 유지한다.
 | §10.2 eval/exec | `no-eval-exec` |
 | §10.2 f-string SQL | `no-fstring-sql` |
 | §4.3 application/domain vendor SDK | `application-no-vendor-sdk` |
+
+### Tier P0.5 — AST-grep structural anti-magic (✅ 완료 2026-06-11)
+
+AST-grep는 Semgrep보다 Python AST 패턴을 더 좁고 빠르게 검증하기 좋은 곳에 쓴다.
+현재 첫 규칙은 `FoundryLiteCore`가 다시 `__getattr__`/`__setattr__` 기반
+method-registry magic dispatch로 돌아가는 것을 차단한다.
+
+규칙:
+- `scripts/quality/ast-grep-rules/no-facade-magic-dispatch.yml`
+- 대상: `libs/foundry_lite/application/core.py`
+- 정량 기준: `__getattr__`/`__setattr__` 0건
+
+실행:
+- 로컬/CI release gate: `pnpm exec sg scan -c sgconfig.yml`
+- package script: `pnpm quality:ast-grep`
+- Self-test: `tests/unit/test_quality_ci_workflows.py`가 임시 `core.py` fixture에
+  `__getattr__`를 심고, AST-grep가 실제 error finding을 내는지 검증한다.
 
 ### Tier 0 — 즉시 추출 가능 (정적 분석, 각 30~60분)
 
@@ -347,7 +380,7 @@ AST 게이트로 유지한다.
 | G6 | `check_pragma_no_cover_budget.py` | §11.4 53 | `# pragma: no cover` 총 카운트 baseline + monotonic decrease + 이유 주석 강제 (`# pragma: no cover  # reason: ...`) | 커버리지 우회 차단 |
 | G7 | `check_error_response_has_request_id.py` | §6.3 31, §8.3 | FastAPI `HTTPException(detail=...)` / exception handler가 `request_id` 포함하는지 정적 검증 | 사용자 응답에 추적 키 보존 |
 | G8 | `check_tier_coverage_by_layer.py` | §11.4 51 | `coverage.json` 파싱 후 `domain`/`application`/`infrastructure`/`apps/api`/`apps/cli` 각 영역 95%+ | 평균 95%에 가려진 가난한 영역 노출 |
-| G9 | `check_no_test_sleep.py` | §18.1 60 | `tests/**/*.py`에서 `time.sleep`/`asyncio.sleep` 0건 | flaky 근원 차단 |
+| G9 | `check_no_test_sleep.py` | §18.1 60 | `tests/**/*.py` AST에서 `time.sleep`/`asyncio.sleep` 호출 0건 | flaky 근원 차단 |
 | G10 | `check_repository_no_business.py` | §3.1 13, §7.1 32, §18.3 | `infrastructure/repositories/*.py`에서 도메인 errors(`ValidationFailed`, `PermissionDenied`, `ConflictDetected`) raise 0건 | Repository에 비즈니스 규칙 침투 차단 |
 
 ### Tier 1 — 중간 (정적 + 마커, 각 1~3시간)
@@ -409,19 +442,16 @@ AST 게이트로 유지한다.
 
 ---
 
-## 4. 추가 도구 후보 (분석 안 한 것)
+## 4. 추가 도구 후보 (남은 것)
 
-문서에 명시 안 됐지만 root cause 차단에 유용한 도구들:
+다음 도구들은 아직 gate로 도입하지 않은 후보들이다. 이미 도입한
+CodeQL, Semgrep, AST-grep, Tach, import-linter, vulture, interrogate,
+Pyright strict, pytest-randomly, pytest-xdist, gitleaks는 위 Tier 섹션으로
+승격했다.
 
 | 도구 | 분류 | 효과 |
 |---|---|---|
-| `import-linter` | 정적 | 우리 `check_dependency_graph`의 표준화 버전. 마이그레이션 검토 |
-| `vulture` | 정적 | dead code 검출. private_test_references baseline 0 달성 후 진짜 dead code 청산 |
-| `interrogate` | 정적 | docstring coverage. domain/application의 public 메서드는 docstring 강제 |
-| `mutmut` 또는 `cosmic-ray` | 동적 | mutation testing. 테스트가 실제로 버그를 잡는지 검증 (커버리지의 함정 차단) |
-| `pyright --strict` | 정적 | 현재 일반 모드 → 점진적 strict. `Any` 사용 자동 카운트 |
-| `pytest-randomly` | 동적 | 테스트 순서 무작위화. 숨은 의존성 검출 |
-| `pytest-xdist` + 결과 차이 검출 | 동적 | 병렬 실행 시 결과 안정성 → 진짜 결정적 테스트 보장 |
+| `cosmic-ray` | 동적 | mutmut 4.x stat-collection 이슈가 계속되면 mutation testing 대체 엔진으로 검토 |
 | OpenLineage CLI | 동적 | lineage 일관성 검증 (Foundry 차별점) |
 | `git-secrets` 또는 `truffleHog` | 정적 | secret 누출 사후 차단 (Bandit 보완) |
 | `safety` | 정적 | pip-audit 보완, CVE DB 다른 소스 |

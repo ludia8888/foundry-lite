@@ -20,7 +20,7 @@ import RawJsonToServiceFlow::PathGraph
 module RawJsonToServiceConfig implements DataFlow::ConfigSig {
   predicate isSource(DataFlow::Node source) {
     exists(API::Node n |
-      n = API::moduleImport("fastapi").getMember("Request").getInstance().getMember("json") and
+      n = API::moduleImport("fastapi").getMember("Request").getAnInstance().getMember("json") and
       source = n.getACall()
     )
   }
@@ -37,7 +37,13 @@ module RawJsonToServiceConfig implements DataFlow::ConfigSig {
     // Pydantic BaseModel.model_validate / parse_obj sanitises the value
     exists(API::Node bm |
       bm = API::moduleImport("pydantic").getMember("BaseModel") and
-      node = bm.getMember(["model_validate", "parse_obj", "model_validate_json"]).getACall()
+      (
+        node = bm.getMember("model_validate").getACall()
+        or
+        node = bm.getMember("parse_obj").getACall()
+        or
+        node = bm.getMember("model_validate_json").getACall()
+      )
     )
   }
 }

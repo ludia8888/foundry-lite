@@ -4,6 +4,11 @@ set -euo pipefail
 export PYTHONPATH=".:libs:apps/cli:apps/api:apps/worker"
 mkdir -p artifacts/coverage artifacts/demo artifacts/test-results artifacts/quality
 
+# CodeQL P7 is intentionally not run from this local/release shell gate.
+# Fresh Python DB builds take minutes and would slow every local feedback loop;
+# .github/workflows/codeql.yml owns that heavy data-flow gate and fails on SARIF
+# findings after each push/PR.
+
 if [[ "${FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS:-}" == "1" ]]; then
   echo "ERROR: FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1 is local-only; ci:gate requires PostgreSQL contract suites." >&2
   exit 1
@@ -27,6 +32,9 @@ uv run python scripts/quality/check_dependency_graph.py
 echo "== Static: import-linter layered architecture contracts =="
 uv run lint-imports --config .importlinter
 
+echo "== Static: Tach module dependency contracts =="
+uv run tach check --dependencies
+
 echo "== Static: infra import and service collaborator boundaries =="
 uv run python scripts/quality/check_infra_import_boundary.py --max-application-imports 0
 uv run python scripts/quality/check_service_dependencies.py
@@ -37,6 +45,7 @@ uv run python scripts/quality/check_application_module_size.py --max-lines 500
 
 echo "== Static: no skipped/flaky/xfail release bypasses =="
 uv run python scripts/quality/check_no_test_bypasses.py
+uv run python scripts/quality/check_no_test_sleep.py
 
 echo "== Static: private test reference baseline =="
 uv run python scripts/quality/check_private_test_references.py --max-count 0
@@ -51,18 +60,18 @@ uv run semgrep --config scripts/quality/semgrep-rules/foundry-lite.yml \
   --json --output artifacts/quality/semgrep.json \
   .
 
+echo "== Static: AST-grep structural rules =="
+pnpm exec sg scan -c sgconfig.yml
+
 echo "== Static: gitleaks secret scan =="
 if command -v gitleaks >/dev/null 2>&1; then
   gitleaks dir --no-banner --config .gitleaks.toml --report-path artifacts/quality/gitleaks.json --report-format json
+elif [[ "${CI:-}" == "true" || "${FOUNDRY_LITE_STRICT_EXTERNAL_TOOLS:-0}" == "1" ]]; then
+  echo "ERROR: gitleaks not on PATH; CI/release evidence cannot skip the P9 secret scan." >&2
+  exit 1
 else
-  echo "WARN: gitleaks not on PATH; install with 'brew install gitleaks' (P9 gate skipped locally)." >&2
+  echo "WARN: gitleaks not on PATH; install with 'brew install gitleaks' (P9 gate skipped locally only)." >&2
 fi
-
-echo "== Static: CodeQL data-flow analysis =="
-# P7 CodeQL is heavy (~5 minutes for a fresh DB build). Locally, skipping
-# is acceptable when codeql is not on PATH; CI builds the DB on every push.
-# Re-build the DB with FOUNDRY_LITE_CODEQL_FRESH=1.
-bash scripts/quality/codeql/run.sh
 
 echo "== Static: pip-audit dependency vulnerability scan =="
 # pyjwt PYSEC-2026-175/177/178/179 are pinned <2.13 by semgrep 1.165 (dev-only

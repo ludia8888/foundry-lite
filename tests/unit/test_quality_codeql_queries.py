@@ -67,6 +67,18 @@ def test_every_query_declares_id_and_severity() -> None:
         assert "@kind" in text, f"{query.name} missing @kind"
 
 
+def test_api_graph_queries_use_supported_instance_api() -> None:
+    """Regression shield for the P7 failure on 2026-06-10.
+
+    CodeQL Python API::Node exposes getAnInstance(), not getInstance(). The
+    latter compiles nowhere and breaks the GitHub-hosted data-flow gate before
+    it can produce findings.
+    """
+
+    offenders = [query.name for query in QUERIES_DIR.glob("*.ql") if ".getInstance()" in query.read_text()]
+    assert offenders == []
+
+
 def test_run_script_is_executable() -> None:
     assert RUN_SCRIPT.exists(), "run.sh missing"
     mode = RUN_SCRIPT.stat().st_mode

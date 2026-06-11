@@ -1,0 +1,2 @@
+ruleDirs:
+  - scripts/quality/ast-grep-rules

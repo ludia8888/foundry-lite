@@ -127,7 +127,7 @@ class DuckDBComputeAdapter:
             # trusted local project code authored by registered transforms.
             # If transform SQL ever becomes user-supplied, this must be
             # replaced with parameterised DuckDB execution.
-            # nosemgrep: foundry-lite-no-fstring-sql
+            # nosemgrep: foundry-lite-no-fstring-sql -- trusted local SQL; remove if user-supplied
             con.execute(f"copy ({sql}) to {_sql_literal(target_path)} (format parquet)")  # nosec B608
         finally:
             con.close()

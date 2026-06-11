@@ -1,0 +1,63 @@
+# Foundry-lite Tach module-boundary gate.
+#
+# Enforces guideline §4.1/§4.3 as a module dependency graph. import-linter
+# already catches transitive layer violations; Tach gives us an explicit,
+# human-readable map of allowed module dependencies that can grow with the
+# scale-foundation ports.
+
+source_roots = ["libs", "apps/api", "apps/cli", "apps/worker"]
+exclude = ["tests", ".venv", "mutants"]
+forbid_circular_dependencies = true
+
+[[modules]]
+path = "foundry_lite.domain"
+depends_on = []
+
+[[modules]]
+path = "foundry_lite.security"
+depends_on = ["foundry_lite.domain"]
+
+[[modules]]
+path = "foundry_lite.observability"
+depends_on = ["foundry_lite.domain"]
+
+[[modules]]
+path = "foundry_lite.transforms_sdk"
+depends_on = []
+
+[[modules]]
+path = "foundry_lite.application"
+depends_on = [
+  "foundry_lite.domain",
+  "foundry_lite.observability",
+  "foundry_lite.security",
+]
+
+[[modules]]
+path = "foundry_lite.infrastructure"
+depends_on = [
+  "foundry_lite.application",
+  "foundry_lite.domain",
+  "foundry_lite.security",
+]
+
+[[modules]]
+path = "foundry_lite_api"
+depends_on = [
+  "foundry_lite.application",
+  "foundry_lite.domain",
+  "foundry_lite.infrastructure",
+  "foundry_lite.observability",
+]
+
+[[modules]]
+path = "foundry_lite_cli"
+depends_on = [
+  "foundry_lite.application",
+  "foundry_lite.domain",
+  "foundry_lite.infrastructure",
+]
+
+[[modules]]
+path = "foundry_lite_worker"
+depends_on = []

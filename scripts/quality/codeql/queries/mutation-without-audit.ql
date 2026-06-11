@@ -18,14 +18,24 @@ import semmle.python.ApiGraphs
 predicate isMutationCall(Call call) {
   exists(string name |
     name = call.getFunc().(Attribute).getName() and
-    name in ["insert", "update", "delete", "merge"]
+    (
+      name = "insert"
+      or name = "update"
+      or name = "delete"
+      or name = "merge"
+    )
   )
 }
 
 predicate isAuditCall(Call call) {
   exists(string name |
     name = call.getFunc().(Attribute).getName() and
-    name in ["_audit", "_outbox", "insert_audit_event", "insert_outbox_event"]
+    (
+      name = "_audit"
+      or name = "_outbox"
+      or name = "insert_audit_event"
+      or name = "insert_outbox_event"
+    )
   )
 }
 
@@ -41,8 +51,8 @@ where
     isAuditCall(audit) and
     enclosingFunction(audit, f)
   ) and
-  // Exclude private helpers prefixed with double underscore (mutmut internal)
-  not f.getName().matches("xǁ%")
+  // Exclude private helpers prefixed with double underscore.
+  not f.getName().matches("__%")
 select mutation,
   "§10.2 violation: mutation in service method '" + f.getName() +
     "' has no audit/outbox sibling call. Add self.runtime_service._audit(...) " +

@@ -22,7 +22,7 @@ module HeaderToSqlConfig implements DataFlow::ConfigSig {
   predicate isSource(DataFlow::Node source) {
     exists(API::Node n |
       // FastAPI Request.headers.get(...)
-      n = API::moduleImport("fastapi").getMember("Request").getInstance().getMember("headers") and
+      n = API::moduleImport("fastapi").getMember("Request").getAnInstance().getMember("headers") and
       source = n.getMember("get").getACall()
       or
       // FastAPI Header() dependency

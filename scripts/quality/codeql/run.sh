@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Foundry-lite CodeQL gate — Sprint quality-gate roadmap P7.
 #
-# Builds (or refreshes) a CodeQL Python database, runs both the upstream
-# security-extended suite and our Foundry-lite-specific queries, and prints
-# the result. Designed to be invoked from scripts/ci_gate.sh.
+# Builds (or refreshes) a CodeQL Python database and runs the repo-local
+# Foundry-lite-specific queries. This is a manual local debugging helper only:
+# the required release gate is .github/workflows/codeql.yml, because fresh DB
+# builds are too expensive for every local ci:gate run.
 #
-# When CodeQL CLI is not on PATH, the script prints a warning and exits
-# 0 so local development is not blocked. CI must have it installed.
+# When CodeQL CLI is not on PATH, the script prints a warning and exits 0 only
+# for local debugging. CI/release evidence must never silently skip P7.
 
 set -euo pipefail
 
@@ -17,7 +18,11 @@ QUERIES_DIR="${REPO_ROOT}/scripts/quality/codeql/queries"
 SARIF_OUT="${ARTIFACT_DIR}/codeql-results.sarif"
 
 if ! command -v codeql >/dev/null 2>&1; then
-  echo "WARN: codeql not on PATH; install with 'brew install codeql' (P7 gate skipped locally)." >&2
+  if [[ "${CI:-}" == "true" || "${FOUNDRY_LITE_STRICT_EXTERNAL_TOOLS:-0}" == "1" ]]; then
+    echo "ERROR: codeql not on PATH; CI/release evidence cannot skip the P7 data-flow gate." >&2
+    exit 1
+  fi
+  echo "WARN: codeql not on PATH; install with 'brew install codeql' (manual P7 debug skipped locally)." >&2
   exit 0
 fi
 
@@ -43,27 +48,4 @@ codeql database analyze "${DB_PATH}" \
   --download \
   --quiet
 
-# Parse SARIF for any results; fail the gate if any rule produced findings.
-python3 - <<PY
-import json, sys
-with open("${SARIF_OUT}") as f:
-    sarif = json.load(f)
-total = 0
-for run in sarif.get("runs", []):
-    results = run.get("results", [])
-    if results:
-        rule = run.get("tool", {}).get("driver", {}).get("name", "unknown")
-        print(f"CodeQL findings in {rule}:")
-        for r in results:
-            loc = r.get("locations", [{}])[0]
-            uri = loc.get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "?")
-            line = loc.get("physicalLocation", {}).get("region", {}).get("startLine", "?")
-            msg = r.get("message", {}).get("text", "")
-            rule_id = r.get("ruleId", "?")
-            print(f"  - {uri}:{line} [{rule_id}] {msg}")
-            total += 1
-if total:
-    print(f"\nCodeQL: {total} root-cause finding(s); gate failed.")
-    sys.exit(1)
-print("CodeQL: 0 root-cause findings.")
-PY
+python3 "${REPO_ROOT}/scripts/quality/codeql/fail_on_sarif_findings.py" "${SARIF_OUT}"
