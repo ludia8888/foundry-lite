@@ -26,7 +26,7 @@ def test_github_ci_installs_gitleaks_before_release_gate() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     assert "actions/setup-go" in workflow
-    assert "go install github.com/gitleaks/gitleaks/v8@v8.30.1" in workflow
+    assert "go install github.com/zricethezav/gitleaks/v8@v8.30.1" in workflow
     assert workflow.index("Install gitleaks") < workflow.index("Run release gate")
 
 
