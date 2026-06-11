@@ -27,13 +27,42 @@ string detailText(Call call) {
   )
 }
 
+predicate keyHasRequestId(Expr key) {
+  key.toString().matches("%request_id%")
+  or
+  key.toString().matches("%requestId%")
+  or
+  exists(StringLiteral text |
+    key = text and
+    (
+      text.getText() = "request_id"
+      or text.getText() = "requestId"
+      or text.getS() = "request_id"
+      or text.getS() = "requestId"
+    )
+  )
+}
+
+predicate detailHasRequestId(Call call) {
+  exists(Keyword kw, Dict detail, Expr key |
+    kw = call.getAKeyword() and
+    kw.getArg() = "detail" and
+    detail = kw.getValue() and
+    key = detail.getAKey() and
+    keyHasRequestId(key)
+  )
+  or
+  detailText(call).matches("%request_id%")
+  or
+  detailText(call).matches("%requestId%")
+}
+
 from Call call, Function f
 where
   isHttpException(call) and
   call.getScope+() = f and
   f.getLocation().getFile().getRelativePath().matches("apps/api/%") and
-  not detailText(call).matches("%request_id%") and
-  not detailText(call).matches("%requestId%")
+  not detailHasRequestId(call)
 select call,
   "§8.3 violation: HTTPException in '" + f.getName() +
     "' raised without request_id in detail. Operators cannot correlate this " +

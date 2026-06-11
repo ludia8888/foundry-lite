@@ -90,6 +90,14 @@ def test_dataflow_queries_use_supported_argument_api() -> None:
     assert offenders == []
 
 
+def test_http_exception_query_checks_detail_dict_keys() -> None:
+    """The request_id gate must understand dict literals, not just string dumps."""
+
+    query = (QUERIES_DIR / "http-exception-without-request-id.ql").read_text()
+    assert "detail.getAKey()" in query
+    assert "StringLiteral" in query
+
+
 def test_run_script_is_executable() -> None:
     assert RUN_SCRIPT.exists(), "run.sh missing"
     mode = RUN_SCRIPT.stat().st_mode
