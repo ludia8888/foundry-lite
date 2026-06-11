@@ -29,7 +29,7 @@ module RawJsonToServiceConfig implements DataFlow::ConfigSig {
     // The 'core' or any service in the application layer being called
     exists(DataFlow::CallCfgNode call |
       call.getLocation().getFile().getRelativePath().matches("apps/api/%") and
-      sink = call.getAnArg()
+      exists(int i | sink = call.getArg(i))
     )
   }
 

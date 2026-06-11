@@ -7,8 +7,8 @@ claims to prohibit.
 The CodeQL queries take minutes to run, so this self-test focuses on
 *structural validity* (the .ql files are parseable, the qlpack.yml is
 well-formed, the run.sh script is invokable) rather than executing
-the full analysis. The full analysis runs in CI and in the local
-`pnpm ci:gate` step via scripts/quality/codeql/run.sh.
+the full analysis. The full analysis runs in GitHub Actions; run.sh is
+a local debugging helper only.
 
 If codeql CLI is not on PATH (local dev without Homebrew), the structural
 checks still run; only the optional full-DB build is skipped.
@@ -76,6 +76,17 @@ def test_api_graph_queries_use_supported_instance_api() -> None:
     """
 
     offenders = [query.name for query in QUERIES_DIR.glob("*.ql") if ".getInstance()" in query.read_text()]
+    assert offenders == []
+
+
+def test_dataflow_queries_use_supported_argument_api() -> None:
+    """Regression shield for the P7 failure on 2026-06-11.
+
+    CodeQL Python DataFlow::CallCfgNode exposes getArg(i). It does not expose
+    getAnArg(), so any-argument matching must quantify over getArg(i).
+    """
+
+    offenders = [query.name for query in QUERIES_DIR.glob("*.ql") if ".getAnArg()" in query.read_text()]
     assert offenders == []
 
 
