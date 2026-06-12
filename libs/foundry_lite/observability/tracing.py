@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import functools
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from opentelemetry import trace
@@ -15,6 +15,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.observability.metrics import core_operation
 
 _CONFIGURED = False
+_TRACED_MARKER = "__foundry_lite_traced__"
 
 
 def configure_observability(service_name: str = "foundry-lite") -> None:
@@ -46,6 +47,9 @@ def _ctx_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> RequestCont
 
 
 def trace_operation[F: Callable[..., Any]](operation: str, func: F) -> F:
+    if getattr(func, _TRACED_MARKER, False):
+        return func
+
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         ctx = _ctx_from_call(args, kwargs)
@@ -58,20 +62,28 @@ def trace_operation[F: Callable[..., Any]](operation: str, func: F) -> F:
             with core_operation(operation):
                 return func(*args, **kwargs)
 
+    setattr(wrapper, _TRACED_MARKER, True)
     return cast(F, wrapper)
 
 
-def trace_public_methods[T](cls: type[T]) -> type[T]:
-    for base in reversed(cls.mro()):
-        if base is object:
-            continue
-        for name, value in list(base.__dict__.items()):
-            if name.startswith("_") or not callable(value):
-                continue
-            if isinstance(value, staticmethod | classmethod):
-                continue
-            setattr(cls, name, trace_operation(f"{cls.__name__}.{name}", value))
+def trace_public_methods[T](cls: type[T], *, include_inherited: bool = True) -> type[T]:
+    classes = reversed(cls.mro()) if include_inherited else (cls,)
+    for base in classes:
+        _trace_class_dict(cls, base.__dict__)
     return cls
+
+
+def _trace_class_dict[T](target: type[T], values: Mapping[str, Any]) -> None:
+    for name, value in list(values.items()):
+        if name.startswith("_") or not callable(value):
+            continue
+        if isinstance(value, staticmethod | classmethod):
+            continue
+        setattr(target, name, trace_operation(f"{target.__name__}.{name}", value))
+
+
+def trace_direct_public_methods[T](cls: type[T]) -> type[T]:
+    return trace_public_methods(cls, include_inherited=False)
 
 
 def instrument_fastapi_app(app: Any) -> None:

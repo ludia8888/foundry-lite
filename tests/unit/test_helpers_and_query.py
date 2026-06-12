@@ -144,6 +144,9 @@ def test_dataset_not_found_duplicate_reset_preview_and_transform_update(
         ctx=ctx,
     )
     assert updated["id"] == created["id"]
+    audit_event_types = {event["event_type"] for event in core.list_runs(ctx=ctx)["auditEvents"]}
+    assert "transform.definition.created" in audit_event_types
+    assert "transform.definition.updated" in audit_event_types
     with pytest.raises(ValidationFailed):
         core.reset()
     core.reset(confirm_dev=True)
@@ -155,6 +158,18 @@ def test_permission_deny_on_dataset_write_is_audited(core: FoundryLiteCore) -> N
     with pytest.raises(PermissionDenied):
         core.create_dataset("raw.denied", ctx=viewer)
     assert any(event["decision"] == "deny" for event in core.list_runs()["auditEvents"])
+
+
+def test_permission_deny_on_dataset_read_does_not_write_audit(core: FoundryLiteCore) -> None:
+    ctx = demo_admin_context()
+    core.ensure_dataset("raw.read_boundary", ctx=ctx, primary_key=["id"])
+    audit_count_before = len(core.list_runs(ctx=ctx)["auditEvents"])
+    blocked_reader = RequestContext(actor_user_id="blocked-reader", roles=())
+
+    with pytest.raises(PermissionDenied):
+        core.get_dataset("raw.read_boundary", ctx=blocked_reader)
+
+    assert len(core.list_runs(ctx=ctx)["auditEvents"]) == audit_count_before
 
 
 def test_csv_upload_wraps_unexpected_internal_error(
@@ -428,6 +443,8 @@ def test_transforms_sdk_decorator_and_logging(caplog) -> None:
 
     configure_logging()
     with caplog.at_level(logging.INFO):
-        log_event(logging.getLogger("foundry-lite-test"), "demo")
+        log_event(logging.getLogger("foundry-lite-test"), "demo", request_id="req-test")
+    with pytest.raises(ValueError):
+        log_event(logging.getLogger("foundry-lite-test"), "missing_trace_key")
     assert compute._foundry_lite_transform_bindings["orders"].dataset_ref == "raw.erp_orders"
     assert "demo" in caplog.text

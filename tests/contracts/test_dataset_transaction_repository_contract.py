@@ -65,9 +65,12 @@ class FakeDatasetTransactionRepository:
         row = self.transactions.get(transaction_id)
         return dict(row) if row else None
 
-    def abort_transaction(self, *, transaction: Any, transaction_id: str, metadata: dict[str, Any]) -> None:
+    def abort_transaction(
+        self, *, transaction: Any, tenant_id: str, transaction_id: str, metadata: dict[str, Any]
+    ) -> None:
         del transaction
-        self.transactions[transaction_id].update(status="ABORTED", metadata=metadata)
+        if self.transactions[transaction_id]["tenant_id"] == tenant_id:
+            self.transactions[transaction_id].update(status="ABORTED", metadata=metadata)
 
     def insert_version(self, *, transaction: Any, record: DatasetVersionRecord) -> None:
         del transaction
@@ -81,12 +84,15 @@ class FakeDatasetTransactionRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         transaction_id: str,
         committed_version_id: str,
         schema_version: int,
         committed_at: str,
     ) -> None:
         del transaction
+        if self.transactions[transaction_id]["tenant_id"] != tenant_id:
+            return
         self.transactions[transaction_id].update(
             status="COMMITTED",
             committed_version_id=committed_version_id,
@@ -97,16 +103,23 @@ class FakeDatasetTransactionRepository:
     def abort_open_transaction_and_fail_run(
         self,
         *,
+        transaction: Any,
+        tenant_id: str,
         transaction_id: str,
         run_id: str,
         run_kind: DatasetRunKind,
         error: dict[str, Any],
         completed_at: str,
-    ) -> None:
+    ) -> bool:
+        del transaction
         tx = self.transactions[transaction_id]
+        if tx["tenant_id"] != tenant_id:
+            return False
+        aborted = tx["status"] == "OPEN"
         if tx["status"] == "OPEN":
             tx.update(status="ABORTED", metadata={"error": error})
         self.runs[(run_kind, run_id)].update(status="FAILED", error=error, completed_at=completed_at)
+        return aborted
 
     def insert_sync_run(self, *, transaction: Any, record: SyncRunRecord) -> None:
         del transaction
@@ -128,12 +141,15 @@ class FakeDatasetTransactionRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         sync_run_id: str,
         status: str,
         committed_version_id: str | None,
         completed_at: str,
     ) -> None:
         del transaction
+        if self.sync_runs_store[sync_run_id]["tenant_id"] != tenant_id:
+            return
         self.sync_runs_store[sync_run_id].update(
             status=status,
             committed_version_id=committed_version_id,
@@ -327,6 +343,7 @@ def test_dataset_transaction_repository_contract_commit_flow(harness: Transactio
         repository.insert_file(transaction=transaction, record=_file_record())
         repository.commit_transaction(
             transaction=transaction,
+            tenant_id="tenant-demo",
             transaction_id="dstx_commit",
             committed_version_id="dsv_orders_1",
             schema_version=1,
@@ -350,6 +367,7 @@ def test_dataset_transaction_repository_contract_abort_flow(harness: Transaction
         repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_abort"))
         repository.abort_transaction(
             transaction=transaction,
+            tenant_id="tenant-demo",
             transaction_id="dstx_abort",
             metadata={"validationFailures": [{"check": "row_count_min"}]},
         )
@@ -377,18 +395,23 @@ def test_dataset_transaction_repository_contract_abort_open_transaction_and_fail
     )
     harness.add_run(run_kind=run_kind, run_id="run_1", transaction_id="dstx_fail")
 
-    repository.abort_open_transaction_and_fail_run(
-        transaction_id="dstx_fail",
-        run_id="run_1",
-        run_kind=run_kind,
-        error={"code": "VALIDATION_FAILED"},
-        completed_at="2026-06-10T00:03:00Z",
+    aborted = harness.call_in_transaction(
+        lambda transaction: repository.abort_open_transaction_and_fail_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_fail",
+            run_id="run_1",
+            run_kind=run_kind,
+            error={"code": "VALIDATION_FAILED"},
+            completed_at="2026-06-10T00:03:00Z",
+        )
     )
     failed_run = harness.run_status(run_kind=run_kind, run_id="run_1")
     failed_tx = harness.call_in_transaction(
         lambda transaction: repository.transaction_by_id(transaction=transaction, transaction_id="dstx_fail")
     )
 
+    assert aborted is True
     assert failed_run is not None
     assert failed_run["status"] == "FAILED"
     assert failed_tx is not None
@@ -445,6 +468,7 @@ def test_dataset_transaction_repository_contract_sync_run_terminal_committed(
         repository.insert_sync_run(transaction=transaction, record=_sync_run_record())
         repository.update_sync_run_terminal(
             transaction=transaction,
+            tenant_id="tenant-demo",
             sync_run_id="sync_run_1",
             status="COMMITTED",
             committed_version_id="dsv_orders_1",

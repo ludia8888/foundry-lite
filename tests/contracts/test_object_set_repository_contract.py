@@ -4,10 +4,16 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pytest
-from foundry_lite.application.ports import ObjectSetRecord, ObjectSetRepository
+from foundry_lite.application.ports import (
+    ObjectRecordRow,
+    ObjectSetObjectTypeRow,
+    ObjectSetRecord,
+    ObjectSetRepository,
+    ObjectSetRow,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyObjectSetRepository
 from sqlalchemy import create_engine, insert
@@ -15,7 +21,8 @@ from sqlalchemy.engine import Engine
 
 
 class ObjectSetHarness(Protocol):
-    repository: ObjectSetRepository
+    @property
+    def repository(self) -> ObjectSetRepository: ...
 
     def transaction(self) -> AbstractContextManager[Any]: ...
 
@@ -28,20 +35,20 @@ class ObjectSetHarness(Protocol):
 
 @dataclass
 class FakeObjectSetRepository:
-    object_sets_store: list[dict[str, Any]] = field(default_factory=list)
-    object_types: list[dict[str, Any]] = field(default_factory=list)
+    object_sets_store: list[ObjectSetRow] = field(default_factory=list)
+    object_types: list[ObjectSetObjectTypeRow] = field(default_factory=list)
     property_types: list[dict[str, Any]] = field(default_factory=list)
-    object_records: list[dict[str, Any]] = field(default_factory=list)
+    object_records: list[ObjectRecordRow] = field(default_factory=list)
 
     def create_object_set(self, *, transaction: Any, record: ObjectSetRecord) -> None:
         del transaction
         self.object_sets_store.append(_object_set_row(record))
 
-    def object_set_by_id(self, *, transaction: Any, tenant_id: str, set_id: str) -> dict[str, Any] | None:
+    def object_set_by_id(self, *, transaction: Any, tenant_id: str, set_id: str) -> ObjectSetRow | None:
         del transaction
         for row in self.object_sets_store:
             if row["tenant_id"] == tenant_id and row["id"] == set_id:
-                return dict(row)
+                return cast(ObjectSetRow, dict(row))
         return None
 
     def object_sets(
@@ -50,18 +57,20 @@ class FakeObjectSetRepository:
         transaction: Any,
         tenant_id: str,
         object_type_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectSetRow]:
         del transaction
         rows = [
-            dict(row)
+            cast(ObjectSetRow, dict(row))
             for row in self.object_sets_store
             if row["tenant_id"] == tenant_id and (object_type_id is None or row["object_type_id"] == object_type_id)
         ]
         return sorted(rows, key=lambda row: row["created_at"])
 
-    def delete_object_sets(self, *, transaction: Any, set_ids: list[str]) -> None:
+    def delete_object_sets(self, *, transaction: Any, tenant_id: str, set_ids: list[str]) -> None:
         del transaction
-        self.object_sets_store = [row for row in self.object_sets_store if row["id"] not in set_ids]
+        self.object_sets_store = [
+            row for row in self.object_sets_store if row["tenant_id"] != tenant_id or row["id"] not in set_ids
+        ]
 
     def active_object_ids(
         self,
@@ -88,10 +97,10 @@ class FakeObjectSetRepository:
         tenant_id: str,
         object_type_api_name: str,
         object_ids: list[str],
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectRecordRow]:
         del transaction
         return [
-            dict(row)
+            cast(ObjectRecordRow, dict(row))
             for row in self.object_records
             if row["tenant_id"] == tenant_id
             and row["object_type_api_name"] == object_type_api_name
@@ -109,11 +118,11 @@ class FakeObjectSetRepository:
         transaction: Any,
         tenant_id: str,
         object_type_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> ObjectSetObjectTypeRow | None:
         del transaction
         for row in self.object_types:
             if row["tenant_id"] == tenant_id and row["id"] == object_type_id:
-                return dict(row)
+                return cast(ObjectSetObjectTypeRow, dict(row))
         return None
 
 
@@ -173,7 +182,7 @@ def _object_set_record(set_id: str, *, object_type_id: str = "ot_order") -> Obje
     )
 
 
-def _object_set_row(record: ObjectSetRecord) -> dict[str, Any]:
+def _object_set_row(record: ObjectSetRecord) -> ObjectSetRow:
     return {
         "id": record.set_id,
         "tenant_id": record.tenant_id,
@@ -193,7 +202,7 @@ def _object_type_row(
     object_type_id: str = "ot_order",
     tenant_id: str = "tenant-demo",
     api_name: str = "Order",
-) -> dict[str, Any]:
+) -> ObjectSetObjectTypeRow:
     return {
         "id": object_type_id,
         "tenant_id": tenant_id,
@@ -240,7 +249,7 @@ def _object_record_row(
     object_type_api_name: str = "Order",
     object_id: str = "O-1",
     deleted: bool = False,
-) -> dict[str, Any]:
+) -> ObjectRecordRow:
     return {
         "id": record_id,
         "tenant_id": tenant_id,
@@ -261,13 +270,19 @@ def _object_record_row(
     }
 
 
-@pytest.fixture(params=["sqlalchemy", "fake"])
+@pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> ObjectSetHarness:
     if request.param == "fake":
         return FakeObjectSetHarness(FakeObjectSetRepository())
-    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
-    db.create_database(engine)
-    return SqlAlchemyObjectSetHarness(SqlAlchemyObjectSetRepository(engine), engine)
+    if request.param == "sqlalchemy":
+        engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+        db.create_database(engine)
+        return SqlAlchemyObjectSetHarness(SqlAlchemyObjectSetRepository(engine), engine)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyObjectSetHarness(
+        SqlAlchemyObjectSetRepository(postgres_fixture.engine),
+        postgres_fixture.engine,
+    )
 
 
 def test_object_set_repository_contract_creates_lists_gets_and_deletes_sets(
@@ -287,7 +302,7 @@ def test_object_set_repository_contract_creates_lists_gets_and_deletes_sets(
             tenant_id="tenant-demo",
             object_type_id="ot_order",
         )
-        harness.repository.delete_object_sets(transaction=transaction, set_ids=["oset_1"])
+        harness.repository.delete_object_sets(transaction=transaction, tenant_id="tenant-demo", set_ids=["oset_1"])
         remaining = harness.repository.object_sets(transaction=transaction, tenant_id="tenant-demo")
 
     assert found is not None

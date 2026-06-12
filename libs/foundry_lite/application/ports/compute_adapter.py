@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 
+from foundry_lite.application.ports.dataset_quality_repository import DatasetCheckConfig, DatasetCheckResult
 from foundry_lite.application.primitives import StagedFileStats
+
+TabularRow = dict[str, object]
+"""JSON-ready tabular row keyed by column name."""
 
 
 @dataclass(frozen=True)
@@ -39,15 +44,15 @@ class ComputeAdapter(Protocol):
         """Convert a CSV file into a Parquet file."""
         ...
 
-    def rows_to_parquet(self, rows: list[dict[str, Any]], target_path: Path, fieldnames: list[str]) -> None:
+    def rows_to_parquet(self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]) -> None:
         """Write in-memory rows into a Parquet file."""
         ...
 
-    def rows_from_parquet(self, parquet_path: Path) -> list[dict[str, Any]]:
+    def rows_from_parquet(self, parquet_path: Path) -> list[TabularRow]:
         """Read all rows from a Parquet file as JSON-ready dictionaries."""
         ...
 
-    def preview_parquet(self, parquet_path: Path, *, limit: int) -> list[dict[str, Any]]:
+    def preview_parquet(self, parquet_path: Path, *, limit: int) -> list[TabularRow]:
         """Read a bounded preview from a Parquet file."""
         ...
 
@@ -55,7 +60,7 @@ class ComputeAdapter(Protocol):
         """Return row count, schema, hash, and size for a Parquet file."""
         ...
 
-    def execute_check(self, parquet_path: Path, row_count: int, check: dict[str, Any]) -> dict[str, Any]:
+    def execute_check(self, parquet_path: Path, row_count: int, check: DatasetCheckConfig) -> DatasetCheckResult:
         """Execute a dataset health check against a Parquet file."""
         ...
 

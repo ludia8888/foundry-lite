@@ -1,0 +1,152 @@
+"""Enforces guideline §11.4: coverage must not hide weak layers in averages.
+
+The ordinary coverage gate proves the whole Python backend is well exercised.
+This gate splits the same coverage JSON into architectural layers so a strong
+domain or application score cannot hide an untested API, CLI, worker, or
+infrastructure layer.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "tier_coverage_by_layer.json"
+
+LAYER_PREFIXES: dict[str, tuple[str, ...]] = {
+    "domain": ("libs/foundry_lite/domain/",),
+    "application": ("libs/foundry_lite/application/",),
+    "infrastructure": ("libs/foundry_lite/infrastructure/",),
+    "api": ("apps/api/",),
+    "cli": ("apps/cli/",),
+    "worker": ("apps/worker/",),
+}
+
+
+@dataclass(frozen=True)
+class LayerCoverage:
+    layer: str
+    file_count: int
+    covered_units: int
+    total_units: int
+    percent: float
+    covered_lines: int
+    statements: int
+    line_percent: float
+    covered_branches: int
+    branches: int
+    branch_percent: float
+    gate_pass: bool
+
+
+def _percent(covered: int, total: int) -> float:
+    if total == 0:
+        return 100.0
+    return covered / total * 100
+
+
+def _layer_for_path(path: str) -> str | None:
+    for layer, prefixes in LAYER_PREFIXES.items():
+        if any(path.startswith(prefix) for prefix in prefixes):
+            return layer
+    return None
+
+
+def collect_layer_coverage(coverage: dict[str, Any], *, threshold: float) -> dict[str, LayerCoverage]:
+    totals = {
+        layer: {
+            "file_count": 0,
+            "covered_lines": 0,
+            "statements": 0,
+            "covered_branches": 0,
+            "branches": 0,
+        }
+        for layer in LAYER_PREFIXES
+    }
+    for path, payload in coverage.get("files", {}).items():
+        layer = _layer_for_path(str(path))
+        if layer is None:
+            continue
+        summary = payload.get("summary", {})
+        bucket = totals[layer]
+        bucket["file_count"] += 1
+        bucket["covered_lines"] += int(summary.get("covered_lines", 0))
+        bucket["statements"] += int(summary.get("num_statements", 0))
+        bucket["covered_branches"] += int(summary.get("covered_branches", 0))
+        bucket["branches"] += int(summary.get("num_branches", 0))
+
+    layers: dict[str, LayerCoverage] = {}
+    for layer, bucket in totals.items():
+        covered_units = bucket["covered_lines"] + bucket["covered_branches"]
+        total_units = bucket["statements"] + bucket["branches"]
+        percent = _percent(covered_units, total_units)
+        layers[layer] = LayerCoverage(
+            layer=layer,
+            file_count=bucket["file_count"],
+            covered_units=covered_units,
+            total_units=total_units,
+            percent=round(percent, 2),
+            covered_lines=bucket["covered_lines"],
+            statements=bucket["statements"],
+            line_percent=round(_percent(bucket["covered_lines"], bucket["statements"]), 2),
+            covered_branches=bucket["covered_branches"],
+            branches=bucket["branches"],
+            branch_percent=round(_percent(bucket["covered_branches"], bucket["branches"]), 2),
+            gate_pass=bucket["file_count"] > 0 and percent >= threshold,
+        )
+    return layers
+
+
+def write_report(output: Path, layers: dict[str, LayerCoverage], threshold: float) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    violations = [layer.__dict__ for layer in layers.values() if not layer.gate_pass]
+    report = {
+        "count": len(violations),
+        "baseline": 0,
+        "threshold": threshold,
+        "gate_pass": not violations,
+        "layers": {name: layer.__dict__ for name, layer in layers.items()},
+        "violations": violations,
+    }
+    output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _print_failure(layers: dict[str, LayerCoverage], threshold: float, output: Path) -> None:
+    print("Release gate blocked: coverage is below threshold in one or more architectural layers.")
+    for layer in layers.values():
+        if layer.gate_pass:
+            continue
+        if layer.file_count == 0:
+            print(f"- {layer.layer}: missing from coverage data")
+        else:
+            print(
+                f"- {layer.layer}: {layer.percent:.2f}% < {threshold:.2f}% "
+                f"({layer.covered_units}/{layer.total_units} covered units)"
+            )
+    print(f"Report: {output.relative_to(ROOT)}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check coverage by architectural layer.")
+    parser.add_argument("coverage_json", type=Path)
+    parser.add_argument("--threshold", type=float, default=95.0)
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    args = parser.parse_args(argv)
+
+    coverage = json.loads(args.coverage_json.read_text(encoding="utf-8"))
+    layers = collect_layer_coverage(coverage, threshold=args.threshold)
+    write_report(args.output, layers, args.threshold)
+    if not all(layer.gate_pass for layer in layers.values()):
+        _print_failure(layers, args.threshold, args.output)
+        return 1
+    print(f"Layer coverage gate passed: all layers >= {args.threshold:.2f}%.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

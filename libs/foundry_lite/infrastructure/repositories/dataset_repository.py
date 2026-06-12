@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import and_, insert, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
-from foundry_lite.application.ports import DatasetAlreadyExistsError
+from foundry_lite.application.ports import DatasetAlreadyExistsError, DatasetRow
 from foundry_lite.infrastructure import schema as db
 
 
@@ -54,7 +54,7 @@ class SqlAlchemyDatasetRepository:
         except IntegrityError as exc:
             raise DatasetAlreadyExistsError from exc
 
-    def find_active_dataset(self, *, tenant_id: str, namespace: str, name: str) -> dict[str, Any] | None:
+    def find_active_dataset(self, *, tenant_id: str, namespace: str, name: str) -> DatasetRow | None:
         with self.engine.begin() as conn:
             row = (
                 conn.execute(
@@ -70,4 +70,4 @@ class SqlAlchemyDatasetRepository:
                 .mappings()
                 .first()
             )
-            return dict(row) if row else None
+            return cast(DatasetRow, dict(row)) if row else None

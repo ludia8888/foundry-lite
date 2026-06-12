@@ -5,13 +5,27 @@ import json
 import os
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
+from foundry_lite.application.action_types import ActionApplyResponse
 from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.demo_types import SupplyChainDemoResult
+from foundry_lite.application.ports import (
+    DatasetInspectionPayload,
+    DatasetRow,
+    DatasetVersionRow,
+    ObjectSetPayload,
+    RuntimeRetryResult,
+    RuntimeRunDetail,
+    RuntimeRunSnapshot,
+    TabularRow,
+    TransformRetryResult,
+)
+from foundry_lite.application.primitives import CommitResult
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
-Handler = Callable[[FoundryLiteCore, RequestContext, argparse.Namespace], Any]
+JsonObject = dict[str, object]
+Handler = Callable[[FoundryLiteCore, RequestContext, argparse.Namespace], object]
 DEFAULT_STORAGE_ROOT = ".foundry-lite"
 DEFAULT_DEMO_STORAGE_ROOT = ".foundry-lite-demo"
 
@@ -27,7 +41,7 @@ def _core(adapter_profile: str | None = None, *, storage_root: str | None = None
     )
 
 
-def _print(value: Any) -> None:
+def _print(value: object) -> None:
     print(json.dumps(value, indent=2, sort_keys=True, default=str))
 
 
@@ -41,11 +55,11 @@ def _params(values: list[str]) -> dict[str, str]:
     return params
 
 
-def _json_arg(value: str) -> dict[str, Any]:
-    parsed = json.loads(value)
+def _json_arg(value: str) -> JsonObject:
+    parsed: object = json.loads(value)
     if not isinstance(parsed, dict):
         raise SystemExit("JSON argument must be an object")
-    return parsed
+    return {str(key): item for key, item in parsed.items()}
 
 
 def _is_supply_chain_demo(args: argparse.Namespace) -> bool:
@@ -105,6 +119,8 @@ def _build_parser() -> argparse.ArgumentParser:
     transform_sub = transform.add_subparsers(dest="command", required=True)
     tr_run = transform_sub.add_parser("run")
     tr_run.add_argument("name")
+    tr_retry = transform_sub.add_parser("retry")
+    tr_retry.add_argument("run_id")
 
     ontology = sub.add_parser("ontology")
     ontology_sub = ontology.add_subparsers(dest="command", required=True)
@@ -115,6 +131,10 @@ def _build_parser() -> argparse.ArgumentParser:
     index_sub = index.add_subparsers(dest="command", required=True)
     idx_rebuild = index_sub.add_parser("rebuild")
     idx_rebuild.add_argument("object_type")
+    idx_replay = index_sub.add_parser("replay")
+    idx_replay.add_argument("object_type")
+    idx_replay_run = index_sub.add_parser("replay-run")
+    idx_replay_run.add_argument("run_id")
 
     action = sub.add_parser("action")
     action_sub = action.add_subparsers(dest="command", required=True)
@@ -165,7 +185,20 @@ def _build_parser() -> argparse.ArgumentParser:
     lineage.add_argument("resource_id")
 
     operations = sub.add_parser("operations")
-    operations.add_argument("command", choices=["runs"])
+    operations_sub = operations.add_subparsers(dest="command", required=True)
+    operations_runs = operations_sub.add_parser("runs")
+    operations_runs.add_argument("--type", dest="run_type")
+    operations_runs.add_argument("--status")
+    operations_runs.add_argument("--since")
+    operations_runs.add_argument("--until")
+    operations_run = operations_sub.add_parser("run")
+    operations_run.add_argument("run_type")
+    operations_run.add_argument("run_id")
+
+    outbox = sub.add_parser("outbox")
+    outbox_sub = outbox.add_subparsers(dest="command", required=True)
+    outbox_retry = outbox_sub.add_parser("retry")
+    outbox_retry.add_argument("event_id")
     return parser
 
 
@@ -175,31 +208,35 @@ def _demo_seed(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namesp
     return {"seeded": str(Path("examples/supply-chain-demo").resolve())}
 
 
-def _demo_run_supply_chain(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
+def _demo_run_supply_chain(
+    core: FoundryLiteCore,
+    ctx: RequestContext,
+    args: argparse.Namespace,
+) -> SupplyChainDemoResult:
     return core.run_supply_chain_demo(ctx=ctx, fresh=_fresh_supply_chain_demo(args))
 
 
-def _dataset_create(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
+def _dataset_create(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> DatasetRow:
     return core.create_dataset(args.dataset, ctx=ctx, primary_key=args.primary_key)
 
 
-def _dataset_upload(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> Any:
+def _dataset_upload(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> CommitResult:
     return core.upload_csv(args.dataset, args.path, ctx=ctx)
 
 
-def _dataset_versions(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> list[dict[str, Any]]:
+def _dataset_versions(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> list[DatasetVersionRow]:
     return core.list_dataset_versions(args.dataset, ctx=ctx)
 
 
-def _dataset_preview(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> list[dict[str, Any]]:
+def _dataset_preview(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> list[TabularRow]:
     return core.preview_dataset(args.dataset, ctx=ctx, limit=args.limit)
 
 
-def _dataset_inspect(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
+def _dataset_inspect(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> DatasetInspectionPayload:
     return core.inspect_dataset(args.dataset, ctx=ctx, version=args.version)
 
 
-def _action_apply(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
+def _action_apply(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> ActionApplyResponse:
     object_type, object_id = args.object.split("/", 1)
     current = core.get_object(object_type, object_id, ctx=ctx)
     return core.apply_action(
@@ -213,7 +250,7 @@ def _action_apply(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Nam
     )
 
 
-def _object_set_create_static(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
+def _object_set_create_static(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> ObjectSetPayload:
     return core.create_object_set(
         args.name,
         args.object_type,
@@ -225,7 +262,9 @@ def _object_set_create_static(core: FoundryLiteCore, ctx: RequestContext, args: 
     )
 
 
-def _object_set_create_dynamic(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, Any]:
+def _object_set_create_dynamic(
+    core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace
+) -> ObjectSetPayload:
     return core.create_object_set(
         args.name,
         args.object_type,
@@ -235,6 +274,28 @@ def _object_set_create_dynamic(core: FoundryLiteCore, ctx: RequestContext, args:
         ttl_seconds=args.ttl_seconds,
         ctx=ctx,
     )
+
+
+def _outbox_retry(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRetryResult:
+    return core.retry_dead_letter_event(args.event_id, ctx=ctx)
+
+
+def _operations_runs(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRunSnapshot:
+    return core.query_runs(
+        ctx=ctx,
+        run_type=args.run_type,
+        status=args.status,
+        since=args.since,
+        until=args.until,
+    )
+
+
+def _operations_run_detail(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRunDetail:
+    return core.run_detail(args.run_type, args.run_id, ctx=ctx)
+
+
+def _transform_retry(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> TransformRetryResult:
+    return core.retry_transform_run(args.run_id, ctx=ctx)
 
 
 def _handlers() -> dict[tuple[str, str], Handler]:
@@ -247,15 +308,18 @@ def _handlers() -> dict[tuple[str, str], Handler]:
         ("dataset", "preview"): _dataset_preview,
         ("dataset", "inspect"): _dataset_inspect,
         ("transform", "run"): lambda core, ctx, args: core.run_transform(args.name, ctx=ctx),
+        ("transform", "retry"): _transform_retry,
         ("ontology", "apply"): lambda core, ctx, args: core.apply_ontology(args.path, ctx=ctx),
         ("index", "rebuild"): lambda core, ctx, args: core.index_rebuild(args.object_type, ctx=ctx),
+        ("index", "replay"): lambda core, ctx, args: core.index_rebuild(args.object_type, ctx=ctx),
+        ("index", "replay-run"): lambda core, ctx, args: core.index_replay_run(args.run_id, ctx=ctx),
         ("action", "apply"): _action_apply,
         ("materialize", "run"): lambda core, ctx, args: core.materialize(args.name, ctx=ctx),
         ("object", "get"): lambda core, ctx, args: core.get_object(
             args.object_type,
             args.object_id,
             ctx=ctx,
-            explain=args.explain,
+            include_explain=args.explain,
         ),
         ("object", "links"): lambda core, ctx, args: core.get_links(
             args.object_type,
@@ -272,11 +336,13 @@ def _handlers() -> dict[tuple[str, str], Handler]:
         ("object-set", "create-dynamic"): _object_set_create_dynamic,
         ("object-set", "cleanup-expired"): lambda core, ctx, args: core.cleanup_expired_object_sets(ctx=ctx),
         ("lineage", ""): lambda core, ctx, args: core.lineage_for_resource(args.resource_id, ctx=ctx),
-        ("operations", "runs"): lambda core, ctx, args: core.list_runs(ctx=ctx),
+        ("operations", "runs"): _operations_runs,
+        ("operations", "run"): _operations_run_detail,
+        ("outbox", "retry"): _outbox_retry,
     }
 
 
-def _dispatch(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> Any:
+def _dispatch(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> object:
     key = (args.group, getattr(args, "command", ""))
     handler = _handlers().get(key)
     if handler is None:

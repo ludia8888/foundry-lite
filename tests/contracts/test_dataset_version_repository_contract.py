@@ -148,13 +148,19 @@ def _version_row(*, dataset_id: str, version_id: str, version_number: int) -> di
     }
 
 
-@pytest.fixture(params=["sqlalchemy", "fake"])
+@pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> DatasetVersionRepositoryHarness:
     if request.param == "fake":
         return FakeDatasetVersionRepositoryHarness(FakeDatasetVersionRepository())
-    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
-    db.create_database(engine)
-    return SqlAlchemyDatasetVersionRepositoryHarness(SqlAlchemyDatasetVersionRepository(engine), engine)
+    if request.param == "sqlalchemy":
+        engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+        db.create_database(engine)
+        return SqlAlchemyDatasetVersionRepositoryHarness(SqlAlchemyDatasetVersionRepository(engine), engine)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyDatasetVersionRepositoryHarness(
+        SqlAlchemyDatasetVersionRepository(postgres_fixture.engine),
+        postgres_fixture.engine,
+    )
 
 
 def test_dataset_version_repository_contract_lists_versions_and_calculates_next(

@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import cast
 
-from foundry_lite.application.ports import StoredDatasetCommit
+from foundry_lite.application.ports import DatasetManifest, DatasetManifestFile, StoredDatasetCommit
 from foundry_lite.application.primitives import _file_hash
 
 
@@ -47,20 +47,19 @@ class LocalDatasetStorageAdapter:
 
         data_file_uri = self._uri_for(final_parquet)
         manifest_path = version_dir / "manifest.json"
-        manifest: dict[str, Any] = {
+        manifest_file: DatasetManifestFile = {
+            "uri": data_file_uri,
+            "format": "parquet",
+            "row_count": row_count,
+            "byte_size": final_parquet.stat().st_size,
+            "content_hash": _file_hash(final_parquet),
+        }
+        manifest: DatasetManifest = {
             "version_id": version_id,
             "dataset": dataset_ref,
             "branch": branch,
             "schema_hash": schema_hash,
-            "files": [
-                {
-                    "uri": data_file_uri,
-                    "format": "parquet",
-                    "row_count": row_count,
-                    "byte_size": final_parquet.stat().st_size,
-                    "content_hash": _file_hash(final_parquet),
-                }
-            ],
+            "files": [manifest_file],
             "created_at": created_at,
             "storage_profile": self.profile_name,
         }
@@ -74,8 +73,8 @@ class LocalDatasetStorageAdapter:
             manifest=manifest,
         )
 
-    def load_manifest(self, manifest_uri: str) -> dict[str, Any]:
-        return json.loads(self._path_for(manifest_uri).read_text(encoding="utf-8"))
+    def load_manifest(self, manifest_uri: str) -> DatasetManifest:
+        return cast(DatasetManifest, json.loads(self._path_for(manifest_uri).read_text(encoding="utf-8")))
 
     def first_data_file_path(self, manifest_uri: str) -> Path:
         manifest = self.load_manifest(manifest_uri)

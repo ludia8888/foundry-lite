@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, cast
 
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.transform_repository import (
+    TransformCheck,
     TransformRecord,
+    TransformRow,
     TransformRunRecord,
+    TransformRunRow,
 )
 from foundry_lite.infrastructure import schema as db
 
@@ -24,7 +28,7 @@ class SqlAlchemyTransformRepository:
         transaction: Any,
         tenant_id: str,
         api_name: str,
-    ) -> dict[str, Any] | None:
+    ) -> TransformRow | None:
         row = (
             transaction.execute(
                 select(db.transforms).where(
@@ -37,7 +41,7 @@ class SqlAlchemyTransformRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(TransformRow, dict(row)) if row else None
 
     def insert_transform(self, *, transaction: Any, record: TransformRecord) -> None:
         transaction.execute(
@@ -58,30 +62,49 @@ class SqlAlchemyTransformRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         transform_id: str,
         language: str,
         entrypoint: str,
         mode: str,
         inputs: dict[str, str],
         output_dataset_ref: str,
-        checks: list[dict[str, Any]],
+        checks: Sequence[TransformCheck],
     ) -> None:
         transaction.execute(
             update(db.transforms)
-            .where(db.transforms.c.id == transform_id)
+            .where(and_(db.transforms.c.tenant_id == tenant_id, db.transforms.c.id == transform_id))
             .values(
                 language=language,
                 entrypoint=entrypoint,
                 mode=mode,
                 inputs=inputs,
                 output_dataset_ref=output_dataset_ref,
-                checks=checks,
+                checks=[dict(check) for check in checks],
             )
         )
 
-    def transform_by_id(self, *, transaction: Any, transform_id: str) -> dict[str, Any] | None:
+    def transform_by_id(self, *, transaction: Any, transform_id: str) -> TransformRow | None:
         row = transaction.execute(select(db.transforms).where(db.transforms.c.id == transform_id)).mappings().first()
-        return dict(row) if row else None
+        return cast(TransformRow, dict(row)) if row else None
+
+    def transform_run_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transform_run_id: str,
+    ) -> TransformRunRow | None:
+        row = (
+            transaction.execute(
+                select(db.transform_runs).where(
+                    and_(db.transform_runs.c.tenant_id == tenant_id, db.transform_runs.c.id == transform_run_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(TransformRunRow, dict(row)) if row else None
 
     def insert_transform_run(self, *, transaction: Any, record: TransformRunRecord) -> None:
         transaction.execute(
@@ -103,15 +126,16 @@ class SqlAlchemyTransformRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         transform_run_id: str,
         status: str,
         output_version_id: str | None,
-        error: dict[str, Any] | None,
+        error: Mapping[str, object] | None,
         completed_at: str,
     ) -> None:
         transaction.execute(
             update(db.transform_runs)
-            .where(db.transform_runs.c.id == transform_run_id)
+            .where(and_(db.transform_runs.c.tenant_id == tenant_id, db.transform_runs.c.id == transform_run_id))
             .values(
                 status=status,
                 output_version_id=output_version_id,

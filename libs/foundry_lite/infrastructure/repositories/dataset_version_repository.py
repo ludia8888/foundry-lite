@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.engine import Engine
 
+from foundry_lite.application.ports.dataset_quality_repository import DatasetSchemaRow
+from foundry_lite.application.ports.dataset_version_repository import DatasetVersionRow
 from foundry_lite.infrastructure import schema as db
 
 
@@ -25,7 +27,7 @@ class SqlAlchemyDatasetVersionRepository:
         )
         return int(latest) + 1
 
-    def schema_for_version(self, *, dataset_id: str, schema_version: int) -> dict[str, Any] | None:
+    def schema_for_version(self, *, dataset_id: str, schema_version: int) -> DatasetSchemaRow | None:
         with self.engine.begin() as conn:
             row = (
                 conn.execute(
@@ -39,9 +41,9 @@ class SqlAlchemyDatasetVersionRepository:
                 .mappings()
                 .first()
             )
-            return dict(row) if row else None
+            return cast(DatasetSchemaRow, dict(row)) if row else None
 
-    def latest_version_by_dataset_id(self, *, transaction: Any, dataset_id: str) -> dict[str, Any] | None:
+    def latest_version_by_dataset_id(self, *, transaction: Any, dataset_id: str) -> DatasetVersionRow | None:
         row = (
             transaction.execute(
                 select(db.dataset_versions)
@@ -52,17 +54,17 @@ class SqlAlchemyDatasetVersionRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(DatasetVersionRow, dict(row)) if row else None
 
-    def version_by_id(self, *, transaction: Any, version_id: str) -> dict[str, Any] | None:
+    def version_by_id(self, *, transaction: Any, version_id: str) -> DatasetVersionRow | None:
         row = (
             transaction.execute(select(db.dataset_versions).where(db.dataset_versions.c.id == version_id))
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(DatasetVersionRow, dict(row)) if row else None
 
-    def list_versions(self, *, dataset_id: str) -> list[dict[str, Any]]:
+    def list_versions(self, *, dataset_id: str) -> list[DatasetVersionRow]:
         with self.engine.begin() as conn:
             rows = (
                 conn.execute(
@@ -73,4 +75,4 @@ class SqlAlchemyDatasetVersionRepository:
                 .mappings()
                 .all()
             )
-            return [dict(row) for row in rows]
+            return [cast(DatasetVersionRow, dict(row)) for row in rows]

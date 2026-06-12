@@ -23,6 +23,7 @@ class PolicyService:
         "object:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
         "action:execute:ApproveOrder": {"admin", "ops_manager"},
         "materialization:run": {"admin", "data_engineer", "ops_manager"},
+        "operations:retry": {"admin", "ops_manager"},
     }
 
     def decide(self, ctx: RequestContext, permission: str) -> PolicyDecision:

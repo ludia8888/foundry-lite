@@ -1,21 +1,35 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from foundry_lite.application.ports import (
+    DatasetCheckConfig,
+    DatasetCheckResult,
     DatasetFileRecord,
+    DatasetManifest,
+    DatasetRow,
     DatasetRunKind,
     DatasetTransactionRecord,
+    DatasetTransactionRow,
     DatasetVersionRecord,
+    DatasetVersionRow,
+    StoredDatasetCommit,
+    TransactionContext,
 )
 from foundry_lite.application.primitives import (
     CommitResult,
-    _dataset_ref,
+    StagedFileStats,
     _new_id,
     _now,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.dataset.protocols import (
+    DatasetQualityBoundary,
+    DatasetRuntimeBoundary,
+    DatasetVersionLookup,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -24,22 +38,64 @@ from foundry_lite.domain.errors import (
 )
 
 
+@dataclass(frozen=True)
+class DatasetCommitTarget:
+    row: DatasetRow
+    dataset_id: str
+    dataset_ref: str
+    primary_key: list[str]
+
+    @classmethod
+    def from_row(cls, row: DatasetRow) -> DatasetCommitTarget:
+        return cls(
+            row=row,
+            dataset_id=row["id"],
+            dataset_ref=f"{row['namespace']}.{row['name']}",
+            primary_key=list(row["primary_key"]),
+        )
+
+
+@dataclass(frozen=True)
+class DatasetFinalizationRequest:
+    target: DatasetCommitTarget
+    transaction_id: str
+    staged_parquet: Path
+    run_id: str
+    audit_action: str
+    outbox_event_type: str
+    extra_checks: list[DatasetCheckConfig]
+
+
+@dataclass(frozen=True)
+class DatasetFinalizationCheck:
+    branch: str
+    stats: StagedFileStats
+
+
+@dataclass(frozen=True)
+class DatasetCommitArtifacts:
+    version_id: str
+    version_number: int
+    schema_version: int
+    stored_commit: StoredDatasetCommit
+
+
 class DatasetTransactionService(CoreService):
-    required_dependencies = ("dataset_storage", "dataset_transaction_repository")
+    required_dependencies = ("engine", "dataset_storage", "dataset_transaction_repository")
     required_collaborators = (
         "dataset_quality_service",
         "dataset_version_service",
         "runtime_service",
     )
-    dataset_quality_service: Any
-    dataset_version_service: Any
-    runtime_service: Any
+    dataset_quality_service: DatasetQualityBoundary
+    dataset_version_service: DatasetVersionLookup
+    runtime_service: DatasetRuntimeBoundary
 
     def _open_dataset_transaction(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
-        dataset: dict[str, Any],
+        dataset: DatasetRow,
         tx_type: str,
         *,
         branch: str = "main",
@@ -68,7 +124,7 @@ class DatasetTransactionService(CoreService):
         )
         return tx_id
 
-    def _staging_file(self, dataset: dict[str, Any], transaction_id: str, file_name: str) -> Path:
+    def _staging_file(self, dataset: DatasetRow, transaction_id: str, file_name: str) -> Path:
         return self.dataset_storage.staging_file(
             tenant_id=dataset["tenant_id"],
             dataset_id=dataset["id"],
@@ -76,86 +132,129 @@ class DatasetTransactionService(CoreService):
             file_name=file_name,
         )
 
-    def _version_file_path(self, version: dict[str, Any]) -> Path:
+    def _version_file_path(self, version: DatasetVersionRow) -> Path:
         return self.dataset_storage.first_data_file_path(version["manifest_uri"])
 
-    def _load_manifest(self, manifest_uri: str) -> dict[str, Any]:
+    def _load_manifest(self, manifest_uri: str) -> DatasetManifest:
         return self.dataset_storage.load_manifest(manifest_uri)
 
     def _finalize_open_transaction(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         *,
-        dataset: dict[str, Any],
+        dataset: DatasetRow,
         transaction_id: str,
         staged_parquet: Path,
         run_id: str,
         audit_action: str,
         outbox_event_type: str,
-        extra_checks: list[dict[str, Any]] | None = None,
+        extra_checks: Sequence[DatasetCheckConfig] | None = None,
     ) -> CommitResult:
-        tx = self._require_open_transaction(conn, transaction_id)
-        stats = self.dataset_quality_service._inspect_parquet(staged_parquet, dataset["primary_key"])
+        request = DatasetFinalizationRequest(
+            target=DatasetCommitTarget.from_row(dataset),
+            transaction_id=transaction_id,
+            staged_parquet=staged_parquet,
+            run_id=run_id,
+            audit_action=audit_action,
+            outbox_event_type=outbox_event_type,
+            extra_checks=list(extra_checks or []),
+        )
+        validation = self._validate_finalization_request(conn, ctx, request)
+        commit = self._store_finalized_dataset_commit(conn, ctx, request, validation)
+        self._persist_finalized_dataset_version(conn, ctx, request, validation, commit)
+        self._emit_dataset_commit_events(conn, ctx, request, validation, commit)
+        return self._commit_result(request, validation, commit)
+
+    def _validate_finalization_request(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        request: DatasetFinalizationRequest,
+    ) -> DatasetFinalizationCheck:
+        tx = self._require_open_transaction(conn, request.transaction_id)
+        stats = self.dataset_quality_service._inspect_parquet(
+            request.staged_parquet,
+            request.target.primary_key,
+        )
         failures = self.dataset_quality_service._run_dataset_checks(
             conn,
             ctx,
-            dataset,
+            request.target.row,
             stats.parquet_path,
             stats.row_count,
-            run_id,
-            transaction_id,
-            extra_checks=extra_checks or [],
+            request.run_id,
+            request.transaction_id,
+            extra_checks=request.extra_checks,
         )
-        compatibility_error = self.dataset_quality_service._schema_compatibility_error(conn, dataset, stats.schema_json)
+        compatibility_error = self.dataset_quality_service._schema_compatibility_error(
+            conn,
+            request.target.row,
+            stats.schema_json,
+        )
         if compatibility_error:
             failures.append(compatibility_error)
         if failures:
-            self.dataset_transaction_repository.abort_transaction(
-                transaction=conn,
-                transaction_id=transaction_id,
-                metadata={"validationFailures": failures},
-            )
-            self.runtime_service._audit(
-                conn,
-                ctx,
-                event_type="dataset.transaction.aborted",
-                resource_type="dataset_transaction",
-                resource_id=transaction_id,
-                action="abort",
-                after_ref={"failures": failures},
-            )
-            raise ValidationFailed("dataset checks failed", details={"failures": failures})
+            self._abort_finalization_with_failures(conn, ctx, request.transaction_id, failures)
+        return DatasetFinalizationCheck(branch=str(tx["branch"]), stats=stats)
 
+    def _store_finalized_dataset_commit(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        request: DatasetFinalizationRequest,
+        validation: DatasetFinalizationCheck,
+    ) -> DatasetCommitArtifacts:
         schema_version = self.dataset_quality_service._ensure_schema(
-            conn, dataset, stats.schema_json, stats.schema_hash
+            conn,
+            request.target.row,
+            validation.stats.schema_json,
+            validation.stats.schema_hash,
         )
-        version_number = self.dataset_version_service._next_dataset_version_number(conn, dataset["id"])
+        version_number = self.dataset_version_service._next_dataset_version_number(
+            conn,
+            request.target.dataset_id,
+        )
         version_id = _new_id("dsv")
         stored_commit = self.dataset_storage.commit_staged_file(
             tenant_id=ctx.tenant_id,
-            dataset_id=dataset["id"],
-            branch=tx["branch"],
+            dataset_id=request.target.dataset_id,
+            branch=validation.branch,
             version_id=version_id,
-            dataset_ref=_dataset_ref(dataset),
-            schema_hash=stats.schema_hash,
-            staged_file=staged_parquet,
-            row_count=stats.row_count,
+            dataset_ref=request.target.dataset_ref,
+            schema_hash=validation.stats.schema_hash,
+            staged_file=request.staged_parquet,
+            row_count=validation.stats.row_count,
             created_at=_now(),
         )
+        return DatasetCommitArtifacts(
+            version_id=version_id,
+            version_number=version_number,
+            schema_version=schema_version,
+            stored_commit=stored_commit,
+        )
+
+    def _persist_finalized_dataset_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        request: DatasetFinalizationRequest,
+        validation: DatasetFinalizationCheck,
+        commit: DatasetCommitArtifacts,
+    ) -> None:
         self.dataset_transaction_repository.insert_version(
             transaction=conn,
             record=DatasetVersionRecord(
-                version_id=version_id,
+                version_id=commit.version_id,
                 tenant_id=ctx.tenant_id,
-                dataset_id=dataset["id"],
-                branch=tx["branch"],
-                version_number=version_number,
-                transaction_id=transaction_id,
-                schema_version=schema_version,
-                manifest_uri=stored_commit.manifest_uri,
-                row_count=stats.row_count,
-                byte_size=stored_commit.byte_size,
+                dataset_id=request.target.dataset_id,
+                branch=validation.branch,
+                version_number=commit.version_number,
+                transaction_id=request.transaction_id,
+                schema_version=commit.schema_version,
+                manifest_uri=commit.stored_commit.manifest_uri,
+                row_count=validation.stats.row_count,
+                byte_size=commit.stored_commit.byte_size,
                 status="active",
                 superseded_by_version_id=None,
                 created_at=_now(),
@@ -163,62 +262,133 @@ class DatasetTransactionService(CoreService):
         )
         self.dataset_transaction_repository.insert_file(
             transaction=conn,
-            record=DatasetFileRecord(
-                file_id=_new_id("dsf"),
-                tenant_id=ctx.tenant_id,
-                dataset_version_id=version_id,
-                uri=stored_commit.data_file_uri,
-                file_format="parquet",
-                row_count=stats.row_count,
-                byte_size=stored_commit.byte_size,
-                content_hash=stored_commit.content_hash,
-                partition_values={},
-            ),
+            record=self._dataset_file_record(ctx, validation, commit),
         )
-        self.dataset_transaction_repository.commit_transaction(
-            transaction=conn,
-            transaction_id=transaction_id,
-            committed_version_id=version_id,
-            schema_version=schema_version,
-            committed_at=_now(),
+        self._commit_transaction_row(
+            conn,
+            ctx,
+            request.transaction_id,
+            commit.version_id,
+            commit.schema_version,
         )
+
+    def _dataset_file_record(
+        self,
+        ctx: RequestContext,
+        validation: DatasetFinalizationCheck,
+        commit: DatasetCommitArtifacts,
+    ) -> DatasetFileRecord:
+        return DatasetFileRecord(
+            file_id=_new_id("dsf"),
+            tenant_id=ctx.tenant_id,
+            dataset_version_id=commit.version_id,
+            uri=commit.stored_commit.data_file_uri,
+            file_format="parquet",
+            row_count=validation.stats.row_count,
+            byte_size=commit.stored_commit.byte_size,
+            content_hash=commit.stored_commit.content_hash,
+            partition_values={},
+        )
+
+    def _emit_dataset_commit_events(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        request: DatasetFinalizationRequest,
+        validation: DatasetFinalizationCheck,
+        commit: DatasetCommitArtifacts,
+    ) -> None:
         self.runtime_service._outbox(
             conn,
             ctx,
-            outbox_event_type,
+            request.outbox_event_type,
             "dataset_version",
-            version_id,
+            commit.version_id,
             {
-                "datasetId": dataset["id"],
-                "datasetRef": _dataset_ref(dataset),
-                "versionId": version_id,
-                "branch": tx["branch"],
+                "datasetId": request.target.dataset_id,
+                "datasetRef": request.target.dataset_ref,
+                "versionId": commit.version_id,
+                "branch": validation.branch,
             },
-            idempotency_key=version_id,
-            correlation_id=run_id,
+            idempotency_key=commit.version_id,
+            correlation_id=request.run_id,
         )
         self.runtime_service._audit(
             conn,
             ctx,
             event_type="dataset.version.committed",
             resource_type="dataset_version",
-            resource_id=version_id,
-            action=audit_action,
-            after_ref={"dataset_ref": _dataset_ref(dataset), "version_number": version_number},
-            correlation_id=run_id,
-        )
-        return CommitResult(
-            dataset_id=dataset["id"],
-            dataset_ref=_dataset_ref(dataset),
-            transaction_id=transaction_id,
-            version_id=version_id,
-            version_number=version_number,
-            row_count=stats.row_count,
-            manifest_uri=stored_commit.manifest_uri,
-            schema_hash=stats.schema_hash,
+            resource_id=commit.version_id,
+            action=request.audit_action,
+            after_ref={
+                "dataset_ref": request.target.dataset_ref,
+                "version_number": commit.version_number,
+            },
+            correlation_id=request.run_id,
         )
 
-    def _require_open_transaction(self, conn: Any, transaction_id: str) -> dict[str, Any]:
+    def _commit_result(
+        self,
+        request: DatasetFinalizationRequest,
+        validation: DatasetFinalizationCheck,
+        commit: DatasetCommitArtifacts,
+    ) -> CommitResult:
+        return CommitResult(
+            dataset_id=request.target.dataset_id,
+            dataset_ref=request.target.dataset_ref,
+            transaction_id=request.transaction_id,
+            version_id=commit.version_id,
+            version_number=commit.version_number,
+            row_count=validation.stats.row_count,
+            manifest_uri=commit.stored_commit.manifest_uri,
+            schema_hash=validation.stats.schema_hash,
+        )
+
+    def _abort_finalization_with_failures(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        transaction_id: str,
+        failures: Sequence[DatasetCheckResult],
+    ) -> None:
+        """Abort an open transaction and record validation failures for audit."""
+        failure_list = [dict(failure) for failure in failures]
+        self.dataset_transaction_repository.abort_transaction(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            transaction_id=transaction_id,
+            metadata={"validationFailures": failure_list},
+        )
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="dataset.transaction.aborted",
+            resource_type="dataset_transaction",
+            resource_id=transaction_id,
+            action="abort",
+            after_ref={"failures": failure_list},
+        )
+        raise ValidationFailed("dataset checks failed", details={"failures": failure_list})
+
+    def _commit_transaction_row(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        transaction_id: str,
+        version_id: str,
+        schema_version: int,
+    ) -> None:
+        """Mark the transaction committed after the version and files are stored."""
+        self.dataset_transaction_repository.commit_transaction(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            transaction_id=transaction_id,
+            committed_version_id=version_id,
+            schema_version=schema_version,
+            committed_at=_now(),
+        )
+
+    def _require_open_transaction(self, conn: TransactionContext, transaction_id: str) -> DatasetTransactionRow:
         tx = self.dataset_transaction_repository.transaction_by_id(transaction=conn, transaction_id=transaction_id)
         if tx is None:
             raise NotFound("dataset transaction not found", details={"transaction_id": transaction_id})
@@ -236,11 +406,33 @@ class DatasetTransactionService(CoreService):
         run_id: str,
         exc: Exception,
         run_kind: DatasetRunKind,
+        adapter: str | None = None,
     ) -> None:
-        self.dataset_transaction_repository.abort_open_transaction_and_fail_run(
-            transaction_id=transaction_id,
+        error_payload = self.runtime_service._error_payload(
+            exc,
+            ctx,
             run_id=run_id,
-            run_kind=run_kind,
-            error=self.runtime_service._error_payload(exc),
-            completed_at=_now(),
+            correlation_id=run_id,
+            adapter=adapter,
         )
+        with self.engine.begin() as conn:
+            aborted = self.dataset_transaction_repository.abort_open_transaction_and_fail_run(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                transaction_id=transaction_id,
+                run_id=run_id,
+                run_kind=run_kind,
+                error=error_payload,
+                completed_at=_now(),
+            )
+            if aborted:
+                self.runtime_service._audit(
+                    conn,
+                    ctx,
+                    event_type="dataset.transaction.aborted",
+                    resource_type="dataset_transaction",
+                    resource_id=transaction_id,
+                    action="abort",
+                    after_ref={"error": error_payload},
+                    correlation_id=run_id,
+                )

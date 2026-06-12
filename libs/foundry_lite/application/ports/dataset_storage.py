@@ -2,7 +2,36 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol, TypedDict
+
+from foundry_lite.application.ports.dataset_quality_repository import DatasetSchemaJson
+from foundry_lite.application.ports.dataset_version_repository import DatasetVersionRow
+
+
+class DatasetManifestFile(TypedDict):
+    uri: str
+    format: str
+    row_count: int
+    byte_size: int
+    content_hash: str
+
+
+class DatasetManifest(TypedDict):
+    version_id: str
+    dataset: str
+    branch: str
+    schema_hash: str
+    files: list[DatasetManifestFile]
+    created_at: str
+    storage_profile: str
+
+
+class DatasetInspectionPayload(TypedDict):
+    dataset: str
+    dataset_id: str
+    version: DatasetVersionRow
+    schema: DatasetSchemaJson
+    manifest: DatasetManifest
 
 
 @dataclass(frozen=True)
@@ -14,7 +43,7 @@ class StoredDatasetCommit:
     data_file_path: Path
     byte_size: int
     content_hash: str
-    manifest: dict[str, Any]
+    manifest: DatasetManifest
 
 
 class DatasetStorageAdapter(Protocol):
@@ -46,7 +75,7 @@ class DatasetStorageAdapter(Protocol):
         """Promote a staged file into a committed dataset version manifest."""
         ...
 
-    def load_manifest(self, manifest_uri: str) -> dict[str, Any]:
+    def load_manifest(self, manifest_uri: str) -> DatasetManifest:
         """Load a committed dataset manifest by logical URI."""
         ...
 

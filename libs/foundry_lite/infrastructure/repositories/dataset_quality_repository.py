@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import and_, func, insert, select
 from sqlalchemy.engine import Engine
@@ -8,7 +8,9 @@ from sqlalchemy.engine import Engine
 from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckRecord,
     DatasetCheckResultRecord,
+    DatasetCheckRow,
     DatasetSchemaRecord,
+    DatasetSchemaRow,
 )
 from foundry_lite.infrastructure import schema as db
 
@@ -25,7 +27,7 @@ class SqlAlchemyDatasetQualityRepository:
         transaction: Any,
         dataset_id: str,
         schema_hash: str,
-    ) -> dict[str, Any] | None:
+    ) -> DatasetSchemaRow | None:
         row = (
             transaction.execute(
                 select(db.dataset_schemas).where(
@@ -38,7 +40,7 @@ class SqlAlchemyDatasetQualityRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(DatasetSchemaRow, dict(row)) if row else None
 
     def latest_schema_version(self, *, transaction: Any, dataset_id: str) -> int | None:
         value = transaction.execute(
@@ -65,7 +67,7 @@ class SqlAlchemyDatasetQualityRepository:
         tenant_id: str,
         dataset_id: str,
         name: str,
-    ) -> dict[str, Any] | None:
+    ) -> DatasetCheckRow | None:
         row = (
             transaction.execute(
                 select(db.dataset_checks).where(
@@ -79,7 +81,7 @@ class SqlAlchemyDatasetQualityRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(DatasetCheckRow, dict(row)) if row else None
 
     def insert_check(self, *, transaction: Any, record: DatasetCheckRecord) -> None:
         transaction.execute(

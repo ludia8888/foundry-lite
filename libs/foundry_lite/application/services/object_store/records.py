@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
-
+from foundry_lite.application.ports import ObjectRecordRow, TransactionContext
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 
@@ -12,11 +11,11 @@ class ObjectRecordsService(CoreService):
 
     def _object_record(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         object_type_api_name: str,
         object_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> ObjectRecordRow | None:
         return self.object_read_repository.object_record(
             transaction=conn,
             tenant_id=ctx.tenant_id,

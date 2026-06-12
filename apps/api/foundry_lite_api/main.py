@@ -2,11 +2,24 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any
+from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from foundry_lite.application.action_types import ActionApplyResponse
 from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.ports import (
+    ObjectIndexRebuildResult,
+    ObjectPayload,
+    ObjectQueryResult,
+    ObjectSetPayload,
+    ObjectSetQueryResult,
+    RuntimeRetryResult,
+    RuntimeRunDetail,
+    RuntimeRunSnapshot,
+    TabularRow,
+    TransformRetryResult,
+)
 from foundry_lite.application.ports.auth_provider import AuthProvider
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
@@ -43,11 +56,22 @@ auth_provider: AuthProvider = HeaderTrustAuthProvider()
 instrument_fastapi_app(app)
 instrument_sqlalchemy_engine(core.engine)
 
+JsonObject = dict[str, object]
+
+
+class ActionTargetRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    object_type: str = Field(alias="objectType")
+    object_id: str = Field(alias="objectId")
+
 
 class ActionApplyRequest(BaseModel):
-    target: dict[str, str]
+    model_config = ConfigDict(populate_by_name=True)
+
+    target: ActionTargetRequest
     expected_object_version: int = Field(alias="expectedObjectVersion")
-    params: dict[str, Any]
+    params: JsonObject
 
 
 class ObjectSetCreateRequest(BaseModel):
@@ -58,12 +82,21 @@ class ObjectSetCreateRequest(BaseModel):
     set_type: str = Field(alias="setType")
     visibility: str = "private"
     ids: list[str] | None = None
-    filter_ast: dict[str, Any] | None = Field(default=None, alias="filter")
+    filter_ast: JsonObject | None = Field(default=None, alias="filter")
     ttl_seconds: int | None = Field(default=None, alias="ttlSeconds")
 
 
+class ObjectQueryRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    filter_ast: JsonObject | None = Field(default=None, alias="filter")
+    order_by: list[dict[str, str]] | None = Field(default=None, alias="orderBy")
+    limit: int = 50
+    cursor: str | None = None
+
+
 @app.middleware("http")
-async def telemetry_middleware(request: Request, call_next: Any) -> Response:
+async def telemetry_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     started_at = time.perf_counter()
     request_id = request.headers.get("X-Request-ID") or f"api-{time.time_ns()}"
     request.state.request_id = request_id
@@ -157,7 +190,7 @@ def metrics() -> Response:
 
 
 @app.get("/api/datasets/{namespace}/{name}/preview")
-def preview_dataset(request: Request, namespace: str, name: str, limit: int = 100) -> list[dict[str, Any]]:
+def preview_dataset(request: Request, namespace: str, name: str, limit: int = 100) -> list[TabularRow]:
     try:
         return core.preview_dataset(f"{namespace}.{name}", limit=limit, ctx=_ctx(request))
     except FoundryLiteError as exc:
@@ -165,9 +198,29 @@ def preview_dataset(request: Request, namespace: str, name: str, limit: int = 10
 
 
 @app.get("/api/objects/{object_type}/{object_id}")
-def get_object(request: Request, object_type: str, object_id: str) -> dict[str, Any]:
+def get_object(
+    request: Request,
+    object_type: str,
+    object_id: str,
+    include_explain: bool = Query(default=False, alias="explain"),
+) -> ObjectPayload:
     try:
-        return core.get_object(object_type, object_id, ctx=_ctx(request))
+        return core.get_object(object_type, object_id, ctx=_ctx(request), include_explain=include_explain)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/objects/{object_type}/query")
+def query_objects(request: Request, object_type: str, payload: ObjectQueryRequest) -> ObjectQueryResult:
+    try:
+        return core.query_objects(
+            object_type,
+            ctx=_ctx(request),
+            filter_ast=payload.filter_ast,
+            order_by=payload.order_by,
+            limit=payload.limit,
+            cursor=payload.cursor,
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -176,7 +229,7 @@ def get_object(request: Request, object_type: str, object_id: str) -> dict[str, 
 def query_object_sets(
     request: Request,
     object_type: str | None = Query(default=None, alias="objectType"),
-) -> dict[str, list[dict[str, Any]]]:
+) -> ObjectSetQueryResult:
     try:
         return core.query_object_sets(ctx=_ctx(request), object_type_api_name=object_type)
     except FoundryLiteError as exc:
@@ -184,7 +237,7 @@ def query_object_sets(
 
 
 @app.post("/api/object-sets")
-def create_object_set(request: Request, payload: ObjectSetCreateRequest) -> dict[str, Any]:
+def create_object_set(request: Request, payload: ObjectSetCreateRequest) -> ObjectSetPayload:
     try:
         return core.create_object_set(
             payload.name,
@@ -201,9 +254,63 @@ def create_object_set(request: Request, payload: ObjectSetCreateRequest) -> dict
 
 
 @app.get("/api/object-sets/{set_id}")
-def get_object_set(request: Request, set_id: str) -> dict[str, Any]:
+def get_object_set(request: Request, set_id: str) -> ObjectSetPayload:
     try:
         return core.get_object_set(set_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/runs")
+def list_operation_runs(
+    request: Request,
+    run_type: str | None = Query(default=None, alias="runType"),
+    status: str | None = Query(default=None),
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+) -> RuntimeRunSnapshot:
+    try:
+        return core.query_runs(ctx=_ctx(request), run_type=run_type, status=status, since=since, until=until)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/runs/{run_type}/{run_id}")
+def get_operation_run_detail(request: Request, run_type: str, run_id: str) -> RuntimeRunDetail:
+    try:
+        return core.run_detail(run_type, run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/dead-letter-events/{event_id}/retry")
+def retry_dead_letter_event(request: Request, event_id: str) -> RuntimeRetryResult:
+    try:
+        return core.retry_dead_letter_event(event_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/index/{object_type}/replay")
+def replay_object_index(request: Request, object_type: str) -> ObjectIndexRebuildResult:
+    try:
+        return core.index_rebuild(object_type, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/runs/index/{run_id}/replay")
+def replay_failed_index_run(request: Request, run_id: str) -> ObjectIndexRebuildResult:
+    try:
+        return core.index_replay_run(run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/runs/transform/{run_id}/retry")
+def retry_failed_transform_run(request: Request, run_id: str) -> TransformRetryResult:
+    try:
+        return core.retry_transform_run(run_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -214,12 +321,12 @@ def apply_action(
     action_type: str,
     payload: ActionApplyRequest,
     idempotency_key: str = Header(alias="Idempotency-Key"),
-) -> dict[str, Any]:
+) -> ActionApplyResponse:
     try:
         return core.apply_action(
             action_type,
-            object_type=payload.target["objectType"],
-            object_id=payload.target["objectId"],
+            object_type=payload.target.object_type,
+            object_id=payload.target.object_id,
             expected_object_version=payload.expected_object_version,
             params=payload.params,
             idempotency_key=idempotency_key,

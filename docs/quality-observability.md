@@ -23,12 +23,40 @@ pnpm ci:gate
 | service 의존성 | `check_service_dependencies.py` | service의 `required_dependencies`/`required_collaborators` 선언과 실제 dependency/collaborator 접근이 다르거나, 숨은 `self.<attr>`에 기대는 문제 |
 | service call graph | `check_service_call_graph.py` | `self.runtime_service._audit(...)` 같은 명시적 collaborator call이 순환하거나 depth/fan-out 한계를 넘는 문제 |
 | 모듈 크기 | `check_application_module_size.py` | application core/service 파일이 다시 god file로 커지는 문제 |
+| 함수 길이 | `check_function_length.py` | application 함수가 40줄을 넘으면서 책임이 섞이는 문제 |
+| boolean naming | `check_boolean_naming.py` | boolean 인자와 annotated field가 `is_`/`has_`/`can_`/`should_`/`include_` 같은 읽기 쉬운 이름을 벗어나는 문제 |
+| dict-any signature budget | `check_dict_any_budget.py` | application 함수 시그니처에서 `dict[str, Any]`가 더 늘어나 schema drift를 숨기는 문제 |
+| API router purity | `check_router_layer_purity.py` | API 라우터가 application service를 건너뛰고 repository나 DB transaction을 직접 만지는 문제 |
+| query side-effect boundary | `check_query_side_effects.py` | 조회처럼 보이는 service method가 DB write, audit/outbox/lineage write, 파일 write, write adapter, mutation collaborator로 이어지는 문제 |
+| repository no-business | `check_repository_no_business.py` | repository가 validation/permission/conflict 같은 비즈니스 판단을 직접 소유하거나 transaction을 직접 끝내는 문제 |
+| tenant write guard | `check_tenant_write_guard.py` | tenant-scoped insert/update/delete가 `tenant_id` 없이 실행되어 다른 tenant 데이터를 건드릴 수 있는 문제 |
+| contract test per port | `check_contract_test_per_port.py` | 새 port/interface가 contract test 없이 추가되어 fake/local/scale adapter 의미가 갈라지는 문제 |
+| strategy/specification testability | `check_strategy_specification_tests.py` | filter/precondition 같은 조건 규칙이 API/Core 경유 테스트로만 검증되어 작은 규칙을 따로 고치기 어려워지는 문제 |
+| integration scenario markers | `check_integration_scenario_markers.py` | MVP release 필수 통합 시나리오 7개 중 하나라도 테스트 마커로 증명되지 않는 문제 |
+| regression test per bug-fix | `check_regression_test_per_bugfix.py` | fix/bug/patch/regression 커밋이 회귀 테스트 없이 증상만 덮고 들어오는 문제 |
+| PR root-cause evidence | `check_pr_root_cause_section.py` | PR 설명에 원인, 영향 범위, 회귀 방지 증거가 없어 리뷰가 증상 제거 패치를 놓치는 문제 |
+| current-state doc drift | `check_doc_drift.py` | 현재 구현처럼 적은 문서의 source path/script/Python symbol이 실제 코드에 없어 문서가 코드보다 앞서는 문제 |
+| schema revision guard | `check_schema_revision_guard.py` | DB 테이블/컬럼/unique constraint 모양이 revision snapshot 없이 바뀌어 코드 가정만 남는 문제 |
+| mutation audit | `check_audit_on_mutation.py` | public service mutation이 repository write에 닿으면서 audit/outbox 증거가 없는 문제 |
+| transaction outbox/audit pair | `check_transaction_outbox_pair.py` | 같은 transaction 안에서 state write와 audit/outbox 증거가 함께 남지 않는 문제 |
+| action idempotency | `check_idempotency_on_action.py` | Action API/Core/Service/schema 사이에서 `Idempotency-Key` 필수 계약과 기존 action_run 재사용 경로가 끊기는 문제 |
+| error response request_id | `check_error_response_has_request_id.py` | API 에러 응답에서 운영 추적용 `request_id`가 빠지는 문제 |
+| log trace keys | `check_log_has_trace_keys.py` | 운영 로그가 `request_id`, `tenant_id`, run id 계열 키 없이 남아 trace/audit/API 에러와 이어지지 않는 문제 |
+| required operational metrics | `check_metrics_exposed.py` | Prometheus payload에서 dataset commit, transform, action, query, outbox lag, failed run, DLQ size 지표가 빠지는 문제 |
+| runtime audit count | `check_audit_count_runtime.py` | 데모 폐루프가 만든 상태 변경 수와 durable `audit_events` row 수가 어긋나는 문제 |
+| runtime outbox consistency | `check_outbox_consistency.py` | 데모 폐루프가 만든 event-propagated 상태 변경과 durable `outbox_events` row가 어긋나는 문제 |
+| OpenLineage dynamic lineage | `check_openlineage_dynamic_lineage.py` | transform run의 input/output dataset version과 durable lineage edge가 누락·중복·오연결되는 문제 |
+| trace continuity | `check_trace_continuity.py` | request span, service span, SQLAlchemy DB span이 서로 다른 trace로 끊기는 문제 |
+| adapter error trace keys | `check_adapter_error_trace_keys.py` | adapter 실패가 run error payload에 request/tenant/actor/run/correlation/adapter 키 없이 남는 문제 |
+| flaky detector | `check_flaky_detector.py` | 테스트가 한 번은 통과하지만 반복 실행에서 실패하거나 수집 결과가 흔들리는 문제 |
 | 테스트 우회 방지 | `check_no_test_bypasses.py` | `tests/**/*.py`에서 skip/xfail로 release gate를 우회하는 테스트. PostgreSQL 로컬 opt-out만 명시적으로 허용하고 `pnpm ci:gate`에서 차단한다. |
+| 커버리지 제외 예산 | `check_pragma_no_cover_budget.py` | `# pragma: no cover`로 테스트 사각지대를 만드는 문제. 현재 baseline은 `0`이다. |
 | Facade private 테스트 부채 | `check_private_test_references.py` | 테스트가 `core._...` private facade 위임에 다시 기대는 문제. 현재 baseline은 `0`이다. |
 | 보안 정적 분석 | Bandit | 위험한 Python 코드 패턴 |
 | 의존성 취약점 | pip-audit | 설치 패키지의 알려진 보안 취약점 |
 | 복잡도 | Radon, Xenon | 너무 복잡해서 장애 추적이 어려운 함수. CI는 block complexity `B` 초과를 막는다. |
 | 동적 테스트 | pytest + coverage | 실제 기능/실패 경로 검증, branch coverage 95% |
+| 계층별 coverage | `check_tier_coverage_by_layer.py` | 평균 coverage가 domain/application/infrastructure/API/CLI/worker 중 약한 계층을 숨기는 문제 |
 | public callable coverage | `check_public_api_coverage.py` | 공개 함수/메서드가 최소 한 번 실행됐는지. 분기 검증은 branch coverage가 담당한다. |
 | 제품 데모 | `pnpm demo:supply-chain` | 문서의 MVP 폐루프가 실제로 끝까지 도는지. 기본 CLI 데모는 `.foundry-lite-demo/`에서 fresh 실행되어 반복 실행이 로컬 DB 상태에 의존하지 않는다. |
 | 런타임 진단 | `run_runtime_diagnostics.py` | 메모리, 프로파일, 경고, Python 장애 로그 |
@@ -90,6 +118,13 @@ Grafana:
 - `foundry_lite_http_request_seconds`
 - `foundry_lite_core_operations_total`
 - `foundry_lite_core_operation_seconds`
+- `foundry_lite_dataset_commit_seconds`
+- `foundry_lite_transform_run_seconds`
+- `foundry_lite_action_apply_seconds`
+- `foundry_lite_object_query_seconds`
+- `foundry_lite_outbox_publish_lag_seconds`
+- `foundry_lite_failed_runs_total`
+- `foundry_lite_dlq_size`
 
 ## 5. Code Coupling And Relationship Reports
 
@@ -105,6 +140,28 @@ pnpm quality:architecture
 - `artifacts/quality/dependency_graph.md`
 - `artifacts/quality/infra_import_boundary.json`
 - `artifacts/quality/application_module_size.json`
+- `artifacts/quality/function_length.json`
+- `artifacts/quality/boolean_naming.json`
+- `artifacts/quality/dict_any_budget.json`
+- `artifacts/quality/query_side_effects.json`
+- `artifacts/quality/tenant_write_guard.json`
+- `artifacts/quality/strategy_specification_tests.json`
+- `artifacts/quality/integration_scenario_markers.json`
+- `artifacts/quality/regression_test_per_bugfix.json`
+- `artifacts/quality/pr_root_cause_section.json`
+- `artifacts/quality/doc_drift.json`
+- `artifacts/quality/schema_revision_guard.json`
+- `artifacts/quality/action_idempotency.json`
+- `artifacts/quality/transaction_outbox_pair.json`
+- `artifacts/quality/error_response_request_id.json`
+- `artifacts/quality/log_trace_keys.json`
+- `artifacts/quality/metrics_exposed.json`
+- `artifacts/quality/outbox_consistency.json`
+- `artifacts/quality/openlineage_dynamic_lineage.json`
+- `artifacts/quality/openlineage_events.json`
+- `artifacts/quality/trace_continuity.json`
+- `artifacts/quality/adapter_error_trace_keys.json`
+- `artifacts/quality/flaky_detector.json`
 - `artifacts/quality/radon_cc.json`
 - `artifacts/quality/private_test_references.json`
 
@@ -176,8 +233,8 @@ uv run python -m trace --count --summary apps/cli/foundry_lite_cli/main.py demo 
 - PostgreSQL snapshot connector는 아직 없다.
 - action precondition은 CEL이 아니라 제한된 `safeExpression` subset이다.
 - ERP writeback은 실제 외부 호출이 아니라 `mock_erp_simulator` 기록이다.
-- Alembic migration과 Temporal worker는 아직 구현되지 않았다.
-- Scale Foundation은 문서상 Sprint 02A 목표로 명시되었지만, 현재 코드가 모든 infra boundary를 port/adapter로 완전히 추출한 상태는 아니다. 이후 구현에서는 storage/metadata/compute/event/search/workflow/connector/auth adapter 교체가 trace key와 contract test를 유지하는지 CI에서 확인해야 한다.
+- Alembic migration과 Temporal worker는 아직 구현되지 않았다. 현재 release gate는 `check_schema_revision_guard.py`로 SQLAlchemy metadata와 `infra/schema_revisions` snapshot이 어긋나는지만 차단한다.
+- Scale Foundation은 문서상 Sprint 02A 목표로 명시되었고, 현재 로컬 slice는 storage/metadata/compute/event/search/workflow/connector/auth boundary를 port/adapter 계약으로 노출한다. 다만 search/workflow/connector/stream은 아직 local/fake in-memory 계약 구현이며, production OpenSearch/Temporal/외부 connector/Kafka류 adapter 교체는 이후 구현에서 trace key와 contract test를 유지해야 한다.
 
 ## 8. Playwright E2E
 

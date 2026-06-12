@@ -38,6 +38,7 @@
 
       button,
       input,
+      select,
       textarea {
         font: inherit;
       }
@@ -137,6 +138,7 @@
       }
 
       input,
+      select,
       textarea {
         background: var(--field);
         border: 1px solid transparent;
@@ -153,6 +155,7 @@
       }
 
       input:focus,
+      select:focus,
       textarea:focus {
         border-color: var(--accent);
         background: #fff;
@@ -304,12 +307,54 @@
               Saved Set Name
               <input id="setName" value="Pending Orders" />
             </label>
+            <div class="row">
+              <label>
+                Run Type
+                <select id="operationType">
+                  <option value="">All</option>
+                  <option value="sync">Sync</option>
+                  <option value="transform">Transform</option>
+                  <option value="index">Index</option>
+                  <option value="action">Action</option>
+                  <option value="action_writeback">Action Writeback</option>
+                  <option value="materialization">Materialization</option>
+                  <option value="outbox">Outbox</option>
+                  <option value="dead_letter">DLQ</option>
+                  <option value="audit">Audit</option>
+                </select>
+              </label>
+              <label>
+                Run Status
+                <input id="operationStatus" placeholder="succeeded" />
+              </label>
+            </div>
+            <div class="row">
+              <label>
+                Since
+                <input id="operationSince" placeholder="2026-06-10T00:00:00Z" />
+              </label>
+              <label>
+                Until
+                <input id="operationUntil" placeholder="2026-06-11T00:00:00Z" />
+              </label>
+            </div>
+            <label>
+              Run ID
+              <input id="operationRunId" />
+            </label>
             <div class="actions">
               <button id="healthBtn" type="button">Check</button>
               <button id="loadBtn" type="button" class="secondary">Load Object</button>
               <button id="approveBtn" type="button" class="danger">ApproveOrder</button>
               <button id="saveSetBtn" type="button" class="secondary">Save Pending Set</button>
               <button id="setsBtn" type="button" class="secondary">Load Sets</button>
+              <button id="runsBtn" type="button" class="secondary">Load Runs</button>
+              <button id="runDetailBtn" type="button" class="secondary">Load Run Detail</button>
+              <button id="sourceRunBtn" type="button" class="secondary">Source Run</button>
+              <button id="retryTransformBtn" type="button" class="secondary">Retry Failed Transform</button>
+              <button id="replayIndexBtn" type="button" class="secondary">Replay Index</button>
+              <button id="replayFailedIndexBtn" type="button" class="secondary">Replay Failed Index</button>
+              <button id="retryDlqBtn" type="button" class="secondary">Retry DLQ</button>
             </div>
           </div>
         </aside>
@@ -327,6 +372,21 @@
             <div class="metric">
               <span>Status</span>
               <strong id="metricStatus">-</strong>
+            </div>
+          </div>
+
+          <div class="metric-strip">
+            <div class="metric">
+              <span>Failed Runs</span>
+              <strong id="metricFailedRuns">-</strong>
+            </div>
+            <div class="metric">
+              <span>Outbox</span>
+              <strong id="metricOutbox">-</strong>
+            </div>
+            <div class="metric">
+              <span>DLQ</span>
+              <strong id="metricDlq">-</strong>
             </div>
           </div>
 
@@ -349,11 +409,22 @@
               <pre id="setResult" class="result compact">{}</pre>
             </div>
           </div>
+
+          <div class="panel">
+            <header>
+              <h2>Operations</h2>
+            </header>
+            <div class="panel-body">
+              <pre id="runResult" class="result compact">{}</pre>
+            </div>
+          </div>
         </section>
       </section>
     </main>
 
-    <script>
+    <script type="module">
+      import { createFoundryLiteClient, expectedObjectVersion, idempotencyKey } from "./generated-sdk.js";
+
       const apiBase = document.querySelector("#apiBase");
       const statusDot = document.querySelector("#statusDot");
       const statusText = document.querySelector("#statusText");
@@ -361,17 +432,45 @@
       const objectId = document.querySelector("#objectId");
       const reason = document.querySelector("#reason");
       const setName = document.querySelector("#setName");
+      const operationType = document.querySelector("#operationType");
+      const operationStatus = document.querySelector("#operationStatus");
+      const operationSince = document.querySelector("#operationSince");
+      const operationUntil = document.querySelector("#operationUntil");
+      const operationRunId = document.querySelector("#operationRunId");
       const objectResult = document.querySelector("#objectResult");
       const setResult = document.querySelector("#setResult");
+      const runResult = document.querySelector("#runResult");
       const metricObject = document.querySelector("#metricObject");
       const metricVersion = document.querySelector("#metricVersion");
       const metricStatus = document.querySelector("#metricStatus");
+      const metricFailedRuns = document.querySelector("#metricFailedRuns");
+      const metricOutbox = document.querySelector("#metricOutbox");
+      const metricDlq = document.querySelector("#metricDlq");
 
       let currentObject = null;
+      let currentRuns = null;
+      const runGroupByType = {
+        sync: "syncRuns",
+        transform: "transformRuns",
+        index: "indexRuns",
+        action: "actionRuns",
+        action_writeback: "actionWritebacks",
+        materialization: "materializationRuns",
+        outbox: "outboxEvents",
+        dead_letter: "deadLetterEvents",
+        audit: "auditEvents",
+      };
       const demoHeaders = {
         "X-User-ID": "web-demo-operator",
         "X-Roles": "ops_manager,data_engineer,finance",
       };
+
+      function sdkClient() {
+        return createFoundryLiteClient({
+          baseUrl: apiBase.value,
+          headers: demoHeaders,
+        });
+      }
 
       function show(value) {
         objectResult.textContent = JSON.stringify(value, null, 2);
@@ -384,6 +483,43 @@
 
       function showSet(value) {
         setResult.textContent = JSON.stringify(value, null, 2);
+      }
+
+      function showRuns(value) {
+        currentRuns = value;
+        runResult.textContent = JSON.stringify(value, null, 2);
+        const runGroups = [
+          "syncRuns",
+          "transformRuns",
+          "indexRuns",
+          "actionRuns",
+          "actionWritebacks",
+          "materializationRuns",
+        ];
+        const failedRuns = runGroups
+          .flatMap((key) => value[key] ?? [])
+          .filter((row) => String(row.status ?? "").toLowerCase().includes("fail"));
+        metricFailedRuns.textContent = failedRuns.length;
+        metricOutbox.textContent = (value.outboxEvents ?? []).length;
+        metricDlq.textContent = (value.deadLetterEvents ?? []).length;
+      }
+
+      function operationQuery() {
+        const params = new URLSearchParams();
+        if (operationType.value) {
+          params.set("runType", operationType.value);
+        }
+        if (operationStatus.value) {
+          params.set("status", operationStatus.value);
+        }
+        if (operationSince.value) {
+          params.set("since", operationSince.value);
+        }
+        if (operationUntil.value) {
+          params.set("until", operationUntil.value);
+        }
+        const query = params.toString();
+        return query ? `?${query}` : "";
       }
 
       async function request(path, options = {}) {
@@ -409,7 +545,10 @@
       }
 
       async function loadObject() {
-        currentObject = await request(`/api/objects/${objectType.value}/${objectId.value}`);
+        const objectClient = sdkClient().objects[objectType.value];
+        currentObject = objectClient
+          ? await objectClient.get(objectId.value, { explain: true })
+          : await request(`/api/objects/${objectType.value}/${objectId.value}?explain=true`);
         show(currentObject);
       }
 
@@ -417,21 +556,16 @@
         if (!currentObject) {
           await loadObject();
         }
-        const action = await request("/api/actions/ApproveOrder/apply", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Idempotency-Key": `ui-${objectId.value}-${Date.now()}`,
-          },
-          body: JSON.stringify({
-            target: { objectType: objectType.value, objectId: objectId.value },
-            expectedObjectVersion: currentObject.objectVersion,
-            params: { reason: reason.value },
-          }),
+        const action = await sdkClient().actions.ApproveOrder.apply({
+          objectId: objectId.value,
+          expectedObjectVersion: expectedObjectVersion(currentObject),
+          params: { reason: reason.value },
+          idempotencyKey: idempotencyKey("ApproveOrder", objectId.value),
         });
         show(action);
         await loadObject();
         await loadSets();
+        await loadRuns();
       }
 
       async function savePendingSet() {
@@ -454,11 +588,136 @@
         showSet(sets);
       }
 
+      async function loadRuns() {
+        const runs = await request(`/api/operations/runs${operationQuery()}`);
+        showRuns(runs);
+      }
+
+      async function loadRunDetail() {
+        const runType = operationType.value || "action";
+        const runGroup = runGroupByType[runType];
+        let runId = operationRunId.value;
+        let runs = currentRuns;
+        if (!runId) {
+          runs = await request(`/api/operations/runs?runType=${encodeURIComponent(runType)}`);
+          const row = (runs[runGroup] ?? [])[0];
+          if (!row?.id) {
+            showRuns({ ...runs, runDetail: { status: "skipped", reason: "no run found", runType } });
+            return;
+          }
+          runId = row.id;
+          operationRunId.value = runId;
+        }
+        const detail = await request(
+          `/api/operations/runs/${encodeURIComponent(runType)}/${encodeURIComponent(runId)}`
+        );
+        showRuns({ ...(runs ?? {}), runDetail: detail });
+      }
+
+      async function loadSourceRunDetail() {
+        if (!currentObject) {
+          await loadObject();
+        }
+        const link = (currentObject?.explain?.sourceRunChain ?? [])[0];
+        if (!link?.runType || !link?.runId) {
+          showRuns({ ...(currentRuns ?? {}), sourceRun: { status: "skipped", reason: "no source run chain" } });
+          return;
+        }
+        operationType.value = link.runType;
+        operationStatus.value = "";
+        operationRunId.value = link.runId;
+        const detail = await request(
+          link.operationPath ?? `/api/operations/runs/${encodeURIComponent(link.runType)}/${encodeURIComponent(link.runId)}`
+        );
+        const runs = await request(`/api/operations/runs?runType=${encodeURIComponent(link.runType)}`);
+        showRuns({ ...runs, sourceRun: link, runDetail: detail });
+      }
+
+      async function replayObjectIndex() {
+        const replay = await request(`/api/operations/index/${encodeURIComponent(objectType.value)}/replay`, {
+          method: "POST",
+        });
+        const runs = await request("/api/operations/runs?runType=index");
+        operationType.value = "index";
+        operationStatus.value = "";
+        operationRunId.value = replay.index_run_id;
+        showRuns({ ...runs, lastReplay: replay });
+      }
+
+      async function retryFailedTransformRun() {
+        let runId = operationRunId.value;
+        let runs = currentRuns;
+        if (!runId) {
+          runs = await request("/api/operations/runs?runType=transform&status=failed");
+          const row = (runs.transformRuns ?? [])[0];
+          if (!row?.id) {
+            showRuns({ ...runs, lastTransformRetry: { status: "skipped", reason: "no failed transform run" } });
+            return;
+          }
+          runId = row.id;
+        }
+        const retry = await request(`/api/operations/runs/transform/${encodeURIComponent(runId)}/retry`, {
+          method: "POST",
+        });
+        const refreshed = await request("/api/operations/runs?runType=transform");
+        operationType.value = "transform";
+        operationStatus.value = "";
+        operationRunId.value = retry.transform_run_id;
+        showRuns({ ...refreshed, lastTransformRetry: retry });
+      }
+
+      async function replayFailedIndexRun() {
+        let runId = operationRunId.value;
+        let runs = currentRuns;
+        if (!runId) {
+          runs = await request("/api/operations/runs?runType=index&status=failed");
+          const row = (runs.indexRuns ?? [])[0];
+          if (!row?.id) {
+            showRuns({ ...runs, lastFailedReplay: { status: "skipped", reason: "no failed index run" } });
+            return;
+          }
+          runId = row.id;
+        }
+        const replay = await request(`/api/operations/runs/index/${encodeURIComponent(runId)}/replay`, {
+          method: "POST",
+        });
+        const refreshed = await request("/api/operations/runs?runType=index");
+        operationType.value = "index";
+        operationStatus.value = "";
+        operationRunId.value = replay.index_run_id;
+        showRuns({ ...refreshed, lastFailedReplay: replay });
+      }
+
+      async function retryFirstDlq() {
+        const runs = await request("/api/operations/runs");
+        const event = (runs.deadLetterEvents ?? [])[0];
+        if (!event?.id) {
+          showRuns({ ...runs, lastRetry: { status: "skipped", reason: "no DLQ events" } });
+          return;
+        }
+        const retry = await request(`/api/operations/dead-letter-events/${encodeURIComponent(event.id)}/retry`, {
+          method: "POST",
+        });
+        const refreshed = await request("/api/operations/runs");
+        showRuns({ ...refreshed, lastRetry: retry });
+      }
+
       document.querySelector("#healthBtn").addEventListener("click", checkHealth);
       document.querySelector("#loadBtn").addEventListener("click", () => loadObject().catch(show));
       document.querySelector("#approveBtn").addEventListener("click", () => approveOrder().catch(show));
       document.querySelector("#saveSetBtn").addEventListener("click", () => savePendingSet().catch(showSet));
       document.querySelector("#setsBtn").addEventListener("click", () => loadSets().catch(showSet));
+      document.querySelector("#runsBtn").addEventListener("click", () => loadRuns().catch(showRuns));
+      document.querySelector("#runDetailBtn").addEventListener("click", () => loadRunDetail().catch(showRuns));
+      document.querySelector("#sourceRunBtn").addEventListener("click", () => loadSourceRunDetail().catch(showRuns));
+      document
+        .querySelector("#retryTransformBtn")
+        .addEventListener("click", () => retryFailedTransformRun().catch(showRuns));
+      document.querySelector("#replayIndexBtn").addEventListener("click", () => replayObjectIndex().catch(showRuns));
+      document
+        .querySelector("#replayFailedIndexBtn")
+        .addEventListener("click", () => replayFailedIndexRun().catch(showRuns));
+      document.querySelector("#retryDlqBtn").addEventListener("click", () => retryFirstDlq().catch(showRuns));
       checkHealth();
     </script>
   </body>

@@ -8,8 +8,16 @@ from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.infrastructure.adapters import (
     DuckDBComputeAdapter,
     FakeComputeAdapter,
+    FakeConnectorAdapter,
     FakeDatasetStorageAdapter,
+    FakeSearchAdapter,
+    FakeStreamAdapter,
+    FakeWorkflowAdapter,
+    LocalConnectorAdapter,
     LocalDatasetStorageAdapter,
+    LocalSearchAdapter,
+    LocalStreamAdapter,
+    LocalWorkflowAdapter,
 )
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
@@ -44,6 +52,10 @@ def create_local_core_dependencies(
 
     storage_adapter = _dataset_storage_adapter(adapter_profile, object_storage_root)
     compute_adapter = _compute_adapter(adapter_profile)
+    connector_adapter = _connector_adapter(adapter_profile)
+    search_adapter = _search_adapter(adapter_profile)
+    stream_adapter = _stream_adapter(adapter_profile)
+    workflow_adapter = _workflow_adapter(adapter_profile)
     database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
     engine = create_engine(database_url, future=True)
     return CoreDependencies(
@@ -57,6 +69,7 @@ def create_local_core_dependencies(
         materialization_repository=SqlAlchemyMaterializationRepository(engine),
         dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),
         compute_adapter=compute_adapter,
+        connector_adapter=connector_adapter,
         metadata_repository=SqlAlchemyMetadataRepository(engine),
         dataset_repository=SqlAlchemyDatasetRepository(engine),
         dataset_transaction_repository=SqlAlchemyDatasetTransactionRepository(engine),
@@ -66,6 +79,9 @@ def create_local_core_dependencies(
         object_set_repository=SqlAlchemyObjectSetRepository(engine),
         runtime_repository=SqlAlchemyRuntimeRepository(engine),
         dataset_storage=storage_adapter,
+        search_adapter=search_adapter,
+        stream_adapter=stream_adapter,
+        workflow_adapter=workflow_adapter,
     )
 
 
@@ -82,4 +98,36 @@ def _compute_adapter(adapter_profile: str) -> DuckDBComputeAdapter:
         return DuckDBComputeAdapter()
     if adapter_profile == "fake-storage":
         return FakeComputeAdapter()
+    raise ValueError(f"unknown adapter profile: {adapter_profile}")
+
+
+def _connector_adapter(adapter_profile: str) -> LocalConnectorAdapter:
+    if adapter_profile == "local":
+        return LocalConnectorAdapter()
+    if adapter_profile == "fake-storage":
+        return FakeConnectorAdapter()
+    raise ValueError(f"unknown adapter profile: {adapter_profile}")
+
+
+def _search_adapter(adapter_profile: str) -> LocalSearchAdapter:
+    if adapter_profile == "local":
+        return LocalSearchAdapter()
+    if adapter_profile == "fake-storage":
+        return FakeSearchAdapter()
+    raise ValueError(f"unknown adapter profile: {adapter_profile}")
+
+
+def _stream_adapter(adapter_profile: str) -> LocalStreamAdapter:
+    if adapter_profile == "local":
+        return LocalStreamAdapter()
+    if adapter_profile == "fake-storage":
+        return FakeStreamAdapter()
+    raise ValueError(f"unknown adapter profile: {adapter_profile}")
+
+
+def _workflow_adapter(adapter_profile: str) -> LocalWorkflowAdapter:
+    if adapter_profile == "local":
+        return LocalWorkflowAdapter()
+    if adapter_profile == "fake-storage":
+        return FakeWorkflowAdapter()
     raise ValueError(f"unknown adapter profile: {adapter_profile}")

@@ -1,9 +1,36 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol, TypedDict
 
 from foundry_lite.application.ports.transaction_context import TransactionContext
+
+ActionParameters = Mapping[str, object]
+ActionErrorPayload = Mapping[str, object]
+ActionWritebackPayload = Mapping[str, object]
+ObjectProperties = Mapping[str, object]
+ObjectPatch = Mapping[str, object]
+
+
+class ActionRunRow(TypedDict):
+    """Persisted action run row returned for idempotent replay checks."""
+
+    id: str
+    tenant_id: str
+    action_type_id: str
+    action_type_api_name: str
+    actor_user_id: str
+    target_object_type_id: str
+    target_object_type_api_name: str
+    target_object_id: str
+    expected_object_version: int
+    parameters: ActionParameters
+    status: str
+    idempotency_key: str
+    error: ActionErrorPayload | None
+    created_at: str
+    completed_at: str | None
 
 
 @dataclass(frozen=True)
@@ -17,10 +44,10 @@ class ActionRunRecord:
     target_object_type_api_name: str
     target_object_id: str
     expected_object_version: int
-    parameters: dict[str, Any]
+    parameters: ActionParameters
     status: str
     idempotency_key: str
-    error: dict[str, Any] | None
+    error: ActionErrorPayload | None
     created_at: str
     completed_at: str | None
 
@@ -32,8 +59,8 @@ class ActionWritebackRecord:
     action_run_id: str
     mode: str
     connector_id: str
-    request: dict[str, Any]
-    response: dict[str, Any] | None
+    request: ActionWritebackPayload
+    response: ActionWritebackPayload | None
     status: str
     idempotency_key: str
     attempts: int
@@ -44,9 +71,10 @@ class ActionWritebackRecord:
 @dataclass(frozen=True)
 class ObjectTargetUpdate:
     object_record_id: str
+    tenant_id: str
     expected_object_version: int
-    edit_properties: dict[str, Any]
-    properties: dict[str, Any]
+    edit_properties: ObjectProperties
+    properties: ObjectProperties
     next_object_version: int
     updated_at: str
 
@@ -60,8 +88,8 @@ class ObjectEditRecord:
     object_type_api_name: str
     object_id: str
     edit_type: str
-    patch: dict[str, Any]
-    previous_values: dict[str, Any]
+    patch: ObjectPatch
+    previous_values: ObjectProperties
     actor_user_id: str
     idempotency_key: str
     created_at: str
@@ -78,7 +106,7 @@ class ActionRepository(Protocol):
         action_type_id: str,
         actor_user_id: str,
         idempotency_key: str,
-    ) -> dict[str, Any] | None:
+    ) -> ActionRunRow | None:
         """Return an existing action run for an idempotency key."""
         ...
 
@@ -90,9 +118,10 @@ class ActionRepository(Protocol):
         self,
         *,
         transaction: TransactionContext,
+        tenant_id: str,
         action_run_id: str,
         status: str,
-        error: dict[str, Any] | None,
+        error: ActionErrorPayload | None,
         completed_at: str,
     ) -> None:
         """Mark an action run as failed, conflicted, or succeeded."""

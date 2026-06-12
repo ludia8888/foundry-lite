@@ -4,16 +4,21 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pytest
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRecord,
+    ActionTypeRow,
     LinkTypeRecord,
+    LinkTypeRow,
     ObjectTypeRecord,
+    ObjectTypeRow,
     OntologyRepository,
     OntologyVersionRecord,
+    OntologyVersionRow,
     PropertyTypeRecord,
+    PropertyTypeRow,
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyOntologyRepository
@@ -67,12 +72,13 @@ class FakeOntologyRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         ontology_version_id: str,
         activated_at: str,
     ) -> None:
         del transaction
         for row in self.ontology_versions:
-            if row["id"] == ontology_version_id:
+            if row["tenant_id"] == tenant_id and row["id"] == ontology_version_id:
                 row.update(status="active", activated_at=activated_at)
                 return
 
@@ -98,10 +104,10 @@ class FakeOntologyRepository:
         transaction: Any,
         tenant_id: str,
         ontology_version_id: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectTypeRow]:
         del transaction
         rows = [
-            dict(row)
+            cast(ObjectTypeRow, dict(row))
             for row in self.object_types
             if row["tenant_id"] == tenant_id and row["ontology_version_id"] == ontology_version_id
         ]
@@ -113,30 +119,36 @@ class FakeOntologyRepository:
         transaction: Any,
         tenant_id: str,
         ontology_version_id: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[LinkTypeRow]:
         del transaction
         rows = [
-            dict(row)
+            cast(LinkTypeRow, dict(row))
             for row in self.link_types
             if row["tenant_id"] == tenant_id and row["ontology_version_id"] == ontology_version_id
         ]
         return sorted(rows, key=lambda row: row["api_name"])
 
-    def properties_for_object_type(self, *, transaction: Any, object_type_id: str) -> list[dict[str, Any]]:
+    def properties_for_object_type(self, *, transaction: Any, object_type_id: str) -> list[PropertyTypeRow]:
         del transaction
-        rows = [dict(row) for row in self.property_types if row["object_type_id"] == object_type_id]
+        rows = [
+            cast(PropertyTypeRow, dict(row)) for row in self.property_types if row["object_type_id"] == object_type_id
+        ]
         return sorted(rows, key=lambda row: row["api_name"])
 
-    def actions_for_target(self, *, transaction: Any, object_type_id: str) -> list[dict[str, Any]]:
+    def actions_for_target(self, *, transaction: Any, object_type_id: str) -> list[ActionTypeRow]:
         del transaction
-        rows = [dict(row) for row in self.action_types if row["target_object_type_id"] == object_type_id]
+        rows = [
+            cast(ActionTypeRow, dict(row))
+            for row in self.action_types
+            if row["target_object_type_id"] == object_type_id
+        ]
         return sorted(rows, key=lambda row: row["api_name"])
 
-    def active_ontology_version(self, *, transaction: Any, tenant_id: str) -> dict[str, Any] | None:
+    def active_ontology_version(self, *, transaction: Any, tenant_id: str) -> OntologyVersionRow | None:
         del transaction
         for row in self.ontology_versions:
             if row["tenant_id"] == tenant_id and row["status"] == "active":
-                return dict(row)
+                return cast(OntologyVersionRow, dict(row))
         return None
 
     def object_type_for_version(
@@ -146,7 +158,7 @@ class FakeOntologyRepository:
         tenant_id: str,
         ontology_version_id: str,
         api_name: str,
-    ) -> dict[str, Any] | None:
+    ) -> ObjectTypeRow | None:
         del transaction
         for row in self.object_types:
             if (
@@ -154,7 +166,7 @@ class FakeOntologyRepository:
                 and row["ontology_version_id"] == ontology_version_id
                 and row["api_name"] == api_name
             ):
-                return dict(row)
+                return cast(ObjectTypeRow, dict(row))
         return None
 
     def enabled_action_type_for_version(
@@ -164,7 +176,7 @@ class FakeOntologyRepository:
         tenant_id: str,
         ontology_version_id: str,
         api_name: str,
-    ) -> dict[str, Any] | None:
+    ) -> ActionTypeRow | None:
         del transaction
         for row in self.action_types:
             if (
@@ -173,37 +185,42 @@ class FakeOntologyRepository:
                 and row["api_name"] == api_name
                 and row["enabled"] is True
             ):
-                return dict(row)
+                return cast(ActionTypeRow, dict(row))
         return None
 
 
 @dataclass
 class FakeOntologyHarness:
-    repository: FakeOntologyRepository
+    repository: OntologyRepository
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
         yield None
 
     def ontology_version_rows(self) -> list[dict[str, Any]]:
+        assert isinstance(self.repository, FakeOntologyRepository)
         return [dict(row) for row in self.repository.ontology_versions]
 
     def object_type_rows(self) -> list[dict[str, Any]]:
+        assert isinstance(self.repository, FakeOntologyRepository)
         return [dict(row) for row in self.repository.object_types]
 
     def property_type_rows(self) -> list[dict[str, Any]]:
+        assert isinstance(self.repository, FakeOntologyRepository)
         return [dict(row) for row in self.repository.property_types]
 
     def link_type_rows(self) -> list[dict[str, Any]]:
+        assert isinstance(self.repository, FakeOntologyRepository)
         return [dict(row) for row in self.repository.link_types]
 
     def action_type_rows(self) -> list[dict[str, Any]]:
+        assert isinstance(self.repository, FakeOntologyRepository)
         return [dict(row) for row in self.repository.action_types]
 
 
 @dataclass
 class SqlAlchemyOntologyHarness:
-    repository: SqlAlchemyOntologyRepository
+    repository: OntologyRepository
     engine: Engine
 
     @contextmanager
@@ -411,13 +428,19 @@ def _action_type_row(record: ActionTypeRecord) -> dict[str, Any]:
     }
 
 
-@pytest.fixture(params=["sqlalchemy", "fake"])
+@pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> OntologyHarness:
     if request.param == "fake":
         return FakeOntologyHarness(FakeOntologyRepository())
-    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
-    db.create_database(engine)
-    return SqlAlchemyOntologyHarness(SqlAlchemyOntologyRepository(engine), engine)
+    if request.param == "sqlalchemy":
+        engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+        db.create_database(engine)
+        return SqlAlchemyOntologyHarness(SqlAlchemyOntologyRepository(engine), engine)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyOntologyHarness(
+        SqlAlchemyOntologyRepository(postgres_fixture.engine),
+        postgres_fixture.engine,
+    )
 
 
 def test_ontology_repository_contract_manages_version_lifecycle(harness: OntologyHarness) -> None:
@@ -435,6 +458,7 @@ def test_ontology_repository_contract_manages_version_lifecycle(harness: Ontolog
         harness.repository.archive_active_ontology_versions(transaction=transaction, tenant_id="tenant-demo")
         harness.repository.activate_ontology_version(
             transaction=transaction,
+            tenant_id="tenant-demo",
             ontology_version_id="ont_new",
             activated_at="2026-06-10T00:00:01Z",
         )

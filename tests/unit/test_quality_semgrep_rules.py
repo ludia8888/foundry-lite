@@ -42,6 +42,16 @@ def semgrep_available() -> None:
         pytest.fail("semgrep CLI not on PATH; install via `uv sync` or `uv add --dev semgrep`")
 
 
+def _semgrep_env() -> dict[str, str]:
+    import certifi
+
+    env = _os.environ.copy()
+    env.setdefault("SSL_CERT_FILE", certifi.where())
+    env.setdefault("SEMGREP_SEND_METRICS", "off")
+    env.setdefault("SEMGREP_ENABLE_VERSION_CHECK", "0")
+    return env
+
+
 def _run_semgrep(tmp_path: Path) -> dict:
     result = subprocess.run(
         [
@@ -57,6 +67,7 @@ def _run_semgrep(tmp_path: Path) -> dict:
         capture_output=True,
         text=True,
         check=False,
+        env=_semgrep_env(),
     )
     if result.returncode not in (0, 1):
         # semgrep returns 1 when findings exist; anything else is a tool error.

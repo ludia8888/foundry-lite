@@ -42,8 +42,19 @@ ENV = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
 
 
 def _run_pytest(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    child_basetemp = tmp_path / ".pytest-randomly-child"
     return subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "--no-header", *args, str(tmp_path)],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "--no-header",
+            "--basetemp",
+            str(child_basetemp),
+            *args,
+            str(tmp_path),
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -102,8 +113,19 @@ def test_xdist_runs_tests_in_parallel(tmp_path: Path) -> None:
 
     target = tmp_path / "test_parallel.py"
     target.write_text("import time\ndef test_one(): time.sleep(1)\ndef test_two(): time.sleep(1)\n")
+    child_basetemp = tmp_path / ".pytest-xdist-child"
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-n", "2", str(tmp_path)],
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-n",
+            "2",
+            "--basetemp",
+            str(child_basetemp),
+            str(tmp_path),
+        ],
         capture_output=True,
         text=True,
         check=False,

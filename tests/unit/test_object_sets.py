@@ -69,6 +69,8 @@ def test_object_sets_static_dynamic_visibility_and_expiry(core: FoundryLiteCore)
         core.get_object_set(temporary_set["id"], ctx=ctx)
     assert temporary_set["id"] not in {item["id"] for item in core.query_object_sets(ctx=ctx)["items"]}
     assert core.cleanup_expired_object_sets(ctx=ctx)["deleted"] == 1
+    audit_events = core.list_runs(ctx=ctx)["auditEvents"]
+    assert any(event["event_type"] == "object_set.expired_deleted" for event in audit_events)
 
 
 def test_object_set_definition_validation(core: FoundryLiteCore) -> None:

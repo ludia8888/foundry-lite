@@ -1,9 +1,42 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol, TypedDict
 
 from foundry_lite.application.ports.transaction_context import TransactionContext
+
+
+class MaterializationSourceRef(TypedDict, total=False):
+    """Source selector for a materialization specification."""
+
+    type: str
+    objectType: str
+
+
+class MaterializationTargetRef(TypedDict):
+    """Dataset target selector for a materialization specification."""
+
+    dataset: str
+
+
+class MaterializationTriggerConfig(TypedDict):
+    """Trigger settings for a materialization specification."""
+
+    type: str
+
+
+class MaterializationRow(TypedDict):
+    """Persisted materialization specification row."""
+
+    id: str
+    tenant_id: str
+    api_name: str
+    materialization_type: str
+    source_ref: MaterializationSourceRef
+    target_ref: MaterializationTargetRef
+    trigger_config: MaterializationTriggerConfig
+    enabled: bool
 
 
 @dataclass(frozen=True)
@@ -12,9 +45,9 @@ class MaterializationRecord:
     tenant_id: str
     api_name: str
     materialization_type: str
-    source_ref: dict[str, Any]
-    target_ref: dict[str, Any]
-    trigger_config: dict[str, Any]
+    source_ref: MaterializationSourceRef
+    target_ref: MaterializationTargetRef
+    trigger_config: MaterializationTriggerConfig
     enabled: bool
 
 
@@ -25,12 +58,12 @@ class MaterializationRunRecord:
     materialization_id: str
     api_name: str
     status: str
-    source_cursor: dict[str, Any]
-    object_store_watermark: dict[str, Any]
+    source_cursor: Mapping[str, object]
+    object_store_watermark: Mapping[str, object]
     consistency_level: str
     target_dataset_version_id: str | None
     row_count: int | None
-    error: dict[str, Any] | None
+    error: Mapping[str, object] | None
     created_at: str
     completed_at: str | None
 
@@ -44,7 +77,7 @@ class MaterializationRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         api_name: str,
-    ) -> dict[str, Any] | None:
+    ) -> MaterializationRow | None:
         """Return a materialization spec row by tenant + api_name, or None."""
         ...
 
@@ -54,7 +87,7 @@ class MaterializationRepository(Protocol):
 
     def materialization_by_id(
         self, *, transaction: TransactionContext, materialization_id: str
-    ) -> dict[str, Any] | None:
+    ) -> MaterializationRow | None:
         """Return a materialization spec row by id, or None."""
         ...
 
@@ -66,11 +99,12 @@ class MaterializationRepository(Protocol):
         self,
         *,
         transaction: TransactionContext,
+        tenant_id: str,
         materialization_run_id: str,
         status: str,
         target_dataset_version_id: str | None,
         row_count: int | None,
-        error: dict[str, Any] | None,
+        error: Mapping[str, object] | None,
         completed_at: str,
     ) -> None:
         """Mark a materialization run as terminal (succeeded/failed/aborted)."""

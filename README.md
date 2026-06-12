@@ -55,5 +55,13 @@ docker compose -f infra/docker-compose.dev.yml up -d prometheus tempo grafana
 See [docs/quality-observability.md](docs/quality-observability.md) for static analysis, dynamic
 diagnostics, OpenTelemetry, Grafana, Playwright, and CI/CD gates.
 
+Known limitations and v1.5 backlog:
+
+- PostgreSQL JSONB object storage and PostgreSQL snapshot ingest are not productionized yet.
+- Temporal workflow execution, Kafka/OpenSearch-scale adapters, and Alembic migrations remain backlog.
+- CEL/JSON Logic and real external ERP/webhook writeback connectors remain future hardening work.
+- Local performance smoke runs in CI with a fast profile; larger release measurements are available via
+  `pnpm quality:mvp-performance-release-100k` and `pnpm quality:mvp-performance-release-1m`.
+
 See [docs/implementation-status.md](docs/implementation-status.md) for the exact line between what
 is implemented now and what remains a target.

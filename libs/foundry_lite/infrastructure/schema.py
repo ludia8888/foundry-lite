@@ -10,10 +10,12 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    text,
 )
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 metadata = MetaData()
+POSTGRES_TENANT_SETTING = "foundry_lite.tenant_id"
 
 
 tenants = Table(
@@ -525,5 +527,61 @@ materialization_runs = Table(
 )
 
 
+def tenant_rls_tables() -> tuple[Table, ...]:
+    return tuple(table for table in metadata.sorted_tables if "tenant_id" in table.c)
+
+
 def create_database(engine: Engine) -> None:
     metadata.create_all(engine)
+    apply_postgres_rls(engine)
+
+
+def apply_postgres_rls(engine: Engine) -> None:
+    if engine.dialect.name != "postgresql":
+        return
+    with engine.begin() as conn:
+        for table in tenant_rls_tables():
+            _apply_tenant_rls_policy(conn, table)
+        _apply_dataset_schema_rls_policy(conn)
+
+
+def set_postgres_tenant_context(conn: Connection, tenant_id: str, *, is_local: bool = True) -> None:
+    if conn.dialect.name != "postgresql":
+        return
+    conn.execute(
+        text(f"SELECT set_config('{POSTGRES_TENANT_SETTING}', :tenant_id, :local)"),
+        {"tenant_id": tenant_id, "local": is_local},
+    )
+
+
+def _apply_tenant_rls_policy(conn: Connection, table: Table) -> None:
+    table_name = _table_identifier(conn, table)
+    policy_name = _identifier(conn, f"{table.name}_tenant_isolation")
+    condition = f"tenant_id = current_setting('{POSTGRES_TENANT_SETTING}', true)"
+    conn.execute(text(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY"))
+    conn.execute(text(f"DROP POLICY IF EXISTS {policy_name} ON {table_name}"))
+    conn.execute(text(f"CREATE POLICY {policy_name} ON {table_name} USING ({condition}) WITH CHECK ({condition})"))
+
+
+def _apply_dataset_schema_rls_policy(conn: Connection) -> None:
+    table_name = _table_identifier(conn, dataset_schemas)
+    datasets_name = _table_identifier(conn, datasets)
+    policy_name = _identifier(conn, "dataset_schemas_tenant_isolation")
+    # Policy DDL must interpolate identifiers; both names come from static
+    # SQLAlchemy metadata and are quoted by the active dialect preparer.
+    condition = (
+        f"EXISTS (SELECT 1 FROM {datasets_name} AS d "  # nosec B608
+        f"WHERE d.id = {table_name}.dataset_id "
+        f"AND d.tenant_id = current_setting('{POSTGRES_TENANT_SETTING}', true))"
+    )
+    conn.execute(text(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY"))
+    conn.execute(text(f"DROP POLICY IF EXISTS {policy_name} ON {table_name}"))
+    conn.execute(text(f"CREATE POLICY {policy_name} ON {table_name} USING ({condition}) WITH CHECK ({condition})"))
+
+
+def _table_identifier(conn: Connection, table: Table) -> str:
+    return conn.dialect.identifier_preparer.format_table(table)
+
+
+def _identifier(conn: Connection, name: str) -> str:
+    return conn.dialect.identifier_preparer.quote(name)

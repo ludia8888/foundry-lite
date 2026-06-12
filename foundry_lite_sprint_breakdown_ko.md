@@ -1515,17 +1515,17 @@ ApproveOrder → action_log materialize → customer_risk transform → Customer
 - Operations UI에 run type별 목록을 만든다.
 - sync/transform/index/action/materialization run detail 화면을 만든다.
 - outbox pending/failed/DLQ 목록과 retry action을 만든다.
-- CLI `flite sync retry`, `transform retry`, `index replay`, `materialize run`, `outbox retry`를 정리한다.
+- CLI `flite sync retry`, `transform retry`, `index replay`, `index replay-run`, `materialize run`, `outbox retry`를 정리한다.
 - 각 run의 correlation_id와 upstream/downstream reference를 표시한다.
 - 실패 원인 error payload를 사람이 읽을 수 있게 normalize한다.
 
 **Acceptance Gate**
 
-- [ ] 의도적으로 실패시킨 transform을 UI에서 찾아 retry할 수 있다.
-- [ ] DLQ event를 재처리해 materialization을 성공시킬 수 있다.
-- [ ] Object detail에서 source evidence/run chain으로 이동할 수 있다.
-- [ ] run 목록 필터가 status/type/date로 동작한다.
-- [ ] 운영자가 DB에 직접 접속하지 않아도 기본 장애를 조사할 수 있다.
+- [x] 의도적으로 실패시킨 transform을 UI에서 찾아 retry할 수 있다. (`flite transform retry`, `POST /api/operations/runs/transform/{run_id}/retry`, Web `Retry Failed Transform`)
+- [x] DLQ event를 재처리해 materialization을 성공시킬 수 있다. (`flite outbox retry`, `POST /api/operations/dead-letter-events/{event_id}/retry`, Web `Retry DLQ`, `materializationResult`)
+- [x] Object detail에서 source evidence/run chain으로 이동할 수 있다. (`?explain=true`, `sourceRunChain`, Web `Source Run`)
+- [x] run 목록 필터가 status/type/date로 동작한다. (`operations runs --type/--status/--since/--until`, API `runType/status/since/until`, Web Operations filters)
+- [x] 운영자가 DB에 직접 접속하지 않아도 기본 장애를 조사할 수 있다. (`operations run <type> <id>`, API run detail `investigation`, `errorMessage`, references, related evidence)
 
 **Demo / Proof**
 
@@ -1561,11 +1561,11 @@ Foundry 수준의 보안 완전체가 아니라도, v1에서 반드시 필요한
 
 **Acceptance Gate**
 
-- [ ] viewer는 dataset을 읽을 수 있지만 ontology activate는 못 한다.
-- [ ] ops_manager만 ApproveOrder를 실행할 수 있다.
-- [ ] finance/admin이 아닌 사용자는 Order.margin 같은 민감 property가 masked 된다.
-- [ ] 다른 tenant의 object/dataset은 API와 DB RLS 모두에서 보이지 않는다.
-- [ ] permission denied도 audit_events에 decision=deny로 남는다.
+- [x] viewer는 dataset을 읽을 수 있지만 ontology activate는 못 한다. (`dataset:read`, `ontology:activate`, `permission.denied`)
+- [x] ops_manager만 ApproveOrder를 실행할 수 있다. (`action:execute:ApproveOrder`; admin/ops_manager 허용, viewer/data_engineer 거부)
+- [x] finance/admin이 아닌 사용자는 Order의 margin 같은 민감 property가 masked 된다. (`PolicyService.mask_properties`, object/link/API responses)
+- [x] 다른 tenant의 object/dataset은 API와 DB RLS 모두에서 보이지 않는다. (`test_api_security_roles_mask_and_audit_denials`, `test_postgres_rls_hides_dataset_and_object_rows_between_tenants`)
+- [x] permission denied도 audit_events에 decision=deny로 남는다. (`permission.denied` audit evidence)
 
 **Demo / Proof**
 
@@ -1600,11 +1600,11 @@ Foundry 수준의 보안 완전체가 아니라도, v1에서 반드시 필요한
 
 **Acceptance Gate**
 
-- [ ] `client.objects.Order.get('O-1001')`가 typed Order를 반환한다.
-- [ ] `client.actions.ApproveOrder.apply(...)`가 parameter type check를 받는다.
-- [ ] ontology apiName 변경/삭제 시 SDK generation이 breaking change를 감지한다.
-- [ ] SDK smoke test가 generated client로 end-to-end action을 실행한다.
-- [ ] Web이 최소 한 화면에서 raw fetch 대신 SDK를 사용한다.
+- [x] `client.objects.Order.get('O-1001')`가 typed Order를 반환한다. (`packages/sdk-ts/src/generated.ts`, `tests/unit/test_sdk_ts_generation.py`)
+- [x] `client.actions.ApproveOrder.apply(...)`가 parameter type check를 받는다. (`ApproveOrderParams`, `ApproveOrderApplyRequest`, `examples/sdk-demo.ts`)
+- [x] ontology apiName 변경/삭제 시 SDK generation이 breaking change를 감지한다. (`pnpm quality:sdk-generated`, `test_sdk_generator_check_detects_api_name_drift`)
+- [x] SDK smoke test가 generated client로 end-to-end action을 실행한다. (`tests/e2e/foundry-lite.spec.ts`)
+- [x] Web이 최소 한 화면에서 raw fetch 대신 SDK를 사용한다. (`apps/web/index.html`, `apps/web/generated-sdk.js`)
 
 **Demo / Proof**
 
@@ -1656,6 +1656,8 @@ MVP 폐루프가 문서가 아니라 반복 가능한 자동 테스트와 데모
 - [x] `pnpm demo:supply-chain`은 `FOUNDRY_LITE_HOME`이 명시되지 않은 경우 `.foundry-lite-demo/` 격리 저장소에서 fresh 실행되어, 이전 로컬 DB 상태에 의존하지 않는다.
 - [x] CLI smoke regression test가 같은 supply-chain demo 명령을 두 번 연속 실행하고 두 출력 모두 JSON으로 파싱되는지 검증한다.
 - [x] `pnpm ci:gate`는 supply-chain demo smoke 산출물 `artifacts/demo/supply-chain.json`을 `python -m json.tool`로 다시 파싱해, 로그가 섞인 가짜 JSON 산출물을 release evidence로 인정하지 않는다.
+- [x] `check_mvp_data_correctness.py`가 demo DB의 row count, object primary key uniqueness, Order reindex source hash, ApproveOrder idempotency evidence를 release gate에서 검증한다.
+- [x] `check_mvp_performance_smoke.py`가 CSV ingest, object index, object query, no-writeback action apply 측정 리포트를 남기며, CI fast profile과 100k/1M release profile 명령을 분리한다.
 
 **Demo / Proof**
 

@@ -4,14 +4,16 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pytest
 from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckRecord,
     DatasetCheckResultRecord,
+    DatasetCheckRow,
     DatasetQualityRepository,
     DatasetSchemaRecord,
+    DatasetSchemaRow,
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyDatasetQualityRepository
@@ -20,7 +22,8 @@ from sqlalchemy.engine import Engine
 
 
 class QualityHarness(Protocol):
-    repository: DatasetQualityRepository
+    @property
+    def repository(self) -> DatasetQualityRepository: ...
 
     def transaction(self) -> AbstractContextManager[Any]: ...
 
@@ -43,11 +46,11 @@ class FakeDatasetQualityRepository:
         transaction: Any,
         dataset_id: str,
         schema_hash: str,
-    ) -> dict[str, Any] | None:
+    ) -> DatasetSchemaRow | None:
         del transaction
         for row in self.schemas:
             if row["dataset_id"] == dataset_id and row["schema_hash"] == schema_hash:
-                return dict(row)
+                return cast(DatasetSchemaRow, dict(row))
         return None
 
     def latest_schema_version(self, *, transaction: Any, dataset_id: str) -> int | None:
@@ -75,11 +78,11 @@ class FakeDatasetQualityRepository:
         tenant_id: str,
         dataset_id: str,
         name: str,
-    ) -> dict[str, Any] | None:
+    ) -> DatasetCheckRow | None:
         del transaction
         for row in self.checks:
             if row["tenant_id"] == tenant_id and row["dataset_id"] == dataset_id and row["name"] == name:
-                return dict(row)
+                return cast(DatasetCheckRow, dict(row))
         return None
 
     def insert_check(self, *, transaction: Any, record: DatasetCheckRecord) -> None:

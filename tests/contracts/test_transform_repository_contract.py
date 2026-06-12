@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pytest
 from foundry_lite.application.ports.transform_repository import (
+    TransformCheck,
     TransformRecord,
     TransformRepository,
+    TransformRow,
     TransformRunRecord,
+    TransformRunRow,
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyTransformRepository
@@ -39,11 +42,11 @@ class FakeTransformRepository:
         transaction: Any,
         tenant_id: str,
         api_name: str,
-    ) -> dict[str, Any] | None:
+    ) -> TransformRow | None:
         del transaction
         for row in self.transforms:
             if row["tenant_id"] == tenant_id and row["api_name"] == api_name:
-                return dict(row)
+                return cast(TransformRow, dict(row))
         return None
 
     def insert_transform(self, *, transaction: Any, record: TransformRecord) -> None:
@@ -66,17 +69,18 @@ class FakeTransformRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         transform_id: str,
         language: str,
         entrypoint: str,
         mode: str,
         inputs: dict[str, str],
         output_dataset_ref: str,
-        checks: list[dict[str, Any]],
+        checks: Sequence[TransformCheck],
     ) -> None:
         del transaction
         for row in self.transforms:
-            if row["id"] == transform_id:
+            if row["tenant_id"] == tenant_id and row["id"] == transform_id:
                 row.update(
                     {
                         "language": language,
@@ -84,16 +88,29 @@ class FakeTransformRepository:
                         "mode": mode,
                         "inputs": dict(inputs),
                         "output_dataset_ref": output_dataset_ref,
-                        "checks": list(checks),
+                        "checks": [dict(check) for check in checks],
                     }
                 )
                 return
 
-    def transform_by_id(self, *, transaction: Any, transform_id: str) -> dict[str, Any] | None:
+    def transform_by_id(self, *, transaction: Any, transform_id: str) -> TransformRow | None:
         del transaction
         for row in self.transforms:
             if row["id"] == transform_id:
-                return dict(row)
+                return cast(TransformRow, dict(row))
+        return None
+
+    def transform_run_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transform_run_id: str,
+    ) -> TransformRunRow | None:
+        del transaction
+        for row in self.transform_runs:
+            if row["tenant_id"] == tenant_id and row["id"] == transform_run_id:
+                return cast(TransformRunRow, dict(row))
         return None
 
     def insert_transform_run(self, *, transaction: Any, record: TransformRunRecord) -> None:
@@ -117,15 +134,16 @@ class FakeTransformRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         transform_run_id: str,
         status: str,
         output_version_id: str | None,
-        error: dict[str, Any] | None,
+        error: Mapping[str, object] | None,
         completed_at: str,
     ) -> None:
         del transaction
         for row in self.transform_runs:
-            if row["id"] == transform_run_id:
+            if row["tenant_id"] == tenant_id and row["id"] == transform_run_id:
                 row.update(
                     {
                         "status": status,
@@ -158,6 +176,10 @@ class SqlAlchemyTransformHarness:
     repository: SqlAlchemyTransformRepository
 
     @classmethod
+    def from_engine(cls, engine: Engine) -> SqlAlchemyTransformHarness:
+        return cls(engine=engine, repository=SqlAlchemyTransformRepository(engine))
+
+    @classmethod
     def create(cls, tmp_path: Path) -> SqlAlchemyTransformHarness:
         engine = create_engine(f"sqlite:///{tmp_path / 'transform.db'}", future=True)
         db.create_database(engine)
@@ -169,7 +191,7 @@ class SqlAlchemyTransformHarness:
                     created_at="2025-01-01T00:00:00Z",
                 )
             )
-        return cls(engine=engine, repository=SqlAlchemyTransformRepository(engine))
+        return cls.from_engine(engine)
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
@@ -185,11 +207,14 @@ class SqlAlchemyTransformHarness:
             return [dict(row) for row in conn.execute(select(db.transform_runs)).mappings().all()]
 
 
-@pytest.fixture(params=["fake", "sqlalchemy"])
+@pytest.fixture(params=["fake", "sqlalchemy", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> TransformHarness:
     if request.param == "fake":
         return FakeTransformHarness()
-    return SqlAlchemyTransformHarness.create(tmp_path)
+    if request.param == "sqlalchemy":
+        return SqlAlchemyTransformHarness.create(tmp_path)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyTransformHarness.from_engine(postgres_fixture.engine)
 
 
 def _transform_record(api_name: str = "clean_orders") -> TransformRecord:
@@ -247,6 +272,7 @@ def test_update_transform_definition_overwrites_fields(harness: TransformHarness
         harness.repository.insert_transform(transaction=txn, record=record)
         harness.repository.update_transform_definition(
             transaction=txn,
+            tenant_id="tenant-test",
             transform_id=record.transform_id,
             language="python",
             entrypoint="/tmp/new.py",
@@ -269,10 +295,23 @@ def test_insert_transform_run_persists(harness: TransformHarness) -> None:
     with harness.transaction() as txn:
         harness.repository.insert_transform(transaction=txn, record=_transform_record())
         harness.repository.insert_transform_run(transaction=txn, record=_transform_run_record())
+        found = harness.repository.transform_run_by_id(
+            transaction=txn,
+            tenant_id="tenant-test",
+            transform_run_id="trun_test",
+        )
+        hidden_tenant = harness.repository.transform_run_by_id(
+            transaction=txn,
+            tenant_id="tenant-other",
+            transform_run_id="trun_test",
+        )
     rows = harness.transform_run_rows()
     assert len(rows) == 1
     assert rows[0]["status"] == "RUNNING"
     assert rows[0]["input_versions"] == {"raw.orders": "dsv_1"}
+    assert found is not None
+    assert found["input_versions"] == {"raw.orders": "dsv_1"}
+    assert hidden_tenant is None
 
 
 def test_update_transform_run_terminal_marks_success(harness: TransformHarness) -> None:
@@ -281,6 +320,7 @@ def test_update_transform_run_terminal_marks_success(harness: TransformHarness) 
         harness.repository.insert_transform_run(transaction=txn, record=_transform_run_record())
         harness.repository.update_transform_run_terminal(
             transaction=txn,
+            tenant_id="tenant-test",
             transform_run_id="trun_test",
             status="SUCCESS",
             output_version_id="dsv_out",
@@ -299,6 +339,7 @@ def test_update_transform_run_terminal_marks_failure(harness: TransformHarness) 
         harness.repository.insert_transform_run(transaction=txn, record=_transform_run_record())
         harness.repository.update_transform_run_terminal(
             transaction=txn,
+            tenant_id="tenant-test",
             transform_run_id="trun_test",
             status="FAILED",
             output_version_id=None,

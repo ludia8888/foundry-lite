@@ -79,13 +79,19 @@ def _dataset_payload(dataset_id: str, *, tenant_id: str = "tenant-demo") -> dict
     }
 
 
-@pytest.fixture(params=["sqlalchemy", "fake"])
+@pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> DatasetRepositoryHarness:
     if request.param == "fake":
         return FakeDatasetRepositoryHarness(FakeDatasetRepository())
-    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
-    db.create_database(engine)
-    return SqlAlchemyDatasetRepositoryHarness(SqlAlchemyDatasetRepository(engine), engine)
+    if request.param == "sqlalchemy":
+        engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+        db.create_database(engine)
+        return SqlAlchemyDatasetRepositoryHarness(SqlAlchemyDatasetRepository(engine), engine)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyDatasetRepositoryHarness(
+        SqlAlchemyDatasetRepository(postgres_fixture.engine),
+        postgres_fixture.engine,
+    )
 
 
 def test_dataset_repository_contract_create_find_and_duplicate(harness: DatasetRepositoryHarness) -> None:
