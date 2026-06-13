@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 from foundry_lite.application.ports.dataset_quality_repository import DatasetCheckConfig, DatasetCheckResult
 from foundry_lite.application.primitives import StagedFileStats
 
@@ -39,6 +40,13 @@ so application services stay vendor-neutral."""
 
 class ComputeAdapter(Protocol):
     """Compute boundary for local tabular file work and logical transforms."""
+
+    @property
+    def profile_name(self) -> str: ...
+
+    def failure_contract(self) -> AdapterFailureContract:
+        """Return the adapter failure taxonomy promised by this profile."""
+        ...
 
     def csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
         """Convert a CSV file into a Parquet file."""

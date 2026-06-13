@@ -7,6 +7,7 @@ from typing import cast
 import duckdb
 
 from foundry_lite.application.ports import DatasetCheckConfig, DatasetCheckResult
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.compute_adapter import SqlTransformPlan, TabularRow, TransformPlan
 from foundry_lite.application.primitives import (
     INPUT_PATTERN,
@@ -27,6 +28,32 @@ class DuckDBComputeAdapter:
     """DuckDB-backed compute adapter for the local MVP runtime."""
 
     profile_name = "duckdb"
+
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode(
+                    "csv_to_parquet",
+                    "validation",
+                    False,
+                    "CSV input could not be converted; check file format and headers.",
+                ),
+                AdapterFailureMode(
+                    "execute_transform",
+                    "unsupported",
+                    False,
+                    "Transform plan is not supported by this compute adapter.",
+                ),
+                AdapterFailureMode(
+                    "execute_transform",
+                    "timeout",
+                    True,
+                    "Transform execution timed out; retry with the same transaction input.",
+                    timeout_seconds=600,
+                ),
+            ),
+        )
 
     def csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
         target_path.parent.mkdir(parents=True, exist_ok=True)

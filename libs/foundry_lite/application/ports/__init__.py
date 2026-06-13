@@ -13,6 +13,13 @@ from foundry_lite.application.ports.action_repository import (
     ObjectProperties,
     ObjectTargetUpdate,
 )
+from foundry_lite.application.ports.adapter_failure import (
+    AdapterError,
+    AdapterFailure,
+    AdapterFailureContract,
+    AdapterFailureKind,
+    AdapterFailureMode,
+)
 from foundry_lite.application.ports.auth_provider import (
     AuthProvider,
     Credentials,
@@ -188,6 +195,11 @@ __all__ = [
     "ActionTypeRow",
     "ActionWritebackPayload",
     "ActionWritebackRecord",
+    "AdapterError",
+    "AdapterFailure",
+    "AdapterFailureContract",
+    "AdapterFailureKind",
+    "AdapterFailureMode",
     "AuditEventRecord",
     "AuthProvider",
     "ComputeAdapter",

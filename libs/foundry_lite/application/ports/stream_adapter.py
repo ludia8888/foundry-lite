@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
+
 StreamSchemaStrategy = Literal["envelope_json"]
 
 
@@ -47,7 +49,12 @@ class StreamArchiveConfig:
 class StreamAdapter(Protocol):
     """Scale Foundation boundary for future Kafka/Redpanda-style streams."""
 
-    profile_name: str
+    @property
+    def profile_name(self) -> str: ...
+
+    def failure_contract(self) -> AdapterFailureContract:
+        """Return the adapter failure taxonomy promised by this profile."""
+        ...
 
     def publish_event(self, request: StreamPublishRequest) -> StreamEvent:
         """Append one event and return its stream offset."""

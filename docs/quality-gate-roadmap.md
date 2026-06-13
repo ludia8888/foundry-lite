@@ -83,6 +83,7 @@
 | 25 | fake/local adapter contract test 동일 | contract tests | pass | △ (수동) |
 | 26 | trace key boundary 유지 | `check_trace_continuity.py` | dynamic | ✅ |
 | 27 | 새 boundary에 contract test 동반 | `check_contract_test_per_port.py` | 0개 누락 | ✅ |
+| 28 | adapter 실패 의미 표준화 | `check_adapter_failure_taxonomy.py` | 15 adapter profile | ✅ |
 
 ### §5 코드 컨벤션
 
@@ -572,6 +573,24 @@ compute adapter를 끼운 뒤, 실패한 `sync_runs.error.trace`가 운영 추�
 
 Self-test: `tests/unit/test_quality_adapter_error_trace_keys.py`가 실제 exploding adapter
 probe, trace 누락, 필수 키 누락, request context mismatch, JSON report 생성을 검증한다.
+
+### Tier G16C — adapter failure taxonomy (✅ 완료 2026-06-14)
+
+`scripts/quality/check_adapter_failure_taxonomy.py`는 현재 concrete adapter profile이
+공통 `AdapterFailureContract`를 노출하는지 검증한다. 비개발자 관점으로 말하면,
+"부품을 Kafka, OpenSearch, Temporal, S3 같은 다른 인프라로 갈아끼웠는데 실패
+메시지와 재시도 기준이 제각각이라 운영자가 판단할 수 없는" 문제를 막는다.
+
+검사 기준:
+- compute/storage/workflow/stream/search/connector/auth adapter profile은 실패 계약을 가져야 한다.
+- 각 실패 mode는 `operation`, 실패 `kind`, `is_retryable`, 운영자 메시지를 가져야 한다.
+- timeout 실패는 retry 가능한 실패여야 하고, timeout 값은 양수여야 한다.
+- 결과는 `artifacts/quality/adapter_failure_taxonomy.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_adapter_failure_taxonomy.py`가 현재 profile 통과,
+누락 profile 실패, 빈 운영자 메시지 실패, JSON report 생성을 검증한다. Contract proof는
+`tests/contracts/test_adapter_failure_contract.py`가 모든 현재 adapter profile의
+operator-safe failure mode를 검증한다.
 
 ### Tier G16B — failed mutation state validation (✅ 완료 2026-06-12)
 

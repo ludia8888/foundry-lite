@@ -4,6 +4,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
+from foundry_lite.application.ports.adapter_failure import (
+    AdapterError,
+    AdapterFailure,
+    AdapterFailureContract,
+)
+
 RestAuthMode = Literal["none", "bearer", "header"]
 
 
@@ -40,8 +46,32 @@ class RestSourceConfig:
     allow_private_network: bool = False
 
 
-class ConnectorRateLimitedError(Exception):
+class ConnectorRateLimitedError(AdapterError):
     """Raised when a REST connector receives a rate-limit response."""
+
+    def __init__(
+        self,
+        retry_after: str | None,
+        *,
+        adapter_profile: str,
+        operation: str,
+        idempotency_key: str | None = None,
+    ) -> None:
+        message = "REST connector rate limited"
+        if retry_after:
+            message = f"{message}; retry_after={retry_after}"
+        super().__init__(
+            AdapterFailure(
+                adapter_profile=adapter_profile,
+                operation=operation,
+                kind="rate_limited",
+                is_retryable=True,
+                timeout_seconds=_retry_after_seconds(retry_after),
+                idempotency_key=idempotency_key,
+                operator_message=message,
+                details={"retry_after": retry_after} if retry_after else {},
+            )
+        )
 
 
 @dataclass(frozen=True)
@@ -71,8 +101,22 @@ class ConnectorSnapshot:
 class ConnectorAdapter(Protocol):
     """Scale Foundation boundary for future PostgreSQL/SaaS connectors."""
 
-    profile_name: str
+    @property
+    def profile_name(self) -> str: ...
+
+    def failure_contract(self) -> AdapterFailureContract:
+        """Return the adapter failure taxonomy promised by this profile."""
+        ...
 
     def snapshot(self, request: ConnectorSnapshotRequest) -> ConnectorSnapshot:
         """Read a point-in-time connector snapshot."""
         ...
+
+
+def _retry_after_seconds(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None

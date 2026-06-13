@@ -20,6 +20,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
+
 __all__ = ["Credentials", "Principal", "AuthProvider"]
 
 Credentials = Mapping[str, str]
@@ -48,6 +50,13 @@ class AuthProvider(Protocol):
     when no credentials are provided; the demo and dev adapters return a viewer
     role, while a strict production adapter would raise instead.
     """
+
+    @property
+    def profile_name(self) -> str: ...
+
+    def failure_contract(self) -> AdapterFailureContract:
+        """Return the adapter failure taxonomy promised by this profile."""
+        ...
 
     def authenticate(self, credentials: Credentials) -> Principal: ...
 

@@ -20,6 +20,7 @@ from foundry_lite.application.ports import (
     RuntimeRunSnapshot,
     TransactionContext,
 )
+from foundry_lite.application.ports.adapter_failure import AdapterError, adapter_failure_payload
 from foundry_lite.application.primitives import (
     _new_id,
     _now,
@@ -324,8 +325,10 @@ class RuntimeService(CoreService):
         correlation_id: str | None = None,
         adapter: str | None = None,
     ) -> Mapping[str, object]:
-        if isinstance(exc, FoundryLiteError):
-            payload: dict[str, object] = {
+        if isinstance(exc, AdapterError):
+            payload = adapter_failure_payload(exc)
+        elif isinstance(exc, FoundryLiteError):
+            payload = {
                 "type": exc.code,
                 "message": str(exc),
                 "details": exc.details,
