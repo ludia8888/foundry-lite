@@ -167,7 +167,10 @@ def _is_bare_extension(reference: str) -> bool:
 
 
 def _is_runtime_reference(reference: str) -> bool:
-    first_part = reference.strip("./").split("/", maxsplit=1)[0]
+    normalized = reference.strip().rstrip("/")
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    first_part = normalized.split("/", maxsplit=1)[0]
     return first_part in GENERATED_OR_RUNTIME_ROOTS
 
 

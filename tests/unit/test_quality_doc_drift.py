@@ -85,6 +85,16 @@ def test_doc_drift_skips_future_or_negative_gap_wording(tmp_path: Path) -> None:
     assert gate.collect_findings(docs=(doc,), code_roots=(tmp_path / "libs",), root=tmp_path) == []
 
 
+def test_doc_drift_skips_runtime_generated_roots_with_trailing_slash(tmp_path: Path) -> None:
+    doc = _write_doc(
+        tmp_path,
+        "`pnpm demo:supply-chain` uses `.foundry-lite-demo/` for repeatable local state.\n",
+    )
+    _write_python(tmp_path, "libs/example.py", "class ExistingService:\n    pass\n")
+
+    assert gate.collect_findings(docs=(doc,), code_roots=(tmp_path / "libs",), root=tmp_path) == []
+
+
 def test_doc_drift_writes_json_report(tmp_path: Path) -> None:
     doc = _write_doc(tmp_path, "`MissingService` is now implemented.\n")
     output = tmp_path / "artifacts" / "quality" / "doc_drift.json"
