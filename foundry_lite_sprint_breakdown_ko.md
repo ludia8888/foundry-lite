@@ -1829,15 +1829,15 @@ PostgreSQL row 변경을 Debezium envelope로 받아 raw changelog dataset과 ob
 
 **Acceptance Gate**
 
-- [ ] mock ERP orders row insert/update/delete가 CDC topic으로 나온다.
+- [x] mock ERP orders row insert/update/delete가 CDC topic으로 나온다. ([S39-A1](./docs/sprint-evidence-ledger.md#s39-a1))
 - [x] CDC event가 raw changelog dataset에 append된다. ([S39-A2](./docs/sprint-evidence-ledger.md#s39-a2))
 - [x] pk와 ordering metadata가 preview에서 확인된다. ([S39-A3](./docs/sprint-evidence-ledger.md#s39-a3))
 - [x] delete event는 after=null 또는 tombstone 정책으로 표준화된다. ([S39-A4](./docs/sprint-evidence-ledger.md#s39-a4))
-- [ ] CDC connector 실패/lag가 Operations에서 보인다.
+- [x] CDC connector 실패/lag가 Operations에서 보인다. ([S39-A5](./docs/sprint-evidence-ledger.md#s39-a5))
 
 **Demo / Proof**
 
-현재 증명은 Debezium-shaped insert/update/delete stream event를 `DebeziumPostgresStreamAdapter`가 표준 CDC envelope `op`, `pk`, `before`, `after`, `ordering`으로 normalize하고, `StreamArchiveConfig(schema_strategy="cdc_envelope_json")`가 `FoundryLiteCore.archive_stream_events` application boundary를 통해 `raw_cdc.erp_orders` append version을 commit하는 경로다. 실제 ERP DB row update → Debezium Connect topic live proof와 CDC connector failure/lag Operations 증거는 아직 남아 있다.
+현재 증명은 두 층이다. 빠른 계약 증명은 Debezium-shaped insert/update/delete stream event를 `DebeziumPostgresStreamAdapter`가 표준 CDC envelope `op`, `pk`, `before`, `after`, `ordering`으로 normalize하고, `StreamArchiveConfig(schema_strategy="cdc_envelope_json")`가 `FoundryLiteCore.archive_stream_events` application boundary를 통해 `raw_cdc.erp_orders` append version을 commit하는 경로다. Live 증명은 Testcontainers로 Kafka-compatible broker, logical replication PostgreSQL, Debezium Connect를 띄운 뒤 `public.orders` insert/update/delete가 Debezium topic에 나오고 worker가 같은 application boundary로 raw CDC changelog를 commit하는 경로다. CDC read 실패는 Operations의 FAILED sync run에 Debezium adapter failure payload로 남고, unread CDC event 수는 `foundry_lite_stream_archive_lag_events` metric으로 보인다. CDC event가 object store base layer를 직접 갱신하는 작업은 Sprint 40에 남아 있다.
 
 **이러면 성공으로 치지 않는다**
 
