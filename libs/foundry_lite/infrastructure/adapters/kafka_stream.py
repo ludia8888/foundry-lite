@@ -358,9 +358,9 @@ def _decode_value(value: bytes | str) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
-def _publish_headers(request: StreamPublishRequest) -> tuple[tuple[str, bytes], ...]:
-    return (
+def _publish_headers(request: StreamPublishRequest) -> list[tuple[str, bytes]]:
+    return [
         ("foundry-event-type", request.event_type.encode("utf-8")),
         ("foundry-tenant-id", request.tenant_id.encode("utf-8")),
         ("foundry-request-id", request.request_id.encode("utf-8")),
-    )
+    ]

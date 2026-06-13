@@ -234,6 +234,8 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
             "FOUNDRY_LITE_KAFKA_CONSUMER_GROUP": "custom-group",
             "FOUNDRY_LITE_KAFKA_PARTITION": "2",
             "FOUNDRY_LITE_STREAM_ARCHIVE_LIMIT": "9",
+            "FOUNDRY_LITE_KAFKA_POLL_TIMEOUT_SECONDS": "2.5",
+            "FOUNDRY_LITE_KAFKA_MAX_EMPTY_POLLS": "7",
             "FOUNDRY_LITE_TENANT_ID": "tenant-custom",
             "FOUNDRY_LITE_STREAM_SYNC_NAME": "custom-sync",
         }
@@ -241,6 +243,8 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
 
     assert config.stream_config().partition == 2
     assert config.kafka_config().subscriptions[0].default_tenant_id == "tenant-custom"
+    assert config.kafka_config().poll_timeout_seconds == 2.5
+    assert config.kafka_config().max_empty_polls == 7
     assert config.request_context().tenant_id == "tenant-custom"
     assert config.sync_name == "custom-sync"
 

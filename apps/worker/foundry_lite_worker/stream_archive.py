@@ -32,6 +32,8 @@ class StreamArchiveWorkerConfig:
     consumer_group: str = "foundry-lite-archive"
     partition: int = 0
     limit: int = 100
+    poll_timeout_seconds: float = 1.0
+    max_empty_polls: int = 1
     tenant_id: str = DEFAULT_TENANT_ID
     actor_user_id: str = "worker-stream-archive"
     request_id: str = "req-worker-stream-archive"
@@ -58,6 +60,8 @@ class StreamArchiveWorkerConfig:
         return KafkaStreamAdapterConfig(
             bootstrap_servers=self.bootstrap_servers,
             consumer_group=self.consumer_group,
+            poll_timeout_seconds=self.poll_timeout_seconds,
+            max_empty_polls=self.max_empty_polls,
             subscriptions=(
                 KafkaStreamSubscription(
                     stream_name=self.stream_name,
@@ -105,6 +109,8 @@ def config_from_env(env: Mapping[str, str] | None = None) -> StreamArchiveWorker
         consumer_group=values.get("FOUNDRY_LITE_KAFKA_CONSUMER_GROUP", "foundry-lite-archive"),
         partition=_env_int(values, "FOUNDRY_LITE_KAFKA_PARTITION", 0),
         limit=_env_int(values, "FOUNDRY_LITE_STREAM_ARCHIVE_LIMIT", 100),
+        poll_timeout_seconds=_env_float(values, "FOUNDRY_LITE_KAFKA_POLL_TIMEOUT_SECONDS", 1.0),
+        max_empty_polls=_env_int(values, "FOUNDRY_LITE_KAFKA_MAX_EMPTY_POLLS", 1),
         tenant_id=values.get("FOUNDRY_LITE_TENANT_ID", DEFAULT_TENANT_ID),
         sync_name=values.get("FOUNDRY_LITE_STREAM_SYNC_NAME"),
     )
@@ -121,6 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         bootstrap_servers=args.bootstrap_servers,
         storage_root=Path(args.storage_root),
         limit=args.limit,
+        poll_timeout_seconds=args.poll_timeout_seconds,
+        max_empty_polls=args.max_empty_polls,
     )
     try:
         result = run_stream_archive_once(config)
@@ -140,6 +148,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bootstrap-servers", default=defaults.bootstrap_servers)
     parser.add_argument("--storage-root", default=str(defaults.storage_root))
     parser.add_argument("--limit", type=int, default=defaults.limit)
+    parser.add_argument("--poll-timeout-seconds", type=float, default=defaults.poll_timeout_seconds)
+    parser.add_argument("--max-empty-polls", type=int, default=defaults.max_empty_polls)
     return parser
 
 
@@ -160,6 +170,11 @@ def _result_json(result: CommitResult | None) -> str:
 def _env_int(values: Mapping[str, str], name: str, default: int) -> int:
     raw_value = values.get(name)
     return default if raw_value is None else int(raw_value)
+
+
+def _env_float(values: Mapping[str, str], name: str, default: float) -> float:
+    raw_value = values.get(name)
+    return default if raw_value is None else float(raw_value)
 
 
 if __name__ == "__main__":

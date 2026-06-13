@@ -1789,7 +1789,7 @@ Kafka-compatible stream event를 raw archive dataset으로 남겨 replay 가능�
 **Acceptance Gate**
 
 - [x] local/fake Kafka-compatible `StreamAdapter` event를 raw stream archive dataset에 append한다. ([S38-A1](./docs/sprint-evidence-ledger.md#s38-a1))
-- [ ] production Redpanda topic에 event를 넣으면 raw stream archive dataset에 append된다. ([S38-A2](./docs/sprint-evidence-ledger.md#s38-a2))
+- [x] production Kafka-compatible broker topic에 event를 넣으면 raw stream archive dataset에 append된다. ([S38-A2](./docs/sprint-evidence-ledger.md#s38-a2))
 - [x] worker restart 후 마지막 committed offset 이후부터 재개한다. ([S38-A3](./docs/sprint-evidence-ledger.md#s38-a3))
 - [x] 중복 처리 가능성은 event id 또는 topic/partition/offset으로 식별 가능하다. ([S38-A4](./docs/sprint-evidence-ledger.md#s38-a4))
 - [x] stream archive dataset preview가 가능하다. ([S38-A5](./docs/sprint-evidence-ledger.md#s38-a5))
@@ -1797,14 +1797,14 @@ Kafka-compatible stream event를 raw archive dataset으로 남겨 replay 가능�
 
 **Demo / Proof**
 
-현재 증명은 `StreamAdapter.publish_event` → `FoundryLiteCore.archive_stream_events` → `raw.shipment_events` append version 생성이다. production-compatible 경로는 `KafkaStreamAdapter`와 `foundry_lite_worker.stream_archive` one-shot worker가 같은 `archive_stream_events` application boundary를 호출하도록 확장했다. 다만 실제 Redpanda broker에 `kafka-console-producer`로 발행한 live proof는 아직 남아 있으므로 S38-A2 체크박스는 열어둔다.
+현재 증명은 local/fake `StreamAdapter.publish_event` → `FoundryLiteCore.archive_stream_events` → `raw.shipment_events` append version 생성에 더해, `tests/integration/test_kafka_live_broker_stream_archive.py`가 `KafkaContainer` live broker를 띄우고 `KafkaStreamAdapter.publish_event`로 실제 topic에 event를 넣은 뒤 `foundry_lite_worker.stream_archive.run_stream_archive_once`가 같은 `archive_stream_events` application boundary를 통해 raw archive dataset version을 commit하는 경로까지 확인한다.
 
 **이러면 성공으로 치지 않는다**
 
 - offset commit과 dataset commit이 불일치해 유실이 가능하다.
 - stream event를 object store에만 반영하고 archive dataset을 남기지 않는다.
 - restart 후 replay/skip 정책이 없다.
-- local/fake stream adapter proof만으로 production Redpanda worker까지 완료했다고 표시한다.
+- local/fake stream adapter proof만으로 production Kafka-compatible worker까지 완료했다고 표시한다.
 
 ---
 

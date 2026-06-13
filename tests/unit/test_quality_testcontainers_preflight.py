@@ -72,7 +72,7 @@ def test_preflight_fails_early_when_docker_is_unavailable(tmp_path: Path) -> Non
 
     assert result.is_ok is False
     assert result.code == "docker_unavailable"
-    assert "PostgreSQL Testcontainers preflight failed before running pytest." in result.message
+    assert "Testcontainers preflight failed before running pytest." in result.message
 
 
 def _touch_colima_socket(tmp_path: Path) -> Path:
