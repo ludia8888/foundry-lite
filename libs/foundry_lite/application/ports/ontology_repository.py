@@ -22,6 +22,15 @@ class ObjectTypeBacking(TypedDict):
     dataset: str
     mode: NotRequired[str]
     primaryKeyColumns: NotRequired[Sequence[str]]
+    cdc: NotRequired[ObjectTypeCdcBacking]
+
+
+class ObjectTypeCdcBacking(TypedDict):
+    """Optional CDC changelog source for incremental object indexing."""
+
+    dataset: str
+    primaryKeyColumns: NotRequired[Sequence[str]]
+    deletePolicy: NotRequired[str]
 
 
 class LinkTypeBacking(TypedDict):

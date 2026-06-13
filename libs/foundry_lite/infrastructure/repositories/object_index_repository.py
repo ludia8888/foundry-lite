@@ -13,6 +13,7 @@ from foundry_lite.application.ports import (
     ObjectConflictRecord,
     ObjectIndexLinkRow,
     ObjectLinkInsert,
+    ObjectRecordCdcUpdate,
     ObjectRecordInsert,
     ObjectRecordSourceUpdate,
 )
@@ -66,6 +67,7 @@ class SqlAlchemyObjectIndexRepository:
         run_id: str,
         rows_read: int,
         objects_upserted: int,
+        objects_deleted: int,
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
@@ -77,6 +79,7 @@ class SqlAlchemyObjectIndexRepository:
                 status="succeeded",
                 rows_read=rows_read,
                 objects_upserted=objects_upserted,
+                objects_deleted=objects_deleted,
                 links_upserted=links_upserted,
                 cursor=cursor,
                 completed_at=completed_at,
@@ -135,6 +138,28 @@ class SqlAlchemyObjectIndexRepository:
                 source_dataset_version_id=record.source_dataset_version_id,
                 source_hash=record.source_hash,
                 object_version=record.object_version,
+                updated_at=record.updated_at,
+            )
+        )
+
+    def update_object_record_from_cdc(
+        self,
+        *,
+        transaction: Any,
+        record: ObjectRecordCdcUpdate,
+    ) -> None:
+        transaction.execute(
+            update(db.object_records)
+            .where(and_(db.object_records.c.tenant_id == record.tenant_id, db.object_records.c.id == record.record_id))
+            .values(
+                properties=record.properties,
+                base_properties=record.base_properties,
+                property_versions=record.property_versions,
+                source_dataset_version_id=record.source_dataset_version_id,
+                source_hash=record.source_hash,
+                object_version=record.object_version,
+                deleted=record.deleted,
+                deletion_reason=record.deletion_reason,
                 updated_at=record.updated_at,
             )
         )

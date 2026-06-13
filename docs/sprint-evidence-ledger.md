@@ -54,6 +54,7 @@
 | `VERIFY-KAFKA-LIVE-BROKER` | `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock uv run pytest tests/integration/test_kafka_live_broker_stream_archive.py -q` | PASS. `1 passed in 14.93s`. `KafkaContainer` boots a real Kafka-compatible broker, `KafkaStreamAdapter.publish_event` writes a shipment event to a live topic, and `foundry_lite_worker.stream_archive.run_stream_archive_once` reads the broker topic through the same application boundary and commits `raw.shipment_events` with event id `<topic>:0:0`. |
 | `VERIFY-CDC-STREAM-ARCHIVE` | `pnpm --silent quality:cdc-stream-archive`; `pnpm --silent quality:adapter-failure-taxonomy` | PASS. `13 passed in 0.36s`; adapter taxonomy gate passed with `17` concrete adapter profiles. `DebeziumPostgresStreamAdapter` normalizes Debezium-shaped insert/update/delete payloads into the standard CDC envelope, rejects malformed envelopes as adapter validation failures, reports publish/read validation failures under the correct adapter operation, and `tests/integration/test_cdc_stream_archive.py` proves `StreamArchiveConfig(schema_strategy="cdc_envelope_json")` commits `raw_cdc.erp_orders` rows with top-level `op`, `pk_json`, `before_json`, `after_json`, and `ordering_json` preview fields. CDC stream lag updates `foundry_lite_stream_archive_lag_events`, CDC read failures now create FAILED sync runs with Debezium adapter failure payloads in Operations, and stream archive resume cursors require a matching `schemaStrategy`. |
 | `VERIFY-DEBEZIUM-LIVE-CDC` | `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock uv run pytest tests/integration/test_debezium_live_cdc.py -q` | PASS. `1 passed in 39.77s`. Testcontainers boots a real Kafka-compatible broker, PostgreSQL with `wal_level=logical`, and Debezium Connect `quay.io/debezium/connect:3.5`; insert/update/delete against `public.orders` appear on the Debezium topic, and `foundry_lite_worker.stream_archive.run_stream_archive_once` commits three CDC changelog rows into `raw_cdc.erp_orders`. |
+| `VERIFY-CDC-OBJECT-INDEXING` | `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock uv run pytest tests/unit/test_cdc_indexing.py tests/contracts/test_object_index_repository_contract.py tests/integration/test_cdc_object_indexing.py -q`; `pnpm --silent quality:cdc-object-indexing` | PASS. Package script: `23 passed in 2.82s`; focused parser/integration workflow exposure: `15 passed in 0.31s`. `tests/unit/test_cdc_indexing.py` covers CDC envelope validation, JSON envelope parsing, primary-key fallback, stale ordering, and property-version metadata. `tests/integration/test_cdc_object_indexing.py` proves `backing.cdc` mapping, batch-rebuild-free CDC update, CDC-only object insert, tombstone delete handling, duplicate/stale ordering skip, `object.changed` outbox trigger, and `cdc_incremental` index run status. `tests/contracts/test_object_index_repository_contract.py` keeps the CDC object update repository contract aligned across fake, SQLite, and PostgreSQL. |
 
 ## Sprint 02A - Scale Foundation/Infra Swap Boundary
 
@@ -259,11 +260,26 @@ No Sprint 02A Scale Foundation evidence item remains open in the current checkou
 | `S39-A4` | delete event is standardized as `after=null` or tombstone policy | `PR-10`; `VERIFY-CDC-STREAM-ARCHIVE`; `tests/contracts/test_debezium_cdc_adapter_contract.py` | Done for `after=null` delete envelopes |
 | `S39-A5` | CDC connector failure/lag is visible in Operations | `PR-11`; `VERIFY-CDC-STREAM-ARCHIVE`; `test_cdc_stream_archive_read_failure_is_visible_in_operations`; `test_cdc_stream_archive_updates_unread_lag_metric` | Done |
 
+## Sprint 40 - CDC Object Indexing and Delete/Tombstone
+
+<a id="s40-a1"></a>
+<a id="s40-a2"></a>
+<a id="s40-a3"></a>
+<a id="s40-a4"></a>
+<a id="s40-a5"></a>
+
+| Evidence id | Checkbox meaning | Git / test evidence | Current status |
+|---|---|---|---|
+| `S40-A1` | ERP DB row update changes the Order object without batch rebuild | `VERIFY-CDC-OBJECT-INDEXING`; `tests/integration/test_cdc_object_indexing.py`; `tests/unit/test_cdc_indexing.py` | Done |
+| `S40-A2` | delete event marks the object as deleted/tombstoned | `VERIFY-CDC-OBJECT-INDEXING`; `deleted=true`; `deletionReason=source_deleted` | Done |
+| `S40-A3` | replaying the same CDC event is idempotent | `VERIFY-CDC-OBJECT-INDEXING`; duplicate event returns `events_skipped=1` | Done |
+| `S40-A4` | stale CDC event does not overwrite current object state | `VERIFY-CDC-OBJECT-INDEXING`; lower `ordering.lsn` event returns `events_skipped=1` and keeps `status=APPROVED` | Done |
+| `S40-A5` | CDC update emits object.changed/materialization trigger evidence | `VERIFY-CDC-OBJECT-INDEXING`; `object.changed` outbox count changes only for applied update/delete events | Done |
+
 ## Open / Not Yet Merged Scope
 
 These items intentionally remain unchecked until a later PR creates code and gate evidence.
 
 | Scope | Current tracking note |
 |---|---|
-| CDC object indexing | Sprint 40 remains future work after Sprint 39 live Debezium topic/source evidence. |
 | OpenSearch, Iceberg, Spark, Kubernetes production adapters | Sprint 42-45 remain future work. |

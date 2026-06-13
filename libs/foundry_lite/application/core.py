@@ -14,6 +14,7 @@ from foundry_lite.application.ports import (
     DatasetRow,
     DatasetVersionRow,
     LineageEdgeRow,
+    ObjectIndexCdcResult,
     ObjectIndexRebuildResult,
     ObjectLinkPayload,
     ObjectPayload,
@@ -60,21 +61,11 @@ __all__ = [
 class FoundryLiteCore:
     """Facade for the MVP closed loop.
 
-    Public use cases stay on this facade for compatibility. The implementation is
-    delegated to constructor-injected application services so Dataset, Transform,
-    Ontology, Object, Action, Materialization, runtime event, and demo orchestration
-    responsibilities evolve independently without facade-level multiple inheritance.
+    Public use cases stay here while injected services own each domain workflow.
     """
 
-    def __init__(
-        self,
-        *,
-        dependencies: CoreDependencies,
-    ) -> None:
-        # Sprint 02A §4.3: FoundryLiteCore accepts a fully-wired
-        # CoreDependencies bag only. Convenience constructors that pull infrastructure into the
-        # application layer live in apps/* composition roots and the
-        # test conftest, never inside the facade itself.
+    def __init__(self, *, dependencies: CoreDependencies) -> None:
+        # CoreDependencies is assembled by composition roots, not this facade.
         self.root = dependencies.root
         self.storage_root = dependencies.storage_root
         self.engine = dependencies.engine
@@ -316,6 +307,15 @@ class FoundryLiteCore:
         ctx: RequestContext | None = None,
     ) -> ObjectIndexRebuildResult:
         return self._services.object_store.indexing.index_replay_run(index_run_id, ctx=ctx)
+
+    def index_cdc_events(
+        self,
+        object_type_api_name: str,
+        events: Sequence[Mapping[str, object]],
+        *,
+        ctx: RequestContext | None = None,
+    ) -> ObjectIndexCdcResult:
+        return self._services.object_store.indexing.index_cdc_events(object_type_api_name, events, ctx=ctx)
 
     def get_links(
         self,

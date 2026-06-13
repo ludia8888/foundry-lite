@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
     ObjectIndexLinkRow,
     ObjectIndexRepository,
     ObjectLinkInsert,
+    ObjectRecordCdcUpdate,
     ObjectRecordInsert,
     ObjectRecordSourceUpdate,
 )
@@ -69,6 +70,7 @@ class FakeObjectIndexRepository:
         run_id: str,
         rows_read: int,
         objects_upserted: int,
+        objects_deleted: int,
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
@@ -80,6 +82,7 @@ class FakeObjectIndexRepository:
             status="succeeded",
             rows_read=rows_read,
             objects_upserted=objects_upserted,
+            objects_deleted=objects_deleted,
             links_upserted=links_upserted,
             cursor=cursor,
             completed_at=completed_at,
@@ -112,6 +115,22 @@ class FakeObjectIndexRepository:
             source_dataset_version_id=record.source_dataset_version_id,
             source_hash=record.source_hash,
             object_version=record.object_version,
+            updated_at=record.updated_at,
+        )
+
+    def update_object_record_from_cdc(self, *, transaction: Any, record: ObjectRecordCdcUpdate) -> None:
+        del transaction
+        if self.object_records[record.record_id]["tenant_id"] != record.tenant_id:
+            return
+        self.object_records[record.record_id].update(
+            properties=record.properties,
+            base_properties=record.base_properties,
+            property_versions=record.property_versions,
+            source_dataset_version_id=record.source_dataset_version_id,
+            source_hash=record.source_hash,
+            object_version=record.object_version,
+            deleted=record.deleted,
+            deletion_reason=record.deletion_reason,
             updated_at=record.updated_at,
         )
 
@@ -301,6 +320,22 @@ def _object_update_record(record_id: str = "obj_order_1") -> ObjectRecordSourceU
     )
 
 
+def _object_cdc_update_record(record_id: str = "obj_order_1") -> ObjectRecordCdcUpdate:
+    return ObjectRecordCdcUpdate(
+        record_id=record_id,
+        tenant_id="tenant-demo",
+        properties={"status": "CANCELLED", "amount": 120},
+        base_properties={"status": "CANCELLED", "amount": 120},
+        property_versions={"status": 3, "amount": 2, "_cdc": {"eventId": "topic:0:3", "ordering": {"lsn": 3}}},
+        source_dataset_version_id="cdc:topic:0:3",
+        source_hash="hash-v3",
+        object_version=3,
+        deleted=True,
+        deletion_reason="source_deleted",
+        updated_at="2026-06-10T00:02:00Z",
+    )
+
+
 def _conflict_record(conflict_id: str = "conflict_1") -> ObjectConflictRecord:
     return ObjectConflictRecord(
         conflict_id=conflict_id,
@@ -472,6 +507,7 @@ def test_object_index_repository_contract_records_index_run_lifecycle(
             run_id="index_run_1",
             rows_read=3,
             objects_upserted=2,
+            objects_deleted=1,
             links_upserted=1,
             cursor={"last_row": 3},
             completed_at="2026-06-10T00:02:00Z",
@@ -505,6 +541,7 @@ def test_object_index_repository_contract_records_index_run_lifecycle(
     assert succeeded["status"] == "succeeded"
     assert succeeded["cursor"] == {"last_row": 3}
     assert succeeded["objects_upserted"] == 2
+    assert succeeded["objects_deleted"] == 1
     assert failed is not None
     assert failed["status"] == "failed"
     assert failed["error"] == {"type": "ValidationFailed"}
@@ -516,15 +553,19 @@ def test_object_index_repository_contract_writes_object_record_updates_and_confl
     with harness.transaction() as transaction:
         harness.repository.insert_object_record(transaction=transaction, record=_object_insert_record())
         harness.repository.update_object_record_from_source(transaction=transaction, record=_object_update_record())
+        harness.repository.update_object_record_from_cdc(transaction=transaction, record=_object_cdc_update_record())
         harness.repository.insert_object_conflict(transaction=transaction, record=_conflict_record())
 
     record = harness.object_record("obj_order_1")
     conflicts = harness.conflicts()
 
     assert record is not None
-    assert record["object_version"] == 2
-    assert record["properties"] == {"status": "REVIEW", "amount": 120}
-    assert record["source_dataset_version_id"] == "dsv_orders_2"
+    assert record["object_version"] == 3
+    assert record["properties"] == {"status": "CANCELLED", "amount": 120}
+    assert record["source_dataset_version_id"] == "cdc:topic:0:3"
+    assert record["property_versions"]["_cdc"]["eventId"] == "topic:0:3"
+    assert record["deleted"] is True
+    assert record["deletion_reason"] == "source_deleted"
     assert len(conflicts) == 1
     assert conflicts[0]["property_api_name"] == "status"
     assert conflicts[0]["source_value"] == "REVIEW"
