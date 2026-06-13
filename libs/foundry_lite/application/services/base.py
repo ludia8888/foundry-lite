@@ -15,6 +15,7 @@ from foundry_lite.application.ports import (
     ObjectReadRepository,
     ObjectSetRepository,
     RuntimeRepository,
+    StreamAdapter,
     TransactionManager,
 )
 from foundry_lite.application.ports.action_repository import ActionRepository
@@ -73,6 +74,7 @@ class CoreService:
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository
     runtime_repository: RuntimeRepository
+    stream_adapter: StreamAdapter
     dataset_storage: DatasetStorageAdapter
     engine: TransactionManager
     policy: PolicyService

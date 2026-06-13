@@ -34,6 +34,7 @@ def test_metrics_record_success_failure_and_payload() -> None:
     metrics.record_action_apply(0.03)
     metrics.record_object_query(0.04)
     metrics.set_outbox_publish_lag(0.5)
+    metrics.set_stream_archive_lag(0)
     metrics.record_failed_run()
     metrics.set_dlq_size(1)
     payload, media_type = metrics.prometheus_payload()

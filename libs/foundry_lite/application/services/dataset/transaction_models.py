@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from foundry_lite.application.ports import DatasetCheckConfig, DatasetRow, StoredDatasetCommit
+from foundry_lite.application.ports import (
+    DatasetCheckConfig,
+    DatasetRow,
+    DatasetTransactionMetadata,
+    StoredDatasetCommit,
+)
 from foundry_lite.application.primitives import StagedFileStats
 
 
@@ -33,6 +38,7 @@ class DatasetFinalizationRequest:
     audit_action: str
     outbox_event_type: str
     extra_checks: list[DatasetCheckConfig]
+    transaction_metadata: DatasetTransactionMetadata
 
 
 @dataclass(frozen=True)

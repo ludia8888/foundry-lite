@@ -1785,21 +1785,23 @@ Kafka-compatible stream event를 raw archive dataset으로 남겨 replay 가능�
 
 **Acceptance Gate**
 
-- [ ] Redpanda topic에 event를 넣으면 raw stream archive dataset에 append된다.
-- [ ] worker restart 후 마지막 committed offset 이후부터 재개한다.
-- [ ] 중복 처리 가능성은 event id 또는 topic/partition/offset으로 식별 가능하다.
-- [ ] stream archive dataset preview가 가능하다.
-- [ ] lag와 failed event가 Operations에 보인다.
+- [x] local/fake Kafka-compatible `StreamAdapter` event를 raw stream archive dataset에 append한다.
+- [ ] production Redpanda topic에 event를 넣으면 raw stream archive dataset에 append된다.
+- [x] worker restart 후 마지막 committed offset 이후부터 재개한다.
+- [x] 중복 처리 가능성은 event id 또는 topic/partition/offset으로 식별 가능하다.
+- [x] stream archive dataset preview가 가능하다.
+- [x] lag metric과 stream writer 실패가 Operations에 보인다.
 
 **Demo / Proof**
 
-`kafka-console-producer`로 event 발행 → `raw.shipment_events` append version 생성.
+현재 증명은 `StreamAdapter.publish_event` → `FoundryLiteCore.archive_stream_events` → `raw.shipment_events` append version 생성이다. production Redpanda proof는 다음 단계에서 `kafka-console-producer` 발행으로 확장한다.
 
 **이러면 성공으로 치지 않는다**
 
 - offset commit과 dataset commit이 불일치해 유실이 가능하다.
 - stream event를 object store에만 반영하고 archive dataset을 남기지 않는다.
 - restart 후 replay/skip 정책이 없다.
+- local/fake stream adapter proof만으로 production Redpanda worker까지 완료했다고 표시한다.
 
 ---
 

@@ -10,6 +10,7 @@ from foundry_lite.application.ports import (
     DatasetManifest,
     DatasetRow,
     DatasetRunKind,
+    DatasetTransactionMetadata,
     DatasetTransactionRecord,
     DatasetTransactionRow,
     DatasetVersionConflictError,
@@ -113,6 +114,7 @@ class DatasetTransactionService(CoreService):
         audit_action: str,
         outbox_event_type: str,
         extra_checks: Sequence[DatasetCheckConfig] | None = None,
+        transaction_metadata: DatasetTransactionMetadata | None = None,
     ) -> CommitResult:
         request = DatasetFinalizationRequest(
             target=DatasetCommitTarget.from_row(dataset),
@@ -122,6 +124,7 @@ class DatasetTransactionService(CoreService):
             audit_action=audit_action,
             outbox_event_type=outbox_event_type,
             extra_checks=list(extra_checks or []),
+            transaction_metadata=dict(transaction_metadata or {}),
         )
         validation = self._validate_finalization_request(conn, ctx, request)
         commit = self._store_finalized_dataset_commit(conn, ctx, request, validation)
@@ -255,6 +258,7 @@ class DatasetTransactionService(CoreService):
             request.transaction_id,
             commit.version_id,
             commit.schema_version,
+            request.transaction_metadata,
         )
 
     def _cleanup_committed_version_artifacts(
@@ -417,6 +421,7 @@ class DatasetTransactionService(CoreService):
         transaction_id: str,
         version_id: str,
         schema_version: int,
+        metadata: DatasetTransactionMetadata,
     ) -> None:
         """Mark the transaction committed after the version and files are stored."""
         self.dataset_transaction_repository.commit_transaction(
@@ -426,6 +431,7 @@ class DatasetTransactionService(CoreService):
             committed_version_id=version_id,
             schema_version=schema_version,
             committed_at=_now(),
+            metadata=metadata,
         )
 
     def _require_open_transaction(self, conn: TransactionContext, transaction_id: str) -> DatasetTransactionRow:

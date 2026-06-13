@@ -12,6 +12,7 @@ from foundry_lite.application.ports import (
     DatasetRunKind,
     DatasetSchemaJson,
     DatasetSchemaRow,
+    DatasetTransactionMetadata,
     DatasetVersionRow,
     TransactionContext,
 )
@@ -52,6 +53,7 @@ class DatasetTransactionManager(Protocol):
         audit_action: str,
         outbox_event_type: str,
         extra_checks: Sequence[DatasetCheckConfig] | None = None,
+        transaction_metadata: DatasetTransactionMetadata | None = None,
     ) -> CommitResult: ...
 
     def _abort_transaction_after_error(

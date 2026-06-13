@@ -13,6 +13,7 @@ REQUIRED_OPERATIONAL_METRICS = (
     "foundry_lite_action_apply_seconds",
     "foundry_lite_object_query_seconds",
     "foundry_lite_outbox_publish_lag_seconds",
+    "foundry_lite_stream_archive_lag_events",
     "foundry_lite_failed_runs_total",
     "foundry_lite_dlq_size",
 )
@@ -56,6 +57,10 @@ OBJECT_QUERY_SECONDS = Histogram(
 OUTBOX_PUBLISH_LAG_SECONDS = Gauge(
     "foundry_lite_outbox_publish_lag_seconds",
     "Foundry-lite outbox publish lag.",
+)
+STREAM_ARCHIVE_LAG_EVENTS = Gauge(
+    "foundry_lite_stream_archive_lag_events",
+    "Foundry-lite stream archive unread event lag.",
 )
 FAILED_RUNS_TOTAL = Counter(
     "foundry_lite_failed_runs_total",
@@ -107,6 +112,10 @@ def record_object_query(duration_seconds: float) -> None:
 
 def set_outbox_publish_lag(duration_seconds: float) -> None:
     OUTBOX_PUBLISH_LAG_SECONDS.set(duration_seconds)
+
+
+def set_stream_archive_lag(events: int) -> None:
+    STREAM_ARCHIVE_LAG_EVENTS.set(events)
 
 
 def record_failed_run() -> None:

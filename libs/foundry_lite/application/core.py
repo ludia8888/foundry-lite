@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from foundry_lite.application.action_types import ActionApplyResponse
+from foundry_lite.application.core_retry import retry_materialization_name, retry_materialization_result
 from foundry_lite.application.core_services import CoreServices
 from foundry_lite.application.demo_types import SupplyChainDemoResult
 from foundry_lite.application.dependencies import CoreDependencies
@@ -21,16 +22,16 @@ from foundry_lite.application.ports import (
     ObjectSetQueryResult,
     OntologyApplyResult,
     RestSourceConfig,
-    RuntimeRetryMaterializationResult,
-    RuntimeRetryPlan,
     RuntimeRetryResult,
     RuntimeRunDetail,
     RuntimeRunQueryResult,
     RuntimeRunSnapshot,
+    StreamArchiveConfig,
     TabularRow,
+    TransformCheck,
     TransformRetryResult,
+    TransformRow,
 )
-from foundry_lite.application.ports.transform_repository import TransformCheck, TransformRow
 from foundry_lite.application.primitives import (
     CommitResult,
     StagedFileStats,
@@ -244,6 +245,23 @@ class FoundryLiteCore:
             ctx=ctx,
         )
 
+    def archive_stream_events(
+        self,
+        dataset_ref: str,
+        *,
+        stream: StreamArchiveConfig,
+        ctx: RequestContext | None = None,
+        after_offset: int | None = None,
+        sync_name: str | None = None,
+    ) -> CommitResult | None:
+        return self._services.dataset.ingest.archive_stream_events(
+            dataset_ref,
+            stream=stream,
+            ctx=ctx,
+            after_offset=after_offset,
+            sync_name=sync_name,
+        )
+
     def register_transform(
         self,
         api_name: str,
@@ -455,11 +473,11 @@ class FoundryLiteCore:
     def retry_dead_letter_event(self, event_id: str, *, ctx: RequestContext | None = None) -> RuntimeRetryResult:
         ctx = ctx or RequestContext()
         plan = self._services.runtime.dead_letter_event_retry_plan(event_id, ctx=ctx)
-        materialization_name = _retry_materialization_name(plan)
+        materialization_name = retry_materialization_name(plan)
         materialization_result = None
         if materialization_name is not None:
             commit = self._services.materialization.materialize(materialization_name, ctx=ctx)
-            materialization_result = _retry_materialization_result(materialization_name, commit)
+            materialization_result = retry_materialization_result(materialization_name, commit)
         result = self._services.runtime.retry_dead_letter_event(event_id, ctx=ctx)
         if materialization_result is not None:
             result["materializationResult"] = materialization_result
@@ -475,26 +493,3 @@ class FoundryLiteCore:
 
     def seed_supply_chain_demo_files(self) -> None:
         self._services.demo.seed_supply_chain_demo_files()
-
-
-def _retry_materialization_name(result: RuntimeRetryPlan) -> str | None:
-    if result["eventType"] != "materialization.requested":
-        return None
-    value = result["payload"].get("materialization")
-    return value if isinstance(value, str) and value else None
-
-
-def _retry_materialization_result(
-    api_name: str,
-    commit: CommitResult,
-) -> RuntimeRetryMaterializationResult:
-    return {
-        "kind": "materialization",
-        "apiName": api_name,
-        "datasetId": commit.dataset_id,
-        "datasetRef": commit.dataset_ref,
-        "transactionId": commit.transaction_id,
-        "versionId": commit.version_id,
-        "versionNumber": commit.version_number,
-        "rowCount": commit.row_count,
-    }
