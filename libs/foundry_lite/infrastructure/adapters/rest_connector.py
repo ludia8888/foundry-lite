@@ -170,20 +170,20 @@ def _resolved_addresses(host: str, port: int | None) -> tuple[IPv4Address | IPv6
 
 
 def _non_global_ip_reason(address: IPv4Address | IPv6Address) -> str | None:
-    if address.is_global:
-        return None
     if address.is_loopback:
         return "loopback_ip"
     if address.is_link_local:
         return "link_local_ip"
-    if address.is_private:
-        return "private_ip"
     if address.is_multicast:
         return "multicast_ip"
     if address.is_unspecified:
         return "unspecified_ip"
     if address.is_reserved:
         return "reserved_ip"
+    if address.is_private:
+        return "private_ip"
+    if address.is_global:
+        return None
     return "non_global_ip"
 
 
