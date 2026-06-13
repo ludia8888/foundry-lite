@@ -8,13 +8,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
-from foundry_lite.application.ports import DatasetRow, TransactionContext
-from foundry_lite.application.ports.connector_adapter import (
+from foundry_lite.application.ports import (
     ConnectorAdapter,
     ConnectorSnapshotRequest,
+    DatasetRow,
     RestSourceConfig,
+    StreamAdapter,
+    StreamArchiveConfig,
+    StreamEvent,
+    SyncRunRecord,
+    TransactionContext,
 )
-from foundry_lite.application.ports.dataset_transaction_repository import SyncRunRecord
 from foundry_lite.application.primitives import (
     CommitResult,
     _new_id,
@@ -25,6 +29,13 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetRegistryLookup,
     DatasetRuntimeBoundary,
     DatasetTransactionManager,
+)
+from foundry_lite.application.services.dataset.stream_archive import (
+    STREAM_ARCHIVE_FIELDS,
+    read_stream_archive_events,
+    stream_cursor_offset,
+    stream_event_row,
+    stream_transaction_metadata,
 )
 from foundry_lite.application.upload_limits import require_csv_size_limit
 from foundry_lite.domain.context import RequestContext
@@ -46,13 +57,20 @@ class UploadSyncPlan:
 
 
 class DatasetIngestService(CoreService):
-    required_dependencies = ("engine", "compute_adapter", "connector_adapter", "dataset_transaction_repository")
+    required_dependencies = (
+        "engine",
+        "compute_adapter",
+        "connector_adapter",
+        "stream_adapter",
+        "dataset_transaction_repository",
+    )
     required_collaborators = (
         "dataset_registry_service",
         "dataset_transaction_service",
         "runtime_service",
     )
     connector_adapter: ConnectorAdapter
+    stream_adapter: StreamAdapter
     dataset_registry_service: DatasetRegistryLookup
     dataset_transaction_service: DatasetTransactionManager
     runtime_service: DatasetRuntimeBoundary
@@ -166,6 +184,26 @@ class DatasetIngestService(CoreService):
         staged = self.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
         return self._commit_webhook_event(ctx, dataset, plan, staged, connector_name, resource_name, payload)
 
+    def archive_stream_events(
+        self,
+        dataset_ref: str,
+        *,
+        stream: StreamArchiveConfig,
+        ctx: RequestContext | None = None,
+        after_offset: int | None = None,
+        sync_name: str | None = None,
+    ) -> CommitResult | None:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
+        resume_offset = (
+            after_offset if after_offset is not None else self._committed_stream_offset(ctx, dataset, stream)
+        )
+        events = read_stream_archive_events(self.stream_adapter, stream, resume_offset)
+        if not events:
+            return None
+        return self._commit_stream_archive(ctx, dataset, stream, events, sync_name)
+
     def _start_upload_sync_run(
         self,
         conn: TransactionContext,
@@ -227,6 +265,20 @@ class DatasetIngestService(CoreService):
         )
         return UploadSyncPlan(transaction_id=transaction_id, run_id=run_id)
 
+    def _committed_stream_offset(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        stream: StreamArchiveConfig,
+    ) -> int | None:
+        with self.engine.begin() as conn:
+            tx = self.dataset_transaction_repository.latest_committed_transaction(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                dataset_id=dataset["id"],
+            )
+        return stream_cursor_offset(tx["metadata"], stream) if tx else None
+
     def _csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
         self.compute_adapter.csv_to_parquet(source_path, target_path)
 
@@ -267,6 +319,76 @@ class DatasetIngestService(CoreService):
         if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
             raise exc
         raise ValidationFailed("connector snapshot sync failed", details={"error": str(exc)}) from exc
+
+    def _abort_stream_after_error(
+        self,
+        ctx: RequestContext,
+        transaction_id: str,
+        run_id: str,
+        exc: Exception,
+    ) -> NoReturn:
+        self.dataset_transaction_service._abort_transaction_after_error(
+            ctx,
+            transaction_id,
+            run_id,
+            exc,
+            "sync",
+            adapter="stream_archive_writer",
+        )
+        if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
+            raise exc
+        raise ValidationFailed("stream archive failed", details={"error": str(exc)}) from exc
+
+    def _commit_stream_archive(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        stream: StreamArchiveConfig,
+        events: Sequence[StreamEvent],
+        sync_name: str | None,
+    ) -> CommitResult:
+        with self.engine.begin() as conn:
+            plan = self._start_connector_sync_run(
+                conn,
+                ctx,
+                dataset,
+                "stream",
+                stream.stream_name,
+                sync_name or f"stream:{stream.stream_name}:{stream.consumer_group}",
+                tx_type="APPEND",
+                source_type=f"stream.{stream.stream_name}",
+            )
+        staged = self.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
+        return self._write_stream_archive_batch(ctx, dataset, stream, plan, staged, events)
+
+    def _write_stream_archive_batch(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        stream: StreamArchiveConfig,
+        plan: UploadSyncPlan,
+        staged: Path,
+        events: Sequence[StreamEvent],
+    ) -> CommitResult:
+        try:
+            rows = [stream_event_row(event, stream) for event in events]
+            self._rows_to_parquet(rows, staged, STREAM_ARCHIVE_FIELDS)
+            with self.engine.begin() as conn:
+                result = self.dataset_transaction_service._finalize_open_transaction(
+                    conn,
+                    ctx,
+                    dataset=dataset,
+                    transaction_id=plan.transaction_id,
+                    staged_parquet=staged,
+                    run_id=plan.run_id,
+                    audit_action="stream_archive_append_commit",
+                    outbox_event_type="dataset.version.committed",
+                    transaction_metadata=stream_transaction_metadata(stream, events),
+                )
+                self._mark_sync_run_committed(conn, ctx, plan.run_id, result)
+                return result
+        except Exception as exc:
+            self._abort_stream_after_error(ctx, plan.transaction_id, plan.run_id, exc)
 
     def _commit_webhook_event(
         self,

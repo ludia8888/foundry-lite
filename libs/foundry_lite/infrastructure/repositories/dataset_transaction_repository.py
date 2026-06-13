@@ -122,6 +122,7 @@ class SqlAlchemyDatasetTransactionRepository:
         committed_version_id: str,
         schema_version: int,
         committed_at: str,
+        metadata: DatasetTransactionMetadata | None = None,
     ) -> None:
         transaction.execute(
             update(db.dataset_transactions)
@@ -133,8 +134,34 @@ class SqlAlchemyDatasetTransactionRepository:
                 committed_version_id=committed_version_id,
                 schema_version=schema_version,
                 committed_at=committed_at,
+                metadata=dict(metadata or {}),
             )
         )
+
+    def latest_committed_transaction(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> DatasetTransactionRow | None:
+        row = (
+            transaction.execute(
+                select(db.dataset_transactions)
+                .where(
+                    and_(
+                        db.dataset_transactions.c.tenant_id == tenant_id,
+                        db.dataset_transactions.c.dataset_id == dataset_id,
+                        db.dataset_transactions.c.status == "COMMITTED",
+                    )
+                )
+                .order_by(db.dataset_transactions.c.committed_at.desc(), db.dataset_transactions.c.created_at.desc())
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        return cast(DatasetTransactionRow, dict(row)) if row else None
 
     def abort_open_transaction_and_fail_run(
         self,

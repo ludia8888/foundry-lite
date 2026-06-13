@@ -156,6 +156,13 @@ from foundry_lite.application.ports.runtime_repository import (
     RuntimeRunSnapshot,
     RuntimeRunType,
 )
+from foundry_lite.application.ports.stream_adapter import (
+    StreamAdapter,
+    StreamArchiveConfig,
+    StreamEvent,
+    StreamPublishRequest,
+    StreamSchemaStrategy,
+)
 from foundry_lite.application.ports.transaction_context import TransactionContext, TransactionManager
 from foundry_lite.application.ports.transform_repository import (
     TransformCheck,
@@ -295,6 +302,11 @@ __all__ = [
     "RestPaginationConfig",
     "RestSourceConfig",
     "StoredDatasetCommit",
+    "StreamAdapter",
+    "StreamArchiveConfig",
+    "StreamEvent",
+    "StreamPublishRequest",
+    "StreamSchemaStrategy",
     "SyncRunRecord",
     "TabularRow",
     "TransactionContext",

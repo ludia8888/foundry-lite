@@ -102,6 +102,7 @@ class FakeDatasetTransactionRepository:
         committed_version_id: str,
         schema_version: int,
         committed_at: str,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         del transaction
         if self.transactions[transaction_id]["tenant_id"] != tenant_id:
@@ -111,7 +112,24 @@ class FakeDatasetTransactionRepository:
             committed_version_id=committed_version_id,
             schema_version=schema_version,
             committed_at=committed_at,
+            metadata=dict(metadata or {}),
         )
+
+    def latest_committed_transaction(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> dict[str, Any] | None:
+        del transaction
+        rows = [
+            row
+            for row in self.transactions.values()
+            if row["tenant_id"] == tenant_id and row["dataset_id"] == dataset_id and row["status"] == "COMMITTED"
+        ]
+        latest = sorted(rows, key=lambda row: (row["committed_at"] or "", row["created_at"]))[-1:]
+        return dict(latest[0]) if latest else None
 
     def abort_open_transaction_and_fail_run(
         self,
@@ -396,6 +414,45 @@ def test_dataset_transaction_repository_contract_commit_flow(harness: Transactio
     assert committed["committed_version_id"] == "dsv_orders_1"
     assert harness.versions()[0]["version_id" if "version_id" in harness.versions()[0] else "id"] == "dsv_orders_1"
     assert harness.files()[0]["uri"] == "memory://part-00000.parquet"
+
+
+def test_dataset_transaction_repository_contract_latest_committed_metadata(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def commit_two_transactions(transaction: Any) -> dict[str, Any] | None:
+        repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_first"))
+        repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_second"))
+        repository.commit_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_first",
+            committed_version_id="dsv_orders_1",
+            schema_version=1,
+            committed_at="2026-06-10T00:01:00Z",
+            metadata={"streamCursor": {"offset": 1}},
+        )
+        repository.commit_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_second",
+            committed_version_id="dsv_orders_2",
+            schema_version=1,
+            committed_at="2026-06-10T00:02:00Z",
+            metadata={"streamCursor": {"offset": 2}},
+        )
+        return repository.latest_committed_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            dataset_id="ds_orders",
+        )
+
+    latest = harness.call_in_transaction(commit_two_transactions)
+
+    assert latest is not None
+    assert latest["id"] == "dstx_second"
+    assert latest["metadata"] == {"streamCursor": {"offset": 2}}
 
 
 def test_dataset_transaction_repository_contract_locks_dataset_for_version_allocation(

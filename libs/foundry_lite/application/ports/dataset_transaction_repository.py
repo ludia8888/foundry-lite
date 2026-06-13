@@ -145,8 +145,19 @@ class DatasetTransactionRepository(Protocol):
         committed_version_id: str,
         schema_version: int,
         committed_at: str,
+        metadata: DatasetTransactionMetadata | None = None,
     ) -> None:
         """Mark a dataset transaction committed inside the caller transaction."""
+        ...
+
+    def latest_committed_transaction(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> DatasetTransactionRow | None:
+        """Return the latest committed dataset transaction for resume/checkpoint lookups."""
         ...
 
     def abort_open_transaction_and_fail_run(

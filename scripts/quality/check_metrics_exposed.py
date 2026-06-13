@@ -20,6 +20,7 @@ REQUIRED_METRICS = {
     "foundry_lite_action_apply_seconds": "action apply latency",
     "foundry_lite_object_query_seconds": "object query latency",
     "foundry_lite_outbox_publish_lag_seconds": "outbox publish lag",
+    "foundry_lite_stream_archive_lag_events": "stream archive lag",
     "foundry_lite_failed_runs_total": "failed run count",
     "foundry_lite_dlq_size": "DLQ size",
 }

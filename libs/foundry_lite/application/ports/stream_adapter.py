@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
+
+StreamSchemaStrategy = Literal["envelope_json"]
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,18 @@ class StreamEvent:
     request_id: str
     key: str
     payload: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class StreamArchiveConfig:
+    """Stream subscription settings for raw archive dataset commits."""
+
+    stream_name: str
+    topic: str
+    consumer_group: str = "foundry-lite-archive"
+    partition: int = 0
+    limit: int = 100
+    schema_strategy: StreamSchemaStrategy = "envelope_json"
 
 
 class StreamAdapter(Protocol):
