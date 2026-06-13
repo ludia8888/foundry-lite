@@ -217,6 +217,15 @@ def test_metrics_exposed_is_release_gate_step() -> None:
     assert "pnpm quality:metrics-exposed" in package_json
 
 
+def test_adapter_failure_taxonomy_is_release_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert "scripts/quality/check_adapter_failure_taxonomy.py" in script
+    assert '"quality:adapter-failure-taxonomy"' in package_json
+    assert "pnpm quality:adapter-failure-taxonomy" in package_json
+
+
 def test_router_layer_purity_is_release_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

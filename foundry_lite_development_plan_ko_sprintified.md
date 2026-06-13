@@ -523,7 +523,7 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
   - [x] `ActionRepository`의 local/fake 구현은 `tests/contracts/test_action_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
   - [x] `OntologyRepository`의 local/fake 구현은 `tests/contracts/test_ontology_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
   - [x] `AuthProvider`, `ConnectorAdapter`, `SearchAdapter`, `StreamAdapter`, `WorkflowAdapter`도 각각 shared contract suite를 통과한다. ([S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2))
-- [ ] adapter error는 trace key와 FAILED mutation state까지는 gate로 고정했지만, retryability/timeout/idempotency/operator message taxonomy를 모든 adapter에 표준화하는 작업은 남아 있다. ([S02A-O1](./docs/sprint-evidence-ledger.md#s02a-o1))
+- [x] adapter error는 trace key와 FAILED mutation state뿐 아니라 retryability/timeout/idempotency/operator message taxonomy까지 모든 현재 adapter profile에 표준화되어 있다. ([S02A-O1](./docs/sprint-evidence-ledger.md#s02a-o1))
 - [x] adapter를 교체해도 audit/outbox/lineage/run state의 key 이름과 의미가 바뀌지 않는다. ([S02A-A4](./docs/sprint-evidence-ledger.md#s02a-a4))
 - [x] CI는 domain/application이 금지된 concrete infra SDK를 직접 import하면 실패한다. ([S02A-A6](./docs/sprint-evidence-ledger.md#s02a-a6))
   - [x] 현재 CI는 domain concrete infra import 0개, application concrete infra import 0개, scale SDK 직접 import, service dependency/collaborator 우회, call graph cycle/depth/fan-out 회귀를 잡는다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
@@ -540,7 +540,7 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
   - [x] application concrete infra import baseline을 7에서 0으로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
 - [x] 최소 하나의 swap rehearsal test가 있다. 예: local filesystem adapter 대신 fake/S3-compatible adapter를 끼워도 dataset commit use case가 같은 결과를 만든다. ([S02A-A4](./docs/sprint-evidence-ledger.md#s02a-a4))
   - [x] `tests/integration/test_scale_foundation.py`가 fake-storage profile로 CSV commit, inspect, preview public API가 같은 shape로 동작함을 검증한다. ([S02A-A4](./docs/sprint-evidence-ledger.md#s02a-a4))
-- [ ] scale adapter를 아직 구현하지 않았더라도, 미래 구현이 따라야 할 DTO, state transition, trace key는 문서와 테스트로 고정했다. 단, retryability/timeout/idempotency/operator message failure taxonomy는 모든 adapter에 아직 공통 적용되지 않았다. ([S02A-O2](./docs/sprint-evidence-ledger.md#s02a-o2))
+- [x] scale adapter를 아직 구현하지 않았더라도, 미래 구현이 따라야 할 DTO, state transition, trace key, retryability/timeout/idempotency/operator message failure taxonomy는 문서와 테스트로 고정했다. ([S02A-O2](./docs/sprint-evidence-ledger.md#s02a-o2))
 
 #### 이러면 Scale Foundation으로 치지 않는다
 

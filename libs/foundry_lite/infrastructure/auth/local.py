@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.auth_provider import (
     AuthProvider,
     Credentials,
@@ -73,6 +74,20 @@ class HeaderTrustAuthProvider:
     default_tenant_id: str = DEFAULT_TENANT_ID
     default_actor_user_id: str = DEFAULT_ACTOR_USER_ID
     default_roles: tuple[str, ...] = DEFAULT_ROLES
+    profile_name: str = "header-trust-auth"
+
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode(
+                    "authenticate",
+                    "authentication",
+                    False,
+                    "Header-trust credentials were missing or malformed.",
+                ),
+            ),
+        )
 
     def authenticate(self, credentials: Credentials) -> Principal:
         headers = _normalise(credentials)
@@ -100,6 +115,20 @@ class DemoAuthProvider:
     tenant_id: str = DEFAULT_TENANT_ID
     actor_user_id: str = _DEMO_USER_ID
     roles: tuple[str, ...] = field(default_factory=lambda: tuple(DEMO_ADMIN_ROLES))
+    profile_name: str = "demo-auth"
+
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode(
+                    "authenticate",
+                    "authorization",
+                    False,
+                    "Demo identity is only valid for local and demo execution.",
+                ),
+            ),
+        )
 
     def authenticate(self, credentials: Credentials) -> Principal:  # noqa: ARG002 - fixed identity
         return self.anonymous()

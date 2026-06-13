@@ -48,6 +48,7 @@ pnpm ci:gate
 | OpenLineage dynamic lineage | `check_openlineage_dynamic_lineage.py` | transform run의 input/output dataset version과 durable lineage edge가 누락·중복·오연결되는 문제 |
 | trace continuity | `check_trace_continuity.py` | request span, service span, SQLAlchemy DB span이 서로 다른 trace로 끊기는 문제 |
 | adapter error trace keys | `check_adapter_error_trace_keys.py` | adapter 실패가 run error payload에 request/tenant/actor/run/correlation/adapter 키 없이 남는 문제 |
+| adapter failure taxonomy | `check_adapter_failure_taxonomy.py` | 새 compute/storage/workflow/stream/search/connector/auth adapter가 retry 가능 여부, timeout, idempotency key, 운영자 메시지 없이 들어오는 문제 |
 | flaky detector | `check_flaky_detector.py` | 테스트가 한 번은 통과하지만 반복 실행에서 실패하거나 수집 결과가 흔들리는 문제 |
 | 테스트 우회 방지 | `check_no_test_bypasses.py` | `tests/**/*.py`에서 skip/xfail로 release gate를 우회하는 테스트. PostgreSQL 로컬 opt-out만 명시적으로 허용하고 `pnpm ci:gate`에서 차단한다. |
 | 커버리지 제외 예산 | `check_pragma_no_cover_budget.py` | `# pragma: no cover`로 테스트 사각지대를 만드는 문제. 현재 baseline은 `0`이다. |

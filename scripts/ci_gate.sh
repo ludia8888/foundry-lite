@@ -112,6 +112,9 @@ uv run python scripts/quality/check_log_has_trace_keys.py
 echo "== Static: required operational metrics exposed =="
 uv run python scripts/quality/check_metrics_exposed.py
 
+echo "== Static: adapter failure taxonomy contract =="
+uv run python scripts/quality/check_adapter_failure_taxonomy.py
+
 echo "== Static: no skipped/flaky/xfail release bypasses =="
 uv run python scripts/quality/check_no_test_bypasses.py
 uv run python scripts/quality/check_no_test_sleep.py

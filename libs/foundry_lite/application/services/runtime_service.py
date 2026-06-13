@@ -20,6 +20,7 @@ from foundry_lite.application.ports import (
     RuntimeRunSnapshot,
     TransactionContext,
 )
+from foundry_lite.application.ports.adapter_failure import AdapterError, adapter_failure_payload
 from foundry_lite.application.primitives import (
     _new_id,
     _now,
@@ -49,6 +50,56 @@ from foundry_lite.domain.errors import (
     PermissionDenied,
     ValidationFailed,
 )
+
+
+def _base_error_payload(exc: Exception) -> dict[str, object]:
+    if isinstance(exc, AdapterError):
+        return adapter_failure_payload(exc)
+    if isinstance(exc, FoundryLiteError):
+        return {
+            "type": exc.code,
+            "message": str(exc),
+            "details": exc.details,
+        }
+    return {"type": exc.__class__.__name__, "message": str(exc), "details": {}}
+
+
+def _trace_correlation_id(
+    ctx: RequestContext | None,
+    run_id: str | None,
+    correlation_id: str | None,
+) -> str | None:
+    if correlation_id is not None:
+        return correlation_id
+    if run_id is not None:
+        return run_id
+    if ctx is not None:
+        return ctx.request_id
+    return None
+
+
+def _error_trace(
+    ctx: RequestContext | None,
+    *,
+    run_id: str | None,
+    correlation_id: str | None,
+    adapter: str | None,
+) -> dict[str, str]:
+    trace: dict[str, str] = {}
+    if ctx is not None:
+        trace.update(
+            tenant_id=ctx.tenant_id,
+            actor_user_id=ctx.actor_user_id,
+            request_id=ctx.request_id,
+        )
+    if run_id is not None:
+        trace["run_id"] = run_id
+    resolved_correlation_id = _trace_correlation_id(ctx, run_id, correlation_id)
+    if resolved_correlation_id is not None:
+        trace["correlation_id"] = resolved_correlation_id
+    if adapter is not None:
+        trace["adapter"] = adapter
+    return trace
 
 
 class RuntimeService(CoreService):
@@ -324,28 +375,8 @@ class RuntimeService(CoreService):
         correlation_id: str | None = None,
         adapter: str | None = None,
     ) -> Mapping[str, object]:
-        if isinstance(exc, FoundryLiteError):
-            payload: dict[str, object] = {
-                "type": exc.code,
-                "message": str(exc),
-                "details": exc.details,
-            }
-        else:
-            payload = {"type": exc.__class__.__name__, "message": str(exc), "details": {}}
-        trace: dict[str, str] = {}
-        if ctx is not None:
-            trace.update(
-                tenant_id=ctx.tenant_id,
-                actor_user_id=ctx.actor_user_id,
-                request_id=ctx.request_id,
-            )
-        if run_id is not None:
-            trace["run_id"] = run_id
-        correlation = correlation_id or run_id or (ctx.request_id if ctx else None)
-        if correlation is not None:
-            trace["correlation_id"] = correlation
-        if adapter is not None:
-            trace["adapter"] = adapter
+        payload = _base_error_payload(exc)
+        trace = _error_trace(ctx, run_id=run_id, correlation_id=correlation_id, adapter=adapter)
         if trace:
             payload["trace"] = trace
         return payload

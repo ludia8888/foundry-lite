@@ -313,7 +313,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] 각 application service가 직접 호출하는 collaborator만 `required_collaborators`로 선언하고 주입받게 했다. `check_service_dependencies.py`는 undeclared/unused collaborator도 실패 처리한다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
 - [x] service 내부 cross-service 호출을 `self.runtime_service._audit(...)`처럼 명시적 collaborator attribute로 바꿨다. `check_service_call_graph.py`는 이 명시적 호출 그래프를 기준으로 cycle/depth/fan-out을 검증한다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
 - [x] Event/Search/Workflow/Connector/Auth boundary에도 fake/local contract test를 붙였다: `test_stream_adapter_contract.py`, `test_search_adapter_contract.py`, `test_workflow_adapter_contract.py`, `test_connector_adapter_contract.py`, `test_auth_provider_contract.py`. ([S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2))
-- [ ] adapter failure contract는 trace key와 FAILED mutation state까지는 gate로 고정했지만, retryability/timeout/idempotency/operator message taxonomy를 모든 adapter에 표준화하는 작업은 남아 있다. ([S02A-O1](./docs/sprint-evidence-ledger.md#s02a-o1))
+- [x] adapter failure contract는 trace key, FAILED mutation state, retryability/timeout/idempotency/operator message taxonomy를 모든 현재 adapter profile에 표준화한다. ([S02A-O1](./docs/sprint-evidence-ledger.md#s02a-o1))
 
 **Demo / Proof**
 

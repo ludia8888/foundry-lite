@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.connector_adapter import (
     ConnectorAdapter,
     ConnectorSnapshot,
@@ -20,6 +21,22 @@ class LocalWorkflowAdapter:
     def __init__(self) -> None:
         self._runs_by_id: dict[str, WorkflowRun] = {}
         self._runs_by_idempotency: dict[str, WorkflowRun] = {}
+
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode(
+                    "start_workflow",
+                    "timeout",
+                    True,
+                    "Workflow start timed out; retry with the same idempotency key.",
+                    timeout_seconds=60,
+                    has_required_idempotency_key=True,
+                ),
+                AdapterFailureMode("workflow_run", "not_found", False, "Workflow run was not found."),
+            ),
+        )
 
     def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
         existing = self._runs_by_idempotency.get(request.idempotency_key)
@@ -52,6 +69,26 @@ class LocalStreamAdapter:
 
     def __init__(self) -> None:
         self._events_by_stream: dict[str, list[StreamEvent]] = {}
+
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode(
+                    "publish_event",
+                    "unavailable",
+                    True,
+                    "Stream publish failed; retry with the same event key and payload.",
+                ),
+                AdapterFailureMode(
+                    "read_events",
+                    "timeout",
+                    True,
+                    "Stream read timed out; retry from the same offset checkpoint.",
+                    timeout_seconds=30,
+                ),
+            ),
+        )
 
     def publish_event(self, request: StreamPublishRequest) -> StreamEvent:
         events = self._events_by_stream.setdefault(request.stream_name, [])
@@ -87,6 +124,22 @@ class LocalSearchAdapter:
     def __init__(self) -> None:
         self._documents: dict[tuple[str, str, str], SearchDocument] = {}
 
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode("upsert_document", "unavailable", True, "Search index write is unavailable."),
+                AdapterFailureMode("delete_document", "unavailable", True, "Search index delete is unavailable."),
+                AdapterFailureMode(
+                    "search",
+                    "timeout",
+                    True,
+                    "Search query timed out; retry without changing object-store state.",
+                    timeout_seconds=10,
+                ),
+            ),
+        )
+
     def upsert_document(self, document: SearchDocument) -> None:
         self._documents[(document.tenant_id, document.object_type, document.document_id)] = document
 
@@ -121,6 +174,21 @@ class LocalConnectorAdapter:
 
     def __init__(self, snapshots: Mapping[tuple[str, str], ConnectorSnapshot] | None = None) -> None:
         self._snapshots = dict(snapshots or {})
+
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode(
+                    "snapshot",
+                    "timeout",
+                    True,
+                    "Connector snapshot timed out; retry with the same cursor.",
+                    timeout_seconds=60,
+                ),
+                AdapterFailureMode("snapshot", "validation", False, "Connector snapshot config is invalid."),
+            ),
+        )
 
     def snapshot(self, request: ConnectorSnapshotRequest) -> ConnectorSnapshot:
         configured = self._snapshots.get((request.connector_name, request.resource_name))

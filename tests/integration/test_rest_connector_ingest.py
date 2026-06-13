@@ -97,7 +97,9 @@ def test_rest_connector_rate_limit_failure_is_visible_in_operations(tmp_path) ->
 
     failed_runs = core.query_runs(ctx=ctx, run_type="sync", status="FAILED")["syncRuns"]
     assert failed_runs[0]["source_type"] == "connector.rest"
-    assert failed_runs[0]["error"]["type"] == "ConnectorRateLimitedError"
+    assert failed_runs[0]["error"]["type"] == "ADAPTER_FAILURE"
+    assert failed_runs[0]["error"]["adapterFailure"]["kind"] == "rate_limited"
+    assert failed_runs[0]["error"]["adapterFailure"]["retryable"] is True
 
 
 def _core_with_rest_connector(tmp_path) -> FoundryLiteCore:

@@ -9,6 +9,7 @@ from urllib.error import HTTPError
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.connector_adapter import (
     ConnectorRateLimitedError,
     ConnectorSnapshot,
@@ -19,11 +20,34 @@ from foundry_lite.application.ports.connector_adapter import (
 )
 from foundry_lite.domain.errors import ValidationFailed
 
+REST_CONNECTOR_PROFILE = "rest-pull-connector"
+
 
 class RestPullConnectorAdapter:
     """HTTP JSON REST connector that returns one cursor page as a snapshot."""
 
-    profile_name = "rest-pull-connector"
+    profile_name = REST_CONNECTOR_PROFILE
+
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode("snapshot", "validation", False, "REST connector configuration is invalid."),
+                AdapterFailureMode(
+                    "snapshot",
+                    "rate_limited",
+                    True,
+                    "REST connector was rate limited; retry after the provider window.",
+                ),
+                AdapterFailureMode(
+                    "snapshot",
+                    "timeout",
+                    True,
+                    "REST connector request timed out; retry with the same cursor.",
+                    timeout_seconds=5,
+                ),
+            ),
+        )
 
     def snapshot(self, request: ConnectorSnapshotRequest) -> ConnectorSnapshot:
         config = _required_rest_config(request.rest)
@@ -95,7 +119,11 @@ def _http_get(url: str, headers: Mapping[str, str], *, allow_private_network: bo
     except HTTPError as exc:
         if exc.code == 429:
             retry_after = exc.headers.get("Retry-After")
-            raise ConnectorRateLimitedError(f"REST connector rate limited; retry_after={retry_after}") from exc
+            raise ConnectorRateLimitedError(
+                retry_after,
+                adapter_profile=REST_CONNECTOR_PROFILE,
+                operation="snapshot",
+            ) from exc
         raise ValidationFailed("REST connector request failed", details={"status": exc.code, "url": url}) from exc
 
 

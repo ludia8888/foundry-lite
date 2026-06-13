@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import cast
 
 from foundry_lite.application.ports import DatasetManifest, DatasetManifestFile, StoredDatasetCommit
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.primitives import _file_hash
 
 
@@ -18,6 +19,31 @@ class LocalDatasetStorageAdapter:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode(
+                    "commit_staged_file",
+                    "unavailable",
+                    True,
+                    "Dataset artifact storage is unavailable; retry the same version promotion.",
+                ),
+                AdapterFailureMode(
+                    "load_manifest",
+                    "not_found",
+                    False,
+                    "Dataset manifest is missing; inspect storage consistency before retrying.",
+                ),
+                AdapterFailureMode(
+                    "delete_committed_version",
+                    "unavailable",
+                    True,
+                    "Committed artifact cleanup could not reach storage; retry cleanup.",
+                ),
+            ),
+        )
 
     def dataset_uri(self, tenant_id: str, dataset_id: str) -> str:
         return self._uri_for(self._dataset_dir(tenant_id, dataset_id))

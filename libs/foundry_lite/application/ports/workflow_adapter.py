@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
+
 WorkflowStatus = Literal["queued", "running", "succeeded", "failed", "cancelled"]
 
 
@@ -32,7 +34,12 @@ class WorkflowRun:
 class WorkflowAdapter(Protocol):
     """Scale Foundation boundary for future Temporal-style orchestration."""
 
-    profile_name: str
+    @property
+    def profile_name(self) -> str: ...
+
+    def failure_contract(self) -> AdapterFailureContract:
+        """Return the adapter failure taxonomy promised by this profile."""
+        ...
 
     def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
         """Start or idempotently return a workflow run."""

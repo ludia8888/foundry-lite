@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, TypedDict
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 from foundry_lite.application.ports.dataset_quality_repository import DatasetSchemaJson
 from foundry_lite.application.ports.dataset_version_repository import DatasetVersionRow
 
@@ -49,7 +50,12 @@ class StoredDatasetCommit:
 class DatasetStorageAdapter(Protocol):
     """Storage boundary for staged dataset files and committed dataset manifests."""
 
-    profile_name: str
+    @property
+    def profile_name(self) -> str: ...
+
+    def failure_contract(self) -> AdapterFailureContract:
+        """Return the adapter failure taxonomy promised by this profile."""
+        ...
 
     def dataset_uri(self, tenant_id: str, dataset_id: str) -> str:
         """Return the logical storage URI for a dataset."""

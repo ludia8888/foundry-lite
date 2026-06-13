@@ -36,12 +36,13 @@
 |---|---|---|
 | `VERIFY-DOC-DRIFT` | `pnpm --silent quality:doc-drift` | PASS. current-state docs reference existing code paths and symbols. |
 | `VERIFY-INFRA-BOUNDARIES` | `pnpm --silent quality:infra-boundaries` | PASS. domain concrete infra import `0/0`, application concrete infra import `0/0`, service dependency declarations OK, service call graph cycles `0`, max depth `7/7`, max fan-out `8/10`. |
-| `VERIFY-STATIC` | `pnpm --silent quality:static` | PASS. Ruff, format check, mypy, pyright, architecture, infra boundaries, module size, function length, boolean naming, typed boundary, router purity, query side-effect, repository boundaries, tenant write, contract-test-per-port, strategy/spec tests, integration markers, regression/root-cause local checks, docs, SDK generation, schema revision, audit/outbox/idempotency/request-id/log/metrics/no-bypass/no-sleep/coverage/private facade gates all passed. |
+| `VERIFY-STATIC` | `pnpm --silent quality:static` | PASS. Ruff, format check, mypy, pyright, architecture, infra boundaries, module size, function length, boolean naming, typed boundary, router purity, query side-effect, repository boundaries, tenant write, contract-test-per-port, strategy/spec tests, integration markers, regression/root-cause local checks, docs, SDK generation, schema revision, audit/outbox/idempotency/request-id/log/metrics/adapter-failure-taxonomy/no-bypass/no-sleep/coverage/private facade gates all passed. |
 | `VERIFY-CONTRACT-GATE` | `pnpm --silent quality:contract-tests` | PASS. every application port has a contract suite. |
 | `VERIFY-SCALE-ADAPTERS` | `uv run pytest tests/contracts/test_auth_provider_contract.py tests/contracts/test_connector_adapter_contract.py tests/contracts/test_search_adapter_contract.py tests/contracts/test_stream_adapter_contract.py tests/contracts/test_workflow_adapter_contract.py tests/integration/test_scale_foundation.py tests/integration/test_stream_archive_ingest.py -q` | PASS. `29 passed in 0.38s`. |
 | `VERIFY-TESTCONTAINERS-PREFLIGHT` | `pnpm --silent quality:testcontainers-preflight` | FAIL FAST as designed in the current shell when Docker is unreachable. The message tells the operator to set `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock` and `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock` before rerunning `pnpm --silent ci:gate`. Unit proof: `uv run pytest tests/unit/test_quality_testcontainers_preflight.py -q`, `5 passed`. |
 | `VERIFY-REST-SSRF` | `uv run pytest tests/integration/test_rest_connector_ingest.py tests/contracts/test_rest_connector_adapter_contract.py -q` | PASS outside the sandbox because the mock REST server needs local TCP bind permission. `24 passed in 7.35s`. |
 | `VERIFY-REST-WEBHOOK-OPS` | `uv run pytest tests/integration/test_rest_connector_ingest.py tests/contracts/test_rest_connector_adapter_contract.py -q`; `uv run pytest tests/smoke/test_interfaces.py::test_api_webhook_ingest_verifies_signature_and_appends_dataset tests/unit/test_quality_testcontainers_preflight.py -q`; `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1 uv run pytest tests/contracts/test_dataset_transaction_repository_contract.py::test_dataset_transaction_repository_contract_finds_committed_webhook_event -q` | PASS. REST cursor/adapter suite: `24 passed in 7.35s` outside the sandbox for local TCP bind permission. Webhook API duplicate replay plus preflight unit proof: `6 passed`. Webhook transaction lookup contract: `2 passed, 1 skipped` with local-only Postgres skip. |
+| `VERIFY-ADAPTER-FAILURE-TAXONOMY` | `pnpm --silent quality:adapter-failure-taxonomy`; `uv run pytest tests/contracts/test_adapter_failure_contract.py tests/unit/test_quality_adapter_failure_taxonomy.py tests/contracts/test_rest_connector_adapter_contract.py tests/integration/test_rest_connector_ingest.py::test_rest_connector_rate_limit_failure_is_visible_in_operations -q` | PASS. `15` concrete adapter profiles expose `AdapterFailureContract`; targeted adapter taxonomy/REST failure payload tests passed with `64 passed`. |
 
 ## Sprint 02A - Scale Foundation/Infra Swap Boundary
 
@@ -67,20 +68,19 @@
 | `S02A-A2` | core use cases call ports/interfaces instead of concrete infra directly | `CORE-DI`; `GATE-FOUNDATION`; `VERIFY-INFRA-BOUNDARIES` | Done |
 | `S02A-A3` | fake/local adapters share contract scenarios | `PR-5`; `VERIFY-CONTRACT-GATE`; `VERIFY-SCALE-ADAPTERS` | Done |
 | `S02A-A4` | swapping adapter keeps public API and product response shape stable | `tests/integration/test_scale_foundation.py`; `VERIFY-SCALE-ADAPTERS` | Done |
-| `S02A-A5` | adapter failure leaves traceable error/correlation evidence | `PR-2`; `PR-5`; `quality:adapter-error-trace`; `quality:failed-mutation-state`; remaining taxonomy gap tracked as `S02A-O1` | Done for traceability, not for full taxonomy |
+| `S02A-A5` | adapter failure leaves traceable error/correlation evidence | `PR-2`; `PR-5`; `quality:adapter-error-trace`; `quality:failed-mutation-state`; `VERIFY-ADAPTER-FAILURE-TAXONOMY` | Done |
 | `S02A-A6` | CI catches forbidden imports or boundary bypass | `GATE-FOUNDATION`; `VERIFY-INFRA-BOUNDARIES`; `VERIFY-CONTRACT-GATE` | Done |
 | `S02A-P1` | Storage, metadata, dataset, transaction, version, runtime, compute, object, action, ontology ports are extracted | extraction commits through `OBJECT-READ-PORT`, `GATE-FOUNDATION`, and `PR-2`; `VERIFY-INFRA-BOUNDARIES` | Done |
 | `S02A-P2` | Stream/Search/Workflow/Connector/Auth boundaries have local/fake contracts | `AUTH-PORT`; `PR-3`; `PR-5`; `VERIFY-SCALE-ADAPTERS` | Done |
 | `S02A-P3` | application concrete infra import baseline is reduced to `0` | `GATE-FOUNDATION`; `VERIFY-INFRA-BOUNDARIES` | Done |
 | `S02A-P4` | service graph is explicit and gated | `CORE-DI`; `VERIFY-INFRA-BOUNDARIES` | Done |
 | `S02A-P5` | Postgres repository contract axis cannot be skipped in release/CI | `PR-2`; `GATE-FOUNDATION`; `pnpm ci:gate` policy | Done |
+| `S02A-O1` | adapter failure contract standardizes typed error, retryability, timeout, idempotency, operator-facing message across all adapters | `libs/foundry_lite/application/ports/adapter_failure.py`; `scripts/quality/check_adapter_failure_taxonomy.py`; `VERIFY-ADAPTER-FAILURE-TAXONOMY`; `VERIFY-STATIC` | Done |
+| `S02A-O2` | future scale adapter DTO/state/trace/failure contract is fully frozen | `AdapterFailureContract`; `tests/contracts/test_adapter_failure_contract.py`; `quality:adapter-failure-taxonomy`; `VERIFY-ADAPTER-FAILURE-TAXONOMY` | Done |
 
 ### Open Evidence Map
 
-| Evidence id | Checkbox meaning | Why it stays unchecked |
-|---|---|---|
-| `S02A-O1` | adapter failure contract standardizes typed error, retryability, timeout, idempotency, operator-facing message across all adapters | Current gates prove trace keys and failed mutation state, but a shared retryability/timeout/idempotency/operator message taxonomy is not yet implemented across every adapter. |
-| `S02A-O2` | future scale adapter DTO/state/trace/failure contract is fully frozen | DTO/state/trace are partially frozen by ports and gates. The failure taxonomy portion remains open through `S02A-O1`. |
+No Sprint 02A Scale Foundation evidence item remains open in the current checkout. Production Temporal/Kafka/OpenSearch/connector adapters are still later implementation work; this Sprint 02A item freezes the port, DTO, state, trace, and failure semantics they must preserve.
 
 ## Sprint 21 - Object Sets
 
@@ -241,5 +241,3 @@ These items intentionally remain unchecked until a later PR creates code and gat
 | Production Redpanda/Kafka worker | Sprint 38 `S38-A2` remains open. Current proof is local/fake `StreamAdapter`, not production broker ingestion. |
 | CDC topic ingest and CDC object indexing | Sprint 39 and Sprint 40 remain future work. |
 | OpenSearch, Iceberg, Spark, Kubernetes production adapters | Sprint 42-45 remain future work. |
-| Full adapter failure taxonomy | `S02A-O1` and `S02A-O2` remain open until retryability/timeout/idempotency/operator message contracts are shared across adapters. |
-| Friendly Docker/Testcontainers preflight | `VERIFY-TESTCONTAINERS-PREFLIGHT` is now the expected release-gate behavior: environment failures should stop before long pytest output and point to the Colima env fix. |

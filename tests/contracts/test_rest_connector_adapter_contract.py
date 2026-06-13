@@ -129,7 +129,7 @@ def test_rest_connector_supports_custom_header_auth() -> None:
 def test_rest_connector_raises_rate_limit_error() -> None:
     with MockRestServer() as server:
         adapter = RestPullConnectorAdapter()
-        with pytest.raises(ConnectorRateLimitedError, match="retry_after=30"):
+        with pytest.raises(ConnectorRateLimitedError, match="retry_after=30") as exc_info:
             adapter.snapshot(
                 ConnectorSnapshotRequest(
                     connector_name="rest",
@@ -143,6 +143,12 @@ def test_rest_connector_raises_rate_limit_error() -> None:
                     ),
                 )
             )
+
+    failure = exc_info.value.failure
+    assert failure.kind == "rate_limited"
+    assert failure.is_retryable is True
+    assert failure.timeout_seconds == 30
+    assert failure.adapter_profile == "rest-pull-connector"
 
 
 def test_rest_connector_rejects_missing_or_incomplete_config() -> None:

@@ -4,6 +4,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
+
 
 @dataclass(frozen=True)
 class SearchDocument:
@@ -38,7 +40,12 @@ class SearchHit:
 class SearchAdapter(Protocol):
     """Scale Foundation boundary for future OpenSearch-style object search."""
 
-    profile_name: str
+    @property
+    def profile_name(self) -> str: ...
+
+    def failure_contract(self) -> AdapterFailureContract:
+        """Return the adapter failure taxonomy promised by this profile."""
+        ...
 
     def upsert_document(self, document: SearchDocument) -> None:
         """Insert or replace one search document."""
