@@ -1,3 +1,5 @@
+"""Kafka/Redpanda stream adapter implementation for archive workers."""
+
 from __future__ import annotations
 
 import importlib
@@ -19,26 +21,48 @@ from foundry_lite.domain.context import DEFAULT_TENANT_ID
 
 
 class KafkaMessageLike(Protocol):
-    def error(self) -> object | None: ...
+    """Minimal broker message shape used by the adapter."""
 
-    def offset(self) -> int: ...
+    def error(self) -> object | None:
+        """Return broker error metadata for this message, if present."""
+        ...
 
-    def key(self) -> bytes | str | None: ...
+    def offset(self) -> int:
+        """Return the durable broker offset."""
+        ...
 
-    def value(self) -> bytes | str | Mapping[str, object] | None: ...
+    def key(self) -> bytes | str | None:
+        """Return the broker key as bytes or text."""
+        ...
 
-    def headers(self) -> Sequence[tuple[str, bytes | str | None]] | None: ...
+    def value(self) -> bytes | str | Mapping[str, object] | None:
+        """Return the raw event payload."""
+        ...
+
+    def headers(self) -> Sequence[tuple[str, bytes | str | None]] | None:
+        """Return broker headers for Foundry metadata."""
+        ...
 
 
 class KafkaConsumerLike(Protocol):
-    def assign(self, partitions: Sequence[object]) -> None: ...
+    """Minimal Kafka consumer behavior needed for archive reads."""
 
-    def poll(self, timeout: float) -> KafkaMessageLike | None: ...
+    def assign(self, _partitions: Sequence[object]) -> None:
+        """Assign the consumer to an explicit topic partition and offset."""
+        ...
 
-    def close(self) -> None: ...
+    def poll(self, _timeout: float) -> KafkaMessageLike | None:
+        """Poll for one broker message."""
+        ...
+
+    def close(self) -> None:
+        """Close resources owned by the consumer."""
+        ...
 
 
 class KafkaProducerLike(Protocol):
+    """Minimal Kafka producer behavior used by publish tests and demos."""
+
     def produce(
         self,
         topic: str,
@@ -46,9 +70,13 @@ class KafkaProducerLike(Protocol):
         key: bytes,
         value: bytes,
         headers: Sequence[tuple[str, bytes]],
-    ) -> int | None: ...
+    ) -> int | None:
+        """Publish one event and return the assigned offset when available."""
+        ...
 
-    def flush(self, timeout: float | None = None) -> int: ...
+    def flush(self, _timeout: float | None = None) -> int:
+        """Return the number of messages still pending after flush."""
+        ...
 
 
 TopicPartitionFactory = Callable[[str, int, int], object]
@@ -58,6 +86,8 @@ ProducerFactory = Callable[[Mapping[str, object]], KafkaProducerLike]
 
 @dataclass(frozen=True)
 class KafkaStreamSubscription:
+    """Mapping from a Foundry stream name to a Kafka topic partition."""
+
     stream_name: str
     topic: str
     partition: int = 0
@@ -66,6 +96,8 @@ class KafkaStreamSubscription:
 
 @dataclass(frozen=True)
 class KafkaStreamAdapterConfig:
+    """Runtime configuration for Kafka/Redpanda stream IO."""
+
     bootstrap_servers: str
     subscriptions: tuple[KafkaStreamSubscription, ...]
     consumer_group: str = "foundry-lite-archive"
@@ -89,6 +121,7 @@ class KafkaStreamAdapter:
         consumer_factory: ConsumerFactory | None = None,
         producer_factory: ProducerFactory | None = None,
     ) -> None:
+        """Create an adapter with optional injected broker clients for tests."""
         self.config = config
         self._subscriptions = {subscription.stream_name: subscription for subscription in config.subscriptions}
         self._consumer = consumer
@@ -98,6 +131,7 @@ class KafkaStreamAdapter:
         self._producer_factory = producer_factory
 
     def failure_contract(self) -> AdapterFailureContract:
+        """Describe retry and operator behavior for Kafka failures."""
         return AdapterFailureContract(
             adapter_profile=self.profile_name,
             modes=(
@@ -119,6 +153,7 @@ class KafkaStreamAdapter:
         )
 
     def read_events(self, stream_name: str, *, after_offset: int | None = None, limit: int = 100) -> list[StreamEvent]:
+        """Read a bounded batch from a configured stream subscription."""
         if limit < 1:
             return []
         subscription = self._subscription(stream_name)
@@ -132,6 +167,7 @@ class KafkaStreamAdapter:
                 consumer.close()
 
     def publish_event(self, request: StreamPublishRequest) -> StreamEvent:
+        """Publish one stream event through Kafka and return its broker offset."""
         subscription = self._subscription(request.stream_name)
         producer = self._producer or self._build_producer()
         payload = json.dumps(dict(request.payload), sort_keys=True, separators=(",", ":")).encode("utf-8")
