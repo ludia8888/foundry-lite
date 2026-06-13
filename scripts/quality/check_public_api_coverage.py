@@ -40,9 +40,23 @@ def _public_module_functions(path: Path, tree: ast.AST) -> list[PublicCallable]:
 def _public_class_methods(path: Path, tree: ast.AST) -> list[PublicCallable]:
     methods: list[PublicCallable] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and _is_public(node.name):
+        if isinstance(node, ast.ClassDef) and _is_public(node.name) and not _is_protocol_class(node):
             methods.extend(_public_methods_for_class(path, node))
     return methods
+
+
+def _is_protocol_class(node: ast.ClassDef) -> bool:
+    return any(_base_name(base) == "Protocol" for base in node.bases)
+
+
+def _base_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Subscript):
+        return _base_name(node.value)
+    return None
 
 
 def _public_methods_for_class(path: Path, node: ast.ClassDef) -> list[PublicCallable]:
