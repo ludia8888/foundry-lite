@@ -1689,6 +1689,7 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 - 같은 actor/action/target/idempotency key가 거의 동시에 들어와 데이터베이스 unique 충돌이 발생해도, 두 번째 요청은 500 또는 새 실행이 아니라 기존 action run replay로 귀결되게 한다.
 - Dataset commit은 version 번호 배정 경합을 명확히 막고, 파일 복사 후 DB commit이 실패한 경우 이미 promote된 artifact를 자동 정리하며 실패 payload/audit로 추적 가능한 orphan cleanup evidence를 남긴다.
 - Object Query 목록은 메모리 정렬/슬라이스에 의존하지 않고 DB에서 filter, sort, limit을 수행하며, signed opaque cursor token, sort key, query shape checksum, `object_id` tie-breaker가 포함된 안정적인 keyset cursor를 사용한다.
+- Object Query는 ontology property metadata로 filter/order property 존재 여부를 서비스에서 검증하고, repository는 숫자 property JSON 값이 문자열로 들어와도 SQL `CAST` 기반 정렬/비교를 사용한다.
 - Dynamic Object Set membership도 Object Query의 page limit과 cursor를 그대로 사용해 내부 기능이 대량 limit으로 query cap을 우회하지 못하게 한다.
 - Operations run 목록도 `created_at` 또는 `failed_at`과 run id를 기준으로 한 DB-backed cursor paging을 사용해 run 수가 늘어나도 한 번에 전체 row를 읽지 않는다.
 - 운영 모드에서는 header-trust 인증 프로필이 선택되면 앱이 시작 단계에서 실패해야 한다. 로컬/demo 모드에서만 명시적으로 허용한다.
@@ -1701,6 +1702,7 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 - [x] commit 실패로 생긴 promoted/orphan file은 failed error details 또는 abort audit evidence로 찾을 수 있고 자동 cleanup execute 경로가 있다.
 - [x] Object Query는 sort key와 object_id tie-breaker를 포함한 cursor로 다음 page를 안정적으로 반환한다.
 - [x] Object Query cursor는 raw object_id나 변조된 base64 payload를 `ValidationFailed`로 거절한다.
+- [x] Object Query는 존재하지 않는 filter/order property를 `ValidationFailed`로 거절하고, 숫자 property 문자열 값도 fake/SQLite/Postgres contract에서 같은 순서로 page 처리한다.
 - [x] Dynamic Object Set은 `Object Query` page limit 안에서 cursor로 전체 membership을 이어 읽는다.
 - [x] Operations runs API/CLI/UI는 cursor 기반으로 page를 나누고 대량 run fixture에서도 일정한 응답 크기를 유지한다.
 - [x] production auth profile에서 header-trust provider를 쓰면 startup이 실패하고, local/demo profile에서는 명시적으로만 허용된다.
