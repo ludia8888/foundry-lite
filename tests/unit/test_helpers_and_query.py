@@ -100,6 +100,10 @@ def test_query_objects_filter_sort_cursor_and_invalid_op(core: FoundryLiteCore) 
         core.query_objects("Order", filter_ast=filter_ast, order_by=order_by, cursor="oqc1.not-valid-base64")
     with pytest.raises(ValidationFailed):
         core.query_objects("Order", limit=501)
+    with pytest.raises(ValidationFailed, match="missing property"):
+        core.query_objects("Order", filter_ast={"property": "missing", "op": "eq", "value": "PENDING"})
+    with pytest.raises(ValidationFailed, match="missing property"):
+        core.query_objects("Order", order_by=[{"property": "missing", "direction": "asc"}])
 
     contains_page = core.query_objects(
         "Order",

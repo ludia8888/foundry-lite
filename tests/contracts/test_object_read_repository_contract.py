@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Collection, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,10 +14,9 @@ from foundry_lite.application.ports import (
     ObjectReadRepository,
     ObjectRecordRow,
 )
-from foundry_lite.application.query_filters import matches_filter
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyObjectReadRepository
-from sqlalchemy import create_engine, insert
+from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
 
@@ -37,6 +36,7 @@ class ObjectReadHarness(Protocol):
 class FakeObjectReadRepository:
     object_records: list[dict[str, Any]] = field(default_factory=list)
     object_links: list[dict[str, Any]] = field(default_factory=list)
+    property_data_types: dict[tuple[str, str], str] = field(default_factory=dict)
 
     def object_record(
         self,
@@ -89,10 +89,11 @@ class FakeObjectReadRepository:
             tenant_id=tenant_id,
             object_type_api_name=object_type_api_name,
         )
+        property_data_types = self._property_data_types(object_type_api_name)
         if filter_ast:
-            rows = [row for row in rows if matches_filter(row["properties"], filter_ast)]
-        rows = _sort_rows(rows, order_by)
-        rows = _rows_after_cursor(rows, order_by, cursor)
+            rows = [row for row in rows if _matches_typed_filter(row["properties"], filter_ast, property_data_types)]
+        rows = _sort_rows(rows, order_by, property_data_types)
+        rows = _rows_after_cursor(rows, order_by, cursor, property_data_types)
         return rows[:limit]
 
     def active_links_from(
@@ -115,6 +116,13 @@ class FakeObjectReadRepository:
             and row["deleted"] is False
         ]
 
+    def _property_data_types(self, object_type_api_name: str) -> dict[str, str]:
+        return {
+            property_name: data_type
+            for (row_object_type, property_name), data_type in self.property_data_types.items()
+            if row_object_type == object_type_api_name
+        }
+
 
 @dataclass
 class FakeObjectReadHarness:
@@ -128,7 +136,9 @@ class FakeObjectReadHarness:
         self.repository.object_records.append(_object_row(**kwargs))
 
     def add_property_type(self, **kwargs: Any) -> None:
-        return None
+        self.repository.property_data_types[
+            (str(kwargs.get("object_type_api_name", "Order")), str(kwargs.get("api_name", "amount")))
+        ] = str(kwargs.get("data_type", "float"))
 
     def add_link(self, **kwargs: Any) -> None:
         self.repository.object_links.append(_link_row(**kwargs))
@@ -150,7 +160,12 @@ class SqlAlchemyObjectReadHarness:
 
     def add_property_type(self, **kwargs: Any) -> None:
         with self.engine.begin() as conn:
-            conn.execute(insert(db.object_types).values(**_object_type_row(kwargs.get("object_type_id", "ot_order"))))
+            object_type_id = str(kwargs.get("object_type_id", "ot_order"))
+            existing = conn.execute(
+                select(db.object_types.c.id).where(db.object_types.c.id == object_type_id)
+            ).scalar_one_or_none()
+            if existing is None:
+                conn.execute(insert(db.object_types).values(**_object_type_row(object_type_id)))
             conn.execute(insert(db.property_types).values(**_property_type_row(**kwargs)))
 
     def add_link(self, **kwargs: Any) -> None:
@@ -260,11 +275,21 @@ def _object_type_row(object_type_id: object) -> dict[str, Any]:
     }
 
 
-def _sort_rows(rows: list[ObjectRecordRow], order_by: Sequence[ObjectOrderBy]) -> list[ObjectRecordRow]:
+_INVALID_VALUE = object()
+
+
+def _sort_rows(
+    rows: list[ObjectRecordRow],
+    order_by: Sequence[ObjectOrderBy],
+    property_data_types: Mapping[str, str],
+) -> list[ObjectRecordRow]:
     sorted_rows = sorted(rows, key=lambda row: row["object_id"])
     for order in reversed(order_by):
         reverse = order["direction"] == "desc"
-        sorted_rows.sort(key=lambda row: _property_sort_key(row, order["property"]), reverse=reverse)
+        sorted_rows.sort(
+            key=lambda row: _property_sort_key(row, order["property"], property_data_types),
+            reverse=reverse,
+        )
     return sorted_rows
 
 
@@ -272,34 +297,123 @@ def _rows_after_cursor(
     rows: list[ObjectRecordRow],
     order_by: Sequence[ObjectOrderBy],
     cursor: ObjectQueryCursor | None,
+    property_data_types: Mapping[str, str],
 ) -> list[ObjectRecordRow]:
     if cursor is None:
         return rows
-    return [row for row in rows if _row_after_cursor(row, order_by, cursor)]
+    return [row for row in rows if _row_after_cursor(row, order_by, cursor, property_data_types)]
 
 
-def _row_after_cursor(row: ObjectRecordRow, order_by: Sequence[ObjectOrderBy], cursor: ObjectQueryCursor) -> bool:
+def _row_after_cursor(
+    row: ObjectRecordRow,
+    order_by: Sequence[ObjectOrderBy],
+    cursor: ObjectQueryCursor,
+    property_data_types: Mapping[str, str],
+) -> bool:
     for index, order in enumerate(order_by):
-        current = _property_sort_key(row, order["property"])
-        previous = _cursor_sort_key(cursor["values"][index])
+        data_type = _require_property_data_type(property_data_types, order["property"])
+        current = _property_sort_key(row, order["property"], property_data_types)
+        previous = _sort_key(cursor["values"][index], data_type)
         if current == previous:
             continue
         return current > previous if order["direction"] == "asc" else current < previous
     return row["object_id"] > cursor["object_id"]
 
 
-def _property_sort_key(row: ObjectRecordRow, property_name: str) -> tuple[int, float, str]:
-    return _cursor_sort_key(row["properties"].get(property_name))
+def _property_sort_key(
+    row: ObjectRecordRow,
+    property_name: str,
+    property_data_types: Mapping[str, str],
+) -> tuple[int, float, str]:
+    data_type = _require_property_data_type(property_data_types, property_name)
+    return _sort_key(row["properties"].get(property_name), data_type)
 
 
-def _cursor_sort_key(value: object) -> tuple[int, float, str]:
-    if value is None:
-        return (0, 0.0, "")
+def _sort_key(value: object, data_type: str) -> tuple[int, float, str]:
+    if data_type in {"float", "integer", "number"}:
+        number = _number_value(value)
+        return (0, number if number is not _INVALID_VALUE else -1e308, "")
+    if data_type == "boolean":
+        return (1, 1.0 if value is True else 0.0, "")
+    return (2, 0.0, str(value) if value is not None else "")
+
+
+def _matches_typed_filter(
+    properties: Mapping[str, object],
+    filter_ast: Mapping[str, object],
+    property_data_types: Mapping[str, str],
+) -> bool:
+    if "and" in filter_ast:
+        return all(
+            _matches_typed_filter(properties, item, property_data_types) for item in _filter_group(filter_ast["and"])
+        )
+    if "or" in filter_ast:
+        return any(
+            _matches_typed_filter(properties, item, property_data_types) for item in _filter_group(filter_ast["or"])
+        )
+    return _matches_property_filter(properties, filter_ast, property_data_types)
+
+
+def _matches_property_filter(
+    properties: Mapping[str, object],
+    filter_ast: Mapping[str, object],
+    property_data_types: Mapping[str, str],
+) -> bool:
+    prop = str(filter_ast["property"])
+    data_type = _require_property_data_type(property_data_types, prop)
+    current = _filter_value(properties.get(prop), data_type)
+    if str(filter_ast["op"]) == "in":
+        return _matches_in_filter(current, filter_ast["value"], data_type)
+    expected = _filter_value(filter_ast["value"], data_type)
+    if current is _INVALID_VALUE or expected is _INVALID_VALUE:
+        return False
+    return _evaluate_filter(current, str(filter_ast["op"]), expected)
+
+
+def _filter_group(value: object) -> list[Mapping[str, object]]:
+    return [cast(Mapping[str, object], item) for item in cast(Sequence[object], value)]
+
+
+def _filter_value(value: object, data_type: str) -> object:
+    if data_type in {"float", "integer", "number"}:
+        return _number_value(value)
+    if data_type == "boolean":
+        return value if isinstance(value, bool) else _INVALID_VALUE
+    return str(value) if value is not None else _INVALID_VALUE
+
+
+def _matches_in_filter(current: object, value: object, data_type: str) -> bool:
+    if current is _INVALID_VALUE or not isinstance(value, Collection) or isinstance(value, str):
+        return False
+    candidates = [_filter_value(item, data_type) for item in value]
+    return current in [item for item in candidates if item is not _INVALID_VALUE]
+
+
+def _number_value(value: object) -> object:
     if isinstance(value, bool):
-        return (1, 1.0 if value else 0.0, "")
+        return _INVALID_VALUE
     if isinstance(value, int | float):
-        return (2, float(value), "")
-    return (3, 0.0, str(value))
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return _INVALID_VALUE
+    return _INVALID_VALUE
+
+
+def _evaluate_filter(current: object, op: str, expected: object) -> bool:
+    if op == "eq":
+        return current == expected
+    if op == "gte":
+        return current >= expected
+    if op == "lte":
+        return current <= expected
+    return str(expected).lower() in str(current).lower()
+
+
+def _require_property_data_type(property_data_types: Mapping[str, str], property_name: str) -> str:
+    return property_data_types.get(property_name, "string")
 
 
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
@@ -369,6 +483,7 @@ def test_object_read_repository_contract_queries_active_rows_with_db_keyset_page
     harness: ObjectReadHarness,
 ) -> None:
     harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_property_type(row_id="pt_status", api_name="status", data_type="string")
     harness.add_object(row_id="obj_order_1", object_id="O-1", properties={"amount": 2.0, "status": "PENDING"})
     harness.add_object(row_id="obj_order_2", object_id="O-2", properties={"amount": 10.0, "status": "PENDING"})
     harness.add_object(row_id="obj_order_3", object_id="O-3", properties={"amount": 10.0, "status": "REVIEW"})
@@ -412,21 +527,44 @@ def test_object_read_repository_contract_queries_active_rows_with_db_keyset_page
             cursor=None,
             limit=4,
         )
-        missing_property_page = harness.repository.query_active_object_rows(
-            transaction=transaction,
-            tenant_id="tenant-demo",
-            object_type_api_name="Order",
-            filter_ast=None,
-            order_by=[{"property": "missing", "direction": "asc"}],
-            cursor=None,
-            limit=4,
-        )
 
     assert [row["object_id"] for row in first_page] == ["O-2"]
     assert [row["object_id"] for row in second_page] == ["O-3"]
     assert [row["object_id"] for row in remaining_page] == ["O-4", "O-1"]
     assert [row["object_id"] for row in ascending_page] == ["O-1", "O-4", "O-2", "O-3"]
-    assert [row["object_id"] for row in missing_property_page] == ["O-1", "O-2", "O-3", "O-4"]
+
+
+def test_object_read_repository_contract_casts_numeric_property_sort_and_cursor(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_object(row_id="obj_order_10", object_id="O-10", properties={"amount": "10"})
+    harness.add_object(row_id="obj_order_02", object_id="O-02", properties={"amount": "2"})
+    harness.add_object(row_id="obj_order_07", object_id="O-07", properties={"amount": 7})
+    order_by: list[ObjectOrderBy] = [{"property": "amount", "direction": "desc"}]
+
+    with harness.transaction() as transaction:
+        first_page = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            order_by=order_by,
+            cursor=None,
+            limit=1,
+        )
+        second_page = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            order_by=order_by,
+            cursor={"values": ["10"], "object_id": "O-10"},
+            limit=2,
+        )
+
+    assert [row["object_id"] for row in first_page] == ["O-10"]
+    assert [row["object_id"] for row in second_page] == ["O-07", "O-02"]
 
 
 def test_object_read_repository_contract_lists_active_outgoing_links(

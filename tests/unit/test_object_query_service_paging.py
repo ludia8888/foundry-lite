@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
+import pytest
 from foundry_lite.application.ports import ObjectRecordRow
 from foundry_lite.application.services.object_store.query import ObjectQueryService
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ValidationFailed
 
 
 class _FakeEngine:
@@ -26,6 +28,14 @@ class _AllowPolicy:
         return properties
 
 
+class _OntologyLookup:
+    def _active_object_type(self, *_args: object) -> dict[str, object]:
+        return {"id": "ot_order"}
+
+    def _properties_for_object_type(self, *_args: object) -> list[dict[str, object]]:
+        return [{"api_name": "amount"}, {"api_name": "status"}]
+
+
 class _PagedObjectRepository:
     def __init__(self) -> None:
         self.requested_limit: int | None = None
@@ -41,7 +51,9 @@ class _PagedObjectRepository:
 def test_object_query_service_requests_db_keyset_page_with_one_row_lookahead() -> None:
     repository = _PagedObjectRepository()
     service = ObjectQueryService(engine=_FakeEngine(), policy=_AllowPolicy(), object_read_repository=repository)
-    service.bind_collaborators({"object_records_service": object(), "runtime_service": object()})
+    service.bind_collaborators(
+        {"object_records_service": object(), "runtime_service": object(), "ontology_service": _OntologyLookup()}
+    )
 
     result = service.query_objects(
         "Order",
@@ -54,6 +66,30 @@ def test_object_query_service_requests_db_keyset_page_with_one_row_lookahead() -
     assert repository.requested_limit == 2
     assert [item["objectId"] for item in result["items"]] == ["O-1"]
     assert result["nextCursor"] is not None
+
+
+def test_object_query_service_rejects_missing_filter_and_order_properties() -> None:
+    service = ObjectQueryService(
+        engine=_FakeEngine(),
+        policy=_AllowPolicy(),
+        object_read_repository=_PagedObjectRepository(),
+    )
+    service.bind_collaborators(
+        {"object_records_service": object(), "runtime_service": object(), "ontology_service": _OntologyLookup()}
+    )
+
+    with pytest.raises(ValidationFailed, match="missing property"):
+        service.query_objects(
+            "Order",
+            filter_ast={"property": "missing", "op": "eq", "value": "x"},
+            ctx=RequestContext(roles=("viewer",)),
+        )
+    with pytest.raises(ValidationFailed, match="missing property"):
+        service.query_objects(
+            "Order",
+            order_by=[{"property": "missing", "direction": "asc"}],
+            ctx=RequestContext(roles=("viewer",)),
+        )
 
 
 def _object_row(object_id: str, amount: float) -> ObjectRecordRow:

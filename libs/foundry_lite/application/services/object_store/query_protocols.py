@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol
 
-from foundry_lite.application.ports import LineageEdgeRow, ObjectRecordRow, RuntimeRunLink, TransactionContext
+from foundry_lite.application.ports import (
+    LineageEdgeRow,
+    ObjectRecordRow,
+    ObjectTypeRow,
+    PropertyTypeRow,
+    RuntimeRunLink,
+    TransactionContext,
+)
 from foundry_lite.domain.context import RequestContext
 
 
@@ -31,3 +39,18 @@ class ObjectLineageReader(Protocol):
         object_type_api_name: str,
         ctx: RequestContext | None = None,
     ) -> list[RuntimeRunLink]: ...
+
+
+class ObjectQueryOntologyLookup(Protocol):
+    def _active_object_type(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        api_name: str,
+    ) -> ObjectTypeRow: ...
+
+    def _properties_for_object_type(
+        self,
+        conn: TransactionContext,
+        object_type_id: str,
+    ) -> Sequence[PropertyTypeRow]: ...

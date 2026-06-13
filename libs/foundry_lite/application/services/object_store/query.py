@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from foundry_lite.application.ports import (
     LineageEdgeRow,
@@ -10,6 +11,7 @@ from foundry_lite.application.ports import (
     ObjectQueryResult,
     ObjectRecordRow,
     ObjectSortDirection,
+    TransactionContext,
 )
 from foundry_lite.application.ports.object_read_repository import ObjectExplain
 from foundry_lite.application.query_filters import validate_filter_ast
@@ -18,7 +20,11 @@ from foundry_lite.application.services.object_store.query_cursor import (
     decode_object_query_cursor,
     encode_object_query_cursor,
 )
-from foundry_lite.application.services.object_store.query_protocols import ObjectLineageReader, ObjectRecordLookup
+from foundry_lite.application.services.object_store.query_protocols import (
+    ObjectLineageReader,
+    ObjectQueryOntologyLookup,
+    ObjectRecordLookup,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     NotFound,
@@ -30,9 +36,10 @@ OBJECT_QUERY_MAX_LIMIT = 500
 
 class ObjectQueryService(CoreService):
     required_dependencies = ("engine", "policy", "object_read_repository")
-    required_collaborators = ("object_records_service", "runtime_service")
+    required_collaborators = ("object_records_service", "runtime_service", "ontology_service")
     object_records_service: ObjectRecordLookup
     runtime_service: ObjectLineageReader
+    ontology_service: ObjectQueryOntologyLookup
 
     def get_object(
         self,
@@ -100,8 +107,10 @@ class ObjectQueryService(CoreService):
         normalized_order_by = _normalized_order_by(order_by)
         if filter_ast:
             validate_filter_ast(filter_ast)
-        cursor_state = decode_object_query_cursor(cursor, normalized_order_by, filter_ast)
         with self.engine.begin() as conn:
+            property_names = self._query_property_names(conn, ctx, object_type_api_name)
+            _validate_query_properties(filter_ast, normalized_order_by, property_names)
+            cursor_state = decode_object_query_cursor(cursor, normalized_order_by, filter_ast)
             records = self.object_read_repository.query_active_object_rows(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -128,6 +137,18 @@ class ObjectQueryService(CoreService):
             "objectId": row["object_id"],
             "objectVersion": row["object_version"],
             "properties": self.policy.mask_properties(ctx, object_type_api_name, dict(row["properties"])),
+        }
+
+    def _query_property_names(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type_api_name: str,
+    ) -> set[str]:
+        object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
+        return {
+            property_type["api_name"]
+            for property_type in self.ontology_service._properties_for_object_type(conn, object_type["id"])
         }
 
 
@@ -160,6 +181,37 @@ def _normalized_direction(direction: str) -> ObjectSortDirection:
     if direction == "desc":
         return "desc"
     raise ValidationFailed("object query orderBy direction must be asc or desc", details={"direction": direction})
+
+
+def _validate_query_properties(
+    filter_ast: Mapping[str, object] | None,
+    order_by: Sequence[ObjectOrderBy],
+    property_names: set[str],
+) -> None:
+    for order in order_by:
+        _require_known_query_property(order["property"], property_names, source="orderBy")
+    if filter_ast:
+        _validate_filter_properties(filter_ast, property_names)
+
+
+def _validate_filter_properties(filter_ast: Mapping[str, object], property_names: set[str]) -> None:
+    if "and" in filter_ast:
+        for item in cast(Sequence[Mapping[str, object]], filter_ast["and"]):
+            _validate_filter_properties(item, property_names)
+        return
+    if "or" in filter_ast:
+        for item in cast(Sequence[Mapping[str, object]], filter_ast["or"]):
+            _validate_filter_properties(item, property_names)
+        return
+    _require_known_query_property(str(filter_ast["property"]), property_names, source="filter")
+
+
+def _require_known_query_property(property_name: str, property_names: set[str], *, source: str) -> None:
+    if property_name not in property_names:
+        raise ValidationFailed(
+            "object query references missing property",
+            details={"property": property_name, "source": source},
+        )
 
 
 def _next_cursor(
