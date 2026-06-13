@@ -25,8 +25,8 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetVersionLookup,
 )
 from foundry_lite.application.services.dataset.stream_archive import (
-    STREAM_ARCHIVE_FIELDS,
     read_stream_archive_events,
+    stream_archive_fields,
     stream_cursor_offset,
     stream_event_row,
     stream_transaction_metadata,
@@ -333,7 +333,7 @@ class DatasetIngestService(CoreService):
     ) -> CommitResult:
         try:
             rows = [stream_event_row(event, stream) for event in events]
-            self._rows_to_parquet(rows, staged, STREAM_ARCHIVE_FIELDS)
+            self._rows_to_parquet(rows, staged, stream_archive_fields(stream))
             with self.engine.begin() as conn:
                 result = self.dataset_transaction_service._finalize_open_transaction(
                     conn,

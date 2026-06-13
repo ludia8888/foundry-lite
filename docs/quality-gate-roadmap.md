@@ -83,7 +83,7 @@
 | 25 | fake/local adapter contract test 동일 | contract tests | pass | △ (수동) |
 | 26 | trace key boundary 유지 | `check_trace_continuity.py` | dynamic | ✅ |
 | 27 | 새 boundary에 contract test 동반 | `check_contract_test_per_port.py` | 0개 누락 | ✅ |
-| 28 | adapter 실패 의미 표준화 | `check_adapter_failure_taxonomy.py` | 15 adapter profile | ✅ |
+| 28 | adapter 실패 의미 표준화 | `check_adapter_failure_taxonomy.py` | 17 adapter profile | ✅ |
 
 ### §5 코드 컨벤션
 

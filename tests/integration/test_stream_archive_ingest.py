@@ -7,6 +7,7 @@ import pytest
 from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports import StreamAdapter, StreamArchiveConfig, StreamPublishRequest
+from foundry_lite.application.services.dataset.stream_archive import stream_cursor_offset
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter
@@ -53,6 +54,26 @@ def test_stream_archive_restart_resumes_after_committed_offset(tmp_path: Path) -
     assert second.row_count == 1
     assert latest_preview[0]["event_id"] == "shipment_events:0:2"
     assert latest["metadata"]["streamCursor"]["offset"] == 2
+
+
+def test_stream_archive_cursor_requires_matching_schema_strategy() -> None:
+    stream = StreamArchiveConfig(
+        stream_name="shipments",
+        topic="shipment_events",
+        schema_strategy="cdc_envelope_json",
+    )
+    metadata = {
+        "streamCursor": {
+            "streamName": "shipments",
+            "topic": "shipment_events",
+            "partition": 0,
+            "consumerGroup": "foundry-lite-archive",
+            "offset": 7,
+            "schemaStrategy": "envelope_json",
+        }
+    }
+
+    assert stream_cursor_offset(metadata, stream) is None
 
 
 def test_stream_archive_failure_is_visible_in_operations(tmp_path: Path) -> None:

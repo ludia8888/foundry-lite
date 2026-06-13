@@ -16,6 +16,8 @@ if str(LIBS) not in sys.path:
 
 from foundry_lite.application.ports import AdapterFailureContract  # noqa: E402
 from foundry_lite.infrastructure.adapters import (  # noqa: E402
+    DebeziumPostgresSourceConfig,
+    DebeziumPostgresStreamAdapter,
     DuckDBComputeAdapter,
     FakeComputeAdapter,
     FakeConnectorAdapter,
@@ -47,6 +49,7 @@ REQUIRED_PROFILES = frozenset(
         "local-stream",
         "fake-stream",
         "kafka-stream",
+        "debezium-postgres-stream",
         "local-search",
         "fake-search",
         "local-connector",
@@ -82,6 +85,10 @@ def load_contracts() -> tuple[AdapterFailureContract, ...]:
                     bootstrap_servers="redpanda:9092",
                     subscriptions=(KafkaStreamSubscription("shipments", "shipment_events"),),
                 )
+            ),
+            DebeziumPostgresStreamAdapter(
+                FakeStreamAdapter(),
+                DebeziumPostgresSourceConfig(primary_key=("order_id",)),
             ),
             LocalSearchAdapter(),
             FakeSearchAdapter(),

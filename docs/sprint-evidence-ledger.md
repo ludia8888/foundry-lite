@@ -24,6 +24,7 @@
 | `PR-7` | Adapter failure taxonomy hardening and public API coverage protocol handling | [PR #7](https://github.com/ludia8888/foundry-lite/pull/7), [b40a3bcfbf4be0556d820e46ef162d5b25203ca5](https://github.com/ludia8888/foundry-lite/commit/b40a3bcfbf4be0556d820e46ef162d5b25203ca5) | 2026-06-14 KST |
 | `PR-8` | Production-compatible Kafka stream adapter and worker composition root | [PR #8](https://github.com/ludia8888/foundry-lite/pull/8), [61ae5e31836ae25d75b9dccc42cab1f2ac326345](https://github.com/ludia8888/foundry-lite/commit/61ae5e31836ae25d75b9dccc42cab1f2ac326345) | 2026-06-14 KST |
 | `PR-9` | Live Kafka-compatible broker smoke for Sprint 38 stream archive worker | [PR #9](https://github.com/ludia8888/foundry-lite/pull/9), [383bcad848afac8985fd0d500f499790bba1e063](https://github.com/ludia8888/foundry-lite/commit/383bcad848afac8985fd0d500f499790bba1e063) | 2026-06-14 KST |
+| `PR-10` | Sprint 39 Debezium-shaped CDC envelope archive proof and CDC preview fields | [PR #10](https://github.com/ludia8888/foundry-lite/pull/10), [898689cb46ed5575ca9da69d6086cef3d7a141d3](https://github.com/ludia8888/foundry-lite/commit/898689cb46ed5575ca9da69d6086cef3d7a141d3) | 2026-06-14 KST |
 | `GATE-FOUNDATION` | 품질 게이트, release gate, infra boundary hardening | [e1fc49e81c2262c69321eaf6b991f425969b6e35](https://github.com/ludia8888/foundry-lite/commit/e1fc49e81c2262c69321eaf6b991f425969b6e35) | main history |
 | `AUTH-PORT` | `AuthProvider` port, HeaderTrust/Demo local adapters | [b14c70f843dc0faedbde72f5639a28f15389de09](https://github.com/ludia8888/foundry-lite/commit/b14c70f843dc0faedbde72f5639a28f15389de09) | main history |
 | `OBJECT-READ-PORT` | `ObjectReadRepository` boundary extraction | [87a08d7b79795354d3d8782981746978e6e1d07c](https://github.com/ludia8888/foundry-lite/commit/87a08d7b79795354d3d8782981746978e6e1d07c) | main history |
@@ -41,14 +42,16 @@
 | `VERIFY-DOC-DRIFT` | `pnpm --silent quality:doc-drift` | PASS. current-state docs reference existing code paths and symbols. |
 | `VERIFY-INFRA-BOUNDARIES` | `pnpm --silent quality:infra-boundaries` | PASS. domain concrete infra import `0/0`, application concrete infra import `0/0`, service dependency declarations OK, service call graph cycles `0`, max depth `7/7`, max fan-out `8/10`. |
 | `VERIFY-STATIC` | `pnpm --silent quality:static` | PASS. Ruff, format check, mypy, pyright, architecture, infra boundaries, module size, function length, boolean naming, typed boundary, router purity, query side-effect, repository boundaries, tenant write, contract-test-per-port, strategy/spec tests, integration markers, regression/root-cause local checks, docs, SDK generation, schema revision, audit/outbox/idempotency/request-id/log/metrics/adapter-failure-taxonomy/no-bypass/no-sleep/coverage/private facade gates all passed. |
+| `VERIFY-FULL-CI-GATE` | `env DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock pnpm --silent ci:gate` | PASS. Testcontainers preflight reached Colima, full pytest `673 passed`, coverage `95.69%`, flaky detector stable, layer/public callable coverage passed, OpenLineage/audit/outbox/MVP correctness/performance/trace/adapter-error/failed-mutation/runtime diagnostics/Playwright gates passed. |
 | `VERIFY-CONTRACT-GATE` | `pnpm --silent quality:contract-tests` | PASS. every application port has a contract suite. |
 | `VERIFY-SCALE-ADAPTERS` | `uv run pytest tests/contracts/test_auth_provider_contract.py tests/contracts/test_connector_adapter_contract.py tests/contracts/test_search_adapter_contract.py tests/contracts/test_stream_adapter_contract.py tests/contracts/test_workflow_adapter_contract.py tests/integration/test_scale_foundation.py tests/integration/test_stream_archive_ingest.py -q` | PASS. `29 passed in 0.38s`. |
 | `VERIFY-TESTCONTAINERS-PREFLIGHT` | `pnpm --silent quality:testcontainers-preflight` | FAIL FAST as designed in a Docker-unreachable shell. The message tells the operator to set `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock` and `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock` before rerunning `pnpm --silent ci:gate`. Unit proof: `uv run pytest tests/unit/test_quality_testcontainers_preflight.py -q`, `5 passed`. This preflight now protects both PostgreSQL and Kafka Testcontainers evidence. |
 | `VERIFY-REST-SSRF` | `uv run pytest tests/integration/test_rest_connector_ingest.py tests/contracts/test_rest_connector_adapter_contract.py -q` | PASS outside the sandbox because the mock REST server needs local TCP bind permission. `24 passed in 7.35s`. |
 | `VERIFY-REST-WEBHOOK-OPS` | `uv run pytest tests/integration/test_rest_connector_ingest.py tests/contracts/test_rest_connector_adapter_contract.py -q`; `uv run pytest tests/smoke/test_interfaces.py::test_api_webhook_ingest_verifies_signature_and_appends_dataset tests/unit/test_quality_testcontainers_preflight.py -q`; `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1 uv run pytest tests/contracts/test_dataset_transaction_repository_contract.py::test_dataset_transaction_repository_contract_finds_committed_webhook_event -q` | PASS. REST cursor/adapter suite: `24 passed in 7.35s` outside the sandbox for local TCP bind permission. Webhook API duplicate replay plus preflight unit proof: `6 passed`. Webhook transaction lookup contract: `2 passed, 1 skipped` with local-only Postgres skip. |
-| `VERIFY-ADAPTER-FAILURE-TAXONOMY` | `pnpm --silent quality:adapter-failure-taxonomy`; `uv run pytest tests/contracts/test_adapter_failure_contract.py tests/unit/test_quality_adapter_failure_taxonomy.py tests/contracts/test_rest_connector_adapter_contract.py tests/integration/test_rest_connector_ingest.py::test_rest_connector_rate_limit_failure_is_visible_in_operations -q` | PASS. `16` concrete adapter profiles expose `AdapterFailureContract`; targeted adapter taxonomy/REST failure payload tests cover local/fake, REST, auth, and Kafka stream failure contracts. |
-| `VERIFY-KAFKA-STREAM-WORKER` | `uv run pytest tests/contracts/test_kafka_stream_adapter_contract.py tests/contracts/test_adapter_failure_contract.py tests/unit/test_quality_adapter_failure_taxonomy.py -q`; `pnpm --silent quality:adapter-failure-taxonomy` | PASS. Production-compatible `KafkaStreamAdapter` parses broker-shaped messages, the worker archives one micro-batch through `FoundryLiteCore.archive_stream_events`, and `16` concrete adapter profiles expose `AdapterFailureContract`. This focused contract proof is complemented by `VERIFY-KAFKA-LIVE-BROKER`. |
+| `VERIFY-ADAPTER-FAILURE-TAXONOMY` | `pnpm --silent quality:adapter-failure-taxonomy`; `uv run pytest tests/contracts/test_adapter_failure_contract.py tests/unit/test_quality_adapter_failure_taxonomy.py tests/contracts/test_rest_connector_adapter_contract.py tests/integration/test_rest_connector_ingest.py::test_rest_connector_rate_limit_failure_is_visible_in_operations -q` | PASS. `17` concrete adapter profiles expose `AdapterFailureContract`; targeted adapter taxonomy/REST failure payload tests cover local/fake, REST, auth, Kafka stream, and Debezium CDC stream failure contracts. |
+| `VERIFY-KAFKA-STREAM-WORKER` | `uv run pytest tests/contracts/test_kafka_stream_adapter_contract.py tests/contracts/test_adapter_failure_contract.py tests/unit/test_quality_adapter_failure_taxonomy.py -q`; `pnpm --silent quality:adapter-failure-taxonomy` | PASS. Production-compatible `KafkaStreamAdapter` parses broker-shaped messages, the worker archives one micro-batch through `FoundryLiteCore.archive_stream_events`, and the adapter taxonomy gate covers every current concrete adapter profile. This focused contract proof is complemented by `VERIFY-KAFKA-LIVE-BROKER`. |
 | `VERIFY-KAFKA-LIVE-BROKER` | `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock uv run pytest tests/integration/test_kafka_live_broker_stream_archive.py -q` | PASS. `1 passed in 14.93s`. `KafkaContainer` boots a real Kafka-compatible broker, `KafkaStreamAdapter.publish_event` writes a shipment event to a live topic, and `foundry_lite_worker.stream_archive.run_stream_archive_once` reads the broker topic through the same application boundary and commits `raw.shipment_events` with event id `<topic>:0:0`. |
+| `VERIFY-CDC-STREAM-ARCHIVE` | `pnpm --silent quality:cdc-stream-archive`; `pnpm --silent quality:adapter-failure-taxonomy` | PASS. `11 passed in 0.21s`; adapter taxonomy gate passed with `17` concrete adapter profiles. `DebeziumPostgresStreamAdapter` normalizes Debezium-shaped insert/update/delete payloads into the standard CDC envelope, rejects malformed envelopes as adapter validation failures, reports publish/read validation failures under the correct adapter operation, and `tests/integration/test_cdc_stream_archive.py` proves `StreamArchiveConfig(schema_strategy="cdc_envelope_json")` commits `raw_cdc.erp_orders` rows with top-level `op`, `pk_json`, `before_json`, `after_json`, and `ordering_json` preview fields. Stream archive resume cursors also require a matching `schemaStrategy`, so a plain envelope checkpoint is not reused for a CDC envelope archive run. |
 
 ## Sprint 02A - Scale Foundation/Infra Swap Boundary
 
@@ -238,11 +241,27 @@ No Sprint 02A Scale Foundation evidence item remains open in the current checkou
 | `S38-A5` | stream archive dataset preview works | `PR-5`; `VERIFY-SCALE-ADAPTERS` | Done |
 | `S38-A6` | lag metric and stream writer failure are visible to Operations | `PR-5`; `VERIFY-SCALE-ADAPTERS` | Done |
 
+## Sprint 39 - Debezium PostgreSQL CDC Connector
+
+<a id="s39-a1"></a>
+<a id="s39-a2"></a>
+<a id="s39-a3"></a>
+<a id="s39-a4"></a>
+<a id="s39-a5"></a>
+
+| Evidence id | Checkbox meaning | Git / test evidence | Current status |
+|---|---|---|---|
+| `S39-A1` | mock ERP orders row insert/update/delete appears on a CDC topic | no merged Debezium docker profile proof yet | Open |
+| `S39-A2` | CDC event appends to raw changelog dataset | `PR-10`; `VERIFY-CDC-STREAM-ARCHIVE`; `tests/integration/test_cdc_stream_archive.py` | Done for Debezium-shaped stream events |
+| `S39-A3` | primary key and ordering metadata are visible in preview | `PR-10`; `VERIFY-CDC-STREAM-ARCHIVE`; `tests/integration/test_cdc_stream_archive.py` | Done |
+| `S39-A4` | delete event is standardized as `after=null` or tombstone policy | `PR-10`; `VERIFY-CDC-STREAM-ARCHIVE`; `tests/contracts/test_debezium_cdc_adapter_contract.py` | Done for `after=null` delete envelopes |
+| `S39-A5` | CDC connector failure/lag is visible in Operations | no merged Debezium connector failure/lag proof yet | Open |
+
 ## Open / Not Yet Merged Scope
 
 These items intentionally remain unchecked until a later PR creates code and gate evidence.
 
 | Scope | Current tracking note |
 |---|---|
-| CDC topic ingest and CDC object indexing | Sprint 39 and Sprint 40 remain future work. |
+| Live Debezium Postgres topic source and CDC object indexing | Sprint 39 `S39-A1`/`S39-A5` and Sprint 40 remain future work. |
 | OpenSearch, Iceberg, Spark, Kubernetes production adapters | Sprint 42-45 remain future work. |

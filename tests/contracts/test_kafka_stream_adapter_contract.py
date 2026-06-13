@@ -236,6 +236,8 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
             "FOUNDRY_LITE_STREAM_ARCHIVE_LIMIT": "9",
             "FOUNDRY_LITE_KAFKA_POLL_TIMEOUT_SECONDS": "2.5",
             "FOUNDRY_LITE_KAFKA_MAX_EMPTY_POLLS": "7",
+            "FOUNDRY_LITE_STREAM_SCHEMA_STRATEGY": "cdc_envelope_json",
+            "FOUNDRY_LITE_CDC_PRIMARY_KEY": "order_id, line_id",
             "FOUNDRY_LITE_TENANT_ID": "tenant-custom",
             "FOUNDRY_LITE_STREAM_SYNC_NAME": "custom-sync",
         }
@@ -245,8 +247,29 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
     assert config.kafka_config().subscriptions[0].default_tenant_id == "tenant-custom"
     assert config.kafka_config().poll_timeout_seconds == 2.5
     assert config.kafka_config().max_empty_polls == 7
+    assert config.stream_config().schema_strategy == "cdc_envelope_json"
+    assert config.cdc_primary_key == ("order_id", "line_id")
     assert config.request_context().tenant_id == "tenant-custom"
     assert config.sync_name == "custom-sync"
+
+
+def test_stream_archive_worker_builds_debezium_adapter_for_cdc(tmp_path: Path) -> None:
+    config = StreamArchiveWorkerConfig(
+        dataset_ref="raw_cdc.erp_orders",
+        stream_name="erp_orders_cdc",
+        topic="dbserver1.inventory.orders",
+        bootstrap_servers="redpanda:9092",
+        storage_root=tmp_path,
+        schema_strategy="cdc_envelope_json",
+        cdc_primary_key=("order_id",),
+    )
+
+    assert config.stream_adapter().profile_name == "debezium-postgres-stream"
+
+
+def test_stream_archive_worker_rejects_unknown_schema_strategy() -> None:
+    with pytest.raises(ValueError, match="unsupported stream schema strategy"):
+        worker_module.config_from_env({"FOUNDRY_LITE_STREAM_SCHEMA_STRATEGY": "raw"})
 
 
 def test_stream_archive_worker_main_prints_success(
