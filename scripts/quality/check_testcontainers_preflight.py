@@ -1,4 +1,4 @@
-"""Fail fast when PostgreSQL Testcontainers cannot reach Docker."""
+"""Fail fast when Testcontainers cannot reach Docker."""
 
 from __future__ import annotations
 
@@ -146,7 +146,7 @@ def _docker_unavailable(colima_socket: Path) -> PreflightResult:
         "docker_unavailable",
         "\n".join(
             [
-                "PostgreSQL Testcontainers preflight failed before running pytest.",
+                "Testcontainers preflight failed before running pytest.",
                 "Docker is not reachable from this shell.",
                 "If you use Colima, start it and run:",
                 f"  export DOCKER_HOST=unix://{colima_socket}",
@@ -160,7 +160,7 @@ def _docker_unavailable(colima_socket: Path) -> PreflightResult:
 def _colima_full_env_message(colima_socket: Path) -> str:
     return "\n".join(
         [
-            "PostgreSQL Testcontainers preflight failed before running pytest.",
+            "Testcontainers preflight failed before running pytest.",
             f"Found a reachable Colima socket at {colima_socket}, but this shell is not configured for it.",
             "Run:",
             f"  export DOCKER_HOST=unix://{colima_socket}",
@@ -173,7 +173,7 @@ def _colima_full_env_message(colima_socket: Path) -> str:
 def _colima_docker_host_message(colima_socket: Path) -> str:
     return "\n".join(
         [
-            "PostgreSQL Testcontainers preflight failed before running pytest.",
+            "Testcontainers preflight failed before running pytest.",
             "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE is set, but DOCKER_HOST is missing.",
             "Run:",
             f"  export DOCKER_HOST=unix://{colima_socket}",
@@ -185,7 +185,7 @@ def _colima_docker_host_message(colima_socket: Path) -> str:
 def _colima_override_message(socket_path: Path) -> str:
     return "\n".join(
         [
-            "PostgreSQL Testcontainers preflight failed before running pytest.",
+            "Testcontainers preflight failed before running pytest.",
             f"DOCKER_HOST points at Colima ({socket_path}), but Testcontainers also needs:",
             f"  export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE={TESTCONTAINERS_SOCKET_OVERRIDE}",
             "Then rerun:",
@@ -197,7 +197,7 @@ def _colima_override_message(socket_path: Path) -> str:
 def _socket_unreachable_message(socket_path: Path, docker_host: str) -> str:
     return "\n".join(
         [
-            "PostgreSQL Testcontainers preflight failed before running pytest.",
+            "Testcontainers preflight failed before running pytest.",
             f"DOCKER_HOST is set to {docker_host}, but {socket_path} is not reachable.",
             "Start Docker or Colima, then rerun the gate.",
         ]
@@ -213,13 +213,13 @@ def _failure(code: str, message: str) -> PreflightResult:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate Docker access before PostgreSQL Testcontainers run.")
+    parser = argparse.ArgumentParser(description="Validate Docker access before Testcontainers run.")
     parser.add_argument("--output", type=Path, default=Path("artifacts/quality/testcontainers_preflight.json"))
     args = parser.parse_args()
     result = check_preflight(os.environ, home=Path.home())
     write_report(args.output, result)
     if result.is_ok:
-        print(f"PostgreSQL Testcontainers preflight OK: {result.message}")
+        print(f"Testcontainers preflight OK: {result.message}")
         return 0
     print(result.message, file=sys.stderr)
     return 1

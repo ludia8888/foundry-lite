@@ -14,7 +14,7 @@ if [[ "${FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS:-}" == "1" ]]; then
   exit 1
 fi
 
-echo "== Preflight: PostgreSQL Testcontainers Docker access =="
+echo "== Preflight: Testcontainers Docker access =="
 uv run python scripts/quality/check_testcontainers_preflight.py
 
 echo "== Static: Ruff lint =="

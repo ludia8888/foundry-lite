@@ -231,6 +231,8 @@ def test_stream_archive_worker_script_is_exposed() -> None:
 
     assert '"worker:stream-archive"' in package_json
     assert "python -m foundry_lite_worker.stream_archive" in package_json
+    assert '"quality:kafka-live-broker"' in package_json
+    assert "tests/integration/test_kafka_live_broker_stream_archive.py" in package_json
 
 
 def test_router_layer_purity_is_release_gate_step() -> None:
