@@ -33,7 +33,13 @@ from foundry_lite.application.services.dataset.stream_archive import (
 )
 from foundry_lite.application.upload_limits import require_csv_size_limit
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, NotFound, ValidationFailed
+from foundry_lite.domain.errors import (
+    ConflictDetected,
+    FoundryLiteError,
+    InvariantViolation,
+    NotFound,
+    ValidationFailed,
+)
 
 
 class DatasetIngestService(CoreService):
@@ -160,7 +166,13 @@ class DatasetIngestService(CoreService):
         resume_offset = (
             after_offset if after_offset is not None else self._committed_stream_offset(ctx, dataset, stream)
         )
-        events = read_stream_archive_events(self.stream_adapter, stream, resume_offset)
+        try:
+            events = read_stream_archive_events(self.stream_adapter, stream, resume_offset)
+        except Exception as exc:
+            self._record_stream_read_failure(ctx, dataset, stream, sync_name, exc)
+            if isinstance(exc, FoundryLiteError):
+                raise
+            raise ValidationFailed("stream archive read failed", details={"error": str(exc)}) from exc
         if not events:
             return None
         return self._commit_stream_archive(ctx, dataset, stream, events, sync_name)
@@ -239,6 +251,35 @@ class DatasetIngestService(CoreService):
                 dataset_id=dataset["id"],
             )
         return stream_cursor_offset(tx["metadata"], stream) if tx else None
+
+    def _record_stream_read_failure(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        stream: StreamArchiveConfig,
+        sync_name: str | None,
+        exc: Exception,
+    ) -> None:
+        run_id = _new_id("sync_run")
+        error = self.runtime_service._error_payload(exc, ctx, run_id=run_id, adapter="stream_archive_reader")
+        now = _now()
+        with self.engine.begin() as conn:
+            self.dataset_transaction_repository.insert_sync_run(
+                transaction=conn,
+                record=SyncRunRecord(
+                    sync_run_id=run_id,
+                    tenant_id=ctx.tenant_id,
+                    sync_name=sync_name or f"stream:{stream.stream_name}:{stream.consumer_group}",
+                    source_type=f"stream.{stream.stream_name}",
+                    output_dataset_id=str(dataset["id"]),
+                    transaction_id=None,
+                    committed_version_id=None,
+                    status="FAILED",
+                    error=error,
+                    created_at=now,
+                    completed_at=now,
+                ),
+            )
 
     def _csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
         self.compute_adapter.csv_to_parquet(source_path, target_path)

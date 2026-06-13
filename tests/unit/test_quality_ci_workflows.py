@@ -235,6 +235,8 @@ def test_stream_archive_worker_script_is_exposed() -> None:
     assert "tests/integration/test_kafka_live_broker_stream_archive.py" in package_json
     assert '"quality:cdc-stream-archive"' in package_json
     assert "tests/integration/test_cdc_stream_archive.py" in package_json
+    assert '"quality:cdc-live-debezium"' in package_json
+    assert "tests/integration/test_debezium_live_cdc.py" in package_json
 
 
 def test_router_layer_purity_is_release_gate_step() -> None:

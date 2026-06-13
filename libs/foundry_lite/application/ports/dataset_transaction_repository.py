@@ -66,7 +66,7 @@ class SyncRunRecord:
     sync_name: str
     source_type: str
     output_dataset_id: str
-    transaction_id: str
+    transaction_id: str | None
     committed_version_id: str | None
     status: str
     error: DatasetRunError | None

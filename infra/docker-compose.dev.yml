@@ -7,6 +7,59 @@ services:
       POSTGRES_DB: foundry_lite
     ports:
       - "5432:5432"
+  cdc-postgres:
+    image: postgres:16
+    profiles:
+      - cdc
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=8"
+      - "-c"
+      - "max_wal_senders=8"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: inventory
+    ports:
+      - "15432:5432"
+  cdc-kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    profiles:
+      - cdc
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@cdc-kafka:9094"
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:19092,BROKER://0.0.0.0:9092,CONTROLLER://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:19092,BROKER://cdc-kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,BROKER:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: BROKER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_OFFSETS_TOPIC_NUM_PARTITIONS: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+    ports:
+      - "19092:19092"
+  debezium-connect:
+    image: quay.io/debezium/connect:3.5
+    profiles:
+      - cdc
+    environment:
+      BOOTSTRAP_SERVERS: cdc-kafka:9092
+      GROUP_ID: foundry-lite-cdc-connect
+      CONFIG_STORAGE_TOPIC: foundry-lite-cdc-connect-configs
+      OFFSET_STORAGE_TOPIC: foundry-lite-cdc-connect-offsets
+      STATUS_STORAGE_TOPIC: foundry-lite-cdc-connect-status
+      CONNECT_REST_ADVERTISED_HOST_NAME: debezium-connect
+    ports:
+      - "18083:8083"
+    depends_on:
+      - cdc-kafka
+      - cdc-postgres
   minio:
     image: minio/minio
     command: server /data --console-address ":9001"
