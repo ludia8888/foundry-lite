@@ -23,6 +23,9 @@ from foundry_lite.infrastructure.adapters import (  # noqa: E402
     FakeSearchAdapter,
     FakeStreamAdapter,
     FakeWorkflowAdapter,
+    KafkaStreamAdapter,
+    KafkaStreamAdapterConfig,
+    KafkaStreamSubscription,
     LocalConnectorAdapter,
     LocalDatasetStorageAdapter,
     LocalSearchAdapter,
@@ -43,6 +46,7 @@ REQUIRED_PROFILES = frozenset(
         "fake-workflow",
         "local-stream",
         "fake-stream",
+        "kafka-stream",
         "local-search",
         "fake-search",
         "local-connector",
@@ -73,6 +77,12 @@ def load_contracts() -> tuple[AdapterFailureContract, ...]:
             FakeWorkflowAdapter(),
             LocalStreamAdapter(),
             FakeStreamAdapter(),
+            KafkaStreamAdapter(
+                KafkaStreamAdapterConfig(
+                    bootstrap_servers="redpanda:9092",
+                    subscriptions=(KafkaStreamSubscription("shipments", "shipment_events"),),
+                )
+            ),
             LocalSearchAdapter(),
             FakeSearchAdapter(),
             LocalConnectorAdapter(),

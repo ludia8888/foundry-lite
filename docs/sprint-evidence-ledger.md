@@ -42,7 +42,8 @@
 | `VERIFY-TESTCONTAINERS-PREFLIGHT` | `pnpm --silent quality:testcontainers-preflight` | FAIL FAST as designed in the current shell when Docker is unreachable. The message tells the operator to set `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock` and `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock` before rerunning `pnpm --silent ci:gate`. Unit proof: `uv run pytest tests/unit/test_quality_testcontainers_preflight.py -q`, `5 passed`. |
 | `VERIFY-REST-SSRF` | `uv run pytest tests/integration/test_rest_connector_ingest.py tests/contracts/test_rest_connector_adapter_contract.py -q` | PASS outside the sandbox because the mock REST server needs local TCP bind permission. `24 passed in 7.35s`. |
 | `VERIFY-REST-WEBHOOK-OPS` | `uv run pytest tests/integration/test_rest_connector_ingest.py tests/contracts/test_rest_connector_adapter_contract.py -q`; `uv run pytest tests/smoke/test_interfaces.py::test_api_webhook_ingest_verifies_signature_and_appends_dataset tests/unit/test_quality_testcontainers_preflight.py -q`; `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1 uv run pytest tests/contracts/test_dataset_transaction_repository_contract.py::test_dataset_transaction_repository_contract_finds_committed_webhook_event -q` | PASS. REST cursor/adapter suite: `24 passed in 7.35s` outside the sandbox for local TCP bind permission. Webhook API duplicate replay plus preflight unit proof: `6 passed`. Webhook transaction lookup contract: `2 passed, 1 skipped` with local-only Postgres skip. |
-| `VERIFY-ADAPTER-FAILURE-TAXONOMY` | `pnpm --silent quality:adapter-failure-taxonomy`; `uv run pytest tests/contracts/test_adapter_failure_contract.py tests/unit/test_quality_adapter_failure_taxonomy.py tests/contracts/test_rest_connector_adapter_contract.py tests/integration/test_rest_connector_ingest.py::test_rest_connector_rate_limit_failure_is_visible_in_operations -q` | PASS. `15` concrete adapter profiles expose `AdapterFailureContract`; targeted adapter taxonomy/REST failure payload tests passed with `64 passed`. |
+| `VERIFY-ADAPTER-FAILURE-TAXONOMY` | `pnpm --silent quality:adapter-failure-taxonomy`; `uv run pytest tests/contracts/test_adapter_failure_contract.py tests/unit/test_quality_adapter_failure_taxonomy.py tests/contracts/test_rest_connector_adapter_contract.py tests/integration/test_rest_connector_ingest.py::test_rest_connector_rate_limit_failure_is_visible_in_operations -q` | PASS. `16` concrete adapter profiles expose `AdapterFailureContract`; targeted adapter taxonomy/REST failure payload tests cover local/fake, REST, auth, and Kafka stream failure contracts. |
+| `VERIFY-KAFKA-STREAM-WORKER` | `uv run pytest tests/contracts/test_kafka_stream_adapter_contract.py tests/contracts/test_adapter_failure_contract.py tests/unit/test_quality_adapter_failure_taxonomy.py -q`; `pnpm --silent quality:adapter-failure-taxonomy` | PASS. Production-compatible `KafkaStreamAdapter` parses broker-shaped messages, the worker archives one micro-batch through `FoundryLiteCore.archive_stream_events`, and `16` concrete adapter profiles expose `AdapterFailureContract`. This is not a live Redpanda broker smoke. |
 
 ## Sprint 02A - Scale Foundation/Infra Swap Boundary
 
@@ -226,7 +227,7 @@ No Sprint 02A Scale Foundation evidence item remains open in the current checkou
 | Evidence id | Checkbox meaning | Git / test evidence | Current status |
 |---|---|---|---|
 | `S38-A1` | local/fake Kafka-compatible `StreamAdapter` events append to raw stream archive dataset | `PR-5`; `VERIFY-SCALE-ADAPTERS` | Done |
-| `S38-A2` | production Redpanda topic event appends to raw stream archive dataset | No production Redpanda worker PR/merge evidence yet | Open |
+| `S38-A2` | production Redpanda topic event appends to raw stream archive dataset | `libs/foundry_lite/infrastructure/adapters/kafka_stream.py`; `apps/worker/foundry_lite_worker/stream_archive.py`; `tests/contracts/test_kafka_stream_adapter_contract.py` prove the production-compatible adapter and worker path with an injected broker-shaped consumer. Live Redpanda broker smoke is not yet merged. | Partial; live broker proof open |
 | `S38-A3` | worker restart resumes after last committed offset | `PR-5`; `VERIFY-SCALE-ADAPTERS` | Done for local/fake checkpoint path |
 | `S38-A4` | duplicate processing can be identified by event id or topic/partition/offset | `PR-5`; `VERIFY-SCALE-ADAPTERS` | Done |
 | `S38-A5` | stream archive dataset preview works | `PR-5`; `VERIFY-SCALE-ADAPTERS` | Done |
@@ -238,6 +239,6 @@ These items intentionally remain unchecked until a later PR creates code and gat
 
 | Scope | Current tracking note |
 |---|---|
-| Production Redpanda/Kafka worker | Sprint 38 `S38-A2` remains open. Current proof is local/fake `StreamAdapter`, not production broker ingestion. |
+| Production Redpanda/Kafka live broker proof | Sprint 38 `S38-A2` remains open for a real Redpanda/Kafka broker smoke. Current branch adds the production-compatible `KafkaStreamAdapter` and one-shot worker composition root, but live broker evidence is still required before the sprint checkbox changes to `[x]`. |
 | CDC topic ingest and CDC object indexing | Sprint 39 and Sprint 40 remain future work. |
 | OpenSearch, Iceberg, Spark, Kubernetes production adapters | Sprint 42-45 remain future work. |

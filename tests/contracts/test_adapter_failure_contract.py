@@ -12,6 +12,9 @@ from foundry_lite.infrastructure.adapters import (
     FakeSearchAdapter,
     FakeStreamAdapter,
     FakeWorkflowAdapter,
+    KafkaStreamAdapter,
+    KafkaStreamAdapterConfig,
+    KafkaStreamSubscription,
     LocalConnectorAdapter,
     LocalDatasetStorageAdapter,
     LocalSearchAdapter,
@@ -32,6 +35,7 @@ from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthPr
         "fake-workflow",
         "local-stream",
         "fake-stream",
+        "kafka-stream",
         "local-search",
         "fake-search",
         "local-connector",
@@ -76,6 +80,12 @@ def _adapter_failure_contract(profile: str, tmp_path: Path) -> AdapterFailureCon
         "fake-workflow": FakeWorkflowAdapter(),
         "local-stream": LocalStreamAdapter(),
         "fake-stream": FakeStreamAdapter(),
+        "kafka-stream": KafkaStreamAdapter(
+            KafkaStreamAdapterConfig(
+                bootstrap_servers="redpanda:9092",
+                subscriptions=(KafkaStreamSubscription("shipments", "shipment_events"),),
+            )
+        ),
         "local-search": LocalSearchAdapter(),
         "fake-search": FakeSearchAdapter(),
         "local-connector": LocalConnectorAdapter(),
