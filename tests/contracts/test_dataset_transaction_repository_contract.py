@@ -131,6 +131,28 @@ class FakeDatasetTransactionRepository:
         latest = sorted(rows, key=lambda row: (row["committed_at"] or "", row["created_at"]))[-1:]
         return dict(latest[0]) if latest else None
 
+    def committed_webhook_transaction_by_event(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        connector_name: str,
+        resource_name: str,
+        event_id: str,
+    ) -> dict[str, Any] | None:
+        del transaction
+        rows = [
+            row
+            for row in self.transactions.values()
+            if row["tenant_id"] == tenant_id
+            and row["dataset_id"] == dataset_id
+            and row["status"] == "COMMITTED"
+            and _webhook_event_matches(row["metadata"], connector_name, resource_name, event_id)
+        ]
+        latest = sorted(rows, key=lambda row: (row["committed_at"] or "", row["created_at"]))[-1:]
+        return dict(latest[0]) if latest else None
+
     def abort_open_transaction_and_fail_run(
         self,
         *,
@@ -455,6 +477,45 @@ def test_dataset_transaction_repository_contract_latest_committed_metadata(
     assert latest["metadata"] == {"streamCursor": {"offset": 2}}
 
 
+def test_dataset_transaction_repository_contract_finds_committed_webhook_event(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def commit_webhook_transaction(transaction: Any) -> dict[str, Any] | None:
+        repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_webhook"))
+        repository.commit_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_webhook",
+            committed_version_id="dsv_webhook_1",
+            schema_version=1,
+            committed_at="2026-06-10T00:02:00Z",
+            metadata={
+                "webhookEvent": {
+                    "connectorName": "mock_saas",
+                    "resourceName": "orders",
+                    "eventId": "evt-1",
+                    "payloadHash": "hash-1",
+                }
+            },
+        )
+        return repository.committed_webhook_transaction_by_event(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            dataset_id="ds_orders",
+            connector_name="mock_saas",
+            resource_name="orders",
+            event_id="evt-1",
+        )
+
+    found = harness.call_in_transaction(commit_webhook_transaction)
+
+    assert found is not None
+    assert found["id"] == "dstx_webhook"
+    assert found["committed_version_id"] == "dsv_webhook_1"
+
+
 def test_dataset_transaction_repository_contract_locks_dataset_for_version_allocation(
     harness: TransactionHarness,
 ) -> None:
@@ -562,6 +623,24 @@ def _sync_run_record(
         error=None,
         created_at="2026-06-10T00:00:00Z",
         completed_at=None,
+    )
+
+
+def _webhook_event_matches(
+    metadata: object,
+    connector_name: str,
+    resource_name: str,
+    event_id: str,
+) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    event = metadata.get("webhookEvent")
+    if not isinstance(event, dict):
+        return False
+    return (
+        event.get("connectorName") == connector_name
+        and event.get("resourceName") == resource_name
+        and event.get("eventId") == event_id
     )
 
 

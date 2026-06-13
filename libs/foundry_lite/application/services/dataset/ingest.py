@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
 from foundry_lite.application.ports import (
     ConnectorAdapter,
-    ConnectorSnapshotRequest,
     DatasetRow,
     RestSourceConfig,
     StreamAdapter,
@@ -19,16 +14,15 @@ from foundry_lite.application.ports import (
     SyncRunRecord,
     TransactionContext,
 )
-from foundry_lite.application.primitives import (
-    CommitResult,
-    _new_id,
-    _now,
-)
+from foundry_lite.application.primitives import CommitResult, _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.dataset import connector_snapshot_ingest, webhook_ingest
+from foundry_lite.application.services.dataset.ingest_models import UploadSyncPlan
 from foundry_lite.application.services.dataset.protocols import (
     DatasetRegistryLookup,
     DatasetRuntimeBoundary,
     DatasetTransactionManager,
+    DatasetVersionLookup,
 )
 from foundry_lite.application.services.dataset.stream_archive import (
     STREAM_ARCHIVE_FIELDS,
@@ -39,21 +33,7 @@ from foundry_lite.application.services.dataset.stream_archive import (
 )
 from foundry_lite.application.upload_limits import require_csv_size_limit
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import (
-    ConflictDetected,
-    InvariantViolation,
-    NotFound,
-    PermissionDenied,
-    ValidationFailed,
-)
-
-
-@dataclass(frozen=True)
-class UploadSyncPlan:
-    """Identifiers opened before converting one CSV upload."""
-
-    transaction_id: str
-    run_id: str
+from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, NotFound, ValidationFailed
 
 
 class DatasetIngestService(CoreService):
@@ -67,12 +47,14 @@ class DatasetIngestService(CoreService):
     required_collaborators = (
         "dataset_registry_service",
         "dataset_transaction_service",
+        "dataset_version_service",
         "runtime_service",
     )
     connector_adapter: ConnectorAdapter
     stream_adapter: StreamAdapter
     dataset_registry_service: DatasetRegistryLookup
     dataset_transaction_service: DatasetTransactionManager
+    dataset_version_service: DatasetVersionLookup
     runtime_service: DatasetRuntimeBoundary
 
     def upload_csv(
@@ -124,33 +106,17 @@ class DatasetIngestService(CoreService):
         cursor: Mapping[str, object] | None = None,
         rest: RestSourceConfig | None = None,
     ) -> CommitResult:
-        ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
-        dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
-        with self.engine.begin() as conn:
-            plan = self._start_connector_sync_run(conn, ctx, dataset, connector_name, resource_name, sync_name)
-        staged = self.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
-        try:
-            snapshot = self.connector_adapter.snapshot(
-                ConnectorSnapshotRequest(connector_name, resource_name, ctx.tenant_id, ctx.request_id, cursor, rest)
-            )
-            rows = list(snapshot.rows)
-            self._rows_to_parquet(rows, staged, _connector_fieldnames(snapshot.schema, rows))
-            with self.engine.begin() as conn:
-                result = self.dataset_transaction_service._finalize_open_transaction(
-                    conn,
-                    ctx,
-                    dataset=dataset,
-                    transaction_id=plan.transaction_id,
-                    staged_parquet=staged,
-                    run_id=plan.run_id,
-                    audit_action="connector_snapshot_commit",
-                    outbox_event_type="dataset.version.committed",
-                )
-                self._mark_sync_run_committed(conn, ctx, plan.run_id, result)
-                return result
-        except Exception as exc:
-            self._abort_connector_after_error(ctx, plan.transaction_id, plan.run_id, exc)
+        return connector_snapshot_ingest.sync_connector_snapshot(
+            self,
+            dataset_ref,
+            connector_adapter=self.connector_adapter,
+            connector_name=connector_name,
+            resource_name=resource_name,
+            ctx=ctx,
+            sync_name=sync_name,
+            cursor=cursor,
+            rest=rest,
+        )
 
     def ingest_webhook_event(
         self,
@@ -162,27 +128,22 @@ class DatasetIngestService(CoreService):
         raw_body: bytes,
         signature: str,
         secret: str,
+        event_id: str | None = None,
         ctx: RequestContext | None = None,
     ) -> CommitResult:
-        ctx = ctx or RequestContext()
-        if not _webhook_signature_valid(raw_body, signature, secret):
-            self._audit_webhook_signature_denied(ctx, dataset_ref, connector_name, resource_name)
-            raise PermissionDenied("invalid webhook signature", details={"connector": connector_name})
-        self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
-        dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
-        with self.engine.begin() as conn:
-            plan = self._start_connector_sync_run(
-                conn,
-                ctx,
-                dataset,
-                connector_name,
-                resource_name,
-                f"webhook:{connector_name}:{resource_name}",
-                tx_type="APPEND",
-                source_type=f"webhook.{connector_name}",
-            )
-        staged = self.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
-        return self._commit_webhook_event(ctx, dataset, plan, staged, connector_name, resource_name, payload)
+        return webhook_ingest.ingest_webhook_event(
+            self,
+            dataset_ref,
+            dataset_version_service=self.dataset_version_service,
+            connector_name=connector_name,
+            resource_name=resource_name,
+            payload=payload,
+            raw_body=raw_body,
+            signature=signature,
+            secret=secret,
+            event_id=event_id,
+            ctx=ctx,
+        )
 
     def archive_stream_events(
         self,
@@ -390,54 +351,6 @@ class DatasetIngestService(CoreService):
         except Exception as exc:
             self._abort_stream_after_error(ctx, plan.transaction_id, plan.run_id, exc)
 
-    def _commit_webhook_event(
-        self,
-        ctx: RequestContext,
-        dataset: DatasetRow,
-        plan: UploadSyncPlan,
-        staged: Path,
-        connector_name: str,
-        resource_name: str,
-        payload: Mapping[str, object],
-    ) -> CommitResult:
-        try:
-            row = _webhook_event_row(connector_name, resource_name, payload)
-            self._rows_to_parquet([row], staged, list(row))
-            with self.engine.begin() as conn:
-                result = self.dataset_transaction_service._finalize_open_transaction(
-                    conn,
-                    ctx,
-                    dataset=dataset,
-                    transaction_id=plan.transaction_id,
-                    staged_parquet=staged,
-                    run_id=plan.run_id,
-                    audit_action="webhook_append_commit",
-                    outbox_event_type="dataset.version.committed",
-                )
-                self._mark_sync_run_committed(conn, ctx, plan.run_id, result)
-                return result
-        except Exception as exc:
-            self._abort_connector_after_error(ctx, plan.transaction_id, plan.run_id, exc)
-
-    def _audit_webhook_signature_denied(
-        self,
-        ctx: RequestContext,
-        dataset_ref: str,
-        connector_name: str,
-        resource_name: str,
-    ) -> None:
-        with self.engine.begin() as conn:
-            self.runtime_service._audit(
-                conn,
-                ctx,
-                event_type="permission.denied",
-                resource_type="webhook",
-                resource_id=f"{connector_name}:{resource_name}",
-                action="webhook:ingest",
-                decision="deny",
-                before_ref={"dataset_ref": dataset_ref},
-            )
-
     def _mark_sync_run_committed(
         self,
         conn: TransactionContext,
@@ -457,35 +370,3 @@ class DatasetIngestService(CoreService):
 
     def _rows_to_parquet(self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]) -> None:
         self.compute_adapter.rows_to_parquet(rows, target_path, fieldnames)
-
-
-def _connector_fieldnames(schema: Mapping[str, object], rows: Sequence[Mapping[str, object]]) -> list[str]:
-    columns = schema.get("columns")
-    if isinstance(columns, Sequence) and not isinstance(columns, str):
-        names = [column for column in columns if isinstance(column, str)]
-        if len(names) == len(columns) and names:
-            return names
-    if rows:
-        return [str(name) for name in rows[0]]
-    raise ValidationFailed("connector snapshot returned no schema columns")
-
-
-def _webhook_signature_valid(raw_body: bytes, signature: str, secret: str) -> bool:
-    if not secret:
-        raise ValidationFailed("webhook secret is not configured")
-    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(signature, f"sha256={expected}")
-
-
-def _webhook_event_row(
-    connector_name: str,
-    resource_name: str,
-    payload: Mapping[str, object],
-) -> Mapping[str, object]:
-    return {
-        "event_id": _new_id("webhook"),
-        "connector": connector_name,
-        "resource": resource_name,
-        "received_at": f"ts:{_now()}",
-        "payload_json": json.dumps(dict(payload), sort_keys=True, separators=(",", ":"), default=str),
-    }

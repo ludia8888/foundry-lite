@@ -26,6 +26,7 @@
     "quality:contract-tests": "uv run python scripts/quality/check_contract_test_per_port.py",
     "quality:strategy-spec-tests": "uv run python scripts/quality/check_strategy_specification_tests.py",
     "quality:integration-scenarios": "uv run python scripts/quality/check_integration_scenario_markers.py",
+    "quality:testcontainers-preflight": "uv run python scripts/quality/check_testcontainers_preflight.py",
     "quality:regression-bugfix": "uv run python scripts/quality/check_regression_test_per_bugfix.py",
     "quality:pr-root-cause": "uv run python scripts/quality/check_pr_root_cause_section.py",
     "quality:doc-drift": "uv run python scripts/quality/check_doc_drift.py",

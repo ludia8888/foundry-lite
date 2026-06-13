@@ -147,6 +147,7 @@ pnpm quality:architecture
 - `artifacts/quality/tenant_write_guard.json`
 - `artifacts/quality/strategy_specification_tests.json`
 - `artifacts/quality/integration_scenario_markers.json`
+- `artifacts/quality/testcontainers_preflight.json`
 - `artifacts/quality/regression_test_per_bugfix.json`
 - `artifacts/quality/pr_root_cause_section.json`
 - `artifacts/quality/doc_drift.json`
@@ -180,6 +181,14 @@ CI에서는 application module이 `500`줄을 넘는 것도 막는다. `FoundryL
 현재 CI는 `core._...` private facade 위임 테스트를 `0`개로 강제한다. 내부 service/helper 테스트는 필요한 경우 책임 소유 module을 직접 대상으로 삼되, `FoundryLiteCore`가 숨은 private delegation layer로 되살아나면 안 된다.
 
 Repository contract test 중 PostgreSQL testcontainer 축은 release/CI evidence에 반드시 포함되어야 한다. Docker가 꺼진 로컬 개발 환경에서는 `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1`로 임시 우회할 수 있지만, `pnpm ci:gate`는 이 값을 발견하면 즉시 실패한다. 즉, “로컬 편의”와 “출시 증거”를 분리한다.
+
+`pnpm ci:gate`는 pytest를 시작하기 전에 `scripts/quality/check_testcontainers_preflight.py`를 실행한다. Docker/Testcontainers가 현재 셸에서 보이지 않으면 긴 Postgres container traceback까지 기다리지 않고, Colima 사용자를 위해 아래 환경 변수를 바로 안내한다.
+
+```bash
+export DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock
+export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
+pnpm --silent ci:gate
+```
 
 복잡도 기준:
 

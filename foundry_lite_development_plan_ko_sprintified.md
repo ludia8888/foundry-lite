@@ -5,7 +5,7 @@
 **목표:** Palantir Foundry 전체를 복제하는 것이 아니라, 핵심 철학인 “데이터 유입 → 변환 → 온톨로지 인덱싱 → 운영 객체 조회 → 액션 실행 → 데이터셋으로 환류”가 실제로 반복 실행되는 **재현 가능한 운영 폐루프 MVP**를 단일 모노레포 안에 구현한다.  
 **개정 원칙:** v1은 기능 나열식 MVP가 아니라, replay 가능한 최소 폐루프를 안정적으로 구현하는 vertical slice로 제한한다. Kafka/CDC/OpenSearch/Spark/복잡한 보안 모델은 production 구현을 v1.5 이후로 이관하되, 나중에 쉽게 갈아끼울 수 있는 port/interface, adapter contract, trace key, composition root 경계는 Sprint 02A Scale Foundation에서 먼저 고정한다.
 
-> 현재 구현 상태 주의: 2026-06-10 기준 코드 커밋은 로컬 core vertical slice다. 실제 구현은 SQLite + filesystem adapter, CSV ingest, 제한된 `safeExpression`, `mock_erp_simulator`를 사용한다. PostgreSQL JSONB object store, PostgreSQL snapshot connector, Temporal worker, Alembic migration, real CEL/JSON Logic, real ERP writeback은 아직 목표/설계 단계이며 현재 구현 완료로 보지 않는다. 정확한 현황은 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다.
+> 현재 구현 상태 주의: 2026-06-14 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. 완료 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
 
 ---
 
@@ -13,11 +13,11 @@
 
 이 문서는 Foundry-lite 문서 체계의 **제품 목표와 설계 원본**이다. 무엇을 만들지, 왜 그 구조가 필요한지, 어떤 범위까지 v1에 포함할지를 설명한다.
 
-- [ ] 이 문서는 제품 목표, v1 범위, 아키텍처, 데이터/객체/액션/운영 설계를 정의한다.
-- [ ] 실행 순서와 스프린트별 완료 조건은 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)을 원본으로 본다.
-- [ ] Foundry 공개 문서에서 가져온 외부 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 원본으로 본다.
-- [ ] Python 백엔드 구현 원칙과 코드 품질 기준은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)를 원본으로 본다.
-- [ ] 네 문서는 모두 같은 v1 폐루프와 Python 백엔드 품질 기준을 기준으로 연결된다: `CSV/PostgreSQL snapshot → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`.
+- 이 문서는 제품 목표, v1 범위, 아키텍처, 데이터/객체/액션/운영 설계를 정의한다.
+- 실행 순서와 스프린트별 완료 조건은 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)을 원본으로 본다.
+- Foundry 공개 문서에서 가져온 외부 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 원본으로 본다.
+- Python 백엔드 구현 원칙과 코드 품질 기준은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)를 원본으로 본다.
+- 네 문서는 모두 같은 v1 폐루프와 Python 백엔드 품질 기준을 기준으로 연결된다: `CSV/PostgreSQL snapshot → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`.
 
 ### 함께 읽을 문서
 
@@ -25,17 +25,17 @@
 - [Palantir Foundry 심층 분석](./deep-research-report.md): Ontology, Dataset, Action, Materialization 같은 설계 결정이 어떤 공개 근거에서 왔는지 확인한다.
 - [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md): 백엔드를 Python으로 구현할 때 지켜야 할 Clean Code, SRP, 테스트, 트랜잭션, 운영 로그 기준을 확인한다.
 
-### Goal Clarity Checklist
+### Goal Clarity Criteria
 
-- [ ] v1에서 반드시 증명할 폐루프가 명시되어 있다.
-- [ ] v1에서 하지 않을 일이 명시되어 있다.
-- [ ] 성공 기준이 CLI/API/UI/테스트 중 하나로 검증 가능하다.
-- [ ] 각 설계 섹션이 실행 스프린트와 연결되어 있다.
-- [ ] 외부 근거가 심층 분석 보고서와 연결되어 있다.
-- [ ] 구현 품질 기준이 Python 백엔드 엔지니어링 가이드와 연결되어 있다.
-- [ ] 안티패턴 방지, 단순 패치 금지, 에러 추적 가능성 기준이 구현 완료 조건에 포함되어 있다.
-- [ ] 테스트 커버리지 95% 이상, 필수 통합/스모크 테스트 100% 통과 기준이 구현 완료 조건에 포함되어 있다.
-- [ ] Scale Foundation이 v1 초기에 고정되어 storage/compute/event/search/workflow/auth 인프라를 나중에 교체해도 core 제품 로직을 대수술하지 않는 구조를 요구한다.
+- v1에서 반드시 증명할 폐루프가 명시되어 있다.
+- v1에서 하지 않을 일이 명시되어 있다.
+- 성공 기준이 CLI/API/UI/테스트 중 하나로 검증 가능하다.
+- 각 설계 섹션이 실행 스프린트와 연결되어 있다.
+- 외부 근거가 심층 분석 보고서와 연결되어 있다.
+- 구현 품질 기준이 Python 백엔드 엔지니어링 가이드와 연결되어 있다.
+- 안티패턴 방지, 단순 패치 금지, 에러 추적 가능성 기준이 구현 완료 조건에 포함되어 있다.
+- 테스트 커버리지 95% 이상, 필수 통합/스모크 테스트 100% 통과 기준이 구현 완료 조건에 포함되어 있다.
+- Scale Foundation이 v1 초기에 고정되어 storage/compute/event/search/workflow/auth 인프라를 나중에 교체해도 core 제품 로직을 대수술하지 않는 구조를 요구한다.
 
 ---
 
@@ -497,50 +497,50 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
 
 #### Scale Foundation Checklist
 
-- [ ] 각 boundary는 `Protocol` 또는 명시적 interface로 정의되고, application service는 concrete SDK가 아니라 이 boundary를 호출한다.
-  - [x] `DatasetStorageAdapter`는 `Protocol`로 정의했고 dataset staging/manifest/version file 경로는 adapter를 통한다.
-  - [x] `MetadataRepository`는 schema bootstrap/reset/default tenant-user DB write 경계를 맡는다.
-  - [x] `DatasetRepository`는 dataset registry create/find DB read/write 경계를 맡고 local/fake contract test를 통과한다.
-  - [x] `DatasetTransactionRepository`는 dataset transaction/version/file DB state change와 run failure update 경계를 맡고 local/fake contract test를 통과한다.
-  - [x] `DatasetVersionRepository`는 committed version/schema DB read 경계를 맡고 local/fake contract test를 통과한다.
-  - [x] `RuntimeRepository`는 audit/outbox/lineage/list-runs DB 경계를 맡고 local/fake contract test를 통과한다.
-  - [x] `ComputeAdapter`는 CSV/Parquet/SQL transform/health-check 실행 경계를 맡고 DuckDB local/fake contract test를 통과한다.
-  - [ ] `StreamAdapter`, `SearchAdapter`, `WorkflowAdapter`, `ConnectorAdapter`, `AuthProvider`는 아직 application service에서 완전히 포트화되지 않았다.
-- [ ] concrete 구현 선택은 `apps/api`, `apps/worker`, `apps/cli` 같은 composition root에서만 한다.
-  - [x] API와 CLI는 `create_local_core_dependencies(...)` composition root에서 adapter profile을 선택한다.
-  - [x] DB schema bootstrap/reset 구현 선택은 `SqlAlchemyMetadataRepository`를 통해 local runtime에 주입된다.
-  - [ ] `FoundryLiteCore`의 하위 호환 fallback은 아직 남아 있다.
-- [ ] local adapter와 fake adapter가 같은 contract test suite를 통과한다.
-  - [x] `DatasetStorageAdapter`의 local/fake 구현은 `tests/contracts/test_dataset_storage_adapter_contract.py`의 같은 시나리오를 통과한다.
-  - [x] `DatasetRepository`의 local/fake 구현은 `tests/contracts/test_dataset_repository_contract.py`의 같은 시나리오를 통과한다.
-  - [x] `DatasetTransactionRepository`의 local/fake 구현은 `tests/contracts/test_dataset_transaction_repository_contract.py`의 같은 시나리오를 통과한다.
-  - [x] `DatasetVersionRepository`의 local/fake 구현은 `tests/contracts/test_dataset_version_repository_contract.py`의 같은 시나리오를 통과한다.
-  - [x] `RuntimeRepository`의 local/fake 구현은 `tests/contracts/test_runtime_repository_contract.py`의 같은 시나리오를 통과한다.
-  - [x] `ComputeAdapter`의 DuckDB/fake 구현은 `tests/contracts/test_compute_adapter_contract.py`의 같은 시나리오를 통과한다.
-  - [x] `ObjectReadRepository`의 local/fake 구현은 `tests/contracts/test_object_read_repository_contract.py`의 같은 시나리오를 통과한다.
-  - [x] `ObjectIndexRepository`의 local/fake 구현은 `tests/contracts/test_object_index_repository_contract.py`의 같은 시나리오를 통과한다.
-  - [x] `ObjectSetRepository`의 local/fake 구현은 `tests/contracts/test_object_set_repository_contract.py`의 같은 시나리오를 통과한다.
-  - [x] `ActionRepository`의 local/fake 구현은 `tests/contracts/test_action_repository_contract.py`의 같은 시나리오를 통과한다.
-  - [x] `OntologyRepository`의 local/fake 구현은 `tests/contracts/test_ontology_repository_contract.py`의 같은 시나리오를 통과한다.
-  - [ ] 나머지 boundary의 fake/local contract test는 아직 남아 있다.
-- [ ] adapter error는 숨기지 않고 typed error, retryability, timeout, idempotency 정보를 application layer로 돌려준다.
-- [ ] adapter를 교체해도 audit/outbox/lineage/run state의 key 이름과 의미가 바뀌지 않는다.
-- [ ] CI는 domain/application이 금지된 concrete infra SDK를 직접 import하면 실패한다.
-  - [x] 현재 CI는 domain concrete infra import 0개, application concrete infra import baseline 7개 초과, scale SDK 직접 import, mixin method 충돌을 잡는다.
-  - [x] application concrete infra import baseline을 37에서 32로 낮췄다.
-  - [x] application concrete infra import baseline을 32에서 30으로 낮췄다.
-  - [x] application concrete infra import baseline을 30에서 28로 낮췄다.
-  - [x] application concrete infra import baseline을 28에서 25로 낮췄다.
-  - [x] application concrete infra import baseline을 25에서 20으로 낮췄다.
-  - [x] application concrete infra import baseline을 20에서 15로 낮췄다.
-  - [x] application concrete infra import baseline을 15에서 13으로 낮췄다.
-  - [x] application concrete infra import baseline을 13에서 11로 낮췄다.
-  - [x] application concrete infra import baseline을 11에서 9로 낮췄다.
-  - [x] application concrete infra import baseline을 9에서 7로 낮췄다.
-  - [ ] application concrete infra import baseline을 7에서 0으로 낮추는 repository/adapter 추출은 남아 있다.
-- [x] 최소 하나의 swap rehearsal test가 있다. 예: local filesystem adapter 대신 fake/S3-compatible adapter를 끼워도 dataset commit use case가 같은 결과를 만든다.
-  - [x] `tests/integration/test_scale_foundation.py`가 fake-storage profile로 CSV commit, inspect, preview public API가 같은 shape로 동작함을 검증한다.
-- [ ] scale adapter를 아직 구현하지 않았더라도, 미래 구현이 따라야 할 DTO, state transition, trace key, failure contract는 문서와 테스트로 고정한다.
+- [x] 각 boundary는 `Protocol` 또는 명시적 interface로 정의되고, application service는 concrete SDK가 아니라 이 boundary를 호출한다. ([S02A-A2](./docs/sprint-evidence-ledger.md#s02a-a2))
+  - [x] `DatasetStorageAdapter`는 `Protocol`로 정의했고 dataset staging/manifest/version file 경로는 adapter를 통한다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+  - [x] `MetadataRepository`는 schema bootstrap/reset/default tenant-user DB write 경계를 맡는다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+  - [x] `DatasetRepository`는 dataset registry create/find DB read/write 경계를 맡고 local/fake contract test를 통과한다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+  - [x] `DatasetTransactionRepository`는 dataset transaction/version/file DB state change와 run failure update 경계를 맡고 local/fake contract test를 통과한다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+  - [x] `DatasetVersionRepository`는 committed version/schema DB read 경계를 맡고 local/fake contract test를 통과한다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+  - [x] `RuntimeRepository`는 audit/outbox/lineage/list-runs DB 경계를 맡고 local/fake contract test를 통과한다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+  - [x] `ComputeAdapter`는 CSV/Parquet/SQL transform/health-check 실행 경계를 맡고 DuckDB local/fake contract test를 통과한다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+  - [x] `StreamAdapter`, `SearchAdapter`, `WorkflowAdapter`, `ConnectorAdapter`, `AuthProvider`는 port와 local/fake adapter contract를 갖는다. production Kafka/OpenSearch/Temporal/connector/OIDC 구현은 이후 스프린트 범위다. ([S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2))
+- [x] concrete 구현 선택은 `apps/api`, `apps/worker`, `apps/cli` 같은 composition root에서만 한다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
+  - [x] API와 CLI는 `create_local_core_dependencies(...)` composition root에서 adapter profile을 선택한다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
+  - [x] DB schema bootstrap/reset 구현 선택은 `SqlAlchemyMetadataRepository`를 통해 local runtime에 주입된다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+  - [x] `FoundryLiteCore`의 flat method registry, `__getattr__`, `__setattr__` fallback bridge는 제거했다. Public API forwarder는 하위 호환을 위한 의도적 facade다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
+- [x] local adapter와 fake adapter가 같은 contract test suite를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `DatasetStorageAdapter`의 local/fake 구현은 `tests/contracts/test_dataset_storage_adapter_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `DatasetRepository`의 local/fake 구현은 `tests/contracts/test_dataset_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `DatasetTransactionRepository`의 local/fake 구현은 `tests/contracts/test_dataset_transaction_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `DatasetVersionRepository`의 local/fake 구현은 `tests/contracts/test_dataset_version_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `RuntimeRepository`의 local/fake 구현은 `tests/contracts/test_runtime_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `ComputeAdapter`의 DuckDB/fake 구현은 `tests/contracts/test_compute_adapter_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `ObjectReadRepository`의 local/fake 구현은 `tests/contracts/test_object_read_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `ObjectIndexRepository`의 local/fake 구현은 `tests/contracts/test_object_index_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `ObjectSetRepository`의 local/fake 구현은 `tests/contracts/test_object_set_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `ActionRepository`의 local/fake 구현은 `tests/contracts/test_action_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `OntologyRepository`의 local/fake 구현은 `tests/contracts/test_ontology_repository_contract.py`의 같은 시나리오를 통과한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+  - [x] `AuthProvider`, `ConnectorAdapter`, `SearchAdapter`, `StreamAdapter`, `WorkflowAdapter`도 각각 shared contract suite를 통과한다. ([S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2))
+- [ ] adapter error는 trace key와 FAILED mutation state까지는 gate로 고정했지만, retryability/timeout/idempotency/operator message taxonomy를 모든 adapter에 표준화하는 작업은 남아 있다. ([S02A-O1](./docs/sprint-evidence-ledger.md#s02a-o1))
+- [x] adapter를 교체해도 audit/outbox/lineage/run state의 key 이름과 의미가 바뀌지 않는다. ([S02A-A4](./docs/sprint-evidence-ledger.md#s02a-a4))
+- [x] CI는 domain/application이 금지된 concrete infra SDK를 직접 import하면 실패한다. ([S02A-A6](./docs/sprint-evidence-ledger.md#s02a-a6))
+  - [x] 현재 CI는 domain concrete infra import 0개, application concrete infra import 0개, scale SDK 직접 import, service dependency/collaborator 우회, call graph cycle/depth/fan-out 회귀를 잡는다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 37에서 32로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 32에서 30으로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 30에서 28로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 28에서 25로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 25에서 20으로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 20에서 15로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 15에서 13으로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 13에서 11로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 11에서 9로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 9에서 7로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+  - [x] application concrete infra import baseline을 7에서 0으로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] 최소 하나의 swap rehearsal test가 있다. 예: local filesystem adapter 대신 fake/S3-compatible adapter를 끼워도 dataset commit use case가 같은 결과를 만든다. ([S02A-A4](./docs/sprint-evidence-ledger.md#s02a-a4))
+  - [x] `tests/integration/test_scale_foundation.py`가 fake-storage profile로 CSV commit, inspect, preview public API가 같은 shape로 동작함을 검증한다. ([S02A-A4](./docs/sprint-evidence-ledger.md#s02a-a4))
+- [ ] scale adapter를 아직 구현하지 않았더라도, 미래 구현이 따라야 할 DTO, state transition, trace key는 문서와 테스트로 고정했다. 단, retryability/timeout/idempotency/operator message failure taxonomy는 모든 adapter에 아직 공통 적용되지 않았다. ([S02A-O2](./docs/sprint-evidence-ledger.md#s02a-o2))
 
 #### 이러면 Scale Foundation으로 치지 않는다
 
@@ -3360,24 +3360,24 @@ flite lineage dataset clean.orders
 
 ### 문서 연결
 
-- [ ] 제품 목표와 설계 원본: [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)
-- [ ] 실행 순서와 스프린트별 완료 조건 원본: [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)
-- [ ] 외부 근거와 Foundry 공개 문서 분석 원본: [Palantir Foundry 심층 분석](./deep-research-report.md)
-- [ ] Python 백엔드 코드 품질 기준 원본: [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)
+- 제품 목표와 설계 원본: [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)
+- 실행 순서와 스프린트별 완료 조건 원본: [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)
+- 외부 근거와 Foundry 공개 문서 분석 원본: [Palantir Foundry 심층 분석](./deep-research-report.md)
+- Python 백엔드 코드 품질 기준 원본: [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)
 
 ### 스프린트 단계 요약
 
-- [ ] Sprint 00~02: 제품 경계, 로컬 런타임, 테넌트/감사 기반을 고정한다.
-- [ ] Sprint 02A: Scale Foundation으로 infra swap boundary, contract test, trace key, composition root를 고정한다.
-- [ ] Sprint 03~10: Dataset Registry와 Data Connection-lite로 raw dataset commit 경로를 완성한다.
-- [ ] Sprint 11~14: DuckDB SQL transform과 lineage로 clean dataset 생성 경로를 완성한다.
-- [ ] Sprint 15~23: Ontology, Object Store, Object Query, Outbox로 운영 객체 조회 기반을 만든다.
-- [ ] Sprint 24~32: Action Runtime, side effect, materialization으로 운영 변경이 다시 dataset으로 돌아오는 폐루프를 완성한다.
-- [ ] Sprint 33~36: Operations, Security, SDK, E2E release gate로 v1 MVP를 검증한다.
-- [ ] Sprint 37~45: REST/Webhook, Kafka/CDC, OpenSearch, Iceberg, Spark, Kubernetes는 MVP 이후 확장으로 둔다.
-- [ ] 모든 Python 백엔드 스프린트는 Clean Code, SRP, 타입 검사, 테스트 기준을 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)에 맞춘다.
-- [ ] 모든 Python 백엔드 스프린트는 [안티패턴 방지와 강제 대응 원칙](./foundry_lite_python_engineering_guidelines_ko.md#18-안티패턴-방지와-강제-대응-원칙)을 통과해야 한다.
-- [ ] 모든 Python 백엔드 스프린트는 line/branch/function coverage 95% 이상과 필수 integration/smoke 100% 통과 기준을 만족해야 한다.
+- Sprint 00~02: 제품 경계, 로컬 런타임, 테넌트/감사 기반을 고정한다.
+- Sprint 02A: Scale Foundation으로 infra swap boundary, contract test, trace key, composition root를 고정한다.
+- Sprint 03~10: Dataset Registry와 Data Connection-lite로 raw dataset commit 경로를 완성한다.
+- Sprint 11~14: DuckDB SQL transform과 lineage로 clean dataset 생성 경로를 완성한다.
+- Sprint 15~23: Ontology, Object Store, Object Query, Outbox로 운영 객체 조회 기반을 만든다.
+- Sprint 24~32: Action Runtime, side effect, materialization으로 운영 변경이 다시 dataset으로 돌아오는 폐루프를 완성한다.
+- Sprint 33~36: Operations, Security, SDK, E2E release gate로 v1 MVP를 검증한다.
+- Sprint 37~45: REST/Webhook, Kafka/CDC, OpenSearch, Iceberg, Spark, Kubernetes는 MVP 이후 확장으로 둔다.
+- 모든 Python 백엔드 스프린트는 Clean Code, SRP, 타입 검사, 테스트 기준을 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)에 맞춘다.
+- 모든 Python 백엔드 스프린트는 [안티패턴 방지와 강제 대응 원칙](./foundry_lite_python_engineering_guidelines_ko.md#18-안티패턴-방지와-강제-대응-원칙)을 통과해야 한다.
+- 모든 Python 백엔드 스프린트는 line/branch/function coverage 95% 이상과 필수 integration/smoke 100% 통과 기준을 만족해야 한다.
 
 ### MVP Core Completion Gate
 

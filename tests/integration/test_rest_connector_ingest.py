@@ -7,8 +7,10 @@ from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.application.ports import RestSourceConfig
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters import RestPullConnectorAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from sqlalchemy import select
 
 from tests.contracts.test_rest_connector_adapter_contract import MockRestServer
 
@@ -24,7 +26,7 @@ def test_rest_connector_snapshot_commits_raw_dataset(tmp_path) -> None:
             connector_name="rest",
             resource_name="orders",
             ctx=ctx,
-            rest=RestSourceConfig(base_url=server.base_url, resource_path="/orders"),
+            rest=RestSourceConfig(base_url=server.base_url, resource_path="/orders", allow_private_network=True),
         )
 
     preview = core.preview_dataset("raw.rest_orders", ctx=ctx)
@@ -34,6 +36,44 @@ def test_rest_connector_snapshot_commits_raw_dataset(tmp_path) -> None:
     assert preview[0]["amount"] == 100
     assert preview[0]["order_id"] == "O-1001"
     assert runs["syncRuns"][0]["source_type"] == "connector.rest"
+
+
+def test_rest_connector_snapshot_resumes_from_committed_cursor(tmp_path) -> None:
+    with MockRestServer() as server:
+        core = _core_with_rest_connector(tmp_path)
+        ctx = demo_admin_context()
+        core.ensure_dataset("raw.rest_orders", ctx=ctx, primary_key=["order_id"])
+        rest = RestSourceConfig(base_url=server.base_url, resource_path="/orders", allow_private_network=True)
+
+        first = core.sync_connector_snapshot(
+            "raw.rest_orders",
+            connector_name="rest",
+            resource_name="orders",
+            ctx=ctx,
+            rest=rest,
+        )
+        second = core.sync_connector_snapshot(
+            "raw.rest_orders",
+            connector_name="rest",
+            resource_name="orders",
+            ctx=ctx,
+            rest=rest,
+        )
+
+    latest_metadata = _transaction_metadata(core, second.transaction_id)
+    preview = core.preview_dataset("raw.rest_orders", ctx=ctx)
+
+    assert first.version_number == 1
+    assert second.version_number == 2
+    assert server.requests[0]["cursor"] is None
+    assert server.requests[1]["cursor"] == "page-2"
+    assert preview[0]["order_id"] == "O-1002"
+    assert latest_metadata["connectorCursor"] == {
+        "connectorName": "rest",
+        "resourceName": "orders",
+        "requestCursor": {"cursor": "page-2"},
+        "nextCursor": None,
+    }
 
 
 def test_rest_connector_rate_limit_failure_is_visible_in_operations(tmp_path) -> None:
@@ -48,7 +88,11 @@ def test_rest_connector_rate_limit_failure_is_visible_in_operations(tmp_path) ->
                 connector_name="rest",
                 resource_name="limited",
                 ctx=ctx,
-                rest=RestSourceConfig(base_url=server.base_url, resource_path="/rate-limit"),
+                rest=RestSourceConfig(
+                    base_url=server.base_url,
+                    resource_path="/rate-limit",
+                    allow_private_network=True,
+                ),
             )
 
     failed_runs = core.query_runs(ctx=ctx, run_type="sync", status="FAILED")["syncRuns"]
@@ -59,3 +103,13 @@ def test_rest_connector_rate_limit_failure_is_visible_in_operations(tmp_path) ->
 def _core_with_rest_connector(tmp_path) -> FoundryLiteCore:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
     return FoundryLiteCore(dependencies=replace(dependencies, connector_adapter=RestPullConnectorAdapter()))
+
+
+def _transaction_metadata(core: FoundryLiteCore, transaction_id: str) -> dict[str, object]:
+    with core.engine.begin() as conn:
+        row = (
+            conn.execute(select(db.dataset_transactions).where(db.dataset_transactions.c.id == transaction_id))
+            .mappings()
+            .one()
+        )
+        return dict(row["metadata"])

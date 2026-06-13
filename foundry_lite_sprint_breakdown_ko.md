@@ -4,15 +4,15 @@
 
 이 문서는 Foundry-lite 문서 체계의 **스프린트 실행 계획 원본**이다. [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 실제 구현 가능한 작은 스프린트 단위로 나누고, 각 스프린트가 반드시 통과해야 하는 제품/기술 Goal을 정의한다.
 
-> 현재 구현 상태 주의: 2026-06-10 기준 코드 커밋은 Sprint 00~36 전체 Acceptance Gate 완료가 아니라 로컬 core vertical slice 완료 상태다. SQLite adapter, CSV ingest, 제한된 `safeExpression`, `mock_erp_simulator`가 현재 구현이며 PostgreSQL JSONB, PostgreSQL snapshot, Temporal, Alembic, real CEL/JSON Logic, real writeback은 아직 남은 작업이다. 정확한 현황은 [Implementation Status](./docs/implementation-status.md)를 따른다.
+> 현재 구현 상태 주의: 2026-06-14 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 따른다. 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
 
 ## 문서 지도
 
-- [ ] 이 문서는 스프린트 순서, Must-Win Goal, Acceptance Gate의 원본이다.
-- [ ] 제품 목표와 시스템 설계는 [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 원본으로 본다.
-- [ ] Foundry 공개 문서에서 가져온 외부 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 원본으로 본다.
-- [ ] Python 백엔드 구현 원칙과 코드 품질 기준은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)를 원본으로 본다.
-- [ ] v1 필수 범위는 네 문서 모두 `CSV/PostgreSQL snapshot → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`으로 통일한다.
+- 이 문서는 스프린트 순서, Must-Win Goal, Acceptance Gate의 원본이다.
+- 제품 목표와 시스템 설계는 [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 원본으로 본다.
+- Foundry 공개 문서에서 가져온 외부 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 원본으로 본다.
+- Python 백엔드 구현 원칙과 코드 품질 기준은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)를 원본으로 본다.
+- v1 필수 범위는 네 문서 모두 `CSV/PostgreSQL snapshot → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`으로 통일한다.
 
 ### 함께 읽을 문서
 
@@ -22,16 +22,16 @@
 
 ### 완료 판단 기준
 
-- [ ] 각 스프린트의 성공은 코드 완료가 아니라 CLI/API/UI/테스트 중 하나로 증명된다.
-- [ ] 각 스프린트는 이전 스프린트의 결과를 실제로 사용한다.
-- [ ] 모든 write는 audit 가능하다.
-- [ ] 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능하다.
-- [ ] Sprint 00~36은 MVP core, Sprint 02A는 scale-ready foundation 보강, Sprint 37~45는 MVP 이후 확장으로 구분된다.
-- [ ] Python 백엔드 코드는 `ruff`, `mypy` 또는 `pyright`, `pytest` 품질 게이트를 통과한다.
-- [ ] 안티패턴 금지 기준을 위반한 단순 패치는 완료로 보지 않는다.
-- [ ] 에러 발생 시 request/run/dataset/object/action 단위로 원인을 추적할 수 있다.
-- [ ] Python 백엔드 테스트 커버리지는 line, branch, function 기준 모두 95% 이상이어야 한다.
-- [ ] 필수 통합 테스트와 필수 스모크 테스트는 100% 실행되고 100% 통과해야 한다.
+- 각 스프린트의 성공은 코드 완료가 아니라 CLI/API/UI/테스트 중 하나로 증명된다.
+- 각 스프린트는 이전 스프린트의 결과를 실제로 사용한다.
+- 모든 write는 audit 가능하다.
+- 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능하다.
+- Sprint 00~36은 MVP core, Sprint 02A는 scale-ready foundation 보강, Sprint 37~45는 MVP 이후 확장으로 구분된다.
+- Python 백엔드 코드는 `ruff`, `mypy` 또는 `pyright`, `pytest` 품질 게이트를 통과한다.
+- 안티패턴 금지 기준을 위반한 단순 패치는 완료로 보지 않는다.
+- 에러 발생 시 request/run/dataset/object/action 단위로 원인을 추적할 수 있다.
+- Python 백엔드 테스트 커버리지는 line, branch, function 기준 모두 95% 이상이어야 한다.
+- 필수 통합 테스트와 필수 스모크 테스트는 100% 실행되고 100% 통과해야 한다.
 
 모든 스프린트는 다음 원칙을 따른다.
 
@@ -49,20 +49,20 @@
 
 한 스프린트는 아래 조건을 모두 만족해야 완료로 본다.
 
-- [ ] API/Worker/Web/CLI 중 해당 스프린트에 관련된 public surface가 동작한다.
-- [ ] DB migration이 있고 빈 DB에서 재현 가능하다.
-- [ ] 핵심 state transition은 DB에 durable하게 기록된다.
-- [ ] 실패 상태가 성공 상태와 구분되어 저장된다.
-- [ ] unit test 또는 integration test가 핵심 성공/실패 경로를 검증한다.
-- [ ] seed demo 또는 example이 업데이트된다.
-- [ ] 운영자가 실패 원인을 audit/run/log에서 추적할 수 있다.
-- [ ] 문서 또는 README에 사용법과 제한 사항이 반영된다.
-- [ ] Python 백엔드 변경은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)의 SRP, typing, transaction, test checklist를 통과한다.
-- [ ] [안티패턴 방지와 강제 대응 원칙](./foundry_lite_python_engineering_guidelines_ko.md#18-안티패턴-방지와-강제-대응-원칙)을 위반하지 않는다.
-- [ ] 실패 케이스는 request id, run id, domain id, error type 중 필요한 추적 키를 남긴다.
-- [ ] storage, metadata DB, compute, event, search, workflow, connector, auth 같은 인프라와 닿는 변경은 port/interface, adapter, contract test, trace key를 함께 정의한다.
-- [ ] Python 백엔드 line/branch/function coverage가 모두 95% 이상이다.
-- [ ] 해당 스프린트의 필수 integration/smoke 시나리오가 100% 실행되고 100% 통과한다.
+- API/Worker/Web/CLI 중 해당 스프린트에 관련된 public surface가 동작한다.
+- DB migration이 있고 빈 DB에서 재현 가능하다.
+- 핵심 state transition은 DB에 durable하게 기록된다.
+- 실패 상태가 성공 상태와 구분되어 저장된다.
+- unit test 또는 integration test가 핵심 성공/실패 경로를 검증한다.
+- seed demo 또는 example이 업데이트된다.
+- 운영자가 실패 원인을 audit/run/log에서 추적할 수 있다.
+- 문서 또는 README에 사용법과 제한 사항이 반영된다.
+- Python 백엔드 변경은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)의 SRP, typing, transaction, test checklist를 통과한다.
+- [안티패턴 방지와 강제 대응 원칙](./foundry_lite_python_engineering_guidelines_ko.md#18-안티패턴-방지와-강제-대응-원칙)을 위반하지 않는다.
+- 실패 케이스는 request id, run id, domain id, error type 중 필요한 추적 키를 남긴다.
+- storage, metadata DB, compute, event, search, workflow, connector, auth 같은 인프라와 닿는 변경은 port/interface, adapter, contract test, trace key를 함께 정의한다.
+- Python 백엔드 line/branch/function coverage가 모두 95% 이상이다.
+- 해당 스프린트의 필수 integration/smoke 시나리오가 100% 실행되고 100% 통과한다.
 
 ---
 
@@ -269,51 +269,51 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 
 **Acceptance Gate**
 
-- [ ] Infra Swap Readiness Matrix가 문서에 있고, 각 boundary의 local/scale 구현 후보와 trace key가 적혀 있다.
-- [ ] core use case가 infra를 직접 부르지 않고 port/interface를 통해 호출한다는 architecture rule이 있다.
-- [ ] fake adapter contract test와 local adapter contract test가 같은 테스트 시나리오를 공유한다.
-- [ ] adapter를 하나 교체해도 application service public API와 product response shape이 바뀌지 않는다.
-- [ ] adapter 실패가 run/audit/outbox/diagnostics 중 적절한 곳에 추적 가능한 error type과 correlation id로 남는다.
-- [ ] CI가 금지 import 또는 boundary 우회를 잡는다.
+- [x] Infra Swap Readiness Matrix가 문서에 있고, 각 boundary의 local/scale 구현 후보와 trace key가 적혀 있다. ([S02A-A1](./docs/sprint-evidence-ledger.md#s02a-a1))
+- [x] core use case가 infra를 직접 부르지 않고 port/interface를 통해 호출한다는 architecture rule이 있다. ([S02A-A2](./docs/sprint-evidence-ledger.md#s02a-a2))
+- [x] fake adapter contract test와 local adapter contract test가 같은 테스트 시나리오를 공유한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+- [x] adapter를 하나 교체해도 application service public API와 product response shape이 바뀌지 않는다. ([S02A-A4](./docs/sprint-evidence-ledger.md#s02a-a4))
+- [x] adapter 실패가 run/audit/outbox/diagnostics 중 적절한 곳에 추적 가능한 error type과 correlation id로 남는다. ([S02A-A5](./docs/sprint-evidence-ledger.md#s02a-a5))
+- [x] CI가 금지 import 또는 boundary 우회를 잡는다. ([S02A-A6](./docs/sprint-evidence-ledger.md#s02a-a6))
 
 **Sprint 02A 구현 진행 체크**
 
-- [x] `DatasetStorageAdapter` port를 추가하고 dataset staging/manifest/version file 접근을 adapter 경계로 이동했다.
-- [x] `LocalDatasetStorageAdapter`와 `FakeDatasetStorageAdapter`를 추가했다. fake profile은 파일은 local에 두되 `fake-storage://...` logical URI를 노출해 S3류 object storage 교체 감각을 검증한다.
-- [x] API와 CLI가 `create_local_core_dependencies(...)` composition root에서 adapter profile을 선택한다.
-- [x] `tests/contracts/test_dataset_storage_adapter_contract.py`가 local/fake adapter에 같은 contract test를 적용한다.
-- [x] `tests/integration/test_scale_foundation.py`가 `fake-storage` profile로 CSV commit, inspect, preview public API가 유지되는지 검증한다.
-- [x] `scripts/quality/check_infra_import_boundary.py`를 application baseline `0`으로 CI와 로컬 `pnpm quality:infra-boundaries`에 연결했다.
-- [x] `check_service_dependencies.py`, `check_service_call_graph.py`를 CI와 로컬 `pnpm quality:infra-boundaries`에 연결했다. 과거 flat method registry용 service method conflict gate는 registry 제거와 함께 폐기했다.
-- [x] application concrete infra import baseline을 `37`에서 `32`로 낮췄다.
-- [x] core bootstrap/reset DB write를 `MetadataRepository` port로 이동했다.
-- [x] dataset registry create/find DB read/write를 `DatasetRepository` port로 이동하고 local/fake contract test를 추가했다.
-- [x] Dataset transaction DB state change와 run failure update를 `DatasetTransactionRepository` port로 이동하고 local/fake contract test를 추가했다.
-- [x] Dataset committed version/schema DB read를 `DatasetVersionRepository` port로 이동하고 local/fake contract test를 추가했다.
-- [x] Audit/outbox/lineage/list-runs DB 경계를 `RuntimeRepository` port로 이동하고 local/fake contract test를 추가했다.
-- [x] CSV/Parquet/SQL transform/health-check 실행 경계를 `ComputeAdapter` port로 이동하고 DuckDB/fake contract test를 추가했다.
-- [x] Object record/link read DB 경계를 `ObjectReadRepository` port로 이동하고 local/fake contract test를 추가했다.
-- [x] Object index run/object record conflict/link write DB 경계를 `ObjectIndexRepository` port로 이동하고 local/fake contract test를 추가했다.
-- [x] Object set row/membership metadata DB 경계를 `ObjectSetRepository` port로 이동하고 local/fake contract test를 추가했다.
-- [x] Action run/writeback/object edit/object target DB 경계를 `ActionRepository` port로 이동하고 local/fake contract test를 추가했다.
-- [x] Ontology version/object/property/link/action type metadata DB 경계를 `OntologyRepository` port로 이동하고 local/fake contract test를 추가했다.
-- [x] application concrete infra import baseline을 `32`에서 `30`으로 낮췄다.
-- [x] application concrete infra import baseline을 `30`에서 `28`로 낮췄다.
-- [x] application concrete infra import baseline을 `28`에서 `25`로 낮췄다.
-- [x] application concrete infra import baseline을 `25`에서 `20`으로 낮췄다.
-- [x] application concrete infra import baseline을 `20`에서 `15`로 낮췄다.
-- [x] application concrete infra import baseline을 `15`에서 `13`으로 낮췄다.
-- [x] application concrete infra import baseline을 `13`에서 `11`로 낮췄다.
-- [x] application concrete infra import baseline을 `11`에서 `9`로 낮췄다.
-- [x] application concrete infra import baseline을 `9`에서 `7`로 낮췄다.
-- [x] application concrete infra import baseline을 `7`에서 `0`으로 낮췄다.
-- [x] PostgreSQL repository contract testcontainer 축은 로컬 opt-out만 허용하고, `pnpm ci:gate`에서는 `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1`을 실패 처리한다.
-- [x] `FoundryLiteCore`의 facade-level service multiple inheritance를 제거하고 `CoreServices` constructor-injected service graph로 전환했다. Public API forwarder는 유지하되, flat method registry와 `__getattr__`/`__setattr__` private helper delegation bridge는 제거했다.
-- [x] 각 application service가 직접 쓰는 `CoreDependencies` 필드만 `required_dependencies`로 선언하고 주입받게 했다. `check_service_dependencies.py`는 선언 누락과 불필요 선언을 모두 실패 처리한다.
-- [x] 각 application service가 직접 호출하는 collaborator만 `required_collaborators`로 선언하고 주입받게 했다. `check_service_dependencies.py`는 undeclared/unused collaborator도 실패 처리한다.
-- [x] service 내부 cross-service 호출을 `self.runtime_service._audit(...)`처럼 명시적 collaborator attribute로 바꿨다. `check_service_call_graph.py`는 이 명시적 호출 그래프를 기준으로 cycle/depth/fan-out을 검증한다.
-- [ ] Event/Search/Workflow/Connector/Auth boundary에도 fake/local contract test를 붙인다.
-- [ ] adapter failure contract를 typed error, retryability, timeout, idempotency, operator message까지 구현한다.
+- [x] `DatasetStorageAdapter` port를 추가하고 dataset staging/manifest/version file 접근을 adapter 경계로 이동했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] `LocalDatasetStorageAdapter`와 `FakeDatasetStorageAdapter`를 추가했다. fake profile은 파일은 local에 두되 `fake-storage://...` logical URI를 노출해 S3류 object storage 교체 감각을 검증한다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] API와 CLI가 `create_local_core_dependencies(...)` composition root에서 adapter profile을 선택한다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
+- [x] `tests/contracts/test_dataset_storage_adapter_contract.py`가 local/fake adapter에 같은 contract test를 적용한다. ([S02A-A3](./docs/sprint-evidence-ledger.md#s02a-a3))
+- [x] `tests/integration/test_scale_foundation.py`가 `fake-storage` profile로 CSV commit, inspect, preview public API가 유지되는지 검증한다. ([S02A-A4](./docs/sprint-evidence-ledger.md#s02a-a4))
+- [x] `scripts/quality/check_infra_import_boundary.py`를 application baseline `0`으로 CI와 로컬 `pnpm quality:infra-boundaries`에 연결했다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] `check_service_dependencies.py`, `check_service_call_graph.py`를 CI와 로컬 `pnpm quality:infra-boundaries`에 연결했다. 과거 flat method registry용 service method conflict gate는 registry 제거와 함께 폐기했다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
+- [x] application concrete infra import baseline을 `37`에서 `32`로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] core bootstrap/reset DB write를 `MetadataRepository` port로 이동했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] dataset registry create/find DB read/write를 `DatasetRepository` port로 이동하고 local/fake contract test를 추가했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] Dataset transaction DB state change와 run failure update를 `DatasetTransactionRepository` port로 이동하고 local/fake contract test를 추가했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] Dataset committed version/schema DB read를 `DatasetVersionRepository` port로 이동하고 local/fake contract test를 추가했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] Audit/outbox/lineage/list-runs DB 경계를 `RuntimeRepository` port로 이동하고 local/fake contract test를 추가했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] CSV/Parquet/SQL transform/health-check 실행 경계를 `ComputeAdapter` port로 이동하고 DuckDB/fake contract test를 추가했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] Object record/link read DB 경계를 `ObjectReadRepository` port로 이동하고 local/fake contract test를 추가했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] Object index run/object record conflict/link write DB 경계를 `ObjectIndexRepository` port로 이동하고 local/fake contract test를 추가했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] Object set row/membership metadata DB 경계를 `ObjectSetRepository` port로 이동하고 local/fake contract test를 추가했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] Action run/writeback/object edit/object target DB 경계를 `ActionRepository` port로 이동하고 local/fake contract test를 추가했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] Ontology version/object/property/link/action type metadata DB 경계를 `OntologyRepository` port로 이동하고 local/fake contract test를 추가했다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] application concrete infra import baseline을 `32`에서 `30`으로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] application concrete infra import baseline을 `30`에서 `28`로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] application concrete infra import baseline을 `28`에서 `25`로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] application concrete infra import baseline을 `25`에서 `20`으로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] application concrete infra import baseline을 `20`에서 `15`로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] application concrete infra import baseline을 `15`에서 `13`으로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] application concrete infra import baseline을 `13`에서 `11`로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] application concrete infra import baseline을 `11`에서 `9`로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] application concrete infra import baseline을 `9`에서 `7`로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] application concrete infra import baseline을 `7`에서 `0`으로 낮췄다. ([S02A-P3](./docs/sprint-evidence-ledger.md#s02a-p3))
+- [x] PostgreSQL repository contract testcontainer 축은 로컬 opt-out만 허용하고, `pnpm ci:gate`에서는 `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1`을 실패 처리한다. ([S02A-P5](./docs/sprint-evidence-ledger.md#s02a-p5))
+- [x] `FoundryLiteCore`의 facade-level service multiple inheritance를 제거하고 `CoreServices` constructor-injected service graph로 전환했다. Public API forwarder는 유지하되, flat method registry와 `__getattr__`/`__setattr__` private helper delegation bridge는 제거했다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
+- [x] 각 application service가 직접 쓰는 `CoreDependencies` 필드만 `required_dependencies`로 선언하고 주입받게 했다. `check_service_dependencies.py`는 선언 누락과 불필요 선언을 모두 실패 처리한다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
+- [x] 각 application service가 직접 호출하는 collaborator만 `required_collaborators`로 선언하고 주입받게 했다. `check_service_dependencies.py`는 undeclared/unused collaborator도 실패 처리한다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
+- [x] service 내부 cross-service 호출을 `self.runtime_service._audit(...)`처럼 명시적 collaborator attribute로 바꿨다. `check_service_call_graph.py`는 이 명시적 호출 그래프를 기준으로 cycle/depth/fan-out을 검증한다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
+- [x] Event/Search/Workflow/Connector/Auth boundary에도 fake/local contract test를 붙였다: `test_stream_adapter_contract.py`, `test_search_adapter_contract.py`, `test_workflow_adapter_contract.py`, `test_connector_adapter_contract.py`, `test_auth_provider_contract.py`. ([S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2))
+- [ ] adapter failure contract는 trace key와 FAILED mutation state까지는 gate로 고정했지만, retryability/timeout/idempotency/operator message taxonomy를 모든 adapter에 표준화하는 작업은 남아 있다. ([S02A-O1](./docs/sprint-evidence-ledger.md#s02a-o1))
 
 **Demo / Proof**
 
@@ -1054,12 +1054,12 @@ Object API와 CLI로 pending high-risk orders를 조회한다.
 
 **Acceptance Gate**
 
-- [x] 현재 pending orders query를 dynamic object set으로 저장할 수 있다.
-- [x] static set은 저장 시점의 ids를 유지한다.
-- [x] dynamic set은 query 실행 시점의 최신 object state를 반영한다.
-- [x] 권한 없는 사용자는 다른 사용자의 private set을 볼 수 없다.
-- [x] 만료된 temporary set은 조회되지 않거나 cleanup 대상이 된다.
-- [x] dynamic set이 많은 object를 담아도 내부에서 `limit=10000` 같은 대량 요청을 만들지 않고 page limit 안에서 cursor paging한다.
+- [x] 현재 pending orders query를 dynamic object set으로 저장할 수 있다. ([S21-A1](./docs/sprint-evidence-ledger.md#s21-a1))
+- [x] static set은 저장 시점의 ids를 유지한다. ([S21-A2](./docs/sprint-evidence-ledger.md#s21-a2))
+- [x] dynamic set은 query 실행 시점의 최신 object state를 반영한다. ([S21-A3](./docs/sprint-evidence-ledger.md#s21-a3))
+- [x] 권한 없는 사용자는 다른 사용자의 private set을 볼 수 없다. ([S21-A4](./docs/sprint-evidence-ledger.md#s21-a4))
+- [x] 만료된 temporary set은 조회되지 않거나 cleanup 대상이 된다. ([S21-A5](./docs/sprint-evidence-ledger.md#s21-a5))
+- [x] dynamic set이 많은 object를 담아도 내부에서 `limit=10000` 같은 대량 요청을 만들지 않고 page limit 안에서 cursor paging한다. ([S21-A6](./docs/sprint-evidence-ledger.md#s21-a6))
 
 **Demo / Proof**
 
@@ -1523,11 +1523,11 @@ ApproveOrder → action_log materialize → customer_risk transform → Customer
 
 **Acceptance Gate**
 
-- [x] 의도적으로 실패시킨 transform을 UI에서 찾아 retry할 수 있다. (`flite transform retry`, `POST /api/operations/runs/transform/{run_id}/retry`, Web `Retry Failed Transform`)
-- [x] DLQ event를 재처리해 materialization을 성공시킬 수 있다. (`flite outbox retry`, `POST /api/operations/dead-letter-events/{event_id}/retry`, Web `Retry DLQ`, `materializationResult`)
-- [x] Object detail에서 source evidence/run chain으로 이동할 수 있다. (`?explain=true`, `sourceRunChain`, Web `Source Run`)
-- [x] run 목록 필터가 status/type/date로 동작한다. (`operations runs --type/--status/--since/--until`, API `runType/status/since/until`, Web Operations filters)
-- [x] 운영자가 DB에 직접 접속하지 않아도 기본 장애를 조사할 수 있다. (`operations run <type> <id>`, API run detail `investigation`, `errorMessage`, references, related evidence)
+- [x] 의도적으로 실패시킨 transform을 UI에서 찾아 retry할 수 있다. (`flite transform retry`, `POST /api/operations/runs/transform/{run_id}/retry`, Web `Retry Failed Transform`) ([S33-A1](./docs/sprint-evidence-ledger.md#s33-a1))
+- [x] DLQ event를 재처리해 materialization을 성공시킬 수 있다. (`flite outbox retry`, `POST /api/operations/dead-letter-events/{event_id}/retry`, Web `Retry DLQ`, `materializationResult`) ([S33-A2](./docs/sprint-evidence-ledger.md#s33-a2))
+- [x] Object detail에서 source evidence/run chain으로 이동할 수 있다. (`?explain=true`, `sourceRunChain`, Web `Source Run`) ([S33-A3](./docs/sprint-evidence-ledger.md#s33-a3))
+- [x] run 목록 필터가 status/type/date로 동작한다. (`operations runs --type/--status/--since/--until`, API `runType/status/since/until`, Web Operations filters) ([S33-A4](./docs/sprint-evidence-ledger.md#s33-a4))
+- [x] 운영자가 DB에 직접 접속하지 않아도 기본 장애를 조사할 수 있다. (`operations run <type> <id>`, API run detail `investigation`, `errorMessage`, references, related evidence) ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5))
 
 **Demo / Proof**
 
@@ -1563,11 +1563,11 @@ Foundry 수준의 보안 완전체가 아니라도, v1에서 반드시 필요한
 
 **Acceptance Gate**
 
-- [x] viewer는 dataset을 읽을 수 있지만 ontology activate는 못 한다. (`dataset:read`, `ontology:activate`, `permission.denied`)
-- [x] ops_manager만 ApproveOrder를 실행할 수 있다. (`action:execute:ApproveOrder`; admin/ops_manager 허용, viewer/data_engineer 거부)
-- [x] finance/admin이 아닌 사용자는 Order의 margin 같은 민감 property가 masked 된다. (`PolicyService.mask_properties`, object/link/API responses)
-- [x] 다른 tenant의 object/dataset은 API와 DB RLS 모두에서 보이지 않는다. (`test_api_security_roles_mask_and_audit_denials`, `test_postgres_rls_hides_dataset_and_object_rows_between_tenants`)
-- [x] permission denied도 audit_events에 decision=deny로 남는다. (`permission.denied` audit evidence)
+- [x] viewer는 dataset을 읽을 수 있지만 ontology activate는 못 한다. (`dataset:read`, `ontology:activate`, `permission.denied`) ([S34-A1](./docs/sprint-evidence-ledger.md#s34-a1))
+- [x] ops_manager만 ApproveOrder를 실행할 수 있다. (`action:execute:ApproveOrder`; admin/ops_manager 허용, viewer/data_engineer 거부) ([S34-A2](./docs/sprint-evidence-ledger.md#s34-a2))
+- [x] finance/admin이 아닌 사용자는 Order의 margin 같은 민감 property가 masked 된다. (`PolicyService.mask_properties`, object/link/API responses) ([S34-A3](./docs/sprint-evidence-ledger.md#s34-a3))
+- [x] 다른 tenant의 object/dataset은 API와 DB RLS 모두에서 보이지 않는다. (`test_api_security_roles_mask_and_audit_denials`, `test_postgres_rls_hides_dataset_and_object_rows_between_tenants`) ([S34-A4](./docs/sprint-evidence-ledger.md#s34-a4))
+- [x] permission denied도 audit_events에 decision=deny로 남는다. (`permission.denied` audit evidence) ([S34-A5](./docs/sprint-evidence-ledger.md#s34-a5))
 
 **Demo / Proof**
 
@@ -1602,11 +1602,11 @@ Foundry 수준의 보안 완전체가 아니라도, v1에서 반드시 필요한
 
 **Acceptance Gate**
 
-- [x] `client.objects.Order.get('O-1001')`가 typed Order를 반환한다. (`packages/sdk-ts/src/generated.ts`, `tests/unit/test_sdk_ts_generation.py`)
-- [x] `client.actions.ApproveOrder.apply(...)`가 parameter type check를 받는다. (`ApproveOrderParams`, `ApproveOrderApplyRequest`, `examples/sdk-demo.ts`)
-- [x] ontology apiName 변경/삭제 시 SDK generation이 breaking change를 감지한다. (`pnpm quality:sdk-generated`, `test_sdk_generator_check_detects_api_name_drift`)
-- [x] SDK smoke test가 generated client로 end-to-end action을 실행한다. (`tests/e2e/foundry-lite.spec.ts`)
-- [x] Web이 최소 한 화면에서 raw fetch 대신 SDK를 사용한다. (`apps/web/index.html`, `apps/web/generated-sdk.js`)
+- [x] `client.objects.Order.get('O-1001')`가 typed Order를 반환한다. (`packages/sdk-ts/src/generated.ts`, `tests/unit/test_sdk_ts_generation.py`) ([S35-A1](./docs/sprint-evidence-ledger.md#s35-a1))
+- [x] `client.actions.ApproveOrder.apply(...)`가 parameter type check를 받는다. (`ApproveOrderParams`, `ApproveOrderApplyRequest`, `examples/sdk-demo.ts`) ([S35-A2](./docs/sprint-evidence-ledger.md#s35-a2))
+- [x] ontology apiName 변경/삭제 시 SDK generation이 breaking change를 감지한다. (`pnpm quality:sdk-generated`, `test_sdk_generator_check_detects_api_name_drift`) ([S35-A3](./docs/sprint-evidence-ledger.md#s35-a3))
+- [x] SDK smoke test가 generated client로 end-to-end action을 실행한다. (`tests/e2e/foundry-lite.spec.ts`) ([S35-A4](./docs/sprint-evidence-ledger.md#s35-a4))
+- [x] Web이 최소 한 화면에서 raw fetch 대신 SDK를 사용한다. (`apps/web/index.html`, `apps/web/generated-sdk.js`) ([S35-A5](./docs/sprint-evidence-ledger.md#s35-a5))
 
 **Demo / Proof**
 
@@ -1655,12 +1655,12 @@ MVP 폐루프가 문서가 아니라 반복 가능한 자동 테스트와 데모
 
 **Sprint 36 구현 진행 체크**
 
-- [x] `pnpm demo:supply-chain`은 `FOUNDRY_LITE_HOME`이 명시되지 않은 경우 `.foundry-lite-demo/` 격리 저장소에서 fresh 실행되어, 이전 로컬 DB 상태에 의존하지 않는다.
-- [x] CLI smoke regression test가 같은 supply-chain demo 명령을 두 번 연속 실행하고 두 출력 모두 JSON으로 파싱되는지 검증한다.
-- [x] `pnpm ci:gate`는 supply-chain demo smoke 산출물 `artifacts/demo/supply-chain.json`을 `python -m json.tool`로 다시 파싱해, 로그가 섞인 가짜 JSON 산출물을 release evidence로 인정하지 않는다.
-- [x] `check_mvp_data_correctness.py`가 demo DB의 row count, object primary key uniqueness, Order reindex source hash, ApproveOrder idempotency evidence를 release gate에서 검증한다.
-- [x] `check_mvp_performance_smoke.py`가 CSV ingest, object index, object query, no-writeback action apply 측정 리포트를 남기며, CI fast profile과 100k/1M release profile 명령을 분리한다.
-- [x] `tests/contracts/test_mvp_testcontainers_closed_loop.py`가 Testcontainers PostgreSQL 저장소 위에서 connector snapshot → dataset commit → transform → index → action → materialization 폐쇄루프를 검증한다.
+- [x] `pnpm demo:supply-chain`은 `FOUNDRY_LITE_HOME`이 명시되지 않은 경우 `.foundry-lite-demo/` 격리 저장소에서 fresh 실행되어, 이전 로컬 DB 상태에 의존하지 않는다. ([S36-P1](./docs/sprint-evidence-ledger.md#s36-p1))
+- [x] CLI smoke regression test가 같은 supply-chain demo 명령을 두 번 연속 실행하고 두 출력 모두 JSON으로 파싱되는지 검증한다. ([S36-P2](./docs/sprint-evidence-ledger.md#s36-p2))
+- [x] `pnpm ci:gate`는 supply-chain demo smoke 산출물 `artifacts/demo/supply-chain.json`을 `python -m json.tool`로 다시 파싱해, 로그가 섞인 가짜 JSON 산출물을 release evidence로 인정하지 않는다. ([S36-P3](./docs/sprint-evidence-ledger.md#s36-p3))
+- [x] `check_mvp_data_correctness.py`가 demo DB의 row count, object primary key uniqueness, Order reindex source hash, ApproveOrder idempotency evidence를 release gate에서 검증한다. ([S36-P4](./docs/sprint-evidence-ledger.md#s36-p4))
+- [x] `check_mvp_performance_smoke.py`가 CSV ingest, object index, object query, no-writeback action apply 측정 리포트를 남기며, CI fast profile과 100k/1M release profile 명령을 분리한다. ([S36-P5](./docs/sprint-evidence-ledger.md#s36-p5))
+- [x] `tests/contracts/test_mvp_testcontainers_closed_loop.py`가 Testcontainers PostgreSQL 저장소 위에서 connector snapshot → dataset commit → transform → index → action → materialization 폐쇄루프를 검증한다. ([S36-P6](./docs/sprint-evidence-ledger.md#s36-p6))
 
 **Demo / Proof**
 
@@ -1697,16 +1697,16 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 
 **Acceptance Gate**
 
-- [x] 같은 Idempotency-Key 요청 2개를 동시에 보내도 action_run은 1개만 남고 두 응답은 같은 실행 결과를 가리킨다.
-- [x] dataset version commit을 동시에 시도해도 version_number 중복이나 순서 역전이 생기지 않는다.
-- [x] commit 실패로 생긴 promoted/orphan file은 failed error details 또는 abort audit evidence로 찾을 수 있고 자동 cleanup execute 경로가 있다.
-- [x] Object Query는 sort key와 object_id tie-breaker를 포함한 cursor로 다음 page를 안정적으로 반환한다.
-- [x] Object Query cursor는 raw object_id나 변조된 base64 payload를 `ValidationFailed`로 거절한다.
-- [x] Object Query는 존재하지 않는 filter/order property를 `ValidationFailed`로 거절하고, 숫자 property 문자열 값도 fake/SQLite/Postgres contract에서 같은 순서로 page 처리한다.
-- [x] Dynamic Object Set은 `Object Query` page limit 안에서 cursor로 전체 membership을 이어 읽는다.
-- [x] Operations runs API/CLI/UI는 cursor 기반으로 page를 나누고 대량 run fixture에서도 일정한 응답 크기를 유지한다.
-- [x] production auth profile에서 header-trust provider를 쓰면 startup이 실패하고, local/demo profile에서는 명시적으로만 허용된다.
-- [x] SDK package output과 browser output이 같은 object/action method surface를 노출하는지 테스트가 검증한다.
+- [x] 같은 Idempotency-Key 요청 2개를 동시에 보내도 action_run은 1개만 남고 두 응답은 같은 실행 결과를 가리킨다. ([S36A-A1](./docs/sprint-evidence-ledger.md#s36a-a1))
+- [x] dataset version commit을 동시에 시도해도 version_number 중복이나 순서 역전이 생기지 않는다. ([S36A-A2](./docs/sprint-evidence-ledger.md#s36a-a2))
+- [x] commit 실패로 생긴 promoted/orphan file은 failed error details 또는 abort audit evidence로 찾을 수 있고 자동 cleanup execute 경로가 있다. ([S36A-A3](./docs/sprint-evidence-ledger.md#s36a-a3))
+- [x] Object Query는 sort key와 object_id tie-breaker를 포함한 cursor로 다음 page를 안정적으로 반환한다. ([S36A-A4](./docs/sprint-evidence-ledger.md#s36a-a4))
+- [x] Object Query cursor는 raw object_id나 변조된 base64 payload를 `ValidationFailed`로 거절한다. ([S36A-A5](./docs/sprint-evidence-ledger.md#s36a-a5))
+- [x] Object Query는 존재하지 않는 filter/order property를 `ValidationFailed`로 거절하고, 숫자 property 문자열 값도 fake/SQLite/Postgres contract에서 같은 순서로 page 처리한다. ([S36A-A6](./docs/sprint-evidence-ledger.md#s36a-a6))
+- [x] Dynamic Object Set은 `Object Query` page limit 안에서 cursor로 전체 membership을 이어 읽는다. ([S36A-A7](./docs/sprint-evidence-ledger.md#s36a-a7))
+- [x] Operations runs API/CLI/UI는 cursor 기반으로 page를 나누고 대량 run fixture에서도 일정한 응답 크기를 유지한다. ([S36A-A8](./docs/sprint-evidence-ledger.md#s36a-a8))
+- [x] production auth profile에서 header-trust provider를 쓰면 startup이 실패하고, local/demo profile에서는 명시적으로만 허용된다. ([S36A-A9](./docs/sprint-evidence-ledger.md#s36a-a9))
+- [x] SDK package output과 browser output이 같은 object/action method surface를 노출하는지 테스트가 검증한다. ([S36A-A10](./docs/sprint-evidence-ledger.md#s36a-a10))
 
 **Demo / Proof**
 
@@ -1746,11 +1746,14 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 
 **Acceptance Gate**
 
-- [x] mock REST API에서 orders를 pull해 raw dataset으로 commit한다.
-- [x] pagination/cursor가 재시작 가능하다.
-- [x] webhook event가 append transaction으로 raw dataset에 쌓인다.
-- [x] 잘못된 signature webhook은 거부되고 audit deny가 남는다.
-- [x] REST rate-limit 실패와 Webhook signature deny가 기존 Operations 조회 표면에서 보인다.
+- [x] mock REST API에서 orders를 pull해 raw dataset으로 commit한다. ([S37-A1](./docs/sprint-evidence-ledger.md#s37-a1))
+- [x] REST adapter는 응답의 `nextCursor`를 반환하고, 전달받은 cursor를 다음 요청에 실어 보낼 수 있다. ([S37-A2](./docs/sprint-evidence-ledger.md#s37-a2))
+- [x] 실패/중단된 REST sync가 운영자가 cursor를 다시 입력하지 않아도 durable state에서 이어받을 수 있다. ([S37-A7](./docs/sprint-evidence-ledger.md#s37-a7))
+- [x] webhook event가 append transaction으로 raw dataset에 쌓인다. ([S37-A3](./docs/sprint-evidence-ledger.md#s37-a3))
+- [x] 같은 webhook event가 두 번 들어와도 중복 dataset row/version을 만들지 않는다. ([S37-A8](./docs/sprint-evidence-ledger.md#s37-a8))
+- [x] 잘못된 signature webhook은 거부되고 audit deny가 남는다. ([S37-A4](./docs/sprint-evidence-ledger.md#s37-a4))
+- [x] REST source URL은 localhost/private/link-local/internal metadata 주소를 차단한다. ([S37-A6](./docs/sprint-evidence-ledger.md#s37-a6))
+- [x] REST rate-limit 실패와 Webhook signature deny가 기존 Operations 조회 표면에서 보인다. ([S37-A5](./docs/sprint-evidence-ledger.md#s37-a5))
 
 **Demo / Proof**
 
@@ -1785,12 +1788,12 @@ Kafka-compatible stream event를 raw archive dataset으로 남겨 replay 가능�
 
 **Acceptance Gate**
 
-- [x] local/fake Kafka-compatible `StreamAdapter` event를 raw stream archive dataset에 append한다.
-- [ ] production Redpanda topic에 event를 넣으면 raw stream archive dataset에 append된다.
-- [x] worker restart 후 마지막 committed offset 이후부터 재개한다.
-- [x] 중복 처리 가능성은 event id 또는 topic/partition/offset으로 식별 가능하다.
-- [x] stream archive dataset preview가 가능하다.
-- [x] lag metric과 stream writer 실패가 Operations에 보인다.
+- [x] local/fake Kafka-compatible `StreamAdapter` event를 raw stream archive dataset에 append한다. ([S38-A1](./docs/sprint-evidence-ledger.md#s38-a1))
+- [ ] production Redpanda topic에 event를 넣으면 raw stream archive dataset에 append된다. ([S38-A2](./docs/sprint-evidence-ledger.md#s38-a2))
+- [x] worker restart 후 마지막 committed offset 이후부터 재개한다. ([S38-A3](./docs/sprint-evidence-ledger.md#s38-a3))
+- [x] 중복 처리 가능성은 event id 또는 topic/partition/offset으로 식별 가능하다. ([S38-A4](./docs/sprint-evidence-ledger.md#s38-a4))
+- [x] stream archive dataset preview가 가능하다. ([S38-A5](./docs/sprint-evidence-ledger.md#s38-a5))
+- [x] lag metric과 stream writer 실패가 Operations에 보인다. ([S38-A6](./docs/sprint-evidence-ledger.md#s38-a6))
 
 **Demo / Proof**
 

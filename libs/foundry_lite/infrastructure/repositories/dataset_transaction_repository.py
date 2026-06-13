@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from sqlalchemy import and_, insert, select, update
@@ -163,6 +164,37 @@ class SqlAlchemyDatasetTransactionRepository:
         )
         return cast(DatasetTransactionRow, dict(row)) if row else None
 
+    def committed_webhook_transaction_by_event(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        connector_name: str,
+        resource_name: str,
+        event_id: str,
+    ) -> DatasetTransactionRow | None:
+        rows = (
+            transaction.execute(
+                select(db.dataset_transactions)
+                .where(
+                    and_(
+                        db.dataset_transactions.c.tenant_id == tenant_id,
+                        db.dataset_transactions.c.dataset_id == dataset_id,
+                        db.dataset_transactions.c.status == "COMMITTED",
+                    )
+                )
+                .order_by(db.dataset_transactions.c.committed_at.desc(), db.dataset_transactions.c.created_at.desc())
+            )
+            .mappings()
+            .all()
+        )
+        for row in rows:
+            candidate = dict(row)
+            if _webhook_event_matches(candidate.get("metadata"), connector_name, resource_name, event_id):
+                return cast(DatasetTransactionRow, candidate)
+        return None
+
     def abort_open_transaction_and_fail_run(
         self,
         *,
@@ -237,3 +269,21 @@ def _run_table(run_kind: DatasetRunKind) -> Any:
     if run_kind == "transform":
         return db.transform_runs
     return db.materialization_runs
+
+
+def _webhook_event_matches(
+    metadata: object,
+    connector_name: str,
+    resource_name: str,
+    event_id: str,
+) -> bool:
+    if not isinstance(metadata, Mapping):
+        return False
+    event = metadata.get("webhookEvent")
+    if not isinstance(event, Mapping):
+        return False
+    return (
+        event.get("connectorName") == connector_name
+        and event.get("resourceName") == resource_name
+        and event.get("eventId") == event_id
+    )
