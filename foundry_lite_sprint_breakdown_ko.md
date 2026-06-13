@@ -1658,6 +1658,7 @@ MVP 폐루프가 문서가 아니라 반복 가능한 자동 테스트와 데모
 - [x] `pnpm ci:gate`는 supply-chain demo smoke 산출물 `artifacts/demo/supply-chain.json`을 `python -m json.tool`로 다시 파싱해, 로그가 섞인 가짜 JSON 산출물을 release evidence로 인정하지 않는다.
 - [x] `check_mvp_data_correctness.py`가 demo DB의 row count, object primary key uniqueness, Order reindex source hash, ApproveOrder idempotency evidence를 release gate에서 검증한다.
 - [x] `check_mvp_performance_smoke.py`가 CSV ingest, object index, object query, no-writeback action apply 측정 리포트를 남기며, CI fast profile과 100k/1M release profile 명령을 분리한다.
+- [x] `tests/contracts/test_mvp_testcontainers_closed_loop.py`가 Testcontainers PostgreSQL 저장소 위에서 connector snapshot → dataset commit → transform → index → action → materialization 폐쇄루프를 검증한다.
 
 **Demo / Proof**
 

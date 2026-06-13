@@ -18,6 +18,7 @@ from foundry_lite.application.ports import (
     TransactionManager,
 )
 from foundry_lite.application.ports.action_repository import ActionRepository
+from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.dataset_quality_repository import DatasetQualityRepository
 from foundry_lite.application.ports.materialization_repository import MaterializationRepository
 from foundry_lite.application.ports.ontology_repository import OntologyRepository
@@ -64,6 +65,7 @@ class CoreService:
     root: Path
     storage_root: Path
     compute_adapter: ComputeAdapter
+    connector_adapter: ConnectorAdapter
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository

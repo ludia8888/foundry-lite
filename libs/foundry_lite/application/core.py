@@ -199,6 +199,25 @@ class FoundryLiteCore:
     ) -> CommitResult:
         return self._services.dataset.ingest.upload_csv(dataset_ref, csv_path, ctx=ctx, sync_name=sync_name)
 
+    def sync_connector_snapshot(
+        self,
+        dataset_ref: str,
+        *,
+        connector_name: str,
+        resource_name: str,
+        ctx: RequestContext | None = None,
+        sync_name: str | None = None,
+        cursor: Mapping[str, object] | None = None,
+    ) -> CommitResult:
+        return self._services.dataset.ingest.sync_connector_snapshot(
+            dataset_ref,
+            connector_name=connector_name,
+            resource_name=resource_name,
+            ctx=ctx,
+            sync_name=sync_name,
+            cursor=cursor,
+        )
+
     def register_transform(
         self,
         api_name: str,
