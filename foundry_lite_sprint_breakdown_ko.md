@@ -1688,7 +1688,7 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 
 - 같은 actor/action/target/idempotency key가 거의 동시에 들어와 데이터베이스 unique 충돌이 발생해도, 두 번째 요청은 500 또는 새 실행이 아니라 기존 action run replay로 귀결되게 한다.
 - Dataset commit은 version 번호 배정 경합을 명확히 막고, 파일 복사 후 DB commit이 실패한 경우 이미 promote된 artifact를 자동 정리하며 실패 payload/audit로 추적 가능한 orphan cleanup evidence를 남긴다.
-- Object Query 목록은 메모리 정렬/슬라이스에 의존하지 않고 DB에서 filter, sort, limit을 수행하며, opaque cursor token과 `object_id` tie-breaker가 포함된 안정적인 keyset cursor를 사용한다.
+- Object Query 목록은 메모리 정렬/슬라이스에 의존하지 않고 DB에서 filter, sort, limit을 수행하며, signed opaque cursor token, sort key, query shape checksum, `object_id` tie-breaker가 포함된 안정적인 keyset cursor를 사용한다.
 - Dynamic Object Set membership도 Object Query의 page limit과 cursor를 그대로 사용해 내부 기능이 대량 limit으로 query cap을 우회하지 못하게 한다.
 - Operations run 목록도 `created_at` 또는 `failed_at`과 run id를 기준으로 한 DB-backed cursor paging을 사용해 run 수가 늘어나도 한 번에 전체 row를 읽지 않는다.
 - 운영 모드에서는 header-trust 인증 프로필이 선택되면 앱이 시작 단계에서 실패해야 한다. 로컬/demo 모드에서만 명시적으로 허용한다.
@@ -1700,6 +1700,7 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 - [x] dataset version commit을 동시에 시도해도 version_number 중복이나 순서 역전이 생기지 않는다.
 - [x] commit 실패로 생긴 promoted/orphan file은 failed error details 또는 abort audit evidence로 찾을 수 있고 자동 cleanup execute 경로가 있다.
 - [x] Object Query는 sort key와 object_id tie-breaker를 포함한 cursor로 다음 page를 안정적으로 반환한다.
+- [x] Object Query cursor는 raw object_id나 변조된 base64 payload를 `ValidationFailed`로 거절한다.
 - [x] Dynamic Object Set은 `Object Query` page limit 안에서 cursor로 전체 membership을 이어 읽는다.
 - [x] Operations runs API/CLI/UI는 cursor 기반으로 page를 나누고 대량 run fixture에서도 일정한 응답 크기를 유지한다.
 - [x] production auth profile에서 header-trust provider를 쓰면 startup이 실패하고, local/demo profile에서는 명시적으로만 허용된다.
@@ -1716,7 +1717,7 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 - object query나 operations 목록이 DB에서 page를 자르지 않고 애플리케이션 메모리에서 전체 목록을 자른다.
 - operations cursor가 timestamp와 run id tie-breaker 없이 단순 run id만 담거나, query shape이 다른 요청에 재사용된다.
 - dynamic object set이 Object Query page limit을 피하려고 내부에서 큰 limit 값을 직접 요청한다.
-- object query cursor가 sort key, query shape checksum, `object_id` tie-breaker 없이 단순 object id만 담는다.
+- object query cursor가 sort key, query shape checksum, `object_id` tie-breaker, tamper check 없이 단순 object id만 담거나 raw object_id cursor를 허용한다.
 - 운영 배포에서 header-trust 인증이 실수로 켜질 수 있다.
 - SDK 출력 2개가 서로 다른 문자열 템플릿에서 만들어지는데 parity test가 없다.
 
@@ -1743,11 +1744,11 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 
 **Acceptance Gate**
 
-- [ ] mock REST API에서 orders를 pull해 raw dataset으로 commit한다.
-- [ ] pagination/cursor가 재시작 가능하다.
-- [ ] webhook event가 append transaction으로 raw dataset에 쌓인다.
-- [ ] 잘못된 signature webhook은 거부되고 audit deny가 남는다.
-- [ ] REST/Webhook 실패가 기존 Operations UI에 표시된다.
+- [x] mock REST API에서 orders를 pull해 raw dataset으로 commit한다.
+- [x] pagination/cursor가 재시작 가능하다.
+- [x] webhook event가 append transaction으로 raw dataset에 쌓인다.
+- [x] 잘못된 signature webhook은 거부되고 audit deny가 남는다.
+- [x] REST rate-limit 실패와 Webhook signature deny가 기존 Operations 조회 표면에서 보인다.
 
 **Demo / Proof**
 

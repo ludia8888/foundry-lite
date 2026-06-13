@@ -20,6 +20,7 @@ from foundry_lite.application.ports import (
     ObjectSetPayload,
     ObjectSetQueryResult,
     OntologyApplyResult,
+    RestSourceConfig,
     RuntimeRetryMaterializationResult,
     RuntimeRetryPlan,
     RuntimeRetryResult,
@@ -70,8 +71,7 @@ class FoundryLiteCore:
         dependencies: CoreDependencies,
     ) -> None:
         # Sprint 02A §4.3: FoundryLiteCore accepts a fully-wired
-        # CoreDependencies bag only. Convenience constructors that take
-        # ``db_url``/``storage_root`` and pull infrastructure into the
+        # CoreDependencies bag only. Convenience constructors that pull infrastructure into the
         # application layer live in apps/* composition roots and the
         # test conftest, never inside the facade itself.
         self.root = dependencies.root
@@ -209,6 +209,7 @@ class FoundryLiteCore:
         ctx: RequestContext | None = None,
         sync_name: str | None = None,
         cursor: Mapping[str, object] | None = None,
+        rest: RestSourceConfig | None = None,
     ) -> CommitResult:
         return self._services.dataset.ingest.sync_connector_snapshot(
             dataset_ref,
@@ -217,6 +218,30 @@ class FoundryLiteCore:
             ctx=ctx,
             sync_name=sync_name,
             cursor=cursor,
+            rest=rest,
+        )
+
+    def ingest_webhook_event(
+        self,
+        dataset_ref: str,
+        *,
+        connector_name: str,
+        resource_name: str,
+        payload: Mapping[str, object],
+        raw_body: bytes,
+        signature: str,
+        secret: str,
+        ctx: RequestContext | None = None,
+    ) -> CommitResult:
+        return self._services.dataset.ingest.ingest_webhook_event(
+            dataset_ref,
+            connector_name=connector_name,
+            resource_name=resource_name,
+            payload=payload,
+            raw_body=raw_body,
+            signature=signature,
+            secret=secret,
+            ctx=ctx,
         )
 
     def register_transform(

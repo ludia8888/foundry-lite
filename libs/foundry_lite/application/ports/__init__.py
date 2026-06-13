@@ -19,6 +19,15 @@ from foundry_lite.application.ports.auth_provider import (
     Principal,
 )
 from foundry_lite.application.ports.compute_adapter import ComputeAdapter, TabularRow
+from foundry_lite.application.ports.connector_adapter import (
+    ConnectorAdapter,
+    ConnectorRateLimitedError,
+    ConnectorSnapshot,
+    ConnectorSnapshotRequest,
+    RestAuthConfig,
+    RestPaginationConfig,
+    RestSourceConfig,
+)
 from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckConfig,
     DatasetCheckRecord,
@@ -175,6 +184,10 @@ __all__ = [
     "AuditEventRecord",
     "AuthProvider",
     "ComputeAdapter",
+    "ConnectorAdapter",
+    "ConnectorRateLimitedError",
+    "ConnectorSnapshot",
+    "ConnectorSnapshotRequest",
     "Credentials",
     "DatasetAlreadyExistsError",
     "DatasetCheckConfig",
@@ -278,6 +291,9 @@ __all__ = [
     "RuntimeRow",
     "RuntimeRunSnapshot",
     "RuntimeRowsTable",
+    "RestAuthConfig",
+    "RestPaginationConfig",
+    "RestSourceConfig",
     "StoredDatasetCommit",
     "SyncRunRecord",
     "TabularRow",

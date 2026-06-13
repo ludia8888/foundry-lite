@@ -5,6 +5,7 @@ from foundry_lite.infrastructure.adapters.dataset_storage import (
     FakeDatasetStorageAdapter,
     LocalDatasetStorageAdapter,
 )
+from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
 from foundry_lite.infrastructure.adapters.scale_foundation import (
     FakeConnectorAdapter,
     FakeSearchAdapter,
@@ -29,4 +30,5 @@ __all__ = [
     "LocalSearchAdapter",
     "LocalStreamAdapter",
     "LocalWorkflowAdapter",
+    "RestPullConnectorAdapter",
 ]
