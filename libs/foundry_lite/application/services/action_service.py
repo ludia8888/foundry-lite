@@ -100,13 +100,15 @@ class ActionService(CoreService):
             existing = self._existing_action_run(conn, ctx, action_type, command.idempotency_key)
             if existing is not None:
                 return ActionApplyOutcome(response=action_replay_response(existing))
-            self._insert_action_run(
+            raced_existing = self._insert_action_run(
                 conn,
                 ctx,
                 action_type=action_type,
                 action_run_id=action_run_id,
                 command=command,
             )
+            if raced_existing is not None:
+                return ActionApplyOutcome(response=action_replay_response(raced_existing))
             outcome = self._complete_received_action_run(
                 conn,
                 ctx,
@@ -197,8 +199,8 @@ class ActionService(CoreService):
         action_type: ActionTypeRow,
         action_run_id: str,
         command: ActionApplyCommand,
-    ) -> None:
-        self.action_repository.insert_action_run(
+    ) -> ActionRunRow | None:
+        return self.action_repository.insert_action_run_or_get_existing(
             transaction=conn,
             record=ActionRunRecord(
                 action_run_id=action_run_id,

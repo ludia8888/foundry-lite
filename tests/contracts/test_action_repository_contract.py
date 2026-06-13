@@ -68,6 +68,19 @@ class FakeActionRepository:
         del transaction
         self.action_runs.append(_action_run_row(record))
 
+    def insert_action_run_or_get_existing(self, *, transaction: Any, record: ActionRunRecord) -> ActionRunRow | None:
+        existing = self.action_run_by_idempotency(
+            transaction=transaction,
+            tenant_id=record.tenant_id,
+            action_type_id=record.action_type_id,
+            actor_user_id=record.actor_user_id,
+            idempotency_key=record.idempotency_key,
+        )
+        if existing is not None:
+            return existing
+        self.action_runs.append(_action_run_row(record))
+        return None
+
     def update_action_run_terminal(
         self,
         *,
@@ -366,6 +379,24 @@ def test_action_repository_contract_inserts_and_replays_idempotent_runs(harness:
     assert found["id"] == "arun_1"
     assert found["parameters"] == {"status": "APPROVED"}
     assert missing_actor is None
+
+
+def test_action_repository_contract_insert_or_get_existing_replays_duplicate(harness: ActionHarness) -> None:
+    with harness.transaction() as transaction:
+        first = harness.repository.insert_action_run_or_get_existing(
+            transaction=transaction,
+            record=_action_run_record(run_id="arun_winner"),
+        )
+        replay = harness.repository.insert_action_run_or_get_existing(
+            transaction=transaction,
+            record=_action_run_record(run_id="arun_loser"),
+        )
+
+    rows = harness.action_run_rows()
+    assert first is None
+    assert replay is not None
+    assert replay["id"] == "arun_winner"
+    assert [row["id"] for row in rows] == ["arun_winner"]
 
 
 def test_action_repository_contract_updates_terminal_state_and_writebacks(harness: ActionHarness) -> None:

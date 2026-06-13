@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from scripts import generate_sdk_ts as sdk
@@ -10,6 +11,15 @@ def _type_block(source: str, type_name: str) -> str:
     start = source.index(prefix)
     end = source.index("};", start)
     return source[start : end + 2]
+
+
+def _client_surface_payload(source: str) -> dict[str, object]:
+    prefix = "export const SDK_CLIENT_SURFACE = "
+    start = source.index(prefix) + len(prefix)
+    end = source.index(";", start)
+    payload = json.loads(source[start:end])
+    assert isinstance(payload, dict)
+    return payload
 
 
 def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
@@ -25,6 +35,18 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "any" not in approve_params
     assert "expectedObjectVersion(object: { objectVersion: number }): number" in generated
     assert "idempotencyKey(actionName: string, objectId: string): string" in generated
+    assert "export const SDK_CLIENT_SURFACE" in generated
+
+
+def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    expected_surface = json.loads(sdk.render_client_surface_json(sdk.client_surface(ontology)))
+    ts_surface = _client_surface_payload(sdk.DEFAULT_TS_OUTPUT.read_text(encoding="utf-8"))
+    browser_surface = _client_surface_payload(sdk.DEFAULT_WEB_OUTPUT.read_text(encoding="utf-8"))
+
+    assert ts_surface == expected_surface
+    assert browser_surface == expected_surface
+    assert ts_surface == browser_surface
 
 
 def test_sdk_generator_check_detects_api_name_drift(tmp_path: Path) -> None:

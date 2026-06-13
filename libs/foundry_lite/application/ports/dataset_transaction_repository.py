@@ -74,6 +74,10 @@ class SyncRunRecord:
     completed_at: str | None
 
 
+class DatasetVersionConflictError(Exception):
+    """Raised when a dataset version number is already committed."""
+
+
 class DatasetTransactionRow(TypedDict):
     id: str
     tenant_id: str
@@ -112,6 +116,16 @@ class DatasetTransactionRepository(Protocol):
         metadata: DatasetTransactionMetadata,
     ) -> None:
         """Mark a dataset transaction aborted inside the caller transaction."""
+        ...
+
+    def lock_dataset_for_version_allocation(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> None:
+        """Lock one dataset row before assigning the next branch version number."""
         ...
 
     def insert_version(self, *, transaction: TransactionContext, record: DatasetVersionRecord) -> None:

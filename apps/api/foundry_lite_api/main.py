@@ -16,14 +16,14 @@ from foundry_lite.application.ports import (
     ObjectSetQueryResult,
     RuntimeRetryResult,
     RuntimeRunDetail,
-    RuntimeRunSnapshot,
+    RuntimeRunQueryResult,
     TabularRow,
     TransformRetryResult,
 )
 from foundry_lite.application.ports.auth_provider import AuthProvider
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
-from foundry_lite.infrastructure.auth import HeaderTrustAuthProvider
+from foundry_lite.infrastructure.auth import auth_provider_from_env
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.observability.metrics import prometheus_payload, record_http_request
 from foundry_lite.observability.tracing import (
@@ -48,11 +48,9 @@ core = FoundryLiteCore(
         adapter_profile=os.getenv("FOUNDRY_LITE_ADAPTER_PROFILE", "local"),
     )
 )
-# Sprint 02A: HTTP requests authenticate through an explicit AuthProvider.
-# Today's adapter trusts X-Tenant-ID/X-User-ID/X-Roles headers verbatim - the
-# same posture as before, but now visible at the composition root so a JWT
-# adapter can swap in without touching any handler.
-auth_provider: AuthProvider = HeaderTrustAuthProvider()
+# Sprint 36A: choose auth through a profile guard so production startup cannot
+# accidentally use the local header-trust adapter.
+auth_provider: AuthProvider = auth_provider_from_env()
 instrument_fastapi_app(app)
 instrument_sqlalchemy_engine(core.engine)
 
@@ -268,9 +266,19 @@ def list_operation_runs(
     status: str | None = Query(default=None),
     since: str | None = Query(default=None),
     until: str | None = Query(default=None),
-) -> RuntimeRunSnapshot:
+    limit: int = Query(default=50),
+    cursor: str | None = Query(default=None),
+) -> RuntimeRunQueryResult:
     try:
-        return core.query_runs(ctx=_ctx(request), run_type=run_type, status=status, since=since, until=until)
+        return core.query_runs(
+            ctx=_ctx(request),
+            run_type=run_type,
+            status=status,
+            since=since,
+            until=until,
+            limit=limit,
+            cursor=cursor,
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

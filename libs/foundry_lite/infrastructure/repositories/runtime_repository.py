@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, delete, insert, select, update
+from sqlalchemy import and_, delete, desc, false, func, insert, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -14,7 +14,9 @@ from foundry_lite.application.ports import (
     RuntimeLookupTable,
     RuntimeRow,
     RuntimeRowsTable,
+    RuntimeRunPageCursor,
     RuntimeRunSnapshot,
+    RuntimeRunType,
 )
 from foundry_lite.infrastructure import schema as db
 
@@ -74,6 +76,33 @@ class SqlAlchemyRuntimeRepository:
                 "auditEvents": self.rows_for_tenant(transaction=transaction, table="audit_events", tenant_id=tenant_id),
                 "objectEdits": self.rows_for_tenant(transaction=transaction, table="object_edits", tenant_id=tenant_id),
             }
+
+    def query_run_rows(
+        self,
+        *,
+        tenant_id: str,
+        run_type: RuntimeRunType,
+        status: str | None,
+        since: str | None,
+        until: str | None,
+        cursor: RuntimeRunPageCursor | None,
+        limit: int,
+    ) -> list[RuntimeRow]:
+        runtime_table = _run_table(run_type)
+        timestamp = _run_timestamp_column(run_type)
+        conditions = _run_query_conditions(runtime_table, run_type, tenant_id, status, since, until, cursor)
+        with self.engine.begin() as transaction:
+            rows = (
+                transaction.execute(
+                    select(runtime_table)
+                    .where(and_(*conditions))
+                    .order_by(desc(timestamp), desc(runtime_table.c.id))
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+        return [cast(RuntimeRow, dict(row)) for row in rows]
 
     def row_by_id(self, *, transaction: Any, table: RuntimeLookupTable, row_id: str) -> RuntimeRow | None:
         runtime_table = _lookup_table(table)
@@ -211,3 +240,58 @@ def _rows_table(table: RuntimeRowsTable) -> Any:
         "object_edits": db.object_edits,
         "object_records": db.object_records,
     }[table]
+
+
+def _run_table(run_type: RuntimeRunType) -> Any:
+    return {
+        "sync": db.sync_runs,
+        "transform": db.transform_runs,
+        "index": db.index_runs,
+        "action": db.action_runs,
+        "action_writeback": db.action_writebacks,
+        "materialization": db.materialization_runs,
+        "outbox": db.outbox_events,
+        "dead_letter": db.dead_letter_events,
+        "audit": db.audit_events,
+    }[run_type]
+
+
+def _run_timestamp_column(run_type: RuntimeRunType) -> Any:
+    if run_type == "dead_letter":
+        return db.dead_letter_events.c.failed_at
+    return _run_table(run_type).c.created_at
+
+
+def _run_query_conditions(
+    runtime_table: Any,
+    run_type: RuntimeRunType,
+    tenant_id: str,
+    status: str | None,
+    since: str | None,
+    until: str | None,
+    cursor: RuntimeRunPageCursor | None,
+) -> list[Any]:
+    timestamp = _run_timestamp_column(run_type)
+    conditions = [runtime_table.c.tenant_id == tenant_id, _run_status_condition(runtime_table, run_type, status)]
+    if since:
+        conditions.append(timestamp >= since)
+    if until:
+        conditions.append(timestamp <= until)
+    if cursor is not None:
+        conditions.append(
+            or_(
+                timestamp < cursor["timestamp"],
+                and_(timestamp == cursor["timestamp"], runtime_table.c.id < cursor["run_id"]),
+            )
+        )
+    return conditions
+
+
+def _run_status_condition(runtime_table: Any, run_type: RuntimeRunType, status: str | None) -> Any:
+    if status is None or status == "":
+        return True
+    normalized = status.lower()
+    if run_type == "dead_letter":
+        return True if normalized == "dead_lettered" else false()
+    column = runtime_table.c.decision if run_type == "audit" else runtime_table.c.status
+    return func.lower(column) == normalized

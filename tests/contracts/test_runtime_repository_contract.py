@@ -17,7 +17,9 @@ from foundry_lite.application.ports import (
     RuntimeRepository,
     RuntimeRow,
     RuntimeRowsTable,
+    RuntimeRunPageCursor,
     RuntimeRunSnapshot,
+    RuntimeRunType,
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyRuntimeRepository
@@ -34,7 +36,14 @@ class RuntimeRepositoryHarness(Protocol):
 
     def add_materialization(self, *, materialization_id: str, tenant_id: str) -> None: ...
 
-    def add_action_run(self, *, run_id: str, tenant_id: str) -> None: ...
+    def add_action_run(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        status: str = "SUCCEEDED",
+        created_at: str = "2026-06-10T00:00:00Z",
+    ) -> None: ...
 
     def add_dead_letter_event(self, *, event_id: str, tenant_id: str) -> None: ...
 
@@ -76,6 +85,22 @@ class FakeRuntimeRepository:
             "auditEvents": self.rows_for_tenant(transaction=None, table="audit_events", tenant_id=tenant_id),
             "objectEdits": self.rows_for_tenant(transaction=None, table="object_edits", tenant_id=tenant_id),
         }
+
+    def query_run_rows(
+        self,
+        *,
+        tenant_id: str,
+        run_type: RuntimeRunType,
+        status: str | None,
+        since: str | None,
+        until: str | None,
+        cursor: RuntimeRunPageCursor | None,
+        limit: int,
+    ) -> list[RuntimeRow]:
+        rows = [row for row in self.tables[_run_table_name(run_type)] if row["tenant_id"] == tenant_id]
+        rows = [row for row in rows if _matches_run_query(row, run_type, status, since, until, cursor)]
+        rows.sort(key=lambda row: (_runtime_timestamp(row, run_type), str(row["id"])), reverse=True)
+        return [cast(RuntimeRow, dict(row)) for row in rows[:limit]]
 
     def row_by_id(self, *, transaction: Any, table: RuntimeLookupTable, row_id: str) -> RuntimeRow | None:
         del transaction
@@ -151,9 +176,18 @@ class FakeRuntimeRepositoryHarness:
             _materialization_row(materialization_id=materialization_id, tenant_id=tenant_id)
         )
 
-    def add_action_run(self, *, run_id: str, tenant_id: str) -> None:
+    def add_action_run(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        status: str = "SUCCEEDED",
+        created_at: str = "2026-06-10T00:00:00Z",
+    ) -> None:
         assert isinstance(self.repository, FakeRuntimeRepository)
-        self.repository.tables["action_runs"].append(_action_run_row(run_id=run_id, tenant_id=tenant_id))
+        self.repository.tables["action_runs"].append(
+            _action_run_row(run_id=run_id, tenant_id=tenant_id, status=status, created_at=created_at)
+        )
 
     def add_dead_letter_event(self, *, event_id: str, tenant_id: str) -> None:
         assert isinstance(self.repository, FakeRuntimeRepository)
@@ -182,9 +216,20 @@ class SqlAlchemyRuntimeRepositoryHarness:
                 )
             )
 
-    def add_action_run(self, *, run_id: str, tenant_id: str) -> None:
+    def add_action_run(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        status: str = "SUCCEEDED",
+        created_at: str = "2026-06-10T00:00:00Z",
+    ) -> None:
         with self.engine.begin() as conn:
-            conn.execute(insert(db.action_runs).values(**_action_run_row(run_id=run_id, tenant_id=tenant_id)))
+            conn.execute(
+                insert(db.action_runs).values(
+                    **_action_run_row(run_id=run_id, tenant_id=tenant_id, status=status, created_at=created_at)
+                )
+            )
 
     def add_dead_letter_event(self, *, event_id: str, tenant_id: str) -> None:
         with self.engine.begin() as conn:
@@ -315,6 +360,53 @@ def _dead_letter_row(*, event_id: str, tenant_id: str) -> dict[str, Any]:
     }
 
 
+def _run_table_name(run_type: RuntimeRunType) -> str:
+    return {
+        "sync": "sync_runs",
+        "transform": "transform_runs",
+        "index": "index_runs",
+        "action": "action_runs",
+        "action_writeback": "action_writebacks",
+        "materialization": "materialization_runs",
+        "outbox": "outbox_events",
+        "dead_letter": "dead_letter_events",
+        "audit": "audit_events",
+    }[run_type]
+
+
+def _matches_run_query(
+    row: dict[str, Any],
+    run_type: RuntimeRunType,
+    status: str | None,
+    since: str | None,
+    until: str | None,
+    cursor: RuntimeRunPageCursor | None,
+) -> bool:
+    timestamp = _runtime_timestamp(row, run_type)
+    if status and _runtime_status(row, run_type).lower() != status.lower():
+        return False
+    if since and timestamp < since:
+        return False
+    if until and timestamp > until:
+        return False
+    if cursor is not None:
+        return (timestamp, str(row["id"])) < (cursor["timestamp"], cursor["run_id"])
+    return True
+
+
+def _runtime_timestamp(row: dict[str, Any], run_type: RuntimeRunType) -> str:
+    key = "failed_at" if run_type == "dead_letter" else "created_at"
+    return str(row[key])
+
+
+def _runtime_status(row: dict[str, Any], run_type: RuntimeRunType) -> str:
+    if run_type == "dead_letter":
+        return "dead_lettered"
+    if run_type == "audit":
+        return str(row["decision"])
+    return str(row["status"])
+
+
 def _transform_row(*, transform_id: str, tenant_id: str) -> dict[str, Any]:
     return {
         "id": transform_id,
@@ -342,7 +434,13 @@ def _materialization_row(*, materialization_id: str, tenant_id: str) -> dict[str
     }
 
 
-def _action_run_row(*, run_id: str, tenant_id: str) -> dict[str, Any]:
+def _action_run_row(
+    *,
+    run_id: str,
+    tenant_id: str,
+    status: str = "SUCCEEDED",
+    created_at: str = "2026-06-10T00:00:00Z",
+) -> dict[str, Any]:
     return {
         "id": run_id,
         "tenant_id": tenant_id,
@@ -354,10 +452,10 @@ def _action_run_row(*, run_id: str, tenant_id: str) -> dict[str, Any]:
         "target_object_id": "O-1",
         "expected_object_version": 1,
         "parameters": {"reason": "ok"},
-        "status": "SUCCEEDED",
+        "status": status,
         "idempotency_key": run_id,
         "error": None,
-        "created_at": "2026-06-10T00:00:00Z",
+        "created_at": created_at,
         "completed_at": "2026-06-10T00:00:01Z",
     }
 
@@ -399,6 +497,55 @@ def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(
     assert [row["id"] for row in runs["auditEvents"]] == ["audit_1"]
     assert [row["id"] for row in runs["outboxEvents"]] == ["outbox_1"]
     assert [row["id"] for row in runs["deadLetterEvents"]] == ["dlq_1"]
+
+
+def test_runtime_repository_contract_queries_run_rows_with_keyset_page(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    harness.add_action_run(
+        run_id="action_a",
+        tenant_id="tenant-demo",
+        created_at="2026-06-10T00:00:01Z",
+    )
+    harness.add_action_run(
+        run_id="action_b",
+        tenant_id="tenant-demo",
+        created_at="2026-06-10T00:00:02Z",
+    )
+    harness.add_action_run(
+        run_id="action_c",
+        tenant_id="tenant-demo",
+        created_at="2026-06-10T00:00:02Z",
+    )
+    harness.add_action_run(
+        run_id="action_failed",
+        tenant_id="tenant-demo",
+        status="FAILED",
+        created_at="2026-06-10T00:00:03Z",
+    )
+    harness.add_action_run(run_id="action_other", tenant_id="tenant-other")
+
+    first = harness.repository.query_run_rows(
+        tenant_id="tenant-demo",
+        run_type="action",
+        status="succeeded",
+        since="2026-06-10T00:00:00Z",
+        until="2026-06-10T00:00:03Z",
+        cursor=None,
+        limit=1,
+    )
+    second = harness.repository.query_run_rows(
+        tenant_id="tenant-demo",
+        run_type="action",
+        status="succeeded",
+        since="2026-06-10T00:00:00Z",
+        until="2026-06-10T00:00:03Z",
+        cursor={"timestamp": str(first[-1]["created_at"]), "run_id": str(first[-1]["id"])},
+        limit=2,
+    )
+
+    assert [row["id"] for row in first] == ["action_c"]
+    assert [row["id"] for row in second] == ["action_b", "action_a"]
 
 
 def test_runtime_repository_contract_lineage_lookup_is_tenant_scoped(

@@ -161,6 +161,20 @@ class RuntimeRunSnapshot(TypedDict):
     objectEdits: list[RuntimeRow]
 
 
+class RuntimeRunPageCursor(TypedDict):
+    """Decoded keyset cursor for one Operations run group."""
+
+    timestamp: str
+    run_id: str
+
+
+class RuntimeRunQueryResult(RuntimeRunSnapshot):
+    """Paged operational runtime rows grouped for the run-list screen/API."""
+
+    nextCursor: NotRequired[str | None]
+    nextCursors: NotRequired[dict[RuntimeRunType, str]]
+
+
 class RuntimeRetryPlan(TypedDict):
     """Validated DLQ retry data read before changing runtime state."""
 
@@ -205,6 +219,20 @@ class RuntimeRepository(Protocol):
 
     def list_runs(self, *, tenant_id: str) -> RuntimeRunSnapshot:
         """Return operational run, audit, and outbox rows for one tenant."""
+        ...
+
+    def query_run_rows(
+        self,
+        *,
+        tenant_id: str,
+        run_type: RuntimeRunType,
+        status: str | None,
+        since: str | None,
+        until: str | None,
+        cursor: RuntimeRunPageCursor | None,
+        limit: int,
+    ) -> list[RuntimeRow]:
+        """Return one bounded, ordered Operations run page for one tenant."""
         ...
 
     def row_by_id(

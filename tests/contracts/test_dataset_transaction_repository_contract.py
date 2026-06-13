@@ -9,6 +9,7 @@ from foundry_lite.application.ports import (
     DatasetRunKind,
     DatasetTransactionRecord,
     DatasetTransactionRepository,
+    DatasetVersionConflictError,
     DatasetVersionRecord,
     SyncRunRecord,
 )
@@ -24,6 +25,8 @@ class TransactionHarness(Protocol):
     def call_in_transaction(self, fn: Any) -> Any: ...
 
     def add_run(self, *, run_kind: DatasetRunKind, run_id: str, transaction_id: str) -> None: ...
+
+    def add_dataset(self) -> None: ...
 
     def run_status(self, *, run_kind: DatasetRunKind, run_id: str) -> dict[str, Any] | None: ...
 
@@ -72,8 +75,18 @@ class FakeDatasetTransactionRepository:
         if self.transactions[transaction_id]["tenant_id"] == tenant_id:
             self.transactions[transaction_id].update(status="ABORTED", metadata=metadata)
 
+    def lock_dataset_for_version_allocation(self, *, transaction: Any, tenant_id: str, dataset_id: str) -> None:
+        del transaction, tenant_id, dataset_id
+
     def insert_version(self, *, transaction: Any, record: DatasetVersionRecord) -> None:
         del transaction
+        if any(
+            row["dataset_id"] == record.dataset_id
+            and row["branch"] == record.branch
+            and row["version_number"] == record.version_number
+            for row in self.versions_store
+        ):
+            raise DatasetVersionConflictError("dataset version already exists")
         self.versions_store.append(record.__dict__.copy())
 
     def insert_file(self, *, transaction: Any, record: DatasetFileRecord) -> None:
@@ -173,6 +186,9 @@ class FakeTransactionHarness:
             "completed_at": None,
         }
 
+    def add_dataset(self) -> None:
+        return None
+
     def run_status(self, *, run_kind: DatasetRunKind, run_id: str) -> dict[str, Any] | None:
         row = self.repository.runs.get((run_kind, run_id))
         return dict(row) if row else None
@@ -202,6 +218,10 @@ class SqlAlchemyTransactionHarness:
         values = _run_values(run_kind, run_id, transaction_id)
         with self.engine.begin() as transaction:
             transaction.execute(insert(table).values(**values))
+
+    def add_dataset(self) -> None:
+        with self.engine.begin() as transaction:
+            transaction.execute(insert(db.datasets).values(**_dataset_values()))
 
     def run_status(self, *, run_kind: DatasetRunKind, run_id: str) -> dict[str, Any] | None:
         table = _run_table(run_kind)
@@ -271,6 +291,24 @@ def _file_record() -> DatasetFileRecord:
         content_hash="hash-demo",
         partition_values={},
     )
+
+
+def _dataset_values() -> dict[str, Any]:
+    return {
+        "id": "ds_orders",
+        "tenant_id": "tenant-demo",
+        "namespace": "raw",
+        "name": "orders",
+        "description": None,
+        "storage_kind": "local",
+        "storage_uri": None,
+        "owner_team": "data",
+        "classification": "internal",
+        "status": "active",
+        "primary_key": ["order_id"],
+        "created_at": "2026-06-10T00:00:00Z",
+        "updated_at": "2026-06-10T00:00:00Z",
+    }
 
 
 def _run_table(run_kind: DatasetRunKind) -> Any:
@@ -358,6 +396,35 @@ def test_dataset_transaction_repository_contract_commit_flow(harness: Transactio
     assert committed["committed_version_id"] == "dsv_orders_1"
     assert harness.versions()[0]["version_id" if "version_id" in harness.versions()[0] else "id"] == "dsv_orders_1"
     assert harness.files()[0]["uri"] == "memory://part-00000.parquet"
+
+
+def test_dataset_transaction_repository_contract_locks_dataset_for_version_allocation(
+    harness: TransactionHarness,
+) -> None:
+    harness.add_dataset()
+
+    harness.call_in_transaction(
+        lambda transaction: harness.repository.lock_dataset_for_version_allocation(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            dataset_id="ds_orders",
+        )
+    )
+
+
+def test_dataset_transaction_repository_contract_rejects_duplicate_dataset_version(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def insert_duplicate(transaction: Any) -> None:
+        repository.insert_version(transaction=transaction, record=_version_record("dstx_commit_1"))
+        with pytest.raises(DatasetVersionConflictError):
+            repository.insert_version(transaction=transaction, record=_version_record("dstx_commit_2"))
+
+    harness.call_in_transaction(insert_duplicate)
+
+    assert len(harness.versions()) == 1
 
 
 def test_dataset_transaction_repository_contract_abort_flow(harness: TransactionHarness) -> None:

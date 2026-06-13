@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 import pytest
-from foundry_lite.application.ports import ObjectLinkRow, ObjectReadRepository, ObjectRecordRow
+from foundry_lite.application.ports import (
+    ObjectLinkRow,
+    ObjectOrderBy,
+    ObjectQueryCursor,
+    ObjectReadRepository,
+    ObjectRecordRow,
+)
+from foundry_lite.application.query_filters import matches_filter
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyObjectReadRepository
 from sqlalchemy import create_engine, insert
@@ -20,6 +27,8 @@ class ObjectReadHarness(Protocol):
     def transaction(self) -> AbstractContextManager[Any]: ...
 
     def add_object(self, **kwargs: Any) -> None: ...
+
+    def add_property_type(self, **kwargs: Any) -> None: ...
 
     def add_link(self, **kwargs: Any) -> None: ...
 
@@ -64,6 +73,28 @@ class FakeObjectReadRepository:
         ]
         return sorted(rows, key=lambda row: row["object_id"])
 
+    def query_active_object_rows(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        order_by: Sequence[ObjectOrderBy],
+        cursor: ObjectQueryCursor | None,
+        limit: int,
+    ) -> list[ObjectRecordRow]:
+        rows = self.active_object_rows(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            object_type_api_name=object_type_api_name,
+        )
+        if filter_ast:
+            rows = [row for row in rows if matches_filter(row["properties"], filter_ast)]
+        rows = _sort_rows(rows, order_by)
+        rows = _rows_after_cursor(rows, order_by, cursor)
+        return rows[:limit]
+
     def active_links_from(
         self,
         *,
@@ -96,6 +127,9 @@ class FakeObjectReadHarness:
     def add_object(self, **kwargs: Any) -> None:
         self.repository.object_records.append(_object_row(**kwargs))
 
+    def add_property_type(self, **kwargs: Any) -> None:
+        return None
+
     def add_link(self, **kwargs: Any) -> None:
         self.repository.object_links.append(_link_row(**kwargs))
 
@@ -113,6 +147,11 @@ class SqlAlchemyObjectReadHarness:
     def add_object(self, **kwargs: Any) -> None:
         with self.engine.begin() as conn:
             conn.execute(insert(db.object_records).values(**_object_row(**kwargs)))
+
+    def add_property_type(self, **kwargs: Any) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(insert(db.object_types).values(**_object_type_row(kwargs.get("object_type_id", "ot_order"))))
+            conn.execute(insert(db.property_types).values(**_property_type_row(**kwargs)))
 
     def add_link(self, **kwargs: Any) -> None:
         with self.engine.begin() as conn:
@@ -182,6 +221,87 @@ def _link_row(
     }
 
 
+def _property_type_row(
+    *,
+    row_id: str,
+    object_type_id: str = "ot_order",
+    api_name: str = "amount",
+    data_type: str = "float",
+) -> dict[str, Any]:
+    return {
+        "id": row_id,
+        "tenant_id": "tenant-demo",
+        "object_type_id": object_type_id,
+        "api_name": api_name,
+        "display_name": api_name,
+        "data_type": data_type,
+        "nullable": True,
+        "indexed": True,
+        "searchable": False,
+        "editable": False,
+        "classification": None,
+        "source": "base",
+        "column_name": api_name,
+        "edit_policy": "immutable",
+        "derivation": None,
+    }
+
+
+def _object_type_row(object_type_id: object) -> dict[str, Any]:
+    return {
+        "id": str(object_type_id),
+        "tenant_id": "tenant-demo",
+        "ontology_version_id": "ont_1",
+        "api_name": "Order",
+        "display_name": "Order",
+        "primary_key_property": "order_id",
+        "backing": {"type": "dataset"},
+        "config": {},
+    }
+
+
+def _sort_rows(rows: list[ObjectRecordRow], order_by: Sequence[ObjectOrderBy]) -> list[ObjectRecordRow]:
+    sorted_rows = sorted(rows, key=lambda row: row["object_id"])
+    for order in reversed(order_by):
+        reverse = order["direction"] == "desc"
+        sorted_rows.sort(key=lambda row: _property_sort_key(row, order["property"]), reverse=reverse)
+    return sorted_rows
+
+
+def _rows_after_cursor(
+    rows: list[ObjectRecordRow],
+    order_by: Sequence[ObjectOrderBy],
+    cursor: ObjectQueryCursor | None,
+) -> list[ObjectRecordRow]:
+    if cursor is None:
+        return rows
+    return [row for row in rows if _row_after_cursor(row, order_by, cursor)]
+
+
+def _row_after_cursor(row: ObjectRecordRow, order_by: Sequence[ObjectOrderBy], cursor: ObjectQueryCursor) -> bool:
+    for index, order in enumerate(order_by):
+        current = _property_sort_key(row, order["property"])
+        previous = _cursor_sort_key(cursor["values"][index])
+        if current == previous:
+            continue
+        return current > previous if order["direction"] == "asc" else current < previous
+    return row["object_id"] > cursor["object_id"]
+
+
+def _property_sort_key(row: ObjectRecordRow, property_name: str) -> tuple[int, float, str]:
+    return _cursor_sort_key(row["properties"].get(property_name))
+
+
+def _cursor_sort_key(value: object) -> tuple[int, float, str]:
+    if value is None:
+        return (0, 0.0, "")
+    if isinstance(value, bool):
+        return (1, 1.0 if value else 0.0, "")
+    if isinstance(value, int | float):
+        return (2, float(value), "")
+    return (3, 0.0, str(value))
+
+
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> ObjectReadHarness:
     if request.param == "fake":
@@ -243,6 +363,70 @@ def test_object_read_repository_contract_lists_active_rows_in_object_id_order(
         )
 
     assert [row["object_id"] for row in rows] == ["O-1", "O-2"]
+
+
+def test_object_read_repository_contract_queries_active_rows_with_db_keyset_page(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_object(row_id="obj_order_1", object_id="O-1", properties={"amount": 2.0, "status": "PENDING"})
+    harness.add_object(row_id="obj_order_2", object_id="O-2", properties={"amount": 10.0, "status": "PENDING"})
+    harness.add_object(row_id="obj_order_3", object_id="O-3", properties={"amount": 10.0, "status": "REVIEW"})
+    harness.add_object(row_id="obj_order_4", object_id="O-4", properties={"amount": 5.0, "status": "PENDING"})
+    order_by: list[ObjectOrderBy] = [{"property": "amount", "direction": "desc"}]
+
+    with harness.transaction() as transaction:
+        first_page = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "status", "op": "in", "value": ["PENDING", "REVIEW"]},
+            order_by=order_by,
+            cursor=None,
+            limit=1,
+        )
+        second_page = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "status", "op": "in", "value": ["PENDING", "REVIEW"]},
+            order_by=order_by,
+            cursor={"values": [10.0], "object_id": "O-2"},
+            limit=1,
+        )
+        remaining_page = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "status", "op": "in", "value": ["PENDING", "REVIEW"]},
+            order_by=order_by,
+            cursor={"values": [10.0], "object_id": "O-3"},
+            limit=2,
+        )
+        ascending_page = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            order_by=[{"property": "amount", "direction": "asc"}],
+            cursor=None,
+            limit=4,
+        )
+        missing_property_page = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            order_by=[{"property": "missing", "direction": "asc"}],
+            cursor=None,
+            limit=4,
+        )
+
+    assert [row["object_id"] for row in first_page] == ["O-2"]
+    assert [row["object_id"] for row in second_page] == ["O-3"]
+    assert [row["object_id"] for row in remaining_page] == ["O-4", "O-1"]
+    assert [row["object_id"] for row in ascending_page] == ["O-1", "O-4", "O-2", "O-3"]
+    assert [row["object_id"] for row in missing_property_page] == ["O-1", "O-2", "O-3", "O-4"]
 
 
 def test_object_read_repository_contract_lists_active_outgoing_links(

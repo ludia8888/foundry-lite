@@ -24,6 +24,7 @@ from foundry_lite.application.ports import (
     RuntimeRetryPlan,
     RuntimeRetryResult,
     RuntimeRunDetail,
+    RuntimeRunQueryResult,
     RuntimeRunSnapshot,
     TabularRow,
     TransformRetryResult,
@@ -410,8 +411,18 @@ class FoundryLiteCore:
         status: str | None = None,
         since: str | None = None,
         until: str | None = None,
-    ) -> RuntimeRunSnapshot:
-        return self._services.runtime.query_runs(ctx=ctx, run_type=run_type, status=status, since=since, until=until)
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> RuntimeRunQueryResult:
+        return self._services.runtime.query_runs(
+            ctx=ctx,
+            run_type=run_type,
+            status=status,
+            since=since,
+            until=until,
+            limit=limit,
+            cursor=cursor,
+        )
 
     def run_detail(self, run_type: str, run_id: str, *, ctx: RequestContext | None = None) -> RuntimeRunDetail:
         return self._services.runtime.run_detail(run_type, run_id, ctx=ctx)

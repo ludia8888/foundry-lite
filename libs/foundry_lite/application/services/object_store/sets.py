@@ -17,12 +17,16 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.query_filters import FILTER_OPERATIONS
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.set_members import collect_dynamic_object_set_members
 from foundry_lite.application.services.object_store.set_protocols import (
     SetObjectQuery,
     SetOntologyLookup,
     SetRuntimeBoundary,
 )
-from foundry_lite.application.services.object_store.set_types import NormalizedObjectSetDefinition, ObjectSetMembers
+from foundry_lite.application.services.object_store.set_types import (
+    NormalizedObjectSetDefinition,
+    ObjectSetMembers,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 
@@ -412,14 +416,13 @@ class ObjectSetsService(CoreService):
         row: ObjectSetRow,
         include_items: bool,
     ) -> ObjectSetMembers:
-        result = self.object_query_service.query_objects(
+        return collect_dynamic_object_set_members(
+            self.object_query_service,
             object_type_api_name,
             ctx=ctx,
             filter_ast=cast(Mapping[str, object], row["definition"]["filter"]),
-            limit=10_000,
+            include_items=include_items,
         )
-        object_ids = [item["objectId"] for item in result["items"]]
-        return object_ids, result["items"] if include_items else []
 
     def _visible_object_set_row(
         self,

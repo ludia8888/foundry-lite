@@ -40,7 +40,7 @@ class LocalDatasetStorageAdapter:
         row_count: int,
         created_at: str,
     ) -> StoredDatasetCommit:
-        version_dir = self._dataset_dir(tenant_id, dataset_id) / f"branch={branch}" / f"version={version_id}"
+        version_dir = self._version_dir(tenant_id, dataset_id, branch, version_id)
         version_dir.mkdir(parents=True, exist_ok=True)
         final_parquet = version_dir / "part-00000.parquet"
         shutil.copy2(staged_file, final_parquet)
@@ -73,6 +73,20 @@ class LocalDatasetStorageAdapter:
             manifest=manifest,
         )
 
+    def delete_committed_version(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        branch: str,
+        version_id: str,
+    ) -> bool:
+        version_dir = self._version_dir(tenant_id, dataset_id, branch, version_id)
+        if not version_dir.exists():
+            return False
+        shutil.rmtree(version_dir)
+        return True
+
     def load_manifest(self, manifest_uri: str) -> DatasetManifest:
         return cast(DatasetManifest, json.loads(self._path_for(manifest_uri).read_text(encoding="utf-8")))
 
@@ -82,6 +96,9 @@ class LocalDatasetStorageAdapter:
 
     def _dataset_dir(self, tenant_id: str, dataset_id: str) -> Path:
         return self.root / tenant_id / "datasets" / dataset_id
+
+    def _version_dir(self, tenant_id: str, dataset_id: str, branch: str, version_id: str) -> Path:
+        return self._dataset_dir(tenant_id, dataset_id) / f"branch={branch}" / f"version={version_id}"
 
     def _uri_for(self, path: Path) -> str:
         if self.uri_scheme is None:

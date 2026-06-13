@@ -113,6 +113,66 @@ def test_api_object_set_create_and_query(core, monkeypatch) -> None:
     assert fetched.json()["name"] == "Pending Orders"
 
 
+def test_api_operations_runs_cursor_pages_action_runs(core, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(core)
+    monkeypatch.setattr(api_main, "core", core)
+    client = TestClient(app)
+    headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
+
+    first_order = core.get_object("Order", "O-1001", ctx=ctx)
+    second_order = core.get_object("Order", "O-1002", ctx=ctx)
+    core.apply_action(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=first_order["objectVersion"],
+        params={"reason": "Ops page one"},
+        idempotency_key="api-operations-page-one",
+        ctx=ctx,
+    )
+    core.apply_action(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1002",
+        expected_object_version=second_order["objectVersion"],
+        params={"reason": "Ops page two"},
+        idempotency_key="api-operations-page-two",
+        ctx=ctx,
+    )
+
+    first_page = client.get(
+        "/api/operations/runs",
+        headers=headers,
+        params={"runType": "action", "status": "succeeded", "limit": 1},
+    )
+    assert first_page.status_code == 200
+    first_payload = first_page.json()
+    assert len(first_payload["actionRuns"]) == 1
+    assert isinstance(first_payload["nextCursor"], str)
+
+    second_page = client.get(
+        "/api/operations/runs",
+        headers=headers,
+        params={
+            "runType": "action",
+            "status": "succeeded",
+            "limit": 1,
+            "cursor": first_payload["nextCursor"],
+        },
+    )
+    second_payload = second_page.json()
+    assert second_page.status_code == 200
+    assert len(second_payload["actionRuns"]) == 1
+    assert second_payload["actionRuns"][0]["id"] != first_payload["actionRuns"][0]["id"]
+
+    bad_cursor = client.get(
+        "/api/operations/runs",
+        headers=headers,
+        params={"runType": "action", "cursor": "orc1.not-valid-base64"},
+    )
+    assert bad_cursor.status_code == 400
+
+
 def test_api_security_roles_mask_and_audit_denials(core, monkeypatch) -> None:
     ctx = prepare_indexed_demo(core)
     monkeypatch.setattr(api_main, "core", core)
@@ -500,6 +560,26 @@ def test_cli_dataset_lineage_operations_and_materialize_smoke(tmp_path, monkeypa
     action_runs = json.loads(capsys.readouterr().out)
     assert action_runs["transformRuns"] == []
     action_run_id = next(row["id"] for row in action_runs["actionRuns"] if row["target_object_id"] == "O-1001")
+
+    main(["operations", "runs", "--type", "action", "--status", "succeeded", "--limit", "1"])
+    first_action_page = json.loads(capsys.readouterr().out)
+    assert isinstance(first_action_page["nextCursor"], str)
+    main(
+        [
+            "operations",
+            "runs",
+            "--type",
+            "action",
+            "--status",
+            "succeeded",
+            "--limit",
+            "1",
+            "--cursor",
+            first_action_page["nextCursor"],
+        ]
+    )
+    second_action_page = json.loads(capsys.readouterr().out)
+    assert second_action_page["actionRuns"][0]["id"] != first_action_page["actionRuns"][0]["id"]
 
     main(["operations", "run", "action", action_run_id])
     action_detail = json.loads(capsys.readouterr().out)
