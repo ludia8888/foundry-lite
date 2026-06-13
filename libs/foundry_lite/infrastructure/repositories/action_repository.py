@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.action_repository import (
     ActionRunRecord,
+    ActionRunRow,
     ActionWritebackRecord,
     ObjectEditRecord,
     ObjectTargetUpdate,
@@ -28,7 +30,7 @@ class SqlAlchemyActionRepository:
         action_type_id: str,
         actor_user_id: str,
         idempotency_key: str,
-    ) -> dict[str, Any] | None:
+    ) -> ActionRunRow | None:
         row = (
             transaction.execute(
                 select(db.action_runs).where(
@@ -43,7 +45,7 @@ class SqlAlchemyActionRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(ActionRunRow, dict(row)) if row else None
 
     def insert_action_run(self, *, transaction: Any, record: ActionRunRecord) -> None:
         transaction.execute(
@@ -57,10 +59,10 @@ class SqlAlchemyActionRepository:
                 target_object_type_api_name=record.target_object_type_api_name,
                 target_object_id=record.target_object_id,
                 expected_object_version=record.expected_object_version,
-                parameters=record.parameters,
+                parameters=dict(record.parameters),
                 status=record.status,
                 idempotency_key=record.idempotency_key,
-                error=record.error,
+                error=dict(record.error) if record.error is not None else None,
                 created_at=record.created_at,
                 completed_at=record.completed_at,
             )
@@ -70,15 +72,16 @@ class SqlAlchemyActionRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         action_run_id: str,
         status: str,
-        error: dict[str, Any] | None,
+        error: Mapping[str, object] | None,
         completed_at: str,
     ) -> None:
         transaction.execute(
             update(db.action_runs)
-            .where(db.action_runs.c.id == action_run_id)
-            .values(status=status, error=error, completed_at=completed_at)
+            .where(and_(db.action_runs.c.tenant_id == tenant_id, db.action_runs.c.id == action_run_id))
+            .values(status=status, error=dict(error) if error is not None else None, completed_at=completed_at)
         )
 
     def insert_action_writeback(self, *, transaction: Any, record: ActionWritebackRecord) -> None:
@@ -89,8 +92,8 @@ class SqlAlchemyActionRepository:
                 action_run_id=record.action_run_id,
                 mode=record.mode,
                 connector_id=record.connector_id,
-                request=record.request,
-                response=record.response,
+                request=dict(record.request),
+                response=dict(record.response) if record.response is not None else None,
                 status=record.status,
                 idempotency_key=record.idempotency_key,
                 attempts=record.attempts,
@@ -104,13 +107,14 @@ class SqlAlchemyActionRepository:
             update(db.object_records)
             .where(
                 and_(
+                    db.object_records.c.tenant_id == record.tenant_id,
                     db.object_records.c.id == record.object_record_id,
                     db.object_records.c.object_version == record.expected_object_version,
                 )
             )
             .values(
-                edit_properties=record.edit_properties,
-                properties=record.properties,
+                edit_properties=dict(record.edit_properties),
+                properties=dict(record.properties),
                 object_version=record.next_object_version,
                 updated_at=record.updated_at,
             )
@@ -127,8 +131,8 @@ class SqlAlchemyActionRepository:
                 object_type_api_name=record.object_type_api_name,
                 object_id=record.object_id,
                 edit_type=record.edit_type,
-                patch=record.patch,
-                previous_values=record.previous_values,
+                patch=dict(record.patch),
+                previous_values=dict(record.previous_values),
                 actor_user_id=record.actor_user_id,
                 idempotency_key=record.idempotency_key,
                 created_at=record.created_at,

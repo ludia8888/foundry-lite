@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import duckdb
 
-from foundry_lite.application.ports.compute_adapter import SqlTransformPlan, TransformPlan
+from foundry_lite.application.ports import DatasetCheckConfig, DatasetCheckResult
+from foundry_lite.application.ports.compute_adapter import SqlTransformPlan, TabularRow, TransformPlan
 from foundry_lite.application.primitives import (
     INPUT_PATTERN,
     StagedFileStats,
@@ -36,37 +38,35 @@ class DuckDBComputeAdapter:
         finally:
             con.close()
 
-    def rows_to_parquet(self, rows: list[dict[str, Any]], target_path: Path, fieldnames: list[str]) -> None:
+    def rows_to_parquet(self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]) -> None:
         csv_path = target_path.with_suffix(".csv")
         _write_rows_to_csv(rows, csv_path, fieldnames)
         self.csv_to_parquet(csv_path, target_path)
 
-    def rows_from_parquet(self, parquet_path: Path) -> list[dict[str, Any]]:
+    def rows_from_parquet(self, parquet_path: Path) -> list[TabularRow]:
         con = duckdb.connect()
         try:
             result = con.execute("select * from read_parquet(?)", [str(parquet_path)])
-            names = [column[0] for column in result.description]
-            return [_json_ready(dict(zip(names, row, strict=True))) for row in result.fetchall()]
+            names = [str(column[0]) for column in result.description]
+            return [_tabular_row(dict(zip(names, row, strict=True))) for row in result.fetchall()]
         finally:
             con.close()
 
-    def preview_parquet(self, parquet_path: Path, *, limit: int) -> list[dict[str, Any]]:
+    def preview_parquet(self, parquet_path: Path, *, limit: int) -> list[TabularRow]:
         con = duckdb.connect()
         try:
             result = con.execute("select * from read_parquet(?) limit ?", [str(parquet_path), int(limit)])
-            columns = [column[0] for column in result.description]
-            return [dict(zip(columns, row, strict=True)) for row in result.fetchall()]
+            columns = [str(column[0]) for column in result.description]
+            return [_tabular_row(dict(zip(columns, row, strict=True))) for row in result.fetchall()]
         finally:
             con.close()
 
     def inspect_parquet(self, parquet_path: Path, primary_key: list[str]) -> StagedFileStats:
         con = duckdb.connect()
         try:
-            row_count = int(
-                _required_row(
-                    con.execute("select count(*) from read_parquet(?)", [str(parquet_path)]).fetchone(),
-                    "parquet row count",
-                )[0]
+            row_count = _required_int_cell(
+                con.execute("select count(*) from read_parquet(?)", [str(parquet_path)]).fetchone(),
+                "parquet row count",
             )
             describe = con.execute("describe select * from read_parquet(?)", [str(parquet_path)]).fetchall()
         finally:
@@ -80,7 +80,7 @@ class DuckDBComputeAdapter:
             }
             for row in describe
         ]
-        schema_json = {"columns": columns, "primary_key": primary_key, "cdc": {"enabled": False}}
+        schema_json: dict[str, object] = {"columns": columns, "primary_key": primary_key, "cdc": {"enabled": False}}
         return StagedFileStats(
             parquet_path=parquet_path,
             row_count=row_count,
@@ -90,8 +90,8 @@ class DuckDBComputeAdapter:
             schema_hash=_json_hash(schema_json),
         )
 
-    def execute_check(self, parquet_path: Path, row_count: int, check: dict[str, Any]) -> dict[str, Any]:
-        check_type = check["type"]
+    def execute_check(self, parquet_path: Path, row_count: int, check: DatasetCheckConfig) -> DatasetCheckResult:
+        check_type = str(check["type"])
         if check_type == "row_count_min":
             return self._row_count_min_check(row_count, check)
         con = duckdb.connect()
@@ -132,23 +132,24 @@ class DuckDBComputeAdapter:
         finally:
             con.close()
 
-    def _row_count_min_check(self, row_count: int, check: dict[str, Any]) -> dict[str, Any]:
-        status = "passed" if row_count >= int(check["min"]) else "failed"
-        return {"check": check["type"], "status": status, "row_count": row_count, "min": check["min"]}
+    def _row_count_min_check(self, row_count: int, check: DatasetCheckConfig) -> DatasetCheckResult:
+        minimum = int(cast(str | int, check["min"]))
+        status = "passed" if row_count >= minimum else "failed"
+        return {"check": str(check["type"]), "status": status, "row_count": row_count, "min": minimum}
 
     def _not_null_check(
         self,
         con: duckdb.DuckDBPyConnection,
         parquet_path: Path,
-        check: dict[str, Any],
-    ) -> dict[str, Any]:
+        check: DatasetCheckConfig,
+    ) -> DatasetCheckResult:
         failures: dict[str, int] = {}
-        for column in check["columns"]:
+        for column in cast(list[str], check["columns"]):
             count = self._null_count(con, parquet_path, column)
             if count:
                 failures[column] = count
         return {
-            "check": check["type"],
+            "check": str(check["type"]),
             "status": "failed" if failures else "passed",
             "failures": failures,
         }
@@ -157,23 +158,21 @@ class DuckDBComputeAdapter:
         column_identifier = _sql_identifier(column)
         # column_identifier is validated and parquet path is a bound parameter.
         null_check_sql = f"select count(*) from read_parquet(?) where {column_identifier} is null"  # nosec B608
-        return int(
-            _required_row(
-                con.execute(null_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
-                "not null health check",
-            )[0]
+        return _required_int_cell(
+            con.execute(null_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
+            "not null health check",
         )
 
     def _unique_check(
         self,
         con: duckdb.DuckDBPyConnection,
         parquet_path: Path,
-        check: dict[str, Any],
-    ) -> dict[str, Any]:
-        column = check["column"]
+        check: DatasetCheckConfig,
+    ) -> DatasetCheckResult:
+        column = str(check["column"])
         duplicate_count = self._duplicate_group_count(con, parquet_path, column)
         return {
-            "check": check["type"],
+            "check": str(check["type"]),
             "status": "failed" if duplicate_count else "passed",
             "column": column,
             "duplicate_groups": duplicate_count,
@@ -186,11 +185,9 @@ class DuckDBComputeAdapter:
             f"{column_identifier}, count(*) c from read_parquet(?) "
             f"group by {column_identifier} having c > 1)"
         )
-        return int(
-            _required_row(
-                con.execute(duplicate_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
-                "unique health check",
-            )[0]
+        return _required_int_cell(
+            con.execute(duplicate_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
+            "unique health check",
         )
 
 
@@ -198,3 +195,22 @@ class FakeComputeAdapter(DuckDBComputeAdapter):
     """Fake compute profile that keeps local semantics but exercises adapter replacement."""
 
     profile_name = "fake-compute"
+
+
+def _tabular_row(value: object) -> TabularRow:
+    ready = _json_ready(value)
+    if not isinstance(ready, Mapping):
+        raise ValidationFailed("compute adapter row must be a mapping")
+    row: TabularRow = {}
+    for raw_key, raw_value in ready.items():
+        if not isinstance(raw_key, str):
+            raise ValidationFailed("compute adapter row keys must be strings", details={"key": str(raw_key)})
+        row[raw_key] = raw_value
+    return row
+
+
+def _required_int_cell(row: tuple[object, ...] | None, operation: str) -> int:
+    value = _required_row(row, operation)[0]
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValidationFailed(f"{operation} did not return an integer", details={"value": str(value)})
+    return value

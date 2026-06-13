@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, cast
 
 from sqlalchemy import and_, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.materialization_repository import (
     MaterializationRecord,
+    MaterializationRow,
     MaterializationRunRecord,
 )
 from foundry_lite.infrastructure import schema as db
@@ -24,7 +26,7 @@ class SqlAlchemyMaterializationRepository:
         transaction: Any,
         tenant_id: str,
         api_name: str,
-    ) -> dict[str, Any] | None:
+    ) -> MaterializationRow | None:
         row = (
             transaction.execute(
                 select(db.materializations).where(
@@ -37,7 +39,7 @@ class SqlAlchemyMaterializationRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(MaterializationRow, dict(row)) if row else None
 
     def insert_materialization(self, *, transaction: Any, record: MaterializationRecord) -> None:
         transaction.execute(
@@ -53,13 +55,13 @@ class SqlAlchemyMaterializationRepository:
             )
         )
 
-    def materialization_by_id(self, *, transaction: Any, materialization_id: str) -> dict[str, Any] | None:
+    def materialization_by_id(self, *, transaction: Any, materialization_id: str) -> MaterializationRow | None:
         row = (
             transaction.execute(select(db.materializations).where(db.materializations.c.id == materialization_id))
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(MaterializationRow, dict(row)) if row else None
 
     def insert_materialization_run(self, *, transaction: Any, record: MaterializationRunRecord) -> None:
         transaction.execute(
@@ -84,16 +86,22 @@ class SqlAlchemyMaterializationRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         materialization_run_id: str,
         status: str,
         target_dataset_version_id: str | None,
         row_count: int | None,
-        error: dict[str, Any] | None,
+        error: Mapping[str, object] | None,
         completed_at: str,
     ) -> None:
         transaction.execute(
             update(db.materialization_runs)
-            .where(db.materialization_runs.c.id == materialization_run_id)
+            .where(
+                and_(
+                    db.materialization_runs.c.tenant_id == tenant_id,
+                    db.materialization_runs.c.id == materialization_run_id,
+                )
+            )
             .values(
                 status=status,
                 target_dataset_version_id=target_dataset_version_id,

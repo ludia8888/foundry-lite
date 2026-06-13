@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import and_, delete, insert, select
 from sqlalchemy.engine import Engine
 
-from foundry_lite.application.ports import ObjectSetRecord
+from foundry_lite.application.ports import ObjectRecordRow, ObjectSetObjectTypeRow, ObjectSetRecord, ObjectSetRow
 from foundry_lite.infrastructure import schema as db
 
 
@@ -31,7 +31,7 @@ class SqlAlchemyObjectSetRepository:
             )
         )
 
-    def object_set_by_id(self, *, transaction: Any, tenant_id: str, set_id: str) -> dict[str, Any] | None:
+    def object_set_by_id(self, *, transaction: Any, tenant_id: str, set_id: str) -> ObjectSetRow | None:
         row = (
             transaction.execute(
                 select(db.object_sets).where(
@@ -41,7 +41,7 @@ class SqlAlchemyObjectSetRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(ObjectSetRow, dict(row)) if row else None
 
     def object_sets(
         self,
@@ -49,17 +49,21 @@ class SqlAlchemyObjectSetRepository:
         transaction: Any,
         tenant_id: str,
         object_type_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectSetRow]:
         query = select(db.object_sets).where(db.object_sets.c.tenant_id == tenant_id)
         if object_type_id is not None:
             query = query.where(db.object_sets.c.object_type_id == object_type_id)
         rows = transaction.execute(query.order_by(db.object_sets.c.created_at)).mappings().all()
-        return [dict(row) for row in rows]
+        return [cast(ObjectSetRow, dict(row)) for row in rows]
 
-    def delete_object_sets(self, *, transaction: Any, set_ids: list[str]) -> None:
+    def delete_object_sets(self, *, transaction: Any, tenant_id: str, set_ids: list[str]) -> None:
         if not set_ids:
             return
-        transaction.execute(delete(db.object_sets).where(db.object_sets.c.id.in_(set_ids)))
+        transaction.execute(
+            delete(db.object_sets).where(
+                and_(db.object_sets.c.tenant_id == tenant_id, db.object_sets.c.id.in_(set_ids))
+            )
+        )
 
     def active_object_ids(
         self,
@@ -94,7 +98,7 @@ class SqlAlchemyObjectSetRepository:
         tenant_id: str,
         object_type_api_name: str,
         object_ids: list[str],
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectRecordRow]:
         if not object_ids:
             return []
         rows = (
@@ -111,7 +115,7 @@ class SqlAlchemyObjectSetRepository:
             .mappings()
             .all()
         )
-        return [dict(row) for row in rows]
+        return [cast(ObjectRecordRow, dict(row)) for row in rows]
 
     def property_names_for_object_type(self, *, transaction: Any, object_type_id: str) -> set[str]:
         rows = (
@@ -121,7 +125,7 @@ class SqlAlchemyObjectSetRepository:
             .mappings()
             .all()
         )
-        return {row["api_name"] for row in rows}
+        return {str(row["api_name"]) for row in rows}
 
     def object_type_by_id(
         self,
@@ -129,7 +133,7 @@ class SqlAlchemyObjectSetRepository:
         transaction: Any,
         tenant_id: str,
         object_type_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> ObjectSetObjectTypeRow | None:
         row = (
             transaction.execute(
                 select(db.object_types).where(
@@ -142,4 +146,4 @@ class SqlAlchemyObjectSetRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(ObjectSetObjectTypeRow, dict(row)) if row else None

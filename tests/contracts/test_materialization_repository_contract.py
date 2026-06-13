@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +10,7 @@ import pytest
 from foundry_lite.application.ports.materialization_repository import (
     MaterializationRecord,
     MaterializationRepository,
+    MaterializationRow,
     MaterializationRunRecord,
 )
 from foundry_lite.infrastructure import schema as db
@@ -34,7 +35,7 @@ class MaterializationHarness(Protocol):
 
 @dataclass
 class FakeMaterializationRepository:
-    materializations: list[dict[str, Any]] = field(default_factory=list)
+    materializations: list[MaterializationRow] = field(default_factory=list)
     materialization_runs: list[dict[str, Any]] = field(default_factory=list)
     action_run_watermarks: list[str] = field(default_factory=list)
     object_record_watermarks: list[str] = field(default_factory=list)
@@ -45,33 +46,32 @@ class FakeMaterializationRepository:
         transaction: Any,
         tenant_id: str,
         api_name: str,
-    ) -> dict[str, Any] | None:
+    ) -> MaterializationRow | None:
         del transaction
         for row in self.materializations:
             if row["tenant_id"] == tenant_id and row["api_name"] == api_name:
-                return dict(row)
+                return row.copy()
         return None
 
     def insert_materialization(self, *, transaction: Any, record: MaterializationRecord) -> None:
         del transaction
-        self.materializations.append(
-            {
-                "id": record.materialization_id,
-                "tenant_id": record.tenant_id,
-                "api_name": record.api_name,
-                "materialization_type": record.materialization_type,
-                "source_ref": dict(record.source_ref),
-                "target_ref": dict(record.target_ref),
-                "trigger_config": dict(record.trigger_config),
-                "enabled": record.enabled,
-            }
-        )
+        row: MaterializationRow = {
+            "id": record.materialization_id,
+            "tenant_id": record.tenant_id,
+            "api_name": record.api_name,
+            "materialization_type": record.materialization_type,
+            "source_ref": record.source_ref.copy(),
+            "target_ref": record.target_ref.copy(),
+            "trigger_config": record.trigger_config.copy(),
+            "enabled": record.enabled,
+        }
+        self.materializations.append(row)
 
-    def materialization_by_id(self, *, transaction: Any, materialization_id: str) -> dict[str, Any] | None:
+    def materialization_by_id(self, *, transaction: Any, materialization_id: str) -> MaterializationRow | None:
         del transaction
         for row in self.materializations:
             if row["id"] == materialization_id:
-                return dict(row)
+                return row.copy()
         return None
 
     def insert_materialization_run(self, *, transaction: Any, record: MaterializationRunRecord) -> None:
@@ -98,16 +98,17 @@ class FakeMaterializationRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         materialization_run_id: str,
         status: str,
         target_dataset_version_id: str | None,
         row_count: int | None,
-        error: dict[str, Any] | None,
+        error: Mapping[str, object] | None,
         completed_at: str,
     ) -> None:
         del transaction
         for row in self.materialization_runs:
-            if row["id"] == materialization_run_id:
+            if row["tenant_id"] == tenant_id and row["id"] == materialization_run_id:
                 row.update(
                     {
                         "status": status,
@@ -130,31 +131,43 @@ class FakeMaterializationRepository:
 
 @dataclass
 class FakeMaterializationHarness:
-    repository: FakeMaterializationRepository = field(default_factory=FakeMaterializationRepository)
+    repository: MaterializationRepository = field(default_factory=FakeMaterializationRepository)
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
         yield self
 
     def materialization_rows(self) -> list[dict[str, Any]]:
-        return [dict(row) for row in self.repository.materializations]
+        repository = self.repository
+        assert isinstance(repository, FakeMaterializationRepository)
+        return [dict(row) for row in repository.materializations]
 
     def materialization_run_rows(self) -> list[dict[str, Any]]:
-        return [dict(row) for row in self.repository.materialization_runs]
+        repository = self.repository
+        assert isinstance(repository, FakeMaterializationRepository)
+        return [dict(row) for row in repository.materialization_runs]
 
     def seed_action_run(self, *, run_id: str, created_at: str) -> None:
         del run_id
-        self.repository.action_run_watermarks.append(created_at)
+        repository = self.repository
+        assert isinstance(repository, FakeMaterializationRepository)
+        repository.action_run_watermarks.append(created_at)
 
     def seed_object_record(self, *, record_id: str, updated_at: str) -> None:
         del record_id
-        self.repository.object_record_watermarks.append(updated_at)
+        repository = self.repository
+        assert isinstance(repository, FakeMaterializationRepository)
+        repository.object_record_watermarks.append(updated_at)
 
 
 @dataclass
 class SqlAlchemyMaterializationHarness:
     engine: Engine
-    repository: SqlAlchemyMaterializationRepository
+    repository: MaterializationRepository
+
+    @classmethod
+    def from_engine(cls, engine: Engine) -> SqlAlchemyMaterializationHarness:
+        return cls(engine=engine, repository=SqlAlchemyMaterializationRepository(engine))
 
     @classmethod
     def create(cls, tmp_path: Path) -> SqlAlchemyMaterializationHarness:
@@ -168,7 +181,7 @@ class SqlAlchemyMaterializationHarness:
                     created_at="2025-01-01T00:00:00Z",
                 )
             )
-        return cls(engine=engine, repository=SqlAlchemyMaterializationRepository(engine))
+        return cls.from_engine(engine)
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
@@ -227,11 +240,14 @@ class SqlAlchemyMaterializationHarness:
             )
 
 
-@pytest.fixture(params=["fake", "sqlalchemy"])
+@pytest.fixture(params=["fake", "sqlalchemy", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> MaterializationHarness:
     if request.param == "fake":
         return FakeMaterializationHarness()
-    return SqlAlchemyMaterializationHarness.create(tmp_path)
+    if request.param == "sqlalchemy":
+        return SqlAlchemyMaterializationHarness.create(tmp_path)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyMaterializationHarness.from_engine(postgres_fixture.engine)
 
 
 def _materialization_record(api_name: str = "action_log") -> MaterializationRecord:
@@ -334,6 +350,7 @@ def test_update_materialization_run_terminal_succeeded(harness: MaterializationH
         harness.repository.insert_materialization_run(transaction=txn, record=_materialization_run_record())
         harness.repository.update_materialization_run_terminal(
             transaction=txn,
+            tenant_id="tenant-test",
             materialization_run_id="mrun_test",
             status="succeeded",
             target_dataset_version_id="dsv_target",
@@ -353,6 +370,7 @@ def test_update_materialization_run_terminal_failed(harness: MaterializationHarn
         harness.repository.insert_materialization_run(transaction=txn, record=_materialization_run_record())
         harness.repository.update_materialization_run_terminal(
             transaction=txn,
+            tenant_id="tenant-test",
             materialization_run_id="mrun_test",
             status="failed",
             target_dataset_version_id=None,

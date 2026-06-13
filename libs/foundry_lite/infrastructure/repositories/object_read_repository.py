@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import and_, select
 from sqlalchemy.engine import Engine
 
+from foundry_lite.application.ports import ObjectLinkRow, ObjectRecordRow
 from foundry_lite.infrastructure import schema as db
 
 
@@ -21,7 +22,7 @@ class SqlAlchemyObjectReadRepository:
         tenant_id: str,
         object_type_api_name: str,
         object_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> ObjectRecordRow | None:
         row = (
             transaction.execute(
                 select(db.object_records).where(
@@ -35,7 +36,7 @@ class SqlAlchemyObjectReadRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(ObjectRecordRow, dict(row)) if row else None
 
     def active_object_rows(
         self,
@@ -43,7 +44,7 @@ class SqlAlchemyObjectReadRepository:
         transaction: Any,
         tenant_id: str,
         object_type_api_name: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectRecordRow]:
         rows = (
             transaction.execute(
                 select(db.object_records)
@@ -59,7 +60,7 @@ class SqlAlchemyObjectReadRepository:
             .mappings()
             .all()
         )
-        return [dict(row) for row in rows]
+        return [cast(ObjectRecordRow, dict(row)) for row in rows]
 
     def active_links_from(
         self,
@@ -69,7 +70,7 @@ class SqlAlchemyObjectReadRepository:
         link_type_api_name: str,
         from_api_name: str,
         from_object_id: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectLinkRow]:
         rows = (
             transaction.execute(
                 select(db.object_links).where(
@@ -85,4 +86,4 @@ class SqlAlchemyObjectReadRepository:
             .mappings()
             .all()
         )
-        return [dict(row) for row in rows]
+        return [cast(ObjectLinkRow, dict(row)) for row in rows]

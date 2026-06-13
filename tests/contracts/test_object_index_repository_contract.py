@@ -4,17 +4,22 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pytest
 from foundry_lite.application.ports import (
+    IndexRunCursor,
+    IndexRunError,
     IndexRunRecord,
+    LinkTypeRow,
     ObjectConflictRecord,
+    ObjectIndexLinkRow,
     ObjectIndexRepository,
     ObjectLinkInsert,
     ObjectRecordInsert,
     ObjectRecordSourceUpdate,
 )
+from foundry_lite.application.ports.object_index_repository import IndexRunRow
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyObjectIndexRepository
 from sqlalchemy import create_engine, insert, select
@@ -45,6 +50,13 @@ class FakeObjectIndexRepository:
     link_types: list[dict[str, Any]] = field(default_factory=list)
     object_links: dict[str, dict[str, Any]] = field(default_factory=dict)
 
+    def index_run_by_id(self, *, transaction: Any, tenant_id: str, run_id: str) -> IndexRunRow | None:
+        del transaction
+        row = self.index_runs.get(run_id)
+        if row is None or row["tenant_id"] != tenant_id:
+            return None
+        return cast(IndexRunRow, dict(row))
+
     def create_index_run(self, *, transaction: Any, record: IndexRunRecord) -> None:
         del transaction
         self.index_runs[record.run_id] = _index_run_row(record)
@@ -53,14 +65,17 @@ class FakeObjectIndexRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         run_id: str,
         rows_read: int,
         objects_upserted: int,
         links_upserted: int,
-        cursor: dict[str, Any],
+        cursor: IndexRunCursor,
         completed_at: str,
     ) -> None:
         del transaction
+        if self.index_runs[run_id]["tenant_id"] != tenant_id:
+            return
         self.index_runs[run_id].update(
             status="succeeded",
             rows_read=rows_read,
@@ -74,12 +89,14 @@ class FakeObjectIndexRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         run_id: str,
-        error: dict[str, Any],
+        error: IndexRunError,
         completed_at: str,
     ) -> None:
         del transaction
-        self.index_runs[run_id].update(status="failed", error=error, completed_at=completed_at)
+        if self.index_runs[run_id]["tenant_id"] == tenant_id:
+            self.index_runs[run_id].update(status="failed", error=error, completed_at=completed_at)
 
     def insert_object_record(self, *, transaction: Any, record: ObjectRecordInsert) -> None:
         del transaction
@@ -87,6 +104,8 @@ class FakeObjectIndexRepository:
 
     def update_object_record_from_source(self, *, transaction: Any, record: ObjectRecordSourceUpdate) -> None:
         del transaction
+        if self.object_records[record.record_id]["tenant_id"] != record.tenant_id:
+            return
         self.object_records[record.record_id].update(
             properties=record.properties,
             base_properties=record.base_properties,
@@ -107,10 +126,10 @@ class FakeObjectIndexRepository:
         tenant_id: str,
         ontology_version_id: str,
         from_object_type_id: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[LinkTypeRow]:
         del transaction
         return [
-            dict(row)
+            cast(LinkTypeRow, dict(row))
             for row in self.link_types
             if row["tenant_id"] == tenant_id
             and row["ontology_version_id"] == ontology_version_id
@@ -125,7 +144,7 @@ class FakeObjectIndexRepository:
         link_type_id: str,
         from_object_id: str,
         to_object_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> ObjectIndexLinkRow | None:
         del transaction
         for row in self.object_links.values():
             if (
@@ -134,19 +153,22 @@ class FakeObjectIndexRepository:
                 and row["from_object_id"] == from_object_id
                 and row["to_object_id"] == to_object_id
             ):
-                return dict(row)
+                return cast(ObjectIndexLinkRow, dict(row))
         return None
 
     def refresh_object_link(
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         link_id: str,
         link_version: int,
         source_dataset_version_id: str,
         updated_at: str,
     ) -> None:
         del transaction
+        if self.object_links[link_id]["tenant_id"] != tenant_id:
+            return
         self.object_links[link_id].update(
             link_version=link_version,
             source_dataset_version_id=source_dataset_version_id,
@@ -161,33 +183,38 @@ class FakeObjectIndexRepository:
 
 @dataclass
 class FakeObjectIndexHarness:
-    repository: FakeObjectIndexRepository
+    repository: ObjectIndexRepository
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
         yield None
 
     def add_link_type(self, **kwargs: Any) -> None:
+        assert isinstance(self.repository, FakeObjectIndexRepository)
         self.repository.link_types.append(_link_type_row(**kwargs))
 
     def add_link(self, record: ObjectLinkInsert) -> None:
+        assert isinstance(self.repository, FakeObjectIndexRepository)
         self.repository.object_links[record.link_id] = _link_row(record)
 
     def index_run(self, run_id: str) -> dict[str, Any] | None:
+        assert isinstance(self.repository, FakeObjectIndexRepository)
         row = self.repository.index_runs.get(run_id)
         return dict(row) if row else None
 
     def object_record(self, record_id: str) -> dict[str, Any] | None:
+        assert isinstance(self.repository, FakeObjectIndexRepository)
         row = self.repository.object_records.get(record_id)
         return dict(row) if row else None
 
     def conflicts(self) -> list[dict[str, Any]]:
+        assert isinstance(self.repository, FakeObjectIndexRepository)
         return [dict(row) for row in self.repository.object_conflicts]
 
 
 @dataclass
 class SqlAlchemyObjectIndexHarness:
-    repository: SqlAlchemyObjectIndexRepository
+    repository: ObjectIndexRepository
     engine: Engine
 
     @contextmanager
@@ -264,6 +291,7 @@ def _object_insert_record(record_id: str = "obj_order_1") -> ObjectRecordInsert:
 def _object_update_record(record_id: str = "obj_order_1") -> ObjectRecordSourceUpdate:
     return ObjectRecordSourceUpdate(
         record_id=record_id,
+        tenant_id="tenant-demo",
         properties={"status": "REVIEW", "amount": 120},
         base_properties={"status": "REVIEW", "amount": 120},
         source_dataset_version_id="dsv_orders_2",
@@ -440,6 +468,7 @@ def test_object_index_repository_contract_records_index_run_lifecycle(
         harness.repository.create_index_run(transaction=transaction, record=_index_run_record("index_run_1"))
         harness.repository.mark_index_run_succeeded(
             transaction=transaction,
+            tenant_id="tenant-demo",
             run_id="index_run_1",
             rows_read=3,
             objects_upserted=2,
@@ -450,14 +479,28 @@ def test_object_index_repository_contract_records_index_run_lifecycle(
         harness.repository.create_index_run(transaction=transaction, record=_index_run_record("index_run_failed"))
         harness.repository.mark_index_run_failed(
             transaction=transaction,
+            tenant_id="tenant-demo",
             run_id="index_run_failed",
             error={"type": "ValidationFailed"},
             completed_at="2026-06-10T00:03:00Z",
+        )
+        found_for_replay = harness.repository.index_run_by_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            run_id="index_run_failed",
+        )
+        hidden_tenant = harness.repository.index_run_by_id(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            run_id="index_run_failed",
         )
 
     succeeded = harness.index_run("index_run_1")
     failed = harness.index_run("index_run_failed")
 
+    assert found_for_replay is not None
+    assert found_for_replay["source_ref"] == {"dataset_version_id": "dsv_orders_1"}
+    assert hidden_tenant is None
     assert succeeded is not None
     assert succeeded["status"] == "succeeded"
     assert succeeded["cursor"] == {"last_row": 3}
@@ -512,6 +555,7 @@ def test_object_index_repository_contract_reads_link_types_and_upserts_links(
         assert existing is not None
         harness.repository.refresh_object_link(
             transaction=transaction,
+            tenant_id="tenant-demo",
             link_id=existing["id"],
             link_version=existing["link_version"] + 1,
             source_dataset_version_id="dsv_orders_2",

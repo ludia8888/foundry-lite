@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Mapping
 
+from foundry_lite.application.action_types import ActionApplyCommand, ActionApplyOutcome, ActionApplyResponse
+from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, TransactionContext
 from foundry_lite.application.ports.action_repository import (
     ActionRunRecord,
+    ActionRunRow,
+    ActionWritebackPayload,
     ActionWritebackRecord,
     ObjectEditRecord,
+    ObjectPatch,
+    ObjectProperties,
     ObjectTargetUpdate,
 )
 from foundry_lite.application.primitives import (
@@ -13,10 +19,20 @@ from foundry_lite.application.primitives import (
     _new_id,
     _now,
 )
-from foundry_lite.application.safe_expression import (
-    evaluate_safe_expression,
-    precondition_expression,
-    validate_action_request,
+from foundry_lite.application.safe_expression import validate_action_request
+from foundry_lite.application.services.action_helpers import (
+    action_command,
+    action_patch,
+    action_replay_response,
+    action_success_response,
+    previous_action_values,
+    writeback_error_payload,
+)
+from foundry_lite.application.services.action_protocols import (
+    ActionObjectIndexer,
+    ActionObjectRecordLookup,
+    ActionOntologyLookup,
+    ActionRuntimeBoundary,
 )
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
@@ -26,7 +42,6 @@ from foundry_lite.domain.errors import (
     InvariantViolation,
     NotFound,
     PermissionDenied,
-    ValidationFailed,
 )
 
 
@@ -38,10 +53,10 @@ class ActionService(CoreService):
         "ontology_service",
         "runtime_service",
     )
-    object_indexing_service: Any
-    object_records_service: Any
-    ontology_service: Any
-    runtime_service: Any
+    object_indexing_service: ActionObjectIndexer
+    object_records_service: ActionObjectRecordLookup
+    ontology_service: ActionOntologyLookup
+    runtime_service: ActionRuntimeBoundary
 
     def apply_action(
         self,
@@ -50,69 +65,96 @@ class ActionService(CoreService):
         object_type: str,
         object_id: str,
         expected_object_version: int,
-        params: dict[str, Any],
+        params: Mapping[str, object],
         idempotency_key: str,
         ctx: RequestContext | None = None,
         simulate_writeback_failure: bool = False,
-    ) -> dict[str, Any]:
+    ) -> ActionApplyResponse:
         ctx = ctx or RequestContext()
-        if not idempotency_key:
-            raise ValidationFailed("idempotency key is required")
-        self._require_action_permission(ctx, action_api_name)
+        command = action_command(
+            action_api_name,
+            object_type,
+            object_id,
+            expected_object_version,
+            params,
+            idempotency_key,
+            simulate_writeback_failure,
+        )
+        self._require_action_permission(ctx, command.action_api_name)
         action_run_id = _new_id("action_run")
-        deferred_error: Exception | None = None
-        response: dict[str, Any] | None = None
+        outcome = self._run_action_command(ctx, command, action_run_id)
+        if outcome.deferred_error is not None:
+            raise outcome.deferred_error
+        if outcome.response is None:
+            raise InvariantViolation("action did not produce a response")
+        return outcome.response
 
+    def _run_action_command(
+        self,
+        ctx: RequestContext,
+        command: ActionApplyCommand,
+        action_run_id: str,
+    ) -> ActionApplyOutcome:
         with self.engine.begin() as conn:
-            action_type = self.ontology_service._active_action_type(conn, ctx, action_api_name)
-            existing = self._existing_action_run(conn, ctx, action_type, idempotency_key)
+            action_type = self.ontology_service._active_action_type(conn, ctx, command.action_api_name)
+            existing = self._existing_action_run(conn, ctx, action_type, command.idempotency_key)
             if existing is not None:
-                return self._action_replay_response(existing)
-
+                return ActionApplyOutcome(response=action_replay_response(existing))
             self._insert_action_run(
                 conn,
                 ctx,
                 action_type=action_type,
-                action_api_name=action_api_name,
                 action_run_id=action_run_id,
-                object_type=object_type,
-                object_id=object_id,
-                expected_object_version=expected_object_version,
-                params=params,
-                idempotency_key=idempotency_key,
+                command=command,
             )
-            record = self.object_records_service._object_record(conn, ctx, object_type, object_id)
-            deferred_error = self._action_request_error(action_type, record, expected_object_version, params)
+            outcome = self._complete_received_action_run(
+                conn,
+                ctx,
+                action_type=action_type,
+                action_run_id=action_run_id,
+                command=command,
+            )
+        return outcome
 
-            if deferred_error is not None:
-                self._fail_action_run(conn, ctx, action_run_id, deferred_error)
-            elif simulate_writeback_failure:
-                deferred_error = self._fail_before_commit_writeback(conn, ctx, action_run_id, idempotency_key)
-            else:
-                if record is None:
-                    raise InvariantViolation("action target record disappeared before commit")
-                self._record_writeback(
-                    conn,
-                    ctx,
-                    action_run_id,
-                    status="succeeded",
-                    idempotency_key=idempotency_key,
-                    response={"status_code": 200},
-                )
-                response = self._commit_action_mutations(
-                    conn,
-                    ctx,
-                    action_type=action_type,
-                    action_run_id=action_run_id,
-                    record=record,
-                    params=params,
-                    idempotency_key=idempotency_key,
-                )
+    def _complete_received_action_run(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        *,
+        action_type: ActionTypeRow,
+        action_run_id: str,
+        command: ActionApplyCommand,
+    ) -> ActionApplyOutcome:
+        record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
+        deferred_error = self._action_request_error(
+            action_type, record, command.expected_object_version, command.params
+        )
         if deferred_error is not None:
-            raise deferred_error
-        if response is None:
-            raise InvariantViolation("action did not produce a response")
-        return response
+            self._fail_action_run(conn, ctx, action_run_id, deferred_error)
+            return ActionApplyOutcome(deferred_error=deferred_error)
+        if command.simulate_writeback_failure:
+            error = self._fail_before_commit_writeback(conn, ctx, action_run_id, command.idempotency_key)
+            return ActionApplyOutcome(deferred_error=error)
+        if record is None:
+            raise InvariantViolation("action target record disappeared before commit")
+        self._record_writeback(
+            conn,
+            ctx,
+            action_run_id,
+            status="succeeded",
+            idempotency_key=command.idempotency_key,
+            response={"status_code": 200},
+        )
+        response = self._commit_action_mutations(
+            conn,
+            ctx,
+            action_type=action_type,
+            action_run_id=action_run_id,
+            record=record,
+            params=command.params,
+            idempotency_key=command.idempotency_key,
+        )
+        return ActionApplyOutcome(response=response)
 
     def _require_action_permission(self, ctx: RequestContext, action_api_name: str) -> None:
         permission = f"action:execute:{action_api_name}"
@@ -134,11 +176,11 @@ class ActionService(CoreService):
 
     def _existing_action_run(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
-        action_type: dict[str, Any],
+        action_type: ActionTypeRow,
         idempotency_key: str,
-    ) -> dict[str, Any] | None:
+    ) -> ActionRunRow | None:
         return self.action_repository.action_run_by_idempotency(
             transaction=conn,
             tenant_id=ctx.tenant_id,
@@ -147,30 +189,14 @@ class ActionService(CoreService):
             idempotency_key=idempotency_key,
         )
 
-    def _action_replay_response(self, existing: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "actionRunId": existing["id"],
-            "status": existing["status"],
-            "idempotentReplay": True,
-            "target": {
-                "objectType": existing["target_object_type_api_name"],
-                "objectId": existing["target_object_id"],
-            },
-        }
-
     def _insert_action_run(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         *,
-        action_type: dict[str, Any],
-        action_api_name: str,
+        action_type: ActionTypeRow,
         action_run_id: str,
-        object_type: str,
-        object_id: str,
-        expected_object_version: int,
-        params: dict[str, Any],
-        idempotency_key: str,
+        command: ActionApplyCommand,
     ) -> None:
         self.action_repository.insert_action_run(
             transaction=conn,
@@ -178,15 +204,15 @@ class ActionService(CoreService):
                 action_run_id=action_run_id,
                 tenant_id=ctx.tenant_id,
                 action_type_id=action_type["id"],
-                action_type_api_name=action_api_name,
+                action_type_api_name=command.action_api_name,
                 actor_user_id=ctx.actor_user_id,
                 target_object_type_id=action_type["target_object_type_id"],
-                target_object_type_api_name=object_type,
-                target_object_id=object_id,
-                expected_object_version=expected_object_version,
-                parameters=params,
+                target_object_type_api_name=command.object_type,
+                target_object_id=command.object_id,
+                expected_object_version=command.expected_object_version,
+                parameters=command.params,
                 status="received",
-                idempotency_key=idempotency_key,
+                idempotency_key=command.idempotency_key,
                 error=None,
                 created_at=_now(),
                 completed_at=None,
@@ -195,10 +221,10 @@ class ActionService(CoreService):
 
     def _action_request_error(
         self,
-        action_type: dict[str, Any],
-        record: dict[str, Any] | None,
+        action_type: ActionTypeRow,
+        record: ObjectRecordRow | None,
         expected_object_version: int,
-        params: dict[str, Any],
+        params: Mapping[str, object],
     ) -> Exception | None:
         if record is None:
             return NotFound("target object not found")
@@ -210,11 +236,11 @@ class ActionService(CoreService):
                     "expectedObjectVersion": expected_object_version,
                 },
             )
-        return self._validate_action_request(action_type, record, params)
+        return validate_action_request(action_type, record, params)
 
     def _fail_action_run(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         action_run_id: str,
         error: Exception,
@@ -222,9 +248,10 @@ class ActionService(CoreService):
         status = "conflict" if isinstance(error, ConflictDetected) else "failed"
         self.action_repository.update_action_run_terminal(
             transaction=conn,
+            tenant_id=ctx.tenant_id,
             action_run_id=action_run_id,
             status=status,
-            error=self.runtime_service._error_payload(error),
+            error=self.runtime_service._error_payload(error, ctx, run_id=action_run_id, correlation_id=action_run_id),
             completed_at=_now(),
         )
         self.runtime_service._audit(
@@ -235,13 +262,15 @@ class ActionService(CoreService):
             resource_id=action_run_id,
             action="apply",
             decision="deny" if isinstance(error, PermissionDenied) else "allow",
-            after_ref=self.runtime_service._error_payload(error),
+            after_ref=self.runtime_service._error_payload(
+                error, ctx, run_id=action_run_id, correlation_id=action_run_id
+            ),
             correlation_id=action_run_id,
         )
 
     def _fail_before_commit_writeback(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         action_run_id: str,
         idempotency_key: str,
@@ -258,38 +287,36 @@ class ActionService(CoreService):
             idempotency_key=idempotency_key,
             response={"status_code": 500},
         )
+        error_payload = dict(writeback_error_payload(self.runtime_service, error, ctx, action_run_id))
         self.action_repository.update_action_run_terminal(
             transaction=conn,
+            tenant_id=ctx.tenant_id,
             action_run_id=action_run_id,
             status="failed",
-            error=self.runtime_service._error_payload(error),
+            error=error_payload,
             completed_at=_now(),
+        )
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="action.run.failed",
+            resource_type="action_run",
+            resource_id=action_run_id,
+            action="apply",
+            after_ref=error_payload,
+            correlation_id=action_run_id,
         )
         return error
 
-    def _validate_action_request(
-        self,
-        action_type: dict[str, Any],
-        record: dict[str, Any],
-        params: dict[str, Any],
-    ) -> Exception | None:
-        return validate_action_request(action_type, record, params)
-
-    def _precondition_expression(self, precondition: dict[str, Any]) -> str:
-        return precondition_expression(precondition)
-
-    def _evaluate_precondition(self, expression: str, properties: dict[str, Any]) -> bool:
-        return evaluate_safe_expression(expression, properties)
-
     def _record_writeback(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         action_run_id: str,
         *,
         status: str,
         idempotency_key: str,
-        response: dict[str, Any],
+        response: ActionWritebackPayload,
     ) -> None:
         now = _now()
         self.action_repository.insert_action_writeback(
@@ -301,7 +328,7 @@ class ActionService(CoreService):
                 mode="before_commit",
                 connector_id=MOCK_WRITEBACK_CONNECTOR,
                 request={"connector": MOCK_WRITEBACK_CONNECTOR, "simulated": True, "networkCall": False},
-                response={**response, "simulated": True},
+                response={**dict(response), "simulated": True},
                 status=status,
                 idempotency_key=idempotency_key,
                 attempts=1,
@@ -312,27 +339,40 @@ class ActionService(CoreService):
 
     def _commit_action_mutations(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         *,
-        action_type: dict[str, Any],
+        action_type: ActionTypeRow,
         action_run_id: str,
-        record: dict[str, Any],
-        params: dict[str, Any],
+        record: ObjectRecordRow,
+        params: Mapping[str, object],
         idempotency_key: str,
-    ) -> dict[str, Any]:
-        patch = self._action_patch(action_type, params)
-        previous_values = self._previous_action_values(record, patch)
+    ) -> ActionApplyResponse:
+        patch = dict(action_patch(action_type, params))
+        previous_values = dict(previous_action_values(record, patch))
         self._update_action_target(conn, record, patch)
         edit_id = self._insert_object_edit(conn, ctx, action_run_id, record, patch, previous_values, idempotency_key)
         self.action_repository.update_action_run_terminal(
             transaction=conn,
+            tenant_id=ctx.tenant_id,
             action_run_id=action_run_id,
             status="succeeded",
             error=None,
             completed_at=_now(),
         )
         self._publish_action_commit_events(conn, ctx, action_run_id, record, edit_id)
+        self._audit_action_commit(conn, ctx, action_run_id, previous_values, patch, edit_id)
+        return action_success_response(action_run_id, record, edit_id, patch)
+
+    def _audit_action_commit(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        previous_values: ObjectProperties,
+        patch: ObjectPatch,
+        edit_id: str,
+    ) -> None:
         self.runtime_service._audit(
             conn,
             ctx,
@@ -340,40 +380,16 @@ class ActionService(CoreService):
             resource_type="action_run",
             resource_id=action_run_id,
             action="apply",
-            before_ref=previous_values,
-            after_ref={"patch": patch, "object_edit_id": edit_id},
+            before_ref=dict(previous_values),
+            after_ref={"patch": dict(patch), "object_edit_id": edit_id},
             correlation_id=action_run_id,
         )
-        return {
-            "actionRunId": action_run_id,
-            "status": "succeeded",
-            "objectEditId": edit_id,
-            "target": {"objectType": record["object_type_api_name"], "objectId": record["object_id"]},
-            "newObjectVersion": record["object_version"] + 1,
-            "patch": patch,
-        }
-
-    def _action_patch(self, action_type: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
-        patch: dict[str, Any] = {}
-        for mutation in action_type["definition"].get("mutations", []):
-            if mutation["type"] != "setProperty":
-                raise ValidationFailed("v1 action supports setProperty only", details=mutation)
-            patch[mutation["property"]] = self._mutation_value(mutation, params)
-        return patch
-
-    def _mutation_value(self, mutation: dict[str, Any], params: dict[str, Any]) -> Any:
-        if "valueFrom" in mutation:
-            return self._resolve_value_from(mutation["valueFrom"], params)
-        return mutation.get("value")
-
-    def _previous_action_values(self, record: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
-        return {key: record["properties"].get(key) for key in patch}
 
     def _update_action_target(
         self,
-        conn: Any,
-        record: dict[str, Any],
-        patch: dict[str, Any],
+        conn: TransactionContext,
+        record: ObjectRecordRow,
+        patch: ObjectPatch,
     ) -> None:
         edit_properties = dict(record["edit_properties"])
         edit_properties.update(patch)
@@ -384,6 +400,7 @@ class ActionService(CoreService):
             transaction=conn,
             record=ObjectTargetUpdate(
                 object_record_id=record["id"],
+                tenant_id=record["tenant_id"],
                 expected_object_version=record["object_version"],
                 edit_properties=edit_properties,
                 properties=current,
@@ -396,12 +413,12 @@ class ActionService(CoreService):
 
     def _insert_object_edit(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         action_run_id: str,
-        record: dict[str, Any],
-        patch: dict[str, Any],
-        previous_values: dict[str, Any],
+        record: ObjectRecordRow,
+        patch: ObjectPatch,
+        previous_values: ObjectProperties,
         idempotency_key: str,
     ) -> str:
         edit_id = _new_id("edit")
@@ -415,8 +432,8 @@ class ActionService(CoreService):
                 object_type_api_name=record["object_type_api_name"],
                 object_id=record["object_id"],
                 edit_type="set_property",
-                patch=patch,
-                previous_values=previous_values,
+                patch=dict(patch),
+                previous_values=dict(previous_values),
                 actor_user_id=ctx.actor_user_id,
                 idempotency_key=idempotency_key,
                 created_at=_now(),
@@ -426,10 +443,10 @@ class ActionService(CoreService):
 
     def _publish_action_commit_events(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         action_run_id: str,
-        record: dict[str, Any],
+        record: ObjectRecordRow,
         edit_id: str,
     ) -> None:
         payload = {
@@ -451,9 +468,3 @@ class ActionService(CoreService):
                 idempotency_key=f"{event_type}:{action_run_id}",
                 correlation_id=action_run_id,
             )
-
-    def _resolve_value_from(self, expression: str, params: dict[str, Any]) -> Any:
-        if expression.startswith("params."):
-            key = expression.split(".", 1)[1]
-            return params.get(key)
-        raise ValidationFailed("unsupported valueFrom expression", details={"expression": expression})

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports import (
     DatasetFileRecord,
+    DatasetRunError,
     DatasetRunKind,
+    DatasetTransactionMetadata,
     DatasetTransactionRecord,
+    DatasetTransactionRow,
     DatasetVersionRecord,
     SyncRunRecord,
 )
@@ -36,23 +39,27 @@ class SqlAlchemyDatasetTransactionRepository:
                 created_by=record.created_by,
                 created_at=record.created_at,
                 committed_at=record.committed_at,
-                metadata=record.metadata,
+                metadata=dict(record.metadata),
             )
         )
 
-    def transaction_by_id(self, *, transaction: Any, transaction_id: str) -> dict[str, Any] | None:
+    def transaction_by_id(self, *, transaction: Any, transaction_id: str) -> DatasetTransactionRow | None:
         row = (
             transaction.execute(select(db.dataset_transactions).where(db.dataset_transactions.c.id == transaction_id))
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(DatasetTransactionRow, dict(row)) if row else None
 
-    def abort_transaction(self, *, transaction: Any, transaction_id: str, metadata: dict[str, Any]) -> None:
+    def abort_transaction(
+        self, *, transaction: Any, tenant_id: str, transaction_id: str, metadata: DatasetTransactionMetadata
+    ) -> None:
         transaction.execute(
             update(db.dataset_transactions)
-            .where(db.dataset_transactions.c.id == transaction_id)
-            .values(status="ABORTED", metadata=metadata)
+            .where(
+                and_(db.dataset_transactions.c.tenant_id == tenant_id, db.dataset_transactions.c.id == transaction_id)
+            )
+            .values(status="ABORTED", metadata=dict(metadata))
         )
 
     def insert_version(self, *, transaction: Any, record: DatasetVersionRecord) -> None:
@@ -85,7 +92,7 @@ class SqlAlchemyDatasetTransactionRepository:
                 row_count=record.row_count,
                 byte_size=record.byte_size,
                 content_hash=record.content_hash,
-                partition_values=record.partition_values,
+                partition_values=dict(record.partition_values),
             )
         )
 
@@ -93,6 +100,7 @@ class SqlAlchemyDatasetTransactionRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         transaction_id: str,
         committed_version_id: str,
         schema_version: int,
@@ -100,7 +108,9 @@ class SqlAlchemyDatasetTransactionRepository:
     ) -> None:
         transaction.execute(
             update(db.dataset_transactions)
-            .where(db.dataset_transactions.c.id == transaction_id)
+            .where(
+                and_(db.dataset_transactions.c.tenant_id == tenant_id, db.dataset_transactions.c.id == transaction_id)
+            )
             .values(
                 status="COMMITTED",
                 committed_version_id=committed_version_id,
@@ -112,29 +122,32 @@ class SqlAlchemyDatasetTransactionRepository:
     def abort_open_transaction_and_fail_run(
         self,
         *,
+        transaction: Any,
+        tenant_id: str,
         transaction_id: str,
         run_id: str,
         run_kind: DatasetRunKind,
-        error: dict[str, Any],
+        error: DatasetRunError,
         completed_at: str,
-    ) -> None:
-        with self.engine.begin() as transaction:
-            transaction.execute(
-                update(db.dataset_transactions)
-                .where(
-                    and_(
-                        db.dataset_transactions.c.id == transaction_id,
-                        db.dataset_transactions.c.status == "OPEN",
-                    )
+    ) -> bool:
+        abort_result = transaction.execute(
+            update(db.dataset_transactions)
+            .where(
+                and_(
+                    db.dataset_transactions.c.tenant_id == tenant_id,
+                    db.dataset_transactions.c.id == transaction_id,
+                    db.dataset_transactions.c.status == "OPEN",
                 )
-                .values(status="ABORTED", metadata={"error": error})
             )
-            run_table = _run_table(run_kind)
-            transaction.execute(
-                update(run_table)
-                .where(run_table.c.id == run_id)
-                .values(status="FAILED", error=error, completed_at=completed_at)
-            )
+            .values(status="ABORTED", metadata={"error": dict(error)})
+        )
+        run_table = _run_table(run_kind)
+        transaction.execute(
+            update(run_table)
+            .where(and_(run_table.c.tenant_id == tenant_id, run_table.c.id == run_id))
+            .values(status="FAILED", error=dict(error), completed_at=completed_at)
+        )
+        return abort_result.rowcount == 1
 
     def insert_sync_run(self, *, transaction: Any, record: SyncRunRecord) -> None:
         transaction.execute(
@@ -147,7 +160,7 @@ class SqlAlchemyDatasetTransactionRepository:
                 transaction_id=record.transaction_id,
                 committed_version_id=record.committed_version_id,
                 status=record.status,
-                error=record.error,
+                error=dict(record.error) if record.error is not None else None,
                 created_at=record.created_at,
                 completed_at=record.completed_at,
             )
@@ -157,6 +170,7 @@ class SqlAlchemyDatasetTransactionRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         sync_run_id: str,
         status: str,
         committed_version_id: str | None,
@@ -164,7 +178,7 @@ class SqlAlchemyDatasetTransactionRepository:
     ) -> None:
         transaction.execute(
             update(db.sync_runs)
-            .where(db.sync_runs.c.id == sync_run_id)
+            .where(and_(db.sync_runs.c.tenant_id == tenant_id, db.sync_runs.c.id == sync_run_id))
             .values(
                 status=status,
                 committed_version_id=committed_version_id,

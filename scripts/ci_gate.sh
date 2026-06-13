@@ -43,9 +43,76 @@ uv run python scripts/quality/check_service_call_graph.py --max-depth 7 --max-fa
 echo "== Static: application module size guard =="
 uv run python scripts/quality/check_application_module_size.py --max-lines 500
 
+echo "== Static: application function length hard limit =="
+uv run python scripts/quality/check_function_length.py
+
+echo "== Static: boolean naming =="
+uv run python scripts/quality/check_boolean_naming.py
+
+echo "== Static: dict[str, Any] signature budget =="
+uv run python scripts/quality/check_dict_any_budget.py
+
+echo "== Static: application broad Any boundary =="
+uv run python scripts/quality/check_application_any_budget.py
+
+echo "== Static: API router layer purity =="
+uv run python scripts/quality/check_router_layer_purity.py
+
+echo "== Static: query side-effect boundary =="
+uv run python scripts/quality/check_query_side_effects.py
+
+echo "== Static: repository no-business boundary =="
+uv run python scripts/quality/check_repository_no_business.py
+
+echo "== Static: tenant-scoped repository writes =="
+uv run python scripts/quality/check_tenant_write_guard.py
+
+echo "== Static: contract test coverage per port =="
+uv run python scripts/quality/check_contract_test_per_port.py
+
+echo "== Static: strategy/specification direct tests =="
+uv run python scripts/quality/check_strategy_specification_tests.py
+
+echo "== Static: required integration scenario markers =="
+uv run python scripts/quality/check_integration_scenario_markers.py
+
+echo "== Static: regression test per bug-fix commit =="
+uv run python scripts/quality/check_regression_test_per_bugfix.py
+
+echo "== Static: PR root-cause evidence =="
+uv run python scripts/quality/check_pr_root_cause_section.py
+
+echo "== Static: current-state documentation drift =="
+uv run python scripts/quality/check_doc_drift.py
+
+echo "== Static: generated TypeScript SDK drift =="
+uv run python scripts/generate_sdk_ts.py --check
+
+echo "== Static: DB schema revision guard =="
+uv run python scripts/quality/check_schema_revision_guard.py
+
+echo "== Static: audit on public service mutations =="
+uv run python scripts/quality/check_audit_on_mutation.py
+
+echo "== Static: transaction outbox/audit pairing =="
+uv run python scripts/quality/check_transaction_outbox_pair.py
+
+echo "== Static: action idempotency contract =="
+uv run python scripts/quality/check_idempotency_on_action.py
+
+echo "== Static: API error response request_id =="
+uv run python scripts/quality/check_error_response_has_request_id.py
+
+echo "== Static: log trace correlation keys =="
+uv run python scripts/quality/check_log_has_trace_keys.py
+
+echo "== Static: required operational metrics exposed =="
+uv run python scripts/quality/check_metrics_exposed.py
+
 echo "== Static: no skipped/flaky/xfail release bypasses =="
 uv run python scripts/quality/check_no_test_bypasses.py
 uv run python scripts/quality/check_no_test_sleep.py
+uv run python scripts/quality/check_pragma_no_cover_budget.py --baseline 0
 
 echo "== Static: private test reference baseline =="
 uv run python scripts/quality/check_private_test_references.py --max-count 0
@@ -55,6 +122,7 @@ uv run bandit -c pyproject.toml -r libs apps scripts
 
 echo "== Static: Semgrep design-pattern rules =="
 mkdir -p artifacts/quality
+export SSL_CERT_FILE="${SSL_CERT_FILE:-$(uv run python -c 'import certifi; print(certifi.where())')}"
 uv run semgrep --config scripts/quality/semgrep-rules/foundry-lite.yml \
   --error --metrics off --quiet \
   --json --output artifacts/quality/semgrep.json \
@@ -111,24 +179,55 @@ echo "== Dynamic: pytest with branch coverage =="
 # reproduced exactly.
 uv run pytest tests \
   --cov=libs/foundry_lite \
+  --cov=apps/api \
+  --cov=apps/cli \
+  --cov=apps/worker \
   --cov-branch \
   --cov-fail-under=95 \
   --junitxml=artifacts/test-results/pytest.xml
 
-echo "== Dynamic: pytest stability under random order + parallel =="
-# Re-run the suite without coverage instrumentation under pytest-xdist to
-# surface race conditions and shared-resource contention that the serial
-# coverage run cannot expose. A fresh random seed each run is the point.
-uv run pytest tests -n auto --no-header -q
+echo "== Dynamic: flaky pytest detector (3 repeated random + parallel runs) =="
+# Re-run the suite without coverage instrumentation under pytest-xdist three
+# times. pytest-randomly chooses a fresh seed each run, so order coupling,
+# shared-resource races, or unstable collection cannot be waved through as
+# "passed once".
+uv run python scripts/quality/check_flaky_detector.py \
+  --iterations 3 \
+  --command "uv run pytest tests -n auto --no-header -q"
 
 echo "== Dynamic: public callable smoke coverage gate =="
 uv run coverage json -o artifacts/coverage/coverage.json
+uv run python scripts/quality/check_tier_coverage_by_layer.py artifacts/coverage/coverage.json --threshold 95
 uv run python scripts/quality/check_public_api_coverage.py artifacts/coverage/coverage.json --threshold 95
 
 echo "== Dynamic: supply-chain demo smoke =="
 rm -rf .foundry-lite-ci-smoke
 FOUNDRY_LITE_HOME=.foundry-lite-ci-smoke pnpm --silent demo:supply-chain --fresh > artifacts/demo/supply-chain.json
 uv run python -m json.tool artifacts/demo/supply-chain.json > /dev/null
+
+echo "== Dynamic: OpenLineage lineage consistency =="
+uv run python scripts/quality/check_openlineage_dynamic_lineage.py --storage-root .foundry-lite-ci-smoke
+
+echo "== Dynamic: runtime audit count consistency =="
+uv run python scripts/quality/check_audit_count_runtime.py --storage-root .foundry-lite-ci-smoke
+
+echo "== Dynamic: outbox consistency =="
+uv run python scripts/quality/check_outbox_consistency.py --storage-root .foundry-lite-ci-smoke
+
+echo "== Dynamic: MVP data correctness =="
+uv run python scripts/quality/check_mvp_data_correctness.py --storage-root .foundry-lite-ci-smoke
+
+echo "== Dynamic: MVP performance smoke =="
+uv run python scripts/quality/check_mvp_performance_smoke.py --profile ci
+
+echo "== Dynamic: trace continuity consistency =="
+uv run python scripts/quality/check_trace_continuity.py --storage-root .foundry-lite-trace-gate
+
+echo "== Dynamic: adapter error trace keys =="
+uv run python scripts/quality/check_adapter_error_trace_keys.py --storage-root .foundry-lite-adapter-error-gate
+
+echo "== Dynamic: failed mutation state consistency =="
+uv run python scripts/quality/check_failed_mutation_state_runtime.py --storage-root .foundry-lite-failure-state-gate
 
 echo "== Dynamic: runtime diagnostics =="
 rm -rf .foundry-lite-diagnostics

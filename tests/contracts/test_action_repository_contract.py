@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -10,6 +10,7 @@ import pytest
 from foundry_lite.application.ports.action_repository import (
     ActionRepository,
     ActionRunRecord,
+    ActionRunRow,
     ActionWritebackRecord,
     ObjectEditRecord,
     ObjectTargetUpdate,
@@ -38,7 +39,7 @@ class ActionHarness(Protocol):
 
 @dataclass
 class FakeActionRepository:
-    action_runs: list[dict[str, Any]] = field(default_factory=list)
+    action_runs: list[ActionRunRow] = field(default_factory=list)
     action_writebacks: list[dict[str, Any]] = field(default_factory=list)
     object_records: list[dict[str, Any]] = field(default_factory=list)
     object_edits: list[dict[str, Any]] = field(default_factory=list)
@@ -51,7 +52,7 @@ class FakeActionRepository:
         action_type_id: str,
         actor_user_id: str,
         idempotency_key: str,
-    ) -> dict[str, Any] | None:
+    ) -> ActionRunRow | None:
         del transaction
         for row in self.action_runs:
             if (
@@ -60,7 +61,7 @@ class FakeActionRepository:
                 and row["actor_user_id"] == actor_user_id
                 and row["idempotency_key"] == idempotency_key
             ):
-                return dict(row)
+                return row.copy()
         return None
 
     def insert_action_run(self, *, transaction: Any, record: ActionRunRecord) -> None:
@@ -71,14 +72,15 @@ class FakeActionRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         action_run_id: str,
         status: str,
-        error: dict[str, Any] | None,
+        error: Mapping[str, object] | None,
         completed_at: str,
     ) -> None:
         del transaction
         for row in self.action_runs:
-            if row["id"] == action_run_id:
+            if row["tenant_id"] == tenant_id and row["id"] == action_run_id:
                 row.update(status=status, error=error, completed_at=completed_at)
                 return
 
@@ -89,7 +91,11 @@ class FakeActionRepository:
     def update_object_target(self, *, transaction: Any, record: ObjectTargetUpdate) -> bool:
         del transaction
         for row in self.object_records:
-            if row["id"] == record.object_record_id and row["object_version"] == record.expected_object_version:
+            if (
+                row["tenant_id"] == record.tenant_id
+                and row["id"] == record.object_record_id
+                and row["object_version"] == record.expected_object_version
+            ):
                 row.update(
                     edit_properties=record.edit_properties,
                     properties=record.properties,
@@ -106,31 +112,41 @@ class FakeActionRepository:
 
 @dataclass
 class FakeActionHarness:
-    repository: FakeActionRepository
+    repository: ActionRepository
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
         yield None
 
     def add_object_record(self, **kwargs: Any) -> None:
-        self.repository.object_records.append(_object_record_row(**kwargs))
+        repository = self.repository
+        assert isinstance(repository, FakeActionRepository)
+        repository.object_records.append(_object_record_row(**kwargs))
 
     def action_run_rows(self) -> list[dict[str, Any]]:
-        return [dict(row) for row in self.repository.action_runs]
+        repository = self.repository
+        assert isinstance(repository, FakeActionRepository)
+        return [dict(row) for row in repository.action_runs]
 
     def writeback_rows(self) -> list[dict[str, Any]]:
-        return [dict(row) for row in self.repository.action_writebacks]
+        repository = self.repository
+        assert isinstance(repository, FakeActionRepository)
+        return [dict(row) for row in repository.action_writebacks]
 
     def object_rows(self) -> list[dict[str, Any]]:
-        return [dict(row) for row in self.repository.object_records]
+        repository = self.repository
+        assert isinstance(repository, FakeActionRepository)
+        return [dict(row) for row in repository.object_records]
 
     def object_edit_rows(self) -> list[dict[str, Any]]:
-        return [dict(row) for row in self.repository.object_edits]
+        repository = self.repository
+        assert isinstance(repository, FakeActionRepository)
+        return [dict(row) for row in repository.object_edits]
 
 
 @dataclass
 class SqlAlchemyActionHarness:
-    repository: SqlAlchemyActionRepository
+    repository: ActionRepository
     engine: Engine
 
     @contextmanager
@@ -187,7 +203,7 @@ def _action_run_record(
     )
 
 
-def _action_run_row(record: ActionRunRecord) -> dict[str, Any]:
+def _action_run_row(record: ActionRunRecord) -> ActionRunRow:
     return {
         "id": record.action_run_id,
         "tenant_id": record.tenant_id,
@@ -270,6 +286,7 @@ def _object_record_row(
 def _object_target_update(*, expected_object_version: int = 3) -> ObjectTargetUpdate:
     return ObjectTargetUpdate(
         object_record_id="obj_order_1",
+        tenant_id="tenant-demo",
         expected_object_version=expected_object_version,
         edit_properties={"status": "APPROVED"},
         properties={"status": "APPROVED"},
@@ -312,13 +329,19 @@ def _object_edit_row(record: ObjectEditRecord) -> dict[str, Any]:
     }
 
 
-@pytest.fixture(params=["sqlalchemy", "fake"])
+@pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> ActionHarness:
     if request.param == "fake":
         return FakeActionHarness(FakeActionRepository())
-    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
-    db.create_database(engine)
-    return SqlAlchemyActionHarness(SqlAlchemyActionRepository(engine), engine)
+    if request.param == "sqlalchemy":
+        engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+        db.create_database(engine)
+        return SqlAlchemyActionHarness(SqlAlchemyActionRepository(engine), engine)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyActionHarness(
+        SqlAlchemyActionRepository(postgres_fixture.engine),
+        postgres_fixture.engine,
+    )
 
 
 def test_action_repository_contract_inserts_and_replays_idempotent_runs(harness: ActionHarness) -> None:
@@ -350,6 +373,7 @@ def test_action_repository_contract_updates_terminal_state_and_writebacks(harnes
         harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
         harness.repository.update_action_run_terminal(
             transaction=transaction,
+            tenant_id="tenant-demo",
             action_run_id="arun_1",
             status="failed",
             error={"type": "ExternalSystemError"},

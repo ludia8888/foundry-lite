@@ -29,9 +29,18 @@ class DummyTracer:
 
 def test_metrics_record_success_failure_and_payload() -> None:
     metrics.record_http_request("GET", "/healthz", 200, 0.01)
+    metrics.record_dataset_commit(0.01)
+    metrics.record_transform_run(0.02)
+    metrics.record_action_apply(0.03)
+    metrics.record_object_query(0.04)
+    metrics.set_outbox_publish_lag(0.5)
+    metrics.record_failed_run()
+    metrics.set_dlq_size(1)
     payload, media_type = metrics.prometheus_payload()
 
     assert b"foundry_lite_http_requests_total" in payload
+    for metric_name in metrics.REQUIRED_OPERATIONAL_METRICS:
+        assert metric_name.encode() in payload
     assert "text/plain" in media_type
     assert metrics.operation_labels("demo", run_id="run-1") == {"operation": "demo", "run_id": "run-1"}
 
@@ -77,9 +86,28 @@ def test_trace_public_methods_wraps_only_public_instance_methods(monkeypatch: py
     assert span.attributes["foundry_lite.operation"] == "Sample.public"
 
 
-def test_configure_observability_respects_disabled_and_exporters(monkeypatch: pytest.MonkeyPatch) -> None:
-    providers: list[object] = []
+def test_trace_direct_public_methods_does_not_wrap_inherited_methods(monkeypatch: pytest.MonkeyPatch) -> None:
+    span = DummySpan()
+    monkeypatch.setattr(tracing, "tracer", lambda: DummyTracer(span))
 
+    class Parent:
+        def inherited(self) -> str:
+            return "inherited"
+
+    @tracing.trace_direct_public_methods
+    class Child(Parent):
+        def direct(self) -> str:
+            return "direct"
+
+    child = Child()
+    assert child.inherited() == "inherited"
+    assert "foundry_lite.operation" not in span.attributes
+
+    assert child.direct() == "direct"
+    assert span.attributes["foundry_lite.operation"] == "Child.direct"
+
+
+def test_configure_observability_respects_disabled_and_exporters(monkeypatch: pytest.MonkeyPatch) -> None:
     class DummyResource:
         @staticmethod
         def create(attributes: dict[str, str]) -> dict[str, str]:
@@ -92,6 +120,8 @@ def test_configure_observability_respects_disabled_and_exporters(monkeypatch: py
 
         def add_span_processor(self, processor: object) -> None:
             self.processors.append(processor)
+
+    providers: list[DummyProvider] = []
 
     monkeypatch.setenv("FOUNDRY_LITE_OTEL_DISABLED", "1")
     monkeypatch.setattr(tracing, "_CONFIGURED", False)

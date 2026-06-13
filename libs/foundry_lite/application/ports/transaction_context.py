@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from typing import Protocol, runtime_checkable
 
 
@@ -19,3 +20,11 @@ class TransactionContext(Protocol):
     operations are defined by the concrete repository implementation pairing.
     What it documents is the boundary, not the vendor API.
     """
+
+
+class TransactionManager(Protocol):
+    """Application-visible transaction lifecycle boundary."""
+
+    def begin(self) -> AbstractContextManager[TransactionContext]:
+        """Open a transaction context and yield its opaque handle."""
+        ...

@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import and_, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRecord,
+    ActionTypeRow,
     LinkTypeRecord,
+    LinkTypeRow,
     ObjectTypeRecord,
+    ObjectTypeRow,
     OntologyVersionRecord,
+    OntologyVersionRow,
     PropertyTypeRecord,
+    PropertyTypeRow,
 )
 from foundry_lite.infrastructure import schema as db
 
@@ -61,12 +66,18 @@ class SqlAlchemyOntologyRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         ontology_version_id: str,
         activated_at: str,
     ) -> None:
         transaction.execute(
             update(db.ontology_versions)
-            .where(db.ontology_versions.c.id == ontology_version_id)
+            .where(
+                and_(
+                    db.ontology_versions.c.tenant_id == tenant_id,
+                    db.ontology_versions.c.id == ontology_version_id,
+                )
+            )
             .values(status="active", activated_at=activated_at)
         )
 
@@ -145,7 +156,7 @@ class SqlAlchemyOntologyRepository:
         transaction: Any,
         tenant_id: str,
         ontology_version_id: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectTypeRow]:
         rows = (
             transaction.execute(
                 select(db.object_types)
@@ -160,7 +171,7 @@ class SqlAlchemyOntologyRepository:
             .mappings()
             .all()
         )
-        return [dict(row) for row in rows]
+        return [cast(ObjectTypeRow, dict(row)) for row in rows]
 
     def link_types_for_version(
         self,
@@ -168,7 +179,7 @@ class SqlAlchemyOntologyRepository:
         transaction: Any,
         tenant_id: str,
         ontology_version_id: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[LinkTypeRow]:
         rows = (
             transaction.execute(
                 select(db.link_types)
@@ -183,9 +194,9 @@ class SqlAlchemyOntologyRepository:
             .mappings()
             .all()
         )
-        return [dict(row) for row in rows]
+        return [cast(LinkTypeRow, dict(row)) for row in rows]
 
-    def properties_for_object_type(self, *, transaction: Any, object_type_id: str) -> list[dict[str, Any]]:
+    def properties_for_object_type(self, *, transaction: Any, object_type_id: str) -> list[PropertyTypeRow]:
         rows = (
             transaction.execute(
                 select(db.property_types)
@@ -195,9 +206,9 @@ class SqlAlchemyOntologyRepository:
             .mappings()
             .all()
         )
-        return [dict(row) for row in rows]
+        return [cast(PropertyTypeRow, dict(row)) for row in rows]
 
-    def actions_for_target(self, *, transaction: Any, object_type_id: str) -> list[dict[str, Any]]:
+    def actions_for_target(self, *, transaction: Any, object_type_id: str) -> list[ActionTypeRow]:
         rows = (
             transaction.execute(
                 select(db.action_types)
@@ -207,9 +218,9 @@ class SqlAlchemyOntologyRepository:
             .mappings()
             .all()
         )
-        return [dict(row) for row in rows]
+        return [cast(ActionTypeRow, dict(row)) for row in rows]
 
-    def active_ontology_version(self, *, transaction: Any, tenant_id: str) -> dict[str, Any] | None:
+    def active_ontology_version(self, *, transaction: Any, tenant_id: str) -> OntologyVersionRow | None:
         row = (
             transaction.execute(
                 select(db.ontology_versions).where(
@@ -222,7 +233,7 @@ class SqlAlchemyOntologyRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(OntologyVersionRow, dict(row)) if row else None
 
     def object_type_for_version(
         self,
@@ -231,7 +242,7 @@ class SqlAlchemyOntologyRepository:
         tenant_id: str,
         ontology_version_id: str,
         api_name: str,
-    ) -> dict[str, Any] | None:
+    ) -> ObjectTypeRow | None:
         row = (
             transaction.execute(
                 select(db.object_types).where(
@@ -245,7 +256,7 @@ class SqlAlchemyOntologyRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(ObjectTypeRow, dict(row)) if row else None
 
     def enabled_action_type_for_version(
         self,
@@ -254,7 +265,7 @@ class SqlAlchemyOntologyRepository:
         tenant_id: str,
         ontology_version_id: str,
         api_name: str,
-    ) -> dict[str, Any] | None:
+    ) -> ActionTypeRow | None:
         row = (
             transaction.execute(
                 select(db.action_types).where(
@@ -269,4 +280,4 @@ class SqlAlchemyOntologyRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(ActionTypeRow, dict(row)) if row else None

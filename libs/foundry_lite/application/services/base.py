@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports import (
@@ -15,15 +15,18 @@ from foundry_lite.application.ports import (
     ObjectReadRepository,
     ObjectSetRepository,
     RuntimeRepository,
+    TransactionManager,
 )
 from foundry_lite.application.ports.action_repository import ActionRepository
+from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.dataset_quality_repository import DatasetQualityRepository
 from foundry_lite.application.ports.materialization_repository import MaterializationRepository
 from foundry_lite.application.ports.ontology_repository import OntologyRepository
 from foundry_lite.application.ports.transform_repository import TransformRepository
+from foundry_lite.observability.tracing import trace_direct_public_methods
 from foundry_lite.security.policy import PolicyService
 
-CollaboratorMap = Mapping[str, Any]
+CollaboratorMap = Mapping[str, object]
 
 SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_service": "ActionService",
@@ -62,6 +65,7 @@ class CoreService:
     root: Path
     storage_root: Path
     compute_adapter: ComputeAdapter
+    connector_adapter: ConnectorAdapter
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
@@ -70,7 +74,7 @@ class CoreService:
     object_set_repository: ObjectSetRepository
     runtime_repository: RuntimeRepository
     dataset_storage: DatasetStorageAdapter
-    engine: Any
+    engine: TransactionManager
     policy: PolicyService
     action_repository: ActionRepository
     ontology_repository: OntologyRepository
@@ -78,7 +82,11 @@ class CoreService:
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository
 
-    def __init__(self, **dependencies: Any) -> None:
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        trace_direct_public_methods(cls)
+
+    def __init__(self, **dependencies: object) -> None:
         expected = set(self.required_dependencies)
         provided = set(dependencies)
         missing = sorted(expected - provided)
@@ -103,7 +111,7 @@ class CoreService:
             setattr(self, name, collaborator)
 
 
-def dependency_kwargs(service_type: type[CoreService], dependencies: CoreDependencies) -> dict[str, Any]:
+def dependency_kwargs(service_type: type[CoreService], dependencies: CoreDependencies) -> dict[str, object]:
     return {name: getattr(dependencies, name) for name in service_type.required_dependencies}
 
 
@@ -111,5 +119,5 @@ def build_service[ServiceT: CoreService](service_type: type[ServiceT], dependenc
     return service_type(**dependency_kwargs(service_type, dependencies))
 
 
-def collaborator_kwargs(service: CoreService, collaborators: CollaboratorMap) -> dict[str, Any]:
+def collaborator_kwargs(service: CoreService, collaborators: CollaboratorMap) -> dict[str, object]:
     return {name: collaborators[name] for name in service.required_collaborators}

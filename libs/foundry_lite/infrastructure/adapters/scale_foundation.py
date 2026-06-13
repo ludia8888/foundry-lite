@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+
+from foundry_lite.application.ports.connector_adapter import (
+    ConnectorAdapter,
+    ConnectorSnapshot,
+    ConnectorSnapshotRequest,
+)
+from foundry_lite.application.ports.search_adapter import SearchAdapter, SearchDocument, SearchHit, SearchQuery
+from foundry_lite.application.ports.stream_adapter import StreamAdapter, StreamEvent, StreamPublishRequest
+from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter, WorkflowRun, WorkflowStartRequest
+
+
+class LocalWorkflowAdapter:
+    """In-memory workflow boundary for local/demo execution."""
+
+    profile_name = "local-workflow"
+
+    def __init__(self) -> None:
+        self._runs_by_id: dict[str, WorkflowRun] = {}
+        self._runs_by_idempotency: dict[str, WorkflowRun] = {}
+
+    def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
+        existing = self._runs_by_idempotency.get(request.idempotency_key)
+        if existing is not None:
+            return existing
+        run = WorkflowRun(
+            run_id=f"workflow_run_{len(self._runs_by_id) + 1}",
+            workflow_name=request.workflow_name,
+            status="succeeded",
+            output={"workflow_name": request.workflow_name, "request_id": request.request_id},
+        )
+        self._runs_by_id[run.run_id] = run
+        self._runs_by_idempotency[request.idempotency_key] = run
+        return run
+
+    def workflow_run(self, run_id: str) -> WorkflowRun | None:
+        return self._runs_by_id.get(run_id)
+
+
+class FakeWorkflowAdapter(LocalWorkflowAdapter):
+    """Fake workflow profile that preserves the local contract surface."""
+
+    profile_name = "fake-workflow"
+
+
+class LocalStreamAdapter:
+    """In-memory stream boundary for local/demo execution."""
+
+    profile_name = "local-stream"
+
+    def __init__(self) -> None:
+        self._events_by_stream: dict[str, list[StreamEvent]] = {}
+
+    def publish_event(self, request: StreamPublishRequest) -> StreamEvent:
+        events = self._events_by_stream.setdefault(request.stream_name, [])
+        event = StreamEvent(
+            stream_name=request.stream_name,
+            offset=len(events),
+            event_type=request.event_type,
+            tenant_id=request.tenant_id,
+            request_id=request.request_id,
+            key=request.key,
+            payload=dict(request.payload),
+        )
+        events.append(event)
+        return event
+
+    def read_events(self, stream_name: str, *, after_offset: int | None = None, limit: int = 100) -> list[StreamEvent]:
+        events = self._events_by_stream.get(stream_name, [])
+        start = -1 if after_offset is None else after_offset
+        return [event for event in events if event.offset > start][:limit]
+
+
+class FakeStreamAdapter(LocalStreamAdapter):
+    """Fake stream profile that preserves the local contract surface."""
+
+    profile_name = "fake-stream"
+
+
+class LocalSearchAdapter:
+    """In-memory exact-match search boundary for local/demo execution."""
+
+    profile_name = "local-search"
+
+    def __init__(self) -> None:
+        self._documents: dict[tuple[str, str, str], SearchDocument] = {}
+
+    def upsert_document(self, document: SearchDocument) -> None:
+        self._documents[(document.tenant_id, document.object_type, document.document_id)] = document
+
+    def delete_document(self, *, tenant_id: str, object_type: str, document_id: str) -> None:
+        self._documents.pop((tenant_id, object_type, document_id), None)
+
+    def search(self, query: SearchQuery) -> list[SearchHit]:
+        matches = [
+            SearchHit(document_id=document.document_id, score=1.0, document=document)
+            for key, document in sorted(self._documents.items())
+            if self._matches_query(key, document, query)
+        ]
+        return matches[: query.limit]
+
+    def _matches_query(self, key: tuple[str, str, str], document: SearchDocument, query: SearchQuery) -> bool:
+        tenant_id, object_type, _ = key
+        if tenant_id != query.tenant_id or object_type != query.object_type:
+            return False
+        return all(document.properties.get(name) == value for name, value in query.terms.items())
+
+
+class FakeSearchAdapter(LocalSearchAdapter):
+    """Fake search profile that preserves the local contract surface."""
+
+    profile_name = "fake-search"
+
+
+class LocalConnectorAdapter:
+    """Configured in-memory connector boundary for local/demo execution."""
+
+    profile_name = "local-connector"
+
+    def __init__(self, snapshots: Mapping[tuple[str, str], ConnectorSnapshot] | None = None) -> None:
+        self._snapshots = dict(snapshots or {})
+
+    def snapshot(self, request: ConnectorSnapshotRequest) -> ConnectorSnapshot:
+        configured = self._snapshots.get((request.connector_name, request.resource_name))
+        if configured is not None:
+            return configured
+        return ConnectorSnapshot(
+            connector_name=request.connector_name,
+            resource_name=request.resource_name,
+            rows=(),
+            schema={"columns": []},
+            cursor=request.cursor,
+            source_watermark=request.request_id,
+        )
+
+
+class FakeConnectorAdapter(LocalConnectorAdapter):
+    """Fake connector profile that preserves the local contract surface."""
+
+    profile_name = "fake-connector"
+
+
+_workflow_adapter: WorkflowAdapter = LocalWorkflowAdapter()
+_stream_adapter: StreamAdapter = LocalStreamAdapter()
+_search_adapter: SearchAdapter = LocalSearchAdapter()
+_connector_adapter: ConnectorAdapter = LocalConnectorAdapter()

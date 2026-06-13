@@ -50,6 +50,9 @@ flite = "foundry_lite_cli.main:main"
 [tool.pytest.ini_options]
 pythonpath = [".", "libs", "apps/api", "apps/cli", "apps/worker"]
 testpaths = ["tests"]
+markers = [
+  "integration_scenario(name): marks one of the seven required MVP release integration scenarios",
+]
 
 [tool.coverage.run]
 branch = true

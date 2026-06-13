@@ -1,9 +1,56 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import NotRequired, Protocol, TypedDict
 
+from foundry_lite.application.ports.object_read_repository import ObjectQueryItem, ObjectRecordRow
 from foundry_lite.application.ports.transaction_context import TransactionContext
+
+ObjectSetDefinition = dict[str, object]
+
+
+class ObjectSetRow(TypedDict):
+    id: str
+    tenant_id: str
+    name: str
+    object_type_id: str
+    set_type: str
+    definition: ObjectSetDefinition
+    visibility: str
+    owner_user_id: str
+    expires_at: str | None
+    created_at: str
+
+
+class ObjectSetObjectTypeRow(TypedDict):
+    id: str
+    tenant_id: str
+    ontology_version_id: str
+    api_name: str
+    display_name: str
+    description: str | None
+    primary_key_property: str
+    backing: Mapping[str, object]
+    config: Mapping[str, object]
+
+
+class ObjectSetPayload(TypedDict):
+    id: str
+    name: str
+    objectType: str
+    setType: str
+    definition: ObjectSetDefinition
+    visibility: str
+    ownerUserId: str
+    expiresAt: str | None
+    createdAt: str
+    objectIds: list[str]
+    items: NotRequired[list[ObjectQueryItem]]
+
+
+class ObjectSetQueryResult(TypedDict):
+    items: list[ObjectSetPayload]
 
 
 @dataclass(frozen=True)
@@ -13,7 +60,7 @@ class ObjectSetRecord:
     name: str
     object_type_id: str
     set_type: str
-    definition: dict[str, Any]
+    definition: ObjectSetDefinition
     visibility: str
     owner_user_id: str
     expires_at: str | None
@@ -27,9 +74,7 @@ class ObjectSetRepository(Protocol):
         """Persist a new object set."""
         ...
 
-    def object_set_by_id(
-        self, *, transaction: TransactionContext, tenant_id: str, set_id: str
-    ) -> dict[str, Any] | None:
+    def object_set_by_id(self, *, transaction: TransactionContext, tenant_id: str, set_id: str) -> ObjectSetRow | None:
         """Return one object set row for a tenant."""
         ...
 
@@ -39,11 +84,11 @@ class ObjectSetRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         object_type_id: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectSetRow]:
         """Return object set rows for a tenant, optionally narrowed to one object type."""
         ...
 
-    def delete_object_sets(self, *, transaction: TransactionContext, set_ids: list[str]) -> None:
+    def delete_object_sets(self, *, transaction: TransactionContext, tenant_id: str, set_ids: list[str]) -> None:
         """Delete object sets by id."""
         ...
 
@@ -65,7 +110,7 @@ class ObjectSetRepository(Protocol):
         tenant_id: str,
         object_type_api_name: str,
         object_ids: list[str],
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectRecordRow]:
         """Return active object records for a requested id list."""
         ...
 
@@ -79,6 +124,6 @@ class ObjectSetRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         object_type_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> ObjectSetObjectTypeRow | None:
         """Return one object type row for a tenant."""
         ...

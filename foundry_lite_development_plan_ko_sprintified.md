@@ -3102,6 +3102,7 @@ flite ontology validate ontology.yaml
 flite object get Order O-1001 --explain
 flite action replay <action-run-id>
 flite index replay --object-type Order --from-event <event-id>
+flite index replay-run <index-run-id>
 flite materialize run order_current_dataset
 ```
 

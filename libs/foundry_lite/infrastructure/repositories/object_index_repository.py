@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports import (
+    IndexRunCursor,
+    IndexRunError,
     IndexRunRecord,
+    LinkTypeRow,
     ObjectConflictRecord,
+    ObjectIndexLinkRow,
     ObjectLinkInsert,
     ObjectRecordInsert,
     ObjectRecordSourceUpdate,
 )
+from foundry_lite.application.ports.object_index_repository import IndexRunRow
 from foundry_lite.infrastructure import schema as db
 
 
@@ -20,6 +25,16 @@ class SqlAlchemyObjectIndexRepository:
 
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
+
+    def index_run_by_id(self, *, transaction: Any, tenant_id: str, run_id: str) -> IndexRunRow | None:
+        row = (
+            transaction.execute(
+                select(db.index_runs).where(and_(db.index_runs.c.tenant_id == tenant_id, db.index_runs.c.id == run_id))
+            )
+            .mappings()
+            .first()
+        )
+        return cast(IndexRunRow, dict(row)) if row else None
 
     def create_index_run(self, *, transaction: Any, record: IndexRunRecord) -> None:
         transaction.execute(
@@ -47,16 +62,17 @@ class SqlAlchemyObjectIndexRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         run_id: str,
         rows_read: int,
         objects_upserted: int,
         links_upserted: int,
-        cursor: dict[str, Any],
+        cursor: IndexRunCursor,
         completed_at: str,
     ) -> None:
         transaction.execute(
             update(db.index_runs)
-            .where(db.index_runs.c.id == run_id)
+            .where(and_(db.index_runs.c.tenant_id == tenant_id, db.index_runs.c.id == run_id))
             .values(
                 status="succeeded",
                 rows_read=rows_read,
@@ -71,13 +87,14 @@ class SqlAlchemyObjectIndexRepository:
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         run_id: str,
-        error: dict[str, Any],
+        error: IndexRunError,
         completed_at: str,
     ) -> None:
         transaction.execute(
             update(db.index_runs)
-            .where(db.index_runs.c.id == run_id)
+            .where(and_(db.index_runs.c.tenant_id == tenant_id, db.index_runs.c.id == run_id))
             .values(status="failed", error=error, completed_at=completed_at)
         )
 
@@ -111,7 +128,7 @@ class SqlAlchemyObjectIndexRepository:
     ) -> None:
         transaction.execute(
             update(db.object_records)
-            .where(db.object_records.c.id == record.record_id)
+            .where(and_(db.object_records.c.tenant_id == record.tenant_id, db.object_records.c.id == record.record_id))
             .values(
                 properties=record.properties,
                 base_properties=record.base_properties,
@@ -146,7 +163,7 @@ class SqlAlchemyObjectIndexRepository:
         tenant_id: str,
         ontology_version_id: str,
         from_object_type_id: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[LinkTypeRow]:
         rows = (
             transaction.execute(
                 select(db.link_types).where(
@@ -160,7 +177,7 @@ class SqlAlchemyObjectIndexRepository:
             .mappings()
             .all()
         )
-        return [dict(row) for row in rows]
+        return [cast(LinkTypeRow, dict(row)) for row in rows]
 
     def object_link(
         self,
@@ -170,7 +187,7 @@ class SqlAlchemyObjectIndexRepository:
         link_type_id: str,
         from_object_id: str,
         to_object_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> ObjectIndexLinkRow | None:
         row = (
             transaction.execute(
                 select(db.object_links).where(
@@ -185,12 +202,13 @@ class SqlAlchemyObjectIndexRepository:
             .mappings()
             .first()
         )
-        return dict(row) if row else None
+        return cast(ObjectIndexLinkRow, dict(row)) if row else None
 
     def refresh_object_link(
         self,
         *,
         transaction: Any,
+        tenant_id: str,
         link_id: str,
         link_version: int,
         source_dataset_version_id: str,
@@ -198,7 +216,7 @@ class SqlAlchemyObjectIndexRepository:
     ) -> None:
         transaction.execute(
             update(db.object_links)
-            .where(db.object_links.c.id == link_id)
+            .where(and_(db.object_links.c.tenant_id == tenant_id, db.object_links.c.id == link_id))
             .values(
                 link_version=link_version,
                 source_dataset_version_id=source_dataset_version_id,

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol, TypedDict
 
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
 DatasetRunKind = Literal["sync", "transform", "materialization"]
+DatasetTransactionMetadata = Mapping[str, object]
+DatasetFilePartitionValues = Mapping[str, object]
+DatasetRunError = Mapping[str, object]
 
 
 @dataclass(frozen=True)
@@ -22,7 +26,7 @@ class DatasetTransactionRecord:
     created_by: str
     created_at: str
     committed_at: str | None
-    metadata: dict[str, Any]
+    metadata: DatasetTransactionMetadata
 
 
 @dataclass(frozen=True)
@@ -52,7 +56,7 @@ class DatasetFileRecord:
     row_count: int
     byte_size: int
     content_hash: str
-    partition_values: dict[str, Any]
+    partition_values: DatasetFilePartitionValues
 
 
 @dataclass(frozen=True)
@@ -65,9 +69,25 @@ class SyncRunRecord:
     transaction_id: str
     committed_version_id: str | None
     status: str
-    error: dict[str, Any] | None
+    error: DatasetRunError | None
     created_at: str
     completed_at: str | None
+
+
+class DatasetTransactionRow(TypedDict):
+    id: str
+    tenant_id: str
+    dataset_id: str
+    branch: str
+    tx_type: str
+    status: str
+    base_version_id: str | None
+    committed_version_id: str | None
+    schema_version: int | None
+    created_by: str
+    created_at: str
+    committed_at: str | None
+    metadata: DatasetTransactionMetadata
 
 
 class DatasetTransactionRepository(Protocol):
@@ -77,12 +97,19 @@ class DatasetTransactionRepository(Protocol):
         """Persist a new OPEN dataset transaction inside the caller transaction."""
         ...
 
-    def transaction_by_id(self, *, transaction: TransactionContext, transaction_id: str) -> dict[str, Any] | None:
+    def transaction_by_id(
+        self, *, transaction: TransactionContext, transaction_id: str
+    ) -> DatasetTransactionRow | None:
         """Return a dataset transaction row by id inside the caller transaction."""
         ...
 
     def abort_transaction(
-        self, *, transaction: TransactionContext, transaction_id: str, metadata: dict[str, Any]
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        transaction_id: str,
+        metadata: DatasetTransactionMetadata,
     ) -> None:
         """Mark a dataset transaction aborted inside the caller transaction."""
         ...
@@ -99,6 +126,7 @@ class DatasetTransactionRepository(Protocol):
         self,
         *,
         transaction: TransactionContext,
+        tenant_id: str,
         transaction_id: str,
         committed_version_id: str,
         schema_version: int,
@@ -110,13 +138,15 @@ class DatasetTransactionRepository(Protocol):
     def abort_open_transaction_and_fail_run(
         self,
         *,
+        transaction: TransactionContext,
+        tenant_id: str,
         transaction_id: str,
         run_id: str,
         run_kind: DatasetRunKind,
-        error: dict[str, Any],
+        error: DatasetRunError,
         completed_at: str,
-    ) -> None:
-        """Best-effort abort for an OPEN transaction and the associated run row."""
+    ) -> bool:
+        """Abort an OPEN transaction and fail the associated run inside the caller transaction."""
         ...
 
     def insert_sync_run(self, *, transaction: TransactionContext, record: SyncRunRecord) -> None:
@@ -127,6 +157,7 @@ class DatasetTransactionRepository(Protocol):
         self,
         *,
         transaction: TransactionContext,
+        tenant_id: str,
         sync_run_id: str,
         status: str,
         committed_version_id: str | None,

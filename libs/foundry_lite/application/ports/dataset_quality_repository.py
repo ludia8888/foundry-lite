@@ -1,9 +1,34 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol, TypedDict
 
 from foundry_lite.application.ports.transaction_context import TransactionContext
+
+DatasetSchemaJson = Mapping[str, object]
+DatasetCheckConfig = Mapping[str, object]
+DatasetCheckResult = dict[str, object]
+
+
+class DatasetSchemaRow(TypedDict):
+    id: str
+    dataset_id: str
+    version: int
+    schema_json: DatasetSchemaJson
+    schema_hash: str
+    created_at: str
+
+
+class DatasetCheckRow(TypedDict):
+    id: str
+    tenant_id: str
+    dataset_id: str
+    name: str
+    check_type: str
+    config: DatasetCheckConfig
+    severity: str
+    enabled: bool
 
 
 @dataclass(frozen=True)
@@ -11,7 +36,7 @@ class DatasetSchemaRecord:
     schema_id: str
     dataset_id: str
     version: int
-    schema_json: dict[str, Any]
+    schema_json: DatasetSchemaJson
     schema_hash: str
     created_at: str
 
@@ -23,7 +48,7 @@ class DatasetCheckRecord:
     dataset_id: str
     name: str
     check_type: str
-    config: dict[str, Any]
+    config: DatasetCheckConfig
     severity: str
     enabled: bool
 
@@ -36,7 +61,7 @@ class DatasetCheckResultRecord:
     run_id: str
     transaction_id: str
     status: str
-    details: dict[str, Any]
+    details: DatasetCheckResult
     created_at: str
 
 
@@ -49,7 +74,7 @@ class DatasetQualityRepository(Protocol):
         transaction: TransactionContext,
         dataset_id: str,
         schema_hash: str,
-    ) -> dict[str, Any] | None:
+    ) -> DatasetSchemaRow | None:
         """Return an existing schema row matching a dataset_id + schema_hash, or None."""
         ...
 
@@ -68,7 +93,7 @@ class DatasetQualityRepository(Protocol):
         tenant_id: str,
         dataset_id: str,
         name: str,
-    ) -> dict[str, Any] | None:
+    ) -> DatasetCheckRow | None:
         """Return an existing dataset check row by tenant + dataset + canonical name, or None."""
         ...
 

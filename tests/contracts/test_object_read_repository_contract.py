@@ -4,10 +4,10 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pytest
-from foundry_lite.application.ports import ObjectReadRepository
+from foundry_lite.application.ports import ObjectLinkRow, ObjectReadRepository, ObjectRecordRow
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyObjectReadRepository
 from sqlalchemy import create_engine, insert
@@ -36,7 +36,7 @@ class FakeObjectReadRepository:
         tenant_id: str,
         object_type_api_name: str,
         object_id: str,
-    ) -> dict[str, Any] | None:
+    ) -> ObjectRecordRow | None:
         del transaction
         for row in self.object_records:
             if (
@@ -44,7 +44,7 @@ class FakeObjectReadRepository:
                 and row["object_type_api_name"] == object_type_api_name
                 and row["object_id"] == object_id
             ):
-                return dict(row)
+                return cast(ObjectRecordRow, dict(row))
         return None
 
     def active_object_rows(
@@ -53,10 +53,10 @@ class FakeObjectReadRepository:
         transaction: Any,
         tenant_id: str,
         object_type_api_name: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectRecordRow]:
         del transaction
         rows = [
-            dict(row)
+            cast(ObjectRecordRow, dict(row))
             for row in self.object_records
             if row["tenant_id"] == tenant_id
             and row["object_type_api_name"] == object_type_api_name
@@ -72,10 +72,10 @@ class FakeObjectReadRepository:
         link_type_api_name: str,
         from_api_name: str,
         from_object_id: str,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ObjectLinkRow]:
         del transaction
         return [
-            dict(row)
+            cast(ObjectLinkRow, dict(row))
             for row in self.object_links
             if row["tenant_id"] == tenant_id
             and row["link_type_api_name"] == link_type_api_name
@@ -182,13 +182,19 @@ def _link_row(
     }
 
 
-@pytest.fixture(params=["sqlalchemy", "fake"])
+@pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> ObjectReadHarness:
     if request.param == "fake":
         return FakeObjectReadHarness(FakeObjectReadRepository())
-    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
-    db.create_database(engine)
-    return SqlAlchemyObjectReadHarness(SqlAlchemyObjectReadRepository(engine), engine)
+    if request.param == "sqlalchemy":
+        engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+        db.create_database(engine)
+        return SqlAlchemyObjectReadHarness(SqlAlchemyObjectReadRepository(engine), engine)
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyObjectReadHarness(
+        SqlAlchemyObjectReadRepository(postgres_fixture.engine),
+        postgres_fixture.engine,
+    )
 
 
 def test_object_read_repository_contract_reads_one_record_by_tenant(harness: ObjectReadHarness) -> None:

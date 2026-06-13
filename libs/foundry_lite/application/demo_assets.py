@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
 
+from foundry_lite.application.ports.transform_repository import TransformRow
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SUPPLY_CHAIN_DEMO_ROOT = PROJECT_ROOT / "examples" / "supply-chain-demo"
-RegisterTransform = Callable[..., dict[str, Any]]
+RegisterTransform = Callable[..., TransformRow]
 
 REQUIRED_SUPPLY_CHAIN_DEMO_FILES = (
     "data/orders.csv",

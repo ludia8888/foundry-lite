@@ -1,20 +1,33 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
+from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.compute_adapter import SqlTransformPlan
 from foundry_lite.application.ports.transform_repository import (
+    TransformCheck,
     TransformRecord,
-    TransformRunRecord,
+    TransformRetryResult,
+    TransformRow,
 )
 from foundry_lite.application.primitives import (
-    INPUT_PATTERN,
     CommitResult,
     _new_id,
     _now,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.transform_protocols import (
+    TransformDatasetRegistry,
+    TransformDatasetTransactions,
+    TransformDatasetVersions,
+    TransformRuntimeBoundary,
+)
+from foundry_lite.application.services.transform_runs import (
+    TransformRunPlan,
+    start_failed_transform_retry,
+    start_transform_run,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -25,167 +38,403 @@ from foundry_lite.domain.errors import (
 
 
 class TransformService(CoreService):
-    required_dependencies = ("engine", "policy", "compute_adapter", "transform_repository")
+    required_dependencies = ("engine", "compute_adapter", "transform_repository")
     required_collaborators = (
         "dataset_registry_service",
         "dataset_transaction_service",
         "dataset_version_service",
         "runtime_service",
     )
-    dataset_registry_service: Any
-    dataset_transaction_service: Any
-    dataset_version_service: Any
-    runtime_service: Any
+    dataset_registry_service: TransformDatasetRegistry
+    dataset_transaction_service: TransformDatasetTransactions
+    dataset_version_service: TransformDatasetVersions
+    runtime_service: TransformRuntimeBoundary
 
     def register_transform(
         self,
         api_name: str,
         *,
         entrypoint: str | Path,
-        inputs: dict[str, str],
+        inputs: Mapping[str, str],
         output_dataset_ref: str,
-        checks: list[dict[str, Any]] | None = None,
+        checks: Sequence[TransformCheck] | None = None,
         ctx: RequestContext | None = None,
         mode: str = "snapshot",
         language: str = "sql",
-    ) -> dict[str, Any]:
+    ) -> TransformRow:
         ctx = ctx or RequestContext()
-        self.policy.require(ctx, "transform:run")
-        transform_id = _new_id("tf")
-        normalized_checks = checks or []
+        self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
+        return self._register_transform_definition(
+            ctx,
+            api_name,
+            entrypoint=entrypoint,
+            inputs=inputs,
+            output_dataset_ref=output_dataset_ref,
+            checks=checks,
+            mode=mode,
+            language=language,
+        )
+
+    def _register_transform_definition(
+        self,
+        ctx: RequestContext,
+        api_name: str,
+        *,
+        entrypoint: str | Path,
+        inputs: Mapping[str, str],
+        output_dataset_ref: str,
+        checks: Sequence[TransformCheck] | None,
+        mode: str,
+        language: str,
+    ) -> TransformRow:
+        normalized_checks = self._normalized_checks(checks)
         with self.engine.begin() as conn:
-            existing = self.transform_repository.transform_by_api_name(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                api_name=api_name,
-            )
+            existing = self._transform_by_api_name(conn, ctx, api_name)
             if existing:
-                self.transform_repository.update_transform_definition(
-                    transaction=conn,
-                    transform_id=existing["id"],
-                    language=language,
-                    entrypoint=str(entrypoint),
-                    mode=mode,
-                    inputs=inputs,
-                    output_dataset_ref=output_dataset_ref,
-                    checks=normalized_checks,
+                return self._replace_transform_definition(
+                    conn,
+                    ctx,
+                    existing,
+                    api_name,
+                    entrypoint,
+                    inputs,
+                    output_dataset_ref,
+                    normalized_checks,
+                    mode,
+                    language,
                 )
-                return dict(existing)
-            self.transform_repository.insert_transform(
-                transaction=conn,
-                record=TransformRecord(
-                    transform_id=transform_id,
-                    tenant_id=ctx.tenant_id,
-                    api_name=api_name,
-                    language=language,
-                    entrypoint=str(entrypoint),
-                    mode=mode,
-                    inputs=inputs,
-                    output_dataset_ref=output_dataset_ref,
-                    checks=normalized_checks,
-                ),
+            return self._create_transform_definition(
+                conn,
+                ctx,
+                api_name,
+                entrypoint=entrypoint,
+                inputs=inputs,
+                output_dataset_ref=output_dataset_ref,
+                checks=normalized_checks,
+                mode=mode,
+                language=language,
             )
-            return self.transform_repository.transform_by_id(transaction=conn, transform_id=transform_id) or {}
+
+    def _transform_by_api_name(
+        self, conn: TransactionContext, ctx: RequestContext, api_name: str
+    ) -> TransformRow | None:
+        return self.transform_repository.transform_by_api_name(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            api_name=api_name,
+        )
 
     def run_transform(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
         with self.engine.begin() as conn:
-            transform = self._get_transform(conn, ctx, api_name)
-            output_dataset = self.dataset_registry_service.get_dataset(transform["output_dataset_ref"], ctx=ctx)
-            input_versions = self._resolve_transform_inputs(conn, ctx, transform)
-            tx_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, output_dataset, "SNAPSHOT")
-            run_id = _new_id("transform_run")
-            self.transform_repository.insert_transform_run(
-                transaction=conn,
-                record=TransformRunRecord(
-                    transform_run_id=run_id,
-                    tenant_id=ctx.tenant_id,
-                    transform_id=transform["id"],
-                    status="RUNNING",
-                    input_versions=input_versions,
-                    output_version_id=None,
-                    transaction_id=tx_id,
-                    error=None,
-                    created_at=_now(),
-                    completed_at=None,
-                ),
+            plan = start_transform_run(
+                conn=conn,
+                ctx=ctx,
+                api_name=api_name,
+                dataset_registry_service=self.dataset_registry_service,
+                dataset_transaction_service=self.dataset_transaction_service,
+                dataset_version_service=self.dataset_version_service,
+                transform_repository=self.transform_repository,
             )
-
-        staged = self.dataset_transaction_service._staging_file(output_dataset, tx_id, "part-00000.parquet")
+        staged = self.dataset_transaction_service._staging_file(
+            plan.output_dataset, plan.transaction_id, "part-00000.parquet"
+        )
         try:
-            self._execute_sql_transform(transform, input_versions, staged)
+            self._execute_sql_transform(plan.entrypoint, plan.input_versions, staged)
             with self.engine.begin() as conn:
-                result = self.dataset_transaction_service._finalize_open_transaction(
-                    conn,
-                    ctx,
-                    dataset=output_dataset,
-                    transaction_id=tx_id,
-                    staged_parquet=staged,
-                    run_id=run_id,
-                    audit_action="transform_output_commit",
-                    outbox_event_type="dataset.version.committed",
-                    extra_checks=transform["checks"],
-                )
-                for version_id in input_versions.values():
-                    self.runtime_service._lineage(
-                        conn,
-                        ctx,
-                        "dataset_version",
-                        version_id,
-                        "dataset_version",
-                        result.version_id,
-                        "input_to",
-                        run_id,
-                    )
-                self.transform_repository.update_transform_run_terminal(
-                    transaction=conn,
-                    transform_run_id=run_id,
-                    status="SUCCESS",
-                    output_version_id=result.version_id,
-                    error=None,
-                    completed_at=_now(),
-                )
-                return result
+                return self._finalize_transform_run(conn, ctx, plan, staged)
         except Exception as exc:
-            self.dataset_transaction_service._abort_transaction_after_error(ctx, tx_id, run_id, exc, "transform")
+            self._abort_transform_run(ctx, plan, exc)
             if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
                 raise
             raise ValidationFailed("transform failed", details={"error": str(exc)}) from exc
 
-    def _get_transform(self, conn: Any, ctx: RequestContext, api_name: str) -> dict[str, Any]:
-        row = self.transform_repository.transform_by_api_name(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            api_name=api_name,
+    def retry_transform_run(
+        self,
+        transform_run_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> TransformRetryResult:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "operations:retry", "transform_run", transform_run_id)
+        with self.engine.begin() as conn:
+            plan = start_failed_transform_retry(
+                conn=conn,
+                ctx=ctx,
+                transform_run_id=transform_run_id,
+                dataset_registry_service=self.dataset_registry_service,
+                dataset_transaction_service=self.dataset_transaction_service,
+                transform_repository=self.transform_repository,
+            )
+        staged = self.dataset_transaction_service._staging_file(
+            plan.output_dataset, plan.transaction_id, "part-00000.parquet"
         )
+        try:
+            self._execute_sql_transform(plan.entrypoint, plan.input_versions, staged)
+            with self.engine.begin() as conn:
+                result = self._finalize_transform_run(conn, ctx, plan, staged)
+                self._audit_transform_retry(conn, ctx, plan, result)
+            return _transform_retry_response(plan, result)
+        except Exception as exc:
+            self._abort_transform_run(ctx, plan, exc)
+            if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
+                raise
+            raise ValidationFailed("transform failed", details={"error": str(exc)}) from exc
+
+    def _finalize_transform_run(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        plan: TransformRunPlan,
+        staged: Path,
+    ) -> CommitResult:
+        """Finalize the dataset version and close the transform run atomically."""
+        result = self.dataset_transaction_service._finalize_open_transaction(
+            conn,
+            ctx,
+            dataset=plan.output_dataset,
+            transaction_id=plan.transaction_id,
+            staged_parquet=staged,
+            run_id=plan.run_id,
+            audit_action="transform_output_commit",
+            outbox_event_type="dataset.version.committed",
+            extra_checks=plan.checks,
+        )
+        self._record_transform_lineage(conn, ctx, plan, result)
+        self._mark_transform_run_succeeded(conn, ctx, plan.run_id, result)
+        return result
+
+    def _record_transform_lineage(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        plan: TransformRunPlan,
+        result: CommitResult,
+    ) -> None:
+        """Persist version-to-version lineage for every consumed input version."""
+        for version_id in plan.input_versions.values():
+            self.runtime_service._lineage(
+                conn,
+                ctx,
+                "dataset_version",
+                version_id,
+                "dataset_version",
+                result.version_id,
+                "input_to",
+                plan.run_id,
+            )
+
+    def _abort_transform_run(
+        self,
+        ctx: RequestContext,
+        plan: TransformRunPlan,
+        exc: Exception,
+    ) -> None:
+        """Abort the output transaction and mark the transform run failed."""
+        self.dataset_transaction_service._abort_transaction_after_error(
+            ctx,
+            plan.transaction_id,
+            plan.run_id,
+            exc,
+            "transform",
+            adapter="compute_adapter.execute_transform",
+        )
+
+    def _create_transform_definition(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        api_name: str,
+        *,
+        entrypoint: str | Path,
+        inputs: Mapping[str, str],
+        output_dataset_ref: str,
+        checks: list[dict[str, object]],
+        mode: str,
+        language: str,
+    ) -> TransformRow:
+        """Insert a new transform definition and emit its audit record."""
+        transform_id = _new_id("tf")
+        self._insert_transform_definition(
+            conn,
+            ctx,
+            transform_id,
+            api_name,
+            entrypoint=entrypoint,
+            inputs=inputs,
+            output_dataset_ref=output_dataset_ref,
+            checks=checks,
+            mode=mode,
+            language=language,
+        )
+        self._audit_transform_definition_created(conn, ctx, transform_id, api_name, output_dataset_ref)
+        row = self.transform_repository.transform_by_id(transaction=conn, transform_id=transform_id)
         if row is None:
-            raise NotFound("transform not found", details={"api_name": api_name})
+            raise InvariantViolation("transform row missing after insert", details={"transform_id": transform_id})
         return row
 
-    def _resolve_transform_inputs(
+    def _insert_transform_definition(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
-        transform: dict[str, Any],
-    ) -> dict[str, str]:
-        resolved: dict[str, str] = {}
-        template = Path(transform["entrypoint"]).read_text(encoding="utf-8")
-        referenced = set(INPUT_PATTERN.findall(template))
-        configured = set(transform["inputs"].values())
-        for dataset_ref in sorted(referenced | configured):
-            dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
-            version = self.dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
-            resolved[dataset_ref] = version["id"]
-        return resolved
+        transform_id: str,
+        api_name: str,
+        *,
+        entrypoint: str | Path,
+        inputs: Mapping[str, str],
+        output_dataset_ref: str,
+        checks: list[dict[str, object]],
+        mode: str,
+        language: str,
+    ) -> None:
+        self.transform_repository.insert_transform(
+            transaction=conn,
+            record=TransformRecord(
+                transform_id=transform_id,
+                tenant_id=ctx.tenant_id,
+                api_name=api_name,
+                language=language,
+                entrypoint=str(entrypoint),
+                mode=mode,
+                inputs=dict(inputs),
+                output_dataset_ref=output_dataset_ref,
+                checks=checks,
+            ),
+        )
+
+    def _audit_transform_definition_created(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        transform_id: str,
+        api_name: str,
+        output_dataset_ref: str,
+    ) -> None:
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="transform.definition.created",
+            resource_type="transform",
+            resource_id=transform_id,
+            action="register",
+            after_ref={"api_name": api_name, "output_dataset_ref": output_dataset_ref},
+        )
+
+    def _update_transform_definition(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        existing: TransformRow,
+        *,
+        language: str,
+        entrypoint: str | Path,
+        mode: str,
+        inputs: Mapping[str, str],
+        output_dataset_ref: str,
+        checks: Sequence[TransformCheck],
+    ) -> None:
+        """Persist a replacement transform definition under the tenant boundary."""
+        self.transform_repository.update_transform_definition(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            transform_id=existing["id"],
+            language=language,
+            entrypoint=str(entrypoint),
+            mode=mode,
+            inputs=dict(inputs),
+            output_dataset_ref=output_dataset_ref,
+            checks=checks,
+        )
+
+    def _replace_transform_definition(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        existing: TransformRow,
+        api_name: str,
+        entrypoint: str | Path,
+        inputs: Mapping[str, str],
+        output_dataset_ref: str,
+        checks: Sequence[TransformCheck],
+        mode: str,
+        language: str,
+    ) -> TransformRow:
+        """Update an existing transform definition and emit its audit record."""
+        self._update_transform_definition(
+            conn,
+            ctx,
+            existing,
+            language=language,
+            entrypoint=entrypoint,
+            mode=mode,
+            inputs=inputs,
+            output_dataset_ref=output_dataset_ref,
+            checks=checks,
+        )
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="transform.definition.updated",
+            resource_type="transform",
+            resource_id=existing["id"],
+            action="register",
+            after_ref={"api_name": api_name, "output_dataset_ref": output_dataset_ref},
+        )
+        row = self.transform_repository.transform_by_id(transaction=conn, transform_id=existing["id"])
+        if row is None:
+            raise InvariantViolation("transform row missing after update", details={"transform_id": existing["id"]})
+        return row
+
+    def _normalized_checks(self, checks: Sequence[TransformCheck] | None) -> list[dict[str, object]]:
+        return [dict(check) for check in checks or ()]
+
+    def _mark_transform_run_succeeded(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        run_id: str,
+        result: CommitResult,
+    ) -> None:
+        """Close a transform run with the output dataset version."""
+        self.transform_repository.update_transform_run_terminal(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            transform_run_id=run_id,
+            status="SUCCESS",
+            output_version_id=result.version_id,
+            error=None,
+            completed_at=_now(),
+        )
+
+    def _audit_transform_retry(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        plan: TransformRunPlan,
+        result: CommitResult,
+    ) -> None:
+        if plan.retry_of_run_id is None:
+            return
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="transform.run.retry_requested",
+            resource_type="transform_run",
+            resource_id=plan.run_id,
+            action="operations:retry",
+            before_ref={"transform_run_id": plan.retry_of_run_id},
+            after_ref={"transform_run_id": plan.run_id, "output_version_id": result.version_id},
+            correlation_id=plan.run_id,
+        )
 
     def _execute_sql_transform(
         self,
-        transform: dict[str, Any],
-        input_versions: dict[str, str],
+        entrypoint: str,
+        input_versions: Mapping[str, str],
         staged: Path,
     ) -> None:
-        sql = Path(transform["entrypoint"]).read_text(encoding="utf-8")
+        sql = Path(entrypoint).read_text(encoding="utf-8")
         input_paths_by_ref = {
             dataset_ref: self.dataset_transaction_service._version_file_path(
                 self.dataset_version_service._get_version_by_id(version_id)
@@ -199,3 +448,18 @@ class TransformService(CoreService):
                 target_path=staged,
             )
         )
+
+
+def _transform_retry_response(plan: TransformRunPlan, result: CommitResult) -> TransformRetryResult:
+    return {
+        "original_run_id": plan.retry_of_run_id or "",
+        "transform_run_id": plan.run_id,
+        "dataset_id": result.dataset_id,
+        "dataset_ref": result.dataset_ref,
+        "transaction_id": result.transaction_id,
+        "version_id": result.version_id,
+        "version_number": result.version_number,
+        "row_count": result.row_count,
+        "manifest_uri": result.manifest_uri,
+        "schema_hash": result.schema_hash,
+    }

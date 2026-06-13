@@ -1,22 +1,50 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
 import yaml
 
+from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.ontology_repository import (
+    ActionMutationDefinition,
+    ActionParameterSchema,
     ActionTypeRecord,
+    ActionTypeRow,
     LinkTypeRecord,
+    LinkTypeRow,
     ObjectTypeRecord,
+    ObjectTypeRow,
+    OntologyApplyResult,
     OntologyVersionRecord,
+    OntologyVersionRow,
     PropertyTypeRecord,
+    PropertyTypeRow,
 )
 from foundry_lite.application.primitives import (
     _new_id,
     _now,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.ontology_protocols import (
+    OntologyDatasetRegistry,
+    OntologyDatasetVersions,
+    OntologyRuntimeBoundary,
+)
+from foundry_lite.application.services.ontology_yaml import (
+    YamlObject,
+    action_parameter_schema,
+    action_type_definition,
+    link_type_backing,
+    mapping_sequence,
+    object_type_backing,
+    optional_bool,
+    optional_str,
+    property_derivation,
+    required_str,
+    schema_columns,
+    yaml_object,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     NotFound,
@@ -31,191 +59,263 @@ class OntologyService(CoreService):
         "dataset_version_service",
         "runtime_service",
     )
-    dataset_registry_service: Any
-    dataset_version_service: Any
-    runtime_service: Any
+    dataset_registry_service: OntologyDatasetRegistry
+    dataset_version_service: OntologyDatasetVersions
+    runtime_service: OntologyRuntimeBoundary
 
     def apply_ontology(
         self,
         yaml_path: str | Path,
         *,
         ctx: RequestContext | None = None,
-    ) -> dict[str, Any]:
+    ) -> OntologyApplyResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
-        definition = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8"))
-        if not isinstance(definition, dict):
-            raise ValidationFailed("ontology yaml must be a mapping")
+        definition = self._load_ontology_definition(yaml_path)
         with self.engine.begin() as conn:
             version_number = self._next_ontology_version(conn, ctx)
             ontology_version_id = _new_id("ont")
-            self.ontology_repository.insert_ontology_version(
-                transaction=conn,
-                record=OntologyVersionRecord(
-                    ontology_version_id=ontology_version_id,
-                    tenant_id=ctx.tenant_id,
-                    version_number=version_number,
-                    status="draft",
-                    created_by=ctx.actor_user_id,
-                    created_at=_now(),
-                    activated_at=None,
-                ),
-            )
+            self._insert_draft_ontology_version(conn, ctx, ontology_version_id, version_number)
             object_map = self._import_object_types(conn, ctx, ontology_version_id, definition)
             self._import_link_types(conn, ctx, ontology_version_id, definition, object_map)
             self._import_action_types(conn, ctx, ontology_version_id, definition, object_map)
             self._validate_ontology(conn, ctx, ontology_version_id)
-            self.ontology_repository.archive_active_ontology_versions(transaction=conn, tenant_id=ctx.tenant_id)
-            self.ontology_repository.activate_ontology_version(
-                transaction=conn,
-                ontology_version_id=ontology_version_id,
-                activated_at=_now(),
-            )
-            self.runtime_service._outbox(
-                conn,
-                ctx,
-                "ontology.version.activated",
-                "ontology_version",
-                ontology_version_id,
-                {"ontologyVersionId": ontology_version_id},
-                idempotency_key=ontology_version_id,
-                correlation_id=ctx.request_id,
-            )
-            self.runtime_service._audit(
-                conn,
-                ctx,
-                event_type="ontology.version.activated",
-                resource_type="ontology_version",
-                resource_id=ontology_version_id,
-                action="activate",
-                after_ref={"version_number": version_number},
-            )
+            self._activate_ontology_version(conn, ctx, ontology_version_id)
+            self._record_ontology_activation(conn, ctx, ontology_version_id, version_number)
             return {"ontology_version_id": ontology_version_id, "version_number": version_number}
 
-    def _next_ontology_version(self, conn: Any, ctx: RequestContext) -> int:
+    def _load_ontology_definition(self, yaml_path: str | Path) -> YamlObject:
+        """Load and validate the top-level ontology YAML mapping."""
+        definition: object = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8"))
+        return yaml_object(definition, "ontology yaml")
+
+    def _insert_draft_ontology_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+        version_number: int,
+    ) -> None:
+        """Persist the draft ontology version before importing its type rows."""
+        self.ontology_repository.insert_ontology_version(
+            transaction=conn,
+            record=OntologyVersionRecord(
+                ontology_version_id=ontology_version_id,
+                tenant_id=ctx.tenant_id,
+                version_number=version_number,
+                status="draft",
+                created_by=ctx.actor_user_id,
+                created_at=_now(),
+                activated_at=None,
+            ),
+        )
+
+    def _record_ontology_activation(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+        version_number: int,
+    ) -> None:
+        """Write the durable activation outbox event and audit record."""
+        self.runtime_service._outbox(
+            conn,
+            ctx,
+            "ontology.version.activated",
+            "ontology_version",
+            ontology_version_id,
+            {"ontologyVersionId": ontology_version_id},
+            idempotency_key=ontology_version_id,
+            correlation_id=ctx.request_id,
+        )
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="ontology.version.activated",
+            resource_type="ontology_version",
+            resource_id=ontology_version_id,
+            action="activate",
+            after_ref={"version_number": version_number},
+        )
+
+    def _activate_ontology_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> None:
+        """Archive the old active ontology and activate the new tenant version."""
+        self.ontology_repository.archive_active_ontology_versions(transaction=conn, tenant_id=ctx.tenant_id)
+        self.ontology_repository.activate_ontology_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=ontology_version_id,
+            activated_at=_now(),
+        )
+
+    def _next_ontology_version(self, conn: TransactionContext, ctx: RequestContext) -> int:
         return self.ontology_repository.next_ontology_version_number(transaction=conn, tenant_id=ctx.tenant_id)
 
     def _import_object_types(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         ontology_version_id: str,
-        definition: dict[str, Any],
+        definition: YamlObject,
     ) -> dict[str, str]:
+        """Import object types and return their API-name to row-id map."""
         object_map: dict[str, str] = {}
-        for item in definition.get("objectTypes", []):
-            object_id = _new_id("otype")
-            api_name = item["apiName"]
-            self.ontology_repository.insert_object_type(
-                transaction=conn,
-                record=ObjectTypeRecord(
-                    object_type_id=object_id,
-                    tenant_id=ctx.tenant_id,
-                    ontology_version_id=ontology_version_id,
-                    api_name=api_name,
-                    display_name=item.get("displayName", api_name),
-                    description=item.get("description"),
-                    primary_key_property=item["primaryKey"],
-                    backing=item["backing"],
-                    config={},
-                ),
-            )
+        for item in mapping_sequence(definition, "objectTypes"):
+            api_name = required_str(item, "apiName")
+            object_id = self._insert_object_type(conn, ctx, ontology_version_id, item)
             object_map[api_name] = object_id
-            seen_properties: set[str] = set()
-            for prop in item.get("properties", []):
-                prop_api = prop["apiName"]
-                if prop_api in seen_properties:
-                    raise ValidationFailed("duplicate property apiName", details={"property": prop_api})
-                seen_properties.add(prop_api)
-                source = prop.get("source", "dataset" if "column" in prop else "edit_layer")
-                self.ontology_repository.insert_property_type(
-                    transaction=conn,
-                    record=PropertyTypeRecord(
-                        property_type_id=_new_id("ptype"),
-                        tenant_id=ctx.tenant_id,
-                        object_type_id=object_id,
-                        api_name=prop_api,
-                        display_name=prop.get("displayName", prop_api),
-                        data_type=prop["type"],
-                        nullable=prop.get("nullable", True),
-                        indexed=prop.get("indexed", False),
-                        searchable=prop.get("searchable", False),
-                        editable=prop.get("editable", False),
-                        classification=prop.get("classification"),
-                        source=source,
-                        column_name=prop.get("column"),
-                        edit_policy=prop.get("editPolicy", "edit_only" if source == "edit_layer" else "source_wins"),
-                        derivation=prop.get("derivation"),
-                    ),
-                )
+            self._import_properties_for_object_type(conn, ctx, object_id, item)
         return object_map
+
+    def _insert_object_type(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+        item: YamlObject,
+    ) -> str:
+        """Persist one ontology object type row and return its generated id."""
+        object_id = _new_id("otype")
+        api_name = required_str(item, "apiName")
+        self.ontology_repository.insert_object_type(
+            transaction=conn,
+            record=ObjectTypeRecord(
+                object_type_id=object_id,
+                tenant_id=ctx.tenant_id,
+                ontology_version_id=ontology_version_id,
+                api_name=api_name,
+                display_name=optional_str(item, "displayName", api_name) or api_name,
+                description=optional_str(item, "description"),
+                primary_key_property=required_str(item, "primaryKey"),
+                backing=object_type_backing(item),
+                config={},
+            ),
+        )
+        return object_id
+
+    def _import_properties_for_object_type(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_id: str,
+        item: YamlObject,
+    ) -> None:
+        """Import all properties for one object type, rejecting duplicates."""
+        seen_properties: set[str] = set()
+        for prop in mapping_sequence(item, "properties"):
+            prop_api = required_str(prop, "apiName")
+            if prop_api in seen_properties:
+                raise ValidationFailed("duplicate property apiName", details={"property": prop_api})
+            seen_properties.add(prop_api)
+            self._insert_property_type(conn, ctx, object_id, prop)
+
+    def _insert_property_type(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_id: str,
+        prop: YamlObject,
+    ) -> None:
+        """Persist one property type row from its YAML declaration."""
+        prop_api = required_str(prop, "apiName")
+        source = optional_str(prop, "source", "dataset" if "column" in prop else "edit_layer")
+        if source is None:
+            raise ValidationFailed("property source must be set", details={"property": prop_api})
+        self.ontology_repository.insert_property_type(
+            transaction=conn,
+            record=PropertyTypeRecord(
+                property_type_id=_new_id("ptype"),
+                tenant_id=ctx.tenant_id,
+                object_type_id=object_id,
+                api_name=prop_api,
+                display_name=optional_str(prop, "displayName", prop_api) or prop_api,
+                data_type=required_str(prop, "type"),
+                nullable=optional_bool(prop, "nullable", True),
+                indexed=optional_bool(prop, "indexed", False),
+                searchable=optional_bool(prop, "searchable", False),
+                editable=optional_bool(prop, "editable", False),
+                classification=optional_str(prop, "classification"),
+                source=source,
+                column_name=optional_str(prop, "column"),
+                edit_policy=optional_str(prop, "editPolicy", "edit_only" if source == "edit_layer" else "source_wins")
+                or "source_wins",
+                derivation=property_derivation(prop),
+            ),
+        )
 
     def _import_link_types(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         ontology_version_id: str,
-        definition: dict[str, Any],
+        definition: YamlObject,
         object_map: dict[str, str],
     ) -> None:
-        for item in definition.get("linkTypes", []):
-            if item["from"] not in object_map or item["to"] not in object_map:
-                raise ValidationFailed("link references unknown object type", details=item)
+        for item in mapping_sequence(definition, "linkTypes"):
+            from_api = required_str(item, "from")
+            to_api = required_str(item, "to")
+            if from_api not in object_map or to_api not in object_map:
+                raise ValidationFailed("link references unknown object type", details=dict(item))
+            api_name = required_str(item, "apiName")
             self.ontology_repository.insert_link_type(
                 transaction=conn,
                 record=LinkTypeRecord(
                     link_type_id=_new_id("ltype"),
                     tenant_id=ctx.tenant_id,
                     ontology_version_id=ontology_version_id,
-                    api_name=item["apiName"],
-                    display_name=item.get("displayName", item["apiName"]),
-                    from_object_type_id=object_map[item["from"]],
-                    from_api_name=item["from"],
-                    to_object_type_id=object_map[item["to"]],
-                    to_api_name=item["to"],
-                    cardinality=item.get("cardinality", "many_to_one"),
-                    backing=item["backing"],
+                    api_name=api_name,
+                    display_name=optional_str(item, "displayName", api_name) or api_name,
+                    from_object_type_id=object_map[from_api],
+                    from_api_name=from_api,
+                    to_object_type_id=object_map[to_api],
+                    to_api_name=to_api,
+                    cardinality=optional_str(item, "cardinality", "many_to_one") or "many_to_one",
+                    backing=link_type_backing(item),
                 ),
             )
 
     def _import_action_types(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         ontology_version_id: str,
-        definition: dict[str, Any],
+        definition: YamlObject,
         object_map: dict[str, str],
     ) -> None:
-        for item in definition.get("actionTypes", []):
-            target = item["target"]
+        for item in mapping_sequence(definition, "actionTypes"):
+            target = required_str(item, "target")
             if target not in object_map:
-                raise ValidationFailed("action target object type not found", details=item)
-            parameter_schema = {
-                "type": "object",
-                "required": [
-                    parameter["apiName"] for parameter in item.get("parameters", []) if parameter.get("required", False)
-                ],
-                "properties": {
-                    parameter["apiName"]: {"type": parameter["type"]} for parameter in item.get("parameters", [])
-                },
-            }
+                raise ValidationFailed("action target object type not found", details=dict(item))
+            parameters = mapping_sequence(item, "parameters")
+            parameter_schema: ActionParameterSchema = action_parameter_schema(parameters)
+            api_name = required_str(item, "apiName")
             self.ontology_repository.insert_action_type(
                 transaction=conn,
                 record=ActionTypeRecord(
                     action_type_id=_new_id("atype"),
                     tenant_id=ctx.tenant_id,
                     ontology_version_id=ontology_version_id,
-                    api_name=item["apiName"],
-                    display_name=item.get("displayName", item["apiName"]),
+                    api_name=api_name,
+                    display_name=optional_str(item, "displayName", api_name) or api_name,
                     target_object_type_id=object_map[target],
                     target_api_name=target,
                     parameter_schema=parameter_schema,
-                    definition=item,
+                    definition=action_type_definition(item),
                     enabled=True,
                 ),
             )
 
-    def _validate_ontology(self, conn: Any, ctx: RequestContext, ontology_version_id: str) -> None:
+    def _validate_ontology(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> None:
         object_rows = self._object_types_for_version(conn, ctx, ontology_version_id)
         object_by_api = {row["api_name"]: row for row in object_rows}
         for object_type in object_rows:
@@ -225,9 +325,9 @@ class OntologyService(CoreService):
 
     def _validate_ontology_object_type(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
-        object_type: dict[str, Any],
+        object_type: ObjectTypeRow,
     ) -> None:
         columns = self._dataset_columns_for_ref(conn, ctx, object_type["backing"]["dataset"])
         properties = self._properties_for_object_type(conn, object_type["id"])
@@ -238,37 +338,37 @@ class OntologyService(CoreService):
 
     def _dataset_columns_for_ref(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         dataset_ref: str,
-    ) -> dict[str, dict[str, Any]]:
+    ) -> Mapping[str, Mapping[str, object]]:
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
         latest_version = self.dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
         schema = self.dataset_version_service._schema_for_version(dataset["id"], latest_version["schema_version"])[
             "schema_json"
         ]
-        return {column["name"]: column for column in schema["columns"]}
+        return schema_columns(schema, dataset_ref)
 
     def _validate_primary_key_property(
         self,
-        object_type: dict[str, Any],
-        property_by_api: dict[str, dict[str, Any]],
-        columns: dict[str, dict[str, Any]],
+        object_type: ObjectTypeRow,
+        property_by_api: Mapping[str, PropertyTypeRow],
+        columns: Mapping[str, Mapping[str, object]],
     ) -> None:
         pk_prop = object_type["primary_key_property"]
         if pk_prop not in property_by_api:
             raise ValidationFailed("primary key property missing", details={"objectType": object_type["api_name"]})
         pk_column = property_by_api[pk_prop]["column_name"]
-        if pk_column not in columns:
+        if pk_column is None or pk_column not in columns:
             raise ValidationFailed("primary key column missing", details={"column": pk_column})
-        if columns[pk_column]["nullable"]:
+        if bool(columns[pk_column].get("nullable")):
             raise ValidationFailed("primary key column must be non-null", details={"column": pk_column})
 
     def _validate_dataset_backed_properties(
         self,
-        object_type: dict[str, Any],
-        properties: list[dict[str, Any]],
-        columns: dict[str, dict[str, Any]],
+        object_type: ObjectTypeRow,
+        properties: Sequence[PropertyTypeRow],
+        columns: Mapping[str, Mapping[str, object]],
     ) -> None:
         for prop in properties:
             if prop["source"] == "dataset" and prop["column_name"] not in columns:
@@ -279,9 +379,9 @@ class OntologyService(CoreService):
 
     def _validate_ontology_action_mutations(
         self,
-        conn: Any,
-        object_type: dict[str, Any],
-        property_by_api: dict[str, dict[str, Any]],
+        conn: TransactionContext,
+        object_type: ObjectTypeRow,
+        property_by_api: Mapping[str, PropertyTypeRow],
     ) -> None:
         for action in self._actions_for_target(conn, object_type["id"]):
             for mutation in action["definition"].get("mutations", []):
@@ -289,21 +389,21 @@ class OntologyService(CoreService):
 
     def _validate_action_mutation_property(
         self,
-        mutation: dict[str, Any],
-        property_by_api: dict[str, dict[str, Any]],
+        mutation: ActionMutationDefinition,
+        property_by_api: Mapping[str, PropertyTypeRow],
     ) -> None:
         prop = mutation.get("property")
-        if prop not in property_by_api:
-            raise ValidationFailed("action mutation property missing", details=mutation)
+        if not isinstance(prop, str) or prop not in property_by_api:
+            raise ValidationFailed("action mutation property missing", details=dict(mutation))
         if not property_by_api[prop]["editable"]:
-            raise ValidationFailed("action mutation property must be editable", details=mutation)
+            raise ValidationFailed("action mutation property must be editable", details=dict(mutation))
 
     def _validate_ontology_link(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
-        link: dict[str, Any],
-        object_by_api: dict[str, dict[str, Any]],
+        link: LinkTypeRow,
+        object_by_api: Mapping[str, ObjectTypeRow],
     ) -> None:
         if link["from_api_name"] not in object_by_api or link["to_api_name"] not in object_by_api:
             raise ValidationFailed("link object type missing", details={"linkType": link["api_name"]})
@@ -317,10 +417,10 @@ class OntologyService(CoreService):
 
     def _object_types_for_version(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         ontology_version_id: str,
-    ) -> list[dict[str, Any]]:
+    ) -> Sequence[ObjectTypeRow]:
         return self.ontology_repository.object_types_for_version(
             transaction=conn,
             tenant_id=ctx.tenant_id,
@@ -329,23 +429,31 @@ class OntologyService(CoreService):
 
     def _link_types_for_version(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         ontology_version_id: str,
-    ) -> list[dict[str, Any]]:
+    ) -> Sequence[LinkTypeRow]:
         return self.ontology_repository.link_types_for_version(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             ontology_version_id=ontology_version_id,
         )
 
-    def _properties_for_object_type(self, conn: Any, object_type_id: str) -> list[dict[str, Any]]:
+    def _properties_for_object_type(
+        self,
+        conn: TransactionContext,
+        object_type_id: str,
+    ) -> Sequence[PropertyTypeRow]:
         return self.ontology_repository.properties_for_object_type(transaction=conn, object_type_id=object_type_id)
 
-    def _actions_for_target(self, conn: Any, object_type_id: str) -> list[dict[str, Any]]:
+    def _actions_for_target(
+        self,
+        conn: TransactionContext,
+        object_type_id: str,
+    ) -> Sequence[ActionTypeRow]:
         return self.ontology_repository.actions_for_target(transaction=conn, object_type_id=object_type_id)
 
-    def _active_ontology_version(self, conn: Any, ctx: RequestContext) -> dict[str, Any]:
+    def _active_ontology_version(self, conn: TransactionContext, ctx: RequestContext) -> OntologyVersionRow:
         row = self.ontology_repository.active_ontology_version(transaction=conn, tenant_id=ctx.tenant_id)
         if row is None:
             raise NotFound("active ontology not found")
@@ -353,10 +461,10 @@ class OntologyService(CoreService):
 
     def _active_object_type(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         api_name: str,
-    ) -> dict[str, Any]:
+    ) -> ObjectTypeRow:
         active = self._active_ontology_version(conn, ctx)
         row = self.ontology_repository.object_type_for_version(
             transaction=conn,
@@ -370,10 +478,10 @@ class OntologyService(CoreService):
 
     def _active_action_type(
         self,
-        conn: Any,
+        conn: TransactionContext,
         ctx: RequestContext,
         api_name: str,
-    ) -> dict[str, Any]:
+    ) -> ActionTypeRow:
         active = self._active_ontology_version(conn, ctx)
         row = self.ontology_repository.enabled_action_type_for_version(
             transaction=conn,

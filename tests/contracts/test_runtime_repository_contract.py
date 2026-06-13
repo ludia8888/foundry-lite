@@ -5,16 +5,19 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import pytest
 from foundry_lite.application.ports import (
     AuditEventRecord,
     LineageEdgeRecord,
+    LineageEdgeRow,
     OutboxEventRecord,
     RuntimeLookupTable,
     RuntimeRepository,
+    RuntimeRow,
     RuntimeRowsTable,
+    RuntimeRunSnapshot,
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyRuntimeRepository
@@ -33,20 +36,22 @@ class RuntimeRepositoryHarness(Protocol):
 
     def add_action_run(self, *, run_id: str, tenant_id: str) -> None: ...
 
+    def add_dead_letter_event(self, *, event_id: str, tenant_id: str) -> None: ...
+
 
 @dataclass
 class FakeRuntimeRepository:
     tables: dict[str, list[dict[str, Any]]] = field(default_factory=lambda: defaultdict(list))
 
-    def lineage_for_resource(self, *, tenant_id: str, resource_id: str) -> list[dict[str, Any]]:
+    def lineage_for_resource(self, *, tenant_id: str, resource_id: str) -> list[LineageEdgeRow]:
         return [
-            dict(row)
+            cast(LineageEdgeRow, dict(row))
             for row in self.tables["lineage_edges"]
             if row["tenant_id"] == tenant_id
             and (row["from_resource_id"] == resource_id or row["to_resource_id"] == resource_id)
         ]
 
-    def list_runs(self, *, tenant_id: str) -> dict[str, list[dict[str, Any]]]:
+    def list_runs(self, *, tenant_id: str) -> RuntimeRunSnapshot:
         return {
             "syncRuns": self.rows_for_tenant(transaction=None, table="sync_runs", tenant_id=tenant_id),
             "transformRuns": self.rows_for_tenant(transaction=None, table="transform_runs", tenant_id=tenant_id),
@@ -63,19 +68,48 @@ class FakeRuntimeRepository:
                 tenant_id=tenant_id,
             ),
             "outboxEvents": self.rows_for_tenant(transaction=None, table="outbox_events", tenant_id=tenant_id),
+            "deadLetterEvents": self.rows_for_tenant(
+                transaction=None,
+                table="dead_letter_events",
+                tenant_id=tenant_id,
+            ),
             "auditEvents": self.rows_for_tenant(transaction=None, table="audit_events", tenant_id=tenant_id),
+            "objectEdits": self.rows_for_tenant(transaction=None, table="object_edits", tenant_id=tenant_id),
         }
 
-    def row_by_id(self, *, transaction: Any, table: RuntimeLookupTable, row_id: str) -> dict[str, Any] | None:
+    def row_by_id(self, *, transaction: Any, table: RuntimeLookupTable, row_id: str) -> RuntimeRow | None:
         del transaction
         for row in self.tables[table]:
             if row["id"] == row_id:
-                return dict(row)
+                return cast(RuntimeRow, dict(row))
         return None
 
-    def rows_for_tenant(self, *, transaction: Any, table: RuntimeRowsTable, tenant_id: str) -> list[dict[str, Any]]:
+    def dead_letter_event_by_id(self, *, transaction: Any, tenant_id: str, event_id: str) -> RuntimeRow | None:
         del transaction
-        return [dict(row) for row in self.tables[table] if row["tenant_id"] == tenant_id]
+        for row in self.tables["dead_letter_events"]:
+            if row["tenant_id"] == tenant_id and row["id"] == event_id:
+                return cast(RuntimeRow, dict(row))
+        return None
+
+    def rows_for_tenant(self, *, transaction: Any, table: RuntimeRowsTable, tenant_id: str) -> list[RuntimeRow]:
+        del transaction
+        return [cast(RuntimeRow, dict(row)) for row in self.tables[table] if row["tenant_id"] == tenant_id]
+
+    def update_outbox_event_for_retry(self, *, transaction: Any, tenant_id: str, event_id: str) -> RuntimeRow | None:
+        del transaction
+        for row in self.tables["outbox_events"]:
+            if row["tenant_id"] == tenant_id and row["id"] == event_id:
+                row.update(status="pending", attempts=0, published_at=None)
+                return cast(RuntimeRow, dict(row))
+        return None
+
+    def delete_dead_letter_event(self, *, transaction: Any, tenant_id: str, event_id: str) -> bool:
+        del transaction
+        before_count = len(self.tables["dead_letter_events"])
+        self.tables["dead_letter_events"] = [
+            row for row in self.tables["dead_letter_events"] if row["tenant_id"] != tenant_id or row["id"] != event_id
+        ]
+        return len(self.tables["dead_letter_events"]) == before_count - 1
 
     def insert_audit_event(self, *, transaction: Any, record: AuditEventRecord) -> None:
         del transaction
@@ -101,27 +135,34 @@ class FakeRuntimeRepository:
 
 @dataclass
 class FakeRuntimeRepositoryHarness:
-    repository: FakeRuntimeRepository
+    repository: RuntimeRepository
 
     @contextmanager
     def transaction(self) -> Iterator[Any]:
         yield None
 
     def add_transform(self, *, transform_id: str, tenant_id: str) -> None:
+        assert isinstance(self.repository, FakeRuntimeRepository)
         self.repository.tables["transforms"].append(_transform_row(transform_id=transform_id, tenant_id=tenant_id))
 
     def add_materialization(self, *, materialization_id: str, tenant_id: str) -> None:
+        assert isinstance(self.repository, FakeRuntimeRepository)
         self.repository.tables["materializations"].append(
             _materialization_row(materialization_id=materialization_id, tenant_id=tenant_id)
         )
 
     def add_action_run(self, *, run_id: str, tenant_id: str) -> None:
+        assert isinstance(self.repository, FakeRuntimeRepository)
         self.repository.tables["action_runs"].append(_action_run_row(run_id=run_id, tenant_id=tenant_id))
+
+    def add_dead_letter_event(self, *, event_id: str, tenant_id: str) -> None:
+        assert isinstance(self.repository, FakeRuntimeRepository)
+        self.repository.tables["dead_letter_events"].append(_dead_letter_row(event_id=event_id, tenant_id=tenant_id))
 
 
 @dataclass
 class SqlAlchemyRuntimeRepositoryHarness:
-    repository: SqlAlchemyRuntimeRepository
+    repository: RuntimeRepository
     engine: Engine
 
     @contextmanager
@@ -145,6 +186,12 @@ class SqlAlchemyRuntimeRepositoryHarness:
         with self.engine.begin() as conn:
             conn.execute(insert(db.action_runs).values(**_action_run_row(run_id=run_id, tenant_id=tenant_id)))
 
+    def add_dead_letter_event(self, *, event_id: str, tenant_id: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                insert(db.dead_letter_events).values(**_dead_letter_row(event_id=event_id, tenant_id=tenant_id))
+            )
+
 
 def _audit_record(*, event_id: str = "audit_1", tenant_id: str = "tenant-demo") -> AuditEventRecord:
     return AuditEventRecord(
@@ -166,7 +213,14 @@ def _audit_record(*, event_id: str = "audit_1", tenant_id: str = "tenant-demo") 
     )
 
 
-def _outbox_record(*, event_id: str = "outbox_1", tenant_id: str = "tenant-demo") -> OutboxEventRecord:
+def _outbox_record(
+    *,
+    event_id: str = "outbox_1",
+    tenant_id: str = "tenant-demo",
+    status: str = "pending",
+    attempts: int = 0,
+    published_at: str | None = None,
+) -> OutboxEventRecord:
     return OutboxEventRecord(
         event_id=event_id,
         tenant_id=tenant_id,
@@ -174,12 +228,12 @@ def _outbox_record(*, event_id: str = "outbox_1", tenant_id: str = "tenant-demo"
         aggregate_type="dataset_version",
         aggregate_id="dsv_1",
         payload={"versionId": "dsv_1"},
-        status="pending",
-        attempts=0,
+        status=status,
+        attempts=attempts,
         idempotency_key="dsv_1",
         correlation_id="run_1",
         created_at="2026-06-10T00:00:00Z",
-        published_at=None,
+        published_at=published_at,
     )
 
 
@@ -245,6 +299,19 @@ def _lineage_row(record: LineageEdgeRecord) -> dict[str, Any]:
         "relation": record.relation,
         "created_by_run_id": record.created_by_run_id,
         "created_at": record.created_at,
+    }
+
+
+def _dead_letter_row(*, event_id: str, tenant_id: str) -> dict[str, Any]:
+    return {
+        "id": event_id,
+        "tenant_id": tenant_id,
+        "source_event_id": "outbox_1",
+        "event_type": "dataset.version.committed",
+        "payload": {"versionId": "dsv_1"},
+        "error": {"message": "publisher failed"},
+        "failed_at": "2026-06-10T00:00:02Z",
+        "retry_after": None,
     }
 
 
@@ -314,6 +381,8 @@ def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(
     harness: RuntimeRepositoryHarness,
 ) -> None:
     harness.add_action_run(run_id="action_run_1", tenant_id="tenant-demo")
+    harness.add_dead_letter_event(event_id="dlq_1", tenant_id="tenant-demo")
+    harness.add_dead_letter_event(event_id="dlq_other", tenant_id="tenant-other")
     with harness.transaction() as transaction:
         harness.repository.insert_audit_event(transaction=transaction, record=_audit_record())
         first_insert = harness.repository.insert_outbox_event(transaction=transaction, record=_outbox_record())
@@ -329,6 +398,7 @@ def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(
     assert [row["id"] for row in runs["actionRuns"]] == ["action_run_1"]
     assert [row["id"] for row in runs["auditEvents"]] == ["audit_1"]
     assert [row["id"] for row in runs["outboxEvents"]] == ["outbox_1"]
+    assert [row["id"] for row in runs["deadLetterEvents"]] == ["dlq_1"]
 
 
 def test_runtime_repository_contract_lineage_lookup_is_tenant_scoped(
@@ -348,6 +418,42 @@ def test_runtime_repository_contract_lineage_lookup_is_tenant_scoped(
     assert [row["id"] for row in by_input] == ["lineage_1"]
     assert [row["id"] for row in by_output] == ["lineage_1"]
     assert [row["id"] for row in other_tenant] == ["lineage_other"]
+
+
+def test_runtime_repository_contract_requeues_dead_letter_event(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    harness.add_dead_letter_event(event_id="dlq_1", tenant_id="tenant-demo")
+    with harness.transaction() as transaction:
+        harness.repository.insert_outbox_event(
+            transaction=transaction,
+            record=_outbox_record(status="failed", attempts=3, published_at="2026-06-10T00:00:01Z"),
+        )
+        dead_letter = harness.repository.dead_letter_event_by_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id="dlq_1",
+        )
+        assert dead_letter is not None
+        outbox = harness.repository.update_outbox_event_for_retry(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id=str(dead_letter["source_event_id"]),
+        )
+        deleted = harness.repository.delete_dead_letter_event(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id="dlq_1",
+        )
+
+    runs = harness.repository.list_runs(tenant_id="tenant-demo")
+
+    assert outbox is not None
+    assert outbox["status"] == "pending"
+    assert outbox["attempts"] == 0
+    assert outbox["published_at"] is None
+    assert deleted is True
+    assert runs["deadLetterEvents"] == []
 
 
 def test_runtime_repository_contract_allowlisted_row_reads(

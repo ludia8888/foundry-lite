@@ -4,11 +4,11 @@ import csv
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
@@ -36,7 +36,7 @@ class StagedFileStats:
     row_count: int
     byte_size: int
     content_hash: str
-    schema_json: dict[str, Any]
+    schema_json: dict[str, object]
     schema_hash: str
 
 
@@ -58,18 +58,18 @@ def _sql_identifier(value: str) -> str:
     return f'"{value}"'
 
 
-def _json_hash(value: dict[str, Any]) -> str:
+def _json_hash(value: Mapping[str, object]) -> str:
     payload = json.dumps(_json_ready(value), sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(payload).hexdigest()
 
 
-def _required_row(row: tuple[Any, ...] | None, operation: str) -> tuple[Any, ...]:
+def _required_row(row: tuple[object, ...] | None, operation: str) -> tuple[object, ...]:
     if row is None:
         raise InvariantViolation(f"{operation} did not return a row")
     return row
 
 
-def _json_ready(value: Any) -> Any:
+def _json_ready(value: object) -> object:
     if isinstance(value, Decimal):
         if value == value.to_integral_value():
             return int(value)
@@ -108,11 +108,11 @@ def _dataset_ref_parts(dataset_ref: str) -> tuple[str, str]:
     return namespace, name
 
 
-def _dataset_ref(row: dict[str, Any]) -> str:
+def _dataset_ref(row: Mapping[str, object]) -> str:
     return f"{row['namespace']}.{row['name']}"
 
 
-def _write_rows_to_csv(rows: list[dict[str, Any]], path: Path, fieldnames: list[str]) -> None:
+def _write_rows_to_csv(rows: Sequence[Mapping[str, object]], path: Path, fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)

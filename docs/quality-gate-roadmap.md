@@ -25,7 +25,7 @@
 ## 1. 문서 조항 ↔ 게이트 매핑 (전수)
 
 `foundry_lite_python_engineering_guidelines_ko.md` (이하 *가이드*)의 18개 섹션 중 핵심
-조항 ~67개를 게이트와 매핑한다. 상태는 ✅ 강제, △ 부분, ❌ 미강제, ⏳ 미해당 (구현 전).
+조항 66개를 게이트와 매핑한다. 상태는 ✅ 강제, △ 부분, ❌ 미강제, ⏳ 미해당 (구현 전).
 
 ### §1 Python 환경과 기본 철학
 
@@ -33,9 +33,9 @@
 |---|---|---|---|---|
 | 1 | Python ≥ 3.12 | `pyproject.toml` `requires-python` | 정적 | ✅ |
 | 2 | ruff/mypy/pyright/pytest 사용 | `ci_gate.sh` | pass/fail | ✅ |
-| 3 | 함수 ≤ 40줄 | (예정 G3) | LoC | ❌ |
-| 4 | mutation은 transaction+audit+실패상태 | (예정 G2/G11) | static + dynamic | ❌ |
-| 5 | request_id/run_id 끊김 금지 | (예정 G5/G16) | static + dynamic | ❌ |
+| 3 | 함수 ≤ 40줄 | `check_function_length.py` | max 40 + baseline 0 | ✅ |
+| 4 | mutation은 transaction+audit+실패상태 | `check_audit_on_mutation.py` + `check_transaction_outbox_pair.py` + `check_audit_count_runtime.py` + `check_failed_mutation_state_runtime.py` | static + dynamic failure probe | ✅ |
+| 5 | request_id/run_id 끊김 금지 | `check_trace_continuity.py` + `check_log_has_trace_keys.py` | static + dynamic | ✅ |
 | 6 | branch coverage ≥ 95% | `pytest --cov-branch` | 95 | ✅ |
 | 7 | 통합/스모크 100% | demo smoke + e2e | pass | ✅ |
 
@@ -43,17 +43,17 @@
 
 | # | 조항 | 게이트 | 정량 | 상태 |
 |---|---|---|---|---|
-| 8 | boolean naming (is_/has_/can_) | — | — | ❌ |
-| 9 | 함수 ≤ 40줄 | (예정 G3) | LoC | ❌ |
+| 8 | boolean naming (is_/has_/can_) | `check_boolean_naming.py` | bool arg/field violation 0 | △ |
+| 9 | 함수 ≤ 40줄 | `check_function_length.py` | max 40 + baseline 0 | ✅ |
 | 10 | guard clause 깊이 | Xenon B (간접) | 복잡도 등급 | △ |
-| 11 | 조회/변경 부작용 분리 | — | — | ❌ |
+| 11 | 조회/변경 부작용 분리 | `check_query_side_effects.py` | query side-effect violation 0 | ✅ |
 
 ### §3 SRP
 
 | # | 조항 | 게이트 | 정량 | 상태 |
 |---|---|---|---|---|
-| 12 | API Router DB transaction 금지 | (예정 G1) | 0건 | ❌ |
-| 13 | Repository 비즈니스 판단 금지 | (예정 G10) | 0건 | ❌ |
+| 12 | API Router DB transaction 금지 | `check_router_layer_purity.py` | 0건 | ✅ |
+| 13 | Repository 비즈니스 판단 금지 | `check_repository_no_business.py` | 0건 | ✅ |
 | 14 | Domain FastAPI/SQLAlchemy import 금지 | `check_dependency_graph` | 0건 | ✅ |
 
 ### §4.1 의존성 방향
@@ -62,7 +62,7 @@
 |---|---|---|---|---|
 | 15 | domain → framework 0 | `check_dependency_graph` + `.importlinter` + `tach` | 0건 + DAG pass | ✅ |
 | 16 | application → port만 | `check_infra_import_boundary` + `.importlinter` + `tach` | baseline 0 + DAG pass | ✅ |
-| 17 | api → repository 직접 호출 금지 | (예정 G1) | 0건 | ❌ |
+| 17 | api → repository 직접 호출 금지 | `check_router_layer_purity.py` | 0건 | ✅ |
 
 ### §4.2 디자인 패턴
 
@@ -72,39 +72,40 @@
 | 19 | required_dependencies 명시 | `check_service_dependencies` | 선언/사용 일치 | ✅ |
 | 20 | required_collaborators 명시 | `check_service_dependencies` | 선언/사용 일치 | ✅ |
 | 21 | 소유 service 명시 호출 | `check_service_call_graph` | cycle 0, depth≤7, fan-out≤10 | ✅ |
-| 22 | Strategy/Specification 테스트성 | — | — | ❌ |
+| 22 | Strategy/Specification 테스트성 | `check_strategy_specification_tests.py` | missing direct test 0 | ✅ |
 
 ### §4.3 Scale Foundation
 
 | # | 조항 | 게이트 | 정량 | 상태 |
 |---|---|---|---|---|
 | 23 | concrete SDK import 0 | `check_infra_import_boundary` | 0건 | ✅ |
-| 24 | adapter error에 trace key 유지 | (예정 G16) | dynamic | ❌ |
+| 24 | adapter error에 trace key 유지 | `check_adapter_error_trace_keys.py` | FAILED run error trace key violation 0 | ✅ |
 | 25 | fake/local adapter contract test 동일 | contract tests | pass | △ (수동) |
-| 26 | trace key boundary 유지 | (예정 G16) | dynamic | ❌ |
-| 27 | 새 boundary에 contract test 동반 | (예정 G13) | 0개 누락 | ❌ |
+| 26 | trace key boundary 유지 | `check_trace_continuity.py` | dynamic | ✅ |
+| 27 | 새 boundary에 contract test 동반 | `check_contract_test_per_port.py` | 0개 누락 | ✅ |
 
 ### §5 코드 컨벤션
 
 | # | 조항 | 게이트 | 정량 | 상태 |
 |---|---|---|---|---|
-| 28 | `Any` boundary 외 금지 | pyright (감지만) | — | △ |
-| 29 | `dict[str, Any]` 대신 model | (예정 G4) | baseline + decrease | ❌ |
+| 28 | `Any` boundary 외 금지 | `check_application_any_budget.py` + pyright | application/API/CLI/worker broad `Any` 0 | ✅ |
+| 29 | `dict[str, Any]` 대신 model | `check_dict_any_budget.py` | signature baseline 0 + no growth | ✅ |
 
 ### §6 API
 
 | # | 조항 | 게이트 | 정량 | 상태 |
 |---|---|---|---|---|
-| 30 | mutation에 idempotency key | (예정 G12) | static | ❌ |
-| 31 | error response에 request_id | (예정 G7) | 0건 누락 | ❌ |
+| 30 | mutation에 idempotency key | `check_idempotency_on_action.py` | 0건 누락 | ✅ |
+| 31 | error response에 request_id | `check_error_response_has_request_id.py` | 0건 누락 | ✅ |
 
 ### §7 트랜잭션
 
 | # | 조항 | 게이트 | 정량 | 상태 |
 |---|---|---|---|---|
-| 32 | Repository 임의 commit 금지 | (예정 G10) | 0건 | ❌ |
-| 33 | outbox와 state change 같은 transaction | (예정 G11/G18) | static + dynamic | ❌ |
+| 32 | Repository 임의 commit 금지 | `check_repository_no_business.py` | 0건 | ✅ |
+| 33 | outbox와 state change 같은 transaction | `check_transaction_outbox_pair.py` + `check_outbox_consistency.py` | static + dynamic | ✅ |
 | 34 | COMMITTED dataset version immutable | DB schema (정적) | — | △ |
+| 34.1 | 성공 transform lineage는 input/output dataset version 단위 | `check_openlineage_dynamic_lineage.py` | violation 0 + OpenLineage RunEvent 산출 | ✅ |
 
 ### §8 에러 처리
 
@@ -113,7 +114,7 @@
 | 35 | broad `except Exception` 금지 | ruff `BLE001` (부분) | 정적 | △ |
 | 36 | `raise X from exc` | ruff `B904` | 정적 | ✅ |
 | 37 | secret/SQL/stack trace 노출 금지 | Bandit (부분) | 정적 | △ |
-| 38 | 로그에 request_id 포함 | (예정 G5) | static | ❌ |
+| 38 | 로그에 request_id 포함 | `check_log_has_trace_keys.py` | static | ✅ |
 
 ### §10 보안
 
@@ -122,28 +123,28 @@
 | 41 | `eval`/`exec` 금지 | Bandit | 0건 | ✅ |
 | 42 | raw SQL interpolation 금지 | Bandit | 0건 | ✅ |
 | 43 | secret hardcoding 금지 | Bandit | 0건 | ✅ |
-| 44 | tenant_id 없는 도메인 write 금지 | (예정 G11) | static | ❌ |
-| 45 | audit 없는 mutation 금지 | (예정 G2/G17) | static + dynamic | ❌ |
+| 44 | tenant_id 없는 도메인 write 금지 | `check_tenant_write_guard.py` | insert/update/delete violation 0 | ✅ |
+| 45 | audit 없는 mutation 금지 | `check_audit_on_mutation.py` + `check_audit_count_runtime.py` | static + dynamic | ✅ |
 
 ### §11 테스트
 
 | # | 조항 | 게이트 | 정량 | 상태 |
 |---|---|---|---|---|
 | 46 | test_*.py 명명 | pytest 디스커버리 | 정적 | ✅ |
-| 47 | flaky test pass 금지 | (예정 G19) | 3회 반복 동일 결과 | ❌ |
+| 47 | flaky test pass 금지 | `check_flaky_detector.py` | 3회 반복 결과 변동 0 | ✅ |
 | 48 | line 95% | `pytest --cov` | 95 | ✅ |
 | 49 | branch 95% | `pytest --cov-branch` | 95 | ✅ |
 | 50 | function 95% | `check_public_api_coverage` | 95 | ✅ |
-| 51 | 영역별 (domain/app/infra/api) 95% | (예정 G8) | 영역별 95 | ❌ |
-| 52 | 통합 시나리오 7개 100% | demo smoke (1개) | 1/7 | △ |
-| 53 | `pragma: no cover` 남발 금지 | (예정 G6) | baseline + decrease | ❌ |
+| 51 | 영역별 (domain/app/infra/api/cli/worker) 95% | `check_tier_coverage_by_layer.py` | 각 계층 95 | ✅ |
+| 52 | 통합 시나리오 7개 100% | `check_integration_scenario_markers.py` + marked pytest scenarios | 7/7 | ✅ |
+| 53 | `pragma: no cover` 남발 금지 | `check_pragma_no_cover_budget.py` | baseline 0 + reason required | ✅ |
 
 ### §12 관측성
 
 | # | 조항 | 게이트 | 정량 | 상태 |
 |---|---|---|---|---|
-| 54 | 로그에 request_id/tenant_id/run_id | (예정 G5) | static | ❌ |
-| 55 | 메트릭 7개 노출 | (예정 — `check_metrics_exposed.py`) | metric count | ❌ |
+| 54 | 로그에 request_id/tenant_id/run_id | `check_log_has_trace_keys.py` | static | ✅ |
+| 55 | 메트릭 7개 노출 | `check_metrics_exposed.py` | 7개 required metric | ✅ |
 
 ### §16 CI
 
@@ -156,33 +157,635 @@
 
 | # | 조항 | 게이트 | 정량 | 상태 |
 |---|---|---|---|---|
-| 58 | 증상 제거 패치 금지 | (예정 G21/G22) | PR diff + git log | ❌ |
+| 58 | 증상 제거 패치 금지 | `check_regression_test_per_bugfix.py` + `check_pr_root_cause_section.py` | bugfix missing test 0 + PR section missing 0 | ✅ |
 | 59 | `except Exception: pass` 금지 | ruff `E722`+`BLE001` (부분) | 정적 | △ |
 | 60 | `sleep`/magic으로 race condition 덮기 | `check_no_test_sleep` | tests 0 | ✅ |
-| 61 | `dict[str, Any]` 우회 | (예정 G4) | baseline + decrease | ❌ |
-| 62 | migration 없이 DB 모양 가정 | (예정 — `check_alembic_revision_on_schema.py`) | static | ❌ |
-| 63 | Fat Router | (예정 G1) | 0건 | ❌ |
+| 61 | `dict[str, Any]` 우회 | `check_dict_any_budget.py` | signature baseline 0 + no growth | ✅ |
+| 62 | migration 없이 DB 모양 가정 | `check_schema_revision_guard.py` | schema fingerprint mismatch 0 | ✅ |
+| 63 | Fat Router | `check_router_layer_purity.py` | direct DB/repository 0건 | △ |
 | 64 | God Service | `check_service_call_graph` | fan-out ≤10 | ✅ |
-| 65 | Silent Failure | (예정 G17) | dynamic audit | ❌ |
-| 66 | Log-only Audit | (예정 G2/G17) | static + dynamic | ❌ |
+| 65 | Silent Failure | `check_audit_count_runtime.py` | dynamic audit | ✅ |
+| 66 | Log-only Audit | `check_audit_on_mutation.py` + `check_audit_count_runtime.py` | static + dynamic | ✅ |
 | 67 | Magic fallback | AST-grep `foundry-lite-no-facade-magic-dispatch` | 0건 | ✅ |
 
 ### 매핑 점수 요약
 
 | 상태 | 개수 | 비율 |
 |---|---|---|
-| ✅ 강제 | 28 | 42% |
-| △ 부분 | 6 | 9% |
-| ❌ 미강제 | 31 | 46% |
-| ⏳ 미해당 (구현 전) | 2 | 3% |
-| **합계** | **67** | **100%** |
+| ✅ 강제 | 54 | 82% |
+| △ 부분 | 12 | 18% |
+| ❌ 미강제 | 0 | 0% |
+| ⏳ 미해당 (구현 전) | 0 | 0% |
+| **합계** | **66** | **100%** |
 
-**현재 게이트는 문서 약속의 ~51%를 정량적으로 강제한다.** 나머지는 PR 리뷰어와
-AGENTS.md 정독에 의존한다. 이 로드맵의 목표는 그 의존을 줄이는 것이다.
+**현재 게이트는 문서 약속의 약 82%를 정량적으로 완전 강제하고, 나머지 18%는
+부분 강제한다.** 직접 미강제(❌) 조항은 0개이며, 다음 목표는 △ 부분 강제 항목을
+실제 구현·정밀 게이트로 줄이는 것이다.
 
 ---
 
 ## 2. 신규 게이트 — Tier 분류
+
+### Tier C1 — boolean naming clarity (△ 부분 완료 2026-06-11)
+
+`scripts/quality/check_boolean_naming.py`는 `libs`, `apps`, `scripts`의 Python 파일을
+AST로 읽고 boolean 인자와 annotated field 이름이 질문형 또는 명시적 상태명처럼 읽히는지
+검사한다. 비개발자 관점으로 말하면, `retry=True`처럼 뜻이 애매한 스위치가 늘어나는 것을
+막고 `include_items=True`, `has_permission=True`처럼 켜면 무엇이 달라지는지 이름만 봐도
+알 수 있게 하는 게이트다.
+
+검사 기준:
+- boolean annotation이 붙은 function argument와 `AnnAssign` field/local 이름을 검사한다.
+- `is_`, `has_`, `can_`, `should_`, `include_`, `allow_`, `enable_`, `require_`,
+  `skip_`, `use_`, `simulate_`, `confirm_` prefix를 허용한다.
+- `enabled`, `disabled`, `deleted`, `nullable`, `indexed`, `searchable`, `editable`,
+  `fresh`, `gate_pass` 같은 명시적 상태명은 허용한다.
+- 결과는 `artifacts/quality/boolean_naming.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_boolean_naming.py`가 불명확한 bool 이름 실패,
+질문형/상태형 이름 허용, optional bool annotation 처리, 현재 repo 0 violation,
+JSON report 생성을 검증한다.
+
+현재 보장 범위: 이 게이트는 새 boolean 인자/field debt를 차단하지만,
+`def matches_filter(...) -> bool` 같은 boolean 반환 함수 이름 전체를 의미적으로 판정하지는
+않는다. 그래서 §2.1은 ✅가 아니라 △ 부분 강제로 기록한다.
+
+### Tier G1 — API router layer purity (✅ 완료 2026-06-11 G1)
+
+`scripts/quality/check_router_layer_purity.py`는 `apps/api/**/*.py`를 AST로 읽고 API
+router가 application service/facade 경계를 건너뛰어 DB나 repository에 직접 접근하는지
+검사한다.
+
+검사 기준:
+- `core.*_repository.*` 직접 호출은 fail한다.
+- `*.engine.begin()` 직접 transaction open은 fail한다.
+- `conn.execute(...)`, `transaction.execute(...)`, `session.execute(...)` 같은 router 내부
+  DB statement 실행은 fail한다.
+- 결과는 `artifacts/quality/router_layer_purity.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_router_layer_purity.py`가 core repository 직접 호출,
+direct transaction/execute 실패, application facade 호출 허용, JSON report 생성을 검증한다.
+이 게이트는 Fat Router 전체를 완전히 판정하지는 않지만, router가 DB/repository를 직접
+소유하는 가장 위험한 root cause를 차단한다.
+
+### Tier G1A — query side-effect boundary (✅ 완료 2026-06-11)
+
+`scripts/quality/check_query_side_effects.py`는 application service의 public read/query
+method를 AST로 읽고, 조회처럼 보이는 method가 상태 변경으로 이어지는지 검사한다.
+비개발자 관점으로 말하면, “보기만 했는데 장부가 바뀌는” 사고를 막는 게이트다.
+
+검사 기준:
+- `get_*`, `list_*`, `query_*`, `preview_*`, `inspect_*`, `lineage_*`, `find_*`
+  public service method가 대상이다.
+- 대상 method의 reachable call tree 안에 repository write가 있으면 fail한다.
+- audit/outbox/lineage write, 파일 write, write-oriented adapter 호출이 있으면 fail한다.
+- public mutation collaborator(`apply_*`, `create_*`, `run_*` 등)로 이어지면 fail한다.
+- 결과는 `artifacts/quality/query_side_effects.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_query_side_effects.py`가 read-only repository 호출 허용,
+repository write 실패, helper를 통한 audit write 실패, file write 실패, mutation
+collaborator 실패, write-mode `open()` 실패, JSON report 생성을 검증한다. 실제 코드에서는
+조회 method가 permission-deny audit row를 쓰던 경로를 제거했고,
+`tests/unit/test_helpers_and_query.py::test_permission_deny_on_dataset_read_does_not_write_audit`로
+그 회귀를 고정했다.
+
+### Tier G10 — repository no-business boundary (✅ 완료 2026-06-11 G10)
+
+`scripts/quality/check_repository_no_business.py`는
+`libs/foundry_lite/infrastructure/repositories/**/*.py`를 AST로 읽고 repository가
+application/domain이 맡아야 할 판단을 직접 소유하는지 검사한다.
+
+검사 기준:
+- `foundry_lite.domain.errors`의 `ValidationFailed`, `PermissionDenied`,
+  `ConflictDetected`, `NotFound`, `InvariantViolation`, `ExternalSystemError`,
+  `FoundryLiteError` import는 fail한다.
+- repository 내부에서 위 도메인 에러를 직접 `raise`하면 fail한다.
+- `savepoint`가 아닌 receiver의 `.commit()`/`.rollback()` 직접 호출은 fail한다.
+- 결과는 `artifacts/quality/repository_no_business.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_repository_no_business.py`가 domain error import/raise
+실패, direct commit/rollback 실패, port-level error와 savepoint commit/rollback 허용,
+JSON report 생성을 검증한다.
+
+### Tier G11 — transaction outbox/audit pair (✅ 정적 완료 2026-06-11 G11)
+
+`scripts/quality/check_transaction_outbox_pair.py`는 application service의
+`with self.engine.begin() as transaction:` block을 AST로 읽고, 그 transaction handle을
+사용하는 repository write가 같은 transaction call tree 안에서 audit/outbox 증거를
+남기는지 검사한다. 비개발자 관점으로 말하면, 업무 장부의 상태 변경과 그 변경을
+나중에 추적·재처리할 수 있는 영수증이 같은 봉투에 들어 있는지 확인하는 게이트다.
+
+검사 기준:
+- 대상은 `libs/foundry_lite/application/services/**/*.py`의 public mutation method다.
+- mutation method prefix는 `create_`, `ensure_`, `upload_`, `register_`, `run_`,
+  `apply_`, `materialize`, `index_`, `cleanup_`, `commit_`, `abort_`다.
+- `self.engine.begin()` transaction block 안에서 transaction handle을 받는 repository
+  write가 있으면 같은 call tree 안에 `_audit`, `_outbox`, `insert_audit_event`,
+  `insert_outbox_event` 중 하나가 있어야 한다.
+- 단순 lifecycle 준비 write인 `create_open_transaction`, `insert_sync_run`,
+  `insert_transform_run`, `insert_materialization_run`, `create_index_run` 등은 allowlist로
+  분리한다. 이들은 최종 상태 변경 proof가 아니라 run/transaction 시작 기록이다.
+- 결과는 `artifacts/quality/transaction_outbox_pair.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_transaction_outbox_pair.py`가 transaction write without
+audit/outbox 실패, 같은 transaction의 direct audit 허용, delegated outbox helper 허용,
+transaction 밖 audit 실패, preparatory lifecycle write 허용, JSON report 생성을 검증한다.
+
+현재 보장 범위: G11은 정적 게이트다. demo smoke 후 실제 state change와 durable
+`outbox_events` row가 일치하는지 보는 동적 검증은 G18이 담당한다. `tenant_id` 없는
+도메인 write를 직접 탐지하는 게이트는 아직 별도 future gate로 남아 있다.
+
+### Tier G12 — action idempotency contract (✅ 완료 2026-06-11 G12)
+
+`scripts/quality/check_idempotency_on_action.py`는 Action apply mutation의 retry/replay
+계약이 HTTP boundary에서 schema까지 끊기지 않는지 AST로 검사한다. 비개발자 관점으로
+말하면, 같은 버튼 클릭이나 네트워크 재시도가 같은 업무 변경을 두 번 만들지 못하도록
+하는 안전장치다.
+
+검사 기준:
+- `apps/api/foundry_lite_api/main.py`의 `apply_action` endpoint는
+  `Idempotency-Key` header를 받아야 한다.
+- API handler는 `core.apply_action(..., idempotency_key=...)`로 key를 전달해야 한다.
+- `FoundryLiteCore.apply_action`과 `ActionService.apply_action`은 `idempotency_key`를
+  required keyword argument로 받아야 한다.
+- `ActionService.apply_action`은 빈 key를 `ValidationFailed`로 거부해야 한다.
+- 새 `action_run` insert 전에 기존 action_run을 idempotency key로 조회하고,
+  있으면 replay response를 반환해야 한다.
+- `ActionRunRecord`에는 idempotency key가 저장되어야 한다.
+- `ActionRepository`는 `action_run_by_idempotency(..., idempotency_key=...)` lookup을
+  제공해야 한다.
+- `action_runs` schema에는 `tenant_id`, `action_type_id`, `actor_user_id`,
+  `idempotency_key` unique constraint가 있어야 한다.
+- 결과는 `artifacts/quality/action_idempotency.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_action_idempotency.py`가 완전한 계약 통과,
+API header 누락 실패, 기존 action_run lookup이 insert 뒤로 밀린 경우 실패,
+schema unique constraint 누락 실패, JSON report 생성을 검증한다.
+
+### Tier G13 — contract test per port (✅ 완료 2026-06-11 G13)
+
+`scripts/quality/check_contract_test_per_port.py`는
+`libs/foundry_lite/application/ports/*.py`와 `tests/contracts/test_*_contract.py`를
+대조해 port/interface가 contract test 없이 추가되는지 검사한다.
+
+검사 기준:
+- `ports/__init__.py`를 제외한 모든 port 파일은 대응 contract test를 가져야 한다.
+- 기본 대응 이름은 `test_{port_file_stem}_contract.py`다.
+- 기존 이름 관례 때문에 `dataset_storage.py`는
+  `test_dataset_storage_adapter_contract.py`도 허용한다.
+- 결과는 `artifacts/quality/contract_test_per_port.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_contract_test_per_port.py`가 missing contract 실패,
+matching contract 허용, `dataset_storage` alias 허용, JSON report 생성을 검증한다.
+누락되어 있던 `MetadataRepository`에는
+`tests/contracts/test_metadata_repository_contract.py`를 추가했다.
+
+### Tier D1 — strategy/specification testability (✅ 완료 2026-06-11)
+
+`scripts/quality/check_strategy_specification_tests.py`는
+`libs/foundry_lite/application`에서 filter evaluator, precondition evaluator,
+`*Strategy`, `*Specification`처럼 조건 판단 규칙을 담당하는 모듈을 찾고, 그 모듈이
+직접 unit/property test import를 갖는지 검사한다.
+
+검사 기준:
+- `matches_*`, `evaluate_*`, `validate_*`, `precondition_*` public function은 규칙
+  함수 후보로 본다.
+- `*Strategy`, `*Specification`, `*Evaluator` type alias/class와
+  `*OPERATIONS`/`*EVALUATORS` registry는 교체 가능한 전략 후보로 본다.
+- 후보 모듈은 `tests/test_*.py`에서 모듈 자체 또는 public 규칙 symbol을 직접
+  import해야 한다.
+- `FoundryLiteCore`나 API 서버를 통해 간접으로만 검증된 경우는 통과로 보지 않는다.
+- 결과는 `artifacts/quality/strategy_specification_tests.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_strategy_specification_tests.py`가 missing direct test
+실패, 직접 module import 허용, parent package symbol import 허용, 일반 helper 제외,
+JSON report 생성을 검증한다. 기존 object query filter 규칙은
+`tests/unit/test_query_filters.py`에서 `matches_filter`를 직접 검증한다.
+
+### Tier G15 — required integration scenario markers (✅ 완료 2026-06-11 G15)
+
+`scripts/quality/check_integration_scenario_markers.py`는 Python 엔지니어링 가이드 §11.4의
+MVP release 필수 통합 흐름을 pytest marker로 고정한다. 단일 demo smoke 하나가 넓게 성공했다는
+사실만으로 7개 시나리오가 모두 검증됐다고 착각하는 문제를 차단한다.
+
+Required scenarios:
+- `connector_sync`: connector sync → raw dataset commit
+- `transform_clean_dataset`: raw dataset → DuckDB transform → clean dataset commit
+- `ontology_index`: ontology import → object index
+- `object_action_audit`: object query → action apply → object edit/outbox/audit
+- `materialization_downstream_transform`: action log/object snapshot materialization → downstream transform
+- `permission_tenant_isolation`: permission denied와 tenant isolation
+- `failed_run_replay_or_dlq`: failed run → retry/replay 또는 DLQ
+
+Additional tracked scenario:
+- `closed_loop_repeatability`: one-command closed-loop demo repeated twice from the same checkout
+
+실행:
+- `@pytest.mark.integration_scenario("<scenario>")` marker가 7개 required scenario를 모두
+  포함해야 한다.
+- 알 수 없는 scenario 이름이나 잘못된 marker shape는 fail한다.
+- 결과는 `artifacts/quality/integration_scenario_markers.json`에 남긴다.
+- package script: `pnpm quality:integration-scenarios`
+- release gate: `pnpm ci:gate`
+
+Self-test: `tests/unit/test_quality_integration_scenario_markers.py`가 7/7 정상 통과,
+missing scenario 실패, unknown scenario 실패, invalid marker 실패, JSON report 생성을
+검증한다.
+
+현재 보장 범위: 시나리오 marker 존재를 정적으로 강제하고, marker가 붙은 통합 테스트는
+raw commit, clean transform lineage, object action/outbox/audit, materialization downstream
+transform, permission/tenant isolation, failed-run replay 증거를 직접 assert한다. 실제
+실행/통과 여부는 pytest coverage run과 flaky detector가 함께 담당한다. 그래서 §11.4 #52는
+7개 required scenario가 모두 release gate 안에 들어온 상태다.
+
+### Tier G14 — current-state document drift (✅ 완료 2026-06-11 G14)
+
+`scripts/quality/check_doc_drift.py`는 `AGENTS.md`와
+`docs/implementation-status.md`를 읽어 현재 구현처럼 언급된 source path, script,
+Python class, 명시적 `Class.method` reference가 실제 코드 트리에 존재하는지 검증한다.
+
+검사 기준:
+- inline code span의 source path/script reference는 현재 repo에 존재해야 한다.
+- `FoundryLiteCore`, `CoreDependencies` 같은 Python class reference는 AST symbol index에
+  존재해야 한다.
+- `Class.method` reference는 해당 class와 method가 모두 존재해야 한다.
+- `아직`, `not implemented`, `remain unextracted`, `removed`, `금지`처럼 미래 목표,
+  미구현 gap, 제거/금지 상태를 정직하게 말하는 문장은 검사 대상에서 제외한다.
+- 결과는 `artifacts/quality/doc_drift.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_doc_drift.py`가 missing script reference 실패,
+missing Python symbol 실패, 기존 path/symbol/method 허용, 미래·제거 문맥 제외,
+JSON report 생성을 검증한다. 이 게이트는 가이드 66개 조항의 직접 mapping 카운트에는
+넣지 않는 meta gate지만, 문서가 현재 코드보다 앞서 “완료”처럼 말하는 root cause를
+차단한다.
+
+### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
+
+`scripts/quality/check_schema_revision_guard.py`는
+`libs/foundry_lite/infrastructure/schema.py`의 SQLAlchemy metadata를 정규화해
+fingerprint를 만들고, 최신 `infra/schema_revisions/*.json` snapshot과 비교한다.
+비개발자 관점으로 말하면, DB 설계도를 바꿨는데 변경 이력 도장을 찍지 않는 일을
+release gate에서 막는 장치다.
+
+현재 구현은 Alembic runtime이 아니라 SQLite/SQLAlchemy local bootstrap이다. 그래서 이
+게이트는 Alembic 완료를 주장하지 않는다. 대신 Alembic migration history가 도입되기
+전까지 DB 테이블/컬럼/unique constraint 모양이 code-only assumption으로 바뀌는 것을
+차단한다.
+
+검사 기준:
+- 최신 schema revision JSON이 존재해야 한다.
+- revision id는 파일명 stem과 같아야 한다.
+- revision은 description을 가져야 한다.
+- 현재 metadata fingerprint와 revision snapshot fingerprint가 같아야 한다.
+- 현재 table/column/unique constraint snapshot과 revision snapshot이 같아야 한다.
+- 결과는 `artifacts/quality/schema_revision_guard.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_schema_revision_guard.py`가 matching snapshot,
+missing revision dir, fingerprint mismatch, schema snapshot mismatch, revision id
+mismatch, JSON report 생성, 실제 metadata snapshot 생성을 검증한다.
+
+### Tier S1 — tenant write guard (✅ 완료 2026-06-11)
+
+`scripts/quality/check_tenant_write_guard.py`는
+`libs/foundry_lite/infrastructure/repositories/**/*.py`의 SQLAlchemy write statement를
+AST로 읽고 tenant-scoped table에 대한 insert/update/delete가 tenant boundary를 갖는지
+검사한다. 비개발자 관점으로 말하면, “주문 번호가 같으면 수정”이 아니라 “이 고객사의
+그 주문 번호가 맞을 때만 수정”하도록 DB 문장 자체에 안전벨트를 거는 게이트다.
+
+검사 기준:
+- `schema.py`에서 `Column("tenant_id", ...)`를 가진 table을 tenant-scoped table로 본다.
+- tenant-scoped `insert(table)`는 `.values(tenant_id=...)`를 가져야 한다.
+- `update(table)`와 `delete(table)`는 `.where(...)` 안에 `tenant_id` 조건을 가져야 한다.
+- dynamic table update/delete도 tenant where guard가 없으면 fail한다.
+- 결과는 `artifacts/quality/tenant_write_guard.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_tenant_write_guard.py`가 tenant 없는 insert/update/delete
+실패, tenant guard가 있는 write 허용, dynamic table update 실패, 현재 repo 0 violation,
+JSON report 생성을 검증한다.
+
+### Tier G2 — audit on public service mutations (✅ 정적 완료 2026-06-11 G2)
+
+`scripts/quality/check_audit_on_mutation.py`는 application service의 public mutation
+entrypoint를 AST로 읽고, 해당 entrypoint가 service/helper call tree를 통해 repository
+write에 닿는지 확인한다. repository write에 닿는데 `runtime_service._audit`,
+`runtime_service._outbox`, `insert_audit_event`, `insert_outbox_event` 중 하나도
+도달하지 못하면 release gate를 실패시킨다.
+
+검사 기준:
+- 대상은 `libs/foundry_lite/application/services/**/*.py`의 public mutation method다.
+- mutation method prefix는 `create_`, `ensure_`, `upload_`, `register_`, `run_`,
+  `apply_`, `materialize`, `index_`, `cleanup_`, `commit_`, `abort_`다.
+- repository write는 `*_repository.insert_/update_/delete_/create_/commit_/abort_/mark_/archive_/activate_`
+  계열 호출로 본다.
+- 같은 public entrypoint의 service/helper call tree 안에 audit/outbox proof가 없으면 fail한다.
+- 결과는 `artifacts/quality/audit_on_mutation.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_audit_on_mutation.py`가 public mutation violation,
+direct audit 허용, delegated audit helper 허용, JSON report 생성을 검증한다.
+
+현재 보장 범위: G2는 정적 게이트다. demo smoke 후 실제 `audit_events` row 수와
+mutation 호출 수를 대조하는 동적 검증은 G17이 담당한다. 그래서 §10.2 audit
+조항은 정적/동적 양쪽에서 강제되며, transaction/outbox 원자성은 G11/G18이 나눠서
+검증한다.
+
+### Tier G17 — runtime audit count validation (✅ 완료 2026-06-11 G17)
+
+`scripts/quality/check_audit_count_runtime.py`는 supply-chain demo smoke가 만든 runtime
+DB를 읽어 high-level mutation 증거와 durable `audit_events` row를 대조한다.
+
+검사 기준:
+- `datasets` row는 `dataset.created` audit를 가져야 한다.
+- `dataset_versions` row는 `dataset.version.committed` audit를 가져야 한다.
+- `transforms` row는 `transform.definition.created` 또는 `transform.definition.updated`
+  audit를 가져야 한다.
+- active `ontology_versions` row는 `ontology.version.activated` audit를 가져야 한다.
+- succeeded `index_runs` row는 `object.index.rebuilt` audit를 가져야 한다.
+- terminal `action_runs` row는 성공 시 `action.run.committed`, 실패/충돌 시
+  `action.run.failed` audit를 가져야 한다.
+- 전체 기대 mutation count와 `audit_events` row count의 차이는 `0`이어야 한다.
+- 결과는 `artifacts/quality/audit_count_runtime.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_audit_count_runtime.py`가 정상 runtime mutation/audit
+매칭, missing audit row 실패, JSON report 생성을 검증한다. 실제 demo probe에서는
+21개 기대 mutation과 21개 audit row가 일치했다.
+
+### Tier G18 — outbox consistency validation (✅ 동적 완료 2026-06-11 G18)
+
+`scripts/quality/check_outbox_consistency.py`는 supply-chain demo smoke가 만든 runtime
+DB를 읽어 event-propagated state change와 durable `outbox_events` row를 대조한다.
+이 게이트는 "업무 장부는 바뀌었는데 외부 전파/재처리 장부가 빠지는" 사고를 막는
+동적 검증이다.
+
+검사 기준:
+- active `dataset_versions` row는 일반 commit이면 `dataset.version.committed`,
+  materialization output이면 `materialization.completed` outbox row를 가져야 한다.
+- active `ontology_versions` row는 `ontology.version.activated` outbox row와 비어 있지
+  않은 correlation id를 가져야 한다.
+- succeeded `action_runs` row는 `action.run.committed` outbox row를 가져야 한다.
+- `object_edits` row는 같은 `action_run_id` 기준의 `object.edit.committed`와
+  `object.changed` outbox row를 가져야 한다.
+- succeeded `index_runs` row는 `objects_upserted + objects_deleted` 개수만큼
+  source dataset version correlation을 가진 `object.changed` outbox row를 가져야 한다.
+- 전체 기대 state-change count와 covered `outbox_events` row count의 차이는 `0`이어야 한다.
+- 결과는 `artifacts/quality/outbox_consistency.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_outbox_consistency.py`가 정상 state change/outbox
+매칭, missing outbox row 실패, correlation id mismatch 실패, JSON report 생성을 검증한다.
+실제 demo probe에서는 18개 기대 state change와 18개 outbox row가 일치했다.
+
+현재 보장 범위: G18은 동적 게이트다. service mutation 함수 안에서 state change와
+outbox insert가 같은 transaction scope에 있는지 정적으로 강제하는 검증은 G11이
+담당한다.
+
+### Tier G19 — flaky detector (✅ 완료 2026-06-11 G19)
+
+`scripts/quality/check_flaky_detector.py`는 같은 pytest 명령을 3회 반복 실행하고,
+각 반복 결과를 `artifacts/quality/flaky_detector.json`에 남긴다. 한 번이라도 실패하거나
+통과 요약이 달라지면 release gate가 실패한다. 비개발자 관점으로 말하면, "한 번은
+우연히 초록불이었지만 다시 돌리면 깨지는 테스트"를 그대로 통과시키지 않는 안전장치다.
+
+검사 기준:
+- 기본 명령은 `uv run pytest tests -n auto --no-header -q`이다.
+- 반복 횟수는 `3`회이며, 각 회차는 pytest-randomly의 fresh seed와 pytest-xdist의
+  병렬 실행을 사용한다.
+- 모든 회차 return code는 `0`이어야 한다.
+- 모든 회차의 pytest summary는 같아야 한다.
+- 결과는 `artifacts/quality/flaky_detector.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_flaky_detector.py`가 안정적으로 통과하는 fake runner,
+중간 1회 실패 runner, 통과하더라도 summary가 바뀌는 runner를 검증한다.
+
+### Tier G16A — adapter error trace-key validation (✅ 완료 2026-06-11)
+
+`scripts/quality/check_adapter_error_trace_keys.py`는 격리된 local core에 일부러 실패하는
+compute adapter를 끼운 뒤, 실패한 `sync_runs.error.trace`가 운영 추적 키를 모두
+보존하는지 검증한다. 비개발자 관점으로 말하면, "데이터 변환 부품이 고장났는데
+누가, 어떤 요청에서, 어떤 실행이 실패했는지 모르는" 사고를 막는 장치다.
+
+검사 기준:
+- adapter 실패 후 run 상태는 `FAILED`로 남아야 한다.
+- `error.trace`에는 `tenant_id`, `actor_user_id`, `request_id`, `run_id`,
+  `correlation_id`, `adapter`가 있어야 한다.
+- `run_id`와 `correlation_id`는 실패한 run id와 일치해야 한다.
+- request/tenant/actor/adapter 값은 gate가 주입한 기대값과 일치해야 한다.
+- 결과는 `artifacts/quality/adapter_error_trace_keys.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_adapter_error_trace_keys.py`가 실제 exploding adapter
+probe, trace 누락, 필수 키 누락, request context mismatch, JSON report 생성을 검증한다.
+
+### Tier G16B — failed mutation state validation (✅ 완료 2026-06-12)
+
+`scripts/quality/check_failed_mutation_state_runtime.py`는 격리된 local core에 일부러
+실패하는 CSV compute adapter를 끼운 뒤, 실패한 mutation이 런타임 DB에 모순 없이
+남는지 검증한다. 비개발자 관점으로 말하면, "업무 변경이 중간에 실패했는데 장부는
+성공처럼 보이거나, 실패 원인과 감사 기록이 빠지는" 사고를 막는 장치다.
+
+검사 기준:
+- 실패 probe는 최소 1개의 `FAILED` sync run을 만들어야 한다.
+- 실패 run은 `completed_at`, 구조화된 `error`, `error.trace`를 가져야 한다.
+- `error.trace`에는 `tenant_id`, `actor_user_id`, `request_id`, `run_id`,
+  `correlation_id`, `adapter`가 있어야 한다.
+- 실패 run의 `transaction_id`는 durable `dataset_transactions` row를 가리켜야 하고,
+  해당 transaction은 `ABORTED`여야 한다.
+- `ABORTED` transaction의 metadata error는 실패 run error와 같아야 한다.
+- 실패/abort transaction은 committed `dataset_versions` row를 만들면 안 된다.
+- `dataset.transaction.aborted` audit row는 같은 transaction id와 failed run correlation
+  id를 가져야 하며, `after_ref.error`를 포함해야 한다.
+- 결과는 `artifacts/quality/failed_mutation_state.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_failed_mutation_state_runtime.py`가 실제 exploding
+adapter probe, 완전한 실패 증거 통과, abort audit 누락 실패, failed transaction의
+committed version 생성 실패, error trace 누락 실패, JSON report 생성을 검증한다.
+
+2026-06-12 추가 진행: `DatasetTransactionService._abort_transaction_after_error`는
+repository가 내부 transaction을 열게 하지 않고 application service가 연 transaction
+안에서 failed run update, dataset transaction abort, `dataset.transaction.aborted`
+audit를 함께 기록한다. `abort_open_transaction_and_fail_run`은 실제 OPEN transaction을
+ABORTED로 바꿨는지 boolean으로 반환하므로, validation failure처럼 이미 abort audit가
+남은 경로에서는 중복 audit를 만들지 않는다. adapter failure probe에서
+`check_audit_count_runtime.py`를 다시 실행하면 2개 기대 mutation과 2개 durable audit
+row가 일치한다.
+
+### Tier G16 — trace continuity validation (✅ 완료 2026-06-11 G16)
+
+`scripts/quality/check_trace_continuity.py`는 supply-chain demo를 in-memory
+OpenTelemetry provider 아래에서 실행한다. 외부 Tempo/Grafana 서버 없이 synthetic
+request span을 만들고, 그 아래에서 service span과 SQLAlchemy DB span이 같은 trace에
+남는지 검증한다.
+
+검사 기준:
+- synthetic request span `foundry-lite.trace-continuity.demo-request`가 있어야 한다.
+- request span은 gate가 주입한 `trace-gate-request` request id를 가져야 한다.
+- `DemoService.run_supply_chain_demo`, `DatasetIngestService.upload_csv`,
+  `TransformService.run_transform`, `OntologyService.apply_ontology`,
+  `ObjectIndexingService.index_rebuild`, `ActionService.apply_action`,
+  `MaterializationService.materialize` span이 있어야 한다.
+- 위 service span은 같은 `foundry_lite.request_id`를 가져야 한다.
+- SQLAlchemy DB span이 request trace 안에 1개 이상 있어야 한다.
+- service span/DB span이 request trace 밖으로 새 trace를 만들면 fail한다.
+- 결과는 `artifacts/quality/trace_continuity.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_trace_continuity.py`가 missing request span,
+service request_id 누락, DB trace mismatch, 정상 span set, JSON report 생성을 검증한다.
+실제 demo probe에서는 service span 13개와 DB span 651개가 하나의 request trace 안에
+묶이는 것을 확인했다.
+
+### Tier P8 — OpenLineage dynamic lineage validation (✅ 동적 완료 2026-06-11 P8)
+
+`scripts/quality/check_openlineage_dynamic_lineage.py`는 supply-chain demo smoke가 만든
+runtime DB를 읽어 `transform_runs.input_versions`, `transform_runs.output_version_id`,
+`lineage_edges`가 같은 version 단위 계약을 가리키는지 검증한다.
+
+검사 기준:
+- 성공한 transform run이 1개 이상 있어야 한다.
+- 성공한 transform run의 모든 input version은 output version으로 가는 `input_to`
+  lineage edge를 가져야 한다.
+- `input_to` edge는 반드시 `dataset_version → dataset_version`이어야 한다.
+- 같은 transform run/input version/output version 조합의 lineage edge가 중복되면 fail한다.
+- 실패한 transform run이 성공 lineage edge처럼 남으면 fail한다.
+- 검증 결과는 `artifacts/quality/openlineage_dynamic_lineage.json`, OpenLineage-compatible
+  RunEvent artifact는 `artifacts/quality/openlineage_events.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_openlineage_dynamic_lineage.py`가 정상 version-bound
+lineage 통과, missing edge 실패, duplicate edge 실패, non-version edge 실패,
+failed-run edge 실패, JSON report 생성을 검증한다. 실제 OpenLineage CLI/server
+전송은 아직 붙이지 않고, P8 1차에서는 외부 서비스 없이 재현 가능한 동적 검증과
+이벤트 산출을 고정한다.
+
+### Tier G3 — function length hard-limit guard (✅ baseline 0 완료 2026-06-11 G3)
+
+`scripts/quality/check_function_length.py`는 `libs/foundry_lite/application` 아래
+Python 함수를 AST로 읽어 함수 길이 부채가 더 커지지 않게 막는다. 가이드 §2.2는
+40줄을 넘으면 책임이 섞였는지 확인하라고 말한다. 현재 application에는 40줄을
+초과하는 기존 함수가 0개 남아 있으므로 G3는 새 40줄 초과 함수부터 차단한다.
+따라서 함수 길이 기준은 더 이상 baseline no-growth가 아니라 40줄 hard limit으로
+강제된다.
+
+검사 기준:
+- hard limit은 40줄이다.
+- baseline은 0개다.
+- 새 40줄 초과 함수는 실패한다.
+- 40줄 초과 함수가 생기면 책임 분리나 record/payload/helper 분리를 먼저 검토한다.
+- 결과는 `artifacts/quality/function_length.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_function_length.py`가 새 over-limit 함수 실패,
+baseline 함수 동일 길이 허용, baseline 함수 성장 실패, warning-only 함수 통과,
+JSON report 생성을 검증한다.
+
+### Tier G4 — dict[str, Any] signature budget (✅ baseline 완료 2026-06-11 G4)
+
+`scripts/quality/check_dict_any_budget.py`는 `libs/foundry_lite/application` 아래
+Python 함수 시그니처를 AST로 읽어 `dict[str, Any]`가 application schema drift 통로로
+더 커지지 않게 막는다. 가이드 §5.2와 §18.3은 adapter/JSON boundary 밖에서
+`dict[str, Any]`로 schema mismatch를 숨기지 말고 Pydantic model, dataclass,
+TypedDict 같은 명시적 구조로 옮기라고 말한다. application 함수 시그니처의
+기존 부채는 0으로 줄였으므로 G4는 baseline 0을 고정하고, 총량 또는 layer별
+총량 증가를 release gate에서 차단한다.
+
+검사 기준:
+- 대상은 `libs/foundry_lite/application` 아래 함수 argument와 return annotation이다.
+- `dict[str, Any]`, `Dict[str, Any]`, `typing.Dict[str, Any]`를 중첩 annotation까지 센다.
+- 총 baseline은 0이다.
+- layer baseline은 core facade 0, ports 0, application helpers 0, services 0이다.
+- 총량 또는 layer별 총량이 baseline보다 늘면 fail한다.
+- 결과는 `artifacts/quality/dict_any_budget.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_dict_any_budget.py`가 중첩 signature 카운트,
+총량 증가 실패, layer 증가 실패, baseline 이내 허용, JSON report 생성을 검증한다.
+
+### Tier G5 — log trace-key validation (✅ 완료 2026-06-11 G5)
+
+`scripts/quality/check_log_has_trace_keys.py`는 운영 로그가 추적 키 없이 남는 것을
+막는다. 비개발자 관점으로 말하면, 장애가 난 뒤 로그 한 줄만 보고도 “어떤 요청,
+어떤 tenant, 어떤 실행(run)에서 나온 일인지” 다시 찾을 수 있게 하는 게이트다.
+
+검사 기준:
+- `libs`, `apps`, `scripts` 아래 Python 파일에서 직접 `logger.info(...)`,
+  `logger.error(...)`, `logging.warning(...)` 같은 logger 호출을 만들면 message,
+  args, 또는 `extra=` 안에 `request_id`, `tenant_id`, run id 계열 키 중 하나가
+  보여야 한다.
+- `log_event(...)` 호출도 `request_id`, `tenant_id`, run id 계열 키 중 하나를
+  keyword field로 넘겨야 한다.
+- `foundry_lite.observability.logging.log_event` 자체도 같은 조건을 런타임에서
+  검증하며, 추적 키가 없으면 `ValueError`로 즉시 실패한다.
+- 결과는 `artifacts/quality/log_trace_keys.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_log_trace_keys.py`가 추적 키 없는 direct logger
+호출 실패, `extra={"request_id": ...}` 허용, 추적 키 없는 `log_event` 실패,
+`tenant_id` 포함 `log_event` 허용, JSON report 생성을 검증한다.
+
+### Tier M1 — required operational metrics exposure (✅ 완료 2026-06-11)
+
+`scripts/quality/check_metrics_exposed.py`는 API의 Prometheus payload에 가이드 §12.2가
+요구한 7개 운영 지표가 모두 노출되는지 검사한다. 비개발자 관점으로 말하면, 장애가
+났을 때 운영자가 볼 계기판의 핵심 바늘이 배포 중 실수로 빠지지 않게 막는 게이트다.
+
+검사 기준:
+- `foundry_lite_dataset_commit_seconds`는 dataset commit duration을 나타낸다.
+- `foundry_lite_transform_run_seconds`는 transform run duration을 나타낸다.
+- `foundry_lite_action_apply_seconds`는 action apply latency를 나타낸다.
+- `foundry_lite_object_query_seconds`는 object query latency를 나타낸다.
+- `foundry_lite_outbox_publish_lag_seconds`는 outbox publish lag를 나타낸다.
+- `foundry_lite_failed_runs_total`은 failed run count를 나타낸다.
+- `foundry_lite_dlq_size`는 DLQ size를 나타낸다.
+- 결과는 `artifacts/quality/metrics_exposed.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_metrics_exposed.py`가 Prometheus HELP/TYPE/sample
+파싱, required metric 누락 실패, 전체 metric 허용, 실제 `prometheus_payload()`
+노출 확인, JSON report 생성을 검증한다.
+
+### Tier G6 — pragma no cover budget (✅ 완료 2026-06-11 G6)
+
+`scripts/quality/check_pragma_no_cover_budget.py`는 Python 주석 token만 읽어
+`# pragma: no cover` 사용을 센다. 현재 코드 baseline은 `0`이고 `pnpm ci:gate`에서
+`--baseline 0`으로 실행한다.
+
+검사 기준:
+- `libs`, `apps`, `scripts` 아래 Python 주석에 `pragma: no cover`가 있으면 count가 증가한다.
+- 모든 exclusion은 `reason:` 주석을 가져야 한다.
+- count가 baseline을 넘거나 reason이 없으면 fail한다.
+- 결과는 `artifacts/quality/pragma_no_cover_budget.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_pragma_no_cover_budget.py`가 missing reason,
+reason 포함 허용, string literal 오탐 방지, budget 초과 report 생성을 검증한다.
+
+### Tier G7 — error response request_id (✅ 완료 2026-06-11 G7)
+
+`scripts/quality/check_error_response_has_request_id.py`는 `apps/api`의 FastAPI
+error response 경로를 AST로 검사한다. 비개발자 관점으로 말하면, 사용자가 API 에러를
+봤을 때 운영자가 trace/log/audit에서 같은 사건을 찾을 수 있는 추적번호가 빠지지
+않게 하는 게이트다.
+
+검사 기준:
+- `HTTPException(...)`을 직접 만들면 `detail` 안에 `request_id` 또는 `requestId`가
+  있어야 한다.
+- 공통 `_handle_error(...)` helper를 호출할 때는 현재 `request`를 두 번째 인자 또는
+  `request=` keyword로 넘겨야 한다.
+- `_handle_error(exc)`처럼 request 없이 호출해 응답 `request_id`가 `None`이 될 수
+  있는 코드는 fail한다.
+- 결과는 `artifacts/quality/error_response_request_id.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_error_response_request_id.py`가 request_id 없는
+`HTTPException` 실패, request_id 포함 detail 허용, request 없는 `_handle_error`
+호출 실패, request 포함 `_handle_error` 허용, JSON report 생성을 검증한다.
+
+### Tier G8 — layer coverage floor (✅ 완료 2026-06-11 G8)
+
+`scripts/quality/check_tier_coverage_by_layer.py`는 `coverage json` 산출물을
+domain/application/infrastructure/API/CLI/worker 계층으로 나누어 각 계층의 combined
+coverage가 95% 이상인지 검증한다. `ci_gate.sh`는 이제 coverage 수집 대상에
+`libs/foundry_lite`, `apps/api`, `apps/cli`, `apps/worker`를 모두 포함한다.
+
+검사 기준:
+- 각 계층은 coverage JSON에 반드시 존재해야 한다.
+- 계층별 covered units는 `covered_lines + covered_branches`, total units는
+  `num_statements + num_branches`로 계산한다.
+- 어느 한 계층이라도 95% 미만이면 fail한다.
+- 결과는 `artifacts/quality/tier_coverage_by_layer.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_tier_coverage_by_layer.py`가 전체 계층 통과,
+낮은 계층 실패, 누락 계층 실패, JSON report 생성을 검증한다. API/CLI 스모크는
+`tests/smoke/test_interfaces.py`에서 endpoint와 CLI command coverage를 보강한다.
 
 ### Tier P7 — CodeQL data-flow taint analysis (✅ 완료 2026-06-10 P7)
 
@@ -225,6 +828,95 @@ strict = [...]` 리스트의 경로는 **strict 모드**로 격상된다. 이 �
 남은 application/services/* 와 infrastructure 어댑터는 점진적으로 strict
 리스트에 추가. 새 boundary 추출 시 ports/* 가 strict이므로 Protocol 위반이
 즉시 fail — 정통화 강제 메커니즘.
+
+2026-06-12 진행: API/CLI JSON entrypoint의 `dict[str, Any]` 노출은 0으로
+줄였다. `ActionApplyRequest.params`, object-set `filter`, CLI JSON argument는
+`dict[str, object]`로 고정했고, `apps/api`/`apps/cli`는 `Any` import 없이
+`mypy`/`pyright`를 통과한다. 추가로 safe-expression/action precondition
+helper와 object query filter evaluator도 `Any` 없이 JSON-ready `object` 값을
+받고, 문자열·리스트·객체 모양을 검증한 뒤 평가한다. 다만 application service
+내부의 collaborator, DB transaction handle, JSON row mapping에는 넓은 `Any`가
+아직 남아 있으므로 #28은 계속 △다.
+
+2026-06-12 추가 진행: Action apply 경로의 `ActionService`와
+`action_helpers`는 `ActionTypeRow`, `ObjectRecordRow`, `ObjectPatch`,
+`ObjectProperties`, `ActionWritebackPayload`, `ActionErrorPayload`,
+`TransactionContext`를 사용해 action type, target object, patch, writeback,
+transaction handle 계약을 더 좁혔다. `ActionMutationDefinition`은 실제 runtime
+검증과 맞게 `type`/`property` 필드를 필수로 선언한다.
+
+2026-06-12 추가 진행: Object indexing 경로의 `ObjectIndexingService`는
+`TabularRow`, `ObjectRecordRow`, `ObjectPropertyMap`, `IndexRunError`,
+`ObjectConflictRecord`, `TransactionContext`, typed collaborator Protocol을
+사용해 Parquet row, object record, conflict value, runtime failure payload,
+transaction handle 계약을 더 좁혔다. application 전체의 넓은 `Any` 잔량은
+201개에서 163개로 감소했다. 다만 `OntologyService`, object set,
+transform/materialization/runtime service 내부에는 아직 broad `Any`가 남아
+있으므로 #28은 계속 △다.
+
+2026-06-12 추가 진행: `OntologyService`는 `TransactionContext`와
+`OntologyDatasetRegistry`, `OntologyDatasetVersions`,
+`OntologyRuntimeBoundary` Protocol을 사용해 ontology activation/import/validation
+경로의 transaction handle, dataset lookup, dataset schema lookup, runtime
+audit/outbox collaborator 계약을 더 좁혔다. ontology 내부의 넓은 `Any`는
+36개에서 12개로 줄었고, application 전체 잔량은 163개에서 139개로 감소했다.
+YAML declaration mapping과 dataset schema column mapping에는 아직 broad
+`Any`가 남아 있으므로 #28은 계속 △다.
+
+2026-06-12 추가 진행: `ObjectSetsService`는 `TransactionContext`와
+`SetObjectQuery`, `SetOntologyLookup`, `SetRuntimeBoundary` Protocol을 사용해
+object set 생성/검증/조회 경로의 transaction handle, object query, ontology
+lookup, runtime audit/outbox collaborator 계약을 더 좁혔다. static object id와
+dynamic filter 입력은 `object`로 받은 뒤 runtime 검증 후 repository/query
+경계로 넘긴다. object set 내부의 넓은 `Any`는 19개에서 0개로 줄었고,
+application 전체 잔량은 139개에서 120개로 감소했다. transform,
+materialization, runtime service 내부에는 아직 broad `Any`가 남아 있으므로 #28은
+계속 △다.
+
+2026-06-12 추가 진행: `TransformService`와 `MaterializationService`는
+`TransactionContext`와 typed collaborator Protocol을 사용해 transform run,
+lineage, materialization commit 경로의 service collaborator와 transaction
+handle 계약을 더 좁혔다. runtime table row는 runtime row mapping과
+`Mapping[str, object]`로 다루고, materialized parquet row도 JSON-ready `object` 값으로
+고정한다. transform 내부의 넓은 `Any`는 18개에서 0개로, materialization
+내부의 넓은 `Any`는 17개에서 0개로 줄었고, application 전체 잔량은
+120개에서 85개로 감소했다. runtime service, dataset service 일부, ontology
+YAML/schema mapping, base DI 경계에는 아직 broad `Any`가 남아 있으므로 #28은
+계속 △다.
+
+2026-06-12 추가 진행: `RuntimeService`는 `TransactionContext`,
+runtime row mapping, `Mapping[str, object]`, `FoundryLiteError`를 사용해
+audit, outbox, lineage, error payload 경계의 넓은 `Any`를 제거했다.
+`OntologyService`는 YAML 선언 검증을 `ontology_yaml.py` helper로 분리하고,
+object/link backing, action parameter schema, action definition,
+dataset schema column mapping을 typed helper로 만든다. runtime 내부의 넓은
+`Any`는 12개에서 0개로, ontology 내부의 넓은 `Any`는 12개에서 0개로
+줄었고, application 전체 잔량은 85개에서 61개로 감소했다. demo orchestration,
+dataset service 일부, object store read/link helpers, base DI 경계에는 아직
+broad `Any`가 남아 있으므로 #28은 계속 △다.
+
+2026-06-12 추가 진행: object store read/link 경계에서
+`ObjectRecordsService`, `ObjectLinksService`, `ObjectQueryService`가
+`ObjectRecordRow`, `ObjectLinkRow`, `TransactionContext`, typed collaborator
+Protocol, 명시적 property sort key를 사용하도록 바꿨다. object store
+read/link helper 내부의 넓은 `Any`는 11개에서 0개로 줄었고, application
+전체 잔량은 61개에서 50개로 감소했다. demo orchestration, dataset service
+일부, primitives JSON helper, base DI 경계에는 아직 broad `Any`가 남아
+있으므로 #28은 계속 △다.
+
+2026-06-12 추가 진행: `DatasetIngestService`, `DatasetRegistryService`,
+`DatasetQualityService`, `DatasetTransactionService`, `DatasetVersionService`는
+dataset 전용 collaborator Protocol과 `TransactionContext`를 사용하도록
+정리했다. `DemoService`는 demo orchestration 전용 Protocol로 action,
+dataset, transform, ontology, object, materialization collaborator 계약을
+고정했다. `CoreDependencies`/`CoreService`의 engine은 `TransactionManager`
+Protocol로 좁혔고, primitives JSON helper는 `object` 입력/출력으로 바꿨다.
+그 결과 application 내부 넓은 `Any`는 50개에서 0개가 됐고,
+`check_application_any_budget.py`가 `libs/foundry_lite/application`,
+`apps/api`, `apps/cli`, `apps/worker`에서 broad `Any` 재도입을 baseline 0으로
+차단한다. 인프라 repository/observability의 runtime edge `Any`는 #28의
+application/app boundary 밖 adapter 영역으로 남겨두며, #28은 ✅ 완료로
+전환한다.
 
 ### Tier P11 — interrogate docstring coverage (✅ 완료 2026-06-10 P11)
 
@@ -300,8 +992,9 @@ not yet in `ci_gate.sh`. Either a future mutmut release or a migration to
 | `pytest-randomly` | **테스트 순서 의존성** — 한 테스트가 다른 테스트의 부작용에 암묵적으로 의존. seed가 매번 바뀌므로 PR에 들어오면 즉시 실패. |
 | `pytest-xdist` | **race / 공유 자원 충돌** — 같은 파일 경로/env var/tmp 디렉토리에 두 테스트가 동시 쓰기. `-n auto`로 매 게이트 실행마다 검증. |
 
-`ci_gate.sh`는 (a) coverage 측정용 serial pytest 1회 + (b) `-n auto` parallel
-pytest 1회를 둘 다 돈다. parallel run은 coverage 산출 없이 통과/실패만 본다.
+`ci_gate.sh`는 (a) coverage 측정용 serial pytest 1회 + (b) G19
+`check_flaky_detector.py`가 소유한 `-n auto` parallel pytest 3회를 둘 다 돈다.
+parallel run은 coverage 산출 없이 통과/실패와 반복 결과 안정성을 본다.
 
 ### Tier P2 — import-linter로 흡수된 게이트 (✅ 완료 2026-06-10 P2)
 
@@ -374,30 +1067,37 @@ method-registry magic dispatch로 돌아가는 것을 차단한다.
 |---|---|---|---|---|
 | G1 | `check_router_layer_purity.py` | §3.1, §6.1, §18.3 Fat Router, §4.1 17 | `apps/api/**/*.py`에서 `core.<repo>_repository.*` 직접 호출 0, `engine.begin` 0, `transaction.execute` 0 | Fat Router 안티패턴 자체 차단 |
 | G2 | `check_audit_on_mutation.py` | §7, §10.2 45, §18.3 66 | mutation 메서드(`create_*`/`commit_*`/`apply_*`/`abort_*`)가 같은 메서드 body에서 `runtime_service._audit` 또는 `audit_repository` 접근. 위반 0 | mutation은 무조건 audit |
-| G3 | `check_function_length.py` | §1.2 3, §2.2 9 | `libs/foundry_lite/application` 함수 ≤ 50줄 (warning 40). baseline 후 monotonic decrease | 함수 거대화 차단 |
-| G4 | `check_dict_any_budget.py` | §5.2 29, §18.3 61 | `application/**/*.py` 함수 시그니처에 `dict[str, Any]` 카운트 → baseline + monotonic decrease | dict[str,Any]가 schema drift 통로 |
+| G3 | `check_function_length.py` | §1.2 3, §2.2 9 | `libs/foundry_lite/application` 함수 ≤ 40줄. baseline 0 | 함수 거대화 차단 |
+| G4 | `check_dict_any_budget.py` | §5.2 29, §18.3 61 | `application/**/*.py` 함수 시그니처 `dict[str, Any]` total 0, layer baseline no growth | dict[str,Any]가 schema drift 통로 |
 | G5 | `check_log_has_trace_keys.py` | §8.3 38, §12.1 54 | `logger.X(...)` 호출 시 `extra=` 또는 message에 `request_id`/`run_id`/`tenant_id` 중 1개 이상 포함. 위반 0 | 추적 키 끊김 차단 |
 | G6 | `check_pragma_no_cover_budget.py` | §11.4 53 | `# pragma: no cover` 총 카운트 baseline + monotonic decrease + 이유 주석 강제 (`# pragma: no cover  # reason: ...`) | 커버리지 우회 차단 |
 | G7 | `check_error_response_has_request_id.py` | §6.3 31, §8.3 | FastAPI `HTTPException(detail=...)` / exception handler가 `request_id` 포함하는지 정적 검증 | 사용자 응답에 추적 키 보존 |
 | G8 | `check_tier_coverage_by_layer.py` | §11.4 51 | `coverage.json` 파싱 후 `domain`/`application`/`infrastructure`/`apps/api`/`apps/cli` 각 영역 95%+ | 평균 95%에 가려진 가난한 영역 노출 |
 | G9 | `check_no_test_sleep.py` | §18.1 60 | `tests/**/*.py` AST에서 `time.sleep`/`asyncio.sleep` 호출 0건 | flaky 근원 차단 |
 | G10 | `check_repository_no_business.py` | §3.1 13, §7.1 32, §18.3 | `infrastructure/repositories/*.py`에서 도메인 errors(`ValidationFailed`, `PermissionDenied`, `ConflictDetected`) raise 0건 | Repository에 비즈니스 규칙 침투 차단 |
+| G1A | `check_query_side_effects.py` | §2.3 11 | read/query service entrypoint side-effect violation 0 | 조회가 상태를 바꾸는 root cause 차단 |
+| C1 | `check_boolean_naming.py` | §2.1 8 | `libs`/`apps`/`scripts` boolean argument와 annotated field 이름 violation 0 | 뜻이 애매한 boolean 스위치 차단 |
+| S1 | `check_tenant_write_guard.py` | §10.2 44 | tenant-scoped SQLAlchemy insert/update/delete tenant guard violation 0 | 다른 tenant 데이터 변경 차단 |
+| M1 | `check_metrics_exposed.py` | §12.2 55 | Prometheus payload에 required operational metrics 7개 노출 | 운영 계기판 누락 차단 |
 
 ### Tier 1 — 중간 (정적 + 마커, 각 1~3시간)
 
 | ID | 게이트 | 매핑 조항 | 정량 기준 | Root cause |
 |---|---|---|---|---|
-| G11 | `check_transaction_outbox_pair.py` | §7.1 33, §10.2 44 | service mutation 메서드에서 `engine.begin()`/`transaction.execute` 호출 시 같은 함수에서 outbox/audit 함께 호출 강제 | outbox/audit 누락 차단 |
-| G12 | `check_idempotency_on_action.py` | §6.3 30, §7.3 | `apps/api/**/actions/**/apply` endpoint와 `apply_action` service가 `idempotency_key` 파라미터 + `existing` 체크 정적 검증 | 중복 액션 차단 |
+| G11 | `check_transaction_outbox_pair.py` | §7.1 33, §10.2 audit/outbox | service mutation transaction block에서 repository write와 audit/outbox proof를 같은 call tree에 강제 | outbox/audit 누락 차단 |
+| G12 | `check_idempotency_on_action.py` | §6.3 30, §7.3 | API `Idempotency-Key` header, Core/Service required parameter, existing action_run replay, schema unique constraint. 위반 0 | 중복 액션 차단 |
 | G13 | `check_contract_test_per_port.py` | §4.3 27 | `libs/foundry_lite/application/ports/*.py`마다 `tests/contracts/test_*_contract.py` 1:1 존재. 누락 0 | 새 boundary가 부정통하게 들어오는 것 차단 |
+| D1 | `check_strategy_specification_tests.py` | §4.2 22 | strategy/specification module missing direct test 0 | 조건 규칙이 API/Core 테스트에 갇히는 문제 차단 |
 | G14 | `check_doc_drift.py` | AGENTS.md, implementation-status.md | 문서에 명시된 클래스/모듈/메서드 이름이 코드에 실재하는지 grep + AST 검증 | 문서 과장 차단 |
+| G15A | `check_schema_revision_guard.py` | §18.1 62 | SQLAlchemy metadata fingerprint와 최신 `infra/schema_revisions` snapshot 일치. mismatch 0 | DB 모양 code-only 변경 차단 |
 | G15 | `check_integration_scenario_markers.py` | §11.4 52 | `@pytest.mark.integration_scenario("connector_sync"|...)` 마커가 가이드 §11.4 7개 시나리오 모두 존재 | 통합 100% 약속 검증 |
-
 ### Tier 2 — 동적 / 메타 (런타임 분석, 각 3~8시간)
 
 | ID | 게이트 | 매핑 조항 | 정량 기준 | Root cause |
 |---|---|---|---|---|
 | G16 | `check_trace_continuity.py` | §4.3 24, 26, §12.3 | demo smoke 실행 중 OTel span 수집 → request span 안의 service span/DB span의 `trace_id` 동일 | trace key 끊김 검출 |
+| G16A | `check_adapter_error_trace_keys.py` | §4.3 24 | FAILED run error trace key violation 0 | adapter 실패 추적 키 보존 |
+| G16B | `check_failed_mutation_state_runtime.py` | §1.2 4, §7.1, §10.2 45 | failed run + aborted transaction + abort audit violation 0 | 실패 mutation 장부 불일치 차단 |
 | G17 | `check_audit_count_runtime.py` | §10.2 45, §18.3 65 | demo smoke 후 `audit_events` row 수 ≥ mutation 호출 카운트. 차이 0 | audit 누락 동적 검증 |
 | G18 | `check_outbox_consistency.py` | §7.1 33 | demo smoke 후 state change ↔ outbox event 1:1 매칭. 불일치 0 | outbox 약속 동적 검증 |
 | G19 | `check_flaky_detector.py` | §11.4 47 | pytest 3회 반복 후 결과 변동 0 | flaky를 통과로 보지 않음 |
@@ -407,11 +1107,34 @@ method-registry magic dispatch로 돌아가는 것을 차단한다.
 
 | ID | 게이트 | 매핑 조항 | 정량 기준 | Root cause |
 |---|---|---|---|---|
-| G21 | `check_regression_test_per_bugfix.py` | §18.1, §18.2 4 | git log → "fix"/"bug"/"patch" 단어 들어간 커밋은 같은 커밋에 `tests/` 변경 동반 | 버그 수정에 회귀 테스트 강제 |
-| G22 | `check_pr_root_cause_section.py` | §18.1 안티패턴 1 | PR description에 `## Root Cause` 섹션 강제 (GitHub Actions) | 증상 제거 패치 차단 |
+| G21 | `check_regression_test_per_bugfix.py` | §11.3, §18.1, §18.2 4 | git log → "fix"/"bug"/"patch"/"regression" 커밋은 같은 커밋에 `tests/` 변경 동반 | 버그 수정에 회귀 테스트 강제 |
+| G22 | `check_pr_root_cause_section.py` | §18.1, §18.2 | PR description에 `Root Cause`, `Impact`, `Regression Test` 섹션 강제 (GitHub Actions) | 증상 제거 패치 차단 |
 | G23 | `check_anti_pattern_count.py` | §18.3 표 12종 | 12개 안티패턴을 정적 패턴(AST/regex)으로 인코딩 → 총 카운트 baseline + monotonic decrease | 안티패턴 monotonic decrease |
 
 ---
+
+### Tier G21/G22 — root-cause patch prevention (✅ 완료 2026-06-11)
+
+`scripts/quality/check_regression_test_per_bugfix.py`와
+`scripts/quality/check_pr_root_cause_section.py`는 가이드 §18.1/§18.2의 “증상 제거
+패치 금지”를 git/PR boundary에서 강제한다.
+
+검사 기준:
+- 커밋 subject/body에 `fix`, `bug`, `patch`, `regression` 계열 단어가 있으면 같은
+  커밋에 `tests/` 변경이 있어야 한다.
+- PR 본문에는 `Root Cause`, `Impact`, `Regression Test` 섹션이 있어야 한다.
+- 로컬 non-PR 실행에서는 PR 본문 검사를 skip하고 JSON report에 `skipped: true`를
+  남긴다.
+- GitHub Actions는 `fetch-depth: 0`으로 checkout해 branch commit range를 볼 수
+  있게 하고, pull request event에서는 PR 본문을 `GITHUB_EVENT_PATH`에서 읽는다.
+- 결과는 `artifacts/quality/regression_test_per_bugfix.json`과
+  `artifacts/quality/pr_root_cause_section.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_regression_test_per_bugfix.py`가 bugfix commit without
+tests 실패, bugfix commit with tests 허용, non-bugfix commit 제외, JSON report 생성을
+검증한다. `tests/unit/test_quality_pr_root_cause_section.py`는 필수 섹션 통과, 누락
+섹션 실패, GitHub event body load, non-PR event skip, JSON report 생성을 검증한다.
+`.github/pull_request_template.md`는 새 PR이 원인/영향/회귀 테스트를 기본으로 쓰게 한다.
 
 ## 3. 우선순위 실행 순서
 
@@ -419,26 +1142,29 @@ method-registry magic dispatch로 돌아가는 것을 차단한다.
 
 **가장 ROI 높은 4개:**
 
-1. **G1 `check_router_layer_purity`** — Fat Router 영구 차단 (~30분)
-2. **G10 `check_repository_no_business`** — Repository 비즈니스 침투 차단 (~30분)
-3. **G13 `check_contract_test_per_port`** — 새 boundary 정통화 강제. 다음 4개 boundary (Workflow/Stream/Search/Connector) 들어올 때 자동 검증 (~30분)
-4. **G14 `check_doc_drift`** — 문서가 코드보다 거짓말 못 함 (~30분)
+1. **G1 `check_router_layer_purity`** — ✅ 완료 2026-06-11, API direct DB/repository 접근 차단
+2. **G10 `check_repository_no_business`** — ✅ 완료 2026-06-11, Repository 비즈니스 침투 차단
+3. **G13 `check_contract_test_per_port`** — ✅ 완료 2026-06-11, 새 boundary 정통화 강제
+4. **G14 `check_doc_drift`** — ✅ 완료 2026-06-11, 문서가 코드보다 거짓말 못 함
 
 각 게이트는 **반드시 self-test와 함께** 박는다 (G20 원칙).
 
 ### 중기 (다음 2~3 세션)
 
-5. G8 영역별 95% — 평균 게이트의 사각지대 청산
-6. G2 audit on mutation — 보안 부채의 핵심
-7. G6 pragma budget — coverage 우회 차단
-8. G16 trace continuity (동적) — 관측성 약속 진짜 검증
+5. G8 영역별 95% — ✅ 완료 2026-06-11, 평균 게이트의 사각지대 청산
+6. G2 audit on mutation — ✅ 정적 완료 2026-06-11, 보안 부채의 핵심
+7. G6 pragma budget — ✅ 완료 2026-06-11, coverage 우회 차단 baseline 0
+8. G17 runtime audit count — ✅ 완료 2026-06-11, 데모 mutation과 audit_events 대조
+9. G16 trace continuity (동적) — ✅ 완료 2026-06-11, request/service/DB trace 연결 검증
 
 ### 장기 (Sprint 02A 마무리 후)
 
-- G21 git hook (regression test per bugfix)
-- G22 GitHub Action (PR Root Cause section)
-- G17/G18 동적 audit/outbox consistency
-- G19 flaky detector (3회 반복)
+- G21 git hook (regression test per bugfix) — ✅ 완료 2026-06-11, release gate와 CI PR boundary에 연결
+- G22 GitHub Action (PR Root Cause section) — ✅ 완료 2026-06-11, PR template과 event body 검사 연결
+- G15 integration scenario marker — ✅ 완료 2026-06-11, MVP release 통합 시나리오 7/7 마커 강제
+- G18 동적 outbox consistency — ✅ 완료 2026-06-11, state change와 outbox_events 동적 대조
+- G16B failed mutation state — ✅ 완료 2026-06-12, FAILED run/ABORTED transaction/audit 동적 대조
+- G19 flaky detector — ✅ 완료 2026-06-11, pytest-randomly + xdist 명령 3회 반복
 
 ---
 
@@ -452,7 +1178,7 @@ Pyright strict, pytest-randomly, pytest-xdist, gitleaks는 위 Tier 섹션으로
 | 도구 | 분류 | 효과 |
 |---|---|---|
 | `cosmic-ray` | 동적 | mutmut 4.x stat-collection 이슈가 계속되면 mutation testing 대체 엔진으로 검토 |
-| OpenLineage CLI | 동적 | lineage 일관성 검증 (Foundry 차별점) |
+| OpenLineage CLI/server transport | 동적 | P8 local RunEvent artifact 이후 실제 backend/CLI 전송 검토 |
 | `git-secrets` 또는 `truffleHog` | 정적 | secret 누출 사후 차단 (Bandit 보완) |
 | `safety` | 정적 | pip-audit 보완, CVE DB 다른 소스 |
 
