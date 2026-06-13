@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 
@@ -111,6 +113,54 @@ def test_api_object_set_create_and_query(core, monkeypatch) -> None:
     )
     assert fetched.status_code == 200
     assert fetched.json()["name"] == "Pending Orders"
+
+
+def test_api_webhook_ingest_verifies_signature_and_appends_dataset(core, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    secret = "local-webhook-secret"
+    body = b'{"order_id":"O-9001","status":"PENDING"}'
+    headers = {
+        "Content-Type": "application/json",
+        "X-Foundry-Lite-Signature": _webhook_signature(body, secret),
+        "X-User-ID": ctx.actor_user_id,
+        "X-Roles": ",".join(ctx.roles),
+    }
+    core.ensure_dataset("raw.webhook_orders", ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_main, "core", core)
+    monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_orders"},
+        headers=headers,
+        content=body,
+    )
+    denied = client.post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_orders"},
+        headers={**headers, "X-Foundry-Lite-Signature": "sha256=bad"},
+        content=body,
+    )
+    rejected_shape_body = b"[]"
+    rejected_shape = client.post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_orders"},
+        headers={**headers, "X-Foundry-Lite-Signature": _webhook_signature(rejected_shape_body, secret)},
+        content=rejected_shape_body,
+    )
+
+    preview = core.preview_dataset("raw.webhook_orders", ctx=ctx)
+    transactions = _dataset_transactions(core.engine)
+    assert response.status_code == 200
+    assert response.json()["row_count"] == 1
+    assert preview[0]["connector"] == "mock_saas"
+    assert '"order_id":"O-9001"' in preview[0]["payload_json"]
+    assert transactions[0]["tx_type"] == "APPEND"
+    assert denied.status_code == 403
+    assert rejected_shape.status_code == 422
+    deny_events = core.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
+    assert deny_events[0]["action"] == "webhook:ingest"
 
 
 def test_api_operations_runs_cursor_pages_action_runs(core, monkeypatch) -> None:
@@ -729,6 +779,17 @@ def _approve_order_for_materialization(core, ctx, *, idempotency_key: str) -> No
         idempotency_key=idempotency_key,
         ctx=ctx,
     )
+
+
+def _webhook_signature(body: bytes, secret: str) -> str:
+    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
+
+
+def _dataset_transactions(engine) -> list[dict[str, object]]:
+    with engine.begin() as conn:
+        rows = conn.execute(select(db.dataset_transactions))
+        return [dict(row) for row in rows.mappings().all()]
 
 
 def _source_run_link(links: list[dict[str, object]], *, run_type: str) -> dict[str, object]:

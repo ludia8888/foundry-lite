@@ -93,6 +93,13 @@ class ObjectQueryRequest(BaseModel):
     cursor: str | None = None
 
 
+class WebhookPayloadRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+WEBHOOK_SIGNING_KEY_ENV = "FOUNDRY_LITE_WEBHOOK_SIGNING_KEY"
+
+
 @app.middleware("http")
 async def telemetry_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     started_at = time.perf_counter()
@@ -323,6 +330,31 @@ def retry_failed_transform_run(request: Request, run_id: str) -> TransformRetryR
         raise _handle_error(exc, request) from exc
 
 
+@app.post("/api/connectors/webhooks/{connector_name}/{resource_name}")
+async def ingest_webhook(
+    request: Request,
+    connector_name: str,
+    resource_name: str,
+    payload: WebhookPayloadRequest,
+    dataset_ref: str = Query(alias="datasetRef"),
+    signature: str = Header(alias="X-Foundry-Lite-Signature"),
+):
+    try:
+        raw_body = await request.body()
+        return core.ingest_webhook_event(
+            dataset_ref,
+            connector_name=connector_name,
+            resource_name=resource_name,
+            payload=_webhook_payload(payload),
+            raw_body=raw_body,
+            signature=signature,
+            secret=_webhook_signing_key(),
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.post("/api/actions/{action_type}/apply")
 def apply_action(
     request: Request,
@@ -342,6 +374,14 @@ def apply_action(
         )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
+
+
+def _webhook_payload(value: WebhookPayloadRequest) -> JsonObject:
+    return {str(key): item for key, item in (value.model_extra or {}).items()}
+
+
+def _webhook_signing_key() -> str:
+    return os.getenv(WEBHOOK_SIGNING_KEY_ENV, "")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
 from dataclasses import replace
@@ -82,13 +84,18 @@ def test_query_objects_filter_sort_cursor_and_invalid_op(core: FoundryLiteCore) 
     )
 
     assert first_page["items"][0]["objectId"] == "O-1001"
-    assert first_page["nextCursor"] is not None
+    next_cursor = first_page["nextCursor"]
+    assert next_cursor is not None
 
-    second_page = core.query_objects("Order", filter_ast=filter_ast, order_by=order_by, cursor=first_page["nextCursor"])
+    second_page = core.query_objects("Order", filter_ast=filter_ast, order_by=order_by, cursor=next_cursor)
     assert [item["objectId"] for item in second_page["items"]] == ["O-1002"]
 
     with pytest.raises(ValidationFailed):
-        core.query_objects("Order", cursor=first_page["nextCursor"])
+        core.query_objects("Order", cursor=next_cursor)
+    with pytest.raises(ValidationFailed):
+        core.query_objects("Order", cursor="O-1001")
+    with pytest.raises(ValidationFailed):
+        core.query_objects("Order", filter_ast=filter_ast, order_by=order_by, cursor=_tampered_cursor(next_cursor))
     with pytest.raises(ValidationFailed):
         core.query_objects("Order", filter_ast=filter_ast, order_by=order_by, cursor="oqc1.not-valid-base64")
     with pytest.raises(ValidationFailed):
@@ -113,6 +120,16 @@ def test_query_objects_filter_sort_cursor_and_invalid_op(core: FoundryLiteCore) 
 
     with pytest.raises(ValidationFailed):
         core.query_objects("Order", filter_ast={"property": "status", "op": "bad", "value": "PENDING"})
+
+
+def _tampered_cursor(cursor: str) -> str:
+    prefix = "oqc1."
+    encoded = cursor.removeprefix(prefix)
+    padded = encoded + "=" * (-len(encoded) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+    payload["objectId"] = "O-0000"
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return prefix + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
 def test_dataset_not_found_duplicate_reset_preview_and_transform_update(

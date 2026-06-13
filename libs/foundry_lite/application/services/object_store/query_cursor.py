@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
+import os
 from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports import ObjectOrderBy, ObjectQueryCursor, ObjectRecordRow
@@ -10,6 +12,8 @@ from foundry_lite.application.primitives import _json_ready
 from foundry_lite.domain.errors import ValidationFailed
 
 CURSOR_PREFIX = "oqc1."
+CURSOR_SIGNING_KEY_ENV = "FOUNDRY_LITE_OBJECT_QUERY_CURSOR_SIGNING_KEY"
+DEFAULT_CURSOR_SIGNING_KEY = "foundry-lite-object-query-cursor-v1"
 
 
 def encode_object_query_cursor(
@@ -17,12 +21,14 @@ def encode_object_query_cursor(
     order_by: Sequence[ObjectOrderBy],
     filter_ast: Mapping[str, object] | None,
 ) -> str:
-    payload = {
-        "order": _order_signature(order_by),
-        "shape": _shape_checksum(order_by, filter_ast),
-        "values": [_json_ready(row["properties"].get(order["property"])) for order in order_by],
-        "objectId": row["object_id"],
-    }
+    payload = _signed_payload(
+        {
+            "order": _order_signature(order_by),
+            "shape": _shape_checksum(order_by, filter_ast),
+            "values": [_json_ready(row["properties"].get(order["property"])) for order in order_by],
+            "objectId": row["object_id"],
+        }
+    )
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
@@ -35,7 +41,7 @@ def decode_object_query_cursor(
     if cursor is None:
         return None
     if not cursor.startswith(CURSOR_PREFIX):
-        return _legacy_cursor(cursor, order_by, filter_ast)
+        raise ValidationFailed("invalid object query cursor")
     payload = _cursor_payload(cursor)
     if payload.get("order") != _order_signature(order_by):
         raise ValidationFailed("object query cursor does not match orderBy")
@@ -50,16 +56,6 @@ def decode_object_query_cursor(
     return {"values": values, "object_id": object_id}
 
 
-def _legacy_cursor(
-    cursor: str,
-    order_by: Sequence[ObjectOrderBy],
-    filter_ast: Mapping[str, object] | None,
-) -> ObjectQueryCursor:
-    if order_by or filter_ast:
-        raise ValidationFailed("object query cursor does not match orderBy")
-    return {"values": [], "object_id": cursor}
-
-
 def _cursor_payload(cursor: str) -> dict[str, object]:
     encoded = cursor.removeprefix(CURSOR_PREFIX)
     padded = encoded + "=" * (-len(encoded) % 4)
@@ -70,7 +66,38 @@ def _cursor_payload(cursor: str) -> dict[str, object]:
         raise ValidationFailed("invalid object query cursor") from exc
     if not isinstance(payload, dict):
         raise ValidationFailed("invalid object query cursor")
-    return {str(key): value for key, value in payload.items()}
+    normalized = {str(key): value for key, value in payload.items()}
+    _require_valid_signature(normalized)
+    return normalized
+
+
+def _signed_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    signed = dict(payload)
+    signed["signature"] = _payload_signature(signed)
+    return signed
+
+
+def _require_valid_signature(payload: Mapping[str, object]) -> None:
+    provided = payload.get("signature")
+    if not isinstance(provided, str):
+        raise ValidationFailed("invalid object query cursor")
+    expected = _payload_signature(payload)
+    if not hmac.compare_digest(provided, expected):
+        raise ValidationFailed("invalid object query cursor")
+
+
+def _payload_signature(payload: Mapping[str, object]) -> str:
+    raw = _canonical_payload(_unsigned_payload(payload)).encode("utf-8")
+    signing_key = os.getenv(CURSOR_SIGNING_KEY_ENV, DEFAULT_CURSOR_SIGNING_KEY).encode("utf-8")
+    return hmac.new(signing_key, raw, hashlib.sha256).hexdigest()[:32]
+
+
+def _unsigned_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    return {key: value for key, value in payload.items() if key != "signature"}
+
+
+def _canonical_payload(payload: Mapping[str, object]) -> str:
+    return json.dumps(_json_ready(payload), sort_keys=True, separators=(",", ":"))
 
 
 def _order_signature(order_by: Sequence[ObjectOrderBy]) -> list[str]:
