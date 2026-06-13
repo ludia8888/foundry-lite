@@ -226,6 +226,13 @@ def test_adapter_failure_taxonomy_is_release_gate_step() -> None:
     assert "pnpm quality:adapter-failure-taxonomy" in package_json
 
 
+def test_stream_archive_worker_script_is_exposed() -> None:
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"worker:stream-archive"' in package_json
+    assert "python -m foundry_lite_worker.stream_archive" in package_json
+
+
 def test_router_layer_purity_is_release_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
@@ -377,6 +384,14 @@ def test_ast_grep_and_tach_are_release_gate_steps() -> None:
     assert "pnpm quality:architecture" in package_json
     assert "forbid_circular_dependencies = true" in tach_config
     assert 'path = "foundry_lite.application"' in tach_config
+    assert 'path = "foundry_lite_worker"' in tach_config
+    assert '"foundry_lite.infrastructure"' in tach_config
+
+
+def test_worker_composition_root_is_import_linter_allowlisted() -> None:
+    import_linter_config = (ROOT / ".importlinter").read_text(encoding="utf-8")
+
+    assert "foundry_lite_worker.stream_archive -> foundry_lite.infrastructure.local_runtime" in import_linter_config
 
 
 def test_ast_grep_facade_magic_rule_has_a_failing_fixture(tmp_path: Path) -> None:

@@ -5,6 +5,11 @@ from foundry_lite.infrastructure.adapters.dataset_storage import (
     FakeDatasetStorageAdapter,
     LocalDatasetStorageAdapter,
 )
+from foundry_lite.infrastructure.adapters.kafka_stream import (
+    KafkaStreamAdapter,
+    KafkaStreamAdapterConfig,
+    KafkaStreamSubscription,
+)
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
 from foundry_lite.infrastructure.adapters.scale_foundation import (
     FakeConnectorAdapter,
@@ -25,6 +30,9 @@ __all__ = [
     "FakeSearchAdapter",
     "FakeStreamAdapter",
     "FakeWorkflowAdapter",
+    "KafkaStreamAdapter",
+    "KafkaStreamAdapterConfig",
+    "KafkaStreamSubscription",
     "LocalConnectorAdapter",
     "LocalDatasetStorageAdapter",
     "LocalSearchAdapter",

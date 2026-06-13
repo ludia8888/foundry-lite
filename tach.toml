@@ -60,4 +60,8 @@ depends_on = [
 
 [[modules]]
 path = "foundry_lite_worker"
-depends_on = []
+depends_on = [
+  "foundry_lite.application",
+  "foundry_lite.domain",
+  "foundry_lite.infrastructure",
+]

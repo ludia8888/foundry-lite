@@ -244,7 +244,7 @@ uv run python -m trace --count --summary apps/cli/foundry_lite_cli/main.py demo 
 - action precondition은 CEL이 아니라 제한된 `safeExpression` subset이다.
 - ERP writeback은 실제 외부 호출이 아니라 `mock_erp_simulator` 기록이다.
 - Alembic migration과 Temporal worker는 아직 구현되지 않았다. 현재 release gate는 `check_schema_revision_guard.py`로 SQLAlchemy metadata와 `infra/schema_revisions` snapshot이 어긋나는지만 차단한다.
-- Scale Foundation은 문서상 Sprint 02A 목표로 명시되었고, 현재 로컬 slice는 storage/metadata/compute/event/search/workflow/connector/auth boundary를 port/adapter 계약으로 노출한다. 다만 search/workflow/connector/stream은 아직 local/fake in-memory 계약 구현이며, production OpenSearch/Temporal/외부 connector/Kafka류 adapter 교체는 이후 구현에서 trace key와 contract test를 유지해야 한다.
+- Scale Foundation은 문서상 Sprint 02A 목표로 명시되었고, 현재 로컬 slice는 storage/metadata/compute/event/search/workflow/connector/auth boundary를 port/adapter 계약으로 노출한다. stream은 local/fake proof에 더해 production-compatible `KafkaStreamAdapter`와 worker composition root가 생겼지만, live Redpanda/Kafka broker proof는 아직 남아 있다. search/workflow/connector의 production OpenSearch/Temporal/외부 connector adapter 교체도 이후 구현에서 trace key와 contract test를 유지해야 한다.
 
 ## 8. Playwright E2E
 

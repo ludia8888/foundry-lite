@@ -1797,7 +1797,7 @@ Kafka-compatible stream event를 raw archive dataset으로 남겨 replay 가능�
 
 **Demo / Proof**
 
-현재 증명은 `StreamAdapter.publish_event` → `FoundryLiteCore.archive_stream_events` → `raw.shipment_events` append version 생성이다. production Redpanda proof는 다음 단계에서 `kafka-console-producer` 발행으로 확장한다.
+현재 증명은 `StreamAdapter.publish_event` → `FoundryLiteCore.archive_stream_events` → `raw.shipment_events` append version 생성이다. production-compatible 경로는 `KafkaStreamAdapter`와 `foundry_lite_worker.stream_archive` one-shot worker가 같은 `archive_stream_events` application boundary를 호출하도록 확장했다. 다만 실제 Redpanda broker에 `kafka-console-producer`로 발행한 live proof는 아직 남아 있으므로 S38-A2 체크박스는 열어둔다.
 
 **이러면 성공으로 치지 않는다**
 
