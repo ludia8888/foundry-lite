@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 import pytest
 from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.ports import ObjectQueryItem, ObjectQueryResult, ObjectRecordRow
+from foundry_lite.application.services.object_store.set_members import collect_dynamic_object_set_members
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 from foundry_lite.infrastructure import schema as db
@@ -71,6 +75,76 @@ def test_object_sets_static_dynamic_visibility_and_expiry(core: FoundryLiteCore)
     assert core.cleanup_expired_object_sets(ctx=ctx)["deleted"] == 1
     audit_events = core.list_runs(ctx=ctx)["auditEvents"]
     assert any(event["event_type"] == "object_set.expired_deleted" for event in audit_events)
+
+
+class _PagedObjectQuery:
+    def __init__(self, pages: dict[str | None, ObjectQueryResult]) -> None:
+        self.pages = pages
+        self.calls: list[tuple[int, str | None]] = []
+
+    def query_objects(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        order_by: Sequence[Mapping[str, str]] | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> ObjectQueryResult:
+        del ctx, order_by
+        assert object_type_api_name == "Order"
+        assert filter_ast == {"property": "status", "op": "eq", "value": "PENDING"}
+        assert limit == 500
+        self.calls.append((limit, cursor))
+        if cursor not in self.pages:
+            raise AssertionError(f"unexpected cursor {cursor}")
+        return self.pages[cursor]
+
+    def _object_query_item(
+        self,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        row: ObjectRecordRow,
+    ) -> ObjectQueryItem:
+        del ctx
+        return {
+            "objectType": object_type_api_name,
+            "objectId": row["object_id"],
+            "objectVersion": row["object_version"],
+            "properties": row["properties"],
+        }
+
+
+def test_dynamic_object_set_members_page_with_public_query_limit() -> None:
+    pending_filter = {"property": "status", "op": "eq", "value": "PENDING"}
+    pages: dict[str | None, ObjectQueryResult] = {
+        None: {
+            "items": [
+                {"objectType": "Order", "objectId": "O-1001", "objectVersion": 1, "properties": {}},
+            ],
+            "nextCursor": "second-page",
+        },
+        "second-page": {
+            "items": [
+                {"objectType": "Order", "objectId": "O-1002", "objectVersion": 1, "properties": {}},
+            ],
+            "nextCursor": None,
+        },
+    }
+    query = _PagedObjectQuery(pages)
+
+    object_ids, items = collect_dynamic_object_set_members(
+        query,
+        "Order",
+        ctx=RequestContext(actor_user_id="demo-user", roles=("viewer",)),
+        filter_ast=pending_filter,
+        include_items=True,
+    )
+
+    assert object_ids == ["O-1001", "O-1002"]
+    assert [item["objectId"] for item in items] == ["O-1001", "O-1002"]
+    assert [call[1] for call in query.calls] == [None, "second-page"]
 
 
 def test_object_set_definition_validation(core: FoundryLiteCore) -> None:

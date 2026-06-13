@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
     RuntimeRowsTable,
     RuntimeRunDetail,
     RuntimeRunLink,
+    RuntimeRunQueryResult,
     RuntimeRunSnapshot,
     TransactionContext,
 )
@@ -24,10 +25,10 @@ from foundry_lite.application.primitives import (
     _now,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.runtime_run_paging import OPERATIONS_RUN_DEFAULT_LIMIT, query_runtime_run_page
 from foundry_lite.application.services.runtime_run_queries import (
     correlation_id,
     error_message,
-    filtered_snapshot,
     optional_run_type,
     related_action_writebacks,
     related_audit,
@@ -95,11 +96,21 @@ class RuntimeService(CoreService):
         status: str | None = None,
         since: str | None = None,
         until: str | None = None,
-    ) -> RuntimeRunSnapshot:
+        limit: int = OPERATIONS_RUN_DEFAULT_LIMIT,
+        cursor: str | None = None,
+    ) -> RuntimeRunQueryResult:
         ctx = ctx or RequestContext()
         parsed_type = optional_run_type(run_type)
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
-        return filtered_snapshot(snapshot, run_type=parsed_type, status=status, since=since, until=until)
+        return query_runtime_run_page(
+            self.runtime_repository,
+            tenant_id=ctx.tenant_id,
+            run_type=parsed_type,
+            status=status,
+            since=since,
+            until=until,
+            limit=limit,
+            cursor=cursor,
+        )
 
     def run_detail(self, run_type: str, run_id: str, *, ctx: RequestContext | None = None) -> RuntimeRunDetail:
         ctx = ctx or RequestContext()

@@ -67,23 +67,32 @@ def test_helper_normalization_and_dataset_ref_validation() -> None:
 
 def test_query_objects_filter_sort_cursor_and_invalid_op(core: FoundryLiteCore) -> None:
     prepare_indexed_demo(core)
+    filter_ast = {
+        "and": [
+            {"property": "status", "op": "in", "value": ["PENDING", "REVIEW"]},
+            {"property": "amount", "op": "gte", "value": 700},
+        ]
+    }
+    order_by = [{"property": "amount", "direction": "desc"}]
     first_page = core.query_objects(
         "Order",
-        filter_ast={
-            "and": [
-                {"property": "status", "op": "in", "value": ["PENDING", "REVIEW"]},
-                {"property": "amount", "op": "gte", "value": 700},
-            ]
-        },
-        order_by=[{"property": "amount", "direction": "desc"}],
+        filter_ast=filter_ast,
+        order_by=order_by,
         limit=1,
     )
 
     assert first_page["items"][0]["objectId"] == "O-1001"
     assert first_page["nextCursor"] is not None
 
-    second_page = core.query_objects("Order", cursor=first_page["nextCursor"])
-    assert all(item["objectId"] > first_page["nextCursor"] for item in second_page["items"])
+    second_page = core.query_objects("Order", filter_ast=filter_ast, order_by=order_by, cursor=first_page["nextCursor"])
+    assert [item["objectId"] for item in second_page["items"]] == ["O-1002"]
+
+    with pytest.raises(ValidationFailed):
+        core.query_objects("Order", cursor=first_page["nextCursor"])
+    with pytest.raises(ValidationFailed):
+        core.query_objects("Order", filter_ast=filter_ast, order_by=order_by, cursor="oqc1.not-valid-base64")
+    with pytest.raises(ValidationFailed):
+        core.query_objects("Order", limit=501)
 
     contains_page = core.query_objects(
         "Order",

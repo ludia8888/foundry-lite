@@ -5,6 +5,7 @@ from typing import Any, cast
 
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from foundry_lite.application.ports.action_repository import (
     ActionRunRecord,
@@ -67,6 +68,25 @@ class SqlAlchemyActionRepository:
                 completed_at=record.completed_at,
             )
         )
+
+    def insert_action_run_or_get_existing(self, *, transaction: Any, record: ActionRunRecord) -> ActionRunRow | None:
+        savepoint = transaction.begin_nested()
+        try:
+            self.insert_action_run(transaction=transaction, record=record)
+        except IntegrityError:
+            savepoint.rollback()
+            existing = self.action_run_by_idempotency(
+                transaction=transaction,
+                tenant_id=record.tenant_id,
+                action_type_id=record.action_type_id,
+                actor_user_id=record.actor_user_id,
+                idempotency_key=record.idempotency_key,
+            )
+            if existing is None:
+                raise
+            return existing
+        savepoint.commit()
+        return None
 
     def update_action_run_terminal(
         self,

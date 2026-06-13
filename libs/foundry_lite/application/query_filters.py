@@ -84,6 +84,22 @@ def matches_filter(properties: Mapping[str, object], filter_ast: Mapping[str, ob
     return _matches_property_filter(properties, filter_ast)
 
 
+def validate_filter_ast(filter_ast: Mapping[str, object]) -> None:
+    if "and" in filter_ast:
+        for item in _filter_group(filter_ast["and"]):
+            validate_filter_ast(item)
+        return
+    if "or" in filter_ast:
+        for item in _filter_group(filter_ast["or"]):
+            validate_filter_ast(item)
+        return
+    op = _required_string(filter_ast, "op")
+    _required_string(filter_ast, "property")
+    _required_value(filter_ast, "value")
+    if op not in FILTER_OPERATIONS:
+        raise ValidationFailed("unsupported filter operation", details={"op": op})
+
+
 def _matches_logical_filter(properties: Mapping[str, object], filter_ast: Mapping[str, object]) -> bool | None:
     if "and" in filter_ast:
         return all(matches_filter(properties, item) for item in _filter_group(filter_ast["and"]))

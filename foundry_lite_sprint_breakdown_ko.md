@@ -1050,6 +1050,7 @@ Object API와 CLI로 pending high-risk orders를 조회한다.
 - temporary/permanent visibility와 owner_user_id를 지원한다.
 - Object Set create/get/query API를 구현한다.
 - Object Explorer에서 saved set 목록을 볼 수 있게 한다.
+- dynamic set membership 조회는 Object Query의 공개 page limit을 우회하지 않고 cursor로 다음 page를 이어 읽는다.
 
 **Acceptance Gate**
 
@@ -1058,6 +1059,7 @@ Object API와 CLI로 pending high-risk orders를 조회한다.
 - [x] dynamic set은 query 실행 시점의 최신 object state를 반영한다.
 - [x] 권한 없는 사용자는 다른 사용자의 private set을 볼 수 없다.
 - [x] 만료된 temporary set은 조회되지 않거나 cleanup 대상이 된다.
+- [x] dynamic set이 많은 object를 담아도 내부에서 `limit=10000` 같은 대량 요청을 만들지 않고 page limit 안에서 cursor paging한다.
 
 **Demo / Proof**
 
@@ -1669,6 +1671,54 @@ MVP 폐루프가 문서가 아니라 반복 가능한 자동 테스트와 데모
 - 데모가 특정 개발자 로컬 DB 상태에 의존한다.
 - E2E는 통과하지만 data correctness/replay 검증이 없다.
 - 성능 목표를 측정하지 않고 감으로만 통과시킨다.
+
+---
+
+### Sprint 36A — MVP 운영 안정성 보강
+
+**Phase:** MVP Core Hardening
+
+**문서 연결:** [Implementation Status](./docs/implementation-status.md#still-targeted-not-yet-implemented), [Action Runtime 설계](./foundry_lite_development_plan_ko_sprintified.md#12-action-runtime-설계), [Object Query execution](./foundry_lite_development_plan_ko_sprintified.md#114-execution-strategy)
+
+**무조건 성공시켜야 하는 Goal**
+
+Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확장으로 밀어붙이기 전에, 운영 중 실제로 자주 터지는 동시성, 페이징, 인증 프로필, 생성 코드 중복 리스크를 먼저 줄인다. 이 스프린트는 새 기능을 크게 늘리는 것이 아니라, 이미 있는 action/dataset/object/operations/SDK 경로가 많은 요청과 재시도 상황에서도 예측 가능하게 동작하도록 만드는 안정화 단계다.
+
+**반드시 완성해야 하는 것**
+
+- 같은 actor/action/target/idempotency key가 거의 동시에 들어와 데이터베이스 unique 충돌이 발생해도, 두 번째 요청은 500 또는 새 실행이 아니라 기존 action run replay로 귀결되게 한다.
+- Dataset commit은 version 번호 배정 경합을 명확히 막고, 파일 복사 후 DB commit이 실패한 경우 이미 promote된 artifact를 자동 정리하며 실패 payload/audit로 추적 가능한 orphan cleanup evidence를 남긴다.
+- Object Query 목록은 메모리 정렬/슬라이스에 의존하지 않고 DB에서 filter, sort, limit을 수행하며, opaque cursor token과 `object_id` tie-breaker가 포함된 안정적인 keyset cursor를 사용한다.
+- Dynamic Object Set membership도 Object Query의 page limit과 cursor를 그대로 사용해 내부 기능이 대량 limit으로 query cap을 우회하지 못하게 한다.
+- Operations run 목록도 `created_at` 또는 `failed_at`과 run id를 기준으로 한 DB-backed cursor paging을 사용해 run 수가 늘어나도 한 번에 전체 row를 읽지 않는다.
+- 운영 모드에서는 header-trust 인증 프로필이 선택되면 앱이 시작 단계에서 실패해야 한다. 로컬/demo 모드에서만 명시적으로 허용한다.
+- Generated TypeScript package output과 browser-ready SDK output은 같은 생성 템플릿 또는 같은 intermediate model에서 나오며, parity test가 두 출력의 API drift를 막는다.
+
+**Acceptance Gate**
+
+- [x] 같은 Idempotency-Key 요청 2개를 동시에 보내도 action_run은 1개만 남고 두 응답은 같은 실행 결과를 가리킨다.
+- [x] dataset version commit을 동시에 시도해도 version_number 중복이나 순서 역전이 생기지 않는다.
+- [x] commit 실패로 생긴 promoted/orphan file은 failed error details 또는 abort audit evidence로 찾을 수 있고 자동 cleanup execute 경로가 있다.
+- [x] Object Query는 sort key와 object_id tie-breaker를 포함한 cursor로 다음 page를 안정적으로 반환한다.
+- [x] Dynamic Object Set은 `Object Query` page limit 안에서 cursor로 전체 membership을 이어 읽는다.
+- [x] Operations runs API/CLI/UI는 cursor 기반으로 page를 나누고 대량 run fixture에서도 일정한 응답 크기를 유지한다.
+- [x] production auth profile에서 header-trust provider를 쓰면 startup이 실패하고, local/demo profile에서는 명시적으로만 허용된다.
+- [x] SDK package output과 browser output이 같은 object/action method surface를 노출하는지 테스트가 검증한다.
+
+**Demo / Proof**
+
+동시 action replay, dataset version allocation lock, metadata persistence failure cleanup, DB-backed object query keyset paging, API/CLI operations cursor paging, production auth profile startup, SDK generation parity를 각각 작은 재현 테스트로 보여준다.
+
+**이러면 성공으로 치지 않는다**
+
+- idempotency unique 충돌을 일반 DB 에러 또는 임시 retry로만 처리한다.
+- dataset commit이 version_number를 max+1로 계산하면서 lock/unique conflict cleanup 전략이 없다.
+- object query나 operations 목록이 DB에서 page를 자르지 않고 애플리케이션 메모리에서 전체 목록을 자른다.
+- operations cursor가 timestamp와 run id tie-breaker 없이 단순 run id만 담거나, query shape이 다른 요청에 재사용된다.
+- dynamic object set이 Object Query page limit을 피하려고 내부에서 큰 limit 값을 직접 요청한다.
+- object query cursor가 sort key, query shape checksum, `object_id` tie-breaker 없이 단순 object id만 담는다.
+- 운영 배포에서 header-trust 인증이 실수로 켜질 수 있다.
+- SDK 출력 2개가 서로 다른 문자열 템플릿에서 만들어지는데 parity test가 없다.
 
 ---
 

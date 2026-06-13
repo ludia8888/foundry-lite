@@ -4,20 +4,28 @@ from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports import (
     LineageEdgeRow,
+    ObjectOrderBy,
     ObjectPayload,
     ObjectQueryItem,
     ObjectQueryResult,
     ObjectRecordRow,
-    TransactionContext,
+    ObjectSortDirection,
 )
 from foundry_lite.application.ports.object_read_repository import ObjectExplain
-from foundry_lite.application.query_filters import matches_filter
+from foundry_lite.application.query_filters import validate_filter_ast
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.query_cursor import (
+    decode_object_query_cursor,
+    encode_object_query_cursor,
+)
 from foundry_lite.application.services.object_store.query_protocols import ObjectLineageReader, ObjectRecordLookup
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     NotFound,
+    ValidationFailed,
 )
+
+OBJECT_QUERY_MAX_LIMIT = 500
 
 
 class ObjectQueryService(CoreService):
@@ -88,70 +96,26 @@ class ObjectQueryService(CoreService):
     ) -> ObjectQueryResult:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
+        query_limit = _query_limit(limit)
+        normalized_order_by = _normalized_order_by(order_by)
+        if filter_ast:
+            validate_filter_ast(filter_ast)
+        cursor_state = decode_object_query_cursor(cursor, normalized_order_by, filter_ast)
         with self.engine.begin() as conn:
-            records = self._object_query_rows(conn, ctx, object_type_api_name)
-        records = self._apply_object_query_options(records, cursor=cursor, filter_ast=filter_ast, order_by=order_by)
-        page = records[:limit]
+            records = self.object_read_repository.query_active_object_rows(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_api_name=object_type_api_name,
+                filter_ast=filter_ast,
+                order_by=normalized_order_by,
+                cursor=cursor_state,
+                limit=query_limit + 1,
+            )
+        page = records[:query_limit]
         return {
             "items": [self._object_query_item(ctx, object_type_api_name, row) for row in page],
-            "nextCursor": page[-1]["object_id"] if len(records) > len(page) and page else None,
+            "nextCursor": _next_cursor(records, page, normalized_order_by, filter_ast),
         }
-
-    def _object_query_rows(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type_api_name: str,
-    ) -> list[ObjectRecordRow]:
-        return self.object_read_repository.active_object_rows(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            object_type_api_name=object_type_api_name,
-        )
-
-    def _apply_object_query_options(
-        self,
-        records: list[ObjectRecordRow],
-        *,
-        cursor: str | None,
-        filter_ast: Mapping[str, object] | None,
-        order_by: Sequence[Mapping[str, str]] | None,
-    ) -> list[ObjectRecordRow]:
-        filtered = self._apply_object_cursor(records, cursor)
-        filtered = self._apply_object_filter(filtered, filter_ast)
-        return self._apply_object_sort(filtered, order_by)
-
-    def _apply_object_cursor(
-        self,
-        records: list[ObjectRecordRow],
-        cursor: str | None,
-    ) -> list[ObjectRecordRow]:
-        if cursor is None:
-            return records
-        return [row for row in records if row["object_id"] > cursor]
-
-    def _apply_object_filter(
-        self,
-        records: list[ObjectRecordRow],
-        filter_ast: Mapping[str, object] | None,
-    ) -> list[ObjectRecordRow]:
-        if not filter_ast:
-            return records
-        return [row for row in records if self._matches_filter(row["properties"], filter_ast)]
-
-    def _apply_object_sort(
-        self,
-        records: list[ObjectRecordRow],
-        order_by: Sequence[Mapping[str, str]] | None,
-    ) -> list[ObjectRecordRow]:
-        if not order_by:
-            return records
-        sorted_records = list(records)
-        for order in reversed(order_by):
-            prop = order["property"]
-            reverse = order.get("direction", "asc") == "desc"
-            sorted_records.sort(key=lambda item: _property_sort_key(item, prop), reverse=reverse)
-        return sorted_records
 
     def _object_query_item(
         self,
@@ -166,21 +130,47 @@ class ObjectQueryService(CoreService):
             "properties": self.policy.mask_properties(ctx, object_type_api_name, dict(row["properties"])),
         }
 
-    def _matches_filter(self, properties: Mapping[str, object], filter_ast: Mapping[str, object]) -> bool:
-        return matches_filter(dict(properties), dict(filter_ast))
+
+def _query_limit(limit: int) -> int:
+    if limit < 1:
+        raise ValidationFailed("object query limit must be positive", details={"limit": limit})
+    if limit > OBJECT_QUERY_MAX_LIMIT:
+        raise ValidationFailed(
+            "object query limit exceeds maximum",
+            details={"limit": limit, "max_limit": OBJECT_QUERY_MAX_LIMIT},
+        )
+    return limit
 
 
-def _property_sort_key(row: ObjectRecordRow, property_name: str) -> tuple[int, float, str]:
-    value = row["properties"].get(property_name)
-    if value is None:
-        return (0, 0.0, "")
-    if isinstance(value, bool):
-        return (1, 1.0 if value else 0.0, "")
-    if isinstance(value, int | float):
-        return (2, float(value), "")
-    if isinstance(value, str):
-        return (3, 0.0, value)
-    return (4, 0.0, str(value))
+def _normalized_order_by(order_by: Sequence[Mapping[str, str]] | None) -> list[ObjectOrderBy]:
+    return [_normalized_order_item(item) for item in order_by or []]
+
+
+def _normalized_order_item(item: Mapping[str, str]) -> ObjectOrderBy:
+    prop = item.get("property")
+    direction = item.get("direction", "asc")
+    if not prop:
+        raise ValidationFailed("object query orderBy property is required")
+    return {"property": prop, "direction": _normalized_direction(direction)}
+
+
+def _normalized_direction(direction: str) -> ObjectSortDirection:
+    if direction == "asc":
+        return "asc"
+    if direction == "desc":
+        return "desc"
+    raise ValidationFailed("object query orderBy direction must be asc or desc", details={"direction": direction})
+
+
+def _next_cursor(
+    records: Sequence[ObjectRecordRow],
+    page: Sequence[ObjectRecordRow],
+    order_by: Sequence[ObjectOrderBy],
+    filter_ast: Mapping[str, object] | None,
+) -> str | None:
+    if len(records) <= len(page) or not page:
+        return None
+    return encode_object_query_cursor(page[-1], order_by, filter_ast)
 
 
 def _lineage_payload(rows: Sequence[LineageEdgeRow]) -> list[dict[str, object]]:

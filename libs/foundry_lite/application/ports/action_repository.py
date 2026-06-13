@@ -114,6 +114,12 @@ class ActionRepository(Protocol):
         """Persist a newly received action run."""
         ...
 
+    def insert_action_run_or_get_existing(
+        self, *, transaction: TransactionContext, record: ActionRunRecord
+    ) -> ActionRunRow | None:
+        """Persist a new action run, or return the existing run for an idempotency race."""
+        ...
+
     def update_action_run_terminal(
         self,
         *,

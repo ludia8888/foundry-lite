@@ -45,6 +45,19 @@ def test_dataset_storage_adapter_contract(factory: StorageFactory, tmp_path: Pat
     assert manifest["files"][0]["uri"] == stored.data_file_uri
     assert manifest["files"][0]["row_count"] == 3
     assert adapter.first_data_file_path(stored.manifest_uri).read_bytes() == b"fake parquet bytes"
+    assert adapter.delete_committed_version(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        branch="main",
+        version_id="dsv_demo",
+    )
+    assert not stored.data_file_path.exists()
+    assert not adapter.delete_committed_version(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        branch="main",
+        version_id="dsv_demo",
+    )
 
 
 def test_fake_storage_adapter_uses_logical_non_file_uris(tmp_path: Path) -> None:

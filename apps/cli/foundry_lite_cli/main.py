@@ -16,7 +16,7 @@ from foundry_lite.application.ports import (
     ObjectSetPayload,
     RuntimeRetryResult,
     RuntimeRunDetail,
-    RuntimeRunSnapshot,
+    RuntimeRunQueryResult,
     TabularRow,
     TransformRetryResult,
 )
@@ -191,6 +191,8 @@ def _build_parser() -> argparse.ArgumentParser:
     operations_runs.add_argument("--status")
     operations_runs.add_argument("--since")
     operations_runs.add_argument("--until")
+    operations_runs.add_argument("--limit", type=int, default=50)
+    operations_runs.add_argument("--cursor")
     operations_run = operations_sub.add_parser("run")
     operations_run.add_argument("run_type")
     operations_run.add_argument("run_id")
@@ -280,13 +282,15 @@ def _outbox_retry(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Nam
     return core.retry_dead_letter_event(args.event_id, ctx=ctx)
 
 
-def _operations_runs(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRunSnapshot:
+def _operations_runs(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRunQueryResult:
     return core.query_runs(
         ctx=ctx,
         run_type=args.run_type,
         status=args.status,
         since=args.since,
         until=args.until,
+        limit=args.limit,
+        cursor=args.cursor,
     )
 
 

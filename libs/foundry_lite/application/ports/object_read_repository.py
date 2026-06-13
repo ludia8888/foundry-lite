@@ -1,9 +1,22 @@
 from __future__ import annotations
 
-from typing import NotRequired, Protocol, TypedDict
+from collections.abc import Mapping, Sequence
+from typing import Literal, NotRequired, Protocol, TypedDict
 
 from foundry_lite.application.ports.runtime_repository import RuntimeRunLink
 from foundry_lite.application.ports.transaction_context import TransactionContext
+
+ObjectSortDirection = Literal["asc", "desc"]
+
+
+class ObjectOrderBy(TypedDict):
+    property: str
+    direction: ObjectSortDirection
+
+
+class ObjectQueryCursor(TypedDict):
+    values: list[object]
+    object_id: str
 
 
 class ObjectRecordRow(TypedDict):
@@ -115,6 +128,20 @@ class ObjectReadRepository(Protocol):
         object_type_api_name: str,
     ) -> list[ObjectRecordRow]:
         """Return non-deleted object records for one object type, ordered by object id."""
+        ...
+
+    def query_active_object_rows(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        order_by: Sequence[ObjectOrderBy],
+        cursor: ObjectQueryCursor | None,
+        limit: int,
+    ) -> list[ObjectRecordRow]:
+        """Return one DB-filtered, DB-sorted object page plus one lookahead row."""
         ...
 
     def active_links_from(

@@ -4,6 +4,7 @@ from typing import Any, cast
 
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from foundry_lite.application.ports import (
     DatasetFileRecord,
@@ -12,6 +13,7 @@ from foundry_lite.application.ports import (
     DatasetTransactionMetadata,
     DatasetTransactionRecord,
     DatasetTransactionRow,
+    DatasetVersionConflictError,
     DatasetVersionRecord,
     SyncRunRecord,
 )
@@ -62,24 +64,39 @@ class SqlAlchemyDatasetTransactionRepository:
             .values(status="ABORTED", metadata=dict(metadata))
         )
 
-    def insert_version(self, *, transaction: Any, record: DatasetVersionRecord) -> None:
+    def lock_dataset_for_version_allocation(self, *, transaction: Any, tenant_id: str, dataset_id: str) -> None:
         transaction.execute(
-            insert(db.dataset_versions).values(
-                id=record.version_id,
-                tenant_id=record.tenant_id,
-                dataset_id=record.dataset_id,
-                branch=record.branch,
-                version_number=record.version_number,
-                transaction_id=record.transaction_id,
-                schema_version=record.schema_version,
-                manifest_uri=record.manifest_uri,
-                row_count=record.row_count,
-                byte_size=record.byte_size,
-                status=record.status,
-                superseded_by_version_id=record.superseded_by_version_id,
-                created_at=record.created_at,
+            select(db.datasets.c.id)
+            .where(and_(db.datasets.c.tenant_id == tenant_id, db.datasets.c.id == dataset_id))
+            .with_for_update()
+        ).first()
+
+    def insert_version(self, *, transaction: Any, record: DatasetVersionRecord) -> None:
+        savepoint = transaction.begin_nested()
+        try:
+            transaction.execute(
+                insert(db.dataset_versions).values(
+                    id=record.version_id,
+                    tenant_id=record.tenant_id,
+                    dataset_id=record.dataset_id,
+                    branch=record.branch,
+                    version_number=record.version_number,
+                    transaction_id=record.transaction_id,
+                    schema_version=record.schema_version,
+                    manifest_uri=record.manifest_uri,
+                    row_count=record.row_count,
+                    byte_size=record.byte_size,
+                    status=record.status,
+                    superseded_by_version_id=record.superseded_by_version_id,
+                    created_at=record.created_at,
+                )
             )
-        )
+            savepoint.commit()
+        except IntegrityError as exc:
+            savepoint.rollback()
+            raise DatasetVersionConflictError(
+                f"dataset version already exists: {record.dataset_id}@{record.branch}#{record.version_number}"
+            ) from exc
 
     def insert_file(self, *, transaction: Any, record: DatasetFileRecord) -> None:
         transaction.execute(

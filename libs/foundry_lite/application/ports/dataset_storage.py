@@ -75,6 +75,17 @@ class DatasetStorageAdapter(Protocol):
         """Promote a staged file into a committed dataset version manifest."""
         ...
 
+    def delete_committed_version(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        branch: str,
+        version_id: str,
+    ) -> bool:
+        """Remove committed version artifacts after metadata persistence fails."""
+        ...
+
     def load_manifest(self, manifest_uri: str) -> DatasetManifest:
         """Load a committed dataset manifest by logical URI."""
         ...
