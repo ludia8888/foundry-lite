@@ -9,6 +9,7 @@ from foundry_lite.application.ports.ontology_repository import (
     ActionTypeDefinition,
     LinkTypeBacking,
     ObjectTypeBacking,
+    ObjectTypeCdcBacking,
     OntologyJsonObject,
     PropertyDerivation,
 )
@@ -91,6 +92,19 @@ def object_type_backing(item: YamlObject) -> ObjectTypeBacking:
         payload["mode"] = mode
     if "primaryKeyColumns" in backing:
         payload["primaryKeyColumns"] = string_sequence(backing["primaryKeyColumns"], "primaryKeyColumns")
+    cdc = optional_mapping(backing, "cdc")
+    if cdc is not None:
+        payload["cdc"] = object_type_cdc_backing(cdc)
+    return payload
+
+
+def object_type_cdc_backing(cdc: YamlObject) -> ObjectTypeCdcBacking:
+    payload: ObjectTypeCdcBacking = {"dataset": required_str(cdc, "dataset")}
+    if "primaryKeyColumns" in cdc:
+        payload["primaryKeyColumns"] = string_sequence(cdc["primaryKeyColumns"], "cdc.primaryKeyColumns")
+    delete_policy = optional_str(cdc, "deletePolicy")
+    if delete_policy is not None:
+        payload["deletePolicy"] = delete_policy
     return payload
 
 

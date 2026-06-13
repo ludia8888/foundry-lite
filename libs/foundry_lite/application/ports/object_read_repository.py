@@ -70,6 +70,8 @@ class ObjectPayload(TypedDict):
     objectVersion: int
     properties: dict[str, object]
     sourceDatasetVersionId: str | None
+    deleted: NotRequired[bool]
+    deletionReason: NotRequired[str | None]
     explain: NotRequired[ObjectExplain]
 
 

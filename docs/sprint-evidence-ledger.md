@@ -26,6 +26,7 @@
 | `PR-9` | Live Kafka-compatible broker smoke for Sprint 38 stream archive worker | [PR #9](https://github.com/ludia8888/foundry-lite/pull/9), [383bcad848afac8985fd0d500f499790bba1e063](https://github.com/ludia8888/foundry-lite/commit/383bcad848afac8985fd0d500f499790bba1e063) | 2026-06-14 KST |
 | `PR-10` | Sprint 39 Debezium-shaped CDC envelope archive proof and CDC preview fields | [PR #10](https://github.com/ludia8888/foundry-lite/pull/10), [898689cb46ed5575ca9da69d6086cef3d7a141d3](https://github.com/ludia8888/foundry-lite/commit/898689cb46ed5575ca9da69d6086cef3d7a141d3) | 2026-06-14 KST |
 | `PR-11` | Sprint 39 live Debezium PostgreSQL CDC topic proof plus Operations failure/lag evidence | [PR #11](https://github.com/ludia8888/foundry-lite/pull/11), [67eccb5824975d970c3aa64c2fcfd86ed49236fd](https://github.com/ludia8888/foundry-lite/commit/67eccb5824975d970c3aa64c2fcfd86ed49236fd) | 2026-06-14 KST |
+| `PR-12` | Sprint 40 CDC object indexing, tombstone delete, replay/stale skip, and object.changed trigger proof | [PR #12](https://github.com/ludia8888/foundry-lite/pull/12), [7b04f99](https://github.com/ludia8888/foundry-lite/commit/7b04f99) | 2026-06-14 KST, pending merge |
 | `GATE-FOUNDATION` | 품질 게이트, release gate, infra boundary hardening | [e1fc49e81c2262c69321eaf6b991f425969b6e35](https://github.com/ludia8888/foundry-lite/commit/e1fc49e81c2262c69321eaf6b991f425969b6e35) | main history |
 | `AUTH-PORT` | `AuthProvider` port, HeaderTrust/Demo local adapters | [b14c70f843dc0faedbde72f5639a28f15389de09](https://github.com/ludia8888/foundry-lite/commit/b14c70f843dc0faedbde72f5639a28f15389de09) | main history |
 | `OBJECT-READ-PORT` | `ObjectReadRepository` boundary extraction | [87a08d7b79795354d3d8782981746978e6e1d07c](https://github.com/ludia8888/foundry-lite/commit/87a08d7b79795354d3d8782981746978e6e1d07c) | main history |
@@ -43,7 +44,7 @@
 | `VERIFY-DOC-DRIFT` | `pnpm --silent quality:doc-drift` | PASS. current-state docs reference existing code paths and symbols. |
 | `VERIFY-INFRA-BOUNDARIES` | `pnpm --silent quality:infra-boundaries` | PASS. domain concrete infra import `0/0`, application concrete infra import `0/0`, service dependency declarations OK, service call graph cycles `0`, max depth `7/7`, max fan-out `8/10`. |
 | `VERIFY-STATIC` | `pnpm --silent quality:static` | PASS. Ruff, format check, mypy, pyright, architecture, infra boundaries, module size, function length, boolean naming, typed boundary, router purity, query side-effect, repository boundaries, tenant write, contract-test-per-port, strategy/spec tests, integration markers, regression/root-cause local checks, docs, SDK generation, schema revision, audit/outbox/idempotency/request-id/log/metrics/adapter-failure-taxonomy/no-bypass/no-sleep/coverage/private facade gates all passed. |
-| `VERIFY-FULL-CI-GATE` | `env DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock pnpm --silent ci:gate` | PASS. Testcontainers preflight reached Colima, full pytest `676 passed`, coverage `95.72%`, flaky detector stable, layer/public callable coverage passed, OpenLineage/audit/outbox/MVP correctness/performance/trace/adapter-error/failed-mutation/runtime diagnostics/Playwright gates passed. |
+| `VERIFY-FULL-CI-GATE` | `env DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock pnpm --silent ci:gate` | PASS. Testcontainers preflight reached Colima, full pytest `690 passed`, coverage `95.84%`, flaky detector stable, layer/public callable coverage passed, OpenLineage/audit/outbox/MVP correctness/performance/trace/adapter-error/failed-mutation/runtime diagnostics/Playwright gates passed. |
 | `VERIFY-CONTRACT-GATE` | `pnpm --silent quality:contract-tests` | PASS. every application port has a contract suite. |
 | `VERIFY-SCALE-ADAPTERS` | `uv run pytest tests/contracts/test_auth_provider_contract.py tests/contracts/test_connector_adapter_contract.py tests/contracts/test_search_adapter_contract.py tests/contracts/test_stream_adapter_contract.py tests/contracts/test_workflow_adapter_contract.py tests/integration/test_scale_foundation.py tests/integration/test_stream_archive_ingest.py -q` | PASS. `29 passed in 0.38s`. |
 | `VERIFY-TESTCONTAINERS-PREFLIGHT` | `pnpm --silent quality:testcontainers-preflight` | FAIL FAST as designed in a Docker-unreachable shell. The message tells the operator to set `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock` and `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock` before rerunning `pnpm --silent ci:gate`. Unit proof: `uv run pytest tests/unit/test_quality_testcontainers_preflight.py -q`, `5 passed`. This preflight now protects both PostgreSQL and Kafka Testcontainers evidence. |
@@ -54,6 +55,7 @@
 | `VERIFY-KAFKA-LIVE-BROKER` | `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock uv run pytest tests/integration/test_kafka_live_broker_stream_archive.py -q` | PASS. `1 passed in 14.93s`. `KafkaContainer` boots a real Kafka-compatible broker, `KafkaStreamAdapter.publish_event` writes a shipment event to a live topic, and `foundry_lite_worker.stream_archive.run_stream_archive_once` reads the broker topic through the same application boundary and commits `raw.shipment_events` with event id `<topic>:0:0`. |
 | `VERIFY-CDC-STREAM-ARCHIVE` | `pnpm --silent quality:cdc-stream-archive`; `pnpm --silent quality:adapter-failure-taxonomy` | PASS. `13 passed in 0.36s`; adapter taxonomy gate passed with `17` concrete adapter profiles. `DebeziumPostgresStreamAdapter` normalizes Debezium-shaped insert/update/delete payloads into the standard CDC envelope, rejects malformed envelopes as adapter validation failures, reports publish/read validation failures under the correct adapter operation, and `tests/integration/test_cdc_stream_archive.py` proves `StreamArchiveConfig(schema_strategy="cdc_envelope_json")` commits `raw_cdc.erp_orders` rows with top-level `op`, `pk_json`, `before_json`, `after_json`, and `ordering_json` preview fields. CDC stream lag updates `foundry_lite_stream_archive_lag_events`, CDC read failures now create FAILED sync runs with Debezium adapter failure payloads in Operations, and stream archive resume cursors require a matching `schemaStrategy`. |
 | `VERIFY-DEBEZIUM-LIVE-CDC` | `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock uv run pytest tests/integration/test_debezium_live_cdc.py -q` | PASS. `1 passed in 39.77s`. Testcontainers boots a real Kafka-compatible broker, PostgreSQL with `wal_level=logical`, and Debezium Connect `quay.io/debezium/connect:3.5`; insert/update/delete against `public.orders` appear on the Debezium topic, and `foundry_lite_worker.stream_archive.run_stream_archive_once` commits three CDC changelog rows into `raw_cdc.erp_orders`. |
+| `VERIFY-CDC-OBJECT-INDEXING` | `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock uv run pytest tests/unit/test_cdc_indexing.py tests/contracts/test_object_index_repository_contract.py tests/integration/test_cdc_object_indexing.py -q`; `pnpm --silent quality:cdc-object-indexing` | PASS. Package script: `23 passed in 2.82s`; focused parser/integration workflow exposure: `15 passed in 0.31s`. `tests/unit/test_cdc_indexing.py` covers CDC envelope validation, JSON envelope parsing, primary-key fallback, stale ordering, and property-version metadata. `tests/integration/test_cdc_object_indexing.py` proves `backing.cdc` mapping, batch-rebuild-free CDC update, CDC-only object insert, tombstone delete handling, duplicate/stale ordering skip, `object.changed` outbox trigger, and `cdc_incremental` index run status. `tests/contracts/test_object_index_repository_contract.py` keeps the CDC object update repository contract aligned across fake, SQLite, and PostgreSQL. |
 
 ## Sprint 02A - Scale Foundation/Infra Swap Boundary
 
@@ -259,11 +261,26 @@ No Sprint 02A Scale Foundation evidence item remains open in the current checkou
 | `S39-A4` | delete event is standardized as `after=null` or tombstone policy | `PR-10`; `VERIFY-CDC-STREAM-ARCHIVE`; `tests/contracts/test_debezium_cdc_adapter_contract.py` | Done for `after=null` delete envelopes |
 | `S39-A5` | CDC connector failure/lag is visible in Operations | `PR-11`; `VERIFY-CDC-STREAM-ARCHIVE`; `test_cdc_stream_archive_read_failure_is_visible_in_operations`; `test_cdc_stream_archive_updates_unread_lag_metric` | Done |
 
+## Sprint 40 - CDC Object Indexing and Delete/Tombstone
+
+<a id="s40-a1"></a>
+<a id="s40-a2"></a>
+<a id="s40-a3"></a>
+<a id="s40-a4"></a>
+<a id="s40-a5"></a>
+
+| Evidence id | Checkbox meaning | Git / test evidence | Current status |
+|---|---|---|---|
+| `S40-A1` | ERP DB row update changes the Order object without batch rebuild | `PR-12`; `VERIFY-CDC-OBJECT-INDEXING`; `tests/integration/test_cdc_object_indexing.py`; `tests/unit/test_cdc_indexing.py` | Done |
+| `S40-A2` | delete event marks the object as deleted/tombstoned | `PR-12`; `VERIFY-CDC-OBJECT-INDEXING`; `deleted=true`; `deletionReason=source_deleted` | Done |
+| `S40-A3` | replaying the same CDC event is idempotent | `PR-12`; `VERIFY-CDC-OBJECT-INDEXING`; duplicate event returns `events_skipped=1` | Done |
+| `S40-A4` | stale CDC event does not overwrite current object state | `PR-12`; `VERIFY-CDC-OBJECT-INDEXING`; lower `ordering.lsn` event returns `events_skipped=1` and keeps `status=APPROVED` | Done |
+| `S40-A5` | CDC update emits object.changed/materialization trigger evidence | `PR-12`; `VERIFY-CDC-OBJECT-INDEXING`; `object.changed` outbox count changes only for applied update/delete events | Done |
+
 ## Open / Not Yet Merged Scope
 
 These items intentionally remain unchecked until a later PR creates code and gate evidence.
 
 | Scope | Current tracking note |
 |---|---|
-| CDC object indexing | Sprint 40 remains future work after Sprint 39 live Debezium topic/source evidence. |
 | OpenSearch, Iceberg, Spark, Kubernetes production adapters | Sprint 42-45 remain future work. |

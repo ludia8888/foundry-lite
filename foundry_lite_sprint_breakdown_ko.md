@@ -1837,7 +1837,7 @@ PostgreSQL row 변경을 Debezium envelope로 받아 raw changelog dataset과 ob
 
 **Demo / Proof**
 
-현재 증명은 두 층이다. 빠른 계약 증명은 Debezium-shaped insert/update/delete stream event를 `DebeziumPostgresStreamAdapter`가 표준 CDC envelope `op`, `pk`, `before`, `after`, `ordering`으로 normalize하고, `StreamArchiveConfig(schema_strategy="cdc_envelope_json")`가 `FoundryLiteCore.archive_stream_events` application boundary를 통해 `raw_cdc.erp_orders` append version을 commit하는 경로다. Live 증명은 Testcontainers로 Kafka-compatible broker, logical replication PostgreSQL, Debezium Connect를 띄운 뒤 `public.orders` insert/update/delete가 Debezium topic에 나오고 worker가 같은 application boundary로 raw CDC changelog를 commit하는 경로다. CDC read 실패는 Operations의 FAILED sync run에 Debezium adapter failure payload로 남고, unread CDC event 수는 `foundry_lite_stream_archive_lag_events` metric으로 보인다. CDC event가 object store base layer를 직접 갱신하는 작업은 Sprint 40에 남아 있다.
+현재 증명은 두 층이다. 빠른 계약 증명은 Debezium-shaped insert/update/delete stream event를 `DebeziumPostgresStreamAdapter`가 표준 CDC envelope `op`, `pk`, `before`, `after`, `ordering`으로 normalize하고, `StreamArchiveConfig(schema_strategy="cdc_envelope_json")`가 `FoundryLiteCore.archive_stream_events` application boundary를 통해 `raw_cdc.erp_orders` append version을 commit하는 경로다. Live 증명은 Testcontainers로 Kafka-compatible broker, logical replication PostgreSQL, Debezium Connect를 띄운 뒤 `public.orders` insert/update/delete가 Debezium topic에 나오고 worker가 같은 application boundary로 raw CDC changelog를 commit하는 경로다. CDC read 실패는 Operations의 FAILED sync run에 Debezium adapter failure payload로 남고, unread CDC event 수는 `foundry_lite_stream_archive_lag_events` metric으로 보인다. CDC event가 object store base layer를 직접 갱신하는 작업은 Sprint 40에서 `index_cdc_events` 증분 object indexing proof로 이어졌다.
 
 **이러면 성공으로 치지 않는다**
 
@@ -1869,15 +1869,15 @@ PostgreSQL row 변경을 Debezium envelope로 받아 raw changelog dataset과 ob
 
 **Acceptance Gate**
 
-- [ ] ERP DB row update 후 Order object가 batch rebuild 없이 바뀐다.
-- [ ] delete event 후 object는 정책에 따라 deleted/tombstoned로 표시된다.
-- [ ] 같은 CDC event 재처리는 idempotent하다.
-- [ ] stale CDC event가 최신 object state를 덮지 않는다.
-- [ ] CDC update도 object.changed event와 materialization trigger를 만든다.
+- [x] ERP DB row update 후 Order object가 batch rebuild 없이 바뀐다. ([S40-A1](./docs/sprint-evidence-ledger.md#s40-a1))
+- [x] delete event 후 object는 정책에 따라 deleted/tombstoned로 표시된다. ([S40-A2](./docs/sprint-evidence-ledger.md#s40-a2))
+- [x] 같은 CDC event 재처리는 idempotent하다. ([S40-A3](./docs/sprint-evidence-ledger.md#s40-a3))
+- [x] stale CDC event가 최신 object state를 덮지 않는다. ([S40-A4](./docs/sprint-evidence-ledger.md#s40-a4))
+- [x] CDC update도 object.changed event와 materialization trigger를 만든다. ([S40-A5](./docs/sprint-evidence-ledger.md#s40-a5))
 
 **Demo / Proof**
 
-DB에서 O-1001 status update/delete → Object Explorer에서 near-real-time 변화 확인.
+`backing.cdc` source mapping이 있는 `Order` ontology에서 초기 snapshot index 후 `index_cdc_events`가 CDC `u/d` event를 object base layer에 증분 반영한다. update event는 batch rebuild 없이 `Order/O-1001` status를 바꾸고 `object.changed` outbox trigger를 남긴다. 같은 event 재처리와 더 낮은 ordering의 stale event는 skip되어 최신 object state를 덮지 않는다. delete event는 object record를 `source_deleted` tombstone으로 표시하고 active object query에서 제외한다.
 
 **이러면 성공으로 치지 않는다**
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from foundry_lite.application.ports import (
+    IndexRunCursor,
     LinkTypeRow,
     ObjectConflictRecord,
     ObjectIndexRebuildResult,
@@ -22,6 +23,7 @@ from foundry_lite.application.primitives import (
 )
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.object_store.index_records import build_object_link_insert
+from foundry_lite.application.services.object_store.indexing_cdc_service import ObjectIndexingCdcMixin
 from foundry_lite.application.services.object_store.indexing_protocols import (
     IndexDatasetRegistry,
     IndexDatasetTransactionFiles,
@@ -35,6 +37,7 @@ from foundry_lite.application.services.object_store.indexing_runs import (
     _start_index_rebuild_plan,
 )
 from foundry_lite.application.services.object_store.indexing_types import (
+    ObjectIndexCdcCounts,
     ObjectIndexRebuildCounts,
     ObjectIndexRebuildPlan,
     ObjectIndexSourceRow,
@@ -44,7 +47,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
 
-class ObjectIndexingService(CoreService):
+class ObjectIndexingService(ObjectIndexingCdcMixin, CoreService):
     required_dependencies = ("engine", "compute_adapter", "object_index_repository")
     required_collaborators = (
         "dataset_registry_service",
@@ -137,10 +140,8 @@ class ObjectIndexingService(CoreService):
             rows,
             plan.source_dataset_version_id,
         )
-        counts = ObjectIndexRebuildCounts(len(rows), objects_upserted, links_upserted)
-        self._mark_index_run_succeeded(
-            conn, ctx, plan.run_id, counts.rows_read, counts.objects_upserted, counts.links_upserted
-        )
+        counts = ObjectIndexRebuildCounts(len(rows), objects_upserted, 0, links_upserted)
+        self._mark_index_run_succeeded(conn, ctx, plan.run_id, counts)
         self._audit_index_rebuild(conn, ctx, plan, counts)
         return counts
 
@@ -411,19 +412,19 @@ class ObjectIndexingService(CoreService):
         conn: TransactionContext,
         ctx: RequestContext,
         run_id: str,
-        rows_read: int,
-        objects_upserted: int,
-        links_upserted: int,
+        counts: ObjectIndexRebuildCounts | ObjectIndexCdcCounts,
+        cursor: IndexRunCursor | None = None,
     ) -> None:
         """Persist successful index run counters within the current tenant."""
         self.object_index_repository.mark_index_run_succeeded(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             run_id=run_id,
-            rows_read=rows_read,
-            objects_upserted=objects_upserted,
-            links_upserted=links_upserted,
-            cursor={"last_row": rows_read},
+            rows_read=counts.rows_read,
+            objects_upserted=counts.objects_upserted,
+            objects_deleted=counts.objects_deleted,
+            links_upserted=counts.links_upserted,
+            cursor=cursor or {"last_row": counts.rows_read},
             completed_at=_now(),
         )
 
@@ -433,6 +434,7 @@ class ObjectIndexingService(CoreService):
         ctx: RequestContext,
         run_id: str,
         exc: Exception,
+        adapter: str = "compute_adapter.rows_from_parquet",
     ) -> None:
         """Persist a failed index run with the normalized error payload."""
         self.object_index_repository.mark_index_run_failed(
@@ -444,7 +446,7 @@ class ObjectIndexingService(CoreService):
                 ctx,
                 run_id=run_id,
                 correlation_id=run_id,
-                adapter="compute_adapter.rows_from_parquet",
+                adapter=adapter,
             ),
             completed_at=_now(),
         )

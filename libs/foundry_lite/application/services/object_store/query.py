@@ -70,6 +70,9 @@ class ObjectQueryService(CoreService):
                 "properties": properties,
                 "sourceDatasetVersionId": record["source_dataset_version_id"],
             }
+            if record["deleted"]:
+                payload["deleted"] = True
+                payload["deletionReason"] = record["deletion_reason"]
             if include_explain:
                 payload["explain"] = self._object_explain(ctx, record)
             return payload

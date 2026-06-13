@@ -8,6 +8,7 @@ from foundry_lite.application.ports.ontology_repository import LinkTypeRow
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
 ObjectPropertyMap = Mapping[str, object]
+ObjectPropertyVersions = dict[str, object]
 
 
 class IndexRunSourceRef(TypedDict, total=False):
@@ -15,12 +16,17 @@ class IndexRunSourceRef(TypedDict, total=False):
 
     dataset_version_id: str
     replay_of_run_id: str
+    cdc_dataset: str
+    event_count: int
 
 
 class IndexRunCursor(TypedDict, total=False):
     """Progress cursor captured when an object index run finishes."""
 
     last_row: int
+    last_event_id: str | None
+    last_ordering: Mapping[str, object]
+    events_skipped: int
 
 
 class IndexRunError(TypedDict, total=False):
@@ -81,7 +87,19 @@ class ObjectIndexRebuildResult(TypedDict):
     object_type: str
     rows_read: int
     objects_upserted: int
+    objects_deleted: int
     links_upserted: int
+
+
+class ObjectIndexCdcResult(TypedDict):
+    """Public result returned after applying CDC events to object records."""
+
+    index_run_id: str
+    object_type: str
+    rows_read: int
+    objects_upserted: int
+    objects_deleted: int
+    events_skipped: int
 
 
 @dataclass(frozen=True)
@@ -114,7 +132,7 @@ class ObjectRecordInsert:
     properties: ObjectPropertyMap
     base_properties: ObjectPropertyMap
     edit_properties: ObjectPropertyMap
-    property_versions: dict[str, int]
+    property_versions: ObjectPropertyVersions
     source_dataset_version_id: str
     source_hash: str
     object_version: int
@@ -133,6 +151,21 @@ class ObjectRecordSourceUpdate:
     source_dataset_version_id: str
     source_hash: str
     object_version: int
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class ObjectRecordCdcUpdate:
+    record_id: str
+    tenant_id: str
+    properties: ObjectPropertyMap
+    base_properties: ObjectPropertyMap
+    property_versions: ObjectPropertyVersions
+    source_dataset_version_id: str
+    source_hash: str
+    object_version: int
+    deleted: bool
+    deletion_reason: str | None
     updated_at: str
 
 
@@ -196,6 +229,7 @@ class ObjectIndexRepository(Protocol):
         run_id: str,
         rows_read: int,
         objects_upserted: int,
+        objects_deleted: int,
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
@@ -226,6 +260,15 @@ class ObjectIndexRepository(Protocol):
         record: ObjectRecordSourceUpdate,
     ) -> None:
         """Update source-owned object fields after a dataset re-index."""
+        ...
+
+    def update_object_record_from_cdc(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: ObjectRecordCdcUpdate,
+    ) -> None:
+        """Apply one ordered CDC source patch or tombstone to an object record."""
         ...
 
     def insert_object_conflict(self, *, transaction: TransactionContext, record: ObjectConflictRecord) -> None:

@@ -31,6 +31,7 @@
     "quality:kafka-live-broker": "uv run pytest tests/integration/test_kafka_live_broker_stream_archive.py -q",
     "quality:cdc-stream-archive": "uv run pytest tests/contracts/test_debezium_cdc_adapter_contract.py tests/integration/test_cdc_stream_archive.py -q",
     "quality:cdc-live-debezium": "uv run pytest tests/integration/test_debezium_live_cdc.py -q",
+    "quality:cdc-object-indexing": "uv run pytest tests/unit/test_cdc_indexing.py tests/contracts/test_object_index_repository_contract.py tests/integration/test_cdc_object_indexing.py -q",
     "quality:regression-bugfix": "uv run python scripts/quality/check_regression_test_per_bugfix.py",
     "quality:pr-root-cause": "uv run python scripts/quality/check_pr_root_cause_section.py",
     "quality:doc-drift": "uv run python scripts/quality/check_doc_drift.py",
