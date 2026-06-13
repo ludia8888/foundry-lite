@@ -388,6 +388,12 @@ def test_ast_grep_and_tach_are_release_gate_steps() -> None:
     assert '"foundry_lite.infrastructure"' in tach_config
 
 
+def test_worker_composition_root_is_import_linter_allowlisted() -> None:
+    import_linter_config = (ROOT / ".importlinter").read_text(encoding="utf-8")
+
+    assert "foundry_lite_worker.stream_archive -> foundry_lite.infrastructure.local_runtime" in import_linter_config
+
+
 def test_ast_grep_facade_magic_rule_has_a_failing_fixture(tmp_path: Path) -> None:
     core_path = tmp_path / "libs" / "foundry_lite" / "application" / "core.py"
     core_path.parent.mkdir(parents=True)

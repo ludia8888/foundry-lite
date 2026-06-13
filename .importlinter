@@ -90,3 +90,4 @@ ignore_imports =
     foundry_lite_api.main -> foundry_lite.infrastructure.local_runtime
     foundry_lite_api.main -> foundry_lite.infrastructure.auth
     foundry_lite_cli.main -> foundry_lite.infrastructure.local_runtime
+    foundry_lite_worker.stream_archive -> foundry_lite.infrastructure.local_runtime
