@@ -5,6 +5,10 @@ from foundry_lite.infrastructure.adapters.dataset_storage import (
     FakeDatasetStorageAdapter,
     LocalDatasetStorageAdapter,
 )
+from foundry_lite.infrastructure.adapters.debezium_cdc import (
+    DebeziumPostgresSourceConfig,
+    DebeziumPostgresStreamAdapter,
+)
 from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamAdapter,
     KafkaStreamAdapterConfig,
@@ -24,6 +28,8 @@ from foundry_lite.infrastructure.adapters.scale_foundation import (
 
 __all__ = [
     "DuckDBComputeAdapter",
+    "DebeziumPostgresSourceConfig",
+    "DebeziumPostgresStreamAdapter",
     "FakeConnectorAdapter",
     "FakeDatasetStorageAdapter",
     "FakeComputeAdapter",

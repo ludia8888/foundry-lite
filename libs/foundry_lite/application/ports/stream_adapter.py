@@ -6,7 +6,7 @@ from typing import Literal, Protocol
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 
-StreamSchemaStrategy = Literal["envelope_json"]
+StreamSchemaStrategy = Literal["envelope_json", "cdc_envelope_json"]
 
 
 @dataclass(frozen=True)

@@ -22,6 +22,14 @@ STREAM_ARCHIVE_FIELDS = [
     "payload_json",
     "ingested_at",
 ]
+CDC_STREAM_ARCHIVE_FIELDS = [
+    *STREAM_ARCHIVE_FIELDS,
+    "op",
+    "pk_json",
+    "before_json",
+    "after_json",
+    "ordering_json",
+]
 
 
 def read_stream_archive_events(
@@ -48,7 +56,7 @@ def stream_archive_limit(limit: int) -> int:
 
 
 def stream_event_row(event: StreamEvent, stream: StreamArchiveConfig) -> Mapping[str, object]:
-    return {
+    row = {
         "event_id": stream_event_id(event, stream),
         "stream": event.stream_name,
         "topic": stream.topic,
@@ -61,6 +69,15 @@ def stream_event_row(event: StreamEvent, stream: StreamArchiveConfig) -> Mapping
         "payload_json": json.dumps(dict(event.payload), sort_keys=True, separators=(",", ":"), default=str),
         "ingested_at": f"ts:{_now()}",
     }
+    if stream.schema_strategy == "cdc_envelope_json":
+        return {**row, **_cdc_envelope_fields(event.payload)}
+    return row
+
+
+def stream_archive_fields(stream: StreamArchiveConfig) -> list[str]:
+    if stream.schema_strategy == "cdc_envelope_json":
+        return list(CDC_STREAM_ARCHIVE_FIELDS)
+    return list(STREAM_ARCHIVE_FIELDS)
 
 
 def stream_transaction_metadata(stream: StreamArchiveConfig, events: Sequence[StreamEvent]) -> Mapping[str, object]:
@@ -91,8 +108,50 @@ def stream_cursor_matches(cursor: Mapping[str, object], stream: StreamArchiveCon
         and cursor.get("topic") == stream.topic
         and cursor.get("partition") == stream.partition
         and cursor.get("consumerGroup") == stream.consumer_group
+        and _cursor_schema_strategy(cursor) == stream.schema_strategy
     )
 
 
 def stream_event_id(event: StreamEvent, stream: StreamArchiveConfig) -> str:
     return f"{stream.topic}:{stream.partition}:{event.offset}"
+
+
+def _cursor_schema_strategy(cursor: Mapping[str, object]) -> object:
+    return cursor.get("schemaStrategy", "envelope_json")
+
+
+def _cdc_envelope_fields(payload: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "op": _required_text(payload, "op"),
+        "pk_json": _required_json_object(payload, "pk"),
+        "before_json": _nullable_json_object(payload, "before"),
+        "after_json": _nullable_json_object(payload, "after"),
+        "ordering_json": _required_json_object(payload, "ordering"),
+    }
+
+
+def _required_text(payload: Mapping[str, object], name: str) -> str:
+    value = payload.get(name)
+    if not isinstance(value, str) or not value:
+        raise ValidationFailed("cdc envelope field must be non-empty text", details={"field": name})
+    return value
+
+
+def _required_json_object(payload: Mapping[str, object], name: str) -> str:
+    value = payload.get(name)
+    if not isinstance(value, Mapping):
+        raise ValidationFailed("cdc envelope field must be an object", details={"field": name})
+    return _json_field(value)
+
+
+def _nullable_json_object(payload: Mapping[str, object], name: str) -> str:
+    value = payload.get(name)
+    if value is None:
+        return "null"
+    if not isinstance(value, Mapping):
+        raise ValidationFailed("cdc envelope field must be null or an object", details={"field": name})
+    return _json_field(value)
+
+
+def _json_field(value: Mapping[str, object]) -> str:
+    return json.dumps(dict(value), sort_keys=True, separators=(",", ":"), default=str)

@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.ports import AdapterFailureContract
 from foundry_lite.infrastructure.adapters import (
+    DebeziumPostgresSourceConfig,
+    DebeziumPostgresStreamAdapter,
     DuckDBComputeAdapter,
     FakeComputeAdapter,
     FakeConnectorAdapter,
@@ -36,6 +38,7 @@ from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthPr
         "local-stream",
         "fake-stream",
         "kafka-stream",
+        "debezium-postgres-stream",
         "local-search",
         "fake-search",
         "local-connector",
@@ -85,6 +88,10 @@ def _adapter_failure_contract(profile: str, tmp_path: Path) -> AdapterFailureCon
                 bootstrap_servers="redpanda:9092",
                 subscriptions=(KafkaStreamSubscription("shipments", "shipment_events"),),
             )
+        ),
+        "debezium-postgres-stream": DebeziumPostgresStreamAdapter(
+            FakeStreamAdapter(),
+            DebeziumPostgresSourceConfig(primary_key=("order_id",)),
         ),
         "local-search": LocalSearchAdapter(),
         "fake-search": FakeSearchAdapter(),

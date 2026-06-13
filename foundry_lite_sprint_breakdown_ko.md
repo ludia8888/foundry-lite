@@ -1830,14 +1830,14 @@ PostgreSQL row 변경을 Debezium envelope로 받아 raw changelog dataset과 ob
 **Acceptance Gate**
 
 - [ ] mock ERP orders row insert/update/delete가 CDC topic으로 나온다.
-- [ ] CDC event가 raw changelog dataset에 append된다.
-- [ ] pk와 ordering metadata가 preview에서 확인된다.
-- [ ] delete event는 after=null 또는 tombstone 정책으로 표준화된다.
+- [x] CDC event가 raw changelog dataset에 append된다. ([S39-A2](./docs/sprint-evidence-ledger.md#s39-a2))
+- [x] pk와 ordering metadata가 preview에서 확인된다. ([S39-A3](./docs/sprint-evidence-ledger.md#s39-a3))
+- [x] delete event는 after=null 또는 tombstone 정책으로 표준화된다. ([S39-A4](./docs/sprint-evidence-ledger.md#s39-a4))
 - [ ] CDC connector 실패/lag가 Operations에서 보인다.
 
 **Demo / Proof**
 
-ERP DB row update → Debezium topic → `raw_cdc.erp_orders` append 확인.
+현재 증명은 Debezium-shaped insert/update/delete stream event를 `DebeziumPostgresStreamAdapter`가 표준 CDC envelope `op`, `pk`, `before`, `after`, `ordering`으로 normalize하고, `StreamArchiveConfig(schema_strategy="cdc_envelope_json")`가 `FoundryLiteCore.archive_stream_events` application boundary를 통해 `raw_cdc.erp_orders` append version을 commit하는 경로다. 실제 ERP DB row update → Debezium Connect topic live proof와 CDC connector failure/lag Operations 증거는 아직 남아 있다.
 
 **이러면 성공으로 치지 않는다**
 
