@@ -37,6 +37,7 @@ class RestSourceConfig:
     pagination: RestPaginationConfig = field(default_factory=RestPaginationConfig)
     rate_limit_per_minute: int | None = None
     schema_columns: tuple[str, ...] = ()
+    allow_private_network: bool = False
 
 
 class ConnectorRateLimitedError(Exception):

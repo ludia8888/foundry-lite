@@ -232,6 +232,7 @@ class FoundryLiteCore:
         raw_body: bytes,
         signature: str,
         secret: str,
+        event_id: str | None = None,
         ctx: RequestContext | None = None,
     ) -> CommitResult:
         return self._services.dataset.ingest.ingest_webhook_event(
@@ -242,6 +243,7 @@ class FoundryLiteCore:
             raw_body=raw_body,
             signature=signature,
             secret=secret,
+            event_id=event_id,
             ctx=ctx,
         )
 

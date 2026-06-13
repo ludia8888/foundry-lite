@@ -4,16 +4,18 @@
 **문서 역할:** Foundry-lite의 Python 백엔드 구현 표준 원본  
 **목표:** 개발자가 같은 기준으로 읽기 쉽고, 고치기 쉽고, 테스트 가능하며, 운영 중 추적 가능한 코드를 작성하게 만든다.
 
+> 체크박스 해석 주의: 이 문서의 체크박스는 대부분 “새 변경을 만들 때 사람이 확인하는 코드 리뷰/장애 대응 템플릿”이다. 제품 스프린트 완료 상태는 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)과 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)를 원본으로 본다.
+
 ---
 
 ## 문서 지도
 
 이 문서는 Foundry-lite 문서 체계의 **프로그래밍 원칙과 코드 품질 원본**이다. 제품이 무엇을 해야 하는지는 개발 기획서가 정하고, 어떤 순서로 만들지는 스프린트 문서가 정하며, 실제 Python 백엔드 코드를 어떤 기준으로 작성할지는 이 문서가 정한다.
 
-- [ ] 제품 목표와 설계 원본은 [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 따른다.
-- [ ] 구현 순서와 Acceptance Gate 원본은 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)을 따른다.
-- [ ] Foundry 공개 문서 기반 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 따른다.
-- [ ] Python 백엔드 코드의 구조, 이름, 테스트, 에러 처리, 트랜잭션, 운영 로그 기준은 이 문서를 따른다.
+- 제품 목표와 설계 원본은 [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 따른다.
+- 구현 순서와 Acceptance Gate 원본은 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)을 따른다.
+- Foundry 공개 문서 기반 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 따른다.
+- Python 백엔드 코드의 구조, 이름, 테스트, 에러 처리, 트랜잭션, 운영 로그 기준은 이 문서를 따른다.
 
 ### 함께 읽을 문서
 
@@ -23,16 +25,16 @@
 
 ### 완료 판단 기준
 
-- [ ] 새 Python 백엔드 코드는 이 문서의 SRP, 의존성 방향, 명명 규칙을 따른다.
-- [ ] 모든 public API, worker activity, CLI command는 테스트와 운영 로그 기준을 만족한다.
-- [ ] 모든 데이터 변경은 transaction, audit, idempotency, replay 가능성을 고려한다.
-- [ ] 단순 증상 제거용 패치가 아니라 원인, 영향 범위, 회귀 방지책이 함께 정리되어 있다.
-- [ ] 에러가 발생하면 request/run/action/dataset/object 단위로 추적 가능한 코드 구조를 가진다.
-- [ ] [안티패턴 방지와 강제 대응 원칙](#18-안티패턴-방지와-강제-대응-원칙)을 위반한 변경은 완료로 보지 않는다.
-- [ ] Python 백엔드 전체 테스트 커버리지는 line, branch, function 기준 모두 95% 이상이어야 한다.
-- [ ] 필수 통합 테스트와 필수 스모크 테스트는 시나리오 수행률과 통과율 모두 100%여야 한다.
-- [ ] CI에서 `ruff`, `mypy` 또는 `pyright`, `pytest`가 통과해야 한다.
-- [ ] 예외적으로 기준을 어기는 경우에는 코드 주석이 아니라 설계 문서 또는 ADR에 이유를 남긴다.
+- 새 Python 백엔드 코드는 이 문서의 SRP, 의존성 방향, 명명 규칙을 따른다.
+- 모든 public API, worker activity, CLI command는 테스트와 운영 로그 기준을 만족한다.
+- 모든 데이터 변경은 transaction, audit, idempotency, replay 가능성을 고려한다.
+- 단순 증상 제거용 패치가 아니라 원인, 영향 범위, 회귀 방지책이 함께 정리되어 있다.
+- 에러가 발생하면 request/run/action/dataset/object 단위로 추적 가능한 코드 구조를 가진다.
+- [안티패턴 방지와 강제 대응 원칙](#18-안티패턴-방지와-강제-대응-원칙)을 위반한 변경은 완료로 보지 않는다.
+- Python 백엔드 전체 테스트 커버리지는 line, branch, function 기준 모두 95% 이상이어야 한다.
+- 필수 통합 테스트와 필수 스모크 테스트는 시나리오 수행률과 통과율 모두 100%여야 한다.
+- CI에서 `ruff`, `mypy` 또는 `pyright`, `pytest`가 통과해야 한다.
+- 예외적으로 기준을 어기는 경우에는 코드 주석이 아니라 설계 문서 또는 ADR에 이유를 남긴다.
 
 ---
 

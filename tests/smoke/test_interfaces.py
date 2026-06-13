@@ -122,6 +122,7 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(core, monkeyp
     headers = {
         "Content-Type": "application/json",
         "X-Foundry-Lite-Signature": _webhook_signature(body, secret),
+        "X-Foundry-Lite-Event-ID": "evt-order-9001",
         "X-User-ID": ctx.actor_user_id,
         "X-Roles": ",".join(ctx.roles),
     }
@@ -131,6 +132,12 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(core, monkeyp
     client = TestClient(app)
 
     response = client.post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_orders"},
+        headers=headers,
+        content=body,
+    )
+    duplicate = client.post(
         "/api/connectors/webhooks/mock_saas/orders",
         params={"datasetRef": "raw.webhook_orders"},
         headers=headers,
@@ -153,10 +160,14 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(core, monkeyp
     preview = core.preview_dataset("raw.webhook_orders", ctx=ctx)
     transactions = _dataset_transactions(core.engine)
     assert response.status_code == 200
+    assert duplicate.status_code == 200
+    assert duplicate.json()["version_id"] == response.json()["version_id"]
     assert response.json()["row_count"] == 1
+    assert preview[0]["event_id"] == "evt-order-9001"
     assert preview[0]["connector"] == "mock_saas"
     assert '"order_id":"O-9001"' in preview[0]["payload_json"]
     assert transactions[0]["tx_type"] == "APPEND"
+    assert len([tx for tx in transactions if tx["tx_type"] == "APPEND"]) == 1
     assert denied.status_code == 403
     assert rejected_shape.status_code == 422
     deny_events = core.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]

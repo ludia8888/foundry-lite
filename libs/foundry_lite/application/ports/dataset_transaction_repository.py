@@ -160,6 +160,19 @@ class DatasetTransactionRepository(Protocol):
         """Return the latest committed dataset transaction for resume/checkpoint lookups."""
         ...
 
+    def committed_webhook_transaction_by_event(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+        connector_name: str,
+        resource_name: str,
+        event_id: str,
+    ) -> DatasetTransactionRow | None:
+        """Return the committed webhook transaction for an already-seen event id."""
+        ...
+
     def abort_open_transaction_and_fail_run(
         self,
         *,

@@ -338,6 +338,7 @@ async def ingest_webhook(
     payload: WebhookPayloadRequest,
     dataset_ref: str = Query(alias="datasetRef"),
     signature: str = Header(alias="X-Foundry-Lite-Signature"),
+    event_id: str | None = Header(default=None, alias="X-Foundry-Lite-Event-ID"),
 ):
     try:
         raw_body = await request.body()
@@ -349,6 +350,7 @@ async def ingest_webhook(
             raw_body=raw_body,
             signature=signature,
             secret=_webhook_signing_key(),
+            event_id=event_id,
             ctx=_ctx(request),
         )
     except FoundryLiteError as exc:

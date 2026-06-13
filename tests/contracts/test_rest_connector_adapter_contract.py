@@ -56,6 +56,7 @@ def test_rest_connector_fetches_page_and_returns_resume_cursor() -> None:
                     resource_path="/orders",
                     auth=RestAuthConfig(mode="bearer", token="secret-token"),
                     schema_columns=("order_id", "amount"),
+                    allow_private_network=True,
                 ),
             )
         )
@@ -76,7 +77,7 @@ def test_rest_connector_sends_cursor_when_resuming() -> None:
                 tenant_id="tenant-demo",
                 request_id="req-rest-2",
                 cursor={"cursor": "page-2"},
-                rest=RestSourceConfig(base_url=server.base_url, resource_path="/orders"),
+                rest=RestSourceConfig(base_url=server.base_url, resource_path="/orders", allow_private_network=True),
             )
         )
 
@@ -94,7 +95,7 @@ def test_rest_connector_omits_cursor_when_resume_key_is_missing() -> None:
                 tenant_id="tenant-demo",
                 request_id="req-rest-missing-cursor",
                 cursor={"offset": "page-2"},
-                rest=RestSourceConfig(base_url=server.base_url, resource_path="/orders"),
+                rest=RestSourceConfig(base_url=server.base_url, resource_path="/orders", allow_private_network=True),
             )
         )
 
@@ -114,6 +115,7 @@ def test_rest_connector_supports_custom_header_auth() -> None:
                     base_url=server.base_url,
                     resource_path="/orders",
                     auth=RestAuthConfig(mode="header", header_name="X-Api-Key", header_value="key-1"),
+                    allow_private_network=True,
                 ),
             )
         )
@@ -131,7 +133,11 @@ def test_rest_connector_raises_rate_limit_error() -> None:
                     resource_name="limited",
                     tenant_id="tenant-demo",
                     request_id="req-rest-3",
-                    rest=RestSourceConfig(base_url=server.base_url, resource_path="/rate-limit"),
+                    rest=RestSourceConfig(
+                        base_url=server.base_url,
+                        resource_path="/rate-limit",
+                        allow_private_network=True,
+                    ),
                 )
             )
 
@@ -181,6 +187,33 @@ def test_rest_connector_rejects_non_http_source_url() -> None:
 
 
 @pytest.mark.parametrize(
+    ("base_url", "reason"),
+    [
+        ("http://127.0.0.1", "loopback_ip"),
+        ("http://[::1]", "loopback_ip"),
+        ("http://localhost", "local_hostname"),
+        ("http://10.0.0.5", "private_ip"),
+        ("http://169.254.169.254", "link_local_ip"),
+        ("http://metadata.google.internal", "metadata_hostname"),
+        ("http://service.internal", "internal_hostname"),
+    ],
+)
+def test_rest_connector_rejects_private_network_source_url(base_url: str, reason: str) -> None:
+    with pytest.raises(ValidationFailed, match="private or local network") as exc_info:
+        RestPullConnectorAdapter().snapshot(
+            ConnectorSnapshotRequest(
+                connector_name="rest",
+                resource_name="orders",
+                tenant_id="tenant-demo",
+                request_id="req-rest-private-url",
+                rest=RestSourceConfig(base_url=base_url, resource_path="/orders"),
+            )
+        )
+
+    assert exc_info.value.details["reason"] == reason
+
+
+@pytest.mark.parametrize(
     ("resource_path", "message", "pagination"),
     [
         ("/server-error", "request failed", RestPaginationConfig()),
@@ -208,6 +241,7 @@ def test_rest_connector_rejects_invalid_http_responses(
                         base_url=server.base_url,
                         resource_path=resource_path,
                         pagination=pagination,
+                        allow_private_network=True,
                     ),
                 )
             )
@@ -221,7 +255,7 @@ def test_rest_connector_returns_empty_schema_for_empty_page_without_declared_col
                 resource_name="orders",
                 tenant_id="tenant-demo",
                 request_id="req-rest-empty-page",
-                rest=RestSourceConfig(base_url=server.base_url, resource_path="/empty"),
+                rest=RestSourceConfig(base_url=server.base_url, resource_path="/empty", allow_private_network=True),
             )
         )
 
