@@ -51,6 +51,7 @@ class FakeObjectIndexRepository:
     object_conflicts: list[dict[str, Any]] = field(default_factory=list)
     link_types: list[dict[str, Any]] = field(default_factory=list)
     object_links: dict[str, dict[str, Any]] = field(default_factory=dict)
+    active_index_versions: dict[tuple[str, str], str] = field(default_factory=dict)
 
     def index_run_by_id(self, *, transaction: Any, tenant_id: str, run_id: str) -> IndexRunRow | None:
         del transaction
@@ -65,6 +66,9 @@ class FakeObjectIndexRepository:
 
     def active_index_version(self, *, transaction: Any, tenant_id: str, object_type_id: str) -> str:
         del transaction
+        pointer = self.active_index_versions.get((tenant_id, object_type_id))
+        if pointer is not None:
+            return pointer
         for row in self.object_records.values():
             if row["tenant_id"] == tenant_id and row["object_type_id"] == object_type_id and row["is_active"]:
                 return str(row["index_version"])
@@ -264,6 +268,7 @@ class FakeObjectIndexRepository:
             if row["tenant_id"] == tenant_id and row["from_object_type_id"] == object_type_id:
                 row["is_active"] = row["index_version"] == index_version
                 row["updated_at"] = updated_at
+        self.active_index_versions[(tenant_id, object_type_id)] = index_version
 
     def delete_inactive_index_version(
         self,
@@ -739,6 +744,33 @@ def test_object_index_repository_contract_switches_and_cleans_shadow_index(
     assert after == "index_run_shadow"
     assert harness.object_record("obj_active") is None
     assert harness.object_record("obj_shadow") is not None
+
+
+def test_object_index_repository_contract_persists_empty_shadow_active_pointer(
+    harness: ObjectIndexHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        before = harness.repository.active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+        )
+        harness.repository.switch_active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+            index_version="index_run_empty",
+            updated_at="2026-06-10T00:04:00Z",
+        )
+        after = harness.repository.active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+        )
+
+    assert before == "active"
+    assert after == "index_run_empty"
+    assert harness.object_record("obj_active") is None
 
 
 def test_object_index_repository_contract_reads_link_types_and_upserts_links(

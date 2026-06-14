@@ -61,6 +61,27 @@ class SqlAlchemyObjectIndexRepository:
         )
 
     def active_index_version(self, *, transaction: Any, tenant_id: str, object_type_id: str) -> str:
+        pointer = self._active_index_pointer(transaction, tenant_id, object_type_id)
+        if pointer is not None:
+            return pointer
+        return self._legacy_active_index_version(transaction, tenant_id, object_type_id)
+
+    def _active_index_pointer(self, transaction: Any, tenant_id: str, object_type_id: str) -> str | None:
+        row = (
+            transaction.execute(
+                select(db.object_index_versions.c.active_index_version).where(
+                    and_(
+                        db.object_index_versions.c.tenant_id == tenant_id,
+                        db.object_index_versions.c.object_type_id == object_type_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return str(row["active_index_version"]) if row else None
+
+    def _legacy_active_index_version(self, transaction: Any, tenant_id: str, object_type_id: str) -> str:
         row = (
             transaction.execute(
                 select(db.object_records.c.index_version)
@@ -380,6 +401,37 @@ class SqlAlchemyObjectIndexRepository:
             .values(is_active=False, updated_at=updated_at)
         )
         self._activate_index_version(transaction, tenant_id, object_type_id, index_version, updated_at)
+        self._upsert_active_index_pointer(transaction, tenant_id, object_type_id, index_version, updated_at)
+
+    def _upsert_active_index_pointer(
+        self,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+        updated_at: str,
+    ) -> None:
+        updated = transaction.execute(
+            update(db.object_index_versions)
+            .where(
+                and_(
+                    db.object_index_versions.c.tenant_id == tenant_id,
+                    db.object_index_versions.c.object_type_id == object_type_id,
+                )
+            )
+            .values(active_index_version=index_version, updated_at=updated_at)
+        )
+        if updated.rowcount:
+            return
+        transaction.execute(
+            insert(db.object_index_versions).values(
+                id=_active_index_pointer_id(tenant_id, object_type_id),
+                tenant_id=tenant_id,
+                object_type_id=object_type_id,
+                active_index_version=index_version,
+                updated_at=updated_at,
+            )
+        )
 
     def _activate_index_version(
         self,
@@ -440,3 +492,7 @@ class SqlAlchemyObjectIndexRepository:
                 )
             )
         )
+
+
+def _active_index_pointer_id(tenant_id: str, object_type_id: str) -> str:
+    return f"object_index_version:{tenant_id}:{object_type_id}"

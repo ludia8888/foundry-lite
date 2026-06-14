@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.ports import TabularRow
 from foundry_lite.domain.context import RequestContext, demo_admin_context
+from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.adapters.compute import DuckDBComputeAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from sqlalchemy import select
+
+
+class EmptyReindexReadComputeAdapter(DuckDBComputeAdapter):
+    def __init__(self) -> None:
+        self.force_empty_reads = False
+
+    def rows_from_parquet(self, parquet_path: Path) -> list[TabularRow]:
+        if self.force_empty_reads:
+            return []
+        return super().rows_from_parquet(parquet_path)
 
 
 def test_cdc_object_indexing_updates_tombstones_and_skips_stale_events(tmp_path: Path) -> None:
@@ -67,6 +82,28 @@ def test_cdc_object_indexing_inserts_new_object_and_new_tombstone(tmp_path: Path
     assert delete_result["objects_deleted"] == 1
     assert deleted.get("deleted") is True
     assert deleted.get("deletionReason") == "source_deleted"
+
+
+def test_empty_shadow_reindex_persists_active_pointer_for_next_cdc_insert(tmp_path: Path) -> None:
+    compute = EmptyReindexReadComputeAdapter()
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    core = FoundryLiteCore(dependencies=replace(dependencies, compute_adapter=compute))
+    ctx = demo_admin_context()
+    _seed_order_snapshot(core, tmp_path, ctx)
+    core.apply_ontology(str(_order_ontology(tmp_path)), ctx=ctx)
+
+    compute.force_empty_reads = True
+    shadow = core.index_shadow_rebuild("Order", ctx=ctx)
+    create = _cdc_event("topic:0:30", "c", 30, after={"order_id": "O-4004", "status": "NEW", "amount": 88})
+    create_result = core.index_cdc_events("Order", [create], ctx=ctx)
+    created = core.get_object("Order", "O-4004", ctx=ctx)
+    stored_index_version = _object_index_version(core, ctx, "O-4004")
+
+    assert shadow["is_switched"] is True
+    assert shadow["validation"]["expectedCount"] == shadow["validation"]["actualCount"] == 0
+    assert create_result["objects_upserted"] == 1
+    assert created["properties"]["status"] == "NEW"
+    assert stored_index_version == shadow["indexVersion"]
 
 
 def _seed_order_snapshot(core: FoundryLiteCore, tmp_path: Path, ctx: RequestContext) -> None:
@@ -142,3 +179,15 @@ def _object_changed_count(core: FoundryLiteCore, ctx: RequestContext, object_id:
 
 def _index_run(core: FoundryLiteCore, ctx: RequestContext, run_id: str) -> dict[str, object]:
     return dict(next(row for row in core.query_runs(ctx=ctx, run_type="index")["indexRuns"] if row["id"] == run_id))
+
+
+def _object_index_version(core: FoundryLiteCore, ctx: RequestContext, object_id: str) -> str:
+    with core.engine.begin() as conn:
+        row = conn.execute(
+            select(db.object_records.c.index_version).where(
+                db.object_records.c.tenant_id == ctx.tenant_id,
+                db.object_records.c.object_type_api_name == "Order",
+                db.object_records.c.object_id == object_id,
+            )
+        ).scalar_one()
+    return str(row)
