@@ -544,6 +544,12 @@ outbox insert가 같은 transaction scope에 있는지 정적으로 강제하는
 각 반복 결과를 `artifacts/quality/flaky_detector.json`에 남긴다. 한 번이라도 실패하거나
 통과 요약이 달라지면 release gate가 실패한다. 비개발자 관점으로 말하면, "한 번은
 우연히 초록불이었지만 다시 돌리면 깨지는 테스트"를 그대로 통과시키지 않는 안전장치다.
+다만 이 게이트는 이미 suite에 들어온 테스트가 실행 순서/랜덤 seed/parallel worker 차이로
+흔들리는지를 보는 장치다. 아직 테스트로 모델링하지 않은 동시성 interleaving, 예를 들어
+두 shadow promotion이 같은 object type의 첫 `object_index_versions` pointer를 동시에 만드는
+경우는 flaky detector가 자동으로 발명해서 잡지 못한다. 그런 문제는 별도의 contract/integration
+test가 경합 스케줄을 직접 만들어야 하며, 그 테스트가 들어온 뒤에야 flaky detector가 반복 안정성을
+감시할 수 있다.
 
 검사 기준:
 - 기본 명령은 `uv run pytest tests -n auto --no-header -q`이다.

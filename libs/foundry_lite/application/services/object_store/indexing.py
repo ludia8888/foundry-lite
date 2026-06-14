@@ -223,13 +223,23 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
         validation: ObjectIndexValidationResult,
     ) -> None:
         now = _now()
-        self.object_index_repository.switch_active_index_version(
+        switched = self.object_index_repository.switch_active_index_version(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             object_type_id=plan.object_type["id"],
             index_version=plan.index_version,
             updated_at=now,
+            expected_previous_index_version=plan.previous_index_version,
         )
+        if not switched:
+            raise ValidationFailed(
+                "shadow index active version changed during switch",
+                details={
+                    "objectType": plan.object_type["api_name"],
+                    "expectedPreviousIndexVersion": plan.previous_index_version,
+                    "attemptedIndexVersion": plan.index_version,
+                },
+            )
         self._mark_index_run_succeeded(conn, ctx, plan.run_id, counts)
         self._audit_shadow_index_switch(conn, ctx, plan, validation)
 
