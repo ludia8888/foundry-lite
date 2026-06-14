@@ -28,7 +28,7 @@
 | `PR-11` | Sprint 39 live Debezium PostgreSQL CDC topic proof plus Operations failure/lag evidence | [PR #11](https://github.com/ludia8888/foundry-lite/pull/11), [67eccb5824975d970c3aa64c2fcfd86ed49236fd](https://github.com/ludia8888/foundry-lite/commit/67eccb5824975d970c3aa64c2fcfd86ed49236fd) | 2026-06-14 KST |
 | `PR-12` | Sprint 40 CDC object indexing, tombstone delete, replay/stale skip, and object.changed trigger proof | [PR #12](https://github.com/ludia8888/foundry-lite/pull/12), [f19bad9ad77f1cd8fea5de982bdafd5993c5099c](https://github.com/ludia8888/foundry-lite/commit/f19bad9ad77f1cd8fea5de982bdafd5993c5099c) | 2026-06-14 08:48 KST |
 | `PR-14` | Sprint 41 shadow reindex, active index pointer, count/hash validation, and action-edit replay proof | [PR #14](https://github.com/ludia8888/foundry-lite/pull/14), [b292e63956a910b1614d66851edcd6489a36897b](https://github.com/ludia8888/foundry-lite/commit/b292e63956a910b1614d66851edcd6489a36897b), [5b00d9c027cc8d7669c4d4d309d924e0bdf2f791](https://github.com/ludia8888/foundry-lite/commit/5b00d9c027cc8d7669c4d4d309d924e0bdf2f791) | 2026-06-14 11:15 KST |
-| `PR-16` | Sprint 42 OpenSearch-compatible search projection, query planner branch, rebuild CLI, and drift detection proof | [branch `codex/sprint42-search-adapter`](https://github.com/ludia8888/foundry-lite/tree/codex/sprint42-search-adapter) | Open PR, merge pending |
+| `PR-16` | Sprint 42 OpenSearch-compatible search projection, query planner branch, rebuild CLI, and drift detection proof | [PR #16](https://github.com/ludia8888/foundry-lite/pull/16), [5b9b0cac557d6f90914070f54881a3ac35a26354](https://github.com/ludia8888/foundry-lite/commit/5b9b0cac557d6f90914070f54881a3ac35a26354) | Open PR, merge pending |
 | `GATE-FOUNDATION` | 품질 게이트, release gate, infra boundary hardening | [e1fc49e81c2262c69321eaf6b991f425969b6e35](https://github.com/ludia8888/foundry-lite/commit/e1fc49e81c2262c69321eaf6b991f425969b6e35) | main history |
 | `AUTH-PORT` | `AuthProvider` port, HeaderTrust/Demo local adapters | [b14c70f843dc0faedbde72f5639a28f15389de09](https://github.com/ludia8888/foundry-lite/commit/b14c70f843dc0faedbde72f5639a28f15389de09) | main history |
 | `OBJECT-READ-PORT` | `ObjectReadRepository` boundary extraction | [87a08d7b79795354d3d8782981746978e6e1d07c](https://github.com/ludia8888/foundry-lite/commit/87a08d7b79795354d3d8782981746978e6e1d07c) | main history |
@@ -307,11 +307,11 @@ No Sprint 02A Scale Foundation evidence item remains open in the current checkou
 
 | Evidence id | Checkbox meaning | Git / test evidence | Current status |
 |---|---|---|---|
-| `S42-A1` | searchable property full-text query executes through the OpenSearch-compatible search path | `PR-16`; `VERIFY-SEARCH-INDEXING`; `OpenSearchAdapter`; `ObjectQueryRequest.search`; `ObjectQueryService` search planner branch | Done in open PR |
-| `S42-A2` | object edit after `object.changed` consumption updates the search index | `PR-16`; `VERIFY-SEARCH-INDEXING`; `FoundryLiteCore.index_search_object_changed`; `flite index consume-search-change`; `tests/integration/test_search_indexing.py` | Done in open PR |
-| `S42-A3` | search index failure does not block get by id or basic Postgres filter | `PR-16`; `VERIFY-SEARCH-INDEXING`; `FailingSearchAdapter` integration proof | Done in open PR |
-| `S42-A4` | search index rebuild result count matches active `object_records` | `PR-16`; `VERIFY-SEARCH-INDEXING`; `FoundryLiteCore.index_search_rebuild`; `flite index rebuild-search` | Done in open PR |
-| `S42-A5` | search documents that exist only in OpenSearch are detected as orphan drift | `PR-16`; `VERIFY-SEARCH-INDEXING`; `orphanDocumentIds` assertion | Done in open PR |
+| `S42-A1` | searchable property full-text query executes through the OpenSearch-compatible search path | `PR-16`; `VERIFY-SEARCH-INDEXING`; `OpenSearchAdapter`; `ObjectQueryRequest.search`; `ObjectQueryService` search planner branch | Done in PR #16, merge pending |
+| `S42-A2` | object edit after `object.changed` consumption updates the search index | `PR-16`; `VERIFY-SEARCH-INDEXING`; `FoundryLiteCore.index_search_object_changed`; `flite index consume-search-change`; `tests/integration/test_search_indexing.py` | Done in PR #16, merge pending |
+| `S42-A3` | search index failure does not block get by id or basic Postgres filter | `PR-16`; `VERIFY-SEARCH-INDEXING`; `FailingSearchAdapter` integration proof | Done in PR #16, merge pending |
+| `S42-A4` | search index rebuild result count matches active `object_records` | `PR-16`; `VERIFY-SEARCH-INDEXING`; `FoundryLiteCore.index_search_rebuild`; `flite index rebuild-search` | Done in PR #16, merge pending |
+| `S42-A5` | search documents that exist only in OpenSearch are detected as orphan drift | `PR-16`; `VERIFY-SEARCH-INDEXING`; `orphanDocumentIds` assertion | Done in PR #16, merge pending |
 
 ## Open / Not Yet Merged Scope
 
