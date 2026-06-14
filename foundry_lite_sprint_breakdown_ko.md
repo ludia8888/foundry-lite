@@ -1908,11 +1908,11 @@ Ontology mapping 변경이나 index corruption 상황에서 live read를 막지 
 
 **Acceptance Gate**
 
-- [ ] live Object Query 중 shadow reindex를 실행해도 reads가 계속 된다.
-- [ ] validation 성공 후 alias switch로 새 index가 serving된다.
-- [ ] validation 실패 시 기존 index가 유지된다.
-- [ ] reindex 후 object count/hash가 baseline과 일치한다.
-- [ ] action edits replay 후 current view가 기존과 같다.
+- [x] live Object Query 중 shadow reindex를 실행해도 reads가 계속 된다. ([S41-A1](./docs/sprint-evidence-ledger.md#s41-a1))
+- [x] validation 성공 후 alias switch로 새 index가 serving된다. ([S41-A2](./docs/sprint-evidence-ledger.md#s41-a2))
+- [x] validation 실패 시 기존 index가 유지된다. ([S41-A3](./docs/sprint-evidence-ledger.md#s41-a3))
+- [x] reindex 후 object count/hash가 baseline과 일치한다. ([S41-A4](./docs/sprint-evidence-ledger.md#s41-a4))
+- [x] action edits replay 후 current view가 기존과 같다. ([S41-A5](./docs/sprint-evidence-ledger.md#s41-a5))
 
 **Demo / Proof**
 

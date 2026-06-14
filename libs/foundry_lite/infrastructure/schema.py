@@ -314,6 +314,8 @@ object_records = Table(
     Column("object_type_id", String, nullable=False),
     Column("object_type_api_name", String, nullable=False),
     Column("object_id", String, nullable=False),
+    Column("index_version", String, nullable=False, default="active"),
+    Column("is_active", Boolean, nullable=False, default=True),
     Column("properties", JSON, nullable=False),
     Column("base_properties", JSON, nullable=False),
     Column("edit_properties", JSON, nullable=False),
@@ -325,7 +327,7 @@ object_records = Table(
     Column("deletion_reason", String),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
-    UniqueConstraint("tenant_id", "object_type_id", "object_id", name="uq_object_record"),
+    UniqueConstraint("tenant_id", "object_type_id", "object_id", "index_version", name="uq_object_record"),
 )
 
 object_links = Table(
@@ -335,6 +337,8 @@ object_links = Table(
     Column("tenant_id", String, nullable=False),
     Column("link_type_id", String, nullable=False),
     Column("link_type_api_name", String, nullable=False),
+    Column("index_version", String, nullable=False, default="active"),
+    Column("is_active", Boolean, nullable=False, default=True),
     Column("from_object_type_id", String, nullable=False),
     Column("from_api_name", String, nullable=False),
     Column("from_object_id", String, nullable=False),
@@ -347,7 +351,7 @@ object_links = Table(
     Column("deleted", Boolean, nullable=False),
     Column("deletion_reason", String),
     Column("updated_at", String, nullable=False),
-    UniqueConstraint("tenant_id", "link_type_id", "from_object_id", "to_object_id", name="uq_link"),
+    UniqueConstraint("tenant_id", "link_type_id", "from_object_id", "to_object_id", "index_version", name="uq_link"),
 )
 
 object_edits = Table(

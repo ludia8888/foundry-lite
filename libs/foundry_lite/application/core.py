@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
     LineageEdgeRow,
     ObjectIndexCdcResult,
     ObjectIndexRebuildResult,
+    ObjectIndexShadowRebuildResult,
     ObjectLinkPayload,
     ObjectPayload,
     ObjectQueryResult,
@@ -155,12 +156,7 @@ class FoundryLiteCore:
     def get_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> DatasetRow:
         return self._services.dataset.registry.get_dataset(dataset_ref, ctx=ctx)
 
-    def list_dataset_versions(
-        self,
-        dataset_ref: str,
-        *,
-        ctx: RequestContext | None = None,
-    ) -> list[DatasetVersionRow]:
+    def list_dataset_versions(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> list[DatasetVersionRow]:
         return self._services.dataset.registry.list_dataset_versions(dataset_ref, ctx=ctx)
 
     def preview_dataset(
@@ -174,11 +170,7 @@ class FoundryLiteCore:
         return self._services.dataset.registry.preview_dataset(dataset_ref, ctx=ctx, limit=limit, version=version)
 
     def inspect_dataset(
-        self,
-        dataset_ref: str,
-        *,
-        ctx: RequestContext | None = None,
-        version: str = "latest",
+        self, dataset_ref: str, *, ctx: RequestContext | None = None, version: str = "latest"
     ) -> DatasetInspectionPayload:
         return self._services.dataset.registry.inspect_dataset(dataset_ref, ctx=ctx, version=version)
 
@@ -293,19 +285,26 @@ class FoundryLiteCore:
         return self._services.ontology.apply_ontology(yaml_path, ctx=ctx)
 
     def index_rebuild(
+        self, object_type_api_name: str, *, ctx: RequestContext | None = None
+    ) -> ObjectIndexRebuildResult:
+        return self._services.object_store.indexing.index_rebuild(object_type_api_name, ctx=ctx)
+
+    def index_shadow_rebuild(
         self,
         object_type_api_name: str,
         *,
         ctx: RequestContext | None = None,
-    ) -> ObjectIndexRebuildResult:
-        return self._services.object_store.indexing.index_rebuild(object_type_api_name, ctx=ctx)
+        expected_count: int | None = None,
+        expected_hash: str | None = None,
+    ) -> ObjectIndexShadowRebuildResult:
+        return self._services.object_store.indexing.index_shadow_rebuild(
+            object_type_api_name,
+            ctx=ctx,
+            expected_count=expected_count,
+            expected_hash=expected_hash,
+        )
 
-    def index_replay_run(
-        self,
-        index_run_id: str,
-        *,
-        ctx: RequestContext | None = None,
-    ) -> ObjectIndexRebuildResult:
+    def index_replay_run(self, index_run_id: str, *, ctx: RequestContext | None = None) -> ObjectIndexRebuildResult:
         return self._services.object_store.indexing.index_replay_run(index_run_id, ctx=ctx)
 
     def index_cdc_events(
@@ -429,12 +428,7 @@ class FoundryLiteCore:
             simulate_writeback_failure=simulate_writeback_failure,
         )
 
-    def materialize(
-        self,
-        api_name: str,
-        *,
-        ctx: RequestContext | None = None,
-    ) -> CommitResult:
+    def materialize(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         return self._services.materialization.materialize(api_name, ctx=ctx)
 
     def lineage_for_resource(

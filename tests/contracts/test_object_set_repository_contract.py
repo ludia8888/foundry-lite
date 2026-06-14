@@ -87,6 +87,7 @@ class FakeObjectSetRepository:
             if row["tenant_id"] == tenant_id
             and row["object_type_api_name"] == object_type_api_name
             and row["object_id"] in object_ids
+            and row.get("is_active", True) is True
             and row["deleted"] is False
         }
 
@@ -105,6 +106,7 @@ class FakeObjectSetRepository:
             if row["tenant_id"] == tenant_id
             and row["object_type_api_name"] == object_type_api_name
             and row["object_id"] in object_ids
+            and row.get("is_active", True) is True
             and row["deleted"] is False
         ]
 
@@ -248,6 +250,8 @@ def _object_record_row(
     object_type_id: str = "ot_order",
     object_type_api_name: str = "Order",
     object_id: str = "O-1",
+    index_version: str = "active",
+    is_active: bool = True,
     deleted: bool = False,
 ) -> ObjectRecordRow:
     return {
@@ -256,6 +260,8 @@ def _object_record_row(
         "object_type_id": object_type_id,
         "object_type_api_name": object_type_api_name,
         "object_id": object_id,
+        "index_version": index_version,
+        "is_active": is_active,
         "properties": {"status": "PENDING"},
         "base_properties": {"status": "PENDING"},
         "edit_properties": {},
@@ -321,6 +327,12 @@ def test_object_set_repository_contract_reads_membership_and_metadata(
     harness.add_property_type(property_id="prop_amount", api_name="amount")
     harness.add_object_record(record_id="obj_order_1", object_id="O-1")
     harness.add_object_record(record_id="obj_order_2", object_id="O-2")
+    harness.add_object_record(
+        record_id="obj_shadow",
+        object_id="O-shadow",
+        index_version="index_run_shadow",
+        is_active=False,
+    )
     harness.add_object_record(record_id="obj_deleted", object_id="O-deleted", deleted=True)
     harness.add_object_record(record_id="obj_other_tenant", tenant_id="tenant-other", object_id="O-other")
     harness.add_object_record(
@@ -349,7 +361,7 @@ def test_object_set_repository_contract_reads_membership_and_metadata(
             transaction=transaction,
             tenant_id="tenant-demo",
             object_type_api_name="Order",
-            object_ids=["O-1", "O-2", "O-deleted", "O-other", "C-1"],
+            object_ids=["O-1", "O-2", "O-shadow", "O-deleted", "O-other", "C-1"],
         )
         records = harness.repository.active_object_records_by_ids(
             transaction=transaction,

@@ -25,6 +25,8 @@ class ObjectRecordRow(TypedDict):
     object_type_id: str
     object_type_api_name: str
     object_id: str
+    index_version: str
+    is_active: bool
     properties: dict[str, object]
     base_properties: dict[str, object]
     edit_properties: dict[str, object]
@@ -43,6 +45,8 @@ class ObjectLinkRow(TypedDict):
     tenant_id: str
     link_type_id: str
     link_type_api_name: str
+    index_version: str
+    is_active: bool
     from_object_type_id: str
     from_api_name: str
     from_object_id: str

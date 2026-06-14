@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
+from foundry_lite.application.ports.object_read_repository import ObjectRecordRow
 from foundry_lite.application.ports.ontology_repository import LinkTypeRow
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
@@ -18,6 +19,10 @@ class IndexRunSourceRef(TypedDict, total=False):
     replay_of_run_id: str
     cdc_dataset: str
     event_count: int
+    mode: str
+    index_version: str
+    baseline_count: int
+    baseline_hash: str
 
 
 class IndexRunCursor(TypedDict, total=False):
@@ -45,6 +50,8 @@ class ObjectIndexLinkRow(TypedDict):
     tenant_id: str
     link_type_id: str
     link_type_api_name: str
+    index_version: str
+    is_active: bool
     from_object_type_id: str
     from_api_name: str
     from_object_id: str
@@ -89,6 +96,30 @@ class ObjectIndexRebuildResult(TypedDict):
     objects_upserted: int
     objects_deleted: int
     links_upserted: int
+
+
+class ObjectIndexValidationResult(TypedDict):
+    """Count/hash validation proof for a shadow object index."""
+
+    expectedCount: int
+    actualCount: int
+    expectedHash: str
+    actualHash: str
+
+
+class ObjectIndexShadowRebuildResult(TypedDict):
+    """Public result returned after building and promoting a shadow index."""
+
+    index_run_id: str
+    object_type: str
+    indexVersion: str
+    previousIndexVersion: str
+    rows_read: int
+    objects_upserted: int
+    objects_deleted: int
+    links_upserted: int
+    is_switched: bool
+    validation: ObjectIndexValidationResult
 
 
 class ObjectIndexCdcResult(TypedDict):
@@ -140,6 +171,8 @@ class ObjectRecordInsert:
     deletion_reason: str | None
     created_at: str
     updated_at: str
+    index_version: str = "active"
+    is_active: bool = True
 
 
 @dataclass(frozen=True)
@@ -202,6 +235,8 @@ class ObjectLinkInsert:
     deleted: bool
     deletion_reason: str | None
     updated_at: str
+    index_version: str = "active"
+    is_active: bool = True
 
 
 class ObjectIndexRepository(Protocol):
@@ -219,6 +254,16 @@ class ObjectIndexRepository(Protocol):
 
     def create_index_run(self, *, transaction: TransactionContext, record: IndexRunRecord) -> None:
         """Persist a running index run row."""
+        ...
+
+    def active_index_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_id: str,
+    ) -> str:
+        """Return the currently serving object index version for one object type."""
         ...
 
     def mark_index_run_succeeded(
@@ -251,6 +296,29 @@ class ObjectIndexRepository(Protocol):
 
     def insert_object_record(self, *, transaction: TransactionContext, record: ObjectRecordInsert) -> None:
         """Insert a new object record."""
+        ...
+
+    def object_record_in_index(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_api_name: str,
+        object_id: str,
+        index_version: str,
+    ) -> ObjectRecordRow | None:
+        """Return one object record from a specific index version."""
+        ...
+
+    def object_records_for_index_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+    ) -> list[ObjectRecordRow]:
+        """Return all object rows for count/hash validation of one index version."""
         ...
 
     def update_object_record_from_source(
@@ -294,6 +362,7 @@ class ObjectIndexRepository(Protocol):
         link_type_id: str,
         from_object_id: str,
         to_object_id: str,
+        index_version: str,
     ) -> ObjectIndexLinkRow | None:
         """Return one object link by identity."""
         ...
@@ -313,4 +382,27 @@ class ObjectIndexRepository(Protocol):
 
     def insert_object_link(self, *, transaction: TransactionContext, record: ObjectLinkInsert) -> None:
         """Insert a new object link."""
+        ...
+
+    def switch_active_index_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+        updated_at: str,
+    ) -> None:
+        """Atomically switch one object type to a validated shadow index version."""
+        ...
+
+    def delete_inactive_index_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+    ) -> None:
+        """Delete one non-serving index version after its retention period."""
         ...

@@ -99,6 +99,8 @@ def _object_row(object_id: str, amount: float) -> ObjectRecordRow:
         "object_type_id": "ot_order",
         "object_type_api_name": "Order",
         "object_id": object_id,
+        "index_version": "active",
+        "is_active": True,
         "properties": {"amount": amount},
         "base_properties": {"amount": amount},
         "edit_properties": {},

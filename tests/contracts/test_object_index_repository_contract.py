@@ -18,6 +18,7 @@ from foundry_lite.application.ports import (
     ObjectLinkInsert,
     ObjectRecordCdcUpdate,
     ObjectRecordInsert,
+    ObjectRecordRow,
     ObjectRecordSourceUpdate,
 )
 from foundry_lite.application.ports.object_index_repository import IndexRunRow
@@ -62,6 +63,13 @@ class FakeObjectIndexRepository:
         del transaction
         self.index_runs[record.run_id] = _index_run_row(record)
 
+    def active_index_version(self, *, transaction: Any, tenant_id: str, object_type_id: str) -> str:
+        del transaction
+        for row in self.object_records.values():
+            if row["tenant_id"] == tenant_id and row["object_type_id"] == object_type_id and row["is_active"]:
+                return str(row["index_version"])
+        return "active"
+
     def mark_index_run_succeeded(
         self,
         *,
@@ -104,6 +112,43 @@ class FakeObjectIndexRepository:
     def insert_object_record(self, *, transaction: Any, record: ObjectRecordInsert) -> None:
         del transaction
         self.object_records[record.record_id] = _object_record_row(record)
+
+    def object_record_in_index(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        object_id: str,
+        index_version: str,
+    ) -> ObjectRecordRow | None:
+        del transaction
+        for row in self.object_records.values():
+            if (
+                row["tenant_id"] == tenant_id
+                and row["object_type_api_name"] == object_type_api_name
+                and row["object_id"] == object_id
+                and row["index_version"] == index_version
+            ):
+                return cast(ObjectRecordRow, dict(row))
+        return None
+
+    def object_records_for_index_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+    ) -> list[ObjectRecordRow]:
+        del transaction
+        return [
+            cast(ObjectRecordRow, dict(row))
+            for row in sorted(self.object_records.values(), key=lambda item: item["object_id"])
+            if row["tenant_id"] == tenant_id
+            and row["object_type_id"] == object_type_id
+            and row["index_version"] == index_version
+        ]
 
     def update_object_record_from_source(self, *, transaction: Any, record: ObjectRecordSourceUpdate) -> None:
         del transaction
@@ -163,6 +208,7 @@ class FakeObjectIndexRepository:
         link_type_id: str,
         from_object_id: str,
         to_object_id: str,
+        index_version: str,
     ) -> ObjectIndexLinkRow | None:
         del transaction
         for row in self.object_links.values():
@@ -171,6 +217,7 @@ class FakeObjectIndexRepository:
                 and row["link_type_id"] == link_type_id
                 and row["from_object_id"] == from_object_id
                 and row["to_object_id"] == to_object_id
+                and row["index_version"] == index_version
             ):
                 return cast(ObjectIndexLinkRow, dict(row))
         return None
@@ -198,6 +245,45 @@ class FakeObjectIndexRepository:
     def insert_object_link(self, *, transaction: Any, record: ObjectLinkInsert) -> None:
         del transaction
         self.object_links[record.link_id] = _link_row(record)
+
+    def switch_active_index_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+        updated_at: str,
+    ) -> None:
+        del transaction
+        for row in self.object_records.values():
+            if row["tenant_id"] == tenant_id and row["object_type_id"] == object_type_id:
+                row["is_active"] = row["index_version"] == index_version
+                row["updated_at"] = updated_at
+        for row in self.object_links.values():
+            if row["tenant_id"] == tenant_id and row["from_object_type_id"] == object_type_id:
+                row["is_active"] = row["index_version"] == index_version
+                row["updated_at"] = updated_at
+
+    def delete_inactive_index_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+    ) -> None:
+        del transaction
+        self.object_records = {
+            key: row
+            for key, row in self.object_records.items()
+            if not _matches_inactive_index(row, tenant_id, object_type_id, index_version)
+        }
+        self.object_links = {
+            key: row
+            for key, row in self.object_links.items()
+            if not _matches_inactive_link_index(row, tenant_id, object_type_id, index_version)
+        }
 
 
 @dataclass
@@ -286,7 +372,12 @@ def _index_run_record(run_id: str, *, status: str = "running") -> IndexRunRecord
     )
 
 
-def _object_insert_record(record_id: str = "obj_order_1") -> ObjectRecordInsert:
+def _object_insert_record(
+    record_id: str = "obj_order_1",
+    *,
+    index_version: str = "active",
+    is_active: bool = True,
+) -> ObjectRecordInsert:
     return ObjectRecordInsert(
         record_id=record_id,
         tenant_id="tenant-demo",
@@ -304,6 +395,8 @@ def _object_insert_record(record_id: str = "obj_order_1") -> ObjectRecordInsert:
         deletion_reason=None,
         created_at="2026-06-10T00:00:00Z",
         updated_at="2026-06-10T00:00:00Z",
+        index_version=index_version,
+        is_active=is_active,
     )
 
 
@@ -359,6 +452,8 @@ def _link_insert_record(
     to_object_id: str = "C-1",
     deleted: bool = False,
     link_version: int = 1,
+    index_version: str = "active",
+    is_active: bool = True,
 ) -> ObjectLinkInsert:
     return ObjectLinkInsert(
         link_id=link_id,
@@ -377,6 +472,8 @@ def _link_insert_record(
         deleted=deleted,
         deletion_reason="old source" if deleted else None,
         updated_at="2026-06-10T00:00:00Z",
+        index_version=index_version,
+        is_active=is_active,
     )
 
 
@@ -408,6 +505,8 @@ def _object_record_row(record: ObjectRecordInsert) -> dict[str, Any]:
         "object_type_id": record.object_type_id,
         "object_type_api_name": record.object_type_api_name,
         "object_id": record.object_id,
+        "index_version": record.index_version,
+        "is_active": record.is_active,
         "properties": record.properties,
         "base_properties": record.base_properties,
         "edit_properties": record.edit_properties,
@@ -466,6 +565,8 @@ def _link_row(record: ObjectLinkInsert) -> dict[str, Any]:
         "tenant_id": record.tenant_id,
         "link_type_id": record.link_type_id,
         "link_type_api_name": record.link_type_api_name,
+        "index_version": record.index_version,
+        "is_active": record.is_active,
         "from_object_type_id": record.from_object_type_id,
         "from_api_name": record.from_api_name,
         "from_object_id": record.from_object_id,
@@ -479,6 +580,24 @@ def _link_row(record: ObjectLinkInsert) -> dict[str, Any]:
         "deletion_reason": record.deletion_reason,
         "updated_at": record.updated_at,
     }
+
+
+def _matches_inactive_index(row: dict[str, Any], tenant_id: str, object_type_id: str, index_version: str) -> bool:
+    return (
+        row["tenant_id"] == tenant_id
+        and row["object_type_id"] == object_type_id
+        and row["index_version"] == index_version
+        and row["is_active"] is False
+    )
+
+
+def _matches_inactive_link_index(row: dict[str, Any], tenant_id: str, object_type_id: str, index_version: str) -> bool:
+    return (
+        row["tenant_id"] == tenant_id
+        and row["from_object_type_id"] == object_type_id
+        and row["index_version"] == index_version
+        and row["is_active"] is False
+    )
 
 
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
@@ -572,6 +691,56 @@ def test_object_index_repository_contract_writes_object_record_updates_and_confl
     assert conflicts[0]["edit_value"] == "APPROVED"
 
 
+def test_object_index_repository_contract_switches_and_cleans_shadow_index(
+    harness: ObjectIndexHarness,
+) -> None:
+    active = _object_insert_record("obj_active")
+    shadow = _object_insert_record("obj_shadow", index_version="index_run_shadow", is_active=False)
+    active_link = _link_insert_record(link_id="olink_active")
+    shadow_link = _link_insert_record(link_id="olink_shadow", index_version="index_run_shadow", is_active=False)
+
+    with harness.transaction() as transaction:
+        harness.repository.insert_object_record(transaction=transaction, record=active)
+        harness.repository.insert_object_record(transaction=transaction, record=shadow)
+        harness.repository.insert_object_link(transaction=transaction, record=active_link)
+        harness.repository.insert_object_link(transaction=transaction, record=shadow_link)
+        before = harness.repository.active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+        )
+        shadow_rows = harness.repository.object_records_for_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+            index_version="index_run_shadow",
+        )
+        harness.repository.switch_active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+            index_version="index_run_shadow",
+            updated_at="2026-06-10T00:04:00Z",
+        )
+        after = harness.repository.active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+        )
+        harness.repository.delete_inactive_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+            index_version="active",
+        )
+
+    assert before == "active"
+    assert [row["id"] for row in shadow_rows] == ["obj_shadow"]
+    assert after == "index_run_shadow"
+    assert harness.object_record("obj_active") is None
+    assert harness.object_record("obj_shadow") is not None
+
+
 def test_object_index_repository_contract_reads_link_types_and_upserts_links(
     harness: ObjectIndexHarness,
 ) -> None:
@@ -592,6 +761,7 @@ def test_object_index_repository_contract_reads_link_types_and_upserts_links(
             link_type_id="lt_order_customer",
             from_object_id="O-1",
             to_object_id="C-1",
+            index_version="active",
         )
         assert existing is not None
         harness.repository.refresh_object_link(
@@ -612,6 +782,7 @@ def test_object_index_repository_contract_reads_link_types_and_upserts_links(
             link_type_id="lt_order_customer",
             from_object_id="O-1",
             to_object_id="C-1",
+            index_version="active",
         )
 
     assert [row["api_name"] for row in link_types] == ["OrderCustomer"]

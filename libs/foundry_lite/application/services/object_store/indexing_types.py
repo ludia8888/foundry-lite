@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from foundry_lite.application.ports import (
     DatasetVersionRow,
     ObjectIndexCdcResult,
     ObjectIndexRebuildResult,
+    ObjectIndexShadowRebuildResult,
+    ObjectIndexValidationResult,
     ObjectPropertyMap,
+    ObjectRecordRow,
     ObjectTypeRow,
 )
 
@@ -18,6 +24,9 @@ class ObjectIndexRebuildPlan:
     object_type: ObjectTypeRow
     dataset_version: DatasetVersionRow
     source_dataset_version_id: str
+    mode: str
+    index_version: str
+    previous_index_version: str
 
 
 @dataclass(frozen=True)
@@ -52,6 +61,29 @@ class ObjectIndexCdcCounts:
     links_upserted: int
 
 
+@dataclass(frozen=True)
+class ObjectIndexStats:
+    object_count: int
+    object_hash: str
+
+
+def object_index_stats(records: Sequence[ObjectRecordRow]) -> ObjectIndexStats:
+    payload = [_validation_row(row) for row in sorted(records, key=lambda item: item["object_id"])]
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return ObjectIndexStats(object_count=len(payload), object_hash=hashlib.sha256(encoded.encode()).hexdigest())
+
+
+def _validation_row(row: ObjectRecordRow) -> dict[str, object]:
+    return {
+        "baseProperties": row["base_properties"],
+        "deleted": row["deleted"],
+        "deletionReason": row["deletion_reason"],
+        "editProperties": row["edit_properties"],
+        "objectId": row["object_id"],
+        "properties": row["properties"],
+    }
+
+
 def object_index_rebuild_response(
     plan: ObjectIndexRebuildPlan,
     counts: ObjectIndexRebuildCounts,
@@ -63,6 +95,25 @@ def object_index_rebuild_response(
         "objects_upserted": counts.objects_upserted,
         "objects_deleted": counts.objects_deleted,
         "links_upserted": counts.links_upserted,
+    }
+
+
+def object_index_shadow_response(
+    plan: ObjectIndexRebuildPlan,
+    counts: ObjectIndexRebuildCounts,
+    validation: ObjectIndexValidationResult,
+) -> ObjectIndexShadowRebuildResult:
+    return {
+        "index_run_id": plan.run_id,
+        "object_type": plan.object_type_api_name,
+        "indexVersion": plan.index_version,
+        "previousIndexVersion": plan.previous_index_version,
+        "rows_read": counts.rows_read,
+        "objects_upserted": counts.objects_upserted,
+        "objects_deleted": counts.objects_deleted,
+        "links_upserted": counts.links_upserted,
+        "is_switched": True,
+        "validation": validation,
     }
 
 

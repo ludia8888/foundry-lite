@@ -323,7 +323,7 @@ class MaterializationService(CoreService):
         records = [
             row
             for row in self.runtime_service._rows_for_tenant(conn, "object_records", ctx)
-            if row["object_type_api_name"] == "Order" and not row["deleted"]
+            if row["object_type_api_name"] == "Order" and row.get("is_active", True) and not row["deleted"]
         ]
         rows = [self._order_current_row(record) for record in records]
         return rows, [
