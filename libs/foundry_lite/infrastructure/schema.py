@@ -354,6 +354,17 @@ object_links = Table(
     UniqueConstraint("tenant_id", "link_type_id", "from_object_id", "to_object_id", "index_version", name="uq_link"),
 )
 
+object_index_versions = Table(
+    "object_index_versions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("object_type_id", String, nullable=False),
+    Column("active_index_version", String, nullable=False, default="active"),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "object_type_id", name="uq_object_index_version_active"),
+)
+
 object_edits = Table(
     "object_edits",
     metadata,
