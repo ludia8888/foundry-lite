@@ -141,7 +141,7 @@ def render_typescript(ontology: OntologyDef) -> str:
         "export type ObjectFilter = Record<string, unknown>;",
         (
             "export type ObjectQueryRequest = { filter?: ObjectFilter; "
-            "orderBy?: Array<Record<string, string>>; limit?: number; cursor?: string | null };"
+            "orderBy?: Array<Record<string, string>>; limit?: number; cursor?: string | null; search?: string | null };"
         ),
         "export type ObjectQueryResult<Item> = { items: Item[]; nextCursor: string | null };",
         "export type ActionApplyResponse = { status: string; actionRunId?: string; object?: Record<string, unknown> };",

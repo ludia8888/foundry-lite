@@ -8,7 +8,13 @@ from foundry_lite.application.ports.connector_adapter import (
     ConnectorSnapshot,
     ConnectorSnapshotRequest,
 )
-from foundry_lite.application.ports.search_adapter import SearchAdapter, SearchDocument, SearchHit, SearchQuery
+from foundry_lite.application.ports.search_adapter import (
+    SearchAdapter,
+    SearchDocument,
+    SearchHit,
+    SearchIndexMapping,
+    SearchQuery,
+)
 from foundry_lite.application.ports.stream_adapter import StreamAdapter, StreamEvent, StreamPublishRequest
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter, WorkflowRun, WorkflowStartRequest
 
@@ -123,13 +129,21 @@ class LocalSearchAdapter:
 
     def __init__(self) -> None:
         self._documents: dict[tuple[str, str, str], SearchDocument] = {}
+        self._mappings: dict[tuple[str, str], SearchIndexMapping] = {}
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
             adapter_profile=self.profile_name,
             modes=(
+                AdapterFailureMode("configure_index", "unavailable", True, "Search index mapping is unavailable."),
                 AdapterFailureMode("upsert_document", "unavailable", True, "Search index write is unavailable."),
                 AdapterFailureMode("delete_document", "unavailable", True, "Search index delete is unavailable."),
+                AdapterFailureMode(
+                    "document_ids",
+                    "unavailable",
+                    True,
+                    "Search index consistency read is unavailable.",
+                ),
                 AdapterFailureMode(
                     "search",
                     "timeout",
@@ -143,8 +157,18 @@ class LocalSearchAdapter:
     def upsert_document(self, document: SearchDocument) -> None:
         self._documents[(document.tenant_id, document.object_type, document.document_id)] = document
 
+    def configure_index(self, mapping: SearchIndexMapping) -> None:
+        self._mappings[(mapping.tenant_id, mapping.object_type)] = mapping
+
     def delete_document(self, *, tenant_id: str, object_type: str, document_id: str) -> None:
         self._documents.pop((tenant_id, object_type, document_id), None)
+
+    def document_ids(self, *, tenant_id: str, object_type: str) -> list[str]:
+        return sorted(
+            document_id
+            for doc_tenant, doc_type, document_id in self._documents
+            if doc_tenant == tenant_id and doc_type == object_type
+        )
 
     def search(self, query: SearchQuery) -> list[SearchHit]:
         matches = [
@@ -158,7 +182,25 @@ class LocalSearchAdapter:
         tenant_id, object_type, _ = key
         if tenant_id != query.tenant_id or object_type != query.object_type:
             return False
-        return all(document.properties.get(name) == value for name, value in query.terms.items())
+        return _matches_terms(document, query) and _matches_full_text(
+            document, query, self._mappings.get((query.tenant_id, query.object_type))
+        )
+
+
+def _matches_terms(document: SearchDocument, query: SearchQuery) -> bool:
+    return all(document.properties.get(name) == value for name, value in query.terms.items())
+
+
+def _matches_full_text(
+    document: SearchDocument,
+    query: SearchQuery,
+    mapping: SearchIndexMapping | None,
+) -> bool:
+    if query.text is None:
+        return True
+    fields = query.searchable_properties or (mapping.searchable_properties if mapping else tuple(document.properties))
+    needle = query.text.casefold()
+    return any(needle in str(document.properties.get(field, "")).casefold() for field in fields)
 
 
 class FakeSearchAdapter(LocalSearchAdapter):

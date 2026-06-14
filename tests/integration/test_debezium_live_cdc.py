@@ -46,6 +46,7 @@ def test_live_debezium_postgres_changes_archive_through_worker(tmp_path: Path) -
             _wait_for_connect(connect)
             _register_postgres_connector(connect, name=connector_name, topic_prefix=topic_prefix, suffix=suffix)
             _wait_for_connector_running(connect, connector_name)
+            _wait_for_replication_slot(postgres, _replication_slot_name(suffix))
             _write_order_changes(postgres)
             _wait_for_cdc_events(kafka.get_bootstrap_server(), topic)
 
@@ -179,8 +180,8 @@ def _register_postgres_connector(
                 "topic.prefix": topic_prefix,
                 "table.include.list": "public.orders",
                 "plugin.name": "pgoutput",
-                "slot.name": f"foundry_lite_{suffix[:24]}",
-                "publication.name": f"foundry_lite_pub_{suffix[:20]}",
+                "slot.name": _replication_slot_name(suffix),
+                "publication.name": _publication_name(suffix),
                 "publication.autocreate.mode": "filtered",
                 "snapshot.mode": "no_data",
                 "tombstones.on.delete": "false",
@@ -200,10 +201,28 @@ def _wait_for_connector_running(connect: DockerContainer, name: str) -> None:
         return (
             status.get("connector", {}).get("state") == "RUNNING"
             and isinstance(tasks, list)
+            and bool(tasks)
             and all(isinstance(task, Mapping) and task.get("state") == "RUNNING" for task in tasks)
         )
 
     _wait_until(running)
+
+
+def _wait_for_replication_slot(postgres: PostgresContainer, slot_name: str) -> None:
+    def slot_exists() -> bool:
+        engine = create_engine(postgres.get_connection_url(), future=True)
+        try:
+            with engine.begin() as conn:
+                return bool(
+                    conn.execute(
+                        text("SELECT 1 FROM pg_replication_slots WHERE slot_name = :slot_name"),
+                        {"slot_name": slot_name},
+                    ).scalar()
+                )
+        finally:
+            engine.dispose()
+
+    _wait_until(slot_exists)
 
 
 def _wait_for_cdc_events(bootstrap_servers: str, topic: str) -> None:
@@ -232,6 +251,14 @@ def _wait_for_cdc_events(bootstrap_servers: str, topic: str) -> None:
         return [event.payload["op"] for event in events] == ["c", "u", "d"]
 
     _wait_until(has_expected_events)
+
+
+def _replication_slot_name(suffix: str) -> str:
+    return f"foundry_lite_{suffix[:24]}"
+
+
+def _publication_name(suffix: str) -> str:
+    return f"foundry_lite_pub_{suffix[:20]}"
 
 
 def _connect_ready(connect: DockerContainer) -> bool:

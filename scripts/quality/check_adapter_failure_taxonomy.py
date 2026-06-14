@@ -33,6 +33,8 @@ from foundry_lite.infrastructure.adapters import (  # noqa: E402
     LocalSearchAdapter,
     LocalStreamAdapter,
     LocalWorkflowAdapter,
+    OpenSearchAdapter,
+    OpenSearchAdapterConfig,
     RestPullConnectorAdapter,
 )
 from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthProvider  # noqa: E402
@@ -52,6 +54,7 @@ REQUIRED_PROFILES = frozenset(
         "debezium-postgres-stream",
         "local-search",
         "fake-search",
+        "opensearch",
         "local-connector",
         "fake-connector",
         "rest-pull-connector",
@@ -92,6 +95,7 @@ def load_contracts() -> tuple[AdapterFailureContract, ...]:
             ),
             LocalSearchAdapter(),
             FakeSearchAdapter(),
+            OpenSearchAdapter(OpenSearchAdapterConfig(endpoint="http://search:9200")),
             LocalConnectorAdapter(),
             FakeConnectorAdapter(),
             RestPullConnectorAdapter(),

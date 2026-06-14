@@ -1947,15 +1947,15 @@ PostgreSQL JSONB query의 한계를 넘는 full-text/search-heavy object type을
 
 **Acceptance Gate**
 
-- [ ] searchable property full-text query가 OpenSearch로 실행된다.
-- [ ] object edit 후 search index가 업데이트된다.
-- [ ] OpenSearch 장애 시 get by id와 basic Postgres filter는 계속 동작한다.
-- [ ] search index rebuild 결과가 object_records count와 맞는다.
-- [ ] OpenSearch에만 있고 object store에 없는 document를 detect할 수 있다.
+- [x] searchable property full-text query가 OpenSearch로 실행된다. ([S42-A1](./docs/sprint-evidence-ledger.md#s42-a1))
+- [x] object edit 후 search index가 업데이트된다. ([S42-A2](./docs/sprint-evidence-ledger.md#s42-a2))
+- [x] OpenSearch 장애 시 get by id와 basic Postgres filter는 계속 동작한다. ([S42-A3](./docs/sprint-evidence-ledger.md#s42-a3))
+- [x] search index rebuild 결과가 object_records count와 맞는다. ([S42-A4](./docs/sprint-evidence-ledger.md#s42-a4))
+- [x] OpenSearch에만 있고 object store에 없는 document를 detect할 수 있다. ([S42-A5](./docs/sprint-evidence-ledger.md#s42-a5))
 
 **Demo / Proof**
 
-Order notes/full-text 검색을 OpenSearch로 수행하고 rebuild-search를 실행한다.
+Order `operatorNote`를 searchable property로 표시하고, `ObjectQueryService`가 `search` payload를 `SearchIndexAdapter` 경로로 분기한다. `OpenSearchAdapter`는 ontology indexed/searchable mapping으로 index mapping을 만들며, `flite index rebuild-search Order`와 `FoundryLiteCore.index_search_rebuild`는 object store의 active `object_records`를 검색 projection으로 다시 쓴 뒤 count 및 orphan document drift를 확인한다. `object.changed` 소비 경로는 `FoundryLiteCore.index_search_object_changed`와 `flite index consume-search-change Order <object-id>`로 증명한다.
 
 **이러면 성공으로 치지 않는다**
 

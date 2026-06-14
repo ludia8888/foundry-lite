@@ -14,6 +14,7 @@ from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamAdapterConfig,
     KafkaStreamSubscription,
 )
+from foundry_lite.infrastructure.adapters.opensearch_search import OpenSearchAdapter, OpenSearchAdapterConfig
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
 from foundry_lite.infrastructure.adapters.scale_foundation import (
     FakeConnectorAdapter,
@@ -44,5 +45,7 @@ __all__ = [
     "LocalSearchAdapter",
     "LocalStreamAdapter",
     "LocalWorkflowAdapter",
+    "OpenSearchAdapter",
+    "OpenSearchAdapterConfig",
     "RestPullConnectorAdapter",
 ]

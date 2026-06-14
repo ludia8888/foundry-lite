@@ -5,6 +5,7 @@ from typing import Protocol
 
 from foundry_lite.application.ports import (
     LineageEdgeRow,
+    ObjectQueryResult,
     ObjectRecordRow,
     ObjectTypeRow,
     PropertyTypeRow,
@@ -54,3 +55,14 @@ class ObjectQueryOntologyLookup(Protocol):
         conn: TransactionContext,
         object_type_id: str,
     ) -> Sequence[PropertyTypeRow]: ...
+
+
+class ObjectSearchQueryPlanner(Protocol):
+    def search_objects(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext,
+        search_text: str,
+        limit: int,
+    ) -> ObjectQueryResult: ...

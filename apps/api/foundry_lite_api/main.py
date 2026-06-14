@@ -91,6 +91,7 @@ class ObjectQueryRequest(BaseModel):
     order_by: list[dict[str, str]] | None = Field(default=None, alias="orderBy")
     limit: int = 50
     cursor: str | None = None
+    search_text: str | None = Field(default=None, alias="search")
 
 
 class WebhookPayloadRequest(BaseModel):
@@ -225,6 +226,7 @@ def query_objects(request: Request, object_type: str, payload: ObjectQueryReques
             order_by=payload.order_by,
             limit=payload.limit,
             cursor=payload.cursor,
+            search_text=payload.search_text,
         )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc

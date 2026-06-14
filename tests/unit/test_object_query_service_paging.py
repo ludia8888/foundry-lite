@@ -52,7 +52,12 @@ def test_object_query_service_requests_db_keyset_page_with_one_row_lookahead() -
     repository = _PagedObjectRepository()
     service = ObjectQueryService(engine=_FakeEngine(), policy=_AllowPolicy(), object_read_repository=repository)
     service.bind_collaborators(
-        {"object_records_service": object(), "runtime_service": object(), "ontology_service": _OntologyLookup()}
+        {
+            "object_records_service": object(),
+            "runtime_service": object(),
+            "ontology_service": _OntologyLookup(),
+            "object_search_service": object(),
+        }
     )
 
     result = service.query_objects(
@@ -75,7 +80,12 @@ def test_object_query_service_rejects_missing_filter_and_order_properties() -> N
         object_read_repository=_PagedObjectRepository(),
     )
     service.bind_collaborators(
-        {"object_records_service": object(), "runtime_service": object(), "ontology_service": _OntologyLookup()}
+        {
+            "object_records_service": object(),
+            "runtime_service": object(),
+            "ontology_service": _OntologyLookup(),
+            "object_search_service": object(),
+        }
     )
 
     with pytest.raises(ValidationFailed, match="missing property"):

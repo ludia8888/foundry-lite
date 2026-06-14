@@ -8,6 +8,7 @@ from foundry_lite.application.services.object_store.indexing import ObjectIndexi
 from foundry_lite.application.services.object_store.links import ObjectLinksService
 from foundry_lite.application.services.object_store.query import ObjectQueryService
 from foundry_lite.application.services.object_store.records import ObjectRecordsService
+from foundry_lite.application.services.object_store.search import ObjectSearchService
 from foundry_lite.application.services.object_store.sets import ObjectSetsService
 
 
@@ -19,6 +20,7 @@ class ObjectServices:
     links: ObjectLinksService
     query: ObjectQueryService
     records: ObjectRecordsService
+    search: ObjectSearchService
     sets: ObjectSetsService
 
     @classmethod
@@ -28,8 +30,9 @@ class ObjectServices:
             links=build_service(ObjectLinksService, dependencies),
             query=build_service(ObjectQueryService, dependencies),
             records=build_service(ObjectRecordsService, dependencies),
+            search=build_service(ObjectSearchService, dependencies),
             sets=build_service(ObjectSetsService, dependencies),
         )
 
     def items(self) -> tuple[CoreService, ...]:
-        return (self.indexing, self.links, self.query, self.records, self.sets)
+        return (self.indexing, self.links, self.query, self.records, self.search, self.sets)

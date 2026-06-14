@@ -47,15 +47,8 @@ from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.observability.tracing import trace_public_methods
 
-__all__ = [
-    "CommitResult",
-    "FoundryLiteCore",
-    "StagedFileStats",
-    "_dataset_ref_parts",
-    "_json_ready",
-    "_normalize_duckdb_type",
-    "_required_row",
-]
+__all__ = ["CommitResult", "FoundryLiteCore", "StagedFileStats", "_dataset_ref_parts"]
+__all__ += ["_json_ready", "_normalize_duckdb_type", "_required_row"]
 
 
 @trace_public_methods
@@ -316,6 +309,16 @@ class FoundryLiteCore:
     ) -> ObjectIndexCdcResult:
         return self._services.object_store.indexing.index_cdc_events(object_type_api_name, events, ctx=ctx)
 
+    def index_search_rebuild(
+        self, object_type_api_name: str, *, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self._services.object_store.search.index_search_rebuild(object_type_api_name, ctx=ctx)
+
+    def index_search_object_changed(
+        self, object_type_api_name: str, object_id: str, *, ctx: RequestContext | None = None
+    ) -> dict[str, object]:
+        return self._services.object_store.search.index_search_object_changed(object_type_api_name, object_id, ctx=ctx)
+
     def get_links(
         self,
         object_type_api_name: str,
@@ -350,6 +353,7 @@ class FoundryLiteCore:
         order_by: Sequence[Mapping[str, str]] | None = None,
         limit: int = 50,
         cursor: str | None = None,
+        search_text: str | None = None,
     ) -> ObjectQueryResult:
         return self._services.object_store.query.query_objects(
             object_type_api_name,
@@ -358,6 +362,7 @@ class FoundryLiteCore:
             order_by=order_by,
             limit=limit,
             cursor=cursor,
+            search_text=search_text,
         )
 
     def create_object_set(
