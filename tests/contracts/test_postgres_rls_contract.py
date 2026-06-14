@@ -93,6 +93,8 @@ def _object_row(row_id: str, tenant_id: str) -> dict[str, object]:
         "object_type_id": f"order-type-{tenant_id}",
         "object_type_api_name": "Order",
         "object_id": f"order-{tenant_id}",
+        "index_version": "active",
+        "is_active": True,
         "properties": {"order_id": f"order-{tenant_id}"},
         "base_properties": {"order_id": f"order-{tenant_id}"},
         "edit_properties": {},

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, insert, select, update
+from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports import (
@@ -15,6 +15,7 @@ from foundry_lite.application.ports import (
     ObjectLinkInsert,
     ObjectRecordCdcUpdate,
     ObjectRecordInsert,
+    ObjectRecordRow,
     ObjectRecordSourceUpdate,
 )
 from foundry_lite.application.ports.object_index_repository import IndexRunRow
@@ -58,6 +59,25 @@ class SqlAlchemyObjectIndexRepository:
                 created_at=record.created_at,
             )
         )
+
+    def active_index_version(self, *, transaction: Any, tenant_id: str, object_type_id: str) -> str:
+        row = (
+            transaction.execute(
+                select(db.object_records.c.index_version)
+                .where(
+                    and_(
+                        db.object_records.c.tenant_id == tenant_id,
+                        db.object_records.c.object_type_id == object_type_id,
+                        db.object_records.c.is_active == True,  # noqa: E712
+                    )
+                )
+                .order_by(db.object_records.c.updated_at.desc(), db.object_records.c.index_version)
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        return str(row["index_version"]) if row else "active"
 
     def mark_index_run_succeeded(
         self,
@@ -109,6 +129,8 @@ class SqlAlchemyObjectIndexRepository:
                 object_type_id=record.object_type_id,
                 object_type_api_name=record.object_type_api_name,
                 object_id=record.object_id,
+                index_version=record.index_version,
+                is_active=record.is_active,
                 properties=record.properties,
                 base_properties=record.base_properties,
                 edit_properties=record.edit_properties,
@@ -122,6 +144,56 @@ class SqlAlchemyObjectIndexRepository:
                 updated_at=record.updated_at,
             )
         )
+
+    def object_record_in_index(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        object_id: str,
+        index_version: str,
+    ) -> ObjectRecordRow | None:
+        row = (
+            transaction.execute(
+                select(db.object_records).where(
+                    and_(
+                        db.object_records.c.tenant_id == tenant_id,
+                        db.object_records.c.object_type_api_name == object_type_api_name,
+                        db.object_records.c.object_id == object_id,
+                        db.object_records.c.index_version == index_version,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(ObjectRecordRow, dict(row)) if row else None
+
+    def object_records_for_index_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+    ) -> list[ObjectRecordRow]:
+        rows = (
+            transaction.execute(
+                select(db.object_records)
+                .where(
+                    and_(
+                        db.object_records.c.tenant_id == tenant_id,
+                        db.object_records.c.object_type_id == object_type_id,
+                        db.object_records.c.index_version == index_version,
+                    )
+                )
+                .order_by(db.object_records.c.object_id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(ObjectRecordRow, dict(row)) for row in rows]
 
     def update_object_record_from_source(
         self,
@@ -212,6 +284,7 @@ class SqlAlchemyObjectIndexRepository:
         link_type_id: str,
         from_object_id: str,
         to_object_id: str,
+        index_version: str,
     ) -> ObjectIndexLinkRow | None:
         row = (
             transaction.execute(
@@ -221,6 +294,7 @@ class SqlAlchemyObjectIndexRepository:
                         db.object_links.c.link_type_id == link_type_id,
                         db.object_links.c.from_object_id == from_object_id,
                         db.object_links.c.to_object_id == to_object_id,
+                        db.object_links.c.index_version == index_version,
                     )
                 )
             )
@@ -257,6 +331,8 @@ class SqlAlchemyObjectIndexRepository:
                 tenant_id=record.tenant_id,
                 link_type_id=record.link_type_id,
                 link_type_api_name=record.link_type_api_name,
+                index_version=record.index_version,
+                is_active=record.is_active,
                 from_object_type_id=record.from_object_type_id,
                 from_api_name=record.from_api_name,
                 from_object_id=record.from_object_id,
@@ -269,5 +345,98 @@ class SqlAlchemyObjectIndexRepository:
                 deleted=record.deleted,
                 deletion_reason=record.deletion_reason,
                 updated_at=record.updated_at,
+            )
+        )
+
+    def switch_active_index_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+        updated_at: str,
+    ) -> None:
+        transaction.execute(
+            update(db.object_records)
+            .where(
+                and_(
+                    db.object_records.c.tenant_id == tenant_id,
+                    db.object_records.c.object_type_id == object_type_id,
+                    db.object_records.c.is_active == True,  # noqa: E712
+                )
+            )
+            .values(is_active=False, updated_at=updated_at)
+        )
+        transaction.execute(
+            update(db.object_links)
+            .where(
+                and_(
+                    db.object_links.c.tenant_id == tenant_id,
+                    db.object_links.c.from_object_type_id == object_type_id,
+                    db.object_links.c.is_active == True,  # noqa: E712
+                )
+            )
+            .values(is_active=False, updated_at=updated_at)
+        )
+        self._activate_index_version(transaction, tenant_id, object_type_id, index_version, updated_at)
+
+    def _activate_index_version(
+        self,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+        updated_at: str,
+    ) -> None:
+        transaction.execute(
+            update(db.object_records)
+            .where(
+                and_(
+                    db.object_records.c.tenant_id == tenant_id,
+                    db.object_records.c.object_type_id == object_type_id,
+                    db.object_records.c.index_version == index_version,
+                )
+            )
+            .values(is_active=True, updated_at=updated_at)
+        )
+        transaction.execute(
+            update(db.object_links)
+            .where(
+                and_(
+                    db.object_links.c.tenant_id == tenant_id,
+                    db.object_links.c.from_object_type_id == object_type_id,
+                    db.object_links.c.index_version == index_version,
+                )
+            )
+            .values(is_active=True, updated_at=updated_at)
+        )
+
+    def delete_inactive_index_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        index_version: str,
+    ) -> None:
+        transaction.execute(
+            delete(db.object_records).where(
+                and_(
+                    db.object_records.c.tenant_id == tenant_id,
+                    db.object_records.c.object_type_id == object_type_id,
+                    db.object_records.c.index_version == index_version,
+                    db.object_records.c.is_active == False,  # noqa: E712
+                )
+            )
+        )
+        transaction.execute(
+            delete(db.object_links).where(
+                and_(
+                    db.object_links.c.tenant_id == tenant_id,
+                    db.object_links.c.from_object_type_id == object_type_id,
+                    db.object_links.c.index_version == index_version,
+                    db.object_links.c.is_active == False,  # noqa: E712
+                )
             )
         )

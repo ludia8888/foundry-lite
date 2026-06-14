@@ -240,6 +240,8 @@ def test_stream_archive_worker_script_is_exposed() -> None:
     assert '"quality:cdc-object-indexing"' in package_json
     assert "tests/unit/test_cdc_indexing.py" in package_json
     assert "tests/integration/test_cdc_object_indexing.py" in package_json
+    assert '"quality:shadow-reindex"' in package_json
+    assert "tests/integration/test_shadow_reindex.py" in package_json
 
 
 def test_router_layer_purity_is_release_gate_step() -> None:

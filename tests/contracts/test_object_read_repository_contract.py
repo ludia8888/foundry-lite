@@ -52,6 +52,7 @@ class FakeObjectReadRepository:
                 row["tenant_id"] == tenant_id
                 and row["object_type_api_name"] == object_type_api_name
                 and row["object_id"] == object_id
+                and row.get("is_active", True) is True
             ):
                 return cast(ObjectRecordRow, dict(row))
         return None
@@ -69,6 +70,7 @@ class FakeObjectReadRepository:
             for row in self.object_records
             if row["tenant_id"] == tenant_id
             and row["object_type_api_name"] == object_type_api_name
+            and row.get("is_active", True) is True
             and row["deleted"] is False
         ]
         return sorted(rows, key=lambda row: row["object_id"])
@@ -111,6 +113,7 @@ class FakeObjectReadRepository:
             for row in self.object_links
             if row["tenant_id"] == tenant_id
             and row["link_type_api_name"] == link_type_api_name
+            and row.get("is_active", True) is True
             and row["from_api_name"] == from_api_name
             and row["from_object_id"] == from_object_id
             and row["deleted"] is False
@@ -182,6 +185,8 @@ def _object_row(
     object_id: str = "O-1",
     deleted: bool = False,
     object_version: int = 1,
+    index_version: str = "active",
+    is_active: bool = True,
     properties: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
@@ -190,6 +195,8 @@ def _object_row(
         "object_type_id": object_type_id,
         "object_type_api_name": object_type_api_name,
         "object_id": object_id,
+        "index_version": index_version,
+        "is_active": is_active,
         "properties": properties or {"status": "PENDING"},
         "base_properties": properties or {"status": "PENDING"},
         "edit_properties": {},
@@ -215,12 +222,16 @@ def _link_row(
     to_api_name: str = "Customer",
     to_object_id: str = "C-1",
     deleted: bool = False,
+    index_version: str = "active",
+    is_active: bool = True,
 ) -> dict[str, Any]:
     return {
         "id": row_id,
         "tenant_id": tenant_id,
         "link_type_id": link_type_id,
         "link_type_api_name": link_type_api_name,
+        "index_version": index_version,
+        "is_active": is_active,
         "from_object_type_id": "ot_order",
         "from_api_name": from_api_name,
         "from_object_id": from_object_id,
@@ -479,6 +490,36 @@ def test_object_read_repository_contract_lists_active_rows_in_object_id_order(
     assert [row["object_id"] for row in rows] == ["O-1", "O-2"]
 
 
+def test_object_read_repository_contract_ignores_shadow_index_rows(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_object(row_id="obj_active", object_id="O-1", properties={"status": "ACTIVE"})
+    harness.add_object(
+        row_id="obj_shadow",
+        object_id="O-1",
+        properties={"status": "SHADOW"},
+        index_version="index_run_shadow",
+        is_active=False,
+    )
+
+    with harness.transaction() as transaction:
+        row = harness.repository.object_record(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            object_id="O-1",
+        )
+        rows = harness.repository.active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+        )
+
+    assert row is not None
+    assert row["properties"]["status"] == "ACTIVE"
+    assert [item["id"] for item in rows] == ["obj_active"]
+
+
 def test_object_read_repository_contract_queries_active_rows_with_db_keyset_page(
     harness: ObjectReadHarness,
 ) -> None:
@@ -571,6 +612,12 @@ def test_object_read_repository_contract_lists_active_outgoing_links(
     harness: ObjectReadHarness,
 ) -> None:
     harness.add_link(row_id="link_1", to_object_id="C-1")
+    harness.add_link(
+        row_id="link_shadow",
+        to_object_id="C-shadow",
+        index_version="index_run_shadow",
+        is_active=False,
+    )
     harness.add_link(row_id="link_deleted", to_object_id="C-deleted", deleted=True)
     harness.add_link(row_id="link_other_type", link_type_api_name="OrderWarehouse", to_object_id="W-1")
     harness.add_link(row_id="link_other_tenant", tenant_id="tenant-other", to_object_id="C-other")

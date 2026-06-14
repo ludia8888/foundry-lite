@@ -34,6 +34,7 @@ class SqlAlchemyObjectReadRepository:
                         db.object_records.c.tenant_id == tenant_id,
                         db.object_records.c.object_type_api_name == object_type_api_name,
                         db.object_records.c.object_id == object_id,
+                        db.object_records.c.is_active == True,  # noqa: E712
                     )
                 )
             )
@@ -56,6 +57,7 @@ class SqlAlchemyObjectReadRepository:
                     and_(
                         db.object_records.c.tenant_id == tenant_id,
                         db.object_records.c.object_type_api_name == object_type_api_name,
+                        db.object_records.c.is_active == True,  # noqa: E712
                         db.object_records.c.deleted == False,  # noqa: E712
                     )
                 )
@@ -109,6 +111,7 @@ class SqlAlchemyObjectReadRepository:
                     and_(
                         db.object_links.c.tenant_id == tenant_id,
                         db.object_links.c.link_type_api_name == link_type_api_name,
+                        db.object_links.c.is_active == True,  # noqa: E712
                         db.object_links.c.from_api_name == from_api_name,
                         db.object_links.c.from_object_id == from_object_id,
                         db.object_links.c.deleted == False,  # noqa: E712
@@ -148,6 +151,7 @@ def _active_object_conditions(tenant_id: str, object_type_api_name: str) -> list
     return [
         db.object_records.c.tenant_id == tenant_id,
         db.object_records.c.object_type_api_name == object_type_api_name,
+        db.object_records.c.is_active == True,  # noqa: E712
         db.object_records.c.deleted == False,  # noqa: E712
     ]
 

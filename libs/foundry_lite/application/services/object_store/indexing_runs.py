@@ -33,12 +33,15 @@ def _start_index_rebuild_plan(
     dataset_version_service: IndexDatasetVersions,
     ontology_service: IndexOntologyLookup,
     object_index_repository: ObjectIndexRepository,
+    mode: str = "full",
 ) -> ObjectIndexRebuildPlan:
     object_type = ontology_service._active_object_type(conn, ctx, object_type_api_name)
     dataset_ref = object_type["backing"]["dataset"]
     dataset = dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
     version = dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
     run_id = _new_id("index_run")
+    active_index_version = _active_index_version(conn, ctx, object_type, object_index_repository)
+    index_version = run_id if mode == "shadow" else active_index_version
     _create_index_run(
         conn=conn,
         ctx=ctx,
@@ -46,14 +49,20 @@ def _start_index_rebuild_plan(
         object_type_api_name=object_type_api_name,
         version=version,
         run_id=run_id,
+        mode=mode,
+        index_version=index_version,
         object_index_repository=object_index_repository,
+        trigger_type=_rebuild_trigger_type(mode),
     )
     return ObjectIndexRebuildPlan(
-        run_id=run_id,
-        object_type_api_name=object_type_api_name,
-        object_type=object_type,
-        dataset_version=version,
-        source_dataset_version_id=version["id"],
+        run_id,
+        object_type_api_name,
+        object_type,
+        version,
+        version["id"],
+        mode,
+        index_version,
+        active_index_version,
     )
 
 
@@ -75,6 +84,7 @@ def _start_failed_index_replay_plan(
     object_type = ontology_service._active_object_type(conn, ctx, object_type_api_name)
     _ensure_replay_object_type_matches(failed_run, object_type)
     run_id = _new_id("index_run")
+    active_index_version = _active_index_version(conn, ctx, object_type, object_index_repository)
     _create_index_run(
         conn=conn,
         ctx=ctx,
@@ -82,11 +92,13 @@ def _start_failed_index_replay_plan(
         object_type_api_name=object_type_api_name,
         version=version,
         run_id=run_id,
+        mode="full",
+        index_version=active_index_version,
         object_index_repository=object_index_repository,
         trigger_type="failed_run_replay",
         source_ref={"dataset_version_id": version_id, "replay_of_run_id": index_run_id},
     )
-    return ObjectIndexRebuildPlan(run_id, object_type_api_name, object_type, version, version_id)
+    return _replay_plan(run_id, object_type_api_name, object_type, version, version_id, active_index_version)
 
 
 def _failed_index_run(
@@ -105,6 +117,39 @@ def _failed_index_run(
     if row["status"] != "failed":
         raise ValidationFailed("index run is not failed", details={"index_run_id": index_run_id})
     return row
+
+
+def _active_index_version(
+    conn: TransactionContext,
+    ctx: RequestContext,
+    object_type: ObjectTypeRow,
+    object_index_repository: ObjectIndexRepository,
+) -> str:
+    return object_index_repository.active_index_version(
+        transaction=conn,
+        tenant_id=ctx.tenant_id,
+        object_type_id=object_type["id"],
+    )
+
+
+def _replay_plan(
+    run_id: str,
+    object_type_api_name: str,
+    object_type: ObjectTypeRow,
+    version: DatasetVersionRow,
+    version_id: str,
+    active_index_version: str,
+) -> ObjectIndexRebuildPlan:
+    return ObjectIndexRebuildPlan(
+        run_id,
+        object_type_api_name,
+        object_type,
+        version,
+        version_id,
+        "full",
+        active_index_version,
+        active_index_version,
+    )
 
 
 def _source_dataset_version_id(row: IndexRunRow, index_run_id: str) -> str:
@@ -131,12 +176,14 @@ def _create_index_run(
     object_type_api_name: str,
     version: DatasetVersionRow,
     run_id: str,
+    mode: str,
+    index_version: str,
     object_index_repository: ObjectIndexRepository,
     trigger_type: str = "reindex",
     source_ref: IndexRunSourceRef | None = None,
 ) -> None:
     now = _now()
-    source = source_ref or {"dataset_version_id": version["id"]}
+    source = _index_run_source_ref(version, mode, index_version, source_ref)
     object_index_repository.create_index_run(
         transaction=conn,
         record=IndexRunRecord(
@@ -158,3 +205,21 @@ def _create_index_run(
             created_at=now,
         ),
     )
+
+
+def _index_run_source_ref(
+    version: DatasetVersionRow,
+    mode: str,
+    index_version: str,
+    source_ref: IndexRunSourceRef | None,
+) -> IndexRunSourceRef:
+    source: IndexRunSourceRef = {"dataset_version_id": version["id"]}
+    if source_ref is not None:
+        source.update(source_ref)
+    source["mode"] = mode
+    source["index_version"] = index_version
+    return source
+
+
+def _rebuild_trigger_type(mode: str) -> str:
+    return "shadow_reindex" if mode == "shadow" else "reindex"

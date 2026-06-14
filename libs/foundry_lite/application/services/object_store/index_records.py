@@ -11,6 +11,9 @@ def build_object_link_insert(
     from_id: str,
     to_id: str,
     source_dataset_version_id: str,
+    *,
+    index_version: str = "active",
+    is_active: bool = True,
 ) -> ObjectLinkInsert:
     return ObjectLinkInsert(
         link_id=_new_id("olink"),
@@ -29,4 +32,6 @@ def build_object_link_insert(
         deleted=False,
         deletion_reason=None,
         updated_at=_now(),
+        index_version=index_version,
+        is_active=is_active,
     )

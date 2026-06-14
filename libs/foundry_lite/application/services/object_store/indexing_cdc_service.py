@@ -260,27 +260,15 @@ class ObjectIndexingCdcMixin(ABC):
     ) -> None:
         base_patch = dict(event.base_patch)
         current = dict(self._merge_properties(conn, object_type["id"], base_patch, {}))
+        index_version = self.object_index_repository.active_index_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_id=object_type["id"],
+        )
         now = _now()
         self.object_index_repository.insert_object_record(
             transaction=conn,
-            record=ObjectRecordInsert(
-                record_id=_new_id("obj"),
-                tenant_id=ctx.tenant_id,
-                object_type_id=object_type["id"],
-                object_type_api_name=object_type["api_name"],
-                object_id=event.object_id,
-                properties=current,
-                base_properties=base_patch,
-                edit_properties={},
-                property_versions=cdc_property_versions(None, event, current),
-                source_dataset_version_id=cdc_source_dataset_version_id(event),
-                source_hash=cdc_source_hash(event, base_patch),
-                object_version=1,
-                deleted=deleted,
-                deletion_reason=_cdc_deletion_reason(deleted),
-                created_at=now,
-                updated_at=now,
-            ),
+            record=_cdc_object_insert(ctx, object_type, event, base_patch, current, index_version, deleted, now),
         )
         self._emit_object_changed(
             conn,
@@ -352,3 +340,35 @@ class ObjectIndexingCdcMixin(ABC):
 
 def _cdc_deletion_reason(deleted: bool) -> str | None:
     return "source_deleted" if deleted else None
+
+
+def _cdc_object_insert(
+    ctx: RequestContext,
+    object_type: ObjectTypeRow,
+    event: ObjectCdcEvent,
+    base_patch: ObjectPropertyMap,
+    current: ObjectPropertyMap,
+    index_version: str,
+    deleted: bool,
+    now: str,
+) -> ObjectRecordInsert:
+    return ObjectRecordInsert(
+        record_id=_new_id("obj"),
+        tenant_id=ctx.tenant_id,
+        object_type_id=object_type["id"],
+        object_type_api_name=object_type["api_name"],
+        object_id=event.object_id,
+        properties=current,
+        base_properties=base_patch,
+        edit_properties={},
+        property_versions=cdc_property_versions(None, event, current),
+        source_dataset_version_id=cdc_source_dataset_version_id(event),
+        source_hash=cdc_source_hash(event, base_patch),
+        object_version=1,
+        deleted=deleted,
+        deletion_reason=_cdc_deletion_reason(deleted),
+        created_at=now,
+        updated_at=now,
+        index_version=index_version,
+        is_active=True,
+    )

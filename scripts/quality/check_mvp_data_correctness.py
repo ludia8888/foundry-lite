@@ -130,7 +130,7 @@ def _object_primary_key_findings(conn: sqlite3.Connection, tenant_id: str) -> li
                    SUM(CASE WHEN object_id IS NULL OR object_id = '' THEN 1 ELSE 0 END) AS blank_ids,
                    SUM(CASE WHEN source_hash IS NULL OR source_hash = '' THEN 1 ELSE 0 END) AS missing_hashes
             FROM object_records
-            WHERE tenant_id = ? AND deleted = 0
+            WHERE tenant_id = ? AND is_active = 1 AND deleted = 0
             GROUP BY object_type_api_name
             """,
             (tenant_id,),
@@ -285,7 +285,7 @@ def _object_source_fingerprint(db_path: Path, tenant_id: str, object_type: str) 
             """
             SELECT object_id, source_dataset_version_id, source_hash
             FROM object_records
-            WHERE tenant_id = ? AND object_type_api_name = ? AND deleted = 0
+            WHERE tenant_id = ? AND object_type_api_name = ? AND is_active = 1 AND deleted = 0
             ORDER BY object_id
             """,
             (tenant_id, object_type),

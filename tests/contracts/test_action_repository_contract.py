@@ -282,6 +282,8 @@ def _object_record_row(
         "object_type_id": "ot_order",
         "object_type_api_name": "Order",
         "object_id": "O-1",
+        "index_version": "active",
+        "is_active": True,
         "properties": {"status": "PENDING"},
         "base_properties": {"status": "PENDING"},
         "edit_properties": {},

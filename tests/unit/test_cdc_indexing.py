@@ -252,6 +252,8 @@ def _record(property_versions: dict[str, object]) -> ObjectRecordRow:
             "object_type_id": "otype_order",
             "object_type_api_name": "Order",
             "object_id": "O-1001",
+            "index_version": "active",
+            "is_active": True,
             "properties": {},
             "base_properties": {},
             "edit_properties": {},

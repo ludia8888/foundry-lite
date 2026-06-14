@@ -82,6 +82,7 @@ class SqlAlchemyObjectSetRepository:
                         db.object_records.c.tenant_id == tenant_id,
                         db.object_records.c.object_type_api_name == object_type_api_name,
                         db.object_records.c.object_id.in_(object_ids),
+                        db.object_records.c.is_active == True,  # noqa: E712
                         db.object_records.c.deleted == False,  # noqa: E712
                     )
                 )
@@ -108,6 +109,7 @@ class SqlAlchemyObjectSetRepository:
                         db.object_records.c.tenant_id == tenant_id,
                         db.object_records.c.object_type_api_name == object_type_api_name,
                         db.object_records.c.object_id.in_(object_ids),
+                        db.object_records.c.is_active == True,  # noqa: E712
                         db.object_records.c.deleted == False,  # noqa: E712
                     )
                 )
