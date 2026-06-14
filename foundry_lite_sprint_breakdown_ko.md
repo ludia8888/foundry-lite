@@ -1914,11 +1914,13 @@ Ontology mapping 변경이나 index corruption 상황에서 live read를 막지 
 - [x] reindex 후 object count/hash가 baseline과 일치한다. ([S41-A4](./docs/sprint-evidence-ledger.md#s41-a4))
 - [x] action edits replay 후 current view가 기존과 같다. ([S41-A5](./docs/sprint-evidence-ledger.md#s41-a5))
 - [x] object row가 0개인 object type도 active index version을 잃지 않는다. ([S41-H1](./docs/sprint-evidence-ledger.md#s41-h1))
+- [x] 같은 object type의 shadow promotion이 겹치면 stale promotion은 조용히 덮어쓰지 않고 실패한다. ([S41-H2](./docs/sprint-evidence-ledger.md#s41-h2))
 
 **Demo / Proof**
 
 Order shadow reindex 실행 중 UI query 지속 → validation → switch → old cleanup.
 추가 hardening proof로, 빈 snapshot object type에서 shadow reindex가 `expected=0`, `actual=0`으로 성공한 뒤에도 `object_index_versions` registry에 새 active index version이 남고, 다음 CDC insert가 그 버전으로 기록된다.
+동시성 proof로, 두 PostgreSQL connection이 같은 tenant/object type의 첫 pointer를 동시에 만들려고 해도 하나만 promotion에 성공하고 다른 하나는 stale switch로 거절된다.
 
 **이러면 성공으로 치지 않는다**
 

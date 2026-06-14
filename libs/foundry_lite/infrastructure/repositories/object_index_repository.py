@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 from sqlalchemy import and_, delete, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports import (
@@ -377,7 +379,18 @@ class SqlAlchemyObjectIndexRepository:
         object_type_id: str,
         index_version: str,
         updated_at: str,
-    ) -> None:
+        expected_previous_index_version: str | None = None,
+    ) -> bool:
+        switched = self._upsert_active_index_pointer(
+            transaction,
+            tenant_id,
+            object_type_id,
+            index_version,
+            updated_at,
+            expected_previous_index_version,
+        )
+        if not switched:
+            return False
         transaction.execute(
             update(db.object_records)
             .where(
@@ -401,7 +414,7 @@ class SqlAlchemyObjectIndexRepository:
             .values(is_active=False, updated_at=updated_at)
         )
         self._activate_index_version(transaction, tenant_id, object_type_id, index_version, updated_at)
-        self._upsert_active_index_pointer(transaction, tenant_id, object_type_id, index_version, updated_at)
+        return True
 
     def _upsert_active_index_pointer(
         self,
@@ -410,28 +423,42 @@ class SqlAlchemyObjectIndexRepository:
         object_type_id: str,
         index_version: str,
         updated_at: str,
-    ) -> None:
-        updated = transaction.execute(
-            update(db.object_index_versions)
-            .where(
-                and_(
-                    db.object_index_versions.c.tenant_id == tenant_id,
-                    db.object_index_versions.c.object_type_id == object_type_id,
-                )
+        expected_previous_index_version: str | None,
+    ) -> bool:
+        values = _active_index_pointer_values(tenant_id, object_type_id, index_version, updated_at)
+        dialect_name = transaction.dialect.name
+        if dialect_name == "postgresql":
+            return self._native_active_index_pointer_upsert(
+                transaction,
+                postgresql_insert(db.object_index_versions).values(**values),
+                expected_previous_index_version,
             )
-            .values(active_index_version=index_version, updated_at=updated_at)
-        )
-        if updated.rowcount:
-            return
-        transaction.execute(
-            insert(db.object_index_versions).values(
-                id=_active_index_pointer_id(tenant_id, object_type_id),
-                tenant_id=tenant_id,
-                object_type_id=object_type_id,
-                active_index_version=index_version,
-                updated_at=updated_at,
+        if dialect_name == "sqlite":
+            return self._native_active_index_pointer_upsert(
+                transaction, sqlite_insert(db.object_index_versions).values(**values), expected_previous_index_version
             )
+        raise RuntimeError(f"unsupported active index pointer upsert dialect: {dialect_name}")
+
+    def _native_active_index_pointer_upsert(
+        self,
+        transaction: Any,
+        statement: Any,
+        expected_previous_index_version: str | None,
+    ) -> bool:
+        conflict_update: dict[str, Any] = {
+            "active_index_version": statement.excluded.active_index_version,
+            "updated_at": statement.excluded.updated_at,
+        }
+        conflict_args: dict[str, Any] = {
+            "index_elements": [db.object_index_versions.c.tenant_id, db.object_index_versions.c.object_type_id],
+            "set_": conflict_update,
+        }
+        if expected_previous_index_version is not None:
+            conflict_args["where"] = db.object_index_versions.c.active_index_version == expected_previous_index_version
+        result = transaction.execute(
+            statement.on_conflict_do_update(**conflict_args).returning(db.object_index_versions.c.active_index_version)
         )
+        return result.first() is not None
 
     def _activate_index_version(
         self,
@@ -496,3 +523,18 @@ class SqlAlchemyObjectIndexRepository:
 
 def _active_index_pointer_id(tenant_id: str, object_type_id: str) -> str:
     return f"object_index_version:{tenant_id}:{object_type_id}"
+
+
+def _active_index_pointer_values(
+    tenant_id: str,
+    object_type_id: str,
+    index_version: str,
+    updated_at: str,
+) -> dict[str, str]:
+    return {
+        "id": _active_index_pointer_id(tenant_id, object_type_id),
+        "tenant_id": tenant_id,
+        "object_type_id": object_type_id,
+        "active_index_version": index_version,
+        "updated_at": updated_at,
+    }

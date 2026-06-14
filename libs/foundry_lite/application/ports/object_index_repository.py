@@ -392,8 +392,14 @@ class ObjectIndexRepository(Protocol):
         object_type_id: str,
         index_version: str,
         updated_at: str,
-    ) -> None:
-        """Atomically switch one object type to a validated shadow index version."""
+        expected_previous_index_version: str | None = None,
+    ) -> bool:
+        """Atomically switch one object type to a validated shadow index version.
+
+        When ``expected_previous_index_version`` is provided, the switch behaves
+        like a compare-and-swap promotion: it succeeds only if the object type's
+        active index pointer still matches the version that was validated.
+        """
         ...
 
     def delete_inactive_index_version(

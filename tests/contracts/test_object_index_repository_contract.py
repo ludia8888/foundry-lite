@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Barrier
 from typing import Any, Protocol, cast
 
 import pytest
@@ -258,8 +260,15 @@ class FakeObjectIndexRepository:
         object_type_id: str,
         index_version: str,
         updated_at: str,
-    ) -> None:
-        del transaction
+        expected_previous_index_version: str | None = None,
+    ) -> bool:
+        current = self.active_index_version(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            object_type_id=object_type_id,
+        )
+        if expected_previous_index_version is not None and current != expected_previous_index_version:
+            return False
         for row in self.object_records.values():
             if row["tenant_id"] == tenant_id and row["object_type_id"] == object_type_id:
                 row["is_active"] = row["index_version"] == index_version
@@ -269,6 +278,7 @@ class FakeObjectIndexRepository:
                 row["is_active"] = row["index_version"] == index_version
                 row["updated_at"] = updated_at
         self.active_index_versions[(tenant_id, object_type_id)] = index_version
+        return True
 
     def delete_inactive_index_version(
         self,
@@ -771,6 +781,87 @@ def test_object_index_repository_contract_persists_empty_shadow_active_pointer(
     assert before == "active"
     assert after == "index_run_empty"
     assert harness.object_record("obj_active") is None
+
+
+def test_object_index_repository_contract_rejects_stale_shadow_pointer_switch(
+    harness: ObjectIndexHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        first = harness.repository.switch_active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+            index_version="index_run_first",
+            updated_at="2026-06-10T00:04:00Z",
+            expected_previous_index_version="active",
+        )
+        second = harness.repository.switch_active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+            index_version="index_run_second",
+            updated_at="2026-06-10T00:05:00Z",
+            expected_previous_index_version="active",
+        )
+        active = harness.repository.active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+        )
+
+    assert first is True
+    assert second is False
+    assert active == "index_run_first"
+
+
+def test_object_index_repository_contract_concurrent_first_pointer_switch_has_one_winner(
+    postgres_fixture: Any,
+) -> None:
+    repository = SqlAlchemyObjectIndexRepository(postgres_fixture.engine)
+    barrier = Barrier(2)
+
+    def switch(index_version: str) -> bool:
+        with postgres_fixture.engine.begin() as transaction:
+            barrier.wait(timeout=10)
+            return repository.switch_active_index_version(
+                transaction=transaction,
+                tenant_id="tenant-demo",
+                object_type_id="ot_order",
+                index_version=index_version,
+                updated_at="2026-06-10T00:04:00Z",
+                expected_previous_index_version="active",
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(switch, ["index_run_first", "index_run_second"]))
+
+    with postgres_fixture.engine.begin() as transaction:
+        active = repository.active_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+        )
+
+    assert sorted(results) == [False, True]
+    assert active in {"index_run_first", "index_run_second"}
+
+
+def test_object_index_repository_contract_rejects_unsupported_pointer_upsert_dialect() -> None:
+    class UnsupportedTransaction:
+        class dialect:
+            name = "unsupported"
+
+    repository = SqlAlchemyObjectIndexRepository(cast(Engine, object()))
+
+    with pytest.raises(RuntimeError, match="unsupported active index pointer upsert dialect"):
+        repository.switch_active_index_version(
+            transaction=UnsupportedTransaction(),
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+            index_version="index_run_first",
+            updated_at="2026-06-10T00:04:00Z",
+            expected_previous_index_version="active",
+        )
 
 
 def test_object_index_repository_contract_reads_link_types_and_upserts_links(
