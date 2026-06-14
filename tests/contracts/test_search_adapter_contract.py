@@ -1,14 +1,61 @@
 from __future__ import annotations
 
 import pytest
-from foundry_lite.application.ports.search_adapter import SearchAdapter, SearchDocument, SearchQuery
-from foundry_lite.infrastructure.adapters import FakeSearchAdapter, LocalSearchAdapter
+from foundry_lite.application.ports.search_adapter import SearchAdapter, SearchDocument, SearchIndexMapping, SearchQuery
+from foundry_lite.infrastructure.adapters import (
+    FakeSearchAdapter,
+    LocalSearchAdapter,
+    OpenSearchAdapter,
+    OpenSearchAdapterConfig,
+)
 
 
-@pytest.fixture(params=[LocalSearchAdapter, FakeSearchAdapter])
+class FakeOpenSearchIndices:
+    def __init__(self) -> None:
+        self.created: set[str] = set()
+
+    def exists(self, *, index: str) -> bool:
+        return index in self.created
+
+    def create(self, *, index: str, body: dict[str, object]) -> object:
+        self.created.add(index)
+        return {"acknowledged": True, "body": body}
+
+    def put_mapping(self, *, index: str, body: dict[str, object]) -> object:
+        self.created.add(index)
+        return {"acknowledged": True, "body": body}
+
+
+class FakeOpenSearchClient:
+    def __init__(self) -> None:
+        self.indices = FakeOpenSearchIndices()
+        self.documents: dict[tuple[str, str], dict[str, object]] = {}
+
+    def index(self, *, index: str, id: str, body: dict[str, object], refresh: bool = False) -> object:
+        self.documents[(index, id)] = dict(body)
+        return {"result": "updated", "refresh": refresh}
+
+    def delete(self, *, index: str, id: str, ignore: tuple[int, ...] = (), refresh: bool = False) -> object:
+        self.documents.pop((index, id), None)
+        return {"result": "deleted", "ignore": ignore, "refresh": refresh}
+
+    def search(self, *, index: str, body: dict[str, object], size: int) -> dict[str, object]:
+        hits = [
+            {"_id": document_id, "_score": 1.0, "_source": document}
+            for (doc_index, document_id), document in sorted(self.documents.items())
+            if doc_index == index and _fake_query_matches(document, body)
+        ]
+        return {"hits": {"hits": hits[:size]}}
+
+
+@pytest.fixture(params=["local", "fake", "opensearch"])
 def adapter(request: pytest.FixtureRequest) -> SearchAdapter:
-    adapter_type = request.param
-    return adapter_type()
+    profile = str(request.param)
+    if profile == "local":
+        return LocalSearchAdapter()
+    if profile == "fake":
+        return FakeSearchAdapter()
+    return OpenSearchAdapter(OpenSearchAdapterConfig(endpoint="http://search:9200"), client=FakeOpenSearchClient())
 
 
 def test_search_adapter_contract_upsert_search_and_delete(adapter: SearchAdapter) -> None:
@@ -17,15 +64,34 @@ def test_search_adapter_contract_upsert_search_and_delete(adapter: SearchAdapter
         object_type="Order",
         document_id="O-1001",
         version=1,
-        properties={"status": "PENDING", "customer_id": "C-100"},
+        properties={"status": "PENDING", "customer_id": "C-100", "operatorNote": "Expedite this order"},
     )
 
+    adapter.configure_index(
+        SearchIndexMapping(
+            "tenant-demo",
+            "Order",
+            indexed_properties=("status",),
+            searchable_properties=("operatorNote",),
+        )
+    )
     adapter.upsert_document(document)
     hits = adapter.search(SearchQuery(tenant_id="tenant-demo", object_type="Order", terms={"status": "PENDING"}))
 
     assert [hit.document_id for hit in hits] == ["O-1001"]
     assert hits[0].score == 1.0
     assert hits[0].document.version == 1
+    assert adapter.document_ids(tenant_id="tenant-demo", object_type="Order") == ["O-1001"]
+    text_hits = adapter.search(
+        SearchQuery(
+            tenant_id="tenant-demo",
+            object_type="Order",
+            terms={},
+            text="expedite",
+            searchable_properties=("operatorNote",),
+        )
+    )
+    assert [hit.document_id for hit in text_hits] == ["O-1001"]
 
     adapter.delete_document(tenant_id="tenant-demo", object_type="Order", document_id="O-1001")
     assert adapter.search(SearchQuery(tenant_id="tenant-demo", object_type="Order", terms={"status": "PENDING"})) == []
@@ -45,3 +111,58 @@ def test_search_adapter_contract_filters_tenant_object_type_and_limit(adapter: S
     )
 
     assert [hit.document_id for hit in hits] == ["O-1001"]
+
+
+def _fake_query_matches(document: dict[str, object], body: dict[str, object]) -> bool:
+    query = body.get("query")
+    if not isinstance(query, dict):
+        return True
+    bool_query = query.get("bool")
+    if not isinstance(bool_query, dict):
+        return True
+    return _matches_fake_filters(document, bool_query) and _matches_fake_must(document, bool_query)
+
+
+def _matches_fake_filters(document: dict[str, object], bool_query: dict[str, object]) -> bool:
+    filters = bool_query.get("filter")
+    if not isinstance(filters, list):
+        return True
+    return all(_matches_fake_term(document, item) for item in filters)
+
+
+def _matches_fake_term(document: dict[str, object], item: object) -> bool:
+    if not isinstance(item, dict):
+        return True
+    term = item.get("term")
+    if not isinstance(term, dict):
+        return True
+    return all(_fake_value(document, str(name)) == value for name, value in term.items())
+
+
+def _matches_fake_must(document: dict[str, object], bool_query: dict[str, object]) -> bool:
+    must = bool_query.get("must")
+    if not isinstance(must, list):
+        return True
+    return all(_matches_fake_text(document, item) for item in must)
+
+
+def _matches_fake_text(document: dict[str, object], item: object) -> bool:
+    if not isinstance(item, dict) or "match_all" in item:
+        return True
+    multi_match = item.get("multi_match")
+    if not isinstance(multi_match, dict):
+        return True
+    query = str(multi_match.get("query", "")).casefold()
+    fields = multi_match.get("fields")
+    return isinstance(fields, list) and any(
+        query in str(_fake_value(document, str(field))).casefold() for field in fields
+    )
+
+
+def _fake_value(document: dict[str, object], dotted: str) -> object:
+    current: object = document
+    for part in dotted.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current

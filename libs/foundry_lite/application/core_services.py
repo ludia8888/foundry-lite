@@ -104,6 +104,7 @@ def _collaborator_map(
         "object_links_service": object_store.links,
         "object_query_service": object_store.query,
         "object_records_service": object_store.records,
+        "object_search_service": object_store.search,
         "object_sets_service": object_store.sets,
         "ontology_service": ontology,
         "runtime_service": runtime,

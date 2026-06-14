@@ -42,6 +42,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "object_links_service": "ObjectLinksService",
     "object_query_service": "ObjectQueryService",
     "object_records_service": "ObjectRecordsService",
+    "object_search_service": "ObjectSearchService",
     "object_sets_service": "ObjectSetsService",
     "ontology_service": "OntologyService",
     "runtime_service": "RuntimeService",

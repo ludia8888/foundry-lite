@@ -25,7 +25,7 @@
 - Real external ERP/webhook writeback.
 - Kafka/Redpanda streaming ingest.
 - Debezium CDC.
-- OpenSearch production search.
+- OpenSearch live cluster deployment and managed operations beyond the Sprint 42 adapter/projection proof.
 - Iceberg production catalog.
 - Spark runner.
 - Production Flink runner.

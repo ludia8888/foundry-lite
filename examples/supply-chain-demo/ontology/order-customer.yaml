@@ -36,6 +36,7 @@ objectTypes:
         indexed: true
       - apiName: operatorNote
         type: string
+        searchable: true
         editable: true
         source: edit_layer
         editPolicy: edit_only

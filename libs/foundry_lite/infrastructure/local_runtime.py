@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from sqlalchemy import create_engine
 
 from foundry_lite.application.dependencies import CoreDependencies
+from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.infrastructure.adapters import (
     DuckDBComputeAdapter,
     FakeComputeAdapter,
@@ -18,6 +20,8 @@ from foundry_lite.infrastructure.adapters import (
     LocalSearchAdapter,
     LocalStreamAdapter,
     LocalWorkflowAdapter,
+    OpenSearchAdapter,
+    OpenSearchAdapterConfig,
 )
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
@@ -109,12 +113,16 @@ def _connector_adapter(adapter_profile: str) -> LocalConnectorAdapter:
     raise ValueError(f"unknown adapter profile: {adapter_profile}")
 
 
-def _search_adapter(adapter_profile: str) -> LocalSearchAdapter:
-    if adapter_profile == "local":
+def _search_adapter(adapter_profile: str) -> SearchAdapter:
+    search_profile = os.getenv("FOUNDRY_LITE_SEARCH_PROFILE", adapter_profile)
+    if search_profile == "local":
         return LocalSearchAdapter()
-    if adapter_profile == "fake-storage":
+    if search_profile == "fake-storage":
         return FakeSearchAdapter()
-    raise ValueError(f"unknown adapter profile: {adapter_profile}")
+    if search_profile == "opensearch":
+        endpoint = os.getenv("FOUNDRY_LITE_OPENSEARCH_URL", "http://localhost:9200")
+        return OpenSearchAdapter(OpenSearchAdapterConfig(endpoint=endpoint))
+    raise ValueError(f"unknown search adapter profile: {search_profile}")
 
 
 def _stream_adapter(adapter_profile: str) -> LocalStreamAdapter:

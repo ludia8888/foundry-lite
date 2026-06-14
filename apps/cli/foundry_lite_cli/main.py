@@ -135,6 +135,11 @@ def _build_parser() -> argparse.ArgumentParser:
     idx_replay.add_argument("object_type")
     idx_replay_run = index_sub.add_parser("replay-run")
     idx_replay_run.add_argument("run_id")
+    idx_search_rebuild = index_sub.add_parser("rebuild-search")
+    idx_search_rebuild.add_argument("object_type")
+    idx_search_change = index_sub.add_parser("consume-search-change")
+    idx_search_change.add_argument("object_type")
+    idx_search_change.add_argument("object_id")
 
     action = sub.add_parser("action")
     action_sub = action.add_subparsers(dest="command", required=True)
@@ -317,6 +322,10 @@ def _handlers() -> dict[tuple[str, str], Handler]:
         ("index", "rebuild"): lambda core, ctx, args: core.index_rebuild(args.object_type, ctx=ctx),
         ("index", "replay"): lambda core, ctx, args: core.index_rebuild(args.object_type, ctx=ctx),
         ("index", "replay-run"): lambda core, ctx, args: core.index_replay_run(args.run_id, ctx=ctx),
+        ("index", "rebuild-search"): lambda core, ctx, args: core.index_search_rebuild(args.object_type, ctx=ctx),
+        ("index", "consume-search-change"): lambda core, ctx, args: core.index_search_object_changed(
+            args.object_type, args.object_id, ctx=ctx
+        ),
         ("action", "apply"): _action_apply,
         ("materialize", "run"): lambda core, ctx, args: core.materialize(args.name, ctx=ctx),
         ("object", "get"): lambda core, ctx, args: core.get_object(

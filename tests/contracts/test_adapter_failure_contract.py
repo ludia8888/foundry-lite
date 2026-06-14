@@ -22,6 +22,8 @@ from foundry_lite.infrastructure.adapters import (
     LocalSearchAdapter,
     LocalStreamAdapter,
     LocalWorkflowAdapter,
+    OpenSearchAdapter,
+    OpenSearchAdapterConfig,
     RestPullConnectorAdapter,
 )
 from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthProvider
@@ -41,6 +43,7 @@ from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthPr
         "debezium-postgres-stream",
         "local-search",
         "fake-search",
+        "opensearch",
         "local-connector",
         "fake-connector",
         "rest-pull-connector",
@@ -95,6 +98,7 @@ def _adapter_failure_contract(profile: str, tmp_path: Path) -> AdapterFailureCon
         ),
         "local-search": LocalSearchAdapter(),
         "fake-search": FakeSearchAdapter(),
+        "opensearch": OpenSearchAdapter(OpenSearchAdapterConfig(endpoint="http://search:9200")),
         "local-connector": LocalConnectorAdapter(),
         "fake-connector": FakeConnectorAdapter(),
         "rest-pull-connector": RestPullConnectorAdapter(),

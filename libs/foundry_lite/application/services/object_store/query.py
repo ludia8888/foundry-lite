@@ -24,6 +24,7 @@ from foundry_lite.application.services.object_store.query_protocols import (
     ObjectLineageReader,
     ObjectQueryOntologyLookup,
     ObjectRecordLookup,
+    ObjectSearchQueryPlanner,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -36,10 +37,11 @@ OBJECT_QUERY_MAX_LIMIT = 500
 
 class ObjectQueryService(CoreService):
     required_dependencies = ("engine", "policy", "object_read_repository")
-    required_collaborators = ("object_records_service", "runtime_service", "ontology_service")
+    required_collaborators = ("object_records_service", "runtime_service", "ontology_service", "object_search_service")
     object_records_service: ObjectRecordLookup
     runtime_service: ObjectLineageReader
     ontology_service: ObjectQueryOntologyLookup
+    object_search_service: ObjectSearchQueryPlanner
 
     def get_object(
         self,
@@ -103,10 +105,16 @@ class ObjectQueryService(CoreService):
         order_by: Sequence[Mapping[str, str]] | None = None,
         limit: int = 50,
         cursor: str | None = None,
+        search_text: str | None = None,
     ) -> ObjectQueryResult:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
         query_limit = _query_limit(limit)
+        if search_text:
+            _validate_search_planner_shape(filter_ast, order_by, cursor)
+            return self.object_search_service.search_objects(
+                object_type_api_name, ctx=ctx, search_text=search_text, limit=query_limit
+            )
         normalized_order_by = _normalized_order_by(order_by)
         if filter_ast:
             validate_filter_ast(filter_ast)
@@ -164,6 +172,15 @@ def _query_limit(limit: int) -> int:
             details={"limit": limit, "max_limit": OBJECT_QUERY_MAX_LIMIT},
         )
     return limit
+
+
+def _validate_search_planner_shape(
+    filter_ast: Mapping[str, object] | None,
+    order_by: Sequence[Mapping[str, str]] | None,
+    cursor: str | None,
+) -> None:
+    if filter_ast or order_by or cursor:
+        raise ValidationFailed("search query cannot be combined with filter, orderBy, or cursor")
 
 
 def _normalized_order_by(order_by: Sequence[Mapping[str, str]] | None) -> list[ObjectOrderBy]:

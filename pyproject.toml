@@ -22,6 +22,9 @@ dependencies = [
 kafka = [
   "confluent-kafka>=2.6",
 ]
+opensearch = [
+  "opensearch-py>=2.7",
+]
 
 [dependency-groups]
 dev = [
