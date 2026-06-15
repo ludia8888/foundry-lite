@@ -951,7 +951,7 @@
 
 ## A. Dataset / Storage / Manifest
 
-- [ ] A1. manifest JSON은 valid하지만 file list 중 하나가 없는 경우를 검증한다.
+- [x] A1. manifest JSON은 valid하지만 file list 중 하나가 없는 경우를 검증한다.
 - [ ] A2. file byte_size/hash는 맞지만 row_count metadata가 잘못된 경우를 검증한다.
 - [ ] A3. Parquet schema와 dataset_schemas schema_hash가 다른 경우를 검증한다.
 - [ ] A4. manifest_uri가 같은데 content overwrite가 불가능하게 한다.
@@ -960,7 +960,7 @@
 - [ ] A7. signedUrl expired를 dataset corruption으로 오판하지 않는다.
 - [ ] A8. object storage list incomplete 상황에서도 cleanup이 안전하다.
 - [ ] A9. APPEND transaction 동시 commit ordering을 검증한다.
-- [ ] A10. SNAPSHOT commit 중 downstream transform이 previous latest를 읽지 않는다.
+- [x] A10. SNAPSHOT commit 중 downstream transform이 previous latest를 읽지 않는다.
 - [ ] A11. branch HEAD와 global latest를 혼동하지 않는다.
 - [ ] A12. content_hash 기준을 compressed bytes/logical rows 중 하나로 고정한다.
 - [ ] A13. CSV null/empty string policy가 schema/check/ontology에서 일관된다.
@@ -987,10 +987,10 @@
 
 ## C. Transform / Compute
 
-- [ ] C1. SQL template injection으로 unauthorized dataset read가 불가능하다.
+- [x] C1. SQL template injection으로 unauthorized dataset read가 불가능하다.
 - [ ] C2. transform YAML이 tenant namespace를 누락하지 않는다.
 - [ ] C3. input/output dataset이 같은 self-overwrite case를 처리한다.
-- [ ] C4. transform output health check failed 시 lineage edge가 committed처럼 남지 않는다.
+- [x] C4. transform output health check failed 시 lineage edge가 committed처럼 남지 않는다.
 - [ ] C5. failed transform staging cleanup이 previous successful output을 삭제하지 않는다.
 - [ ] C6. pandas object dtype output으로 schema instability가 생기지 않는다.
 - [ ] C7. timezone parsing이 DuckDB/Python/Spark에서 일관된다.
@@ -1013,17 +1013,17 @@
 - [ ] D6. editable property는 edit layer/policy가 있어야 한다.
 - [ ] D7. linkType target rename 시 old link row migration/invalid state를 처리한다.
 - [ ] D8. ontology activation event가 outbox에 남는다.
-- [ ] D9. SDK는 draft가 아니라 active에서 생성된다.
+- [x] D9. SDK는 draft가 아니라 active에서 생성된다.
 - [ ] D10. SDK ontology version과 server serving ontology version mismatch를 감지한다.
 - [ ] D11. action param rename/delete breaking change를 감지한다.
-- [ ] D12. browser SDK와 npm SDK parity test가 있다.
+- [x] D12. browser SDK와 npm SDK parity test가 있다.
 
 ## E. Object Store / Index / Merge
 
-- [ ] E1. bulk upsert partial success가 index_run success로 보이지 않는다.
-- [ ] E2. object_id generation이 leading zero를 보존한다.
+- [x] E1. bulk upsert partial success가 index_run success로 보이지 않는다.
+- [x] E2. object_id generation이 leading zero를 보존한다.
 - [ ] E3. CSV와 CDC object_id normalization이 같다.
-- [ ] E4. source_dataset_version_id가 object_records에 저장된다.
+- [x] E4. source_dataset_version_id가 object_records에 저장된다.
 - [ ] E5. property_versions가 base/edit 모두에 대해 갱신된다.
 - [ ] E6. conflict_requires_review가 conflict row를 만들고 current choice를 명확히 한다.
 - [ ] E7. edit_wins property를 source value로 되돌리는 clear/edit reset policy가 있다.
@@ -1041,10 +1041,10 @@
 - [ ] F3. cursor from old ontology version reuse를 처리한다.
 - [ ] F4. cursor from old search index reuse를 처리한다.
 - [ ] F5. mutable sort key pagination 전략이 있다.
-- [ ] F6. offset pagination을 production path에서 금지한다.
-- [ ] F7. missing filter property를 silently ignore하지 않는다.
+- [x] F6. offset pagination을 production path에서 금지한다.
+- [x] F7. missing filter property를 silently ignore하지 않는다.
 - [x] F8. JSON numeric property는 typed cast로 비교한다.
-- [ ] F9. masked property contains/filter/sort/search를 막는다.
+- [x] F9. masked property contains/filter/sort/search를 막는다.
 - [ ] F10. static object set에 deleted object가 있을 때 표시 정책이 있다.
 - [ ] F11. dynamic set query는 time-dependent 조건을 watermark/pinning한다.
 - [ ] F12. private set id enumeration을 막는다.
@@ -1053,16 +1053,16 @@
 
 ## G. Action / Writeback / Outbox
 
-- [ ] G1. same idempotency key different body는 conflict다.
+- [x] G1. same idempotency key different body는 conflict다.
 - [ ] G2. idempotency unique scope에 tenant/action/actor/target/key가 포함된다.
-- [ ] G3. idempotency unique scope에 attempt/run id가 들어가지 않는다.
-- [ ] G4. client timeout retry가 같은 key를 재사용한다.
-- [ ] G5. action_run succeeded는 object_edit commit 후에만 가능하다.
-- [ ] G6. object_edit만 있고 action_run이 없는 상태가 불가능하다.
+- [x] G3. idempotency unique scope에 attempt/run id가 들어가지 않는다.
+- [x] G4. client timeout retry가 같은 key를 재사용한다.
+- [x] G5. action_run succeeded는 object_edit commit 후에만 가능하다.
+- [x] G6. object_edit만 있고 action_run이 없는 상태가 불가능하다.
 - [ ] G7. action_run failed인데 object가 바뀐 상태가 impossible-state로 감지된다.
-- [ ] G8. precondition stale read는 commit conflict로 막는다.
-- [ ] G9. expectedObjectVersion은 optional이 아니다.
-- [ ] G10. object_version은 base/edit 모두에서 증가한다.
+- [x] G8. precondition stale read는 commit conflict로 막는다.
+- [x] G9. expectedObjectVersion은 optional이 아니다.
+- [x] G10. object_version은 base/edit 모두에서 증가한다.
 - [ ] G11. external timeout은 outcome_unknown이다.
 - [ ] G12. external idempotency key를 propagate한다.
 - [ ] G13. compensation worker는 자동 rollback보다 manual review를 기본으로 한다.
@@ -1091,18 +1091,18 @@
 
 ## I. Streaming / CDC
 
-- [ ] I1. offset commit은 archive dataset commit 후에만 가능하다.
-- [ ] I2. dataset commit 후 offset commit 실패 시 duplicate-safe하다.
+- [x] I1. offset commit은 archive dataset commit 후에만 가능하다.
+- [x] I2. dataset commit 후 offset commit 실패 시 duplicate-safe하다.
 - [ ] I3. consumer rebalance mid-batch를 테스트한다.
 - [ ] I4. partition별 partial batch policy가 있다.
 - [ ] I5. event id 없을 때 dedupe fallback이 안정적이다.
 - [ ] I6. Kafka compaction/tombstone과 archive lag을 고려한다.
-- [ ] I7. raw Debezium payload를 그대로 downstream에 노출하지 않는다.
-- [ ] I8. ordering metadata가 사라지지 않는다.
-- [ ] I9. source_ts_ms만으로 ordering하지 않는다.
-- [ ] I10. initial snapshot event가 later update를 덮지 않는다.
-- [ ] I11. delete tombstone이 stale update로 resurrect되지 않는다.
-- [ ] I12. primary key update policy가 있다.
+- [x] I7. raw Debezium payload를 그대로 downstream에 노출하지 않는다.
+- [x] I8. ordering metadata가 사라지지 않는다.
+- [x] I9. source_ts_ms만으로 ordering하지 않는다.
+- [x] I10. initial snapshot event가 later update를 덮지 않는다.
+- [x] I11. delete tombstone이 stale update로 resurrect되지 않는다.
+- [x] I12. primary key update policy가 있다.
 - [ ] I13. source transaction boundary를 추적한다.
 - [ ] I14. schema change event를 처리한다.
 - [ ] I15. replication slot lag/WAL alert가 있다.
@@ -1115,7 +1115,7 @@
 - [x] J1. OpenSearch는 source of truth가 아니다.
 - [x] J2. stale event가 newer index doc을 덮지 않는다.
 - [ ] J3. fallback은 degraded flag를 표시한다.
-- [ ] J4. masked property는 indexed/searchable이 아니다.
+- [x] J4. masked property는 indexed/searchable이 아니다.
 - [ ] J5. ontology activation 후 search mapping drift를 감지한다.
 - [ ] J6. orphan OpenSearch docs를 drift detection으로 찾는다.
 - [ ] J7. search rebuild가 모든 objects를 메모리에 올리지 않는다.
@@ -1131,10 +1131,10 @@
 ## K. Security / Governance
 
 - [x] K1. RLS tenant context가 pooled connection에서 reset된다.
-- [ ] K2. dev header auth는 production에서 hard fail한다.
+- [x] K2. dev header auth는 production에서 hard fail한다.
 - [x] K3. worker/background job도 tenant context가 필수다.
 - [ ] K4. API뿐 아니라 CLI에도 permission check가 있다.
-- [ ] K5. object get/search 모두 permission check가 있다.
+- [x] K5. object get/search 모두 permission check가 있다.
 - [x] K6. masking은 response/filter/sort/search 모두에 적용된다.
 - [ ] K7. materialized dataset에도 masking/export policy가 있다.
 - [x] K8. audit이 masked property를 노출하지 않는다.
@@ -1309,20 +1309,20 @@
 
 ## 1순위 — Commit/Cursor 불변식
 
-- [ ] dataset commit
-- [ ] manifest commit
-- [ ] stream offset
-- [ ] REST cursor
-- [ ] materialization cursor
-- [ ] index progress cursor
+- [x] dataset commit
+- [x] manifest commit
+- [x] stream offset
+- [x] REST cursor
+- [x] materialization cursor
+- [x] index progress cursor
 
 **완료 기준:** commit 전후 process kill을 주입해도 데이터 유실/중복 성공이 없어야 한다.
 
 ## 2순위 — Action/Writeback/Idempotency
 
-- [ ] same idempotency key race
-- [ ] same key different body
-- [ ] expectedObjectVersion
+- [x] same idempotency key race
+- [x] same key different body
+- [x] expectedObjectVersion
 - [ ] external timeout unknown
 - [ ] compensation_required
 - [ ] outbox duplicate publish
@@ -1331,11 +1331,11 @@
 
 ## 3순위 — CDC/Ordering/Tombstone
 
-- [ ] ordering metadata
-- [ ] snapshot event vs update event
-- [ ] delete tombstone
-- [ ] PK update
-- [ ] duplicate event
+- [x] ordering metadata
+- [x] snapshot event vs update event
+- [x] delete tombstone
+- [x] PK update
+- [x] duplicate event
 - [ ] lag/slot/WAL
 
 **완료 기준:** out-of-order/stale/duplicate CDC event가 object current state를 과거로 되돌리지 않아야 한다.
@@ -1346,13 +1346,13 @@
 - [x] alias switch cursor
 - [x] OpenSearch stale event
 - [ ] fallback degraded
-- [ ] masked search
+- [x] masked search
 
 **완료 기준:** projection이 stale하거나 재구성 중이어도 source of truth를 오염시키지 않고, 사용자에게 degraded/stale 상태를 명확히 표시해야 한다.
 
 ## 5순위 — k8s/Backup/Restore/OOM
 
-- [ ] OOMKilled cleanup
+- [x] OOMKilled cleanup
 - [ ] SIGTERM recovery
 - [ ] migration race
 - [ ] DB/object storage restore mismatch
@@ -1365,13 +1365,13 @@
 
 # 12. 최종 원칙
 
-- [ ] retry해도 중복 성공하지 않는다.
-- [ ] 실패해도 성공처럼 보이지 않는다.
-- [ ] projection이 틀려도 source of truth를 오염시키지 않는다.
-- [ ] 어느 시점으로 replay해도 같은 결과가 나온다.
-- [ ] 모든 write에는 commit point가 있다.
-- [ ] 모든 cursor/offset/watermark는 durable commit 이후에만 전진한다.
+- [x] retry해도 중복 성공하지 않는다.
+- [x] 실패해도 성공처럼 보이지 않는다.
+- [x] projection이 틀려도 source of truth를 오염시키지 않는다.
+- [x] 어느 시점으로 replay해도 같은 결과가 나온다.
+- [x] 모든 write에는 commit point가 있다.
+- [x] 모든 cursor/offset/watermark는 durable commit 이후에만 전진한다.
 - [ ] 모든 external side effect에는 idempotency key와 unknown outcome handling이 있다.
-- [ ] 모든 stale event는 skip/no-op/conflict로 처리된다.
-- [ ] 모든 P0는 regression test 없이 완료로 보지 않는다.
-- [ ] 모든 운영 장애는 run/audit/error payload로 추적 가능해야 한다.
+- [x] 모든 stale event는 skip/no-op/conflict로 처리된다.
+- [x] 모든 P0는 regression test 없이 완료로 보지 않는다.
+- [x] 모든 운영 장애는 run/audit/error payload로 추적 가능해야 한다.
