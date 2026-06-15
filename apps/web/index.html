@@ -289,6 +289,10 @@
               API Base
               <input id="apiBase" value="http://127.0.0.1:8000" />
             </label>
+            <label>
+              Dataset
+              <input id="datasetRef" value="clean.orders" />
+            </label>
             <div class="row">
               <label>
                 Object Type
@@ -348,6 +352,8 @@
             </label>
             <div class="actions">
               <button id="healthBtn" type="button">Check</button>
+              <button id="datasetBtn" type="button" class="secondary">Load Dataset</button>
+              <button id="queryBtn" type="button" class="secondary">Load List</button>
               <button id="loadBtn" type="button" class="secondary">Load Object</button>
               <button id="approveBtn" type="button" class="danger">ApproveOrder</button>
               <button id="linkBtn" type="button" class="secondary">Load Link</button>
@@ -392,6 +398,24 @@
             <div class="metric">
               <span>DLQ</span>
               <strong id="metricDlq">-</strong>
+            </div>
+          </div>
+
+          <div class="panel">
+            <header>
+              <h2>Dataset Versions</h2>
+            </header>
+            <div class="panel-body">
+              <pre id="datasetResult" class="result compact">{}</pre>
+            </div>
+          </div>
+
+          <div class="panel">
+            <header>
+              <h2>Object List</h2>
+            </header>
+            <div class="panel-body">
+              <pre id="queryResult" class="result compact">{}</pre>
             </div>
           </div>
 
@@ -442,6 +466,7 @@
       const apiBase = document.querySelector("#apiBase");
       const statusDot = document.querySelector("#statusDot");
       const statusText = document.querySelector("#statusText");
+      const datasetRef = document.querySelector("#datasetRef");
       const objectType = document.querySelector("#objectType");
       const objectId = document.querySelector("#objectId");
       const reason = document.querySelector("#reason");
@@ -452,6 +477,8 @@
       const operationSince = document.querySelector("#operationSince");
       const operationUntil = document.querySelector("#operationUntil");
       const operationRunId = document.querySelector("#operationRunId");
+      const datasetResult = document.querySelector("#datasetResult");
+      const queryResult = document.querySelector("#queryResult");
       const objectResult = document.querySelector("#objectResult");
       const setResult = document.querySelector("#setResult");
       const linkResult = document.querySelector("#linkResult");
@@ -495,6 +522,14 @@
           metricVersion.textContent = value.objectVersion ?? "-";
           metricStatus.textContent = value.properties?.status ?? "-";
         }
+      }
+
+      function showDataset(value) {
+        datasetResult.textContent = JSON.stringify(value, null, 2);
+      }
+
+      function showQuery(value) {
+        queryResult.textContent = JSON.stringify(value, null, 2);
       }
 
       function showSet(value) {
@@ -570,6 +605,35 @@
           ? await objectClient.get(objectId.value, { explain: true })
           : await request(`/api/objects/${objectType.value}/${objectId.value}?explain=true`);
         show(currentObject);
+      }
+
+      function datasetParts() {
+        const [namespace, ...rest] = datasetRef.value.split(".");
+        return { namespace, name: rest.join(".") };
+      }
+
+      async function loadDataset() {
+        const { namespace, name } = datasetParts();
+        const versions = await request(
+          `/api/datasets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/versions`
+        );
+        const preview = await request(
+          `/api/datasets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/preview?limit=3`
+        );
+        showDataset({ dataset: datasetRef.value, versions, preview });
+      }
+
+      async function loadObjectList() {
+        const objectClient = sdkClient().objects[objectType.value];
+        const payload = { filter: { property: "status", op: "eq", value: "PENDING" }, limit: 5 };
+        const result = objectClient
+          ? await objectClient.query(payload)
+          : await request(`/api/objects/${encodeURIComponent(objectType.value)}/query`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+        showQuery(result);
       }
 
       async function loadLinks() {
@@ -729,7 +793,22 @@
         showRuns({ ...refreshed, lastRetry: retry });
       }
 
+      async function restoreFromServer() {
+        await checkHealth();
+        if (statusText.textContent !== "ok") {
+          return;
+        }
+        await Promise.all([
+          loadDataset().catch(showDataset),
+          loadObjectList().catch(showQuery),
+          loadObject().catch(show),
+          loadLinks().catch(showLinks),
+        ]);
+      }
+
       document.querySelector("#healthBtn").addEventListener("click", checkHealth);
+      document.querySelector("#datasetBtn").addEventListener("click", () => loadDataset().catch(showDataset));
+      document.querySelector("#queryBtn").addEventListener("click", () => loadObjectList().catch(showQuery));
       document.querySelector("#loadBtn").addEventListener("click", () => loadObject().catch(show));
       document.querySelector("#approveBtn").addEventListener("click", () => approveOrder().catch(show));
       document.querySelector("#linkBtn").addEventListener("click", () => loadLinks().catch(showLinks));
@@ -746,7 +825,7 @@
         .querySelector("#replayFailedIndexBtn")
         .addEventListener("click", () => replayFailedIndexRun().catch(showRuns));
       document.querySelector("#retryDlqBtn").addEventListener("click", () => retryFirstDlq().catch(showRuns));
-      checkHealth();
+      restoreFromServer();
     </script>
   </body>
 </html>

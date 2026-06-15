@@ -4,14 +4,14 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await page.goto("/");
 
   await expect(page.locator("#statusText")).toHaveText("ok");
-
-  await page.locator("#loadBtn").click();
+  await expect(page.locator("#datasetResult")).toContainText('"dataset": "clean.orders"');
+  await expect(page.locator("#datasetResult")).toContainText('"version_number": 1');
+  await expect(page.locator("#datasetResult")).toContainText('"order_id": "O-1001"');
+  await expect(page.locator("#queryResult")).toContainText('"objectId": "O-1001"');
   await expect(page.locator("#metricObject")).toHaveText("O-1001");
   await expect(page.locator("#metricStatus")).toHaveText("PENDING");
   await expect(page.locator("#objectResult")).toContainText('"objectType": "Order"');
   await expect(page.locator("#objectResult")).toContainText('"sourceRunChain"');
-
-  await page.locator("#linkBtn").click();
   await expect(page.locator("#linkResult")).toContainText('"linkType": "OrderCustomer"');
   await expect(page.locator("#linkResult")).toContainText('"objectType": "Customer"');
   await expect(page.locator("#linkResult")).toContainText('"objectId": "C-100"');
@@ -40,6 +40,14 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await expect(page.locator("#metricFailedRuns")).toHaveText("0");
   await expect(page.locator("#metricOutbox")).toHaveText(/^[1-9]\d*$/);
   await expect(page.locator("#metricDlq")).toHaveText("0");
+
+  await page.reload();
+  await expect(page.locator("#statusText")).toHaveText("ok");
+  await expect(page.locator("#datasetResult")).toContainText('"dataset": "clean.orders"');
+  await expect(page.locator("#queryResult")).toContainText('"items": []');
+  await expect(page.locator("#metricObject")).toHaveText("O-1001");
+  await expect(page.locator("#metricStatus")).toHaveText("APPROVED");
+  await expect(page.locator("#linkResult")).toContainText('"objectId": "C-100"');
 
   await page.locator("#operationType").selectOption("action");
   await page.locator("#operationStatus").fill("succeeded");
