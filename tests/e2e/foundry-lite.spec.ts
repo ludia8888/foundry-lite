@@ -11,6 +11,11 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await expect(page.locator("#objectResult")).toContainText('"objectType": "Order"');
   await expect(page.locator("#objectResult")).toContainText('"sourceRunChain"');
 
+  await page.locator("#linkBtn").click();
+  await expect(page.locator("#linkResult")).toContainText('"linkType": "OrderCustomer"');
+  await expect(page.locator("#linkResult")).toContainText('"objectType": "Customer"');
+  await expect(page.locator("#linkResult")).toContainText('"objectId": "C-100"');
+
   await page.locator("#sourceRunBtn").click();
   await expect(page.locator("#runResult")).toContainText('"sourceRun"');
   await expect(page.locator("#runResult")).toContainText('"runType": "index"');

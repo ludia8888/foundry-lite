@@ -307,6 +307,10 @@
               Saved Set Name
               <input id="setName" value="Pending Orders" />
             </label>
+            <label>
+              Link Type
+              <input id="linkType" value="OrderCustomer" />
+            </label>
             <div class="row">
               <label>
                 Run Type
@@ -346,6 +350,7 @@
               <button id="healthBtn" type="button">Check</button>
               <button id="loadBtn" type="button" class="secondary">Load Object</button>
               <button id="approveBtn" type="button" class="danger">ApproveOrder</button>
+              <button id="linkBtn" type="button" class="secondary">Load Link</button>
               <button id="saveSetBtn" type="button" class="secondary">Save Pending Set</button>
               <button id="setsBtn" type="button" class="secondary">Load Sets</button>
               <button id="runsBtn" type="button" class="secondary">Load Runs</button>
@@ -412,6 +417,15 @@
 
           <div class="panel">
             <header>
+              <h2>Object Links</h2>
+            </header>
+            <div class="panel-body">
+              <pre id="linkResult" class="result compact">[]</pre>
+            </div>
+          </div>
+
+          <div class="panel">
+            <header>
               <h2>Operations</h2>
             </header>
             <div class="panel-body">
@@ -432,6 +446,7 @@
       const objectId = document.querySelector("#objectId");
       const reason = document.querySelector("#reason");
       const setName = document.querySelector("#setName");
+      const linkType = document.querySelector("#linkType");
       const operationType = document.querySelector("#operationType");
       const operationStatus = document.querySelector("#operationStatus");
       const operationSince = document.querySelector("#operationSince");
@@ -439,6 +454,7 @@
       const operationRunId = document.querySelector("#operationRunId");
       const objectResult = document.querySelector("#objectResult");
       const setResult = document.querySelector("#setResult");
+      const linkResult = document.querySelector("#linkResult");
       const runResult = document.querySelector("#runResult");
       const metricObject = document.querySelector("#metricObject");
       const metricVersion = document.querySelector("#metricVersion");
@@ -483,6 +499,10 @@
 
       function showSet(value) {
         setResult.textContent = JSON.stringify(value, null, 2);
+      }
+
+      function showLinks(value) {
+        linkResult.textContent = JSON.stringify(value, null, 2);
       }
 
       function showRuns(value) {
@@ -550,6 +570,13 @@
           ? await objectClient.get(objectId.value, { explain: true })
           : await request(`/api/objects/${objectType.value}/${objectId.value}?explain=true`);
         show(currentObject);
+      }
+
+      async function loadLinks() {
+        const links = await request(
+          `/api/objects/${encodeURIComponent(objectType.value)}/${encodeURIComponent(objectId.value)}/links/${encodeURIComponent(linkType.value)}`
+        );
+        showLinks(links);
       }
 
       async function approveOrder() {
@@ -705,6 +732,7 @@
       document.querySelector("#healthBtn").addEventListener("click", checkHealth);
       document.querySelector("#loadBtn").addEventListener("click", () => loadObject().catch(show));
       document.querySelector("#approveBtn").addEventListener("click", () => approveOrder().catch(show));
+      document.querySelector("#linkBtn").addEventListener("click", () => loadLinks().catch(showLinks));
       document.querySelector("#saveSetBtn").addEventListener("click", () => savePendingSet().catch(showSet));
       document.querySelector("#setsBtn").addEventListener("click", () => loadSets().catch(showSet));
       document.querySelector("#runsBtn").addEventListener("click", () => loadRuns().catch(showRuns));

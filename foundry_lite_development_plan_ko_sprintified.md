@@ -3381,22 +3381,22 @@ flite lineage dataset clean.orders
 
 ### MVP Core Completion Gate
 
-Sprint 00~36과 Sprint 02A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 상세 acceptance는 [스프린트 실행 계획의 MVP Core Completion Gate](./foundry_lite_sprint_breakdown_ko.md#mvp-core-completion-gate)를 원본으로 본다.
+Sprint 00~36과 Sprint 02A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 상세 acceptance는 [스프린트 실행 계획의 MVP Core Completion Gate](./foundry_lite_sprint_breakdown_ko.md#mvp-core-completion-gate)를 원본으로 보고, 항목별 증거는 [Sprint Evidence Ledger의 MVP Core Completion Gate Evidence Map](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map)에 둔다. real ERP writeback, production backup/restore, Kafka/CDC/Iceberg 같은 확장은 Sprint 37 이후 또는 future backlog로 남긴다.
 
-- [ ] CSV 또는 PostgreSQL snapshot으로 raw dataset을 commit한다.
-- [ ] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다.
-- [ ] SQL/DuckDB 또는 Python transform으로 clean dataset을 만든다.
-- [ ] Ontology draft를 validate/activate한다.
-- [ ] clean dataset rows를 Order/Customer objects로 index한다.
-- [ ] Object Explorer에서 Order를 조회하고 Order -> Customer link를 본다.
-- [ ] ApproveOrder action을 실행한다.
-- [ ] object_records, object_edits, action_runs, audit_events, outbox_events가 모두 일관되게 남는다.
-- [ ] action_log와 object_snapshot을 dataset으로 materialize한다.
-- [ ] downstream transform이 materialized dataset을 읽고 Customer object를 갱신한다.
-- [ ] 전체 경로를 lineage/audit/operations UI에서 추적하고 실패를 replay할 수 있다.
-- [ ] 주요 실패 경로는 단순 패치가 아니라 regression test, error type, request/run trace로 재발 방지된다.
-- [ ] Python 백엔드 line/branch/function coverage가 모두 95% 이상이다.
-- [ ] 필수 integration test와 smoke test가 100% 실행되고 100% 통과한다.
+- [x] CSV 또는 PostgreSQL snapshot으로 raw dataset을 commit한다.
+- [x] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다.
+- [x] SQL/DuckDB 또는 Python transform으로 clean dataset을 만든다.
+- [x] Ontology draft를 validate/activate한다.
+- [x] clean dataset rows를 Order/Customer objects로 index한다.
+- [x] Object Explorer에서 Order를 조회하고 Order -> Customer link를 본다.
+- [x] ApproveOrder action을 실행한다.
+- [x] object_records, object_edits, action_runs, audit_events, outbox_events가 모두 일관되게 남는다.
+- [x] action_log와 object_snapshot을 dataset으로 materialize한다.
+- [x] downstream transform이 materialized dataset을 읽고 Customer object를 갱신한다.
+- [x] 전체 경로를 lineage/audit/operations UI에서 추적하고 MVP 실패 경로를 replay할 수 있다.
+- [x] 주요 실패 경로는 단순 패치가 아니라 regression test, error type, request/run trace로 재발 방지된다.
+- [x] Python 백엔드 line/branch/function coverage가 모두 95% 이상이다.
+- [x] 필수 integration test와 smoke test가 100% 실행되고 100% 통과한다.
 
 ### Recommended First Demo Command Shape
 

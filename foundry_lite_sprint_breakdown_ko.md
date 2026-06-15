@@ -1016,11 +1016,11 @@ Object API와 CLI로 pending high-risk orders를 조회한다.
 
 **Acceptance Gate**
 
-- [ ] `OrderCustomer` link가 clean.orders의 customer_id로 생성된다.
-- [ ] Order detail에서 연결된 Customer를 조회할 수 있다.
-- [ ] Customer에서 Order 목록으로 역방향 traversal이 가능하거나 명확한 reverse link가 정의된다.
-- [ ] 존재하지 않는 target object link는 warning/error 정책에 따라 기록된다.
-- [ ] link index run count가 `links_upserted`로 기록된다.
+- [x] `OrderCustomer` link가 clean.orders의 customer_id로 생성된다. ([S20-A1](./docs/sprint-evidence-ledger.md#s20-a1))
+- [x] Order detail에서 연결된 Customer를 조회할 수 있다. ([S20-A2](./docs/sprint-evidence-ledger.md#s20-a2))
+- [ ] Customer에서 Order 목록으로 역방향 traversal이 가능하거나 명확한 reverse link가 정의된다. 현재 MVP 경로는 forward `OrderCustomer` link만 명시한다. ([S20-A3](./docs/sprint-evidence-ledger.md#s20-a3))
+- [ ] 존재하지 않는 target object link는 warning/error 정책에 따라 기록된다. 현재는 missing target link를 숨기는 regression proof만 있다. ([S20-A4](./docs/sprint-evidence-ledger.md#s20-a4))
+- [x] link index run count가 `links_upserted`로 기록된다. ([S20-A5](./docs/sprint-evidence-ledger.md#s20-a5))
 
 **Demo / Proof**
 
@@ -1096,11 +1096,11 @@ CLI/API만 있는 플랫폼에서 벗어나, 사용자가 Web에서 dataset vers
 
 **Acceptance Gate**
 
-- [ ] Web에서 CSV upload 또는 기존 dataset version 확인이 가능하다.
-- [ ] Web에서 ontology YAML validation error를 확인할 수 있다.
-- [ ] Web Object Explorer에서 Order 목록과 상세를 조회할 수 있다.
-- [ ] Object detail에서 Order → Customer link를 볼 수 있다.
-- [ ] 새로고침해도 state가 서버 기준으로 복원된다.
+- [ ] Web에서 CSV upload 또는 기존 dataset version 확인이 가능하다. ([S22-A1](./docs/sprint-evidence-ledger.md#s22-a1))
+- [ ] Web에서 ontology YAML validation error를 확인할 수 있다. ([S22-A2](./docs/sprint-evidence-ledger.md#s22-a2))
+- [ ] Web Object Explorer에서 Order 목록과 상세를 조회할 수 있다. 현재 E2E는 Order 상세 조회만 증명하며, 목록 화면은 별도 UI scope로 남긴다. ([S22-A3](./docs/sprint-evidence-ledger.md#s22-a3))
+- [x] Object Explorer에서 Order → Customer link를 볼 수 있다. ([S22-A4](./docs/sprint-evidence-ledger.md#s22-a4))
+- [ ] 새로고침해도 state가 서버 기준으로 복원된다. ([S22-A5](./docs/sprint-evidence-ledger.md#s22-a5))
 
 **Demo / Proof**
 
@@ -1647,14 +1647,14 @@ MVP 폐루프가 문서가 아니라 반복 가능한 자동 테스트와 데모
 
 **Acceptance Gate**
 
-- [ ] 새 환경에서 seed부터 closed-loop demo까지 명령 하나 또는 명확한 runbook으로 재현된다.
-- [ ] E2E test가 CI에서 통과한다.
-- [ ] reindex 결과 hash가 initial index 결과와 일치한다.
-- [ ] Action apply no external writeback p95 목표에 대한 최소 측정 리포트가 있다.
-- [ ] Python 백엔드 release quality gate가 모두 통과한다.
-- [ ] Python 백엔드 line/branch/function coverage가 모두 95% 이상이다.
-- [ ] 필수 integration test와 smoke test가 100% 실행되고 100% 통과한다.
-- [ ] MVP release tag를 찍을 수 있는 상태다.
+- [x] 새 환경에서 seed부터 closed-loop demo까지 명령 하나 또는 명확한 runbook으로 재현된다. ([S36-P1](./docs/sprint-evidence-ledger.md#s36-p1), [S36-P2](./docs/sprint-evidence-ledger.md#s36-p2), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] E2E test가 CI에서 통과한다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [VERIFY-MVP-WEB-OBJECT-LINK](./docs/sprint-evidence-ledger.md#verify-mvp-web-object-link))
+- [x] reindex 결과 hash가 initial index 결과와 일치한다. ([S36-P4](./docs/sprint-evidence-ledger.md#s36-p4), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] Action apply no external writeback p95 목표에 대한 최소 측정 리포트가 있다. ([S36-P5](./docs/sprint-evidence-ledger.md#s36-p5), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] Python 백엔드 release quality gate가 모두 통과한다. ([VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] Python 백엔드 line/branch/function coverage가 모두 95% 이상이다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] 필수 integration test와 smoke test가 100% 실행되고 100% 통과한다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] MVP release tag를 찍을 수 있는 상태다. 실제 태그 생성은 릴리스 버전 결정 시 별도 release action으로 수행한다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
 
 **Sprint 36 구현 진행 체크**
 
@@ -2093,23 +2093,23 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 
 ## MVP Core Completion Gate
 
-Sprint 00~36과 Sprint 02A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다.
+Sprint 00~36과 Sprint 02A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 각 완료 표시는 [MVP Core Completion Gate Evidence Map](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map)의 현재 증거 범위 안에서만 의미한다. real ERP writeback, production backup/restore, Kafka/CDC/Iceberg 같은 확장은 Sprint 37 이후 또는 future backlog로 남긴다.
 
-- [ ] CSV 또는 PostgreSQL snapshot으로 raw dataset을 commit한다.
-- [ ] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다.
-- [ ] SQL/DuckDB 또는 Python transform으로 clean dataset을 만든다.
-- [ ] Ontology draft를 validate/activate한다.
-- [ ] clean dataset rows를 Order/Customer objects로 index한다.
-- [ ] Object Explorer에서 Order를 조회하고 Order -> Customer link를 본다.
-- [ ] ApproveOrder action을 실행한다.
-- [ ] object_records, object_edits, action_runs, audit_events, outbox_events가 모두 일관되게 남는다.
-- [ ] action_log와 object_snapshot을 dataset으로 materialize한다.
-- [ ] downstream transform이 materialized dataset을 읽고 Customer object를 갱신한다.
-- [ ] 전체 경로를 lineage/audit/operations UI에서 추적하고 실패를 replay할 수 있다.
-- [ ] Python 백엔드 품질 게이트 `ruff`, `mypy` 또는 `pyright`, `pytest`가 통과한다.
-- [ ] 단순 패치성 수정 없이 주요 실패 경로에 regression test와 추적 가능한 error state가 남는다.
-- [ ] Python 백엔드 line/branch/function coverage가 모두 95% 이상이다.
-- [ ] 필수 integration test와 smoke test가 100% 실행되고 100% 통과한다.
+- [x] CSV 또는 PostgreSQL snapshot으로 raw dataset을 commit한다. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
+- [x] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다. ([MVP-SCALE](./docs/sprint-evidence-ledger.md#mvp-core-scale-foundation))
+- [x] SQL/DuckDB 또는 Python transform으로 clean dataset을 만든다. ([MVP-TRANSFORM](./docs/sprint-evidence-ledger.md#mvp-core-transform))
+- [x] Ontology draft를 validate/activate한다. ([MVP-ONTOLOGY](./docs/sprint-evidence-ledger.md#mvp-core-ontology))
+- [x] clean dataset rows를 Order/Customer objects로 index한다. ([MVP-OBJECT-INDEX](./docs/sprint-evidence-ledger.md#mvp-core-object-index))
+- [x] Object Explorer에서 Order를 조회하고 Order -> Customer link를 본다. ([MVP-OBJECT-LINK-UI](./docs/sprint-evidence-ledger.md#mvp-core-object-link-ui), [VERIFY-MVP-WEB-OBJECT-LINK](./docs/sprint-evidence-ledger.md#verify-mvp-web-object-link))
+- [x] ApproveOrder action을 실행한다. ([MVP-ACTION](./docs/sprint-evidence-ledger.md#mvp-core-action))
+- [x] object_records, object_edits, action_runs, audit_events, outbox_events가 모두 일관되게 남는다. ([MVP-MUTATION-LEDGER](./docs/sprint-evidence-ledger.md#mvp-core-mutation-ledger))
+- [x] action_log와 object_snapshot을 dataset으로 materialize한다. ([MVP-MATERIALIZATION](./docs/sprint-evidence-ledger.md#mvp-core-materialization))
+- [x] downstream transform이 materialized dataset을 읽고 Customer object를 갱신한다. ([MVP-DOWNSTREAM](./docs/sprint-evidence-ledger.md#mvp-core-downstream-transform))
+- [x] 전체 경로를 lineage/audit/operations UI에서 추적하고 MVP 실패 경로를 replay할 수 있다. ([MVP-OPERATIONS](./docs/sprint-evidence-ledger.md#mvp-core-operations-replay))
+- [x] Python 백엔드 품질 게이트 `ruff`, `mypy` 또는 `pyright`, `pytest`가 통과한다. ([MVP-QUALITY](./docs/sprint-evidence-ledger.md#mvp-core-quality-gate))
+- [x] 단순 패치성 수정 없이 주요 실패 경로에 regression test와 추적 가능한 error state가 남는다. ([MVP-REGRESSION](./docs/sprint-evidence-ledger.md#mvp-core-regression-trace))
+- [x] Python 백엔드 line/branch/function coverage가 모두 95% 이상이다. ([MVP-COVERAGE](./docs/sprint-evidence-ledger.md#mvp-core-coverage))
+- [x] 필수 integration test와 smoke test가 100% 실행되고 100% 통과한다. ([MVP-INTEGRATION](./docs/sprint-evidence-ledger.md#mvp-core-integration-smoke))
 
 ## Recommended First Demo Command Shape
 

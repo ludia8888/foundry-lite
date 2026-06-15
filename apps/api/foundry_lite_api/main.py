@@ -10,6 +10,7 @@ from foundry_lite.application.action_types import ActionApplyResponse
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
     ObjectIndexRebuildResult,
+    ObjectLinkPayload,
     ObjectPayload,
     ObjectQueryResult,
     ObjectSetPayload,
@@ -212,6 +213,14 @@ def get_object(
 ) -> ObjectPayload:
     try:
         return foundry.objects.get(object_type, object_id, ctx=_ctx(request), include_explain=include_explain)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/objects/{object_type}/{object_id}/links/{link_type}")
+def get_object_links(request: Request, object_type: str, object_id: str, link_type: str) -> list[ObjectLinkPayload]:
+    try:
+        return foundry.objects.links(object_type, object_id, link_type, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

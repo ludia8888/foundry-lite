@@ -584,6 +584,7 @@ Scale Foundation의 핵심은 "지금은 작은 구현으로 돌리되, 제품 �
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/api/datasets/{namespace}/{name}/preview` | dataset preview |
 | `GET` | `/api/objects/{object_type}/{object_id}` | object detail, optional source explanation |
+| `GET` | `/api/objects/{object_type}/{object_id}/links/{link_type}` | object link traversal, for example Order to Customer |
 | `POST` | `/api/objects/{object_type}/query` | filter/sort/page/search object query |
 | `GET` | `/api/object-sets` | object set list |
 | `POST` | `/api/object-sets` | static/dynamic object set create |
