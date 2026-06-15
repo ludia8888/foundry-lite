@@ -8,6 +8,10 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await expect(page.locator("#datasetResult")).toContainText('"version_number": 1');
   await expect(page.locator("#datasetResult")).toContainText('"order_id": "O-1001"');
   await expect(page.locator("#queryResult")).toContainText('"objectId": "O-1001"');
+  await page.locator("#ontologyBtn").click();
+  await expect(page.locator("#ontologyResult")).toContainText('"code": "VALIDATION_FAILED"');
+  await expect(page.locator("#ontologyResult")).toContainText('"message": "primary key column missing"');
+  await expect(page.locator("#ontologyResult")).toContainText('"request_id"');
   await expect(page.locator("#metricObject")).toHaveText("O-1001");
   await expect(page.locator("#metricStatus")).toHaveText("PENDING");
   await expect(page.locator("#objectResult")).toContainText('"objectType": "Order"');

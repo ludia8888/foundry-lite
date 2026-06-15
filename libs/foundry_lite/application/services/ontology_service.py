@@ -7,7 +7,6 @@ import yaml
 
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.ontology_repository import (
-    ActionMutationDefinition,
     ActionParameterSchema,
     ActionTypeRecord,
     ActionTypeRow,
@@ -16,6 +15,7 @@ from foundry_lite.application.ports.ontology_repository import (
     ObjectTypeRecord,
     ObjectTypeRow,
     OntologyApplyResult,
+    OntologyValidationResult,
     OntologyVersionRecord,
     OntologyVersionRow,
     PropertyTypeRecord,
@@ -30,6 +30,12 @@ from foundry_lite.application.services.ontology_protocols import (
     OntologyDatasetRegistry,
     OntologyDatasetVersions,
     OntologyRuntimeBoundary,
+)
+from foundry_lite.application.services.ontology_validation import (
+    ontology_validation_result,
+    validate_ontology_definition,
+    validate_persisted_link,
+    validate_persisted_object_type,
 )
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
@@ -84,9 +90,26 @@ class OntologyService(CoreService):
             self._record_ontology_activation(conn, ctx, ontology_version_id, version_number)
             return {"ontology_version_id": ontology_version_id, "version_number": version_number}
 
+    def validate_yaml_text(
+        self,
+        yaml_text: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> OntologyValidationResult:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "ontology:validate", "ontology", "draft")
+        definition = self._load_ontology_text(yaml_text)
+        with self.engine.begin() as conn:
+            validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
+        return ontology_validation_result(definition)
+
     def _load_ontology_definition(self, yaml_path: str | Path) -> YamlObject:
         """Load and validate the top-level ontology YAML mapping."""
         definition: object = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8"))
+        return yaml_object(definition, "ontology yaml")
+
+    def _load_ontology_text(self, yaml_text: str) -> YamlObject:
+        definition: object = yaml.safe_load(yaml_text)
         return yaml_object(definition, "ontology yaml")
 
     def _insert_draft_ontology_version(
@@ -321,7 +344,8 @@ class OntologyService(CoreService):
         for object_type in object_rows:
             self._validate_ontology_object_type(conn, ctx, object_type)
         for link in self._link_types_for_version(conn, ctx, ontology_version_id):
-            self._validate_ontology_link(conn, ctx, link, object_by_api)
+            columns = self._dataset_columns_for_ref(conn, ctx, link["backing"]["dataset"])
+            validate_persisted_link(link, object_by_api, columns)
 
     def _validate_ontology_object_type(
         self,
@@ -331,10 +355,8 @@ class OntologyService(CoreService):
     ) -> None:
         columns = self._dataset_columns_for_ref(conn, ctx, object_type["backing"]["dataset"])
         properties = self._properties_for_object_type(conn, object_type["id"])
-        property_by_api = {prop["api_name"]: prop for prop in properties}
-        self._validate_primary_key_property(object_type, property_by_api, columns)
-        self._validate_dataset_backed_properties(object_type, properties, columns)
-        self._validate_ontology_action_mutations(conn, object_type, property_by_api)
+        actions = self._actions_for_target(conn, object_type["id"])
+        validate_persisted_object_type(object_type, properties, actions, columns)
 
     def _dataset_columns_for_ref(
         self,
@@ -348,72 +370,6 @@ class OntologyService(CoreService):
             "schema_json"
         ]
         return schema_columns(schema, dataset_ref)
-
-    def _validate_primary_key_property(
-        self,
-        object_type: ObjectTypeRow,
-        property_by_api: Mapping[str, PropertyTypeRow],
-        columns: Mapping[str, Mapping[str, object]],
-    ) -> None:
-        pk_prop = object_type["primary_key_property"]
-        if pk_prop not in property_by_api:
-            raise ValidationFailed("primary key property missing", details={"objectType": object_type["api_name"]})
-        pk_column = property_by_api[pk_prop]["column_name"]
-        if pk_column is None or pk_column not in columns:
-            raise ValidationFailed("primary key column missing", details={"column": pk_column})
-        if bool(columns[pk_column].get("nullable")):
-            raise ValidationFailed("primary key column must be non-null", details={"column": pk_column})
-
-    def _validate_dataset_backed_properties(
-        self,
-        object_type: ObjectTypeRow,
-        properties: Sequence[PropertyTypeRow],
-        columns: Mapping[str, Mapping[str, object]],
-    ) -> None:
-        for prop in properties:
-            if prop["source"] == "dataset" and prop["column_name"] not in columns:
-                raise ValidationFailed(
-                    "property column missing",
-                    details={"objectType": object_type["api_name"], "property": prop["api_name"]},
-                )
-
-    def _validate_ontology_action_mutations(
-        self,
-        conn: TransactionContext,
-        object_type: ObjectTypeRow,
-        property_by_api: Mapping[str, PropertyTypeRow],
-    ) -> None:
-        for action in self._actions_for_target(conn, object_type["id"]):
-            for mutation in action["definition"].get("mutations", []):
-                self._validate_action_mutation_property(mutation, property_by_api)
-
-    def _validate_action_mutation_property(
-        self,
-        mutation: ActionMutationDefinition,
-        property_by_api: Mapping[str, PropertyTypeRow],
-    ) -> None:
-        prop = mutation.get("property")
-        if not isinstance(prop, str) or prop not in property_by_api:
-            raise ValidationFailed("action mutation property missing", details=dict(mutation))
-        if not property_by_api[prop]["editable"]:
-            raise ValidationFailed("action mutation property must be editable", details=dict(mutation))
-
-    def _validate_ontology_link(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        link: LinkTypeRow,
-        object_by_api: Mapping[str, ObjectTypeRow],
-    ) -> None:
-        if link["from_api_name"] not in object_by_api or link["to_api_name"] not in object_by_api:
-            raise ValidationFailed("link object type missing", details={"linkType": link["api_name"]})
-        columns = set(self._dataset_columns_for_ref(conn, ctx, link["backing"]["dataset"]))
-        missing_keys = [key for key in [link["backing"]["fromKey"], link["backing"]["toKey"]] if key not in columns]
-        if missing_keys:
-            raise ValidationFailed(
-                "link backing key missing",
-                details={"linkType": link["api_name"], "missing": missing_keys},
-            )
 
     def _object_types_for_version(
         self,

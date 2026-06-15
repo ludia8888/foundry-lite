@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
     ObjectQueryResult,
     ObjectSetPayload,
     ObjectSetQueryResult,
+    OntologyValidationResult,
     RuntimeRetryResult,
     RuntimeRunDetail,
     RuntimeRunQueryResult,
@@ -98,6 +99,10 @@ class ObjectQueryRequest(BaseModel):
 
 class WebhookPayloadRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
+
+
+class OntologyValidateRequest(BaseModel):
+    yaml_text: str = Field(alias="yaml")
 
 
 WEBHOOK_SIGNING_KEY_ENV = "FOUNDRY_LITE_WEBHOOK_SIGNING_KEY"
@@ -209,6 +214,14 @@ def preview_dataset(request: Request, namespace: str, name: str, limit: int = 10
 def list_dataset_versions(request: Request, namespace: str, name: str) -> list[DatasetVersionRow]:
     try:
         return foundry.datasets.list_versions(f"{namespace}.{name}", ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/ontology/validate")
+def validate_ontology(request: Request, payload: OntologyValidateRequest) -> OntologyValidationResult:
+    try:
+        return foundry.ontology.validate(payload.yaml_text, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
