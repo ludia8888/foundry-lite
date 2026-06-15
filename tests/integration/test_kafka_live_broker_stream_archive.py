@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import StreamPublishRequest
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.adapters import KafkaStreamAdapter, KafkaStreamAdapterConfig, KafkaStreamSubscription
@@ -67,5 +67,5 @@ def _publish_live_event(bootstrap_servers: str, topic: str) -> None:
 
 
 def _preview_dataset(storage_root: Path, dataset_ref: str) -> list[dict[str, object]]:
-    core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=storage_root))
-    return [dict(row) for row in core.preview_dataset(dataset_ref, ctx=demo_admin_context())]
+    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    return [dict(row) for row in core.datasets.preview(dataset_ref, ctx=demo_admin_context())]

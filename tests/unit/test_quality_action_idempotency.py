@@ -95,15 +95,15 @@ def Header(*, alias):
 
 
 def apply_action(request, action_type: str, payload, {header_param}):
-    return core.apply_action(action_type, idempotency_key=idempotency_key)
+    return core.actions.apply(action_type, idempotency_key=idempotency_key)
 """,
     )
     _write(
-        root / "libs" / "foundry_lite" / "application" / "core.py",
+        root / "libs" / "foundry_lite" / "application" / "facades" / "action_gateway.py",
         """
-class FoundryLiteCore:
-    def apply_action(self, action_api_name: str, *, idempotency_key: str):
-        return self._services.action.apply_action(action_api_name, idempotency_key=idempotency_key)
+class ActionGateway:
+    def apply(self, action_api_name: str, *, idempotency_key: str):
+        return self._action.apply_action(action_api_name, idempotency_key=idempotency_key)
 """,
     )
     _write(

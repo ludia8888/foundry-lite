@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import StreamArchiveConfig, StreamPublishRequest
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.domain.context import demo_admin_context
@@ -21,21 +21,21 @@ def test_cdc_stream_archive_appends_standard_changelog_preview(tmp_path: Path) -
     inner = LocalStreamAdapter()
     adapter = DebeziumPostgresStreamAdapter(inner, DebeziumPostgresSourceConfig(primary_key=("order_id",)))
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    core = FoundryLiteCore(dependencies=replace(dependencies, stream_adapter=adapter))
+    core = FoundryLite(dependencies=replace(dependencies, stream_adapter=adapter))
     ctx = demo_admin_context()
     stream = StreamArchiveConfig(
         stream_name="erp_orders_cdc",
         topic="dbserver1.inventory.orders",
         schema_strategy="cdc_envelope_json",
     )
-    core.ensure_dataset("raw_cdc.erp_orders", ctx=ctx, primary_key=["event_id"])
+    core.datasets.ensure("raw_cdc.erp_orders", ctx=ctx, primary_key=["event_id"])
     _publish_order(inner, "c", after={"order_id": "O-1001", "status": "PENDING"}, lsn=11)
     _publish_order(inner, "u", after={"order_id": "O-1001", "status": "APPROVED"}, lsn=12)
     _publish_order(inner, "d", before={"order_id": "O-1001", "status": "APPROVED"}, lsn=13)
 
-    result = core.archive_stream_events("raw_cdc.erp_orders", stream=stream, ctx=ctx)
+    result = core.datasets.archive_stream_events("raw_cdc.erp_orders", stream=stream, ctx=ctx)
 
-    preview = core.preview_dataset("raw_cdc.erp_orders", ctx=ctx)
+    preview = core.datasets.preview("raw_cdc.erp_orders", ctx=ctx)
     assert result is not None
     assert result.row_count == 3
     assert [row["op"] for row in preview] == ["c", "u", "d"]
@@ -48,7 +48,7 @@ def test_cdc_stream_archive_updates_unread_lag_metric(tmp_path: Path) -> None:
     inner = LocalStreamAdapter()
     adapter = DebeziumPostgresStreamAdapter(inner, DebeziumPostgresSourceConfig(primary_key=("order_id",)))
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    core = FoundryLiteCore(dependencies=replace(dependencies, stream_adapter=adapter))
+    core = FoundryLite(dependencies=replace(dependencies, stream_adapter=adapter))
     ctx = demo_admin_context()
     stream = StreamArchiveConfig(
         stream_name="erp_orders_cdc",
@@ -56,12 +56,12 @@ def test_cdc_stream_archive_updates_unread_lag_metric(tmp_path: Path) -> None:
         limit=2,
         schema_strategy="cdc_envelope_json",
     )
-    core.ensure_dataset("raw_cdc.erp_orders", ctx=ctx, primary_key=["event_id"])
+    core.datasets.ensure("raw_cdc.erp_orders", ctx=ctx, primary_key=["event_id"])
     _publish_order(inner, "c", after={"order_id": "O-1001", "status": "PENDING"}, lsn=11)
     _publish_order(inner, "u", after={"order_id": "O-1001", "status": "APPROVED"}, lsn=12)
     _publish_order(inner, "d", before={"order_id": "O-1001", "status": "APPROVED"}, lsn=13)
 
-    result = core.archive_stream_events("raw_cdc.erp_orders", stream=stream, ctx=ctx)
+    result = core.datasets.archive_stream_events("raw_cdc.erp_orders", stream=stream, ctx=ctx)
 
     payload, _media_type = metrics.prometheus_payload()
     assert result is not None
@@ -73,14 +73,14 @@ def test_cdc_stream_archive_read_failure_is_visible_in_operations(tmp_path: Path
     inner = LocalStreamAdapter()
     adapter = DebeziumPostgresStreamAdapter(inner, DebeziumPostgresSourceConfig(primary_key=("order_id",)))
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    core = FoundryLiteCore(dependencies=replace(dependencies, stream_adapter=adapter))
+    core = FoundryLite(dependencies=replace(dependencies, stream_adapter=adapter))
     ctx = demo_admin_context()
     stream = StreamArchiveConfig(
         stream_name="erp_orders_cdc",
         topic="dbserver1.inventory.orders",
         schema_strategy="cdc_envelope_json",
     )
-    core.ensure_dataset("raw_cdc.erp_orders", ctx=ctx, primary_key=["event_id"])
+    core.datasets.ensure("raw_cdc.erp_orders", ctx=ctx, primary_key=["event_id"])
     inner.publish_event(
         StreamPublishRequest(
             stream_name="erp_orders_cdc",
@@ -93,11 +93,11 @@ def test_cdc_stream_archive_read_failure_is_visible_in_operations(tmp_path: Path
     )
 
     with pytest.raises(AdapterError):
-        core.archive_stream_events("raw_cdc.erp_orders", stream=stream, ctx=ctx)
+        core.datasets.archive_stream_events("raw_cdc.erp_orders", stream=stream, ctx=ctx)
 
-    failed_runs = core.query_runs(ctx=ctx, run_type="sync", status="FAILED")["syncRuns"]
+    failed_runs = core.operations.query_runs(ctx=ctx, run_type="sync", status="FAILED")["syncRuns"]
     failed_run = next(run for run in failed_runs if run["source_type"] == "stream.erp_orders_cdc")
-    detail = core.run_detail("sync", str(failed_run["id"]), ctx=ctx)
+    detail = core.operations.run_detail("sync", str(failed_run["id"]), ctx=ctx)
     assert detail["error"]["adapterFailure"]["adapterProfile"] == "debezium-postgres-stream"
     assert detail["error"]["adapterFailure"]["operation"] == "read_events"
     assert detail["error"]["trace"]["adapter"] == "stream_archive_reader"

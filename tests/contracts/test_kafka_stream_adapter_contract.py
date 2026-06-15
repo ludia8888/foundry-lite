@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import StreamPublishRequest
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
 from foundry_lite.application.primitives import CommitResult
@@ -216,8 +216,8 @@ def test_kafka_stream_worker_archives_broker_event(tmp_path: Path) -> None:
 
     assert result is not None
     dependencies = create_local_core_dependencies(storage_root=storage_root)
-    core = FoundryLiteCore(dependencies=dependencies)
-    preview = core.preview_dataset("raw.shipment_events", ctx=demo_admin_context())
+    core = FoundryLite(dependencies=dependencies)
+    preview = core.datasets.preview("raw.shipment_events", ctx=demo_admin_context())
     assert result.row_count == 1
     assert preview[0]["event_id"] == "shipment_events:0:0"
     assert preview[0]["payload_json"] == '{"shipment_id":"S-100","status":"IN_TRANSIT"}'

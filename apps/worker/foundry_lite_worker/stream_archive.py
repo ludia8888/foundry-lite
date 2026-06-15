@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import StreamAdapter, StreamArchiveConfig
 from foundry_lite.application.ports.adapter_failure import AdapterError, adapter_failure_payload
 from foundry_lite.application.ports.stream_adapter import StreamSchemaStrategy
@@ -102,10 +102,10 @@ def run_stream_archive_once(
         adapter_profile=config.adapter_profile,
     )
     adapter = stream_adapter or config.stream_adapter()
-    core = FoundryLiteCore(dependencies=replace(dependencies, stream_adapter=adapter))
+    core = FoundryLite(dependencies=replace(dependencies, stream_adapter=adapter))
     ctx = config.request_context()
-    core.ensure_dataset(config.dataset_ref, ctx=ctx, primary_key=["event_id"])
-    return core.archive_stream_events(
+    core.datasets.ensure(config.dataset_ref, ctx=ctx, primary_key=["event_id"])
+    return core.datasets.archive_stream_events(
         config.dataset_ref,
         stream=config.stream_config(),
         ctx=ctx,

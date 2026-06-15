@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 from foundry_lite.infrastructure import schema as db
@@ -154,7 +154,7 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(core, monkeyp
         "X-User-ID": ctx.actor_user_id,
         "X-Roles": ",".join(ctx.roles),
     }
-    core.ensure_dataset("raw.webhook_orders", ctx=ctx, primary_key=["event_id"])
+    core.datasets.ensure("raw.webhook_orders", ctx=ctx, primary_key=["event_id"])
     monkeypatch.setattr(api_main, "core", core)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
     client = TestClient(app)
@@ -185,7 +185,7 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(core, monkeyp
         content=rejected_shape_body,
     )
 
-    preview = core.preview_dataset("raw.webhook_orders", ctx=ctx)
+    preview = core.datasets.preview("raw.webhook_orders", ctx=ctx)
     transactions = _dataset_transactions(core.engine)
     assert response.status_code == 200
     assert duplicate.status_code == 200
@@ -198,7 +198,7 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(core, monkeyp
     assert len([tx for tx in transactions if tx["tx_type"] == "APPEND"]) == 1
     assert denied.status_code == 403
     assert rejected_shape.status_code == 422
-    deny_events = core.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
+    deny_events = core.operations.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
     assert deny_events[0]["action"] == "webhook:ingest"
 
 
@@ -209,7 +209,7 @@ def test_webhook_same_event_id_different_payload_is_deduped(core, monkeypatch) -
     first_body = b'{"order_id":"O-9002","status":"PENDING","timestamp":"2026-06-15T01:00:00Z"}'
     duplicate_body = b'{"order_id":"O-9002","status":"PENDING","timestamp":"2026-06-15T01:00:05Z"}'
     changed_body = b'{"order_id":"O-9002","status":"SHIPPED","timestamp":"2026-06-15T01:00:06Z"}'
-    core.ensure_dataset("raw.webhook_dedupe_orders", ctx=ctx, primary_key=["event_id"])
+    core.datasets.ensure("raw.webhook_dedupe_orders", ctx=ctx, primary_key=["event_id"])
     monkeypatch.setattr(api_main, "core", core)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
     client = TestClient(app)
@@ -267,7 +267,7 @@ def test_webhook_signature_replay_and_clock_skew_policy(core, monkeypatch) -> No
         "X-User-ID": ctx.actor_user_id,
         "X-Roles": ",".join(ctx.roles),
     }
-    core.ensure_dataset("raw.webhook_replay_orders", ctx=ctx, primary_key=["event_id"])
+    core.datasets.ensure("raw.webhook_replay_orders", ctx=ctx, primary_key=["event_id"])
     monkeypatch.setattr(api_main, "core", core)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
     client = TestClient(app)
@@ -281,12 +281,12 @@ def test_webhook_signature_replay_and_clock_skew_policy(core, monkeypatch) -> No
 
     deny_events = [
         event
-        for event in core.list_runs(ctx=ctx)["auditEvents"]
+        for event in core.operations.list_runs(ctx=ctx)["auditEvents"]
         if event["event_type"] == "permission.denied" and event["resource_id"] == "mock_saas:orders"
     ]
     assert replay.status_code == 403
     assert replay.json()["detail"]["code"] == "PERMISSION_DENIED"
-    assert core.list_dataset_versions("raw.webhook_replay_orders", ctx=ctx) == []
+    assert core.datasets.list_versions("raw.webhook_replay_orders", ctx=ctx) == []
     assert deny_events
 
 
@@ -305,10 +305,10 @@ def test_webhook_ack_not_sent_before_append_commit_or_has_replay_strategy(tmp_pa
     }
 
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    failing_core = FoundryLiteCore(
+    failing_core = FoundryLite(
         dependencies=replace(dependencies, compute_adapter=_RowsToParquetFailingComputeAdapter())
     )
-    failing_core.ensure_dataset("raw.webhook_commit_fail_orders", ctx=ctx, primary_key=["event_id"])
+    failing_core.datasets.ensure("raw.webhook_commit_fail_orders", ctx=ctx, primary_key=["event_id"])
     monkeypatch.setattr(api_main, "core", failing_core)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
 
@@ -333,9 +333,9 @@ def test_api_operations_runs_cursor_pages_action_runs(core, monkeypatch) -> None
     client = TestClient(app)
     headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
 
-    first_order = core.get_object("Order", "O-1001", ctx=ctx)
-    second_order = core.get_object("Order", "O-1002", ctx=ctx)
-    core.apply_action(
+    first_order = core.objects.get("Order", "O-1001", ctx=ctx)
+    second_order = core.objects.get("Order", "O-1002", ctx=ctx)
+    core.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -344,7 +344,7 @@ def test_api_operations_runs_cursor_pages_action_runs(core, monkeypatch) -> None
         idempotency_key="api-operations-page-one",
         ctx=ctx,
     )
-    core.apply_action(
+    core.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1002",
@@ -648,7 +648,7 @@ def test_api_operations_retry_dead_letter_event_keeps_dlq_when_reprocess_fails(c
 
 
 def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
-    class FailingCore:
+    class _Operations:
         def query_runs(self, **_kwargs):
             raise ValidationFailed("invalid run filter")
 
@@ -658,14 +658,21 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
         def retry_dead_letter_event(self, *_args, **_kwargs):
             raise ValidationFailed("dead-letter event is not retryable")
 
-        def index_rebuild(self, *_args, **_kwargs):
+    class _Objects:
+        def reindex(self, *_args, **_kwargs):
             raise NotFound("object type not found")
 
-        def index_replay_run(self, *_args, **_kwargs):
+        def replay_index_run(self, *_args, **_kwargs):
             raise ValidationFailed("index run is not failed")
 
-        def retry_transform_run(self, *_args, **_kwargs):
+    class _Transforms:
+        def retry_run(self, *_args, **_kwargs):
             raise ValidationFailed("transform run is not failed")
+
+    class FailingCore:
+        operations = _Operations()
+        objects = _Objects()
+        transforms = _Transforms()
 
     monkeypatch.setattr(api_main, "core", FailingCore())
     client = TestClient(app)
@@ -696,12 +703,15 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
 
 
 def test_api_object_set_errors_preserve_request_id(monkeypatch) -> None:
-    class FailingCore:
-        def query_object_sets(self, **_kwargs):
+    class _Objects:
+        def query_sets(self, **_kwargs):
             raise NotFound("object type not found")
 
-        def create_object_set(self, *_args, **_kwargs):
+        def create_set(self, *_args, **_kwargs):
             raise ValidationFailed("invalid object set")
+
+    class FailingCore:
+        objects = _Objects()
 
     monkeypatch.setattr(api_main, "core", FailingCore())
     client = TestClient(app)
@@ -952,8 +962,8 @@ class _RowsToParquetFailingComputeAdapter(DuckDBComputeAdapter):
 
 
 def _approve_order_for_materialization(core, ctx, *, idempotency_key: str) -> None:
-    order = core.get_object("Order", "O-1001", ctx=ctx)
-    core.apply_action(
+    order = core.objects.get("Order", "O-1001", ctx=ctx)
+    core.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",

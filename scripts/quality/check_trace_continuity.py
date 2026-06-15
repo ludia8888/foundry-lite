@@ -210,14 +210,14 @@ def _run_demo_and_collect_spans(storage_root: Path) -> list[SpanRecord]:
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
 
-    from foundry_lite.application.core import FoundryLiteCore
+    from foundry_lite.application.foundry import FoundryLite
     from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID, RequestContext
     from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
     from foundry_lite.observability.tracing import instrument_sqlalchemy_engine
 
     dependencies = create_local_core_dependencies(storage_root=storage_root)
     instrument_sqlalchemy_engine(dependencies.engine)
-    core = FoundryLiteCore(dependencies=dependencies)
+    core = FoundryLite(dependencies=dependencies)
     exporter.clear()
 
     ctx = RequestContext(
@@ -231,7 +231,7 @@ def _run_demo_and_collect_spans(storage_root: Path) -> list[SpanRecord]:
         span.set_attribute("foundry_lite.tenant_id", ctx.tenant_id)
         span.set_attribute("foundry_lite.actor_user_id", ctx.actor_user_id)
         span.set_attribute("foundry_lite.request_id", ctx.request_id)
-        core.run_supply_chain_demo(ctx=ctx, fresh=True)
+        core.demo.run(ctx=ctx, fresh=True)
 
     provider.force_flush()
     return [_span_record(span) for span in exporter.get_finished_spans()]

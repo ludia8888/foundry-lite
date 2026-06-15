@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
 from scripts.quality import check_mvp_data_correctness as gate
@@ -55,6 +55,6 @@ def test_mvp_data_correctness_gate_writes_report(tmp_path: Path) -> None:
 
 def _demo_storage_root(tmp_path: Path) -> Path:
     storage_root = tmp_path / "flite"
-    core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=storage_root))
-    core.run_supply_chain_demo()
+    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    core.demo.run()
     return storage_root

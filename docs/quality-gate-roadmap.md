@@ -307,7 +307,7 @@ transaction 밖 audit 실패, preparatory lifecycle write 허용, JSON report �
 - `apps/api/foundry_lite_api/main.py`의 `apply_action` endpoint는
   `Idempotency-Key` header를 받아야 한다.
 - API handler는 `core.apply_action(..., idempotency_key=...)`로 key를 전달해야 한다.
-- `FoundryLiteCore.apply_action`과 `ActionService.apply_action`은 `idempotency_key`를
+- `FoundryLite.apply_action`과 `ActionService.apply_action`은 `idempotency_key`를
   required keyword argument로 받아야 한다.
 - `ActionService.apply_action`은 빈 key를 `ValidationFailed`로 거부해야 한다.
 - 새 `action_run` insert 전에 기존 action_run을 idempotency key로 조회하고,
@@ -362,7 +362,7 @@ matching contract 허용, `dataset_storage` alias 허용, JSON report 생성을 
   `*OPERATIONS`/`*EVALUATORS` registry는 교체 가능한 전략 후보로 본다.
 - 후보 모듈은 `tests/test_*.py`에서 모듈 자체 또는 public 규칙 symbol을 직접
   import해야 한다.
-- `FoundryLiteCore`나 API 서버를 통해 간접으로만 검증된 경우는 통과로 보지 않는다.
+- `FoundryLite`나 API 서버를 통해 간접으로만 검증된 경우는 통과로 보지 않는다.
 - 결과는 `artifacts/quality/strategy_specification_tests.json`에 남긴다.
 
 Self-test: `tests/unit/test_quality_strategy_specification_tests.py`가 missing direct test
@@ -414,7 +414,7 @@ Python class, 명시적 `Class.method` reference가 실제 코드 트리에 존�
 
 검사 기준:
 - inline code span의 source path/script reference는 현재 repo에 존재해야 한다.
-- `FoundryLiteCore`, `CoreDependencies` 같은 Python class reference는 AST symbol index에
+- `FoundryLite`, `CoreDependencies` 같은 Python class reference는 AST symbol index에
   존재해야 한다.
 - `Class.method` reference는 해당 class와 method가 모두 존재해야 한다.
 - `아직`, `not implemented`, `remain unextracted`, `removed`, `금지`처럼 미래 목표,
@@ -1082,7 +1082,7 @@ G9 (test sleep)는 Semgrep의 default tests 제외 동작 때문에 Semgrep으�
 ### Tier P0.5 — AST-grep structural anti-magic (✅ 완료 2026-06-11)
 
 AST-grep는 Semgrep보다 Python AST 패턴을 더 좁고 빠르게 검증하기 좋은 곳에 쓴다.
-현재 첫 규칙은 `FoundryLiteCore`가 다시 `__getattr__`/`__setattr__` 기반
+현재 첫 규칙은 `FoundryLite`가 다시 `__getattr__`/`__setattr__` 기반
 method-registry magic dispatch로 돌아가는 것을 차단한다.
 
 규칙:

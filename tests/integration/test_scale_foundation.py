@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
@@ -14,14 +14,14 @@ def test_dataset_commit_public_api_survives_fake_storage_swap(tmp_path: Path) ->
         storage_root=tmp_path / "fake-runtime",
         adapter_profile="fake-storage",
     )
-    core = FoundryLiteCore(dependencies=dependencies)
+    core = FoundryLite(dependencies=dependencies)
     ctx = demo_admin_context()
 
-    core.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
-    commit = core.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
-    preview = core.preview_dataset("raw.crm_customers", ctx=ctx, limit=1)
-    inspected = core.inspect_dataset("raw.crm_customers", ctx=ctx)
-    sync_runs = core.list_runs(ctx=ctx)["syncRuns"]
+    core.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    commit = core.datasets.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
+    preview = core.datasets.preview("raw.crm_customers", ctx=ctx, limit=1)
+    inspected = core.datasets.inspect("raw.crm_customers", ctx=ctx)
+    sync_runs = core.operations.list_runs(ctx=ctx)["syncRuns"]
 
     assert commit.row_count > 0
     assert preview[0]["customer_id"] == "C-100"

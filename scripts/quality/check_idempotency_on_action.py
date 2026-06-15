@@ -307,7 +307,7 @@ def _check_api(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyFind
                 message="Action apply endpoint must require the Idempotency-Key header",
             )
         )
-    if not _has_call_keyword(function, "core.apply_action", "idempotency_key"):
+    if not _has_call_keyword(function, "core.actions.apply", "idempotency_key"):
         findings.append(
             IdempotencyFinding(
                 code="api_core_call_missing_idempotency_key",
@@ -322,14 +322,14 @@ def _check_api(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyFind
 
 def _check_core(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
-    function = _function_def(tree, "apply_action", class_name="FoundryLiteCore")
+    function = _function_def(tree, "apply", class_name="ActionGateway")
     if function is None:
         _add_function_missing(
             findings,
             code="core_apply_action_missing",
             path=path,
             root=root,
-            message="FoundryLiteCore must expose apply_action",
+            message="ActionGateway must expose apply",
         )
         return findings
     if not _is_required_keyword_only(function, "idempotency_key"):
@@ -339,17 +339,17 @@ def _check_core(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyFin
                 path=_repo_relative(path, root),
                 line=function.lineno,
                 column=function.col_offset + 1,
-                message="FoundryLiteCore.apply_action must require idempotency_key",
+                message="ActionGateway.apply must require idempotency_key",
             )
         )
-    if not _has_call_keyword(function, "_services.action.apply_action", "idempotency_key"):
+    if not _has_call_keyword(function, "_action.apply_action", "idempotency_key"):
         findings.append(
             IdempotencyFinding(
                 code="core_service_call_missing_idempotency_key",
                 path=_repo_relative(path, root),
                 line=function.lineno,
                 column=function.col_offset + 1,
-                message="FoundryLiteCore.apply_action must pass idempotency_key into ActionService",
+                message="ActionGateway.apply must pass idempotency_key into ActionService",
             )
         )
     return findings
@@ -672,7 +672,7 @@ def collect_findings(root: Path = ROOT) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
     paths = {
         "api": root / "apps" / "api" / "foundry_lite_api" / "main.py",
-        "core": root / "libs" / "foundry_lite" / "application" / "core.py",
+        "core": root / "libs" / "foundry_lite" / "application" / "facades" / "action_gateway.py",
         "service": root / "libs" / "foundry_lite" / "application" / "services" / "action_service.py",
         "service_helpers": root / "libs" / "foundry_lite" / "application" / "services" / "action_helpers.py",
         "port": root / "libs" / "foundry_lite" / "application" / "ports" / "action_repository.py",

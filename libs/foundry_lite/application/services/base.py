@@ -57,7 +57,7 @@ class CoreService:
     directly uses through ``required_dependencies`` and only the service
     collaborators it directly calls through ``required_collaborators``.
 
-    This keeps ``FoundryLiteCore`` as a thin facade rather than a multiple
+    This keeps ``FoundryLite`` as a thin facade rather than a multiple
     inheritance host, while making service coupling visible in code.
     """
 

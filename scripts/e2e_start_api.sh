@@ -10,27 +10,27 @@ uv run python - <<'PY' >/tmp/foundry-lite-e2e-seed.json
 import json
 import os
 
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
 ctx = demo_admin_context()
-core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=os.environ["FOUNDRY_LITE_HOME"]))
-core.seed_supply_chain_demo_files()
-core.ensure_dataset("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
-core.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
-core.ensure_dataset("clean.orders", ctx=ctx, primary_key=["order_id"])
-core.ensure_dataset("clean.customers", ctx=ctx, primary_key=["customer_id"])
-core.ensure_dataset("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
-core.ensure_dataset("ops.order_current", ctx=ctx, primary_key=["orderId"])
-core.register_supply_chain_demo_transforms(ctx)
-orders_raw = core.upload_csv("raw.erp_orders", "examples/supply-chain-demo/data/orders.csv", ctx=ctx)
-customers_raw = core.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
-clean_orders = core.run_transform("clean_orders", ctx=ctx)
-clean_customers = core.run_transform("clean_customers", ctx=ctx)
-ontology = core.apply_ontology("examples/supply-chain-demo/ontology/order-customer.yaml", ctx=ctx)
-order_index = core.index_rebuild("Order", ctx=ctx)
-customer_index = core.index_rebuild("Customer", ctx=ctx)
+core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=os.environ["FOUNDRY_LITE_HOME"]))
+core.demo.seed_files()
+core.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
+core.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+core.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+core.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
+core.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
+core.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
+core.demo.register_transforms(ctx)
+orders_raw = core.datasets.upload_csv("raw.erp_orders", "examples/supply-chain-demo/data/orders.csv", ctx=ctx)
+customers_raw = core.datasets.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
+clean_orders = core.transforms.run("clean_orders", ctx=ctx)
+clean_customers = core.transforms.run("clean_customers", ctx=ctx)
+ontology = core.ontology.apply("examples/supply-chain-demo/ontology/order-customer.yaml", ctx=ctx)
+order_index = core.objects.reindex("Order", ctx=ctx)
+customer_index = core.objects.reindex("Customer", ctx=ctx)
 print(
     json.dumps(
         {

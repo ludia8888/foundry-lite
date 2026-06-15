@@ -408,10 +408,10 @@ def test_worker_composition_root_is_import_linter_allowlisted() -> None:
 
 
 def test_ast_grep_facade_magic_rule_has_a_failing_fixture(tmp_path: Path) -> None:
-    core_path = tmp_path / "libs" / "foundry_lite" / "application" / "core.py"
+    core_path = tmp_path / "libs" / "foundry_lite" / "application" / "facades" / "action_gateway.py"
     core_path.parent.mkdir(parents=True)
     core_path.write_text(
-        "class FoundryLiteCore:\n    def __getattr__(self, name):\n        return None\n",
+        "class ActionGateway:\n    def __getattr__(self, name):\n        return None\n",
         encoding="utf-8",
     )
 
@@ -421,7 +421,7 @@ def test_ast_grep_facade_magic_rule_has_a_failing_fixture(tmp_path: Path) -> Non
             "scan",
             "--rule",
             str(ROOT / "scripts" / "quality" / "ast-grep-rules" / "no-facade-magic-dispatch.yml"),
-            "libs/foundry_lite/application/core.py",
+            "libs/foundry_lite/application/facades/action_gateway.py",
             "--json=compact",
         ],
         check=False,

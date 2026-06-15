@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import TabularRow
 from foundry_lite.application.services.object_store.indexing import ObjectIndexingService
 from foundry_lite.domain.context import RequestContext, demo_admin_context
@@ -25,49 +25,49 @@ class EmptyReindexReadComputeAdapter(DuckDBComputeAdapter):
 
 
 def test_cdc_object_indexing_updates_tombstones_and_skips_stale_events(tmp_path: Path) -> None:
-    core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = demo_admin_context()
     _seed_order_snapshot(core, tmp_path, ctx)
-    core.apply_ontology(str(_order_ontology(tmp_path)), ctx=ctx)
-    core.index_rebuild("Order", ctx=ctx)
+    core.ontology.apply(str(_order_ontology(tmp_path)), ctx=ctx)
+    core.objects.reindex("Order", ctx=ctx)
 
     update = _cdc_event("topic:0:12", "u", 12, after={"order_id": "O-1001", "status": "APPROVED", "amount": 725})
-    update_result = core.index_cdc_events("Order", [update], ctx=ctx)
-    updated = core.get_object("Order", "O-1001", ctx=ctx)
+    update_result = core.objects.index_cdc_events("Order", [update], ctx=ctx)
+    updated = core.objects.get("Order", "O-1001", ctx=ctx)
     updated_version = updated["objectVersion"]
     object_changed_count = _object_changed_count(core, ctx, "O-1001")
 
-    replay_result = core.index_cdc_events("Order", [update], ctx=ctx)
+    replay_result = core.objects.index_cdc_events("Order", [update], ctx=ctx)
     stale = _cdc_event("topic:0:11", "u", 11, after={"order_id": "O-1001", "status": "REVIEW", "amount": 700})
-    stale_result = core.index_cdc_events("Order", [stale], ctx=ctx)
-    after_stale = core.get_object("Order", "O-1001", ctx=ctx)
+    stale_result = core.objects.index_cdc_events("Order", [stale], ctx=ctx)
+    after_stale = core.objects.get("Order", "O-1001", ctx=ctx)
     stale_snapshot = _cdc_event(
         "topic:0:10",
         "r",
         10,
         after={"order_id": "O-1001", "status": "SNAPSHOT_PENDING", "amount": 650},
     )
-    stale_snapshot_result = core.index_cdc_events("Order", [stale_snapshot], ctx=ctx)
-    after_stale_snapshot = core.get_object("Order", "O-1001", ctx=ctx)
+    stale_snapshot_result = core.objects.index_cdc_events("Order", [stale_snapshot], ctx=ctx)
+    after_stale_snapshot = core.objects.get("Order", "O-1001", ctx=ctx)
     delete = _cdc_event(
         "topic:0:13",
         "d",
         13,
         before={"order_id": "O-1001", "status": "APPROVED", "amount": 725},
     )
-    delete_result = core.index_cdc_events("Order", [delete], ctx=ctx)
-    deleted = core.get_object("Order", "O-1001", ctx=ctx)
+    delete_result = core.objects.index_cdc_events("Order", [delete], ctx=ctx)
+    deleted = core.objects.get("Order", "O-1001", ctx=ctx)
     late_update_after_delete = _cdc_event(
         "topic:0:11-retry",
         "u",
         11,
         after={"order_id": "O-1001", "status": "REOPENED", "amount": 999},
     )
-    late_update_result = core.index_cdc_events("Order", [late_update_after_delete], ctx=ctx)
-    still_deleted = core.get_object("Order", "O-1001", ctx=ctx)
-    active_page = core.query_objects("Order", ctx=ctx)
-    core.ensure_dataset("ops.order_current", ctx=ctx, primary_key=["orderId"])
-    order_current = core.materialize("order_current", ctx=ctx)
+    late_update_result = core.objects.index_cdc_events("Order", [late_update_after_delete], ctx=ctx)
+    still_deleted = core.objects.get("Order", "O-1001", ctx=ctx)
+    active_page = core.objects.query("Order", ctx=ctx)
+    core.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
+    order_current = core.materialization.run("order_current", ctx=ctx)
     order_current_rows = _materialization_rows_for_version(core, ctx, order_current.version_id)
 
     assert update_result["objects_upserted"] == 1
@@ -92,18 +92,18 @@ def test_cdc_object_indexing_updates_tombstones_and_skips_stale_events(tmp_path:
 
 
 def test_cdc_object_indexing_inserts_new_object_and_new_tombstone(tmp_path: Path) -> None:
-    core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = demo_admin_context()
     _seed_order_snapshot(core, tmp_path, ctx)
-    core.apply_ontology(str(_order_ontology(tmp_path)), ctx=ctx)
+    core.ontology.apply(str(_order_ontology(tmp_path)), ctx=ctx)
 
     create = _cdc_event("topic:0:20", "c", 20, after={"order_id": "O-2002", "status": "NEW", "amount": 50})
     delete = _cdc_event("topic:0:21", "d", 21, before={"order_id": "O-3003", "status": "VOID", "amount": 0})
 
-    create_result = core.index_cdc_events("Order", [create], ctx=ctx)
-    delete_result = core.index_cdc_events("Order", [delete], ctx=ctx)
-    created = core.get_object("Order", "O-2002", ctx=ctx)
-    deleted = core.get_object("Order", "O-3003", ctx=ctx)
+    create_result = core.objects.index_cdc_events("Order", [create], ctx=ctx)
+    delete_result = core.objects.index_cdc_events("Order", [delete], ctx=ctx)
+    created = core.objects.get("Order", "O-2002", ctx=ctx)
+    deleted = core.objects.get("Order", "O-3003", ctx=ctx)
 
     assert create_result["objects_upserted"] == 1
     assert created["properties"]["status"] == "NEW"
@@ -113,17 +113,17 @@ def test_cdc_object_indexing_inserts_new_object_and_new_tombstone(tmp_path: Path
 
 
 def test_cdc_duplicate_event_idempotent(tmp_path: Path) -> None:
-    core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = demo_admin_context()
     _seed_order_snapshot(core, tmp_path, ctx)
-    core.apply_ontology(str(_order_ontology(tmp_path)), ctx=ctx)
-    core.index_rebuild("Order", ctx=ctx)
+    core.ontology.apply(str(_order_ontology(tmp_path)), ctx=ctx)
+    core.objects.reindex("Order", ctx=ctx)
 
     update = _cdc_event("topic:0:30", "u", 30, after={"order_id": "O-1001", "status": "APPROVED", "amount": 900})
-    first = core.index_cdc_events("Order", [update], ctx=ctx)
-    after_first = core.get_object("Order", "O-1001", ctx=ctx)
-    duplicate = core.index_cdc_events("Order", [update], ctx=ctx)
-    after_duplicate = core.get_object("Order", "O-1001", ctx=ctx)
+    first = core.objects.index_cdc_events("Order", [update], ctx=ctx)
+    after_first = core.objects.get("Order", "O-1001", ctx=ctx)
+    duplicate = core.objects.index_cdc_events("Order", [update], ctx=ctx)
+    after_duplicate = core.objects.get("Order", "O-1001", ctx=ctx)
 
     # Re-delivering the exact same CDC event (same topic/partition/offset id and
     # ordering) must be a no-op: no second upsert, no object_version bump, and no
@@ -138,11 +138,11 @@ def test_cdc_duplicate_event_idempotent(tmp_path: Path) -> None:
 def test_cdc_source_transaction_group_not_partially_committed_without_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = demo_admin_context()
     _seed_order_snapshot(core, tmp_path, ctx)
-    core.apply_ontology(str(_order_ontology(tmp_path)), ctx=ctx)
-    core.index_rebuild("Order", ctx=ctx)
+    core.ontology.apply(str(_order_ontology(tmp_path)), ctx=ctx)
+    core.objects.reindex("Order", ctx=ctx)
 
     # Two row changes delivered together as one source transaction group.
     group = [
@@ -159,10 +159,12 @@ def test_cdc_source_transaction_group_not_partially_committed_without_status(
     monkeypatch.setattr(ObjectIndexingService, "_apply_cdc_event", fail_on_second)
 
     with pytest.raises(RuntimeError, match="injected mid-group cdc failure"):
-        core.index_cdc_events("Order", group, ctx=ctx)
+        core.objects.index_cdc_events("Order", group, ctx=ctx)
 
-    active_ids = {item["objectId"] for item in core.query_objects("Order", ctx=ctx)["items"]}
-    failed_runs = [run for run in core.query_runs(ctx=ctx, run_type="index")["indexRuns"] if run["status"] == "failed"]
+    active_ids = {item["objectId"] for item in core.objects.query("Order", ctx=ctx)["items"]}
+    failed_runs = [
+        run for run in core.operations.query_runs(ctx=ctx, run_type="index")["indexRuns"] if run["status"] == "failed"
+    ]
 
     # The whole CDC batch rolls back atomically: neither row of the source
     # transaction group is partially committed, and the failure surfaces as a
@@ -175,16 +177,16 @@ def test_cdc_source_transaction_group_not_partially_committed_without_status(
 def test_empty_shadow_reindex_persists_active_pointer_for_next_cdc_insert(tmp_path: Path) -> None:
     compute = EmptyReindexReadComputeAdapter()
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    core = FoundryLiteCore(dependencies=replace(dependencies, compute_adapter=compute))
+    core = FoundryLite(dependencies=replace(dependencies, compute_adapter=compute))
     ctx = demo_admin_context()
     _seed_order_snapshot(core, tmp_path, ctx)
-    core.apply_ontology(str(_order_ontology(tmp_path)), ctx=ctx)
+    core.ontology.apply(str(_order_ontology(tmp_path)), ctx=ctx)
 
     compute.force_empty_reads = True
-    shadow = core.index_shadow_rebuild("Order", ctx=ctx)
+    shadow = core.objects.shadow_reindex("Order", ctx=ctx)
     create = _cdc_event("topic:0:30", "c", 30, after={"order_id": "O-4004", "status": "NEW", "amount": 88})
-    create_result = core.index_cdc_events("Order", [create], ctx=ctx)
-    created = core.get_object("Order", "O-4004", ctx=ctx)
+    create_result = core.objects.index_cdc_events("Order", [create], ctx=ctx)
+    created = core.objects.get("Order", "O-4004", ctx=ctx)
     stored_index_version = _object_index_version(core, ctx, "O-4004")
 
     assert shadow["is_switched"] is True
@@ -194,12 +196,12 @@ def test_empty_shadow_reindex_persists_active_pointer_for_next_cdc_insert(tmp_pa
     assert stored_index_version == shadow["indexVersion"]
 
 
-def _seed_order_snapshot(core: FoundryLiteCore, tmp_path: Path, ctx: RequestContext) -> None:
-    core.ensure_dataset("clean.orders", ctx=ctx, primary_key=["order_id"])
-    core.ensure_dataset("raw_cdc.erp_orders", ctx=ctx, primary_key=["event_id"])
+def _seed_order_snapshot(core: FoundryLite, tmp_path: Path, ctx: RequestContext) -> None:
+    core.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+    core.datasets.ensure("raw_cdc.erp_orders", ctx=ctx, primary_key=["event_id"])
     csv_path = tmp_path / "orders.csv"
     csv_path.write_text("order_id,status,amount\nO-1001,PENDING,700\n", encoding="utf-8")
-    core.upload_csv("clean.orders", csv_path, ctx=ctx)
+    core.datasets.upload_csv("clean.orders", csv_path, ctx=ctx)
 
 
 def _order_ontology(tmp_path: Path) -> Path:
@@ -257,32 +259,34 @@ def _cdc_event(
     }
 
 
-def _object_changed_count(core: FoundryLiteCore, ctx: RequestContext, object_id: str) -> int:
+def _object_changed_count(core: FoundryLite, ctx: RequestContext, object_id: str) -> int:
     return sum(
         1
-        for event in core.query_runs(ctx=ctx, run_type="outbox")["outboxEvents"]
+        for event in core.operations.query_runs(ctx=ctx, run_type="outbox")["outboxEvents"]
         if event["event_type"] == "object.changed" and event["aggregate_id"] == f"Order/{object_id}"
     )
 
 
-def _index_run(core: FoundryLiteCore, ctx: RequestContext, run_id: str) -> dict[str, object]:
-    return dict(next(row for row in core.query_runs(ctx=ctx, run_type="index")["indexRuns"] if row["id"] == run_id))
+def _index_run(core: FoundryLite, ctx: RequestContext, run_id: str) -> dict[str, object]:
+    return dict(
+        next(row for row in core.operations.query_runs(ctx=ctx, run_type="index")["indexRuns"] if row["id"] == run_id)
+    )
 
 
 def _materialization_rows_for_version(
-    core: FoundryLiteCore,
+    core: FoundryLite,
     ctx: RequestContext,
     version_id: str,
 ) -> list[dict[str, object]]:
     run = next(
         row
-        for row in core.query_runs(ctx=ctx, run_type="materialization")["materializationRuns"]
+        for row in core.operations.query_runs(ctx=ctx, run_type="materialization")["materializationRuns"]
         if row["target_dataset_version_id"] == version_id
     )
-    return [dict(row) for row in core.replay_materialization_rows(str(run["id"]), ctx=ctx).rows]
+    return [dict(row) for row in core.materialization.replay_rows(str(run["id"]), ctx=ctx).rows]
 
 
-def _object_index_version(core: FoundryLiteCore, ctx: RequestContext, object_id: str) -> str:
+def _object_index_version(core: FoundryLite, ctx: RequestContext, object_id: str) -> str:
     with core.engine.begin() as conn:
         row = conn.execute(
             select(db.object_records.c.index_version).where(

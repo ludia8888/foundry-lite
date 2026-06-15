@@ -47,7 +47,7 @@ def test_router_layer_purity_allows_application_facade_calls(tmp_path: Path) -> 
         tmp_path,
         """
 def handler(core, request):
-    return core.get_object("Order", "O-1001", ctx=request.state.ctx)
+    return core.objects.get("Order", "O-1001", ctx=request.state.ctx)
 """,
     )
 
