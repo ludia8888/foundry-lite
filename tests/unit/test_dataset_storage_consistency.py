@@ -27,31 +27,31 @@ class _FailingFileInsertRepository:
 def test_dataset_commit_storage_success_db_failure_creates_orphan_cleanup_evidence(tmp_path: Path) -> None:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "split-brain-runtime")
     failing = _FailingFileInsertRepository(dependencies.dataset_transaction_repository)
-    core = FoundryLite(dependencies=replace(dependencies, dataset_transaction_repository=failing))
+    foundry = FoundryLite(dependencies=replace(dependencies, dataset_transaction_repository=failing))
     ctx = demo_admin_context()
-    core.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
 
     with pytest.raises(InvariantViolation) as exc_info:
-        core.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+        foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
 
     cleanup = exc_info.value.details["orphan_cleanup"]
     assert cleanup["removed"] is True
     assert not list(dependencies.storage_root.glob("**/version=*"))
-    failed_run = next(run for run in core.operations.list_runs(ctx=ctx)["syncRuns"] if run["status"] == "FAILED")
+    failed_run = next(run for run in foundry.operations.list_runs(ctx=ctx)["syncRuns"] if run["status"] == "FAILED")
     error = failed_run["error"]
     assert error["type"] == "INVARIANT_VIOLATION"
     assert error["details"]["orphan_cleanup"]["manifest_uri"] == cleanup["manifest_uri"]
 
 
 def test_dataset_commit_db_success_manifest_missing_marks_storage_corruption(tmp_path: Path) -> None:
-    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "missing-manifest"))
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "missing-manifest"))
     ctx = demo_admin_context()
-    core.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
-    committed = core.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    committed = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
     Path(committed.manifest_uri).unlink()
 
     with pytest.raises(InvariantViolation) as exc_info:
-        core.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)
+        foundry.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)
 
     details = exc_info.value.details
     assert details["error_type"] == "committed_version_storage_missing"
@@ -61,15 +61,15 @@ def test_dataset_commit_db_success_manifest_missing_marks_storage_corruption(tmp
 
 
 def test_dataset_preview_data_file_missing_marks_storage_corruption(tmp_path: Path) -> None:
-    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "missing-data-file"))
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "missing-data-file"))
     ctx = demo_admin_context()
-    core.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
-    committed = core.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
-    manifest = core.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)["manifest"]
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    committed = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+    manifest = foundry.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)["manifest"]
     Path(manifest["files"][0]["uri"]).unlink()
 
     with pytest.raises(InvariantViolation) as exc_info:
-        core.datasets.preview("raw.orders", ctx=ctx, version=committed.version_id)
+        foundry.datasets.preview("raw.orders", ctx=ctx, version=committed.version_id)
 
     details = exc_info.value.details
     assert details["error_type"] == "committed_version_storage_missing"
@@ -79,17 +79,17 @@ def test_dataset_preview_data_file_missing_marks_storage_corruption(tmp_path: Pa
 
 
 def test_abort_cleanup_never_deletes_committed_manifest(tmp_path: Path) -> None:
-    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "abort-cleanup"))
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "abort-cleanup"))
     ctx = demo_admin_context()
-    core.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
-    committed = core.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
-    manifest_before = core.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)["manifest"]
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    committed = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+    manifest_before = foundry.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)["manifest"]
 
     with pytest.raises(ValidationFailed, match="dataset checks failed"):
-        core.datasets.upload_csv("raw.orders", _duplicate_csv_file(tmp_path), ctx=ctx)
+        foundry.datasets.upload_csv("raw.orders", _duplicate_csv_file(tmp_path), ctx=ctx)
 
-    manifest_after = core.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)["manifest"]
-    preview = core.datasets.preview("raw.orders", ctx=ctx, version=committed.version_id)
+    manifest_after = foundry.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)["manifest"]
+    preview = foundry.datasets.preview("raw.orders", ctx=ctx, version=committed.version_id)
     assert Path(committed.manifest_uri).exists()
     assert manifest_after["files"] == manifest_before["files"]
     assert [(row["id"], row["amount"]) for row in preview] == [("O-1", 100)]

@@ -58,7 +58,7 @@ def _call_name(node: ast.AST) -> str | None:
 
 def _is_core_repository_call(call_name: str) -> bool:
     parts = call_name.split(".")
-    if len(parts) < 3 or parts[0] != "core":
+    if len(parts) < 3 or parts[0] != "foundry":
         return False
     return any(part.endswith("_repository") for part in parts[1:-1])
 
@@ -81,7 +81,7 @@ def _finding_for_call(path: Path, node: ast.Call, call_name: str) -> RouterPurit
             line=node.lineno,
             column=node.col_offset + 1,
             expression=call_name,
-            message="API router calls a core repository field directly instead of an application service",
+            message="API router calls a foundry repository field directly instead of an application service",
         )
     if _is_engine_begin_call(call_name):
         return RouterPurityFinding(

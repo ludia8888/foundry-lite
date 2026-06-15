@@ -80,7 +80,7 @@ def test_doc_drift_skips_future_or_negative_gap_wording(tmp_path: Path) -> None:
         tmp_path,
         "`WorkflowAdapter` remains unextracted, and `FoundryLite.__getattr__` has been removed.\n",
     )
-    _write_python(tmp_path, "libs/core.py", "class FoundryLite:\n    pass\n")
+    _write_python(tmp_path, "libs/foundry.py", "class FoundryLite:\n    pass\n")
 
     assert gate.collect_findings(docs=(doc,), code_roots=(tmp_path / "libs",), root=tmp_path) == []
 

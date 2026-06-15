@@ -21,20 +21,20 @@ from tests.conftest import prepare_indexed_demo
 
 @pytest.mark.integration_scenario("transform_clean_dataset")
 def test_supply_chain_closed_loop_updates_customer_risk_and_records_replay_state(
-    core: FoundryLite,
+    foundry: FoundryLite,
 ) -> None:
-    result = core.demo.run()
+    result = foundry.demo.run()
 
     assert result["action"]["status"] == "succeeded"
     assert result["customer"]["properties"]["customerId"] == "C-100"
     assert result["customer"]["properties"]["riskScore"] == 0.1
     assert result["customer"]["properties"]["approvedOrderCount"] == 2
 
-    linked = core.objects.links("Order", "O-1001", "OrderCustomer")
+    linked = foundry.objects.links("Order", "O-1001", "OrderCustomer")
     assert linked[0]["to"]["objectId"] == "C-100"
 
-    clean_orders = core.datasets.inspect("clean.orders")
-    clean_order_lineage = core.operations.lineage(result["cleanOrdersVersion"])
+    clean_orders = foundry.datasets.inspect("clean.orders")
+    clean_order_lineage = foundry.operations.lineage(result["cleanOrdersVersion"])
     assert clean_orders["manifest"]["files"][0]["row_count"] == 3
     assert any(
         edge["from_resource_id"] == result["rawOrdersVersion"]
@@ -42,7 +42,7 @@ def test_supply_chain_closed_loop_updates_customer_risk_and_records_replay_state
         for edge in clean_order_lineage
     )
 
-    runs = core.operations.list_runs()
+    runs = foundry.operations.list_runs()
     assert any(run["status"] == "SUCCESS" for run in runs["transformRuns"])
     assert any(run["status"] == "succeeded" for run in runs["materializationRuns"])
     assert any(event["event_type"] == "action.run.committed" for event in runs["outboxEvents"])
@@ -51,11 +51,11 @@ def test_supply_chain_closed_loop_updates_customer_risk_and_records_replay_state
 
 @pytest.mark.integration_scenario("materialization_downstream_transform")
 def test_action_materialization_writes_dataset_versions_and_manifest_rows(
-    core: FoundryLite,
+    foundry: FoundryLite,
 ) -> None:
-    ctx = prepare_indexed_demo(core)
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
-    action = core.actions.apply(
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    action = foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -65,17 +65,17 @@ def test_action_materialization_writes_dataset_versions_and_manifest_rows(
         ctx=ctx,
     )
 
-    action_log = core.materialization.run("action_log", ctx=ctx)
-    order_current = core.materialization.run("order_current", ctx=ctx)
-    customer_risk = core.transforms.run("customer_risk", ctx=ctx)
+    action_log = foundry.materialization.run("action_log", ctx=ctx)
+    order_current = foundry.materialization.run("order_current", ctx=ctx)
+    customer_risk = foundry.transforms.run("customer_risk", ctx=ctx)
 
-    action_log_versions = core.datasets.list_versions("ops.action_log", ctx=ctx)
-    order_current_versions = core.datasets.list_versions("ops.order_current", ctx=ctx)
-    action_log_manifest = core.datasets.inspect("ops.action_log", ctx=ctx)["manifest"]
-    order_current_manifest = core.datasets.inspect("ops.order_current", ctx=ctx)["manifest"]
-    customer_risk_rows = core.datasets.preview("clean.customers", ctx=ctx)
-    order_current_run = _materialization_run_for_version(core, ctx, order_current.version_id)
-    downstream_lineage = core.operations.lineage(order_current.version_id, ctx=ctx)
+    action_log_versions = foundry.datasets.list_versions("ops.action_log", ctx=ctx)
+    order_current_versions = foundry.datasets.list_versions("ops.order_current", ctx=ctx)
+    action_log_manifest = foundry.datasets.inspect("ops.action_log", ctx=ctx)["manifest"]
+    order_current_manifest = foundry.datasets.inspect("ops.order_current", ctx=ctx)["manifest"]
+    customer_risk_rows = foundry.datasets.preview("clean.customers", ctx=ctx)
+    order_current_run = _materialization_run_for_version(foundry, ctx, order_current.version_id)
+    downstream_lineage = foundry.operations.lineage(order_current.version_id, ctx=ctx)
     order_current_watermark = order_current_run["object_store_watermark"]
 
     assert action_log.version_id == action_log_versions[0]["id"]
@@ -104,14 +104,14 @@ def test_action_materialization_writes_dataset_versions_and_manifest_rows(
 def test_transform_input_latest_is_pinned_to_version_id(tmp_path: Path) -> None:
     compute = _BeforeExecuteTransformAdapter()
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "transform-pinning")
-    core = FoundryLite(dependencies=replace(dependencies, compute_adapter=compute))
+    foundry = FoundryLite(dependencies=replace(dependencies, compute_adapter=compute))
     ctx = RequestContext(roles=("admin", "data_engineer"))
-    core.datasets.ensure("raw.pin_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.ensure("clean.pin_orders", ctx=ctx, primary_key=["order_id"])
-    first_input = core.datasets.upload_csv("raw.pin_orders", _csv(tmp_path, "orders_v1.csv", "O-1", 100), ctx=ctx)
+    foundry.datasets.ensure("raw.pin_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.pin_orders", ctx=ctx, primary_key=["order_id"])
+    first_input = foundry.datasets.upload_csv("raw.pin_orders", _csv(tmp_path, "orders_v1.csv", "O-1", 100), ctx=ctx)
     sql_path = tmp_path / "pin_orders.sql"
     sql_path.write_text("select order_id, amount from {{ input('raw.pin_orders') }}", encoding="utf-8")
-    core.transforms.register(
+    foundry.transforms.register(
         "pin_orders",
         entrypoint=sql_path,
         inputs={"orders": "raw.pin_orders"},
@@ -120,16 +120,16 @@ def test_transform_input_latest_is_pinned_to_version_id(tmp_path: Path) -> None:
     )
 
     def commit_new_latest() -> None:
-        core.datasets.upload_csv("raw.pin_orders", _csv(tmp_path, "orders_v2.csv", "O-1", 999), ctx=ctx)
+        foundry.datasets.upload_csv("raw.pin_orders", _csv(tmp_path, "orders_v2.csv", "O-1", 999), ctx=ctx)
 
     compute.before_execute_transform = commit_new_latest
-    result = core.transforms.run("pin_orders", ctx=ctx)
+    result = foundry.transforms.run("pin_orders", ctx=ctx)
 
-    output_rows = core.datasets.preview("clean.pin_orders", ctx=ctx, version=result.version_id)
-    latest_input_rows = core.datasets.preview("raw.pin_orders", ctx=ctx)
+    output_rows = foundry.datasets.preview("clean.pin_orders", ctx=ctx, version=result.version_id)
+    latest_input_rows = foundry.datasets.preview("raw.pin_orders", ctx=ctx)
     transform_run = next(
         run
-        for run in core.operations.list_runs(ctx=ctx)["transformRuns"]
+        for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"]
         if run["output_version_id"] == result.version_id
     )
     assert [(row["order_id"], row["amount"]) for row in output_rows] == [("O-1", 100)]
@@ -141,16 +141,16 @@ def test_transform_input_latest_is_pinned_to_version_id(tmp_path: Path) -> None:
 def test_downstream_transform_consumes_materialized_version_id_not_latest(tmp_path: Path) -> None:
     compute = _BeforeExecuteTransformAdapter()
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "materialized-transform-pinning")
-    core = FoundryLite(dependencies=replace(dependencies, compute_adapter=compute))
-    ctx = prepare_indexed_demo(core)
-    first_materialized = core.materialization.run("order_current", ctx=ctx)
-    core.datasets.ensure("clean.pinned_order_current", ctx=ctx, primary_key=["orderId"])
+    foundry = FoundryLite(dependencies=replace(dependencies, compute_adapter=compute))
+    ctx = prepare_indexed_demo(foundry)
+    first_materialized = foundry.materialization.run("order_current", ctx=ctx)
+    foundry.datasets.ensure("clean.pinned_order_current", ctx=ctx, primary_key=["orderId"])
     sql_path = tmp_path / "pinned_order_current.sql"
     sql_path.write_text(
         "select \"orderId\", status from {{ input('ops.order_current') }}",
         encoding="utf-8",
     )
-    core.transforms.register(
+    foundry.transforms.register(
         "pinned_order_current",
         entrypoint=sql_path,
         inputs={"orders": "ops.order_current"},
@@ -160,32 +160,32 @@ def test_downstream_transform_consumes_materialized_version_id_not_latest(tmp_pa
     newer_materialized_version_ids: list[str] = []
 
     def commit_new_latest_materialization() -> None:
-        order = core.objects.get("Order", "O-1001", ctx=ctx)
+        order = foundry.objects.get("Order", "O-1001", ctx=ctx)
         _approve_order(
-            core,
+            foundry,
             ctx,
             object_id="O-1001",
             expected_object_version=order["objectVersion"],
             idempotency_key="latest-materialization-after-transform-plan",
         )
-        newer_materialized_version_ids.append(core.materialization.run("order_current", ctx=ctx).version_id)
+        newer_materialized_version_ids.append(foundry.materialization.run("order_current", ctx=ctx).version_id)
 
     compute.before_execute_transform = commit_new_latest_materialization
-    result = core.transforms.run("pinned_order_current", ctx=ctx)
+    result = foundry.transforms.run("pinned_order_current", ctx=ctx)
 
     output_status = _status_by_order(
-        core.datasets.preview("clean.pinned_order_current", ctx=ctx, version=result.version_id)
+        foundry.datasets.preview("clean.pinned_order_current", ctx=ctx, version=result.version_id)
     )
-    newer_run = _materialization_run_for_version(core, ctx, newer_materialized_version_ids[0])
-    latest_status = _status_by_order(core.materialization.replay_rows(str(newer_run["id"]), ctx=ctx).rows)
+    newer_run = _materialization_run_for_version(foundry, ctx, newer_materialized_version_ids[0])
+    latest_status = _status_by_order(foundry.materialization.replay_rows(str(newer_run["id"]), ctx=ctx).rows)
     transform_run = next(
         run
-        for run in core.operations.list_runs(ctx=ctx)["transformRuns"]
+        for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"]
         if run["output_version_id"] == result.version_id
     )
     materialization_event = next(
         event
-        for event in core.operations.list_runs(ctx=ctx)["outboxEvents"]
+        for event in foundry.operations.list_runs(ctx=ctx)["outboxEvents"]
         if event["event_type"] == "materialization.completed" and event["aggregate_id"] == first_materialized.version_id
     )
 
@@ -196,11 +196,11 @@ def test_downstream_transform_consumes_materialized_version_id_not_latest(tmp_pa
     assert materialization_event["payload"]["versionId"] == first_materialized.version_id
 
 
-def test_failed_action_not_included_in_success_action_log_materialization(core: FoundryLite) -> None:
-    ctx = prepare_indexed_demo(core)
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
+def test_failed_action_not_included_in_success_action_log_materialization(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
     with pytest.raises(ExternalSystemError, match="mock before-commit writeback failed"):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -210,7 +210,7 @@ def test_failed_action_not_included_in_success_action_log_materialization(core: 
             simulate_writeback_failure=True,
             ctx=ctx,
         )
-    success = core.actions.apply(
+    success = foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -220,31 +220,31 @@ def test_failed_action_not_included_in_success_action_log_materialization(core: 
         ctx=ctx,
     )
 
-    action_log = core.materialization.run("action_log", ctx=ctx)
-    action_log_run = _materialization_run_for_version(core, ctx, action_log.version_id)
-    action_log_rows = core.materialization.replay_rows(str(action_log_run["id"]), ctx=ctx).rows
+    action_log = foundry.materialization.run("action_log", ctx=ctx)
+    action_log_run = _materialization_run_for_version(foundry, ctx, action_log.version_id)
+    action_log_rows = foundry.materialization.replay_rows(str(action_log_run["id"]), ctx=ctx).rows
 
     assert [row["action_run_id"] for row in action_log_rows] == [success["actionRunId"]]
     assert {row["status"] for row in action_log_rows} == {"succeeded"}
 
 
-def test_action_log_same_cursor_rerun_does_not_duplicate_rows(core: FoundryLite) -> None:
-    ctx = prepare_indexed_demo(core)
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
+def test_action_log_same_cursor_rerun_does_not_duplicate_rows(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
     action = _approve_order(
-        core,
+        foundry,
         ctx,
         object_id="O-1001",
         expected_object_version=order["objectVersion"],
         idempotency_key="action-log-rerun",
     )
 
-    first = core.materialization.run("action_log", ctx=ctx)
-    second = core.materialization.run("action_log", ctx=ctx)
-    first_run = _materialization_run_for_version(core, ctx, first.version_id)
-    second_run = _materialization_run_for_version(core, ctx, second.version_id)
-    first_rows = core.materialization.replay_rows(str(first_run["id"]), ctx=ctx).rows
-    second_rows = core.materialization.replay_rows(str(second_run["id"]), ctx=ctx).rows
+    first = foundry.materialization.run("action_log", ctx=ctx)
+    second = foundry.materialization.run("action_log", ctx=ctx)
+    first_run = _materialization_run_for_version(foundry, ctx, first.version_id)
+    second_run = _materialization_run_for_version(foundry, ctx, second.version_id)
+    first_rows = foundry.materialization.replay_rows(str(first_run["id"]), ctx=ctx).rows
+    second_rows = foundry.materialization.replay_rows(str(second_run["id"]), ctx=ctx).rows
 
     assert [row["action_run_id"] for row in first_rows] == [action["actionRunId"]]
     assert [row["action_run_id"] for row in second_rows] == [action["actionRunId"]]
@@ -252,31 +252,31 @@ def test_action_log_same_cursor_rerun_does_not_duplicate_rows(core: FoundryLite)
 
 
 def test_transform_retry_after_commit_does_not_create_second_output_version(tmp_path: Path) -> None:
-    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-retry"))
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-retry"))
     ctx = RequestContext(roles=("admin", "data_engineer"))
-    core.datasets.ensure("raw.retry_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.ensure("clean.retry_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.upload_csv("raw.retry_orders", _csv(tmp_path, "retry_orders.csv", "O-1", 100), ctx=ctx)
+    foundry.datasets.ensure("raw.retry_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.retry_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.retry_orders", _csv(tmp_path, "retry_orders.csv", "O-1", 100), ctx=ctx)
     sql_path = tmp_path / "retry_orders.sql"
     sql_path.write_text("select order_id, amount from {{ input('raw.retry_orders') }}", encoding="utf-8")
-    core.transforms.register(
+    foundry.transforms.register(
         "retry_orders",
         entrypoint=sql_path,
         inputs={"orders": "raw.retry_orders"},
         output_dataset_ref="clean.retry_orders",
         ctx=ctx,
     )
-    first = core.transforms.run("retry_orders", ctx=ctx)
+    first = foundry.transforms.run("retry_orders", ctx=ctx)
     transform_run = next(
         run
-        for run in core.operations.list_runs(ctx=ctx)["transformRuns"]
+        for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"]
         if run["output_version_id"] == first.version_id
     )
 
     with pytest.raises(ValidationFailed, match="transform run is not failed"):
-        core.transforms.retry_run(transform_run["id"], ctx=ctx)
+        foundry.transforms.retry_run(transform_run["id"], ctx=ctx)
 
-    versions = core.datasets.list_versions("clean.retry_orders", ctx=ctx)
+    versions = foundry.datasets.list_versions("clean.retry_orders", ctx=ctx)
     assert [version["id"] for version in versions] == [first.version_id]
 
 
@@ -285,16 +285,16 @@ def test_transform_output_and_lineage_commit_atomically(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "transform-lineage-atomic")
-    core = FoundryLite(dependencies=dependencies)
+    foundry = FoundryLite(dependencies=dependencies)
     ctx = RequestContext(roles=("admin", "data_engineer"))
-    core.datasets.ensure("raw.atomic_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.ensure("clean.atomic_orders", ctx=ctx, primary_key=["order_id"])
-    input_version = core.datasets.upload_csv(
+    foundry.datasets.ensure("raw.atomic_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.atomic_orders", ctx=ctx, primary_key=["order_id"])
+    input_version = foundry.datasets.upload_csv(
         "raw.atomic_orders", _csv(tmp_path, "atomic_orders.csv", "O-1", 100), ctx=ctx
     )
     sql_path = tmp_path / "atomic_orders.sql"
     sql_path.write_text("select order_id, amount from {{ input('raw.atomic_orders') }}", encoding="utf-8")
-    core.transforms.register(
+    foundry.transforms.register(
         "atomic_orders",
         entrypoint=sql_path,
         inputs={"orders": "raw.atomic_orders"},
@@ -309,15 +309,17 @@ def test_transform_output_and_lineage_commit_atomically(
     monkeypatch.setattr(TransformService, "_record_transform_lineage", fail_lineage)
 
     with pytest.raises(InvariantViolation, match="dataset commit metadata persistence failed") as exc_info:
-        core.transforms.run("atomic_orders", ctx=ctx)
+        foundry.transforms.run("atomic_orders", ctx=ctx)
 
     cleanup = exc_info.value.details["orphan_cleanup"]
-    failed_run = next(run for run in core.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED")
+    failed_run = next(
+        run for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED"
+    )
     assert cleanup["removed"] is True
     assert not Path(str(cleanup["manifest_uri"])).exists()
     assert not list(dependencies.storage_root.glob(f"**/version={cleanup['version_id']}"))
-    assert core.datasets.list_versions("clean.atomic_orders", ctx=ctx) == []
-    assert core.operations.lineage(input_version.version_id, ctx=ctx) == []
+    assert foundry.datasets.list_versions("clean.atomic_orders", ctx=ctx) == []
+    assert foundry.operations.lineage(input_version.version_id, ctx=ctx) == []
     assert failed_run["output_version_id"] is None
     assert failed_run["error"]["details"]["orphan_cleanup"]["version_id"] == cleanup["version_id"]
 
@@ -325,14 +327,14 @@ def test_transform_output_and_lineage_commit_atomically(
 def test_duckdb_oom_aborts_output_transaction(tmp_path: Path) -> None:
     compute = _FailingTransformAdapter()
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "transform-oom")
-    core = FoundryLite(dependencies=replace(dependencies, compute_adapter=compute))
+    foundry = FoundryLite(dependencies=replace(dependencies, compute_adapter=compute))
     ctx = RequestContext(roles=("admin", "data_engineer"))
-    core.datasets.ensure("raw.oom_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.ensure("clean.oom_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.upload_csv("raw.oom_orders", _csv(tmp_path, "oom_orders.csv", "O-1", 100), ctx=ctx)
+    foundry.datasets.ensure("raw.oom_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.oom_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.oom_orders", _csv(tmp_path, "oom_orders.csv", "O-1", 100), ctx=ctx)
     sql_path = tmp_path / "oom_orders.sql"
     sql_path.write_text("select order_id, amount from {{ input('raw.oom_orders') }}", encoding="utf-8")
-    core.transforms.register(
+    foundry.transforms.register(
         "oom_orders",
         entrypoint=sql_path,
         inputs={"orders": "raw.oom_orders"},
@@ -341,10 +343,12 @@ def test_duckdb_oom_aborts_output_transaction(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValidationFailed, match="transform failed"):
-        core.transforms.run("oom_orders", ctx=ctx)
+        foundry.transforms.run("oom_orders", ctx=ctx)
 
-    failed_run = next(run for run in core.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED")
-    assert core.datasets.list_versions("clean.oom_orders", ctx=ctx) == []
+    failed_run = next(
+        run for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED"
+    )
+    assert foundry.datasets.list_versions("clean.oom_orders", ctx=ctx) == []
     assert failed_run["output_version_id"] is None
     assert failed_run["error"]["type"] == "MemoryError"
     assert failed_run["error"]["message"] == "simulated DuckDB OOM"
@@ -353,16 +357,16 @@ def test_duckdb_oom_aborts_output_transaction(tmp_path: Path) -> None:
 
 
 def test_sql_transform_cannot_read_arbitrary_filesystem_path(tmp_path: Path) -> None:
-    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "sql-guard"))
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "sql-guard"))
     ctx = RequestContext(roles=("admin", "data_engineer"))
-    core.datasets.ensure("raw.guard_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.ensure("clean.guard_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.upload_csv("raw.guard_orders", _csv(tmp_path, "guard_orders.csv", "O-1", 100), ctx=ctx)
+    foundry.datasets.ensure("raw.guard_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.guard_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.guard_orders", _csv(tmp_path, "guard_orders.csv", "O-1", 100), ctx=ctx)
     raw_path = tmp_path / "bypass.csv"
     raw_path.write_text("order_id,amount\nO-2,999\n", encoding="utf-8")
     sql_path = tmp_path / "bypass.sql"
     sql_path.write_text(f"select * from read_csv('{raw_path}')", encoding="utf-8")
-    core.transforms.register(
+    foundry.transforms.register(
         "raw_path_bypass",
         entrypoint=sql_path,
         inputs={"orders": "raw.guard_orders"},
@@ -371,24 +375,26 @@ def test_sql_transform_cannot_read_arbitrary_filesystem_path(tmp_path: Path) -> 
     )
 
     with pytest.raises(ValidationFailed, match="declared input datasets"):
-        core.transforms.run("raw_path_bypass", ctx=ctx)
+        foundry.transforms.run("raw_path_bypass", ctx=ctx)
 
-    failed_run = next(run for run in core.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED")
-    assert core.datasets.list_versions("clean.guard_orders", ctx=ctx) == []
+    failed_run = next(
+        run for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED"
+    )
+    assert foundry.datasets.list_versions("clean.guard_orders", ctx=ctx) == []
     assert failed_run["output_version_id"] is None
     assert failed_run["error"]["details"]["function"] == "read_csv"
 
 
 def test_python_transform_cannot_access_raw_storage_path(tmp_path: Path) -> None:
-    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "python-guard"))
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "python-guard"))
     ctx = RequestContext(roles=("admin", "data_engineer"))
-    core.datasets.ensure("raw.python_guard_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.ensure("clean.python_guard_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("raw.python_guard_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.python_guard_orders", ctx=ctx, primary_key=["order_id"])
     entrypoint = tmp_path / "unsafe_transform.py"
     entrypoint.write_text("open('/tmp/raw-storage-path').read()\n", encoding="utf-8")
 
     with pytest.raises(ValidationFailed, match="unsupported transform language"):
-        core.transforms.register(
+        foundry.transforms.register(
             "unsafe_python_transform",
             entrypoint=entrypoint,
             inputs={"orders": "raw.python_guard_orders"},
@@ -398,7 +404,7 @@ def test_python_transform_cannot_access_raw_storage_path(tmp_path: Path) -> None
         )
 
     with pytest.raises(NotFound):
-        core.transforms.run("unsafe_python_transform", ctx=ctx)
+        foundry.transforms.run("unsafe_python_transform", ctx=ctx)
 
 
 class _BeforeExecuteTransformAdapter(DuckDBComputeAdapter):
@@ -430,13 +436,13 @@ def _csv(tmp_path: Path, name: str, order_id: str, amount: int) -> Path:
 
 
 def test_materialization_late_commit_action_not_skipped(
-    core: FoundryLite,
+    foundry: FoundryLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ctx = prepare_indexed_demo(core)
-    initial_order = core.objects.get("Order", "O-1001", ctx=ctx)
+    ctx = prepare_indexed_demo(foundry)
+    initial_order = foundry.objects.get("Order", "O-1001", ctx=ctx)
     _approve_order(
-        core,
+        foundry,
         ctx,
         object_id="O-1001",
         expected_object_version=initial_order["objectVersion"],
@@ -447,9 +453,9 @@ def test_materialization_late_commit_action_not_skipped(
 
     def write_after_late_action(self: MaterializationService, ctx: RequestContext, plan: MaterializationRunPlan):
         if plan.api_name == "action_log" and not action_result:
-            order = core.objects.get("Order", "O-1002", ctx=ctx)
+            order = foundry.objects.get("Order", "O-1002", ctx=ctx)
             action_result.update(
-                core.actions.apply(
+                foundry.actions.apply(
                     "ApproveOrder",
                     object_type="Order",
                     object_id="O-1002",
@@ -463,8 +469,8 @@ def test_materialization_late_commit_action_not_skipped(
 
     monkeypatch.setattr(MaterializationService, "_write_materialization_rows", write_after_late_action)
 
-    first = core.materialization.run("action_log", ctx=ctx)
-    second = core.materialization.run("action_log", ctx=ctx)
+    first = foundry.materialization.run("action_log", ctx=ctx)
+    second = foundry.materialization.run("action_log", ctx=ctx)
 
     assert first.row_count == 1
     assert second.row_count == 2
@@ -472,13 +478,13 @@ def test_materialization_late_commit_action_not_skipped(
 
 
 def test_materialization_cursor_not_advanced_before_dataset_commit(
-    core: FoundryLite,
+    foundry: FoundryLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ctx = prepare_indexed_demo(core)
-    initial_order = core.objects.get("Order", "O-1001", ctx=ctx)
+    ctx = prepare_indexed_demo(foundry)
+    initial_order = foundry.objects.get("Order", "O-1001", ctx=ctx)
     _approve_order(
-        core,
+        foundry,
         ctx,
         object_id="O-1001",
         expected_object_version=initial_order["objectVersion"],
@@ -494,22 +500,22 @@ def test_materialization_cursor_not_advanced_before_dataset_commit(
     monkeypatch.setattr(MaterializationService, "_write_materialization_rows", fail_before_dataset_commit)
 
     with pytest.raises(RuntimeError, match="injected materialization write failure"):
-        core.materialization.run("action_log", ctx=ctx)
+        foundry.materialization.run("action_log", ctx=ctx)
 
     failed_run = next(
-        row for row in core.operations.list_runs(ctx=ctx)["materializationRuns"] if row["api_name"] == "action_log"
+        row for row in foundry.operations.list_runs(ctx=ctx)["materializationRuns"] if row["api_name"] == "action_log"
     )
-    assert core.datasets.list_versions("ops.action_log", ctx=ctx) == []
+    assert foundry.datasets.list_versions("ops.action_log", ctx=ctx) == []
     assert failed_run["status"] == "FAILED"
     assert failed_run["target_dataset_version_id"] is None
     assert failed_run["error"]["message"] == "injected materialization write failure"
 
 
 def test_materialization_retry_after_commit_metadata_failure_does_not_duplicate_output(
-    core: FoundryLite,
+    foundry: FoundryLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ctx = prepare_indexed_demo(core)
+    ctx = prepare_indexed_demo(foundry)
     original_lineage = MaterializationService._record_materialization_lineage
     failed_once = False
 
@@ -529,10 +535,10 @@ def test_materialization_retry_after_commit_metadata_failure_does_not_duplicate_
     monkeypatch.setattr(MaterializationService, "_record_materialization_lineage", fail_first_lineage)
 
     with pytest.raises(InvariantViolation, match="dataset commit metadata persistence failed") as exc_info:
-        core.materialization.run("order_current", ctx=ctx)
+        foundry.materialization.run("order_current", ctx=ctx)
 
-    retry = core.materialization.run("order_current", ctx=ctx)
-    runs = core.operations.list_runs(ctx=ctx)
+    retry = foundry.materialization.run("order_current", ctx=ctx)
+    runs = foundry.operations.list_runs(ctx=ctx)
     failed_run = next(run for run in runs["materializationRuns"] if run["status"] == "FAILED")
     completed_events = [event for event in runs["outboxEvents"] if event["event_type"] == "materialization.completed"]
     cleanup = exc_info.value.details["orphan_cleanup"]
@@ -540,7 +546,7 @@ def test_materialization_retry_after_commit_metadata_failure_does_not_duplicate_
     assert cleanup["removed"] is True
     assert not Path(str(cleanup["manifest_uri"])).exists()
     assert failed_run["target_dataset_version_id"] is None
-    assert [version["id"] for version in core.datasets.list_versions("ops.order_current", ctx=ctx)] == [
+    assert [version["id"] for version in foundry.datasets.list_versions("ops.order_current", ctx=ctx)] == [
         retry.version_id
     ]
     assert all(event["correlation_id"] != failed_run["id"] for event in completed_events)
@@ -548,10 +554,10 @@ def test_materialization_retry_after_commit_metadata_failure_does_not_duplicate_
 
 
 def test_object_snapshot_mid_run_action_not_mixed(
-    core: FoundryLite,
+    foundry: FoundryLite,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ctx = prepare_indexed_demo(core)
+    ctx = prepare_indexed_demo(foundry)
     original_write = MaterializationService._write_materialization_rows
     action_result: dict[str, object] = {}
     captured_rows: list[list[dict[str, object]]] = []
@@ -564,10 +570,10 @@ def test_object_snapshot_mid_run_action_not_mixed(
         if plan.api_name == "order_current":
             captured_rows.append([dict(row) for row in plan.rows])
         if plan.api_name == "order_current" and not action_result:
-            order = core.objects.get("Order", "O-1001", ctx=ctx)
+            order = foundry.objects.get("Order", "O-1001", ctx=ctx)
             action_result.update(
                 _approve_order(
-                    core,
+                    foundry,
                     ctx,
                     object_id="O-1001",
                     expected_object_version=order["objectVersion"],
@@ -578,8 +584,8 @@ def test_object_snapshot_mid_run_action_not_mixed(
 
     monkeypatch.setattr(MaterializationService, "_write_materialization_rows", write_after_snapshot_capture)
 
-    first = core.materialization.run("order_current", ctx=ctx)
-    second = core.materialization.run("order_current", ctx=ctx)
+    first = foundry.materialization.run("order_current", ctx=ctx)
+    second = foundry.materialization.run("order_current", ctx=ctx)
     first_status_by_order = {row["orderId"]: row["status"] for row in captured_rows[0]}
     second_status_by_order = {row["orderId"]: row["status"] for row in captured_rows[1]}
 
@@ -590,26 +596,26 @@ def test_object_snapshot_mid_run_action_not_mixed(
     assert second_status_by_order["O-1001"] == "APPROVED"
 
 
-def test_object_snapshot_fixed_watermark_hash_reproducible(core: FoundryLite) -> None:
-    ctx = prepare_indexed_demo(core)
+def test_object_snapshot_fixed_watermark_hash_reproducible(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
 
-    first = core.materialization.run("order_current", ctx=ctx)
-    first_run = _materialization_run_for_version(core, ctx, first.version_id)
-    first_replay = core.materialization.replay_rows(str(first_run["id"]), ctx=ctx)
+    first = foundry.materialization.run("order_current", ctx=ctx)
+    first_run = _materialization_run_for_version(foundry, ctx, first.version_id)
+    first_replay = foundry.materialization.replay_rows(str(first_run["id"]), ctx=ctx)
 
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
     _approve_order(
-        core,
+        foundry,
         ctx,
         object_id="O-1001",
         expected_object_version=order["objectVersion"],
         idempotency_key="fixed-watermark-after-snapshot",
     )
 
-    replay_after_change = core.materialization.replay_rows(str(first_run["id"]), ctx=ctx)
-    second = core.materialization.run("order_current", ctx=ctx)
-    second_run = _materialization_run_for_version(core, ctx, second.version_id)
-    second_replay = core.materialization.replay_rows(str(second_run["id"]), ctx=ctx)
+    replay_after_change = foundry.materialization.replay_rows(str(first_run["id"]), ctx=ctx)
+    second = foundry.materialization.run("order_current", ctx=ctx)
+    second_run = _materialization_run_for_version(foundry, ctx, second.version_id)
+    second_replay = foundry.materialization.replay_rows(str(second_run["id"]), ctx=ctx)
 
     assert replay_after_change.row_hash == first_replay.row_hash
     assert _status_by_order(replay_after_change.rows)["O-1001"] == "PENDING"
@@ -617,14 +623,14 @@ def test_object_snapshot_fixed_watermark_hash_reproducible(core: FoundryLite) ->
 
 
 def _approve_order(
-    core: FoundryLite,
+    foundry: FoundryLite,
     ctx: RequestContext,
     *,
     object_id: str,
     expected_object_version: int,
     idempotency_key: str,
 ) -> dict[str, object]:
-    result = core.actions.apply(
+    result = foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id=object_id,
@@ -637,13 +643,13 @@ def _approve_order(
 
 
 def _materialization_run_for_version(
-    core: FoundryLite,
+    foundry: FoundryLite,
     ctx: RequestContext,
     version_id: str,
 ) -> dict[str, object]:
     return next(
         dict(row)
-        for row in core.operations.list_runs(ctx=ctx)["materializationRuns"]
+        for row in foundry.operations.list_runs(ctx=ctx)["materializationRuns"]
         if row["target_dataset_version_id"] == version_id
     )
 

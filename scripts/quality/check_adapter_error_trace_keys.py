@@ -2,7 +2,7 @@
 
 Adapter errors are only useful operationally when the failed run records keep
 the request, tenant, actor, run, correlation, and adapter context. This gate
-forces an adapter failure in an isolated local core and inspects the persisted
+forces an adapter failure in an isolated local foundry and inspects the persisted
 run error payload.
 """
 
@@ -113,18 +113,18 @@ def _run_probe(storage_root: Path) -> tuple[Mapping[str, object] | None, dict[st
         shutil.rmtree(storage_root)
     dependencies = create_local_core_dependencies(storage_root=storage_root)
     dependencies = dataclass_replace(dependencies, compute_adapter=ExplodingCsvComputeAdapter())
-    core = FoundryLite(dependencies=dependencies)
+    foundry = FoundryLite(dependencies=dependencies)
     ctx = RequestContext(
         tenant_id="tenant-adapter-trace",
         actor_user_id="actor-adapter-trace",
         request_id="request-adapter-trace",
         roles=DEMO_ADMIN_ROLES,
     )
-    core.datasets.ensure("raw.adapter_trace", ctx=ctx, primary_key=["id"])
+    foundry.datasets.ensure("raw.adapter_trace", ctx=ctx, primary_key=["id"])
     csv_path = storage_root / "adapter-trace.csv"
     csv_path.write_text("id,value\nA,1\n", encoding="utf-8")
     try:
-        core.datasets.upload_csv("raw.adapter_trace", csv_path, ctx=ctx)
+        foundry.datasets.upload_csv("raw.adapter_trace", csv_path, ctx=ctx)
     except ValidationFailed:
         pass
     else:
@@ -135,7 +135,7 @@ def _run_probe(storage_root: Path) -> tuple[Mapping[str, object] | None, dict[st
         "request_id": ctx.request_id,
         "adapter": "compute_adapter.csv_to_parquet",
     }
-    return _failed_sync_run(core.operations.list_runs(ctx=ctx)["syncRuns"]), expected_trace
+    return _failed_sync_run(foundry.operations.list_runs(ctx=ctx)["syncRuns"]), expected_trace
 
 
 def run_gate(storage_root: Path) -> list[AdapterTraceFinding]:

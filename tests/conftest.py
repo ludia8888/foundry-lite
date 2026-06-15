@@ -31,25 +31,25 @@ DEMO_ROOT = REPO_ROOT / "examples" / "supply-chain-demo"
 
 
 @pytest.fixture
-def core(tmp_path: Path) -> FoundryLite:
+def foundry(tmp_path: Path) -> FoundryLite:
     return FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
 
 
-def prepare_indexed_demo(core: FoundryLite) -> RequestContext:
+def prepare_indexed_demo(foundry: FoundryLite) -> RequestContext:
     ctx = demo_admin_context()
-    core.demo.seed_files()
-    core.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
-    core.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
-    core.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
-    core.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
-    core.demo.register_transforms(ctx)
-    core.datasets.upload_csv("raw.erp_orders", str(DEMO_ROOT / "data" / "orders.csv"), ctx=ctx)
-    core.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
-    core.transforms.run("clean_orders", ctx=ctx)
-    core.transforms.run("clean_customers", ctx=ctx)
-    core.ontology.apply(str(DEMO_ROOT / "ontology" / "order-customer.yaml"), ctx=ctx)
-    core.objects.reindex("Order", ctx=ctx)
-    core.objects.reindex("Customer", ctx=ctx)
+    foundry.demo.seed_files()
+    foundry.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
+    foundry.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
+    foundry.demo.register_transforms(ctx)
+    foundry.datasets.upload_csv("raw.erp_orders", str(DEMO_ROOT / "data" / "orders.csv"), ctx=ctx)
+    foundry.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
+    foundry.transforms.run("clean_orders", ctx=ctx)
+    foundry.transforms.run("clean_customers", ctx=ctx)
+    foundry.ontology.apply(str(DEMO_ROOT / "ontology" / "order-customer.yaml"), ctx=ctx)
+    foundry.objects.reindex("Order", ctx=ctx)
+    foundry.objects.reindex("Customer", ctx=ctx)
     return ctx

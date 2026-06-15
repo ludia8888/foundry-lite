@@ -16,23 +16,23 @@ def test_router_layer_purity_flags_core_repository_access(tmp_path: Path) -> Non
     api_file = _write_api_file(
         tmp_path,
         """
-def handler(core):
-    return core.dataset_repository.find_active_dataset(tenant_id="t", namespace="raw", name="orders")
+def handler(foundry):
+    return foundry.dataset_repository.find_active_dataset(tenant_id="t", namespace="raw", name="orders")
 """,
     )
 
     findings = gate.collect_findings((api_file,))
 
     assert [finding.code for finding in findings] == ["api_core_repository_call"]
-    assert findings[0].expression == "core.dataset_repository.find_active_dataset"
+    assert findings[0].expression == "foundry.dataset_repository.find_active_dataset"
 
 
 def test_router_layer_purity_flags_direct_transactions(tmp_path: Path) -> None:
     api_file = _write_api_file(
         tmp_path,
         """
-def handler(core, statement):
-    with core.engine.begin() as conn:
+def handler(foundry, statement):
+    with foundry.engine.begin() as conn:
         return conn.execute(statement)
 """,
     )
@@ -46,8 +46,8 @@ def test_router_layer_purity_allows_application_facade_calls(tmp_path: Path) -> 
     api_file = _write_api_file(
         tmp_path,
         """
-def handler(core, request):
-    return core.objects.get("Order", "O-1001", ctx=request.state.ctx)
+def handler(foundry, request):
+    return foundry.objects.get("Order", "O-1001", ctx=request.state.ctx)
 """,
     )
 
@@ -58,8 +58,8 @@ def test_router_layer_purity_writes_json_report(tmp_path: Path) -> None:
     api_file = _write_api_file(
         tmp_path,
         """
-def handler(core):
-    return core.runtime_repository.list_runs(tenant_id="tenant-demo")
+def handler(foundry):
+    return foundry.runtime_repository.list_runs(tenant_id="tenant-demo")
 """,
     )
     output = tmp_path / "quality" / "router_layer_purity.json"

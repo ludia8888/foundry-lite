@@ -307,7 +307,7 @@ def _check_api(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyFind
                 message="Action apply endpoint must require the Idempotency-Key header",
             )
         )
-    if not _has_call_keyword(function, "core.actions.apply", "idempotency_key"):
+    if not _has_call_keyword(function, "foundry.actions.apply", "idempotency_key"):
         findings.append(
             IdempotencyFinding(
                 code="api_core_call_missing_idempotency_key",
@@ -672,7 +672,7 @@ def collect_findings(root: Path = ROOT) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
     paths = {
         "api": root / "apps" / "api" / "foundry_lite_api" / "main.py",
-        "core": root / "libs" / "foundry_lite" / "application" / "facades" / "action_gateway.py",
+        "foundry": root / "libs" / "foundry_lite" / "application" / "facades" / "action_gateway.py",
         "service": root / "libs" / "foundry_lite" / "application" / "services" / "action_service.py",
         "service_helpers": root / "libs" / "foundry_lite" / "application" / "services" / "action_helpers.py",
         "port": root / "libs" / "foundry_lite" / "application" / "ports" / "action_repository.py",
@@ -684,8 +684,8 @@ def collect_findings(root: Path = ROOT) -> list[IdempotencyFinding]:
     }
     if parsed["api"] is not None:
         findings.extend(_check_api(parsed["api"], paths["api"], root))
-    if parsed["core"] is not None:
-        findings.extend(_check_core(parsed["core"], paths["core"], root))
+    if parsed["foundry"] is not None:
+        findings.extend(_check_core(parsed["foundry"], paths["foundry"], root))
     if parsed["service"] is not None:
         findings.extend(
             _check_action_service(

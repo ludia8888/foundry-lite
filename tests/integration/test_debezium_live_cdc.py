@@ -315,5 +315,5 @@ def _connect_url(connect: DockerContainer, path: str) -> str:
 
 
 def _preview_dataset(storage_root: Path, dataset_ref: str) -> list[dict[str, object]]:
-    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
-    return [dict(row) for row in core.datasets.preview(dataset_ref, ctx=demo_admin_context())]
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    return [dict(row) for row in foundry.datasets.preview(dataset_ref, ctx=demo_admin_context())]

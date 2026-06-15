@@ -102,10 +102,10 @@ def run_stream_archive_once(
         adapter_profile=config.adapter_profile,
     )
     adapter = stream_adapter or config.stream_adapter()
-    core = FoundryLite(dependencies=replace(dependencies, stream_adapter=adapter))
+    foundry = FoundryLite(dependencies=replace(dependencies, stream_adapter=adapter))
     ctx = config.request_context()
-    core.datasets.ensure(config.dataset_ref, ctx=ctx, primary_key=["event_id"])
-    return core.datasets.archive_stream_events(
+    foundry.datasets.ensure(config.dataset_ref, ctx=ctx, primary_key=["event_id"])
+    return foundry.datasets.archive_stream_events(
         config.dataset_ref,
         stream=config.stream_config(),
         ctx=ctx,

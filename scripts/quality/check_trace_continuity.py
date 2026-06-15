@@ -217,7 +217,7 @@ def _run_demo_and_collect_spans(storage_root: Path) -> list[SpanRecord]:
 
     dependencies = create_local_core_dependencies(storage_root=storage_root)
     instrument_sqlalchemy_engine(dependencies.engine)
-    core = FoundryLite(dependencies=dependencies)
+    foundry = FoundryLite(dependencies=dependencies)
     exporter.clear()
 
     ctx = RequestContext(
@@ -231,7 +231,7 @@ def _run_demo_and_collect_spans(storage_root: Path) -> list[SpanRecord]:
         span.set_attribute("foundry_lite.tenant_id", ctx.tenant_id)
         span.set_attribute("foundry_lite.actor_user_id", ctx.actor_user_id)
         span.set_attribute("foundry_lite.request_id", ctx.request_id)
-        core.demo.run(ctx=ctx, fresh=True)
+        foundry.demo.run(ctx=ctx, fresh=True)
 
     provider.force_flush()
     return [_span_record(span) for span in exporter.get_finished_spans()]

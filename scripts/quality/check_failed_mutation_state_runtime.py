@@ -366,18 +366,18 @@ def _run_failure_probe(storage_root: Path) -> tuple[str, dict[str, str]]:
         shutil.rmtree(storage_root)
     dependencies = create_local_core_dependencies(storage_root=storage_root)
     dependencies = dataclass_replace(dependencies, compute_adapter=ExplodingCsvComputeAdapter())
-    core = FoundryLite(dependencies=dependencies)
+    foundry = FoundryLite(dependencies=dependencies)
     ctx = RequestContext(
         tenant_id=TENANT_ID,
         actor_user_id="actor-failure-state",
         request_id="request-failure-state",
         roles=DEMO_ADMIN_ROLES,
     )
-    core.datasets.ensure("raw.failure_state", ctx=ctx, primary_key=["id"])
+    foundry.datasets.ensure("raw.failure_state", ctx=ctx, primary_key=["id"])
     csv_path = storage_root / "failure-state.csv"
     csv_path.write_text("id,value\nA,1\n", encoding="utf-8")
     try:
-        core.datasets.upload_csv("raw.failure_state", csv_path, ctx=ctx)
+        foundry.datasets.upload_csv("raw.failure_state", csv_path, ctx=ctx)
     except ValidationFailed:
         pass
     else:

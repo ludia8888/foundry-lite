@@ -95,7 +95,7 @@ def Header(*, alias):
 
 
 def apply_action(request, action_type: str, payload, {header_param}):
-    return core.actions.apply(action_type, idempotency_key=idempotency_key)
+    return foundry.actions.apply(action_type, idempotency_key=idempotency_key)
 """,
     )
     _write(

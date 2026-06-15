@@ -55,6 +55,6 @@ def test_mvp_data_correctness_gate_writes_report(tmp_path: Path) -> None:
 
 def _demo_storage_root(tmp_path: Path) -> Path:
     storage_root = tmp_path / "flite"
-    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
-    core.demo.run()
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    foundry.demo.run()
     return storage_root

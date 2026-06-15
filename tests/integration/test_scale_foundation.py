@@ -14,14 +14,14 @@ def test_dataset_commit_public_api_survives_fake_storage_swap(tmp_path: Path) ->
         storage_root=tmp_path / "fake-runtime",
         adapter_profile="fake-storage",
     )
-    core = FoundryLite(dependencies=dependencies)
+    foundry = FoundryLite(dependencies=dependencies)
     ctx = demo_admin_context()
 
-    core.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
-    commit = core.datasets.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
-    preview = core.datasets.preview("raw.crm_customers", ctx=ctx, limit=1)
-    inspected = core.datasets.inspect("raw.crm_customers", ctx=ctx)
-    sync_runs = core.operations.list_runs(ctx=ctx)["syncRuns"]
+    foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    commit = foundry.datasets.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
+    preview = foundry.datasets.preview("raw.crm_customers", ctx=ctx, limit=1)
+    inspected = foundry.datasets.inspect("raw.crm_customers", ctx=ctx)
+    sync_runs = foundry.operations.list_runs(ctx=ctx)["syncRuns"]
 
     assert commit.row_count > 0
     assert preview[0]["customer_id"] == "C-100"

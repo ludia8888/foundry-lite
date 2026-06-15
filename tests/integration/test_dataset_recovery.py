@@ -9,9 +9,9 @@ from foundry_lite.infrastructure.local_runtime import create_local_core_dependen
 from sqlalchemy import insert, select
 
 
-def _seed_open_transaction(core: FoundryLite, dataset_id: str, *, tx_id: str, created_at: str) -> None:
+def _seed_open_transaction(foundry: FoundryLite, dataset_id: str, *, tx_id: str, created_at: str) -> None:
     ctx = demo_admin_context()
-    with core.engine.begin() as conn:
+    with foundry.engine.begin() as conn:
         conn.execute(
             insert(db.dataset_transactions).values(
                 id=tx_id,
@@ -32,23 +32,23 @@ def _seed_open_transaction(core: FoundryLite, dataset_id: str, *, tx_id: str, cr
 
 
 def test_failed_upload_oom_leaves_recoverable_aborted_or_stale_open_tx(tmp_path: Path) -> None:
-    core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = demo_admin_context()
-    core.datasets.ensure("raw.events", ctx=ctx, primary_key=["id"])
-    dataset = core.datasets.get("raw.events", ctx=ctx)
+    foundry.datasets.ensure("raw.events", ctx=ctx, primary_key=["id"])
+    dataset = foundry.datasets.get("raw.events", ctx=ctx)
     dataset_id = str(dataset["id"])
 
     # A process killed (OOM) between opening a dataset transaction and committing
     # leaves an OPEN row that never reaches a terminal state.
-    _seed_open_transaction(core, dataset_id, tx_id="dstx_stale", created_at="2026-06-10T00:00:00Z")
+    _seed_open_transaction(foundry, dataset_id, tx_id="dstx_stale", created_at="2026-06-10T00:00:00Z")
     # A freshly opened transaction must not be swept by the watchdog cutoff.
-    _seed_open_transaction(core, dataset_id, tx_id="dstx_recent", created_at="2026-06-15T12:00:00Z")
+    _seed_open_transaction(foundry, dataset_id, tx_id="dstx_recent", created_at="2026-06-15T12:00:00Z")
 
-    aborted = core.datasets.abort_stale_open_transactions("2026-06-12T00:00:00Z", ctx=ctx)
+    aborted = foundry.datasets.abort_stale_open_transactions("2026-06-12T00:00:00Z", ctx=ctx)
 
-    with core.engine.begin() as conn:
+    with foundry.engine.begin() as conn:
         rows = {row["id"]: dict(row) for row in conn.execute(select(db.dataset_transactions)).mappings()}
-    audit_events = core.operations.list_runs(ctx=ctx)["auditEvents"]
+    audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
 
     # The stale OPEN transaction is recovered to ABORTED with watchdog evidence;
     # the recent OPEN transaction is left alone, so an OOM-abandoned write becomes

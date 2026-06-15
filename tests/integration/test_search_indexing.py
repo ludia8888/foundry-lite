@@ -43,30 +43,30 @@ class FailingSearchAdapter:
 
 def test_search_rebuild_full_text_and_orphan_detection(tmp_path: Path) -> None:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    core = FoundryLite(dependencies=dependencies)
-    ctx = prepare_indexed_demo(core)
-    note = _approve_order(core, ctx)
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = prepare_indexed_demo(foundry)
+    note = _approve_order(foundry, ctx)
 
-    change_result = core.objects.consume_search_change("Order", "O-1001", ctx=ctx)
-    search_page = core.objects.query("Order", ctx=ctx, search_text=note, limit=10)
-    rebuild = core.objects.rebuild_search("Order", ctx=ctx)
+    change_result = foundry.objects.consume_search_change("Order", "O-1001", ctx=ctx)
+    search_page = foundry.objects.query("Order", ctx=ctx, search_text=note, limit=10)
+    rebuild = foundry.objects.rebuild_search("Order", ctx=ctx)
     dependencies.search_adapter.upsert_document(
         SearchDocument(ctx.tenant_id, "Order", "O-ORPHAN", 1, {"operatorNote": "orphan only"})
     )
-    drift = core.objects.rebuild_search("Order", ctx=ctx)
+    drift = foundry.objects.rebuild_search("Order", ctx=ctx)
 
     assert change_result["status"] == "indexed"
     assert [item["objectId"] for item in search_page["items"]] == ["O-1001"]
     assert rebuild["objectCount"] == rebuild["searchCount"] == 3
     assert rebuild["status"] == "consistent"
     assert drift["orphanDocumentIds"] == ["O-ORPHAN"]
-    assert _object_changed_count(core) >= 1
+    assert _object_changed_count(foundry) >= 1
 
 
 def test_search_stale_event_cannot_overwrite_newer_doc(tmp_path: Path) -> None:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    core = FoundryLite(dependencies=dependencies)
-    ctx = prepare_indexed_demo(core)
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = prepare_indexed_demo(foundry)
 
     dependencies.search_adapter.upsert_document(
         SearchDocument(ctx.tenant_id, "Order", "O-1001", 12, {"operatorNote": "latest", "status": "APPROVED"})
@@ -84,11 +84,11 @@ def test_search_stale_event_cannot_overwrite_newer_doc(tmp_path: Path) -> None:
 
 def test_action_form_refetches_object_store_after_search_hit(tmp_path: Path) -> None:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    core = FoundryLite(dependencies=dependencies)
-    ctx = prepare_indexed_demo(core)
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
     reason = "Fresh object-store state wins over stale search hit"
-    core.actions.apply(
+    foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -97,7 +97,7 @@ def test_action_form_refetches_object_store_after_search_hit(tmp_path: Path) -> 
         idempotency_key="search-refetch-proof",
         ctx=ctx,
     )
-    current = core.objects.get("Order", "O-1001", ctx=ctx)
+    current = foundry.objects.get("Order", "O-1001", ctx=ctx)
     dependencies.search_adapter.configure_index(
         SearchIndexMapping(
             ctx.tenant_id,
@@ -116,7 +116,7 @@ def test_action_form_refetches_object_store_after_search_hit(tmp_path: Path) -> 
         )
     )
 
-    search_page = core.objects.query("Order", ctx=ctx, search_text="stale form source", limit=10)
+    search_page = foundry.objects.query("Order", ctx=ctx, search_text="stale form source", limit=10)
 
     assert [item["objectId"] for item in search_page["items"]] == ["O-1001"]
     assert search_page["items"][0]["objectVersion"] == current["objectVersion"]
@@ -125,7 +125,7 @@ def test_action_form_refetches_object_store_after_search_hit(tmp_path: Path) -> 
     assert search_page["items"][0]["properties"]["status"] == "APPROVED"
     assert search_page["items"][0]["properties"]["operatorNote"] == reason
     with pytest.raises(ConflictDetected):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -138,11 +138,13 @@ def test_action_form_refetches_object_store_after_search_hit(tmp_path: Path) -> 
 
 def test_search_failure_does_not_break_get_or_basic_filter(tmp_path: Path) -> None:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    core = FoundryLite(dependencies=replace(dependencies, search_adapter=FailingSearchAdapter()))
-    ctx = prepare_indexed_demo(core)
+    foundry = FoundryLite(dependencies=replace(dependencies, search_adapter=FailingSearchAdapter()))
+    ctx = prepare_indexed_demo(foundry)
 
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
-    filtered = core.objects.query("Order", ctx=ctx, filter_ast={"property": "status", "op": "eq", "value": "PENDING"})
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    filtered = foundry.objects.query(
+        "Order", ctx=ctx, filter_ast={"property": "status", "op": "eq", "value": "PENDING"}
+    )
 
     assert order["objectId"] == "O-1001"
     assert any(item["objectId"] == "O-1001" for item in filtered["items"])
@@ -150,30 +152,30 @@ def test_search_failure_does_not_break_get_or_basic_filter(tmp_path: Path) -> No
 
 def test_masked_property_cannot_filter_sort_search(tmp_path: Path) -> None:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    core = FoundryLite(dependencies=dependencies)
-    admin = prepare_indexed_demo(core)
+    foundry = FoundryLite(dependencies=dependencies)
+    admin = prepare_indexed_demo(foundry)
     viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
     finance = RequestContext(actor_user_id="finance-1", roles=("finance",))
 
-    core.ontology.apply(str(_margin_searchable_ontology(tmp_path)), ctx=admin)
-    core.objects.reindex("Order", ctx=admin)
-    core.objects.rebuild_search("Order", ctx=admin)
-    viewer_page = core.objects.query("Order", ctx=viewer, search_text="230.0", limit=10)
-    finance_page = core.objects.query("Order", ctx=finance, search_text="230.0", limit=10)
+    foundry.ontology.apply(str(_margin_searchable_ontology(tmp_path)), ctx=admin)
+    foundry.objects.reindex("Order", ctx=admin)
+    foundry.objects.rebuild_search("Order", ctx=admin)
+    viewer_page = foundry.objects.query("Order", ctx=viewer, search_text="230.0", limit=10)
+    finance_page = foundry.objects.query("Order", ctx=finance, search_text="230.0", limit=10)
 
     assert viewer_page["items"] == []
     assert [item["objectId"] for item in finance_page["items"]] == ["O-1001"]
     assert finance_page["items"][0]["properties"]["margin"] == 230.0
     with pytest.raises(ValidationFailed, match="masked property"):
-        core.objects.query("Order", ctx=viewer, filter_ast={"property": "margin", "op": "gte", "value": 1.0})
+        foundry.objects.query("Order", ctx=viewer, filter_ast={"property": "margin", "op": "gte", "value": 1.0})
     with pytest.raises(ValidationFailed, match="masked property"):
-        core.objects.query("Order", ctx=viewer, order_by=[{"property": "margin", "direction": "desc"}])
+        foundry.objects.query("Order", ctx=viewer, order_by=[{"property": "margin", "direction": "desc"}])
 
 
-def _approve_order(core: FoundryLite, ctx: RequestContext) -> str:
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
+def _approve_order(foundry: FoundryLite, ctx: RequestContext) -> str:
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
     note = "Search projection proof"
-    core.actions.apply(
+    foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -203,8 +205,8 @@ def _margin_searchable_ontology(tmp_path: Path) -> Path:
     return ontology_path
 
 
-def _object_changed_count(core: FoundryLite) -> int:
-    with core.engine.begin() as conn:
+def _object_changed_count(foundry: FoundryLite) -> int:
+    with foundry.engine.begin() as conn:
         count = conn.execute(
             select(func.count()).select_from(db.outbox_events).where(db.outbox_events.c.event_type == "object.changed")
         ).scalar_one()

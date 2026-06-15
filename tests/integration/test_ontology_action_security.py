@@ -139,13 +139,13 @@ def _event_count(rows: list[Mapping[str, object]], event_type: str) -> int:
 
 @pytest.mark.integration_scenario("ontology_index")
 def test_ontology_import_indexes_order_customer_and_supports_object_query(
-    core: FoundryLite,
+    foundry: FoundryLite,
 ) -> None:
-    ctx = prepare_indexed_demo(core)
+    ctx = prepare_indexed_demo(foundry)
 
-    order = core.objects.get("Order", "O-1001", ctx=ctx, include_explain=True)
-    customer = core.objects.get("Customer", "C-100", ctx=ctx)
-    linked_customer = core.objects.links("Order", "O-1001", "OrderCustomer")[0]["to"]
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx, include_explain=True)
+    customer = foundry.objects.get("Customer", "C-100", ctx=ctx)
+    linked_customer = foundry.objects.links("Order", "O-1001", "OrderCustomer")[0]["to"]
 
     assert order["properties"]["orderId"] == "O-1001"
     assert order["sourceDatasetVersionId"]
@@ -159,10 +159,10 @@ def test_ontology_import_indexes_order_customer_and_supports_object_query(
 
 
 def test_ontology_activation_rejects_missing_backing_column(
-    core: FoundryLite,
+    foundry: FoundryLite,
     tmp_path: Path,
 ) -> None:
-    ctx = prepare_indexed_demo(core)
+    ctx = prepare_indexed_demo(foundry)
     bad_yaml = tmp_path / "bad-ontology.yaml"
     bad_yaml.write_text(
         """
@@ -187,16 +187,16 @@ objectTypes:
     )
 
     with pytest.raises(ValidationFailed):
-        core.ontology.apply(bad_yaml, ctx=ctx)
+        foundry.ontology.apply(bad_yaml, ctx=ctx)
 
 
 @pytest.mark.integration_scenario("object_action_audit")
 def test_action_apply_is_idempotent_and_rejects_stale_object_version(
-    core: FoundryLite,
+    foundry: FoundryLite,
 ) -> None:
-    ctx = prepare_indexed_demo(core)
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
-    first = core.actions.apply(
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    first = foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -205,7 +205,7 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
         idempotency_key="same-key",
         ctx=ctx,
     )
-    replay = core.actions.apply(
+    replay = foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -215,8 +215,8 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
         ctx=ctx,
     )
 
-    approved = core.objects.get("Order", "O-1001", ctx=ctx)
-    runs = core.operations.list_runs(ctx=ctx)
+    approved = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    runs = foundry.operations.list_runs(ctx=ctx)
     assert approved["properties"]["status"] == "APPROVED"
     assert approved["properties"]["operatorNote"] == "Inventory confirmed"
     assert any(
@@ -231,7 +231,7 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
     assert replay["idempotentReplay"] is True
     assert replay["actionRunId"] == first["actionRunId"]
     with pytest.raises(ConflictDetected) as idempotency_conflict:
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -240,14 +240,14 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
             idempotency_key="same-key",
             ctx=ctx,
         )
-    conflict_runs = core.operations.list_runs(ctx=ctx)
+    conflict_runs = foundry.operations.list_runs(ctx=ctx)
     assert idempotency_conflict.value.details["action_run_id"] == first["actionRunId"]
     assert any(
         event["event_type"] == "action.run.idempotency_conflict" and event["resource_id"] == first["actionRunId"]
         for event in conflict_runs["auditEvents"]
     )
     with pytest.raises(ConflictDetected):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -258,10 +258,10 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
         )
 
 
-def test_action_same_idempotency_key_different_body_returns_409(core: FoundryLite) -> None:
-    ctx = prepare_indexed_demo(core)
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
-    first = core.actions.apply(
+def test_action_same_idempotency_key_different_body_returns_409(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    first = foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -272,7 +272,7 @@ def test_action_same_idempotency_key_different_body_returns_409(core: FoundryLit
     )
 
     with pytest.raises(ConflictDetected) as exc_info:
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -282,7 +282,7 @@ def test_action_same_idempotency_key_different_body_returns_409(core: FoundryLit
             ctx=ctx,
         )
 
-    runs = core.operations.list_runs(ctx=ctx)
+    runs = foundry.operations.list_runs(ctx=ctx)
     assert exc_info.value.details["action_run_id"] == first["actionRunId"]
     assert any(
         event["event_type"] == "action.run.idempotency_conflict" and event["resource_id"] == first["actionRunId"]
@@ -290,10 +290,10 @@ def test_action_same_idempotency_key_different_body_returns_409(core: FoundryLit
     )
 
 
-def test_action_precondition_stale_read_conflicts_on_commit(core: FoundryLite) -> None:
-    ctx = prepare_indexed_demo(core)
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
-    core.actions.apply(
+def test_action_precondition_stale_read_conflicts_on_commit(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -304,7 +304,7 @@ def test_action_precondition_stale_read_conflicts_on_commit(core: FoundryLite) -
     )
 
     with pytest.raises(ConflictDetected):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -317,13 +317,13 @@ def test_action_precondition_stale_read_conflicts_on_commit(core: FoundryLite) -
 
 @pytest.mark.integration_scenario("failed_run_replay_or_dlq")
 def test_before_commit_writeback_failure_does_not_edit_object(
-    core: FoundryLite,
+    foundry: FoundryLite,
 ) -> None:
-    ctx = prepare_indexed_demo(core)
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
 
     with pytest.raises(ExternalSystemError):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -334,11 +334,13 @@ def test_before_commit_writeback_failure_does_not_edit_object(
             ctx=ctx,
         )
 
-    after = core.objects.get("Order", "O-1001", ctx=ctx)
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
     failed_runs = [
-        run for run in core.operations.list_runs(ctx=ctx)["actionRuns"] if run["idempotency_key"] == "writeback-fails"
+        run
+        for run in foundry.operations.list_runs(ctx=ctx)["actionRuns"]
+        if run["idempotency_key"] == "writeback-fails"
     ]
-    replay = core.actions.apply(
+    replay = foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -348,7 +350,9 @@ def test_before_commit_writeback_failure_does_not_edit_object(
         ctx=ctx,
     )
     after_replay_runs = [
-        run for run in core.operations.list_runs(ctx=ctx)["actionRuns"] if run["idempotency_key"] == "writeback-fails"
+        run
+        for run in foundry.operations.list_runs(ctx=ctx)["actionRuns"]
+        if run["idempotency_key"] == "writeback-fails"
     ]
     assert after["objectVersion"] == order["objectVersion"]
     assert after["properties"]["status"] == "PENDING"
@@ -357,13 +361,13 @@ def test_before_commit_writeback_failure_does_not_edit_object(
     assert replay["status"] == "failed"
     assert replay["actionRunId"] == failed_runs[0]["id"]
     assert [run["id"] for run in after_replay_runs] == [failed_runs[0]["id"]]
-    writeback = core.operations.list_runs(ctx=ctx)["actionWritebacks"][0]
+    writeback = foundry.operations.list_runs(ctx=ctx)["actionWritebacks"][0]
     writeback_request = cast(Mapping[str, object], writeback["request"])
     writeback_response = cast(Mapping[str, object], writeback["response"])
     assert writeback["connector_id"] == "mock_erp_simulator"
     assert writeback_request["networkCall"] is False
     assert writeback_response["simulated"] is True
-    audit_events = core.operations.list_runs(ctx=ctx)["auditEvents"]
+    audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
     assert any(event["event_type"] == "action.run.failed" for event in audit_events)
 
 
@@ -377,13 +381,13 @@ def test_before_commit_writeback_failure_does_not_edit_object(
     ],
 )
 def test_action_commit_object_edit_audit_outbox_atomic(tmp_path: Path, fail_point: str) -> None:
-    core, failing_repository = _core_with_action_failure(tmp_path, fail_point)
-    ctx = prepare_indexed_demo(core)
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
-    before = core.operations.list_runs(ctx=ctx)
+    foundry, failing_repository = _core_with_action_failure(tmp_path, fail_point)
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    before = foundry.operations.list_runs(ctx=ctx)
 
     with pytest.raises(_InjectedActionCommitFailure):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -393,15 +397,15 @@ def test_action_commit_object_edit_audit_outbox_atomic(tmp_path: Path, fail_poin
             ctx=ctx,
         )
 
-    after_failure = core.operations.list_runs(ctx=ctx)
-    unchanged = core.objects.get("Order", "O-1001", ctx=ctx)
+    after_failure = foundry.operations.list_runs(ctx=ctx)
+    unchanged = foundry.objects.get("Order", "O-1001", ctx=ctx)
     assert unchanged["objectVersion"] == order["objectVersion"]
     assert unchanged["properties"]["status"] == "PENDING"
     assert _action_row_count(after_failure, "atomicity-proof") == 0
     assert _action_commit_evidence_counts(after_failure) == _action_commit_evidence_counts(before)
 
     _disable_injected_failure(failing_repository)
-    retry = core.actions.apply(
+    retry = foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -420,13 +424,13 @@ def test_outbox_event_not_published_before_domain_commit(tmp_path: Path) -> None
     # earlier action.run.committed outbox row inserted in the same transaction
     # must also vanish: an outbox event is never durable (and therefore never
     # publishable by the outbox drain path) before the domain commit succeeds.
-    core, failing_repository = _core_with_action_failure(tmp_path, "outbox:object.edit.committed")
-    ctx = prepare_indexed_demo(core)
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
-    before = _action_commit_evidence_counts(core.operations.list_runs(ctx=ctx))
+    foundry, failing_repository = _core_with_action_failure(tmp_path, "outbox:object.edit.committed")
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    before = _action_commit_evidence_counts(foundry.operations.list_runs(ctx=ctx))
 
     with pytest.raises(_InjectedActionCommitFailure):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -436,13 +440,13 @@ def test_outbox_event_not_published_before_domain_commit(tmp_path: Path) -> None
             ctx=ctx,
         )
 
-    after_failure = core.operations.list_runs(ctx=ctx)
+    after_failure = foundry.operations.list_runs(ctx=ctx)
     assert _action_commit_evidence_counts(after_failure) == before
     assert _event_count(after_failure["outboxEvents"], "action.run.committed") == before["outbox_action"]
     assert _event_count(after_failure["outboxEvents"], "object.edit.committed") == before["outbox_edit"]
 
     _disable_injected_failure(failing_repository)
-    committed = core.actions.apply(
+    committed = foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -451,7 +455,7 @@ def test_outbox_event_not_published_before_domain_commit(tmp_path: Path) -> None
         idempotency_key="outbox-before-commit",
         ctx=ctx,
     )
-    after_commit = _action_commit_evidence_counts(core.operations.list_runs(ctx=ctx))
+    after_commit = _action_commit_evidence_counts(foundry.operations.list_runs(ctx=ctx))
 
     # Only after the domain commit succeeds do the outbox rows appear.
     assert committed["status"] == "succeeded"
@@ -459,11 +463,11 @@ def test_outbox_event_not_published_before_domain_commit(tmp_path: Path) -> None
     assert after_commit["outbox_edit"] == before["outbox_edit"] + 1
 
 
-def test_action_audit_masks_sensitive_params(core: FoundryLite, tmp_path: Path) -> None:
-    ctx = _prepare_demo_with_ontology(core, _margin_action_ontology(tmp_path))
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
+def test_action_audit_masks_sensitive_params(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = _prepare_demo_with_ontology(foundry, _margin_action_ontology(tmp_path))
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
 
-    result = core.actions.apply(
+    result = foundry.actions.apply(
         "AdjustMargin",
         object_type="Order",
         object_id="O-1001",
@@ -473,10 +477,10 @@ def test_action_audit_masks_sensitive_params(core: FoundryLite, tmp_path: Path) 
         ctx=ctx,
     )
 
-    changed = core.objects.get("Order", "O-1001", ctx=ctx)
+    changed = foundry.objects.get("Order", "O-1001", ctx=ctx)
     audit = next(
         event
-        for event in core.operations.list_runs(ctx=ctx)["auditEvents"]
+        for event in foundry.operations.list_runs(ctx=ctx)["auditEvents"]
         if event["event_type"] == "action.run.committed" and event["resource_id"] == result["actionRunId"]
     )
     assert changed["properties"]["margin"] == 9999.99
@@ -487,9 +491,9 @@ def test_action_audit_masks_sensitive_params(core: FoundryLite, tmp_path: Path) 
 
 @pytest.mark.integration_scenario("permission_tenant_isolation")
 def test_viewer_sees_masked_margin_and_cannot_approve_order(
-    core: FoundryLite,
+    foundry: FoundryLite,
 ) -> None:
-    prepare_indexed_demo(core)
+    prepare_indexed_demo(foundry)
     viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
     finance = RequestContext(actor_user_id="finance-1", roles=("finance",))
     other_tenant = RequestContext(
@@ -497,10 +501,10 @@ def test_viewer_sees_masked_margin_and_cannot_approve_order(
         actor_user_id="other-admin",
         roles=("admin", "data_engineer", "ops_manager", "finance"),
     )
-    order = core.objects.get("Order", "O-1001", ctx=viewer)
-    dataset_preview = core.datasets.preview("clean.orders", ctx=viewer, limit=1)
-    finance_order = core.objects.get("Order", "O-1001", ctx=finance)
-    finance_query = core.objects.query(
+    order = foundry.objects.get("Order", "O-1001", ctx=viewer)
+    dataset_preview = foundry.datasets.preview("clean.orders", ctx=viewer, limit=1)
+    finance_order = foundry.objects.get("Order", "O-1001", ctx=finance)
+    finance_query = foundry.objects.query(
         "Order",
         ctx=finance,
         filter_ast={"property": "margin", "op": "gte", "value": 80.0},
@@ -513,19 +517,19 @@ def test_viewer_sees_masked_margin_and_cannot_approve_order(
     assert finance_order["properties"]["margin"] != "***MASKED***"
     assert [item["objectId"] for item in finance_query["items"]] == ["O-1001", "O-1002"]
     with pytest.raises(ValidationFailed, match="masked property"):
-        core.objects.query(
+        foundry.objects.query(
             "Order",
             ctx=viewer,
             filter_ast={"property": "margin", "op": "gte", "value": 80.0},
         )
     with pytest.raises(ValidationFailed, match="masked property"):
-        core.objects.query(
+        foundry.objects.query(
             "Order",
             ctx=viewer,
             order_by=[{"property": "margin", "direction": "desc"}],
         )
     with pytest.raises(ValidationFailed, match="masked property"):
-        core.objects.create_set(
+        foundry.objects.create_set(
             "Masked Margin Orders",
             "Order",
             set_type="dynamic",
@@ -533,12 +537,12 @@ def test_viewer_sees_masked_margin_and_cannot_approve_order(
             ctx=viewer,
         )
     with pytest.raises(PermissionDenied):
-        core.ontology.apply(str(DEMO_ROOT / "ontology" / "order-customer.yaml"), ctx=viewer)
+        foundry.ontology.apply(str(DEMO_ROOT / "ontology" / "order-customer.yaml"), ctx=viewer)
     with pytest.raises(NotFound):
-        core.objects.get("Order", "O-1001", ctx=other_tenant)
-    assert all(not rows for rows in core.operations.list_runs(ctx=other_tenant).values())
+        foundry.objects.get("Order", "O-1001", ctx=other_tenant)
+    assert all(not rows for rows in foundry.operations.list_runs(ctx=other_tenant).values())
     with pytest.raises(PermissionDenied):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -547,19 +551,19 @@ def test_viewer_sees_masked_margin_and_cannot_approve_order(
             idempotency_key="viewer-denied",
             ctx=viewer,
         )
-    assert any(event["decision"] == "deny" for event in core.operations.list_runs()["auditEvents"])
+    assert any(event["decision"] == "deny" for event in foundry.operations.list_runs()["auditEvents"])
 
 
 def test_only_ops_manager_or_admin_can_execute_approve_order(
-    core: FoundryLite,
+    foundry: FoundryLite,
 ) -> None:
-    prepare_indexed_demo(core)
+    prepare_indexed_demo(foundry)
     data_engineer = RequestContext(actor_user_id="engineer-1", roles=("data_engineer",))
     ops_manager = RequestContext(actor_user_id="ops-1", roles=("ops_manager",))
-    order = core.objects.get("Order", "O-1001", ctx=ops_manager)
+    order = foundry.objects.get("Order", "O-1001", ctx=ops_manager)
 
     with pytest.raises(PermissionDenied):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -569,7 +573,7 @@ def test_only_ops_manager_or_admin_can_execute_approve_order(
             ctx=data_engineer,
         )
 
-    approved = core.actions.apply(
+    approved = foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -580,23 +584,23 @@ def test_only_ops_manager_or_admin_can_execute_approve_order(
     )
 
     assert approved["status"] == "succeeded"
-    assert any(event["decision"] == "deny" for event in core.operations.list_runs()["auditEvents"])
+    assert any(event["decision"] == "deny" for event in foundry.operations.list_runs()["auditEvents"])
 
 
-def _prepare_demo_with_ontology(core: FoundryLite, ontology_path: Path) -> RequestContext:
+def _prepare_demo_with_ontology(foundry: FoundryLite, ontology_path: Path) -> RequestContext:
     ctx = demo_admin_context()
-    core.demo.seed_files()
-    core.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
-    core.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
-    core.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
-    core.demo.register_transforms(ctx)
-    core.datasets.upload_csv("raw.erp_orders", str(DEMO_ROOT / "data" / "orders.csv"), ctx=ctx)
-    core.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
-    core.transforms.run("clean_orders", ctx=ctx)
-    core.transforms.run("clean_customers", ctx=ctx)
-    core.ontology.apply(str(ontology_path), ctx=ctx)
-    core.objects.reindex("Order", ctx=ctx)
+    foundry.demo.seed_files()
+    foundry.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.demo.register_transforms(ctx)
+    foundry.datasets.upload_csv("raw.erp_orders", str(DEMO_ROOT / "data" / "orders.csv"), ctx=ctx)
+    foundry.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
+    foundry.transforms.run("clean_orders", ctx=ctx)
+    foundry.transforms.run("clean_customers", ctx=ctx)
+    foundry.ontology.apply(str(ontology_path), ctx=ctx)
+    foundry.objects.reindex("Order", ctx=ctx)
     return ctx
 
 

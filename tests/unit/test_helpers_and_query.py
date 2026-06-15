@@ -67,8 +67,8 @@ def test_helper_normalization_and_dataset_ref_validation() -> None:
         _dataset_ref_parts(".orders")
 
 
-def test_query_objects_filter_sort_cursor_and_invalid_op(core: FoundryLite) -> None:
-    prepare_indexed_demo(core)
+def test_query_objects_filter_sort_cursor_and_invalid_op(foundry: FoundryLite) -> None:
+    prepare_indexed_demo(foundry)
     filter_ast = {
         "and": [
             {"property": "status", "op": "in", "value": ["PENDING", "REVIEW"]},
@@ -76,7 +76,7 @@ def test_query_objects_filter_sort_cursor_and_invalid_op(core: FoundryLite) -> N
         ]
     }
     order_by = [{"property": "amount", "direction": "desc"}]
-    first_page = core.objects.query(
+    first_page = foundry.objects.query(
         "Order",
         filter_ast=filter_ast,
         order_by=order_by,
@@ -87,31 +87,31 @@ def test_query_objects_filter_sort_cursor_and_invalid_op(core: FoundryLite) -> N
     next_cursor = first_page["nextCursor"]
     assert next_cursor is not None
 
-    second_page = core.objects.query("Order", filter_ast=filter_ast, order_by=order_by, cursor=next_cursor)
+    second_page = foundry.objects.query("Order", filter_ast=filter_ast, order_by=order_by, cursor=next_cursor)
     assert [item["objectId"] for item in second_page["items"]] == ["O-1002"]
 
     with pytest.raises(ValidationFailed):
-        core.objects.query("Order", cursor=next_cursor)
+        foundry.objects.query("Order", cursor=next_cursor)
     with pytest.raises(ValidationFailed):
-        core.objects.query("Order", cursor="O-1001")
+        foundry.objects.query("Order", cursor="O-1001")
     with pytest.raises(ValidationFailed):
-        core.objects.query("Order", filter_ast=filter_ast, order_by=order_by, cursor=_tampered_cursor(next_cursor))
+        foundry.objects.query("Order", filter_ast=filter_ast, order_by=order_by, cursor=_tampered_cursor(next_cursor))
     with pytest.raises(ValidationFailed):
-        core.objects.query("Order", filter_ast=filter_ast, order_by=order_by, cursor="oqc1.not-valid-base64")
+        foundry.objects.query("Order", filter_ast=filter_ast, order_by=order_by, cursor="oqc1.not-valid-base64")
     with pytest.raises(ValidationFailed):
-        core.objects.query("Order", limit=501)
+        foundry.objects.query("Order", limit=501)
     with pytest.raises(ValidationFailed, match="missing property"):
-        core.objects.query("Order", filter_ast={"property": "missing", "op": "eq", "value": "PENDING"})
+        foundry.objects.query("Order", filter_ast={"property": "missing", "op": "eq", "value": "PENDING"})
     with pytest.raises(ValidationFailed, match="missing property"):
-        core.objects.query("Order", order_by=[{"property": "missing", "direction": "asc"}])
+        foundry.objects.query("Order", order_by=[{"property": "missing", "direction": "asc"}])
 
-    contains_page = core.objects.query(
+    contains_page = foundry.objects.query(
         "Order",
         filter_ast={"property": "customerId", "op": "contains", "value": "C-10"},
     )
     assert contains_page["items"]
 
-    review_or_small = core.objects.query(
+    review_or_small = foundry.objects.query(
         "Order",
         filter_ast={
             "or": [
@@ -123,7 +123,7 @@ def test_query_objects_filter_sort_cursor_and_invalid_op(core: FoundryLite) -> N
     assert {item["objectId"] for item in review_or_small["items"]} == {"O-1002", "O-1003"}
 
     with pytest.raises(ValidationFailed):
-        core.objects.query("Order", filter_ast={"property": "status", "op": "bad", "value": "PENDING"})
+        foundry.objects.query("Order", filter_ast={"property": "status", "op": "bad", "value": "PENDING"})
 
 
 def _tampered_cursor(cursor: str) -> str:
@@ -137,36 +137,36 @@ def _tampered_cursor(cursor: str) -> str:
 
 
 def test_dataset_not_found_duplicate_reset_preview_and_transform_update(
-    core: FoundryLite,
+    foundry: FoundryLite,
     tmp_path: Path,
 ) -> None:
     ctx = demo_admin_context()
-    core.demo.seed_files()
+    foundry.demo.seed_files()
     with pytest.raises(NotFound):
-        core.datasets.get("raw.missing")
+        foundry.datasets.get("raw.missing")
     with pytest.raises(NotFound):
-        core.datasets.preview("raw.missing")
+        foundry.datasets.preview("raw.missing")
 
-    core.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
-    assert core.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])["name"] == "crm_customers"
+    foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    assert foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])["name"] == "crm_customers"
     with pytest.raises(ConflictDetected):
-        core.datasets.create("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+        foundry.datasets.create("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
     with pytest.raises(NotFound):
-        core.datasets.upload_csv("raw.crm_customers", tmp_path / "missing.csv", ctx=ctx)
-    core.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
-    committed = core.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
-    assert core.datasets.preview("raw.crm_customers", ctx=ctx, version=committed.version_id)
-    assert core.datasets.inspect("raw.crm_customers", ctx=ctx, version=committed.version_id)["manifest"]
+        foundry.datasets.upload_csv("raw.crm_customers", tmp_path / "missing.csv", ctx=ctx)
+    foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    committed = foundry.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
+    assert foundry.datasets.preview("raw.crm_customers", ctx=ctx, version=committed.version_id)
+    assert foundry.datasets.inspect("raw.crm_customers", ctx=ctx, version=committed.version_id)["manifest"]
     sql_path = tmp_path / "noop.sql"
     sql_path.write_text("select * from {{ input('raw.crm_customers') }}", encoding="utf-8")
-    created = core.transforms.register(
+    created = foundry.transforms.register(
         "noop",
         entrypoint=sql_path,
         inputs={"customers": "raw.crm_customers"},
         output_dataset_ref="clean.customers",
         ctx=ctx,
     )
-    updated = core.transforms.register(
+    updated = foundry.transforms.register(
         "noop",
         entrypoint=sql_path,
         inputs={"customers": "raw.crm_customers"},
@@ -174,32 +174,32 @@ def test_dataset_not_found_duplicate_reset_preview_and_transform_update(
         ctx=ctx,
     )
     assert updated["id"] == created["id"]
-    audit_event_types = {event["event_type"] for event in core.operations.list_runs(ctx=ctx)["auditEvents"]}
+    audit_event_types = {event["event_type"] for event in foundry.operations.list_runs(ctx=ctx)["auditEvents"]}
     assert "transform.definition.created" in audit_event_types
     assert "transform.definition.updated" in audit_event_types
     with pytest.raises(ValidationFailed):
-        core.reset()
-    core.reset(confirm_dev=True)
-    assert core.datasets.find("raw.crm_customers") is None
+        foundry.reset()
+    foundry.reset(confirm_dev=True)
+    assert foundry.datasets.find("raw.crm_customers") is None
 
 
-def test_permission_deny_on_dataset_write_is_audited(core: FoundryLite) -> None:
+def test_permission_deny_on_dataset_write_is_audited(foundry: FoundryLite) -> None:
     viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
     with pytest.raises(PermissionDenied):
-        core.datasets.create("raw.denied", ctx=viewer)
-    assert any(event["decision"] == "deny" for event in core.operations.list_runs()["auditEvents"])
+        foundry.datasets.create("raw.denied", ctx=viewer)
+    assert any(event["decision"] == "deny" for event in foundry.operations.list_runs()["auditEvents"])
 
 
-def test_permission_deny_on_dataset_read_does_not_write_audit(core: FoundryLite) -> None:
+def test_permission_deny_on_dataset_read_does_not_write_audit(foundry: FoundryLite) -> None:
     ctx = demo_admin_context()
-    core.datasets.ensure("raw.read_boundary", ctx=ctx, primary_key=["id"])
-    audit_count_before = len(core.operations.list_runs(ctx=ctx)["auditEvents"])
+    foundry.datasets.ensure("raw.read_boundary", ctx=ctx, primary_key=["id"])
+    audit_count_before = len(foundry.operations.list_runs(ctx=ctx)["auditEvents"])
     blocked_reader = RequestContext(actor_user_id="blocked-reader", roles=())
 
     with pytest.raises(PermissionDenied):
-        core.datasets.get("raw.read_boundary", ctx=blocked_reader)
+        foundry.datasets.get("raw.read_boundary", ctx=blocked_reader)
 
-    assert len(core.operations.list_runs(ctx=ctx)["auditEvents"]) == audit_count_before
+    assert len(foundry.operations.list_runs(ctx=ctx)["auditEvents"]) == audit_count_before
 
 
 def test_csv_upload_wraps_unexpected_internal_error(
@@ -207,26 +207,26 @@ def test_csv_upload_wraps_unexpected_internal_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = demo_admin_context()
-    dependencies = create_local_core_dependencies(storage_root=tmp_path / "exploding-core")
-    exploding_core = FoundryLite(dependencies=replace(dependencies, compute_adapter=ExplodingCsvComputeAdapter()))
-    exploding_core.datasets.ensure("raw.wraps_error", ctx=ctx, primary_key=["id"])
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "exploding-foundry")
+    exploding_foundry = FoundryLite(dependencies=replace(dependencies, compute_adapter=ExplodingCsvComputeAdapter()))
+    exploding_foundry.datasets.ensure("raw.wraps_error", ctx=ctx, primary_key=["id"])
     csv_path = tmp_path / "rows.csv"
     csv_path.write_text("id,value\nA,1\n", encoding="utf-8")
 
     with pytest.raises(ValidationFailed, match="csv upload failed"):
-        exploding_core.datasets.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
+        exploding_foundry.datasets.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
 
-    normal_core = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "normal-core"))
-    normal_core.datasets.ensure("raw.wraps_error", ctx=ctx, primary_key=["id"])
+    normal_foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "normal-foundry"))
+    normal_foundry.datasets.ensure("raw.wraps_error", ctx=ctx, primary_key=["id"])
     monkeypatch.setenv("FOUNDRY_LITE_MAX_CSV_UPLOAD_BYTES", "4")
     with pytest.raises(ValidationFailed, match="size limit"):
-        normal_core.datasets.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
+        normal_foundry.datasets.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
 
 
-def test_action_validation_not_found_and_precondition_paths(core: FoundryLite) -> None:
-    ctx = prepare_indexed_demo(core)
+def test_action_validation_not_found_and_precondition_paths(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
     with pytest.raises(ValidationFailed):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -236,7 +236,7 @@ def test_action_validation_not_found_and_precondition_paths(core: FoundryLite) -
             ctx=ctx,
         )
     with pytest.raises(NotFound):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-404",
@@ -245,9 +245,9 @@ def test_action_validation_not_found_and_precondition_paths(core: FoundryLite) -
             idempotency_key="missing-object",
             ctx=ctx,
         )
-    order = core.objects.get("Order", "O-1001", ctx=ctx)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
     with pytest.raises(ValidationFailed):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1001",
@@ -256,9 +256,9 @@ def test_action_validation_not_found_and_precondition_paths(core: FoundryLite) -
             idempotency_key="missing-param",
             ctx=ctx,
         )
-    approved = core.objects.get("Order", "O-1003", ctx=ctx)
+    approved = foundry.objects.get("Order", "O-1003", ctx=ctx)
     with pytest.raises(ValidationFailed):
-        core.actions.apply(
+        foundry.actions.apply(
             "ApproveOrder",
             object_type="Order",
             object_id="O-1003",
@@ -272,62 +272,62 @@ def test_action_validation_not_found_and_precondition_paths(core: FoundryLite) -
         evaluate_safe_expression("object.status matches 'PENDING'", {"status": "PENDING"})
 
 
-def test_ontology_and_materialization_error_paths(core: FoundryLite, tmp_path: Path) -> None:
+def test_ontology_and_materialization_error_paths(foundry: FoundryLite, tmp_path: Path) -> None:
     ctx = demo_admin_context()
     non_mapping_yaml = tmp_path / "list.yaml"
     non_mapping_yaml.write_text("- bad\n", encoding="utf-8")
     with pytest.raises(ValidationFailed):
-        core.ontology.apply(non_mapping_yaml, ctx=ctx)
+        foundry.ontology.apply(non_mapping_yaml, ctx=ctx)
     with pytest.raises(NotFound):
-        core.materialization.run("missing", ctx=ctx)
+        foundry.materialization.run("missing", ctx=ctx)
     with pytest.raises(NotFound):
-        core.objects.get("Order", "missing")
+        foundry.objects.get("Order", "missing")
 
 
 def test_dataset_schema_drift_not_null_and_empty_file_failures(
-    core: FoundryLite,
+    foundry: FoundryLite,
     tmp_path: Path,
 ) -> None:
     ctx = demo_admin_context()
-    core.datasets.ensure("raw.schema_drift", ctx=ctx, primary_key=["id"])
+    foundry.datasets.ensure("raw.schema_drift", ctx=ctx, primary_key=["id"])
     first = tmp_path / "first.csv"
     first.write_text("id,value\nA,1\n", encoding="utf-8")
-    core.datasets.upload_csv("raw.schema_drift", first, ctx=ctx)
+    foundry.datasets.upload_csv("raw.schema_drift", first, ctx=ctx)
 
     missing_column = tmp_path / "missing_column.csv"
     missing_column.write_text("id\nA\n", encoding="utf-8")
     with pytest.raises(ValidationFailed):
-        core.datasets.upload_csv("raw.schema_drift", missing_column, ctx=ctx)
+        foundry.datasets.upload_csv("raw.schema_drift", missing_column, ctx=ctx)
 
-    core.datasets.ensure("raw.null_pk", ctx=ctx, primary_key=["id"])
+    foundry.datasets.ensure("raw.null_pk", ctx=ctx, primary_key=["id"])
     null_pk = tmp_path / "null_pk.csv"
     null_pk.write_text("id,value\n,1\n", encoding="utf-8")
     with pytest.raises(ValidationFailed):
-        core.datasets.upload_csv("raw.null_pk", null_pk, ctx=ctx)
+        foundry.datasets.upload_csv("raw.null_pk", null_pk, ctx=ctx)
 
-    core.datasets.ensure("raw.empty", ctx=ctx, primary_key=["id"])
+    foundry.datasets.ensure("raw.empty", ctx=ctx, primary_key=["id"])
     empty = tmp_path / "empty.csv"
     empty.write_text("id,value\n", encoding="utf-8")
     with pytest.raises(ValidationFailed):
-        core.datasets.upload_csv("raw.empty", empty, ctx=ctx)
+        foundry.datasets.upload_csv("raw.empty", empty, ctx=ctx)
 
 
 def test_transform_and_private_guard_failures(tmp_path: Path) -> None:
-    dependencies = create_local_core_dependencies(storage_root=tmp_path / "service-edge-core")
-    core = FoundryLite(dependencies=dependencies)
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "service-edge-foundry")
+    foundry = FoundryLite(dependencies=dependencies)
     services = CoreServices.create(dependencies)
     ctx = demo_admin_context()
-    core.demo.seed_files()
-    core.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
-    core.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
-    commit = core.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
+    foundry.demo.seed_files()
+    foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    commit = foundry.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
 
     with pytest.raises(NotFound):
-        core.transforms.run("missing", ctx=ctx)
+        foundry.transforms.run("missing", ctx=ctx)
 
     bad_sql = tmp_path / "bad.sql"
     bad_sql.write_text("select * from definitely_missing_table", encoding="utf-8")
-    core.transforms.register(
+    foundry.transforms.register(
         "bad_sql",
         entrypoint=bad_sql,
         inputs={"customers": "raw.crm_customers"},
@@ -335,7 +335,7 @@ def test_transform_and_private_guard_failures(tmp_path: Path) -> None:
         ctx=ctx,
     )
     with pytest.raises(ValidationFailed):
-        core.transforms.run("bad_sql", ctx=ctx)
+        foundry.transforms.run("bad_sql", ctx=ctx)
 
     dataset_transactions = services.dataset.transaction
     dataset_versions = services.dataset.version
@@ -343,12 +343,12 @@ def test_transform_and_private_guard_failures(tmp_path: Path) -> None:
     dataset_ingest = services.dataset.ingest
     runtime = services.runtime
 
-    with core.engine.begin() as conn:
+    with foundry.engine.begin() as conn:
         with pytest.raises(NotFound):
             dataset_transactions._require_open_transaction(conn, "missing")
         with pytest.raises(ConflictDetected):
             dataset_transactions._require_open_transaction(conn, commit.transaction_id)
-        dataset = core.datasets.get("raw.crm_customers", ctx=ctx)
+        dataset = foundry.datasets.get("raw.crm_customers", ctx=ctx)
         with pytest.raises(ValidationFailed):
             dataset_transactions._open_dataset_transaction(conn, ctx, dataset, "UPDATE")
         runtime._outbox(
@@ -390,18 +390,18 @@ def test_transform_and_private_guard_failures(tmp_path: Path) -> None:
 
 
 def test_ontology_import_validation_edges_and_missing_active_types(
-    core: FoundryLite,
+    foundry: FoundryLite,
     tmp_path: Path,
 ) -> None:
     ctx = demo_admin_context()
     with pytest.raises(NotFound):
-        core.objects.reindex("Order", ctx=ctx)
+        foundry.objects.reindex("Order", ctx=ctx)
 
-    ctx = prepare_indexed_demo(core)
+    ctx = prepare_indexed_demo(foundry)
     with pytest.raises(NotFound):
-        core.objects.reindex("MissingType", ctx=ctx)
+        foundry.objects.reindex("MissingType", ctx=ctx)
     with pytest.raises(NotFound):
-        core.actions.apply(
+        foundry.actions.apply(
             "MissingAction",
             object_type="Order",
             object_id="O-1001",
@@ -434,7 +434,7 @@ objectTypes:
         encoding="utf-8",
     )
     with pytest.raises(ValidationFailed):
-        core.ontology.apply(duplicate_property, ctx=ctx)
+        foundry.ontology.apply(duplicate_property, ctx=ctx)
 
     bad_link = tmp_path / "bad-link.yaml"
     bad_link.write_text(
@@ -452,18 +452,18 @@ linkTypes:
         encoding="utf-8",
     )
     with pytest.raises(ValidationFailed):
-        core.ontology.apply(bad_link, ctx=ctx)
+        foundry.ontology.apply(bad_link, ctx=ctx)
 
 
-def test_link_skips_missing_target_object(core: FoundryLite) -> None:
-    prepare_indexed_demo(core)
-    with core.engine.begin() as conn:
+def test_link_skips_missing_target_object(foundry: FoundryLite) -> None:
+    prepare_indexed_demo(foundry)
+    with foundry.engine.begin() as conn:
         conn.execute(
             db.object_records.delete().where(
                 (db.object_records.c.object_type_api_name == "Customer") & (db.object_records.c.object_id == "C-100")
             )
         )
-    assert core.objects.links("Order", "O-1001", "OrderCustomer") == []
+    assert foundry.objects.links("Order", "O-1001", "OrderCustomer") == []
 
 
 def test_transforms_sdk_decorator_and_logging(caplog) -> None:

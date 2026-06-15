@@ -91,7 +91,7 @@ def _findings_by_rule(report: dict) -> dict[str, int]:
 def test_router_no_direct_transaction_fires(semgrep_available, tmp_path: Path) -> None:
     target = tmp_path / "apps" / "api" / "router.py"
     target.parent.mkdir(parents=True)
-    target.write_text("def handler(core):\n    with core.engine.begin() as conn:\n        return conn\n")
+    target.write_text("def handler(foundry):\n    with foundry.engine.begin() as conn:\n        return conn\n")
     counts = _findings_by_rule(_run_semgrep(tmp_path))
     assert counts.get("foundry-lite-router-no-direct-transaction") == 1
 
@@ -99,7 +99,7 @@ def test_router_no_direct_transaction_fires(semgrep_available, tmp_path: Path) -
 def test_router_no_repository_access_fires(semgrep_available, tmp_path: Path) -> None:
     target = tmp_path / "apps" / "api" / "router.py"
     target.parent.mkdir(parents=True)
-    target.write_text("def handler(core):\n    return core.action_repository\n")
+    target.write_text("def handler(foundry):\n    return foundry.action_repository\n")
     counts = _findings_by_rule(_run_semgrep(tmp_path))
     assert counts.get("foundry-lite-router-no-repository-access") == 1
 

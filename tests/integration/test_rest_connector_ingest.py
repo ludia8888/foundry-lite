@@ -17,11 +17,11 @@ from tests.contracts.test_rest_connector_adapter_contract import MockRestServer
 
 def test_rest_connector_snapshot_commits_raw_dataset(tmp_path) -> None:
     with MockRestServer() as server:
-        core = _core_with_rest_connector(tmp_path)
+        foundry = _core_with_rest_connector(tmp_path)
         ctx = demo_admin_context()
-        core.datasets.ensure("raw.rest_orders", ctx=ctx, primary_key=["order_id"])
+        foundry.datasets.ensure("raw.rest_orders", ctx=ctx, primary_key=["order_id"])
 
-        result = core.datasets.sync_connector_snapshot(
+        result = foundry.datasets.sync_connector_snapshot(
             "raw.rest_orders",
             connector_name="rest",
             resource_name="orders",
@@ -29,8 +29,8 @@ def test_rest_connector_snapshot_commits_raw_dataset(tmp_path) -> None:
             rest=RestSourceConfig(base_url=server.base_url, resource_path="/orders", allow_private_network=True),
         )
 
-    preview = core.datasets.preview("raw.rest_orders", ctx=ctx)
-    runs = core.operations.query_runs(ctx=ctx, run_type="sync", status="COMMITTED")
+    preview = foundry.datasets.preview("raw.rest_orders", ctx=ctx)
+    runs = foundry.operations.query_runs(ctx=ctx, run_type="sync", status="COMMITTED")
 
     assert result.version_number == 1
     assert preview[0]["amount"] == 100
@@ -40,19 +40,19 @@ def test_rest_connector_snapshot_commits_raw_dataset(tmp_path) -> None:
 
 def test_rest_connector_snapshot_resumes_from_committed_cursor(tmp_path) -> None:
     with MockRestServer() as server:
-        core = _core_with_rest_connector(tmp_path)
+        foundry = _core_with_rest_connector(tmp_path)
         ctx = demo_admin_context()
-        core.datasets.ensure("raw.rest_orders", ctx=ctx, primary_key=["order_id"])
+        foundry.datasets.ensure("raw.rest_orders", ctx=ctx, primary_key=["order_id"])
         rest = RestSourceConfig(base_url=server.base_url, resource_path="/orders", allow_private_network=True)
 
-        first = core.datasets.sync_connector_snapshot(
+        first = foundry.datasets.sync_connector_snapshot(
             "raw.rest_orders",
             connector_name="rest",
             resource_name="orders",
             ctx=ctx,
             rest=rest,
         )
-        second = core.datasets.sync_connector_snapshot(
+        second = foundry.datasets.sync_connector_snapshot(
             "raw.rest_orders",
             connector_name="rest",
             resource_name="orders",
@@ -60,8 +60,8 @@ def test_rest_connector_snapshot_resumes_from_committed_cursor(tmp_path) -> None
             rest=rest,
         )
 
-    latest_metadata = _transaction_metadata(core, second.transaction_id)
-    preview = core.datasets.preview("raw.rest_orders", ctx=ctx)
+    latest_metadata = _transaction_metadata(foundry, second.transaction_id)
+    preview = foundry.datasets.preview("raw.rest_orders", ctx=ctx)
 
     assert first.version_number == 1
     assert second.version_number == 2
@@ -79,8 +79,8 @@ def test_rest_connector_snapshot_resumes_from_committed_cursor(tmp_path) -> None
 def test_rest_cursor_not_advanced_when_dataset_commit_fails(tmp_path) -> None:
     with MockRestServer() as server:
         dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-        core = FoundryLite(dependencies=replace(dependencies, connector_adapter=RestPullConnectorAdapter()))
-        failing_core = FoundryLite(
+        foundry = FoundryLite(dependencies=replace(dependencies, connector_adapter=RestPullConnectorAdapter()))
+        failing_foundry = FoundryLite(
             dependencies=replace(
                 dependencies,
                 compute_adapter=_ExplodingRowsComputeAdapter(),
@@ -89,9 +89,9 @@ def test_rest_cursor_not_advanced_when_dataset_commit_fails(tmp_path) -> None:
         )
         ctx = demo_admin_context()
         rest = RestSourceConfig(base_url=server.base_url, resource_path="/orders", allow_private_network=True)
-        core.datasets.ensure("raw.rest_orders", ctx=ctx, primary_key=["order_id"])
+        foundry.datasets.ensure("raw.rest_orders", ctx=ctx, primary_key=["order_id"])
 
-        core.datasets.sync_connector_snapshot(
+        foundry.datasets.sync_connector_snapshot(
             "raw.rest_orders",
             connector_name="rest",
             resource_name="orders",
@@ -99,14 +99,14 @@ def test_rest_cursor_not_advanced_when_dataset_commit_fails(tmp_path) -> None:
             rest=rest,
         )
         with pytest.raises(ValidationFailed, match="connector snapshot sync failed"):
-            failing_core.datasets.sync_connector_snapshot(
+            failing_foundry.datasets.sync_connector_snapshot(
                 "raw.rest_orders",
                 connector_name="rest",
                 resource_name="orders",
                 ctx=ctx,
                 rest=rest,
             )
-        retry = core.datasets.sync_connector_snapshot(
+        retry = foundry.datasets.sync_connector_snapshot(
             "raw.rest_orders",
             connector_name="rest",
             resource_name="orders",
@@ -114,7 +114,7 @@ def test_rest_cursor_not_advanced_when_dataset_commit_fails(tmp_path) -> None:
             rest=rest,
         )
 
-    latest_metadata = _transaction_metadata(core, retry.transaction_id)
+    latest_metadata = _transaction_metadata(foundry, retry.transaction_id)
     assert [request["cursor"] for request in server.requests] == [None, "page-2", "page-2"]
     assert latest_metadata["connectorCursor"]["requestCursor"] == {"cursor": "page-2"}
     assert latest_metadata["connectorCursor"]["nextCursor"] is None
@@ -122,12 +122,12 @@ def test_rest_cursor_not_advanced_when_dataset_commit_fails(tmp_path) -> None:
 
 def test_rest_connector_rate_limit_failure_is_visible_in_operations(tmp_path) -> None:
     with MockRestServer() as server:
-        core = _core_with_rest_connector(tmp_path)
+        foundry = _core_with_rest_connector(tmp_path)
         ctx = demo_admin_context()
-        core.datasets.ensure("raw.rest_limited", ctx=ctx, primary_key=["order_id"])
+        foundry.datasets.ensure("raw.rest_limited", ctx=ctx, primary_key=["order_id"])
 
         with pytest.raises(ValidationFailed, match="connector snapshot sync failed"):
-            core.datasets.sync_connector_snapshot(
+            foundry.datasets.sync_connector_snapshot(
                 "raw.rest_limited",
                 connector_name="rest",
                 resource_name="limited",
@@ -139,7 +139,7 @@ def test_rest_connector_rate_limit_failure_is_visible_in_operations(tmp_path) ->
                 ),
             )
 
-    failed_runs = core.operations.query_runs(ctx=ctx, run_type="sync", status="FAILED")["syncRuns"]
+    failed_runs = foundry.operations.query_runs(ctx=ctx, run_type="sync", status="FAILED")["syncRuns"]
     assert failed_runs[0]["source_type"] == "connector.rest"
     assert failed_runs[0]["error"]["type"] == "ADAPTER_FAILURE"
     assert failed_runs[0]["error"]["adapterFailure"]["kind"] == "rate_limited"
@@ -151,8 +151,8 @@ def _core_with_rest_connector(tmp_path) -> FoundryLite:
     return FoundryLite(dependencies=replace(dependencies, connector_adapter=RestPullConnectorAdapter()))
 
 
-def _transaction_metadata(core: FoundryLite, transaction_id: str) -> dict[str, object]:
-    with core.engine.begin() as conn:
+def _transaction_metadata(foundry: FoundryLite, transaction_id: str) -> dict[str, object]:
+    with foundry.engine.begin() as conn:
         row = (
             conn.execute(select(db.dataset_transactions).where(db.dataset_transactions.c.id == transaction_id))
             .mappings()

@@ -15,19 +15,19 @@ from foundry_lite.infrastructure.local_runtime import create_local_core_dependen
 
 
 def test_stream_archive_appends_preview_and_checkpoint_metadata(tmp_path: Path) -> None:
-    core, dependencies = _core_with_stream(tmp_path)
+    foundry, dependencies = _core_with_stream(tmp_path)
     ctx = demo_admin_context()
     stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events")
-    core.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
+    foundry.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
     _publish_shipment(dependencies.stream_adapter, "S-100", ctx=ctx)
     _publish_shipment(dependencies.stream_adapter, "S-101", ctx=ctx)
 
-    result = core.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+    result = foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
 
     assert result is not None
-    preview = core.datasets.preview("raw.shipment_events", ctx=ctx)
-    latest = _latest_stream_transaction(core, dependencies, ctx, "raw.shipment_events")
-    runs = core.operations.query_runs(ctx=ctx, run_type="sync", status="COMMITTED")["syncRuns"]
+    preview = foundry.datasets.preview("raw.shipment_events", ctx=ctx)
+    latest = _latest_stream_transaction(foundry, dependencies, ctx, "raw.shipment_events")
+    runs = foundry.operations.query_runs(ctx=ctx, run_type="sync", status="COMMITTED")["syncRuns"]
     assert result.row_count == 2
     assert [row["event_id"] for row in preview] == ["shipment_events:0:0", "shipment_events:0:1"]
     assert preview[0]["payload_json"] == '{"shipment_id":"S-100","status":"IN_TRANSIT"}'
@@ -36,20 +36,20 @@ def test_stream_archive_appends_preview_and_checkpoint_metadata(tmp_path: Path) 
 
 
 def test_stream_archive_restart_resumes_after_committed_offset(tmp_path: Path) -> None:
-    core, dependencies = _core_with_stream(tmp_path)
+    foundry, dependencies = _core_with_stream(tmp_path)
     ctx = demo_admin_context()
     stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events", limit=2)
-    core.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
+    foundry.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
     for shipment_id in ("S-100", "S-101", "S-102"):
         _publish_shipment(dependencies.stream_adapter, shipment_id, ctx=ctx)
 
-    first = core.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
-    second = core.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+    first = foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+    second = foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
 
     assert first is not None
     assert second is not None
-    latest_preview = core.datasets.preview("raw.shipment_events", ctx=ctx)
-    latest = _latest_stream_transaction(core, dependencies, ctx, "raw.shipment_events")
+    latest_preview = foundry.datasets.preview("raw.shipment_events", ctx=ctx)
+    latest = _latest_stream_transaction(foundry, dependencies, ctx, "raw.shipment_events")
     assert first.row_count == 2
     assert second.row_count == 1
     assert latest_preview[0]["event_id"] == "shipment_events:0:2"
@@ -57,21 +57,21 @@ def test_stream_archive_restart_resumes_after_committed_offset(tmp_path: Path) -
 
 
 def test_stream_offset_not_advanced_when_append_commit_fails(tmp_path: Path) -> None:
-    core, dependencies = _core_with_stream(tmp_path)
-    failing_core = FoundryLite(dependencies=replace(dependencies, compute_adapter=_ExplodingRowsComputeAdapter()))
+    foundry, dependencies = _core_with_stream(tmp_path)
+    failing_foundry = FoundryLite(dependencies=replace(dependencies, compute_adapter=_ExplodingRowsComputeAdapter()))
     ctx = demo_admin_context()
     stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events", limit=1)
-    core.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
+    foundry.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
     _publish_shipment(dependencies.stream_adapter, "S-100", ctx=ctx)
     _publish_shipment(dependencies.stream_adapter, "S-101", ctx=ctx)
 
-    first = core.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+    first = foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
     with pytest.raises(ValidationFailed, match="stream archive failed"):
-        failing_core.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
-    retry = core.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+        failing_foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+    retry = foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
 
-    latest = _latest_stream_transaction(core, dependencies, ctx, "raw.shipment_events")
-    preview = core.datasets.preview("raw.shipment_events", ctx=ctx)
+    latest = _latest_stream_transaction(foundry, dependencies, ctx, "raw.shipment_events")
+    preview = foundry.datasets.preview("raw.shipment_events", ctx=ctx)
     assert first is not None
     assert retry is not None
     assert retry.row_count == 1
@@ -101,16 +101,16 @@ def test_stream_archive_cursor_requires_matching_schema_strategy() -> None:
 
 def test_stream_archive_failure_is_visible_in_operations(tmp_path: Path) -> None:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
-    core = FoundryLite(dependencies=replace(dependencies, compute_adapter=_ExplodingRowsComputeAdapter()))
+    foundry = FoundryLite(dependencies=replace(dependencies, compute_adapter=_ExplodingRowsComputeAdapter()))
     ctx = demo_admin_context()
     stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events")
-    core.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
+    foundry.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
     _publish_shipment(dependencies.stream_adapter, "S-100", ctx=ctx)
 
     with pytest.raises(ValidationFailed, match="stream archive failed"):
-        core.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+        foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
 
-    failed_runs = core.operations.query_runs(ctx=ctx, run_type="sync", status="FAILED")["syncRuns"]
+    failed_runs = foundry.operations.query_runs(ctx=ctx, run_type="sync", status="FAILED")["syncRuns"]
     failed_run = next(run for run in failed_runs if run["source_type"] == "stream.shipments")
     assert failed_run["error"]["trace"]["adapter"] == "stream_archive_writer"
 
@@ -134,12 +134,12 @@ def _publish_shipment(stream_adapter: StreamAdapter, shipment_id: str, *, ctx: R
 
 
 def _latest_stream_transaction(
-    core: FoundryLite,
+    foundry: FoundryLite,
     dependencies: CoreDependencies,
     ctx: RequestContext,
     dataset_ref: str,
 ) -> dict[str, object]:
-    dataset = core.datasets.get(dataset_ref, ctx=ctx)
+    dataset = foundry.datasets.get(dataset_ref, ctx=ctx)
     with dependencies.engine.begin() as transaction:
         row = dependencies.dataset_transaction_repository.latest_committed_transaction(
             transaction=transaction,
