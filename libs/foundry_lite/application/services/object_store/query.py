@@ -36,7 +36,7 @@ OBJECT_QUERY_MAX_LIMIT = 500
 
 
 class ObjectQueryService(CoreService):
-    required_dependencies = ("engine", "policy", "object_read_repository")
+    required_dependencies = ("engine", "policy", "object_index_repository", "object_read_repository")
     required_collaborators = ("object_records_service", "runtime_service", "ontology_service", "object_search_service")
     object_records_service: ObjectRecordLookup
     runtime_service: ObjectLineageReader
@@ -118,24 +118,61 @@ class ObjectQueryService(CoreService):
         normalized_order_by = _normalized_order_by(order_by)
         if filter_ast:
             validate_filter_ast(filter_ast)
+        records, active_index_version = self._query_active_records(
+            ctx,
+            object_type_api_name,
+            filter_ast,
+            normalized_order_by,
+            cursor,
+            query_limit,
+        )
+        page = records[:query_limit]
+        return {
+            "items": [self._object_query_item(ctx, object_type_api_name, row) for row in page],
+            "nextCursor": _next_cursor(records, page, normalized_order_by, filter_ast, active_index_version),
+        }
+
+    def _query_active_records(
+        self,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        order_by: Sequence[ObjectOrderBy],
+        cursor: str | None,
+        query_limit: int,
+    ) -> tuple[list[ObjectRecordRow], str]:
         with self.engine.begin() as conn:
-            property_names = self._query_property_names(conn, ctx, object_type_api_name)
-            _validate_query_properties(filter_ast, normalized_order_by, property_names)
-            cursor_state = decode_object_query_cursor(cursor, normalized_order_by, filter_ast)
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
+            active_index_version = self.object_index_repository.active_index_version(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_id=object_type["id"],
+            )
+            self._validate_query_shape(conn, ctx, object_type_api_name, object_type["id"], filter_ast, order_by)
+            cursor_state = decode_object_query_cursor(cursor, order_by, filter_ast, active_index_version)
             records = self.object_read_repository.query_active_object_rows(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
                 object_type_api_name=object_type_api_name,
                 filter_ast=filter_ast,
-                order_by=normalized_order_by,
+                order_by=order_by,
                 cursor=cursor_state,
                 limit=query_limit + 1,
             )
-        page = records[:query_limit]
-        return {
-            "items": [self._object_query_item(ctx, object_type_api_name, row) for row in page],
-            "nextCursor": _next_cursor(records, page, normalized_order_by, filter_ast),
-        }
+        return records, active_index_version
+
+    def _validate_query_shape(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        object_type_id: str,
+        filter_ast: Mapping[str, object] | None,
+        order_by: Sequence[ObjectOrderBy],
+    ) -> None:
+        property_names = self._query_property_names(conn, object_type_id)
+        masked = self.policy.masked_property_names(ctx, object_type_api_name)
+        _validate_query_properties(filter_ast, order_by, property_names, masked)
 
     def _object_query_item(
         self,
@@ -153,13 +190,11 @@ class ObjectQueryService(CoreService):
     def _query_property_names(
         self,
         conn: TransactionContext,
-        ctx: RequestContext,
-        object_type_api_name: str,
+        object_type_id: str,
     ) -> set[str]:
-        object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
         return {
             property_type["api_name"]
-            for property_type in self.ontology_service._properties_for_object_type(conn, object_type["id"])
+            for property_type in self.ontology_service._properties_for_object_type(conn, object_type_id)
         }
 
 
@@ -207,23 +242,43 @@ def _validate_query_properties(
     filter_ast: Mapping[str, object] | None,
     order_by: Sequence[ObjectOrderBy],
     property_names: set[str],
+    masked_property_names: set[str],
 ) -> None:
     for order in order_by:
-        _require_known_query_property(order["property"], property_names, source="orderBy")
+        _validate_query_property(order["property"], property_names, masked_property_names, source="orderBy")
     if filter_ast:
-        _validate_filter_properties(filter_ast, property_names)
+        _validate_filter_properties(filter_ast, property_names, masked_property_names)
 
 
-def _validate_filter_properties(filter_ast: Mapping[str, object], property_names: set[str]) -> None:
+def _validate_filter_properties(
+    filter_ast: Mapping[str, object],
+    property_names: set[str],
+    masked_property_names: set[str],
+) -> None:
     if "and" in filter_ast:
         for item in cast(Sequence[Mapping[str, object]], filter_ast["and"]):
-            _validate_filter_properties(item, property_names)
+            _validate_filter_properties(item, property_names, masked_property_names)
         return
     if "or" in filter_ast:
         for item in cast(Sequence[Mapping[str, object]], filter_ast["or"]):
-            _validate_filter_properties(item, property_names)
+            _validate_filter_properties(item, property_names, masked_property_names)
         return
-    _require_known_query_property(str(filter_ast["property"]), property_names, source="filter")
+    _validate_query_property(str(filter_ast["property"]), property_names, masked_property_names, source="filter")
+
+
+def _validate_query_property(
+    property_name: str,
+    property_names: set[str],
+    masked_property_names: set[str],
+    *,
+    source: str,
+) -> None:
+    _require_known_query_property(property_name, property_names, source=source)
+    if property_name in masked_property_names:
+        raise ValidationFailed(
+            "object query references masked property",
+            details={"property": property_name, "source": source},
+        )
 
 
 def _require_known_query_property(property_name: str, property_names: set[str], *, source: str) -> None:
@@ -239,10 +294,11 @@ def _next_cursor(
     page: Sequence[ObjectRecordRow],
     order_by: Sequence[ObjectOrderBy],
     filter_ast: Mapping[str, object] | None,
+    active_index_version: str,
 ) -> str | None:
     if len(records) <= len(page) or not page:
         return None
-    return encode_object_query_cursor(page[-1], order_by, filter_ast)
+    return encode_object_query_cursor(page[-1], order_by, filter_ast, active_index_version)
 
 
 def _lineage_payload(rows: Sequence[LineageEdgeRow]) -> list[dict[str, object]]:

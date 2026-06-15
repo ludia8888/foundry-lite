@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import StreamAdapter, StreamArchiveConfig
 from foundry_lite.application.ports.adapter_failure import AdapterError, adapter_failure_payload
 from foundry_lite.application.ports.stream_adapter import StreamSchemaStrategy
@@ -46,9 +46,11 @@ class StreamArchiveWorkerConfig:
     sync_name: str | None = None
 
     def request_context(self) -> RequestContext:
+        tenant_id = _required_worker_value("tenant_id", self.tenant_id)
+        actor_user_id = _required_worker_value("actor_user_id", self.actor_user_id)
         return RequestContext(
-            tenant_id=self.tenant_id,
-            actor_user_id=self.actor_user_id,
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
             request_id=self.request_id,
             roles=DEMO_ADMIN_ROLES,
         )
@@ -100,10 +102,10 @@ def run_stream_archive_once(
         adapter_profile=config.adapter_profile,
     )
     adapter = stream_adapter or config.stream_adapter()
-    core = FoundryLiteCore(dependencies=replace(dependencies, stream_adapter=adapter))
+    foundry = FoundryLite(dependencies=replace(dependencies, stream_adapter=adapter))
     ctx = config.request_context()
-    core.ensure_dataset(config.dataset_ref, ctx=ctx, primary_key=["event_id"])
-    return core.archive_stream_events(
+    foundry.datasets.ensure(config.dataset_ref, ctx=ctx, primary_key=["event_id"])
+    return foundry.datasets.archive_stream_events(
         config.dataset_ref,
         stream=config.stream_config(),
         ctx=ctx,
@@ -132,6 +134,13 @@ def config_from_env(env: Mapping[str, str] | None = None) -> StreamArchiveWorker
         tenant_id=values.get("FOUNDRY_LITE_TENANT_ID", DEFAULT_TENANT_ID),
         sync_name=values.get("FOUNDRY_LITE_STREAM_SYNC_NAME"),
     )
+
+
+def _required_worker_value(field: str, value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"stream archive worker requires {field}")
+    return normalized
 
 
 def main(argv: list[str] | None = None) -> int:

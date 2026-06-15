@@ -8,10 +8,12 @@ from typing import Any, Protocol
 
 import pytest
 from foundry_lite.application.ports.materialization_repository import (
+    ActionRunWatermark,
     MaterializationRecord,
     MaterializationRepository,
     MaterializationRow,
     MaterializationRunRecord,
+    ObjectRecordVersionRow,
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyMaterializationRepository
@@ -28,17 +30,26 @@ class MaterializationHarness(Protocol):
 
     def materialization_run_rows(self) -> list[dict[str, Any]]: ...
 
-    def seed_action_run(self, *, run_id: str, created_at: str) -> None: ...
+    def seed_action_run(self, *, run_id: str, created_at: str, completed_at: str | None = None) -> None: ...
 
-    def seed_object_record(self, *, record_id: str, updated_at: str) -> None: ...
+    def seed_object_record(
+        self,
+        *,
+        record_id: str,
+        updated_at: str,
+        object_change_sequence: int | None = None,
+        index_version: str = "active",
+    ) -> None: ...
 
 
 @dataclass
 class FakeMaterializationRepository:
     materializations: list[MaterializationRow] = field(default_factory=list)
     materialization_runs: list[dict[str, Any]] = field(default_factory=list)
-    action_run_watermarks: list[str] = field(default_factory=list)
-    object_record_watermarks: list[str] = field(default_factory=list)
+    action_run_watermarks: list[dict[str, str | None]] = field(default_factory=list)
+    object_record_watermarks: list[dict[str, object]] = field(default_factory=list)
+    object_record_versions: list[dict[str, object]] = field(default_factory=list)
+    active_index_versions: dict[tuple[str, str], str] = field(default_factory=dict)
 
     def materialization_by_api_name(
         self,
@@ -120,13 +131,63 @@ class FakeMaterializationRepository:
                 )
                 return
 
-    def latest_action_run_watermark(self, *, transaction: Any) -> str | None:
+    def latest_action_run_watermark(self, *, transaction: Any, tenant_id: str) -> ActionRunWatermark:
         del transaction
-        return max(self.action_run_watermarks) if self.action_run_watermarks else None
+        rows = [row for row in self.action_run_watermarks if row["tenant_id"] == tenant_id and row["completed_at"]]
+        if not rows:
+            return {"completed_at": None, "action_run_id": None}
+        latest = max(rows, key=lambda row: (str(row["completed_at"]), str(row["action_run_id"])))
+        return {"completed_at": str(latest["completed_at"]), "action_run_id": str(latest["action_run_id"])}
 
-    def latest_object_record_watermark(self, *, transaction: Any) -> str | None:
+    def latest_object_record_watermark(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        index_version: str,
+    ) -> int | None:
         del transaction
-        return max(self.object_record_watermarks) if self.object_record_watermarks else None
+        sequences = [
+            row["object_change_sequence"]
+            for row in self.object_record_watermarks
+            if row["tenant_id"] == tenant_id
+            and row["object_type_api_name"] == object_type_api_name
+            and row["index_version"] == index_version
+            and isinstance(row["object_change_sequence"], int)
+        ]
+        return max(sequence for sequence in sequences if isinstance(sequence, int)) if sequences else None
+
+    def active_object_index_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+    ) -> str:
+        del transaction
+        return self.active_index_versions.get((tenant_id, object_type_api_name), "active")
+
+    def object_records_at_watermark(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        index_version: str,
+        max_object_change_sequence: int,
+    ) -> list[ObjectRecordVersionRow]:
+        del transaction
+        rows = [
+            row
+            for row in self.object_record_versions
+            if row["tenant_id"] == tenant_id
+            and row["object_type_api_name"] == object_type_api_name
+            and row["index_version"] == index_version
+            and isinstance(row["object_change_sequence"], int)
+            and row["object_change_sequence"] <= max_object_change_sequence
+        ]
+        return _latest_object_record_versions(rows)
 
 
 @dataclass
@@ -147,17 +208,41 @@ class FakeMaterializationHarness:
         assert isinstance(repository, FakeMaterializationRepository)
         return [dict(row) for row in repository.materialization_runs]
 
-    def seed_action_run(self, *, run_id: str, created_at: str) -> None:
-        del run_id
+    def seed_action_run(self, *, run_id: str, created_at: str, completed_at: str | None = None) -> None:
         repository = self.repository
         assert isinstance(repository, FakeMaterializationRepository)
-        repository.action_run_watermarks.append(created_at)
+        repository.action_run_watermarks.append(
+            {"tenant_id": "tenant-test", "action_run_id": run_id, "completed_at": completed_at or created_at}
+        )
 
-    def seed_object_record(self, *, record_id: str, updated_at: str) -> None:
-        del record_id
+    def seed_object_record(
+        self,
+        *,
+        record_id: str,
+        updated_at: str,
+        object_change_sequence: int | None = None,
+        index_version: str = "active",
+    ) -> None:
         repository = self.repository
         assert isinstance(repository, FakeMaterializationRepository)
-        repository.object_record_watermarks.append(updated_at)
+        repository.object_record_watermarks.append(
+            {
+                "tenant_id": "tenant-test",
+                "record_id": record_id,
+                "object_type_api_name": "TestObject",
+                "index_version": index_version,
+                "object_change_sequence": object_change_sequence,
+            }
+        )
+        if object_change_sequence is not None:
+            repository.object_record_versions.append(
+                _object_record_version_row(
+                    record_id=record_id,
+                    object_change_sequence=object_change_sequence,
+                    updated_at=updated_at,
+                    index_version=index_version,
+                )
+            )
 
 
 @dataclass
@@ -196,7 +281,7 @@ class SqlAlchemyMaterializationHarness:
         with self.engine.begin() as conn:
             return [dict(row) for row in conn.execute(select(db.materialization_runs)).mappings().all()]
 
-    def seed_action_run(self, *, run_id: str, created_at: str) -> None:
+    def seed_action_run(self, *, run_id: str, created_at: str, completed_at: str | None = None) -> None:
         with self.engine.begin() as conn:
             conn.execute(
                 db.action_runs.insert().values(
@@ -212,32 +297,49 @@ class SqlAlchemyMaterializationHarness:
                     parameters={},
                     status="succeeded",
                     idempotency_key=f"key-{run_id}",
+                    request_fingerprint=f"fingerprint-{run_id}",
                     error=None,
                     created_at=created_at,
-                    completed_at=created_at,
+                    completed_at=completed_at or created_at,
                 )
             )
 
-    def seed_object_record(self, *, record_id: str, updated_at: str) -> None:
+    def seed_object_record(
+        self,
+        *,
+        record_id: str,
+        updated_at: str,
+        object_change_sequence: int | None = None,
+        index_version: str = "active",
+    ) -> None:
         with self.engine.begin() as conn:
-            conn.execute(
-                db.object_records.insert().values(
-                    id=record_id,
-                    tenant_id="tenant-test",
-                    object_type_id="ot_test",
-                    object_type_api_name="TestObject",
-                    object_id=record_id,
-                    object_version=1,
-                    base_properties={},
-                    edit_properties={},
-                    properties={},
-                    property_versions={},
-                    source_dataset_version_id="dsv_test",
-                    deleted=False,
-                    created_at=updated_at,
-                    updated_at=updated_at,
-                )
+            current = _object_record_current_row(
+                record_id=record_id,
+                object_change_sequence=object_change_sequence,
+                updated_at=updated_at,
+                index_version=index_version,
             )
+            existing = conn.execute(
+                select(db.object_records).where(
+                    db.object_records.c.id == record_id,
+                    db.object_records.c.tenant_id == "tenant-test",
+                )
+            ).first()
+            if existing is None:
+                conn.execute(db.object_records.insert().values(**current))
+            else:
+                conn.execute(db.object_records.update().where(db.object_records.c.id == record_id).values(**current))
+            if object_change_sequence is not None:
+                conn.execute(
+                    db.object_record_versions.insert().values(
+                        **_object_record_version_row(
+                            record_id=record_id,
+                            object_change_sequence=object_change_sequence,
+                            updated_at=updated_at,
+                            index_version=index_version,
+                        )
+                    )
+                )
 
 
 @pytest.fixture(params=["fake", "sqlalchemy", "postgres"])
@@ -270,8 +372,8 @@ def _materialization_run_record() -> MaterializationRunRecord:
         materialization_id="mat_test",
         api_name="action_log",
         status="running",
-        source_cursor={"action_run_created_at_lte": None},
-        object_store_watermark={"action_run_created_at_lte": None},
+        source_cursor={"action_run_completed_at_lte": None, "action_run_id_lte": None},
+        object_store_watermark={"action_run_completed_at_lte": None, "action_run_id_lte": None},
         consistency_level="watermark",
         target_dataset_version_id=None,
         row_count=None,
@@ -279,6 +381,79 @@ def _materialization_run_record() -> MaterializationRunRecord:
         created_at="2025-01-01T00:00:00Z",
         completed_at=None,
     )
+
+
+def _object_record_version_row(
+    *,
+    record_id: str,
+    object_change_sequence: int,
+    updated_at: str,
+    index_version: str = "active",
+) -> dict[str, object]:
+    return {
+        "id": f"orv_{record_id}_{object_change_sequence}",
+        "tenant_id": "tenant-test",
+        "object_record_id": record_id,
+        "object_type_id": "ot_test",
+        "object_type_api_name": "TestObject",
+        "object_id": record_id,
+        "index_version": index_version,
+        "is_active": True,
+        "properties": {"objectId": record_id, "sequence": object_change_sequence},
+        "base_properties": {},
+        "edit_properties": {},
+        "property_versions": {},
+        "source_dataset_version_id": "dsv_test",
+        "source_hash": "hash-test",
+        "object_version": object_change_sequence,
+        "object_change_sequence": object_change_sequence,
+        "deleted": False,
+        "deletion_reason": None,
+        "created_at": updated_at,
+        "updated_at": updated_at,
+    }
+
+
+def _object_record_current_row(
+    *,
+    record_id: str,
+    object_change_sequence: int | None,
+    updated_at: str,
+    index_version: str = "active",
+) -> dict[str, object]:
+    return {
+        "id": record_id,
+        "tenant_id": "tenant-test",
+        "object_type_id": "ot_test",
+        "object_type_api_name": "TestObject",
+        "object_id": record_id,
+        "object_version": object_change_sequence or 1,
+        "base_properties": {},
+        "edit_properties": {},
+        "properties": {},
+        "property_versions": {},
+        "source_dataset_version_id": "dsv_test",
+        "object_change_sequence": object_change_sequence,
+        "index_version": index_version,
+        "is_active": True,
+        "deleted": False,
+        "created_at": updated_at,
+        "updated_at": updated_at,
+    }
+
+
+def _latest_object_record_versions(rows: list[dict[str, object]]) -> list[ObjectRecordVersionRow]:
+    latest: dict[tuple[object, object, object], dict[str, object]] = {}
+    for row in rows:
+        key = (row["object_type_id"], row["object_id"], row["index_version"])
+        existing = latest.get(key)
+        row_sequence = row["object_change_sequence"]
+        existing_sequence = existing["object_change_sequence"] if existing is not None else None
+        if isinstance(row_sequence, int) and (
+            not isinstance(existing_sequence, int) or row_sequence > existing_sequence
+        ):
+            latest[key] = row
+    return [dict(row) for row in sorted(latest.values(), key=lambda item: str(item["object_id"]))]
 
 
 def test_materialization_by_api_name_returns_none_when_absent(harness: MaterializationHarness) -> None:
@@ -385,26 +560,95 @@ def test_update_materialization_run_terminal_failed(harness: MaterializationHarn
 
 def test_latest_action_run_watermark_handles_empty(harness: MaterializationHarness) -> None:
     with harness.transaction() as txn:
-        assert harness.repository.latest_action_run_watermark(transaction=txn) is None
+        assert harness.repository.latest_action_run_watermark(transaction=txn, tenant_id="tenant-test") == {
+            "completed_at": None,
+            "action_run_id": None,
+        }
 
 
-def test_latest_action_run_watermark_returns_max(harness: MaterializationHarness) -> None:
-    harness.seed_action_run(run_id="ar_a", created_at="2025-01-01T00:00:00Z")
-    harness.seed_action_run(run_id="ar_b", created_at="2025-01-02T00:00:00Z")
-    harness.seed_action_run(run_id="ar_c", created_at="2025-01-01T12:00:00Z")
+def test_latest_action_run_watermark_returns_completed_at_cursor(harness: MaterializationHarness) -> None:
+    harness.seed_action_run(run_id="ar_a", created_at="2025-01-04T00:00:00Z", completed_at="2025-01-01T00:00:00Z")
+    harness.seed_action_run(run_id="ar_b", created_at="2025-01-01T00:00:00Z", completed_at="2025-01-02T00:00:00Z")
+    harness.seed_action_run(run_id="ar_c", created_at="2025-01-01T12:00:00Z", completed_at="2025-01-02T00:00:00Z")
     with harness.transaction() as txn:
-        watermark = harness.repository.latest_action_run_watermark(transaction=txn)
-    assert watermark == "2025-01-02T00:00:00Z"
+        watermark = harness.repository.latest_action_run_watermark(transaction=txn, tenant_id="tenant-test")
+    assert watermark == {"completed_at": "2025-01-02T00:00:00Z", "action_run_id": "ar_c"}
+
+
+def test_materialization_created_at_tie_does_not_skip_rows(harness: MaterializationHarness) -> None:
+    harness.seed_action_run(
+        run_id="ar_early_commit", created_at="2025-01-03T00:00:00Z", completed_at="2025-01-01T00:00:00Z"
+    )
+    harness.seed_action_run(run_id="ar_tie_a", created_at="2025-01-01T00:00:00Z", completed_at="2025-01-02T00:00:00Z")
+    harness.seed_action_run(run_id="ar_tie_b", created_at="2025-01-01T00:00:00Z", completed_at="2025-01-02T00:00:00Z")
+
+    with harness.transaction() as txn:
+        watermark = harness.repository.latest_action_run_watermark(transaction=txn, tenant_id="tenant-test")
+
+    assert watermark == {"completed_at": "2025-01-02T00:00:00Z", "action_run_id": "ar_tie_b"}
 
 
 def test_latest_object_record_watermark_handles_empty(harness: MaterializationHarness) -> None:
     with harness.transaction() as txn:
-        assert harness.repository.latest_object_record_watermark(transaction=txn) is None
+        assert (
+            harness.repository.latest_object_record_watermark(
+                transaction=txn,
+                tenant_id="tenant-test",
+                object_type_api_name="TestObject",
+                index_version="active",
+            )
+            is None
+        )
 
 
-def test_latest_object_record_watermark_returns_max(harness: MaterializationHarness) -> None:
-    harness.seed_object_record(record_id="or_a", updated_at="2025-01-01T00:00:00Z")
-    harness.seed_object_record(record_id="or_b", updated_at="2025-01-03T00:00:00Z")
+def test_latest_object_record_watermark_returns_max_change_sequence(harness: MaterializationHarness) -> None:
+    harness.seed_object_record(record_id="or_a", updated_at="2025-01-03T00:00:00Z", object_change_sequence=1)
+    harness.seed_object_record(record_id="or_b", updated_at="2025-01-01T00:00:00Z", object_change_sequence=3)
+    harness.seed_object_record(
+        record_id="or_shadow",
+        updated_at="2025-01-04T00:00:00Z",
+        object_change_sequence=5,
+        index_version="shadow",
+    )
     with harness.transaction() as txn:
-        watermark = harness.repository.latest_object_record_watermark(transaction=txn)
-    assert watermark == "2025-01-03T00:00:00Z"
+        watermark = harness.repository.latest_object_record_watermark(
+            transaction=txn,
+            tenant_id="tenant-test",
+            object_type_api_name="TestObject",
+            index_version="active",
+        )
+    assert watermark == 3
+
+
+def test_object_records_at_watermark_returns_latest_version_per_object(harness: MaterializationHarness) -> None:
+    harness.seed_object_record(record_id="or_a", updated_at="2025-01-01T00:00:00Z", object_change_sequence=1)
+    harness.seed_object_record(record_id="or_a", updated_at="2025-01-02T00:00:00Z", object_change_sequence=3)
+    harness.seed_object_record(record_id="or_b", updated_at="2025-01-03T00:00:00Z", object_change_sequence=2)
+    harness.seed_object_record(
+        record_id="or_shadow",
+        updated_at="2025-01-04T00:00:00Z",
+        object_change_sequence=4,
+        index_version="shadow",
+    )
+    with harness.transaction() as txn:
+        rows = harness.repository.object_records_at_watermark(
+            transaction=txn,
+            tenant_id="tenant-test",
+            object_type_api_name="TestObject",
+            index_version="active",
+            max_object_change_sequence=2,
+        )
+    assert [row["object_id"] for row in rows] == ["or_a", "or_b"]
+    assert [row["object_change_sequence"] for row in rows] == [1, 2]
+
+
+def test_active_object_index_version_defaults_to_active(harness: MaterializationHarness) -> None:
+    with harness.transaction() as txn:
+        assert (
+            harness.repository.active_object_index_version(
+                transaction=txn,
+                tenant_id="tenant-test",
+                object_type_api_name="TestObject",
+            )
+            == "active"
+        )

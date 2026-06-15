@@ -323,11 +323,52 @@ object_records = Table(
     Column("source_dataset_version_id", String),
     Column("source_hash", String),
     Column("object_version", Integer, nullable=False),
+    Column("object_change_sequence", Integer),
     Column("deleted", Boolean, nullable=False),
     Column("deletion_reason", String),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
     UniqueConstraint("tenant_id", "object_type_id", "object_id", "index_version", name="uq_object_record"),
+)
+
+object_change_counters = Table(
+    "object_change_counters",
+    metadata,
+    Column("tenant_id", String, primary_key=True),
+    Column("last_sequence", Integer, nullable=False),
+)
+
+object_record_versions = Table(
+    "object_record_versions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("object_record_id", String, nullable=False),
+    Column("object_type_id", String, nullable=False),
+    Column("object_type_api_name", String, nullable=False),
+    Column("object_id", String, nullable=False),
+    Column("index_version", String, nullable=False),
+    Column("is_active", Boolean, nullable=False),
+    Column("properties", JSON, nullable=False),
+    Column("base_properties", JSON, nullable=False),
+    Column("edit_properties", JSON, nullable=False),
+    Column("property_versions", JSON, nullable=False),
+    Column("source_dataset_version_id", String),
+    Column("source_hash", String),
+    Column("object_version", Integer, nullable=False),
+    Column("object_change_sequence", Integer, nullable=False),
+    Column("deleted", Boolean, nullable=False),
+    Column("deletion_reason", String),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint(
+        "tenant_id",
+        "object_type_id",
+        "object_id",
+        "index_version",
+        "object_change_sequence",
+        name="uq_object_record_version_sequence",
+    ),
 )
 
 object_links = Table(
@@ -480,6 +521,7 @@ action_runs = Table(
     Column("parameters", JSON, nullable=False),
     Column("status", String, nullable=False),
     Column("idempotency_key", String, nullable=False),
+    Column("request_fingerprint", String, nullable=False),
     Column("error", JSON),
     Column("created_at", String, nullable=False),
     Column("completed_at", String),

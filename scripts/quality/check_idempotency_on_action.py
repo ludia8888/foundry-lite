@@ -22,6 +22,9 @@ REQUIRED_UNIQUE_COLUMNS = {
     "actor_user_id",
     "idempotency_key",
 }
+REQUEST_FINGERPRINT_FIELD = "request_fingerprint"
+IDEMPOTENCY_CONFLICT_AUDIT_EVENT = "action.run.idempotency_conflict"
+IDEMPOTENCY_CONFLICT_MESSAGE = "idempotency key conflict"
 
 
 @dataclass(frozen=True)
@@ -135,6 +138,24 @@ def _class_methods(tree: ast.Module, class_name: str) -> dict[str, ast.FunctionD
     return {node.name: node for node in parent.body if isinstance(node, ast.FunctionDef)}
 
 
+def _class_has_annotation(tree: ast.Module, class_name: str, name: str) -> bool:
+    parent = _class_def(tree, class_name)
+    if parent is None:
+        return False
+    for node in parent.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
+            return True
+    return False
+
+
+def _has_constant(node: ast.AST, value: object) -> bool:
+    return any(isinstance(child, ast.Constant) and child.value == value for child in ast.walk(node))
+
+
+def _has_name(node: ast.AST, name: str) -> bool:
+    return any(isinstance(child, ast.Name) and child.id == name for child in ast.walk(node))
+
+
 def _called_self_method_names(function: ast.FunctionDef, methods: dict[str, ast.FunctionDef]) -> set[str]:
     names: set[str] = set()
     for call in _call_nodes(function):
@@ -243,6 +264,16 @@ def _reachable_has_replay_response(methods: list[ast.FunctionDef]) -> bool:
     )
 
 
+def _reachable_has_request_fingerprint_guard(methods: list[ast.FunctionDef]) -> bool:
+    for method in methods:
+        for node in ast.walk(method):
+            if not isinstance(node, ast.If):
+                continue
+            if _has_constant(node.test, REQUEST_FINGERPRINT_FIELD) and _has_name(node.test, REQUEST_FINGERPRINT_FIELD):
+                return True
+    return False
+
+
 def _add_function_missing(
     findings: list[IdempotencyFinding],
     *,
@@ -276,7 +307,7 @@ def _check_api(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyFind
                 message="Action apply endpoint must require the Idempotency-Key header",
             )
         )
-    if not _has_call_keyword(function, "core.apply_action", "idempotency_key"):
+    if not _has_call_keyword(function, "foundry.actions.apply", "idempotency_key"):
         findings.append(
             IdempotencyFinding(
                 code="api_core_call_missing_idempotency_key",
@@ -291,14 +322,14 @@ def _check_api(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyFind
 
 def _check_core(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
-    function = _function_def(tree, "apply_action", class_name="FoundryLiteCore")
+    function = _function_def(tree, "apply", class_name="ActionGateway")
     if function is None:
         _add_function_missing(
             findings,
             code="core_apply_action_missing",
             path=path,
             root=root,
-            message="FoundryLiteCore must expose apply_action",
+            message="ActionGateway must expose apply",
         )
         return findings
     if not _is_required_keyword_only(function, "idempotency_key"):
@@ -308,17 +339,17 @@ def _check_core(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyFin
                 path=_repo_relative(path, root),
                 line=function.lineno,
                 column=function.col_offset + 1,
-                message="FoundryLiteCore.apply_action must require idempotency_key",
+                message="ActionGateway.apply must require idempotency_key",
             )
         )
-    if not _has_call_keyword(function, "_services.action.apply_action", "idempotency_key"):
+    if not _has_call_keyword(function, "_action.apply_action", "idempotency_key"):
         findings.append(
             IdempotencyFinding(
                 code="core_service_call_missing_idempotency_key",
                 path=_repo_relative(path, root),
                 line=function.lineno,
                 column=function.col_offset + 1,
-                message="FoundryLiteCore.apply_action must pass idempotency_key into ActionService",
+                message="ActionGateway.apply must pass idempotency_key into ActionService",
             )
         )
     return findings
@@ -395,44 +426,118 @@ def _service_replay_findings(
                 message="ActionService.apply_action must return the existing action_run on idempotent replay",
             )
         )
+    if not _reachable_has_request_fingerprint_guard(reachable):
+        findings.append(
+            IdempotencyFinding(
+                code="service_request_fingerprint_guard_missing",
+                path=_repo_relative(path, root),
+                line=function.lineno,
+                column=function.col_offset + 1,
+                message=(
+                    "ActionService must compare the stored request_fingerprint before replaying an idempotency key"
+                ),
+            )
+        )
     return findings
 
 
-def _service_helper_findings(
+def _service_finding(
+    function: ast.FunctionDef,
+    path: Path,
+    root: Path,
+    *,
+    code: str,
+    message: str,
+) -> IdempotencyFinding:
+    return IdempotencyFinding(
+        code=code,
+        path=_repo_relative(path, root),
+        line=function.lineno,
+        column=function.col_offset + 1,
+        message=message,
+    )
+
+
+def _service_lookup_findings(
     tree: ast.Module, function: ast.FunctionDef, path: Path, root: Path
 ) -> list[IdempotencyFinding]:
-    findings: list[IdempotencyFinding] = []
     existing = _function_def(tree, "_existing_action_run", class_name="ActionService")
-    if existing is None or not _has_call_keyword(
+    if existing is not None and _has_call_keyword(
         existing,
         "action_repository.action_run_by_idempotency",
         "idempotency_key",
     ):
-        findings.append(
-            IdempotencyFinding(
-                code="service_repository_idempotency_lookup_missing",
-                path=_repo_relative(path, root),
-                line=function.lineno,
-                column=function.col_offset + 1,
-                message="ActionService must query the repository by idempotency_key",
-            )
+        return []
+    return [
+        _service_finding(
+            function,
+            path,
+            root,
+            code="service_repository_idempotency_lookup_missing",
+            message="ActionService must query the repository by idempotency_key",
         )
+    ]
+
+
+def _service_insert_findings(
+    tree: ast.Module, function: ast.FunctionDef, path: Path, root: Path
+) -> list[IdempotencyFinding]:
+    findings: list[IdempotencyFinding] = []
     insert_action_run = _function_def(tree, "_insert_action_run", class_name="ActionService")
-    has_insert_idempotency = insert_action_run is not None and _has_call_keyword(
-        insert_action_run,
-        "ActionRunRecord",
-        "idempotency_key",
-    )
-    if not has_insert_idempotency:
-        findings.append(
-            IdempotencyFinding(
-                code="service_action_run_record_missing_idempotency_key",
-                path=_repo_relative(path, root),
-                line=function.lineno,
-                column=function.col_offset + 1,
-                message="ActionService must persist idempotency_key on ActionRunRecord",
-            )
-        )
+    required_fields = {
+        "idempotency_key": "service_action_run_record_missing_idempotency_key",
+        REQUEST_FINGERPRINT_FIELD: "service_action_run_record_missing_request_fingerprint",
+    }
+    messages = {
+        "idempotency_key": "ActionService must persist idempotency_key on ActionRunRecord",
+        REQUEST_FINGERPRINT_FIELD: "ActionService must persist request_fingerprint on ActionRunRecord",
+    }
+    for field_name, code in required_fields.items():
+        if insert_action_run is not None and _has_call_keyword(insert_action_run, "ActionRunRecord", field_name):
+            continue
+        findings.append(_service_finding(function, path, root, code=code, message=messages[field_name]))
+    return findings
+
+
+def _tree_or_helper_has_constant(tree: ast.Module, helper_tree: ast.Module | None, value: object) -> bool:
+    return _has_constant(tree, value) or (helper_tree is not None and _has_constant(helper_tree, value))
+
+
+def _service_conflict_findings(
+    tree: ast.Module,
+    function: ast.FunctionDef,
+    path: Path,
+    root: Path,
+    helper_tree: ast.Module | None,
+) -> list[IdempotencyFinding]:
+    required_constants = {
+        IDEMPOTENCY_CONFLICT_AUDIT_EVENT: (
+            "service_idempotency_conflict_audit_missing",
+            "ActionService must audit same-key/different-request idempotency conflicts",
+        ),
+        IDEMPOTENCY_CONFLICT_MESSAGE: (
+            "service_idempotency_conflict_error_missing",
+            "ActionService must reject same-key/different-request replays as a conflict",
+        ),
+    }
+    findings: list[IdempotencyFinding] = []
+    for value, (code, message) in required_constants.items():
+        if not _tree_or_helper_has_constant(tree, helper_tree, value):
+            findings.append(_service_finding(function, path, root, code=code, message=message))
+    return findings
+
+
+def _service_helper_findings(
+    tree: ast.Module,
+    function: ast.FunctionDef,
+    path: Path,
+    root: Path,
+    helper_tree: ast.Module | None,
+) -> list[IdempotencyFinding]:
+    findings: list[IdempotencyFinding] = []
+    findings.extend(_service_lookup_findings(tree, function, path, root))
+    findings.extend(_service_insert_findings(tree, function, path, root))
+    findings.extend(_service_conflict_findings(tree, function, path, root, helper_tree))
     return findings
 
 
@@ -462,7 +567,7 @@ def _check_action_service(
         return findings
     findings.extend(_service_required_contract_findings(function, path, root, helper_tree))
     findings.extend(_service_replay_findings(tree, function, path, root))
-    findings.extend(_service_helper_findings(tree, function, path, root))
+    findings.extend(_service_helper_findings(tree, function, path, root, helper_tree))
     return findings
 
 
@@ -477,6 +582,26 @@ def _check_repository_port(tree: ast.Module, path: Path, root: Path) -> list[Ide
                 line=1,
                 column=1,
                 message="ActionRepository must expose action_run_by_idempotency with idempotency_key",
+            )
+        )
+    if not _class_has_annotation(tree, "ActionRunRow", REQUEST_FINGERPRINT_FIELD):
+        findings.append(
+            IdempotencyFinding(
+                code="action_run_row_missing_request_fingerprint",
+                path=_repo_relative(path, root),
+                line=1,
+                column=1,
+                message="ActionRunRow must include request_fingerprint for replay conflict checks",
+            )
+        )
+    if not _class_has_annotation(tree, "ActionRunRecord", REQUEST_FINGERPRINT_FIELD):
+        findings.append(
+            IdempotencyFinding(
+                code="action_run_record_missing_request_fingerprint",
+                path=_repo_relative(path, root),
+                line=1,
+                column=1,
+                message="ActionRunRecord must include request_fingerprint for storage",
             )
         )
     return findings
@@ -509,25 +634,45 @@ def _has_action_idempotency_constraint(tree: ast.Module) -> bool:
     return False
 
 
+def _has_column(tree: ast.Module, column_name: str) -> bool:
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or _call_name(node.func) != "Column":
+            continue
+        if node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == column_name:
+            return True
+    return False
+
+
 def _check_schema(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyFinding]:
-    if _has_action_idempotency_constraint(tree):
-        return []
-    return [
-        IdempotencyFinding(
-            code="schema_action_idempotency_unique_constraint_missing",
-            path=_repo_relative(path, root),
-            line=1,
-            column=1,
-            message="action_runs must have a tenant/action/actor/idempotency_key unique constraint",
+    findings: list[IdempotencyFinding] = []
+    if not _has_action_idempotency_constraint(tree):
+        findings.append(
+            IdempotencyFinding(
+                code="schema_action_idempotency_unique_constraint_missing",
+                path=_repo_relative(path, root),
+                line=1,
+                column=1,
+                message="action_runs must have a tenant/action/actor/idempotency_key unique constraint",
+            )
         )
-    ]
+    if not _has_column(tree, REQUEST_FINGERPRINT_FIELD):
+        findings.append(
+            IdempotencyFinding(
+                code="schema_action_request_fingerprint_missing",
+                path=_repo_relative(path, root),
+                line=1,
+                column=1,
+                message="action_runs must store request_fingerprint for idempotency conflict detection",
+            )
+        )
+    return findings
 
 
 def collect_findings(root: Path = ROOT) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
     paths = {
         "api": root / "apps" / "api" / "foundry_lite_api" / "main.py",
-        "core": root / "libs" / "foundry_lite" / "application" / "core.py",
+        "foundry": root / "libs" / "foundry_lite" / "application" / "facades" / "action_gateway.py",
         "service": root / "libs" / "foundry_lite" / "application" / "services" / "action_service.py",
         "service_helpers": root / "libs" / "foundry_lite" / "application" / "services" / "action_helpers.py",
         "port": root / "libs" / "foundry_lite" / "application" / "ports" / "action_repository.py",
@@ -539,8 +684,8 @@ def collect_findings(root: Path = ROOT) -> list[IdempotencyFinding]:
     }
     if parsed["api"] is not None:
         findings.extend(_check_api(parsed["api"], paths["api"], root))
-    if parsed["core"] is not None:
-        findings.extend(_check_core(parsed["core"], paths["core"], root))
+    if parsed["foundry"] is not None:
+        findings.extend(_check_core(parsed["foundry"], paths["foundry"], root))
     if parsed["service"] is not None:
         findings.extend(
             _check_action_service(

@@ -35,6 +35,22 @@ def test_compute_adapter_contract_csv_parquet_preview_inspect_and_rows(
     assert stats.schema_json["columns"][0]["nullable"] is False
 
 
+def test_csv_primary_key_preserves_leading_zeroes(
+    adapter: ComputeAdapter,
+    tmp_path: Path,
+) -> None:
+    csv_path = tmp_path / "leading_zero_orders.csv"
+    csv_path.write_text("order_id,amount\n00123,100\n", encoding="utf-8")
+    parquet_path = tmp_path / "leading_zero_orders.parquet"
+
+    adapter.csv_to_parquet(csv_path, parquet_path)
+    rows = adapter.rows_from_parquet(parquet_path)
+    stats = adapter.inspect_parquet(parquet_path, ["order_id"])
+
+    assert rows == [{"order_id": "00123", "amount": 100}]
+    assert stats.schema_json["columns"][0] == {"name": "order_id", "type": "string", "nullable": False}
+
+
 def test_compute_adapter_contract_rows_to_parquet_and_health_checks(
     adapter: ComputeAdapter,
     tmp_path: Path,

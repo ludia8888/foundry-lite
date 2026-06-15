@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 import pytest
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import ObjectQueryItem, ObjectQueryResult, ObjectRecordRow
 from foundry_lite.application.services.object_store.set_members import collect_dynamic_object_set_members
 from foundry_lite.domain.context import RequestContext
@@ -13,18 +13,18 @@ from foundry_lite.infrastructure import schema as db
 from tests.conftest import prepare_indexed_demo
 
 
-def test_object_sets_static_dynamic_visibility_and_expiry(core: FoundryLiteCore) -> None:
-    ctx = prepare_indexed_demo(core)
+def test_object_sets_static_dynamic_visibility_and_expiry(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
     pending_filter = {"property": "status", "op": "eq", "value": "PENDING"}
 
-    dynamic_set = core.create_object_set(
+    dynamic_set = foundry.objects.create_set(
         "Pending Orders",
         "Order",
         set_type="dynamic",
         filter_ast=pending_filter,
         ctx=ctx,
     )
-    static_set = core.create_object_set(
+    static_set = foundry.objects.create_set(
         "Snapshot Pending Orders",
         "Order",
         set_type="static",
@@ -35,8 +35,8 @@ def test_object_sets_static_dynamic_visibility_and_expiry(core: FoundryLiteCore)
     assert dynamic_set["objectIds"] == ["O-1001"]
     assert static_set["objectIds"] == ["O-1001"]
 
-    order = core.get_object("Order", "O-1001", ctx=ctx)
-    core.apply_action(
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -46,14 +46,14 @@ def test_object_sets_static_dynamic_visibility_and_expiry(core: FoundryLiteCore)
         ctx=ctx,
     )
 
-    assert core.get_object_set(dynamic_set["id"], ctx=ctx)["objectIds"] == []
-    assert core.get_object_set(static_set["id"], ctx=ctx)["objectIds"] == ["O-1001"]
+    assert foundry.objects.get_set(dynamic_set["id"], ctx=ctx)["objectIds"] == []
+    assert foundry.objects.get_set(static_set["id"], ctx=ctx)["objectIds"] == ["O-1001"]
 
     other_user = RequestContext(actor_user_id="other-user", roles=("viewer",))
     with pytest.raises(NotFound):
-        core.get_object_set(dynamic_set["id"], ctx=other_user)
+        foundry.objects.get_set(dynamic_set["id"], ctx=other_user)
 
-    temporary_set = core.create_object_set(
+    temporary_set = foundry.objects.create_set(
         "Temporary Pending Orders",
         "Order",
         set_type="dynamic",
@@ -62,7 +62,7 @@ def test_object_sets_static_dynamic_visibility_and_expiry(core: FoundryLiteCore)
         ttl_seconds=60,
         ctx=ctx,
     )
-    with core.engine.begin() as conn:
+    with foundry.engine.begin() as conn:
         conn.execute(
             db.object_sets.update()
             .where(db.object_sets.c.id == temporary_set["id"])
@@ -70,11 +70,31 @@ def test_object_sets_static_dynamic_visibility_and_expiry(core: FoundryLiteCore)
         )
 
     with pytest.raises(NotFound):
-        core.get_object_set(temporary_set["id"], ctx=ctx)
-    assert temporary_set["id"] not in {item["id"] for item in core.query_object_sets(ctx=ctx)["items"]}
-    assert core.cleanup_expired_object_sets(ctx=ctx)["deleted"] == 1
-    audit_events = core.list_runs(ctx=ctx)["auditEvents"]
+        foundry.objects.get_set(temporary_set["id"], ctx=ctx)
+    assert temporary_set["id"] not in {item["id"] for item in foundry.objects.query_sets(ctx=ctx)["items"]}
+    assert foundry.objects.cleanup_expired_sets(ctx=ctx)["deleted"] == 1
+    audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
     assert any(event["event_type"] == "object_set.expired_deleted" for event in audit_events)
+
+
+def test_static_object_set_rechecks_object_permission(foundry: FoundryLite) -> None:
+    admin = prepare_indexed_demo(foundry)
+    static_set = foundry.objects.create_set(
+        "Public Margin Snapshot",
+        "Order",
+        set_type="static",
+        object_ids=["O-1001"],
+        visibility="public",
+        ctx=admin,
+    )
+    viewer = RequestContext(actor_user_id="viewer-user", roles=("viewer",))
+
+    payload = foundry.objects.get_set(static_set["id"], ctx=viewer)
+    item = payload["items"][0]
+
+    assert payload["objectIds"] == ["O-1001"]
+    assert item["objectId"] == "O-1001"
+    assert item["properties"]["margin"] == "***MASKED***"
 
 
 class _PagedObjectQuery:
@@ -117,6 +137,14 @@ class _PagedObjectQuery:
 
 
 def test_dynamic_object_set_members_page_with_public_query_limit() -> None:
+    _assert_dynamic_object_set_members_page_with_public_query_limit()
+
+
+def test_dynamic_object_set_cannot_bypass_page_limit() -> None:
+    _assert_dynamic_object_set_members_page_with_public_query_limit()
+
+
+def _assert_dynamic_object_set_members_page_with_public_query_limit() -> None:
     pending_filter = {"property": "status", "op": "eq", "value": "PENDING"}
     pages: dict[str | None, ObjectQueryResult] = {
         None: {
@@ -147,18 +175,18 @@ def test_dynamic_object_set_members_page_with_public_query_limit() -> None:
     assert [call[1] for call in query.calls] == [None, "second-page"]
 
 
-def test_object_set_definition_validation(core: FoundryLiteCore) -> None:
-    ctx = prepare_indexed_demo(core)
+def test_object_set_definition_validation(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
     valid_filter = {"property": "status", "op": "eq", "value": "PENDING"}
 
-    static_from_definition = core.create_object_set(
+    static_from_definition = foundry.objects.create_set(
         "Static From Definition",
         "Order",
         set_type="static",
         definition={"ids": ["O-1002"]},
         ctx=ctx,
     )
-    dynamic_from_definition = core.create_object_set(
+    dynamic_from_definition = foundry.objects.create_set(
         "Public Review Orders",
         "Order",
         set_type="dynamic",
@@ -166,7 +194,7 @@ def test_object_set_definition_validation(core: FoundryLiteCore) -> None:
         visibility="public",
         ctx=ctx,
     )
-    grouped_dynamic = core.create_object_set(
+    grouped_dynamic = foundry.objects.create_set(
         "Grouped Pending Orders",
         "Order",
         set_type="dynamic",
@@ -176,7 +204,7 @@ def test_object_set_definition_validation(core: FoundryLiteCore) -> None:
 
     assert static_from_definition["objectIds"] == ["O-1002"]
     assert grouped_dynamic["objectIds"] == ["O-1001"]
-    assert core.get_object_set(
+    assert foundry.objects.get_set(
         dynamic_from_definition["id"],
         ctx=RequestContext(actor_user_id="viewer-2", roles=("viewer",)),
     )["objectIds"] == ["O-1002"]
@@ -241,10 +269,10 @@ def test_object_set_definition_validation(core: FoundryLiteCore) -> None:
     ]
     for kwargs in invalid_creates:
         with pytest.raises(ValidationFailed):
-            core.create_object_set(kwargs.pop("name"), "Order", ctx=ctx, **kwargs)
+            foundry.objects.create_set(kwargs.pop("name"), "Order", ctx=ctx, **kwargs)
 
     with pytest.raises(ValidationFailed):
-        core.create_object_set(
+        foundry.objects.create_set(
             "Bad Property",
             "Order",
             set_type="dynamic",
@@ -252,7 +280,7 @@ def test_object_set_definition_validation(core: FoundryLiteCore) -> None:
             ctx=ctx,
         )
     with pytest.raises(ValidationFailed):
-        core.create_object_set(
+        foundry.objects.create_set(
             "Missing Static Object",
             "Order",
             set_type="static",

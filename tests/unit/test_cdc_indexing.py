@@ -156,6 +156,24 @@ def test_cdc_primary_key_fallback_requires_a_column() -> None:
         )
 
 
+def test_cdc_pk_update_policy() -> None:
+    with pytest.raises(ValidationFailed, match="primary key update is not supported") as exc_info:
+        parse_object_cdc_event(
+            {
+                "event_id": "topic:0:9",
+                "op": "u",
+                "pk": {"order_id": "O-1001"},
+                "before": {"order_id": "O-1001", "status": "PENDING"},
+                "after": {"order_id": "O-2002", "status": "APPROVED"},
+                "ordering": {"lsn": 9},
+            },
+            _object_type(),
+            _properties(),
+        )
+
+    assert exc_info.value.details == {"before_object_id": "O-1001", "after_object_id": "O-2002"}
+
+
 def test_cdc_ordering_and_property_versions_are_monotonic() -> None:
     event = ObjectCdcEvent(
         event_id="topic:0:8",

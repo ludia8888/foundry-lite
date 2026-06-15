@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from foundry_lite.application.ports import (
@@ -29,6 +29,11 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetRuntimeBoundary,
     DatasetVersionLookup,
 )
+from foundry_lite.application.services.dataset.storage_consistency import (
+    cleanup_staging_transaction,
+    committed_manifest,
+    committed_version_file_path,
+)
 from foundry_lite.application.services.dataset.transaction_models import (
     DatasetCommitArtifacts,
     DatasetCommitTarget,
@@ -42,6 +47,8 @@ from foundry_lite.domain.errors import (
     NotFound,
     ValidationFailed,
 )
+
+DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
 
 
 class DatasetTransactionService(CoreService):
@@ -97,10 +104,10 @@ class DatasetTransactionService(CoreService):
         )
 
     def _version_file_path(self, version: DatasetVersionRow) -> Path:
-        return self.dataset_storage.first_data_file_path(version["manifest_uri"])
+        return committed_version_file_path(self.dataset_storage, version)
 
     def _load_manifest(self, manifest_uri: str) -> DatasetManifest:
-        return self.dataset_storage.load_manifest(manifest_uri)
+        return committed_manifest(self.dataset_storage, manifest_uri)
 
     def _finalize_open_transaction(
         self,
@@ -115,6 +122,7 @@ class DatasetTransactionService(CoreService):
         outbox_event_type: str,
         extra_checks: Sequence[DatasetCheckConfig] | None = None,
         transaction_metadata: DatasetTransactionMetadata | None = None,
+        after_persist: DatasetCommitMetadataHook | None = None,
     ) -> CommitResult:
         request = DatasetFinalizationRequest(
             target=DatasetCommitTarget.from_row(dataset),
@@ -126,11 +134,16 @@ class DatasetTransactionService(CoreService):
             extra_checks=list(extra_checks or []),
             transaction_metadata=dict(transaction_metadata or {}),
         )
+        self.dataset_transaction_repository.lock_dataset_for_version_allocation(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            dataset_id=request.target.dataset_id,
+        )
         validation = self._validate_finalization_request(conn, ctx, request)
         commit = self._store_finalized_dataset_commit(conn, ctx, request, validation)
-        self._persist_with_orphan_cleanup(conn, ctx, request, validation, commit)
-        self._emit_dataset_commit_events(conn, ctx, request, validation, commit)
-        return self._commit_result(request, validation, commit)
+        result = self._commit_result(request, validation, commit)
+        self._persist_commit_metadata(conn, ctx, request, validation, commit, result, after_persist)
+        return result
 
     def _validate_finalization_request(
         self,
@@ -177,11 +190,6 @@ class DatasetTransactionService(CoreService):
             validation.stats.schema_json,
             validation.stats.schema_hash,
         )
-        self.dataset_transaction_repository.lock_dataset_for_version_allocation(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            dataset_id=request.target.dataset_id,
-        )
         version_number = self.dataset_version_service._next_dataset_version_number(
             conn,
             request.target.dataset_id,
@@ -205,16 +213,21 @@ class DatasetTransactionService(CoreService):
             stored_commit=stored_commit,
         )
 
-    def _persist_with_orphan_cleanup(
+    def _persist_commit_metadata(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
         request: DatasetFinalizationRequest,
         validation: DatasetFinalizationCheck,
         commit: DatasetCommitArtifacts,
+        result: CommitResult,
+        after_persist: DatasetCommitMetadataHook | None,
     ) -> None:
         try:
             self._persist_finalized_dataset_version(conn, ctx, request, validation, commit)
+            self._emit_dataset_commit_events(conn, ctx, request, validation, commit)
+            if after_persist is not None:
+                after_persist(conn, result)
         except DatasetVersionConflictError as exc:
             cleanup = self._cleanup_committed_version_artifacts(ctx, request, validation, commit)
             raise self._version_conflict_error(request, validation, commit, cleanup) from exc
@@ -462,6 +475,8 @@ class DatasetTransactionService(CoreService):
             adapter=adapter,
         )
         with self.engine.begin() as conn:
+            tx = self.dataset_transaction_repository.transaction_by_id(transaction=conn, transaction_id=transaction_id)
+            staging_cleanup = cleanup_staging_transaction(self.dataset_storage, ctx, tx, transaction_id)
             aborted = self.dataset_transaction_repository.abort_open_transaction_and_fail_run(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -479,6 +494,6 @@ class DatasetTransactionService(CoreService):
                     resource_type="dataset_transaction",
                     resource_id=transaction_id,
                     action="abort",
-                    after_ref={"error": error_payload},
+                    after_ref={"error": error_payload, "staging_cleanup": staging_cleanup},
                     correlation_id=run_id,
                 )

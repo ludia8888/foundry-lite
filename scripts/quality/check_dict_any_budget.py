@@ -120,7 +120,7 @@ def _category_for_path(path: Path) -> str:
         return "ports"
     if "services" in parts:
         return "services"
-    if path.name == "core.py":
+    if "facades" in parts or path.name == "foundry.py":
         return "core_facade"
     return "application_helpers"
 

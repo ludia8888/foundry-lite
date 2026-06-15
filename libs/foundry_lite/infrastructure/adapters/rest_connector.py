@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import socket
 from collections.abc import Mapping
+from contextlib import AbstractContextManager
+from http.client import HTTPMessage
 from ipaddress import IPv4Address, IPv6Address, ip_address
-from typing import cast
+from typing import IO, Protocol, cast
 from urllib.error import HTTPError
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.connector_adapter import (
@@ -75,7 +77,18 @@ def _required_rest_config(config: RestSourceConfig | None) -> RestSourceConfig:
         raise ValidationFailed("REST connector requires source config")
     if not config.base_url or not config.resource_path:
         raise ValidationFailed("REST connector requires baseUrl and resourcePath")
+    _require_replayable_pagination(config.pagination)
     return config
+
+
+def _require_replayable_pagination(pagination: RestPaginationConfig) -> None:
+    """Fail closed when a REST source cannot offer replay-safe cursor semantics."""
+    if pagination.strategy == "cursor":
+        return
+    raise ValidationFailed(
+        "REST connector page-number pagination is non-replayable; use a stable cursor source",
+        details={"pagination_strategy": pagination.strategy, "non_replayable": True},
+    )
 
 
 def _request_url(config: RestSourceConfig, cursor: Mapping[str, object] | None) -> str:
@@ -114,8 +127,8 @@ def _http_get(url: str, headers: Mapping[str, str], *, allow_private_network: bo
     safe_url = _validated_http_url(url, allow_private_network=allow_private_network)
     request = Request(safe_url, headers=dict(headers), method="GET")
     try:
-        with urlopen(request, timeout=5) as response:  # noqa: S310  # nosec B310
-            return cast(bytes, response.read())
+        with _open_http_request(request, allow_private_network=allow_private_network) as response:
+            return response.read()
     except HTTPError as exc:
         if exc.code == 429:
             retry_after = exc.headers.get("Retry-After")
@@ -125,6 +138,38 @@ def _http_get(url: str, headers: Mapping[str, str], *, allow_private_network: bo
                 operation="snapshot",
             ) from exc
         raise ValidationFailed("REST connector request failed", details={"status": exc.code, "url": url}) from exc
+
+
+class _ReadableHTTPResponse(AbstractContextManager["_ReadableHTTPResponse"], Protocol):
+    """Small protocol for urllib responses used by the REST connector."""
+
+    def read(self) -> bytes: ...
+
+
+class _ValidatingRedirectHandler(HTTPRedirectHandler):
+    """Re-run private-network validation for every HTTP redirect target."""
+
+    def __init__(self, allow_private_network: bool) -> None:
+        super().__init__()
+        self._allow_private_network = allow_private_network
+
+    def redirect_request(
+        self,
+        req: Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: HTTPMessage,
+        newurl: str,
+    ) -> Request | None:
+        _validated_http_url(newurl, allow_private_network=self._allow_private_network)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _open_http_request(request: Request, *, allow_private_network: bool) -> _ReadableHTTPResponse:
+    """Open a request with redirect validation installed on this call."""
+    opener = build_opener(_ValidatingRedirectHandler(allow_private_network))
+    return cast(_ReadableHTTPResponse, opener.open(request, timeout=5))
 
 
 def _validated_http_url(url: str, *, allow_private_network: bool = False) -> str:
@@ -153,7 +198,7 @@ def _validated_port(url: str) -> int | None:
 
 
 def _private_network_reason(host: str, port: int | None) -> str | None:
-    normalized = host.strip("[]").rstrip(".").lower()
+    normalized = unquote(host.strip("[]").rstrip(".")).lower()
     hostname_reason = _private_hostname_reason(normalized)
     if hostname_reason is not None:
         return hostname_reason
@@ -180,6 +225,48 @@ def _private_hostname_reason(host: str) -> str | None:
 def _ip_literal(host: str) -> IPv4Address | IPv6Address | None:
     try:
         return ip_address(host)
+    except ValueError:
+        return _legacy_ipv4_literal(host)
+
+
+def _legacy_ipv4_literal(host: str) -> IPv4Address | None:
+    """Parse browser-accepted IPv4 forms that urllib leaves as hostnames."""
+    if ":" in host:
+        return None
+    if host.isdecimal():
+        return _ipv4_from_int(host, 10)
+    parts = host.split(".")
+    if len(parts) != 4:
+        return None
+    parsed: list[int] = []
+    for part in parts:
+        value = _legacy_ipv4_part(part)
+        if value is None or value > 255:
+            return None
+        parsed.append(value)
+    return IPv4Address(".".join(str(part) for part in parsed))
+
+
+def _ipv4_from_int(value: str, base: int) -> IPv4Address | None:
+    try:
+        return IPv4Address(int(value, base))
+    except ValueError:
+        return None
+
+
+def _legacy_ipv4_part(part: str) -> int | None:
+    if part.startswith("0x"):
+        return _int_part(part, 16)
+    if len(part) > 1 and part.startswith("0"):
+        return _int_part(part, 8)
+    if part.isdecimal():
+        return _int_part(part, 10)
+    return None
+
+
+def _int_part(value: str, base: int) -> int | None:
+    try:
+        return int(value, base)
     except ValueError:
         return None
 

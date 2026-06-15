@@ -161,11 +161,13 @@ class DatasetQualityService(CoreService):
         *,
         extra_checks: Sequence[DatasetCheckConfig],
     ) -> list[DatasetCheckResult]:
-        checks: list[DatasetCheckConfig] = [{"type": "row_count_min", "min": 1}]
+        checks: list[DatasetCheckConfig] = []
+        if not _allows_empty_dataset(extra_checks):
+            checks.append({"type": "row_count_min", "min": 1})
         for pk in dataset["primary_key"]:
             checks.append({"type": "not_null", "columns": [pk]})
             checks.append({"type": "unique", "column": pk})
-        checks.extend(extra_checks)
+        checks.extend(check for check in extra_checks if check.get("type") != "allow_empty")
         failures: list[DatasetCheckResult] = []
         for check in checks:
             check_id = self._ensure_dataset_check(conn, ctx, dataset, check)
@@ -227,3 +229,7 @@ class DatasetQualityService(CoreService):
         check: DatasetCheckConfig,
     ) -> DatasetCheckResult:
         return self.compute_adapter.execute_check(parquet_path, row_count, check)
+
+
+def _allows_empty_dataset(extra_checks: Sequence[DatasetCheckConfig]) -> bool:
+    return any(check.get("type") == "allow_empty" for check in extra_checks)

@@ -16,7 +16,7 @@
 
 - 비개발자도 이해할 수 있도록 항상 친절하고 자세히 설명한다.
 - 문서와 코드가 다르면 코드를 과장하지 말고 현재 구현 상태를 정직하게 문서화한다.
-- `FoundryLiteCore`는 얇은 Facade로 유지한다.
+- `FoundryLite`는 얇은 Facade로 유지한다.
 - Dataset, Transform, Ontology, Object, Action, Materialization, Runtime event, Demo orchestration 책임을 다시 한 파일로 합치지 않는다.
 - application module은 500줄 이하를 유지한다. 필요하면 책임별 service, strategy, specification, adapter, repository로 분리한다.
 - 디자인 패턴은 `foundry_lite_python_engineering_guidelines_ko.md`의 “디자인 패턴 적용 원칙”을 따른다.
@@ -41,7 +41,7 @@
 - Root-cause patch prevention G21/G22 게이트(`scripts/quality/check_regression_test_per_bugfix.py`, `scripts/quality/check_pr_root_cause_section.py`)는 fix/bug/patch/regression 커밋이 같은 커밋의 `tests/` 변경 없이 들어오거나, PR 본문에 Root Cause, Impact, Regression Test 섹션이 없으면 release gate를 차단한다.
 - Document drift G14 게이트(`scripts/quality/check_doc_drift.py`)는 `AGENTS.md`와 `docs/implementation-status.md`가 현재 구현처럼 언급한 source path, script, Python class/method가 실제 코드에 없으면 release gate를 차단한다. 미래 목표나 미구현 gap이라고 정직하게 적은 문장은 검사 대상에서 제외한다.
 - Schema revision guard 게이트(`scripts/quality/check_schema_revision_guard.py`)는 `libs/foundry_lite/infrastructure/schema.py`의 SQLAlchemy metadata fingerprint가 `infra/schema_revisions/*.json` 최신 snapshot과 다르면 release gate를 차단한다. Alembic runtime은 아직 미구현이므로, DB 모양을 바꾸는 변경은 최소한 schema revision snapshot을 같은 변경에 포함해야 한다.
-- Facade magic fallback은 AST-grep rule (`scripts/quality/ast-grep-rules/no-facade-magic-dispatch.yml`)이 차단한다. `FoundryLiteCore`에 `__getattr__`/`__setattr__` method-registry dispatch를 다시 넣지 않는다.
+- Facade magic fallback은 AST-grep rule (`scripts/quality/ast-grep-rules/no-facade-magic-dispatch.yml`)이 차단한다. `FoundryLite`에 `__getattr__`/`__setattr__` method-registry dispatch를 다시 넣지 않는다.
 - Secret/credential 노출은 `.gitleaks.toml`로 차단한다. 로컬에서는 gitleaks 미설치 시 경고만 가능하지만, CI/release evidence에서는 미설치가 곧 실패다. 새 false positive를 발견하면 allowlist에 사유와 함께 등록한다. 시크릿이 실제로 들어왔다면 즉시 revoke + git history 정리한다.
 - Cross-function 데이터 흐름 (request → SQL, request body → service, mutation → audit, exception → request_id)은 CodeQL queries (`scripts/quality/codeql/queries/`)로 검사한다. CodeQL DB build는 Python 코드베이스 기준 fresh build 3~5분 + analyze 1~2분이므로 로컬 `pnpm ci:gate`에서는 돌리지 않는다. CI(`.github/workflows/codeql.yml`)가 push/PR마다 강제 실행하고, SARIF finding은 `scripts/quality/codeql/fail_on_sarif_findings.py`가 hard failure로 바꾼다. 새 violation 패턴을 발견하면 동일 디렉터리에 `.ql` 쿼리를 추가하고 `tests/unit/test_quality_codeql_queries.py`에 § 인용·@id·@kind 메타와 알려진 CodeQL API 호환성 검증을 추가한다.
 - Audit-on-mutation G2 게이트(`scripts/quality/check_audit_on_mutation.py`)는 public application service mutation entrypoint가 repository write에 닿으면서 audit/outbox 경로가 없으면 release gate를 차단한다.

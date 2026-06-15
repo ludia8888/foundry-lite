@@ -35,6 +35,31 @@ class FakeOpenSearchClient:
         self.documents[(index, id)] = dict(body)
         return {"result": "updated", "refresh": refresh}
 
+    def update(self, *, index: str, id: str, body: dict[str, object], refresh: bool = False) -> object:
+        current = self.documents.get((index, id))
+        upsert = body.get("upsert")
+        script = body.get("script")
+        if not isinstance(upsert, dict) or not isinstance(script, dict):
+            self.documents[(index, id)] = dict(body)
+            return {"result": "updated", "refresh": refresh}
+        params = script.get("params")
+        if not isinstance(params, dict):
+            self.documents[(index, id)] = dict(upsert)
+            return {"result": "updated", "refresh": refresh}
+        document = params.get("document")
+        incoming_version = params.get("version")
+        if not isinstance(document, dict) or not isinstance(incoming_version, int):
+            self.documents[(index, id)] = dict(upsert)
+            return {"result": "updated", "refresh": refresh}
+        if current is None:
+            self.documents[(index, id)] = dict(upsert)
+            return {"result": "created", "refresh": refresh}
+        current_version = current.get("version")
+        if isinstance(current_version, int) and incoming_version <= current_version:
+            return {"result": "noop", "refresh": refresh}
+        self.documents[(index, id)] = dict(document)
+        return {"result": "updated", "refresh": refresh}
+
     def delete(self, *, index: str, id: str, ignore: tuple[int, ...] = (), refresh: bool = False) -> object:
         self.documents.pop((index, id), None)
         return {"result": "deleted", "ignore": ignore, "refresh": refresh}
@@ -95,6 +120,33 @@ def test_search_adapter_contract_upsert_search_and_delete(adapter: SearchAdapter
 
     adapter.delete_document(tenant_id="tenant-demo", object_type="Order", document_id="O-1001")
     assert adapter.search(SearchQuery(tenant_id="tenant-demo", object_type="Order", terms={"status": "PENDING"})) == []
+
+
+def test_search_adapter_contract_ignores_stale_upsert(adapter: SearchAdapter) -> None:
+    adapter.upsert_document(
+        SearchDocument(
+            tenant_id="tenant-demo",
+            object_type="Order",
+            document_id="O-1001",
+            version=12,
+            properties={"status": "APPROVED"},
+        )
+    )
+    adapter.upsert_document(
+        SearchDocument(
+            tenant_id="tenant-demo",
+            object_type="Order",
+            document_id="O-1001",
+            version=11,
+            properties={"status": "PENDING"},
+        )
+    )
+
+    hits = adapter.search(SearchQuery(tenant_id="tenant-demo", object_type="Order", terms={}))
+
+    assert [hit.document_id for hit in hits] == ["O-1001"]
+    assert hits[0].document.version == 12
+    assert hits[0].document.properties["status"] == "APPROVED"
 
 
 def test_search_adapter_contract_filters_tenant_object_type_and_limit(adapter: SearchAdapter) -> None:

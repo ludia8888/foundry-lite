@@ -27,6 +27,9 @@ class _AllowPolicy:
     ) -> dict[str, object]:
         return properties
 
+    def masked_property_names(self, _ctx: RequestContext, _object_type: str) -> set[str]:
+        return set()
+
 
 class _OntologyLookup:
     def _active_object_type(self, *_args: object) -> dict[str, object]:
@@ -34,6 +37,14 @@ class _OntologyLookup:
 
     def _properties_for_object_type(self, *_args: object) -> list[dict[str, object]]:
         return [{"api_name": "amount"}, {"api_name": "status"}]
+
+
+class _ObjectIndexRepository:
+    def __init__(self, active_index_version: str = "active") -> None:
+        self.active_index_version_value = active_index_version
+
+    def active_index_version(self, **_kwargs: object) -> str:
+        return self.active_index_version_value
 
 
 class _PagedObjectRepository:
@@ -50,7 +61,12 @@ class _PagedObjectRepository:
 
 def test_object_query_service_requests_db_keyset_page_with_one_row_lookahead() -> None:
     repository = _PagedObjectRepository()
-    service = ObjectQueryService(engine=_FakeEngine(), policy=_AllowPolicy(), object_read_repository=repository)
+    service = ObjectQueryService(
+        engine=_FakeEngine(),
+        policy=_AllowPolicy(),
+        object_index_repository=_ObjectIndexRepository(),
+        object_read_repository=repository,
+    )
     service.bind_collaborators(
         {
             "object_records_service": object(),
@@ -73,20 +89,78 @@ def test_object_query_service_requests_db_keyset_page_with_one_row_lookahead() -
     assert result["nextCursor"] is not None
 
 
+def test_object_query_db_backed_keyset_no_memory_slice() -> None:
+    repository = _PagedObjectRepository()
+    service = _object_query_service(repository)
+
+    result = service.query_objects(
+        "Order",
+        filter_ast={"property": "amount", "op": "gte", "value": 5.0},
+        order_by=[{"property": "amount", "direction": "desc"}],
+        limit=1,
+        ctx=RequestContext(roles=("viewer",)),
+    )
+
+    assert repository.requested_limit == 2
+    assert [item["objectId"] for item in result["items"]] == ["O-1"]
+
+
+def test_object_query_cursor_signed_tamper_proof_query_shape_bound() -> None:
+    service = _object_query_service(_PagedObjectRepository())
+    first_page = service.query_objects(
+        "Order",
+        filter_ast={"property": "amount", "op": "gte", "value": 5.0},
+        order_by=[{"property": "amount", "direction": "desc"}],
+        limit=1,
+        ctx=RequestContext(roles=("viewer",)),
+    )
+    cursor = str(first_page["nextCursor"])
+    tampered = cursor[:-1] + ("A" if cursor[-1] != "A" else "B")
+
+    with pytest.raises(ValidationFailed, match="invalid object query cursor"):
+        service.query_objects(
+            "Order",
+            filter_ast={"property": "amount", "op": "gte", "value": 5.0},
+            order_by=[{"property": "amount", "direction": "desc"}],
+            cursor=tampered,
+            ctx=RequestContext(roles=("viewer",)),
+        )
+    with pytest.raises(ValidationFailed, match="query shape"):
+        service.query_objects(
+            "Order",
+            filter_ast={"property": "amount", "op": "gte", "value": 6.0},
+            order_by=[{"property": "amount", "direction": "desc"}],
+            cursor=cursor,
+            ctx=RequestContext(roles=("viewer",)),
+        )
+
+
+def test_object_query_cursor_rejects_active_index_version_change() -> None:
+    object_index_repository = _ObjectIndexRepository()
+    service = _object_query_service(_PagedObjectRepository(), object_index_repository=object_index_repository)
+    first_page = service.query_objects(
+        "Order",
+        filter_ast={"property": "amount", "op": "gte", "value": 5.0},
+        order_by=[{"property": "amount", "direction": "desc"}],
+        limit=1,
+        ctx=RequestContext(roles=("viewer",)),
+    )
+    cursor = str(first_page["nextCursor"])
+
+    object_index_repository.active_index_version_value = "index_run_shadow_promoted"
+
+    with pytest.raises(ValidationFailed, match="active index version"):
+        service.query_objects(
+            "Order",
+            filter_ast={"property": "amount", "op": "gte", "value": 5.0},
+            order_by=[{"property": "amount", "direction": "desc"}],
+            cursor=cursor,
+            ctx=RequestContext(roles=("viewer",)),
+        )
+
+
 def test_object_query_service_rejects_missing_filter_and_order_properties() -> None:
-    service = ObjectQueryService(
-        engine=_FakeEngine(),
-        policy=_AllowPolicy(),
-        object_read_repository=_PagedObjectRepository(),
-    )
-    service.bind_collaborators(
-        {
-            "object_records_service": object(),
-            "runtime_service": object(),
-            "ontology_service": _OntologyLookup(),
-            "object_search_service": object(),
-        }
-    )
+    service = _object_query_service(_PagedObjectRepository())
 
     with pytest.raises(ValidationFailed, match="missing property"):
         service.query_objects(
@@ -100,6 +174,28 @@ def test_object_query_service_rejects_missing_filter_and_order_properties() -> N
             order_by=[{"property": "missing", "direction": "asc"}],
             ctx=RequestContext(roles=("viewer",)),
         )
+
+
+def _object_query_service(
+    repository: _PagedObjectRepository,
+    *,
+    object_index_repository: _ObjectIndexRepository | None = None,
+) -> ObjectQueryService:
+    service = ObjectQueryService(
+        engine=_FakeEngine(),
+        policy=_AllowPolicy(),
+        object_index_repository=object_index_repository or _ObjectIndexRepository(),
+        object_read_repository=repository,
+    )
+    service.bind_collaborators(
+        {
+            "object_records_service": object(),
+            "runtime_service": object(),
+            "ontology_service": _OntologyLookup(),
+            "object_search_service": object(),
+        }
+    )
+    return service
 
 
 def _object_row(object_id: str, amount: float) -> ObjectRecordRow:

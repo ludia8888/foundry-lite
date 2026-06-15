@@ -11,6 +11,7 @@ from foundry_lite.application.ports.adapter_failure import (
 )
 
 RestAuthMode = Literal["none", "bearer", "header"]
+RestPaginationStrategy = Literal["cursor", "page_number"]
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,7 @@ class RestPaginationConfig:
     next_cursor_path: str = "nextCursor"
     cursor_query_param: str = "cursor"
     cursor_key: str = "cursor"
+    strategy: RestPaginationStrategy = "cursor"
 
 
 @dataclass(frozen=True)

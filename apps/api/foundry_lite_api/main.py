@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from foundry_lite.application.action_types import ActionApplyResponse
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
     ObjectIndexRebuildResult,
     ObjectPayload,
@@ -41,7 +41,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-core = FoundryLiteCore(
+foundry = FoundryLite(
     dependencies=create_local_core_dependencies(
         db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
         storage_root=os.getenv("FOUNDRY_LITE_HOME", ".foundry-lite"),
@@ -52,7 +52,7 @@ core = FoundryLiteCore(
 # accidentally use the local header-trust adapter.
 auth_provider: AuthProvider = auth_provider_from_env()
 instrument_fastapi_app(app)
-instrument_sqlalchemy_engine(core.engine)
+instrument_sqlalchemy_engine(foundry.engine)
 
 JsonObject = dict[str, object]
 
@@ -198,7 +198,7 @@ def metrics() -> Response:
 @app.get("/api/datasets/{namespace}/{name}/preview")
 def preview_dataset(request: Request, namespace: str, name: str, limit: int = 100) -> list[TabularRow]:
     try:
-        return core.preview_dataset(f"{namespace}.{name}", limit=limit, ctx=_ctx(request))
+        return foundry.datasets.preview(f"{namespace}.{name}", limit=limit, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -211,7 +211,7 @@ def get_object(
     include_explain: bool = Query(default=False, alias="explain"),
 ) -> ObjectPayload:
     try:
-        return core.get_object(object_type, object_id, ctx=_ctx(request), include_explain=include_explain)
+        return foundry.objects.get(object_type, object_id, ctx=_ctx(request), include_explain=include_explain)
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -219,7 +219,7 @@ def get_object(
 @app.post("/api/objects/{object_type}/query")
 def query_objects(request: Request, object_type: str, payload: ObjectQueryRequest) -> ObjectQueryResult:
     try:
-        return core.query_objects(
+        return foundry.objects.query(
             object_type,
             ctx=_ctx(request),
             filter_ast=payload.filter_ast,
@@ -238,7 +238,7 @@ def query_object_sets(
     object_type: str | None = Query(default=None, alias="objectType"),
 ) -> ObjectSetQueryResult:
     try:
-        return core.query_object_sets(ctx=_ctx(request), object_type_api_name=object_type)
+        return foundry.objects.query_sets(ctx=_ctx(request), object_type_api_name=object_type)
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -246,7 +246,7 @@ def query_object_sets(
 @app.post("/api/object-sets")
 def create_object_set(request: Request, payload: ObjectSetCreateRequest) -> ObjectSetPayload:
     try:
-        return core.create_object_set(
+        return foundry.objects.create_set(
             payload.name,
             payload.object_type,
             set_type=payload.set_type,
@@ -263,7 +263,7 @@ def create_object_set(request: Request, payload: ObjectSetCreateRequest) -> Obje
 @app.get("/api/object-sets/{set_id}")
 def get_object_set(request: Request, set_id: str) -> ObjectSetPayload:
     try:
-        return core.get_object_set(set_id, ctx=_ctx(request))
+        return foundry.objects.get_set(set_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -279,7 +279,7 @@ def list_operation_runs(
     cursor: str | None = Query(default=None),
 ) -> RuntimeRunQueryResult:
     try:
-        return core.query_runs(
+        return foundry.operations.query_runs(
             ctx=_ctx(request),
             run_type=run_type,
             status=status,
@@ -295,7 +295,7 @@ def list_operation_runs(
 @app.get("/api/operations/runs/{run_type}/{run_id}")
 def get_operation_run_detail(request: Request, run_type: str, run_id: str) -> RuntimeRunDetail:
     try:
-        return core.run_detail(run_type, run_id, ctx=_ctx(request))
+        return foundry.operations.run_detail(run_type, run_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -303,7 +303,7 @@ def get_operation_run_detail(request: Request, run_type: str, run_id: str) -> Ru
 @app.post("/api/operations/dead-letter-events/{event_id}/retry")
 def retry_dead_letter_event(request: Request, event_id: str) -> RuntimeRetryResult:
     try:
-        return core.retry_dead_letter_event(event_id, ctx=_ctx(request))
+        return foundry.operations.retry_dead_letter_event(event_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -311,7 +311,7 @@ def retry_dead_letter_event(request: Request, event_id: str) -> RuntimeRetryResu
 @app.post("/api/operations/index/{object_type}/replay")
 def replay_object_index(request: Request, object_type: str) -> ObjectIndexRebuildResult:
     try:
-        return core.index_rebuild(object_type, ctx=_ctx(request))
+        return foundry.objects.reindex(object_type, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -319,7 +319,7 @@ def replay_object_index(request: Request, object_type: str) -> ObjectIndexRebuil
 @app.post("/api/operations/runs/index/{run_id}/replay")
 def replay_failed_index_run(request: Request, run_id: str) -> ObjectIndexRebuildResult:
     try:
-        return core.index_replay_run(run_id, ctx=_ctx(request))
+        return foundry.objects.replay_index_run(run_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -327,7 +327,7 @@ def replay_failed_index_run(request: Request, run_id: str) -> ObjectIndexRebuild
 @app.post("/api/operations/runs/transform/{run_id}/retry")
 def retry_failed_transform_run(request: Request, run_id: str) -> TransformRetryResult:
     try:
-        return core.retry_transform_run(run_id, ctx=_ctx(request))
+        return foundry.transforms.retry_run(run_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -340,17 +340,19 @@ async def ingest_webhook(
     payload: WebhookPayloadRequest,
     dataset_ref: str = Query(alias="datasetRef"),
     signature: str = Header(alias="X-Foundry-Lite-Signature"),
+    signature_timestamp: str = Header(alias="X-Foundry-Lite-Timestamp"),
     event_id: str | None = Header(default=None, alias="X-Foundry-Lite-Event-ID"),
 ):
     try:
         raw_body = await request.body()
-        return core.ingest_webhook_event(
+        return foundry.datasets.ingest_webhook_event(
             dataset_ref,
             connector_name=connector_name,
             resource_name=resource_name,
             payload=_webhook_payload(payload),
             raw_body=raw_body,
             signature=signature,
+            signature_timestamp=signature_timestamp,
             secret=_webhook_signing_key(),
             event_id=event_id,
             ctx=_ctx(request),
@@ -367,7 +369,7 @@ def apply_action(
     idempotency_key: str = Header(alias="Idempotency-Key"),
 ) -> ActionApplyResponse:
     try:
-        return core.apply_action(
+        return foundry.actions.apply(
             action_type,
             object_type=payload.target.object_type,
             object_id=payload.target.object_id,

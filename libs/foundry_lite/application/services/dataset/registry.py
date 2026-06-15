@@ -3,6 +3,7 @@ from __future__ import annotations
 from foundry_lite.application.ports import (
     DatasetAlreadyExistsError,
     DatasetInspectionPayload,
+    DatasetManifest,
     DatasetRow,
     DatasetVersionRow,
     TabularRow,
@@ -22,6 +23,7 @@ from foundry_lite.application.services.dataset.protocols import (
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
+    InvariantViolation,
     NotFound,
 )
 
@@ -210,5 +212,31 @@ class DatasetRegistryService(CoreService):
             "dataset_id": dataset["id"],
             "version": version_row,
             "schema": schema_row["schema_json"],
-            "manifest": self.dataset_transaction_service._load_manifest(version_row["manifest_uri"]),
+            "manifest": self._inspect_manifest(dataset_ref, dataset, version_row),
+        }
+
+    def _inspect_manifest(
+        self,
+        dataset_ref: str,
+        dataset: DatasetRow,
+        version_row: DatasetVersionRow,
+    ) -> DatasetManifest:
+        try:
+            return self.dataset_transaction_service._load_manifest(version_row["manifest_uri"])
+        except InvariantViolation as exc:
+            details = self._storage_error_details(dataset_ref, dataset, version_row, exc.details)
+            raise InvariantViolation(exc.message, details=details) from exc
+
+    def _storage_error_details(
+        self,
+        dataset_ref: str,
+        dataset: DatasetRow,
+        version_row: DatasetVersionRow,
+        details: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            **details,
+            "dataset_ref": dataset_ref,
+            "dataset_id": str(dataset["id"]),
+            "version_id": str(version_row["id"]),
         }

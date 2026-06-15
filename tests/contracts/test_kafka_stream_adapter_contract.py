@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import StreamPublishRequest
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
 from foundry_lite.application.primitives import CommitResult
@@ -216,8 +216,8 @@ def test_kafka_stream_worker_archives_broker_event(tmp_path: Path) -> None:
 
     assert result is not None
     dependencies = create_local_core_dependencies(storage_root=storage_root)
-    core = FoundryLiteCore(dependencies=dependencies)
-    preview = core.preview_dataset("raw.shipment_events", ctx=demo_admin_context())
+    foundry = FoundryLite(dependencies=dependencies)
+    preview = foundry.datasets.preview("raw.shipment_events", ctx=demo_admin_context())
     assert result.row_count == 1
     assert preview[0]["event_id"] == "shipment_events:0:0"
     assert preview[0]["payload_json"] == '{"shipment_id":"S-100","status":"IN_TRANSIT"}'
@@ -251,6 +251,18 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
     assert config.cdc_primary_key == ("order_id", "line_id")
     assert config.request_context().tenant_id == "tenant-custom"
     assert config.sync_name == "custom-sync"
+
+
+def test_worker_requires_tenant_context_for_background_jobs(tmp_path: Path) -> None:
+    config = worker_module.config_from_env(
+        {
+            "FOUNDRY_LITE_HOME": str(tmp_path),
+            "FOUNDRY_LITE_TENANT_ID": " ",
+        }
+    )
+
+    with pytest.raises(ValueError, match="requires tenant_id"):
+        config.request_context()
 
 
 def test_stream_archive_worker_builds_debezium_adapter_for_cdc(tmp_path: Path) -> None:

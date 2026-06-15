@@ -376,3 +376,25 @@ def test_object_set_repository_contract_reads_membership_and_metadata(
     assert property_names == {"status", "amount"}
     assert active_ids == {"O-1", "O-2"}
     assert {row["object_id"] for row in records} == {"O-1", "O-2"}
+
+
+def test_object_set_repository_contract_empty_member_inputs_are_noops(
+    harness: ObjectSetHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.delete_object_sets(transaction=transaction, tenant_id="tenant-demo", set_ids=[])
+        active_ids = harness.repository.active_object_ids(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            object_ids=[],
+        )
+        active_records = harness.repository.active_object_records_by_ids(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            object_ids=[],
+        )
+
+    assert active_ids == set()
+    assert active_records == []

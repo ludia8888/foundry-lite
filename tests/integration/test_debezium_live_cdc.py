@@ -9,7 +9,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite_worker.stream_archive import StreamArchiveWorkerConfig, run_stream_archive_once
@@ -315,5 +315,5 @@ def _connect_url(connect: DockerContainer, path: str) -> str:
 
 
 def _preview_dataset(storage_root: Path, dataset_ref: str) -> list[dict[str, object]]:
-    core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=storage_root))
-    return [dict(row) for row in core.preview_dataset(dataset_ref, ctx=demo_admin_context())]
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    return [dict(row) for row in foundry.datasets.preview(dataset_ref, ctx=demo_admin_context())]

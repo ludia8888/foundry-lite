@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports.connector_adapter import ConnectorSnapshot
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure.adapters import LocalConnectorAdapter
@@ -13,23 +13,23 @@ from foundry_lite.infrastructure.local_runtime import create_local_core_dependen
 
 @pytest.mark.integration_scenario("connector_sync")
 def test_testcontainers_connector_snapshot_reaches_materialized_closed_loop(postgres_fixture, tmp_path: Path) -> None:
-    core = _postgres_core_with_connector(postgres_fixture, tmp_path)
-    ctx = _prepare_supply_chain_metadata(core)
+    foundry = _postgres_core_with_connector(postgres_fixture, tmp_path)
+    ctx = _prepare_supply_chain_metadata(foundry)
 
-    raw_orders = core.sync_connector_snapshot(
+    raw_orders = foundry.datasets.sync_connector_snapshot(
         "raw.erp_orders", connector_name="postgres", resource_name="erp_orders", ctx=ctx
     )
-    raw_customers = core.sync_connector_snapshot(
+    raw_customers = foundry.datasets.sync_connector_snapshot(
         "raw.crm_customers", connector_name="postgres", resource_name="crm_customers", ctx=ctx
     )
-    clean_orders = core.run_transform("clean_orders", ctx=ctx)
-    core.run_transform("clean_customers", ctx=ctx)
-    core.apply_ontology("examples/supply-chain-demo/ontology/order-customer.yaml", ctx=ctx)
-    order_index = core.index_rebuild("Order", ctx=ctx)
-    core.index_rebuild("Customer", ctx=ctx)
-    action = _approve_order(core, ctx)
-    action_log = core.materialize("action_log", ctx=ctx)
-    order_current = core.materialize("order_current", ctx=ctx)
+    clean_orders = foundry.transforms.run("clean_orders", ctx=ctx)
+    foundry.transforms.run("clean_customers", ctx=ctx)
+    foundry.ontology.apply("examples/supply-chain-demo/ontology/order-customer.yaml", ctx=ctx)
+    order_index = foundry.objects.reindex("Order", ctx=ctx)
+    foundry.objects.reindex("Customer", ctx=ctx)
+    action = _approve_order(foundry, ctx)
+    action_log = foundry.materialization.run("action_log", ctx=ctx)
+    order_current = foundry.materialization.run("order_current", ctx=ctx)
 
     assert raw_orders.row_count == 3
     assert raw_customers.row_count == 2
@@ -38,15 +38,15 @@ def test_testcontainers_connector_snapshot_reaches_materialized_closed_loop(post
     assert action["status"] == "succeeded"
     assert action_log.row_count == 1
     assert order_current.row_count == 3
-    assert _committed_connector_runs(core) == ["connector.postgres", "connector.postgres"]
+    assert _committed_connector_runs(foundry) == ["connector.postgres", "connector.postgres"]
 
 
-def _postgres_core_with_connector(postgres_fixture, tmp_path: Path) -> FoundryLiteCore:
+def _postgres_core_with_connector(postgres_fixture, tmp_path: Path) -> FoundryLite:
     dependencies = create_local_core_dependencies(
         db_url=postgres_fixture.engine.url.render_as_string(hide_password=False),
         storage_root=tmp_path / "postgres-closed-loop",
     )
-    return FoundryLiteCore(dependencies=replace(dependencies, connector_adapter=_connector_adapter()))
+    return FoundryLite(dependencies=replace(dependencies, connector_adapter=_connector_adapter()))
 
 
 def _connector_adapter() -> LocalConnectorAdapter:
@@ -83,22 +83,22 @@ def _connector_adapter() -> LocalConnectorAdapter:
     )
 
 
-def _prepare_supply_chain_metadata(core: FoundryLiteCore) -> RequestContext:
+def _prepare_supply_chain_metadata(foundry: FoundryLite) -> RequestContext:
     ctx = demo_admin_context()
-    core.seed_supply_chain_demo_files()
-    core.ensure_dataset("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
-    core.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
-    core.ensure_dataset("clean.orders", ctx=ctx, primary_key=["order_id"])
-    core.ensure_dataset("clean.customers", ctx=ctx, primary_key=["customer_id"])
-    core.ensure_dataset("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
-    core.ensure_dataset("ops.order_current", ctx=ctx, primary_key=["orderId"])
-    core.register_supply_chain_demo_transforms(ctx)
+    foundry.demo.seed_files()
+    foundry.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
+    foundry.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
+    foundry.demo.register_transforms(ctx)
     return ctx
 
 
-def _approve_order(core: FoundryLiteCore, ctx: RequestContext) -> dict[str, object]:
-    order = core.get_object("Order", "O-1001", ctx=ctx)
-    return core.apply_action(
+def _approve_order(foundry: FoundryLite, ctx: RequestContext) -> dict[str, object]:
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    return foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -109,10 +109,10 @@ def _approve_order(core: FoundryLiteCore, ctx: RequestContext) -> dict[str, obje
     )
 
 
-def _committed_connector_runs(core: FoundryLiteCore) -> list[str]:
+def _committed_connector_runs(foundry: FoundryLite) -> list[str]:
     return [
         str(row["source_type"])
-        for row in core.list_runs()["syncRuns"]
+        for row in foundry.operations.list_runs()["syncRuns"]
         if row["status"] == "COMMITTED" and str(row["source_type"]).startswith("connector.")
     ]
 

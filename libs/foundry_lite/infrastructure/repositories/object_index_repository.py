@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
+from uuid import uuid4
 
 from sqlalchemy import and_, delete, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
@@ -22,6 +23,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.object_index_repository import IndexRunRow
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
 
 
 class SqlAlchemyObjectIndexRepository:
@@ -145,6 +147,7 @@ class SqlAlchemyObjectIndexRepository:
         )
 
     def insert_object_record(self, *, transaction: Any, record: ObjectRecordInsert) -> None:
+        object_change_sequence = next_object_change_sequence(transaction, record.tenant_id)
         transaction.execute(
             insert(db.object_records).values(
                 id=record.record_id,
@@ -161,11 +164,16 @@ class SqlAlchemyObjectIndexRepository:
                 source_dataset_version_id=record.source_dataset_version_id,
                 source_hash=record.source_hash,
                 object_version=record.object_version,
+                object_change_sequence=object_change_sequence,
                 deleted=record.deleted,
                 deletion_reason=record.deletion_reason,
                 created_at=record.created_at,
                 updated_at=record.updated_at,
             )
+        )
+        _insert_object_record_version(
+            transaction,
+            values=_object_record_insert_version_values(record, object_change_sequence),
         )
 
     def object_record_in_index(
@@ -224,6 +232,7 @@ class SqlAlchemyObjectIndexRepository:
         transaction: Any,
         record: ObjectRecordSourceUpdate,
     ) -> None:
+        object_change_sequence = next_object_change_sequence(transaction, record.tenant_id)
         transaction.execute(
             update(db.object_records)
             .where(and_(db.object_records.c.tenant_id == record.tenant_id, db.object_records.c.id == record.record_id))
@@ -233,9 +242,11 @@ class SqlAlchemyObjectIndexRepository:
                 source_dataset_version_id=record.source_dataset_version_id,
                 source_hash=record.source_hash,
                 object_version=record.object_version,
+                object_change_sequence=object_change_sequence,
                 updated_at=record.updated_at,
             )
         )
+        _insert_object_record_version_from_current(transaction, record.tenant_id, record.record_id)
 
     def update_object_record_from_cdc(
         self,
@@ -243,6 +254,7 @@ class SqlAlchemyObjectIndexRepository:
         transaction: Any,
         record: ObjectRecordCdcUpdate,
     ) -> None:
+        object_change_sequence = next_object_change_sequence(transaction, record.tenant_id)
         transaction.execute(
             update(db.object_records)
             .where(and_(db.object_records.c.tenant_id == record.tenant_id, db.object_records.c.id == record.record_id))
@@ -253,11 +265,13 @@ class SqlAlchemyObjectIndexRepository:
                 source_dataset_version_id=record.source_dataset_version_id,
                 source_hash=record.source_hash,
                 object_version=record.object_version,
+                object_change_sequence=object_change_sequence,
                 deleted=record.deleted,
                 deletion_reason=record.deletion_reason,
                 updated_at=record.updated_at,
             )
         )
+        _insert_object_record_version_from_current(transaction, record.tenant_id, record.record_id)
 
     def insert_object_conflict(self, *, transaction: Any, record: ObjectConflictRecord) -> None:
         transaction.execute(
@@ -521,10 +535,6 @@ class SqlAlchemyObjectIndexRepository:
         )
 
 
-def _active_index_pointer_id(tenant_id: str, object_type_id: str) -> str:
-    return f"object_index_version:{tenant_id}:{object_type_id}"
-
-
 def _active_index_pointer_values(
     tenant_id: str,
     object_type_id: str,
@@ -532,9 +542,99 @@ def _active_index_pointer_values(
     updated_at: str,
 ) -> dict[str, str]:
     return {
-        "id": _active_index_pointer_id(tenant_id, object_type_id),
+        "id": f"object_index_version_{uuid4().hex}",
         "tenant_id": tenant_id,
         "object_type_id": object_type_id,
         "active_index_version": index_version,
         "updated_at": updated_at,
     }
+
+
+def _object_record_insert_version_values(record: ObjectRecordInsert, object_change_sequence: int) -> dict[str, object]:
+    return {
+        "id": f"object_record_version_{uuid4().hex}",
+        "tenant_id": record.tenant_id,
+        "object_record_id": record.record_id,
+        "object_type_id": record.object_type_id,
+        "object_type_api_name": record.object_type_api_name,
+        "object_id": record.object_id,
+        "index_version": record.index_version,
+        "is_active": record.is_active,
+        "properties": dict(record.properties),
+        "base_properties": dict(record.base_properties),
+        "edit_properties": dict(record.edit_properties),
+        "property_versions": dict(record.property_versions),
+        "source_dataset_version_id": record.source_dataset_version_id,
+        "source_hash": record.source_hash,
+        "object_version": record.object_version,
+        "object_change_sequence": object_change_sequence,
+        "deleted": record.deleted,
+        "deletion_reason": record.deletion_reason,
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+    }
+
+
+def _insert_object_record_version_from_current(transaction: Any, tenant_id: str, record_id: str) -> None:
+    row = (
+        transaction.execute(
+            select(db.object_records).where(
+                and_(db.object_records.c.tenant_id == tenant_id, db.object_records.c.id == record_id)
+            )
+        )
+        .mappings()
+        .one()
+    )
+    _insert_object_record_version(transaction, values=_object_record_row_version_values(row))
+
+
+def _object_record_row_version_values(row: Any) -> dict[str, object]:
+    return {
+        "id": f"object_record_version_{uuid4().hex}",
+        "tenant_id": row["tenant_id"],
+        "object_record_id": row["id"],
+        "object_type_id": row["object_type_id"],
+        "object_type_api_name": row["object_type_api_name"],
+        "object_id": row["object_id"],
+        "index_version": row["index_version"],
+        "is_active": row["is_active"],
+        "properties": row["properties"],
+        "base_properties": row["base_properties"],
+        "edit_properties": row["edit_properties"],
+        "property_versions": row["property_versions"],
+        "source_dataset_version_id": row["source_dataset_version_id"],
+        "source_hash": row["source_hash"],
+        "object_version": row["object_version"],
+        "object_change_sequence": row["object_change_sequence"],
+        "deleted": row["deleted"],
+        "deletion_reason": row["deletion_reason"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _insert_object_record_version(transaction: Any, *, values: dict[str, object]) -> None:
+    transaction.execute(
+        insert(db.object_record_versions).values(
+            id=values["id"],
+            tenant_id=values["tenant_id"],
+            object_record_id=values["object_record_id"],
+            object_type_id=values["object_type_id"],
+            object_type_api_name=values["object_type_api_name"],
+            object_id=values["object_id"],
+            index_version=values["index_version"],
+            is_active=values["is_active"],
+            properties=values["properties"],
+            base_properties=values["base_properties"],
+            edit_properties=values["edit_properties"],
+            property_versions=values["property_versions"],
+            source_dataset_version_id=values["source_dataset_version_id"],
+            source_hash=values["source_hash"],
+            object_version=values["object_version"],
+            object_change_sequence=values["object_change_sequence"],
+            deleted=values["deleted"],
+            deletion_reason=values["deletion_reason"],
+            created_at=values["created_at"],
+            updated_at=values["updated_at"],
+        )
+    )

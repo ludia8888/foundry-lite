@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Barrier
 from typing import Any, Protocol
 
 import pytest
@@ -196,6 +198,7 @@ def _action_run_record(
     action_type_id: str = "atype_approve",
     actor_user_id: str = "actor-demo",
     idempotency_key: str = "idem-1",
+    request_fingerprint: str = "fingerprint-1",
 ) -> ActionRunRecord:
     return ActionRunRecord(
         action_run_id=run_id,
@@ -210,6 +213,7 @@ def _action_run_record(
         parameters={"status": "APPROVED"},
         status="received",
         idempotency_key=idempotency_key,
+        request_fingerprint=request_fingerprint,
         error=None,
         created_at="2026-06-10T00:00:00Z",
         completed_at=None,
@@ -230,6 +234,7 @@ def _action_run_row(record: ActionRunRecord) -> ActionRunRow:
         "parameters": record.parameters,
         "status": record.status,
         "idempotency_key": record.idempotency_key,
+        "request_fingerprint": record.request_fingerprint,
         "error": record.error,
         "created_at": record.created_at,
         "completed_at": record.completed_at,
@@ -380,6 +385,7 @@ def test_action_repository_contract_inserts_and_replays_idempotent_runs(harness:
     assert found is not None
     assert found["id"] == "arun_1"
     assert found["parameters"] == {"status": "APPROVED"}
+    assert found["request_fingerprint"] == "fingerprint-1"
     assert missing_actor is None
 
 
@@ -399,6 +405,52 @@ def test_action_repository_contract_insert_or_get_existing_replays_duplicate(har
     assert replay is not None
     assert replay["id"] == "arun_winner"
     assert [row["id"] for row in rows] == ["arun_winner"]
+
+
+def test_action_same_idempotency_key_concurrent_requests_replay_same_action_run(tmp_path: Path) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'metadata.db'}",
+        connect_args={"check_same_thread": False},
+        future=True,
+    )
+    db.create_database(engine)
+    repository = SqlAlchemyActionRepository(engine)
+    start = Barrier(2)
+
+    def submit(run_id: str) -> str:
+        start.wait()
+        with engine.begin() as transaction:
+            existing = repository.insert_action_run_or_get_existing(
+                transaction=transaction,
+                record=_action_run_record(run_id=run_id),
+            )
+        return existing["id"] if existing is not None else run_id
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(submit, ["arun_first", "arun_second"]))
+
+    with engine.begin() as transaction:
+        rows = transaction.execute(select(db.action_runs)).mappings().all()
+    assert len(rows) == 1
+    assert results == [rows[0]["id"], rows[0]["id"]]
+
+
+def test_sqlalchemy_action_run_insert_or_get_existing_rolls_back_with_outer_transaction(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
+    db.create_database(engine)
+    repository = SqlAlchemyActionRepository(engine)
+
+    with pytest.raises(RuntimeError):
+        with engine.begin() as transaction:
+            repository.insert_action_run_or_get_existing(
+                transaction=transaction,
+                record=_action_run_record(run_id="arun_rollback"),
+            )
+            raise RuntimeError("rollback after idempotency winner insert")
+
+    with engine.begin() as transaction:
+        rows = transaction.execute(select(db.action_runs)).mappings().all()
+    assert rows == []
 
 
 def test_action_repository_contract_updates_terminal_state_and_writebacks(harness: ActionHarness) -> None:

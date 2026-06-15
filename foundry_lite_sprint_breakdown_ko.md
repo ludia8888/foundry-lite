@@ -13,6 +13,7 @@
 - Foundry 공개 문서에서 가져온 외부 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 원본으로 본다.
 - Python 백엔드 구현 원칙과 코드 품질 기준은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)를 원본으로 본다.
 - v1 필수 범위는 네 문서 모두 `CSV/PostgreSQL snapshot → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`으로 통일한다.
+- commit point가 하나의 진실로 유지되는지에 대한 위험 판정은 [Commit-Point Risk Register](./docs/commit-point-risk-register.md)를 따른다.
 
 ### 함께 읽을 문서
 
@@ -26,6 +27,7 @@
 - 각 스프린트는 이전 스프린트의 결과를 실제로 사용한다.
 - 모든 write는 audit 가능하다.
 - 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능하다.
+- 기능이 동작해도 cursor, offset, watermark, manifest, lineage, outbox, action state가 durable commit point보다 앞서가면 완료로 보지 않는다.
 - Sprint 00~36은 MVP core, Sprint 02A는 scale-ready foundation 보강, Sprint 37~45는 MVP 이후 확장으로 구분된다.
 - Python 백엔드 코드는 `ruff`, `mypy` 또는 `pyright`, `pytest` 품질 게이트를 통과한다.
 - 안티패턴 금지 기준을 위반한 단순 패치는 완료로 보지 않는다.
@@ -428,11 +430,11 @@ S3/MinIO 같은 object storage에서 원자적 rename에 의존하지 않고, st
 
 **Acceptance Gate**
 
-- [ ] 파일은 먼저 staging에 쓰이고 commit 후 manifest에 의해 version에 귀속된다.
-- [ ] manifest_uri만으로 dataset version의 파일 목록을 복원할 수 있다.
-- [ ] 중간 실패 후 재시도해도 중복 version이 생기지 않는다.
+- [x] 파일은 먼저 staging에 쓰이고 commit 후 manifest에 의해 version에 귀속된다. ([S05-A1](./docs/sprint-evidence-ledger.md#s05-a1))
+- [x] manifest_uri만으로 dataset version의 파일 목록을 복원할 수 있다. ([S05-A2](./docs/sprint-evidence-ledger.md#s05-a2))
+- [x] 중간 실패 후 재시도해도 중복 version이 생기지 않는다. ([S05-A3](./docs/sprint-evidence-ledger.md#s05-a3))
 - [ ] content_hash가 같은 파일 재첨부 정책이 명확하다.
-- [ ] MinIO 없이 mocked adapter로 unit test가 돈다.
+- [x] MinIO 없이 mocked adapter로 unit test가 돈다. ([S05-A5](./docs/sprint-evidence-ledger.md#s05-a5))
 
 **Demo / Proof**
 
@@ -538,14 +540,14 @@ Dataset이 형식상 commit되는 것만으로 성공으로 보지 않고, prima
 
 - `dataset_checks`, `dataset_check_results` 테이블을 구현한다.
 - not_null, unique, row_count_min/max, custom_sql 최소 check를 지원한다.
-- commit 전 staging/version candidate에 check를 실행한다.
+- commit 전 staging/version candidate에 check를 실행한다. `VERIFY-DATASET-HEALTH-CANDIDATE`가 latest가 아니라 후보 파일을 검사함을 증명한다.
 - severity `error` check 실패 시 transaction을 abort한다.
 - warning check는 commit은 허용하되 결과에 표시한다.
 - Dataset UI에 check 결과를 표시한다.
 
 **Acceptance Gate**
 
-- [ ] `order_id` unique check 실패 CSV는 committed version을 만들지 않는다.
+- [x] `order_id` unique check 실패 CSV는 committed version을 만들지 않는다. 증거: `tests/integration/test_dataset_quality.py::test_dataset_health_check_reads_candidate_not_latest`, `VERIFY-DATASET-HEALTH-CANDIDATE`.
 - [ ] not_null 실패 row count와 샘플 row가 결과 details에 남는다.
 - [ ] check 결과가 run_id와 transaction_id로 추적된다.
 - [ ] 사용자는 어떤 check가 실패했는지 UI/CLI에서 볼 수 있다.
@@ -1211,11 +1213,11 @@ ApproveOrder action apply dry-run으로 parameter/precondition 결과를 반환�
 
 **Acceptance Gate**
 
-- [ ] ApproveOrder가 Order.status를 APPROVED로 바꾼다.
-- [ ] operatorNote editable property가 params.reason으로 설정된다.
-- [ ] 동시에 두 요청이 같은 expectedObjectVersion으로 오면 하나는 conflict로 실패한다.
-- [ ] 실패한 action은 object_edits를 남기지 않는다.
-- [ ] 성공 action은 action_run, object_edit, audit_event, outbox_event가 correlation_id로 연결된다.
+- [x] ApproveOrder가 Order.status를 APPROVED로 바꾼다. ([S25-A1](./docs/sprint-evidence-ledger.md#s25-a1))
+- [x] operatorNote editable property가 params.reason으로 설정된다. ([S25-A2](./docs/sprint-evidence-ledger.md#s25-a2))
+- [x] 같은 object에 stale expectedObjectVersion으로 다시 쓰면 conflict로 실패한다. 병렬 stress proof는 향후 확장으로 남긴다. ([S25-A3](./docs/sprint-evidence-ledger.md#s25-a3))
+- [x] 실패한 action commit은 object_edits나 partial action evidence를 남기지 않는다. ([S25-A4](./docs/sprint-evidence-ledger.md#s25-a4))
+- [x] 성공 action은 action_run, object_edit, audit_event, outbox_event가 correlation/action id로 연결된다. ([S25-A5](./docs/sprint-evidence-ledger.md#s25-a5))
 
 **Demo / Proof**
 
@@ -1250,8 +1252,9 @@ ApproveOrder action apply dry-run으로 parameter/precondition 결과를 반환�
 
 **Acceptance Gate**
 
-- [ ] 동일 idempotency key로 ApproveOrder를 10번 호출해도 object_edit은 하나만 생긴다.
-- [ ] 다른 idempotency key로 같은 object를 수정하면 expectedObjectVersion 규칙에 따라 처리된다.
+- [x] 동일 Idempotency-Key 반복/동시 호출은 기존 action_run을 replay하고 object_edit을 추가로 만들지 않는다. ([S26-A1](./docs/sprint-evidence-ledger.md#s26-a1), [S36A-A1](./docs/sprint-evidence-ledger.md#s36a-a1))
+- [x] 동일 Idempotency-Key를 다른 요청 본문으로 재사용하면 replay하지 않고 conflict와 audit evidence로 남긴다. ([S26-A2](./docs/sprint-evidence-ledger.md#s26-a2))
+- [x] 다른 Idempotency-Key로 같은 object를 수정하면 expectedObjectVersion 규칙에 따라 처리된다. ([S26-A3](./docs/sprint-evidence-ledger.md#s26-a3))
 - [ ] Action log에서 actor, params subset, target, status, error, created/completed time이 보인다.
 - [ ] 감사 이벤트는 action_run_id와 object_edit_id를 참조한다.
 - [ ] 민감 parameter는 audit에서 masking할 수 있는 구조다.
@@ -1406,9 +1409,9 @@ Action Runtime 안에 갇힌 운영 변경 기록을 dataset 세계로 되돌린
 
 **Acceptance Gate**
 
-- [ ] ApproveOrder 실행 후 materialization을 돌리면 `ops.action_log` dataset version이 생긴다.
-- [ ] action_run_id, actor, target, status, parameters subset, edit patch가 dataset에 포함된다.
-- [ ] 같은 cursor로 재실행해도 중복 row 정책이 명확하다.
+- [x] ApproveOrder 실행 후 materialization을 돌리면 `ops.action_log` dataset version이 생긴다. ([S30-A1](./docs/sprint-evidence-ledger.md#s30-a1))
+- [x] action_run_id, actor, target, status, parameters subset, edit patch가 dataset에 포함된다. ([S30-A2](./docs/sprint-evidence-ledger.md#s30-a2))
+- [ ] 같은 cursor로 재실행해도 중복 row 정책이 명확하다. 현재 `action_log` cursor는 `completed_at + action_run_id` 기준으로 보강됐지만, 같은 cursor를 명시적으로 재실행하는 전용 regression은 아직 남아 있다.
 - [ ] failed materialization은 output transaction을 abort한다.
 - [ ] Dataset UI에서 `ops.action_log` preview가 가능하다.
 
@@ -1445,11 +1448,11 @@ object store의 current operational view를 특정 watermark 기준으로 snapsh
 
 **Acceptance Gate**
 
-- [ ] Order object current view가 `ops.order_current` dataset으로 출력된다.
-- [ ] ApproveOrder 후 snapshot에는 APPROVED 상태가 반영된다.
-- [ ] run metadata에 object_store_watermark가 저장된다.
-- [ ] 같은 watermark로 재실행하면 같은 row_count/hash가 나온다.
-- [ ] snapshot 생성 중 새 action이 들어와도 해당 run의 일관성이 깨지지 않는다.
+- [x] Order object current view가 `ops.order_current` dataset으로 출력된다. ([S31-A1](./docs/sprint-evidence-ledger.md#s31-a1))
+- [x] ApproveOrder 후 snapshot에는 APPROVED 상태가 반영된다. ([S31-A2](./docs/sprint-evidence-ledger.md#s31-a2))
+- [x] run metadata에 object_store_watermark가 저장된다. (`object_change_sequence_lte`, `active_index_version`) ([S31-A3](./docs/sprint-evidence-ledger.md#s31-a3))
+- [x] 같은 watermark로 재실행하면 같은 row_count/hash가 나온다. (`object_record_versions` 기반 replay) ([S31-A4](./docs/sprint-evidence-ledger.md#s31-a4))
+- [x] snapshot 생성 중 새 action이 들어와도 해당 run의 일관성이 깨지지 않는다. ([S31-A5](./docs/sprint-evidence-ledger.md#s31-a5))
 
 **Demo / Proof**
 
@@ -1565,8 +1568,8 @@ Foundry 수준의 보안 완전체가 아니라도, v1에서 반드시 필요한
 
 - [x] viewer는 dataset을 읽을 수 있지만 ontology activate는 못 한다. (`dataset:read`, `ontology:activate`, `permission.denied`) ([S34-A1](./docs/sprint-evidence-ledger.md#s34-a1))
 - [x] ops_manager만 ApproveOrder를 실행할 수 있다. (`action:execute:ApproveOrder`; admin/ops_manager 허용, viewer/data_engineer 거부) ([S34-A2](./docs/sprint-evidence-ledger.md#s34-a2))
-- [x] finance/admin이 아닌 사용자는 Order의 margin 같은 민감 property가 masked 된다. (`PolicyService.mask_properties`, object/link/API responses) ([S34-A3](./docs/sprint-evidence-ledger.md#s34-a3))
-- [x] 다른 tenant의 object/dataset은 API와 DB RLS 모두에서 보이지 않는다. (`test_api_security_roles_mask_and_audit_denials`, `test_postgres_rls_hides_dataset_and_object_rows_between_tenants`) ([S34-A4](./docs/sprint-evidence-ledger.md#s34-a4))
+- [x] finance/admin이 아닌 사용자는 Order의 margin 같은 민감 property가 masked 되고, filter/sort/search/dynamic object set filter에서도 사용할 수 없다. (`PolicyService.mask_properties`, `PolicyService.masked_property_names`, object/link/API/query/search responses) ([S34-A3](./docs/sprint-evidence-ledger.md#s34-a3))
+- [x] 다른 tenant의 object/dataset은 API와 DB RLS 모두에서 보이지 않고, pooled PostgreSQL connection을 재사용해도 tenant context가 transaction 밖으로 새지 않는다. (`test_api_security_roles_mask_and_audit_denials`, `test_postgres_rls_hides_dataset_and_object_rows_between_tenants`, `test_rls_tenant_context_reset_between_pooled_connections`) ([S34-A4](./docs/sprint-evidence-ledger.md#s34-a4))
 - [x] permission denied도 audit_events에 decision=deny로 남는다. (`permission.denied` audit evidence) ([S34-A5](./docs/sprint-evidence-ledger.md#s34-a5))
 
 **Demo / Proof**
@@ -1576,8 +1579,8 @@ Foundry 수준의 보안 완전체가 아니라도, v1에서 반드시 필요한
 **이러면 성공으로 치지 않는다**
 
 - 프론트엔드에서만 버튼을 숨기고 API permission check가 없다.
-- property masking이 query response 일부 경로에서 빠진다.
-- tenant isolation이 application code에만 의존하고 DB guard가 없다.
+- property masking이 query response, filter, sort, search, object set filter 일부 경로에서 빠진다.
+- tenant isolation이 application code에만 의존하고 DB guard나 pooled connection reset proof가 없다.
 
 ---
 
@@ -1707,6 +1710,7 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 - [x] Operations runs API/CLI/UI는 cursor 기반으로 page를 나누고 대량 run fixture에서도 일정한 응답 크기를 유지한다. ([S36A-A8](./docs/sprint-evidence-ledger.md#s36a-a8))
 - [x] production auth profile에서 header-trust provider를 쓰면 startup이 실패하고, local/demo profile에서는 명시적으로만 허용된다. ([S36A-A9](./docs/sprint-evidence-ledger.md#s36a-a9))
 - [x] SDK package output과 browser output이 같은 object/action method surface를 노출하는지 테스트가 검증한다. ([S36A-A10](./docs/sprint-evidence-ledger.md#s36a-a10))
+- [x] 동일 Idempotency-Key라도 요청 본문이 다르면 기존 action_run replay가 아니라 conflict로 막는다. ([S36A-A11](./docs/sprint-evidence-ledger.md#s36a-a11))
 
 **Demo / Proof**
 
@@ -1748,7 +1752,7 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 
 - [x] mock REST API에서 orders를 pull해 raw dataset으로 commit한다. ([S37-A1](./docs/sprint-evidence-ledger.md#s37-a1))
 - [x] REST adapter는 응답의 `nextCursor`를 반환하고, 전달받은 cursor를 다음 요청에 실어 보낼 수 있다. ([S37-A2](./docs/sprint-evidence-ledger.md#s37-a2))
-- [x] 실패/중단된 REST sync가 운영자가 cursor를 다시 입력하지 않아도 durable state에서 이어받을 수 있다. ([S37-A7](./docs/sprint-evidence-ledger.md#s37-a7))
+- [x] 실패/중단된 REST sync가 운영자가 cursor를 다시 입력하지 않아도 durable state에서 이어받을 수 있고, 실패한 page fetch의 cursor가 committed cursor보다 앞서가지 않는다. ([S37-A7](./docs/sprint-evidence-ledger.md#s37-a7))
 - [x] webhook event가 append transaction으로 raw dataset에 쌓인다. ([S37-A3](./docs/sprint-evidence-ledger.md#s37-a3))
 - [x] 같은 webhook event가 두 번 들어와도 중복 dataset row/version을 만들지 않는다. ([S37-A8](./docs/sprint-evidence-ledger.md#s37-a8))
 - [x] 잘못된 signature webhook은 거부되고 audit deny가 남는다. ([S37-A4](./docs/sprint-evidence-ledger.md#s37-a4))
@@ -1790,14 +1794,14 @@ Kafka-compatible stream event를 raw archive dataset으로 남겨 replay 가능�
 
 - [x] local/fake Kafka-compatible `StreamAdapter` event를 raw stream archive dataset에 append한다. ([S38-A1](./docs/sprint-evidence-ledger.md#s38-a1))
 - [x] production Kafka-compatible broker topic에 event를 넣으면 raw stream archive dataset에 append된다. ([S38-A2](./docs/sprint-evidence-ledger.md#s38-a2))
-- [x] worker restart 후 마지막 committed offset 이후부터 재개한다. ([S38-A3](./docs/sprint-evidence-ledger.md#s38-a3))
+- [x] worker restart 후 마지막 committed offset 이후부터 재개하며, 실패한 archive write의 offset이 durable cursor로 먼저 저장되지 않는다. ([S38-A3](./docs/sprint-evidence-ledger.md#s38-a3))
 - [x] 중복 처리 가능성은 event id 또는 topic/partition/offset으로 식별 가능하다. ([S38-A4](./docs/sprint-evidence-ledger.md#s38-a4))
 - [x] stream archive dataset preview가 가능하다. ([S38-A5](./docs/sprint-evidence-ledger.md#s38-a5))
 - [x] lag metric과 stream writer 실패가 Operations에 보인다. ([S38-A6](./docs/sprint-evidence-ledger.md#s38-a6))
 
 **Demo / Proof**
 
-현재 증명은 local/fake `StreamAdapter.publish_event` → `FoundryLiteCore.archive_stream_events` → `raw.shipment_events` append version 생성에 더해, `tests/integration/test_kafka_live_broker_stream_archive.py`가 `KafkaContainer` live broker를 띄우고 `KafkaStreamAdapter.publish_event`로 실제 topic에 event를 넣은 뒤 `foundry_lite_worker.stream_archive.run_stream_archive_once`가 같은 `archive_stream_events` application boundary를 통해 raw archive dataset version을 commit하는 경로까지 확인한다.
+현재 증명은 local/fake `StreamAdapter.publish_event` → `FoundryLiteCore.archive_stream_events` → `raw.shipment_events` append version 생성에 더해, 실패한 archive write가 offset cursor를 먼저 전진시키지 않는 regression까지 포함한다. 또한 `tests/integration/test_kafka_live_broker_stream_archive.py`가 `KafkaContainer` live broker를 띄우고 `KafkaStreamAdapter.publish_event`로 실제 topic에 event를 넣은 뒤 `foundry_lite_worker.stream_archive.run_stream_archive_once`가 같은 `archive_stream_events` application boundary를 통해 raw archive dataset version을 commit하는 경로까지 확인한다.
 
 **이러면 성공으로 치지 않는다**
 

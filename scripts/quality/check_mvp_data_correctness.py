@@ -16,7 +16,7 @@ import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import DEFAULT_TENANT_ID, demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
@@ -217,9 +217,9 @@ def _reindex_hash_findings(storage_root: Path, tenant_id: str) -> list[DataCorre
         clone_root = Path(tmp) / "mvp-data-correctness"
         shutil.copytree(storage_root, clone_root)
         try:
-            result = FoundryLiteCore(
-                dependencies=create_local_core_dependencies(storage_root=clone_root)
-            ).index_rebuild("Order", ctx=demo_admin_context())
+            result = FoundryLite(dependencies=create_local_core_dependencies(storage_root=clone_root)).objects.reindex(
+                "Order", ctx=demo_admin_context()
+            )
         except Exception as exc:
             return [
                 _finding(

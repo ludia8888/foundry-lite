@@ -7,8 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from foundry_lite.application.action_types import ActionApplyResponse
-from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.application.demo_types import SupplyChainDemoResult
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
     DatasetInspectionPayload,
     DatasetRow,
@@ -25,14 +25,14 @@ from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
 JsonObject = dict[str, object]
-Handler = Callable[[FoundryLiteCore, RequestContext, argparse.Namespace], object]
+Handler = Callable[[FoundryLite, RequestContext, argparse.Namespace], object]
 DEFAULT_STORAGE_ROOT = ".foundry-lite"
 DEFAULT_DEMO_STORAGE_ROOT = ".foundry-lite-demo"
 
 
-def _core(adapter_profile: str | None = None, *, storage_root: str | None = None) -> FoundryLiteCore:
+def _foundry(adapter_profile: str | None = None, *, storage_root: str | None = None) -> FoundryLite:
     profile = adapter_profile if adapter_profile is not None else os.getenv("FOUNDRY_LITE_ADAPTER_PROFILE", "local")
-    return FoundryLiteCore(
+    return FoundryLite(
         dependencies=create_local_core_dependencies(
             db_url=os.getenv("FOUNDRY_LITE_DB_URL"),
             storage_root=storage_root or os.getenv("FOUNDRY_LITE_HOME", DEFAULT_STORAGE_ROOT),
@@ -209,44 +209,44 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _demo_seed(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> dict[str, str]:
+def _demo_seed(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> dict[str, str]:
     del ctx, args
-    core.seed_supply_chain_demo_files()
+    foundry.demo.seed_files()
     return {"seeded": str(Path("examples/supply-chain-demo").resolve())}
 
 
 def _demo_run_supply_chain(
-    core: FoundryLiteCore,
+    foundry: FoundryLite,
     ctx: RequestContext,
     args: argparse.Namespace,
 ) -> SupplyChainDemoResult:
-    return core.run_supply_chain_demo(ctx=ctx, fresh=_fresh_supply_chain_demo(args))
+    return foundry.demo.run(ctx=ctx, fresh=_fresh_supply_chain_demo(args))
 
 
-def _dataset_create(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> DatasetRow:
-    return core.create_dataset(args.dataset, ctx=ctx, primary_key=args.primary_key)
+def _dataset_create(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> DatasetRow:
+    return foundry.datasets.create(args.dataset, ctx=ctx, primary_key=args.primary_key)
 
 
-def _dataset_upload(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> CommitResult:
-    return core.upload_csv(args.dataset, args.path, ctx=ctx)
+def _dataset_upload(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> CommitResult:
+    return foundry.datasets.upload_csv(args.dataset, args.path, ctx=ctx)
 
 
-def _dataset_versions(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> list[DatasetVersionRow]:
-    return core.list_dataset_versions(args.dataset, ctx=ctx)
+def _dataset_versions(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> list[DatasetVersionRow]:
+    return foundry.datasets.list_versions(args.dataset, ctx=ctx)
 
 
-def _dataset_preview(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> list[TabularRow]:
-    return core.preview_dataset(args.dataset, ctx=ctx, limit=args.limit)
+def _dataset_preview(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> list[TabularRow]:
+    return foundry.datasets.preview(args.dataset, ctx=ctx, limit=args.limit)
 
 
-def _dataset_inspect(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> DatasetInspectionPayload:
-    return core.inspect_dataset(args.dataset, ctx=ctx, version=args.version)
+def _dataset_inspect(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> DatasetInspectionPayload:
+    return foundry.datasets.inspect(args.dataset, ctx=ctx, version=args.version)
 
 
-def _action_apply(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> ActionApplyResponse:
+def _action_apply(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> ActionApplyResponse:
     object_type, object_id = args.object.split("/", 1)
-    current = core.get_object(object_type, object_id, ctx=ctx)
-    return core.apply_action(
+    current = foundry.objects.get(object_type, object_id, ctx=ctx)
+    return foundry.actions.apply(
         args.name,
         object_type=object_type,
         object_id=object_id,
@@ -257,8 +257,8 @@ def _action_apply(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Nam
     )
 
 
-def _object_set_create_static(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> ObjectSetPayload:
-    return core.create_object_set(
+def _object_set_create_static(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> ObjectSetPayload:
+    return foundry.objects.create_set(
         args.name,
         args.object_type,
         set_type="static",
@@ -269,10 +269,8 @@ def _object_set_create_static(core: FoundryLiteCore, ctx: RequestContext, args: 
     )
 
 
-def _object_set_create_dynamic(
-    core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace
-) -> ObjectSetPayload:
-    return core.create_object_set(
+def _object_set_create_dynamic(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> ObjectSetPayload:
+    return foundry.objects.create_set(
         args.name,
         args.object_type,
         set_type="dynamic",
@@ -283,12 +281,12 @@ def _object_set_create_dynamic(
     )
 
 
-def _outbox_retry(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRetryResult:
-    return core.retry_dead_letter_event(args.event_id, ctx=ctx)
+def _outbox_retry(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRetryResult:
+    return foundry.operations.retry_dead_letter_event(args.event_id, ctx=ctx)
 
 
-def _operations_runs(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRunQueryResult:
-    return core.query_runs(
+def _operations_runs(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRunQueryResult:
+    return foundry.operations.query_runs(
         ctx=ctx,
         run_type=args.run_type,
         status=args.status,
@@ -299,12 +297,12 @@ def _operations_runs(core: FoundryLiteCore, ctx: RequestContext, args: argparse.
     )
 
 
-def _operations_run_detail(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRunDetail:
-    return core.run_detail(args.run_type, args.run_id, ctx=ctx)
+def _operations_run_detail(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> RuntimeRunDetail:
+    return foundry.operations.run_detail(args.run_type, args.run_id, ctx=ctx)
 
 
-def _transform_retry(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> TransformRetryResult:
-    return core.retry_transform_run(args.run_id, ctx=ctx)
+def _transform_retry(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> TransformRetryResult:
+    return foundry.transforms.retry_run(args.run_id, ctx=ctx)
 
 
 def _handlers() -> dict[tuple[str, str], Handler]:
@@ -316,51 +314,53 @@ def _handlers() -> dict[tuple[str, str], Handler]:
         ("dataset", "versions"): _dataset_versions,
         ("dataset", "preview"): _dataset_preview,
         ("dataset", "inspect"): _dataset_inspect,
-        ("transform", "run"): lambda core, ctx, args: core.run_transform(args.name, ctx=ctx),
+        ("transform", "run"): lambda foundry, ctx, args: foundry.transforms.run(args.name, ctx=ctx),
         ("transform", "retry"): _transform_retry,
-        ("ontology", "apply"): lambda core, ctx, args: core.apply_ontology(args.path, ctx=ctx),
-        ("index", "rebuild"): lambda core, ctx, args: core.index_rebuild(args.object_type, ctx=ctx),
-        ("index", "replay"): lambda core, ctx, args: core.index_rebuild(args.object_type, ctx=ctx),
-        ("index", "replay-run"): lambda core, ctx, args: core.index_replay_run(args.run_id, ctx=ctx),
-        ("index", "rebuild-search"): lambda core, ctx, args: core.index_search_rebuild(args.object_type, ctx=ctx),
-        ("index", "consume-search-change"): lambda core, ctx, args: core.index_search_object_changed(
+        ("ontology", "apply"): lambda foundry, ctx, args: foundry.ontology.apply(args.path, ctx=ctx),
+        ("index", "rebuild"): lambda foundry, ctx, args: foundry.objects.reindex(args.object_type, ctx=ctx),
+        ("index", "replay"): lambda foundry, ctx, args: foundry.objects.reindex(args.object_type, ctx=ctx),
+        ("index", "replay-run"): lambda foundry, ctx, args: foundry.objects.replay_index_run(args.run_id, ctx=ctx),
+        ("index", "rebuild-search"): lambda foundry, ctx, args: foundry.objects.rebuild_search(
+            args.object_type, ctx=ctx
+        ),
+        ("index", "consume-search-change"): lambda foundry, ctx, args: foundry.objects.consume_search_change(
             args.object_type, args.object_id, ctx=ctx
         ),
         ("action", "apply"): _action_apply,
-        ("materialize", "run"): lambda core, ctx, args: core.materialize(args.name, ctx=ctx),
-        ("object", "get"): lambda core, ctx, args: core.get_object(
+        ("materialize", "run"): lambda foundry, ctx, args: foundry.materialization.run(args.name, ctx=ctx),
+        ("object", "get"): lambda foundry, ctx, args: foundry.objects.get(
             args.object_type,
             args.object_id,
             ctx=ctx,
             include_explain=args.explain,
         ),
-        ("object", "links"): lambda core, ctx, args: core.get_links(
+        ("object", "links"): lambda foundry, ctx, args: foundry.objects.links(
             args.object_type,
             args.object_id,
             args.link_type,
             ctx=ctx,
         ),
-        ("object-set", "list"): lambda core, ctx, args: core.query_object_sets(
+        ("object-set", "list"): lambda foundry, ctx, args: foundry.objects.query_sets(
             ctx=ctx,
             object_type_api_name=args.object_type,
         ),
-        ("object-set", "get"): lambda core, ctx, args: core.get_object_set(args.set_id, ctx=ctx),
+        ("object-set", "get"): lambda foundry, ctx, args: foundry.objects.get_set(args.set_id, ctx=ctx),
         ("object-set", "create-static"): _object_set_create_static,
         ("object-set", "create-dynamic"): _object_set_create_dynamic,
-        ("object-set", "cleanup-expired"): lambda core, ctx, args: core.cleanup_expired_object_sets(ctx=ctx),
-        ("lineage", ""): lambda core, ctx, args: core.lineage_for_resource(args.resource_id, ctx=ctx),
+        ("object-set", "cleanup-expired"): lambda foundry, ctx, args: foundry.objects.cleanup_expired_sets(ctx=ctx),
+        ("lineage", ""): lambda foundry, ctx, args: foundry.operations.lineage(args.resource_id, ctx=ctx),
         ("operations", "runs"): _operations_runs,
         ("operations", "run"): _operations_run_detail,
         ("outbox", "retry"): _outbox_retry,
     }
 
 
-def _dispatch(core: FoundryLiteCore, ctx: RequestContext, args: argparse.Namespace) -> object:
+def _dispatch(foundry: FoundryLite, ctx: RequestContext, args: argparse.Namespace) -> object:
     key = (args.group, getattr(args, "command", ""))
     handler = _handlers().get(key)
     if handler is None:
         raise SystemExit(f"unsupported command: {' '.join(part for part in key if part)}")
-    return handler(core, ctx, args)
+    return handler(foundry, ctx, args)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -368,7 +368,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     _print(
         _dispatch(
-            _core(args.adapter_profile, storage_root=_storage_root_for_args(args)),
+            _foundry(args.adapter_profile, storage_root=_storage_root_for_args(args)),
             demo_admin_context(),
             args,
         )

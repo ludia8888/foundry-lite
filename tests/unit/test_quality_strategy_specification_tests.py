@@ -23,8 +23,8 @@ def test_strategy_specification_gate_flags_missing_direct_test(tmp_path: Path) -
     _write_python(
         tmp_path,
         "tests/test_core_only.py",
-        "from foundry_lite.application.core import FoundryLiteCore\n\n"
-        "def test_query_through_core():\n    assert FoundryLiteCore\n",
+        "from foundry_lite.application.foundry import FoundryLite\n\n"
+        "def test_query_through_core():\n    assert FoundryLite\n",
     )
 
     findings = gate.collect_findings(source_dir=source_dir, test_dirs=(test_dir,), root=tmp_path)

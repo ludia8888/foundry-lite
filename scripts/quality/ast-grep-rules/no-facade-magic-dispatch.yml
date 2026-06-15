@@ -2,9 +2,9 @@ id: foundry-lite-no-facade-magic-dispatch
 language: Python
 severity: error
 message: >-
-  Hidden facade dispatch (§4.2, §18.3): FoundryLiteCore must not reintroduce
-  __getattr__/__setattr__ method-registry magic. Keep public forwarders explicit
-  and service collaboration visible.
+  Hidden facade dispatch (§4.2, §18.3): the FoundryLite root and its bounded-context
+  sub-facades must not reintroduce __getattr__/__setattr__ method-registry magic.
+  Keep public forwarders explicit and service collaboration visible.
 rule:
   any:
     - pattern: |
@@ -14,4 +14,5 @@ rule:
         def __setattr__(self, $$$ARGS):
             $$$BODY
 files:
-  - "libs/foundry_lite/application/core.py"
+  - "libs/foundry_lite/application/foundry.py"
+  - "libs/foundry_lite/application/facades/*.py"

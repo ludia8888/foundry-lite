@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 from foundry_lite.infrastructure import schema as db
-from sqlalchemy import insert, select, text
+from sqlalchemy import create_engine, insert, select, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -26,6 +26,28 @@ def test_postgres_rls_hides_dataset_and_object_rows_between_tenants(postgres_fix
     assert _visible_values(engine, role_name, "tenant-other", db.dataset_schemas.c.id) == ["schema-other"]
     assert _visible_without_tenant_context(engine, role_name, db.datasets.c.id) == []
     _assert_cross_tenant_insert_is_rejected(engine, role_name)
+
+
+def test_rls_tenant_context_reset_between_pooled_connections(postgres_fixture) -> None:
+    engine = postgres_fixture.engine
+    pooled_engine = create_engine(engine.url, future=True, pool_size=1, max_overflow=0)
+    role_name = f"foundry_lite_rls_pool_test_{uuid4().hex}"
+    _grant_rls_role(engine, role_name)
+    _seed_cross_tenant_rows(engine)
+
+    try:
+        demo_pid, demo_rows = _visible_dataset_ids_on_pooled_connection(pooled_engine, role_name, "tenant-demo")
+        no_tenant_pid, no_tenant_rows = _visible_dataset_ids_without_tenant_on_pooled_connection(
+            pooled_engine, role_name
+        )
+        other_pid, other_rows = _visible_dataset_ids_on_pooled_connection(pooled_engine, role_name, "tenant-other")
+    finally:
+        pooled_engine.dispose()
+
+    assert demo_pid == no_tenant_pid == other_pid
+    assert demo_rows == ["dataset-demo"]
+    assert no_tenant_rows == []
+    assert other_rows == ["dataset-other"]
 
 
 def _grant_rls_role(engine: Engine, role_name: str) -> None:
@@ -125,10 +147,31 @@ def _visible_values(engine: Engine, role_name: str, tenant_id: str, column) -> l
     return [str(value) for value in values]
 
 
+def _visible_dataset_ids_on_pooled_connection(engine: Engine, role_name: str, tenant_id: str) -> tuple[int, list[str]]:
+    with engine.begin() as conn:
+        _set_role_and_tenant(conn, role_name, tenant_id)
+        return _backend_pid(conn), _dataset_ids(conn)
+
+
+def _visible_dataset_ids_without_tenant_on_pooled_connection(engine: Engine, role_name: str) -> tuple[int, list[str]]:
+    with engine.begin() as conn:
+        conn.execute(text(f"SET LOCAL ROLE {_role_identifier(conn, role_name)}"))
+        return _backend_pid(conn), _dataset_ids(conn)
+
+
 def _visible_without_tenant_context(engine: Engine, role_name: str, column) -> list[str]:
     with engine.begin() as conn:
         conn.execute(text(f"SET LOCAL ROLE {_role_identifier(conn, role_name)}"))
         values = conn.execute(select(column).order_by(column)).scalars().all()
+    return [str(value) for value in values]
+
+
+def _backend_pid(conn: Connection) -> int:
+    return int(conn.execute(text("SELECT pg_backend_pid()")).scalar_one())
+
+
+def _dataset_ids(conn: Connection) -> list[str]:
+    values = conn.execute(select(db.datasets.c.id).order_by(db.datasets.c.id)).scalars().all()
     return [str(value) for value in values]
 
 

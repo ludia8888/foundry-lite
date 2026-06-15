@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
@@ -13,6 +13,8 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.domain.context import RequestContext
+
+DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
 
 
 class TransformDatasetRegistry(Protocol):
@@ -58,6 +60,7 @@ class TransformDatasetTransactions(Protocol):
         audit_action: str,
         outbox_event_type: str,
         extra_checks: Sequence[DatasetCheckConfig] | None = None,
+        after_persist: DatasetCommitMetadataHook | None = None,
     ) -> CommitResult:
         """Validate and commit the staged transform output atomically."""
         ...

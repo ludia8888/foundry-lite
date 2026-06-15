@@ -182,6 +182,7 @@ def _seed_outbox_state(
                 parameters={"reason": "ok"},
                 status="succeeded",
                 idempotency_key="approve-O-1001",
+                request_fingerprint="fingerprint-action-run-1",
                 error=None,
                 created_at=NOW,
                 completed_at=NOW,

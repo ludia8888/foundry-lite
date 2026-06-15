@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from threading import Barrier, Event
 from typing import Any, Protocol
 
 import pytest
@@ -14,7 +16,10 @@ from foundry_lite.application.ports import (
     SyncRunRecord,
 )
 from foundry_lite.infrastructure import schema as db
-from foundry_lite.infrastructure.repositories import SqlAlchemyDatasetTransactionRepository
+from foundry_lite.infrastructure.repositories import (
+    SqlAlchemyDatasetTransactionRepository,
+    SqlAlchemyDatasetVersionRepository,
+)
 from sqlalchemy import create_engine, insert, select
 from sqlalchemy.engine import Engine
 
@@ -67,6 +72,15 @@ class FakeDatasetTransactionRepository:
         del transaction
         row = self.transactions.get(transaction_id)
         return dict(row) if row else None
+
+    def list_open_transactions(self, *, transaction: Any, tenant_id: str, created_before: str) -> list[dict[str, Any]]:
+        del transaction
+        rows = [
+            dict(row)
+            for row in self.transactions.values()
+            if row["tenant_id"] == tenant_id and row["status"] == "OPEN" and row["created_at"] < created_before
+        ]
+        return sorted(rows, key=lambda row: row["created_at"])
 
     def abort_transaction(
         self, *, transaction: Any, tenant_id: str, transaction_id: str, metadata: dict[str, Any]
@@ -283,7 +297,9 @@ class SqlAlchemyTransactionHarness:
             return dict(row) if row else None
 
 
-def _transaction_record(transaction_id: str, *, status: str = "OPEN") -> DatasetTransactionRecord:
+def _transaction_record(
+    transaction_id: str, *, status: str = "OPEN", created_at: str = "2026-06-10T00:00:00Z"
+) -> DatasetTransactionRecord:
     return DatasetTransactionRecord(
         transaction_id=transaction_id,
         tenant_id="tenant-demo",
@@ -295,7 +311,7 @@ def _transaction_record(transaction_id: str, *, status: str = "OPEN") -> Dataset
         committed_version_id=None,
         schema_version=None,
         created_by="user-demo",
-        created_at="2026-06-10T00:00:00Z",
+        created_at=created_at,
         committed_at=None,
         metadata={},
     )
@@ -331,6 +347,62 @@ def _file_record() -> DatasetFileRecord:
         content_hash="hash-demo",
         partition_values={},
     )
+
+
+def _version_record_for(transaction_id: str, version_number: int) -> DatasetVersionRecord:
+    return DatasetVersionRecord(
+        version_id=f"dsv_orders_{version_number}",
+        tenant_id="tenant-demo",
+        dataset_id="ds_orders",
+        branch="main",
+        version_number=version_number,
+        transaction_id=transaction_id,
+        schema_version=1,
+        manifest_uri=f"memory://manifest-{version_number}.json",
+        row_count=3,
+        byte_size=100,
+        status="active",
+        superseded_by_version_id=None,
+        created_at=f"2026-06-10T00:0{version_number}:00Z",
+    )
+
+
+def _commit_locked_version(
+    transaction_repository: SqlAlchemyDatasetTransactionRepository,
+    version_repository: SqlAlchemyDatasetVersionRepository,
+    transaction: Any,
+    *,
+    transaction_id: str,
+    start: Barrier,
+    signal_locked: Event,
+    wait_for_attempt: Event,
+) -> int:
+    transaction_repository.create_open_transaction(
+        transaction=transaction,
+        record=_transaction_record(transaction_id),
+    )
+    start.wait()
+    transaction_repository.lock_dataset_for_version_allocation(
+        transaction=transaction,
+        tenant_id="tenant-demo",
+        dataset_id="ds_orders",
+    )
+    signal_locked.set()
+    assert wait_for_attempt.wait(timeout=5), "second commit did not attempt the dataset lock"
+    version_number = version_repository.next_version_number(transaction=transaction, dataset_id="ds_orders")
+    transaction_repository.insert_version(
+        transaction=transaction,
+        record=_version_record_for(transaction_id, version_number),
+    )
+    transaction_repository.commit_transaction(
+        transaction=transaction,
+        tenant_id="tenant-demo",
+        transaction_id=transaction_id,
+        committed_version_id=f"dsv_orders_{version_number}",
+        schema_version=1,
+        committed_at="2026-06-10T00:02:00Z",
+    )
+    return version_number
 
 
 def _dataset_values() -> dict[str, Any]:
@@ -438,6 +510,33 @@ def test_dataset_transaction_repository_contract_commit_flow(harness: Transactio
     assert harness.files()[0]["uri"] == "memory://part-00000.parquet"
 
 
+def test_dataset_transaction_repository_contract_lists_stale_open_transactions(harness: TransactionHarness) -> None:
+    repository = harness.repository
+
+    def create_and_list(transaction: Any) -> list[dict[str, Any]]:
+        repository.create_open_transaction(
+            transaction=transaction, record=_transaction_record("dstx_old", created_at="2026-06-10T00:00:00Z")
+        )
+        repository.create_open_transaction(
+            transaction=transaction, record=_transaction_record("dstx_new", created_at="2026-06-15T00:00:00Z")
+        )
+        repository.create_open_transaction(
+            transaction=transaction,
+            record=_transaction_record("dstx_done", status="COMMITTED", created_at="2026-06-09T00:00:00Z"),
+        )
+        return list(
+            repository.list_open_transactions(
+                transaction=transaction, tenant_id="tenant-demo", created_before="2026-06-12T00:00:00Z"
+            )
+        )
+
+    stale = harness.call_in_transaction(create_and_list)
+
+    # Only OPEN transactions created before the cutoff are returned: the recent
+    # OPEN transaction and the already-committed transaction are excluded.
+    assert [row["id"] for row in stale] == ["dstx_old"]
+
+
 def test_dataset_transaction_repository_contract_latest_committed_metadata(
     harness: TransactionHarness,
 ) -> None:
@@ -543,6 +642,74 @@ def test_dataset_transaction_repository_contract_rejects_duplicate_dataset_versi
     harness.call_in_transaction(insert_duplicate)
 
     assert len(harness.versions()) == 1
+
+
+def test_concurrent_dataset_commits_allocate_strictly_increasing_versions(postgres_fixture: Any) -> None:
+    engine = postgres_fixture.engine
+    transaction_repository = SqlAlchemyDatasetTransactionRepository(engine)
+    version_repository = SqlAlchemyDatasetVersionRepository(engine)
+    start = Barrier(2, timeout=5)
+    first_locked = Event()
+    second_attempting_lock = Event()
+
+    with engine.begin() as transaction:
+        transaction.execute(insert(db.datasets).values(**_dataset_values()))
+
+    def commit_first() -> int:
+        with engine.begin() as transaction:
+            return _commit_locked_version(
+                transaction_repository,
+                version_repository,
+                transaction,
+                transaction_id="dstx_first",
+                start=start,
+                signal_locked=first_locked,
+                wait_for_attempt=second_attempting_lock,
+            )
+
+    def commit_second() -> int:
+        with engine.begin() as transaction:
+            transaction_repository.create_open_transaction(
+                transaction=transaction,
+                record=_transaction_record("dstx_second"),
+            )
+            start.wait()
+            assert first_locked.wait(timeout=5), "first commit did not acquire the dataset lock"
+            second_attempting_lock.set()
+            transaction_repository.lock_dataset_for_version_allocation(
+                transaction=transaction,
+                tenant_id="tenant-demo",
+                dataset_id="ds_orders",
+            )
+            version_number = version_repository.next_version_number(transaction=transaction, dataset_id="ds_orders")
+            transaction_repository.insert_version(
+                transaction=transaction,
+                record=_version_record_for("dstx_second", version_number),
+            )
+            transaction_repository.commit_transaction(
+                transaction=transaction,
+                tenant_id="tenant-demo",
+                transaction_id="dstx_second",
+                committed_version_id=f"dsv_orders_{version_number}",
+                schema_version=1,
+                committed_at="2026-06-10T00:03:00Z",
+            )
+            return version_number
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(commit_first)
+        second_future = executor.submit(commit_second)
+        allocated_versions = [first_future.result(), second_future.result()]
+
+    with engine.begin() as transaction:
+        rows = transaction.execute(
+            select(db.dataset_versions.c.version_number, db.dataset_versions.c.transaction_id).order_by(
+                db.dataset_versions.c.version_number
+            )
+        ).all()
+
+    assert allocated_versions == [1, 2]
+    assert rows == [(1, "dstx_first"), (2, "dstx_second")]
 
 
 def test_dataset_transaction_repository_contract_abort_flow(harness: TransactionHarness) -> None:

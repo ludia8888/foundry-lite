@@ -155,6 +155,9 @@ class LocalSearchAdapter:
         )
 
     def upsert_document(self, document: SearchDocument) -> None:
+        current = self._documents.get((document.tenant_id, document.object_type, document.document_id))
+        if current is not None and document.version <= current.version:
+            return
         self._documents[(document.tenant_id, document.object_type, document.document_id)] = document
 
     def configure_index(self, mapping: SearchIndexMapping) -> None:

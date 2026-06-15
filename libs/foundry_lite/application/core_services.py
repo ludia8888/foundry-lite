@@ -30,7 +30,7 @@ __all__ = [
 class CoreServices:
     """Constructor-injected application service graph.
 
-    ``FoundryLiteCore`` delegates to this graph. Each service is a concrete
+    ``FoundryLite`` delegates to this graph. Each service is a concrete
     object with only the dependencies it declares and explicit collaborator
     service attributes, replacing the previous facade-level MRO.
     """

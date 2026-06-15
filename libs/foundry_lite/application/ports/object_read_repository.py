@@ -17,6 +17,7 @@ class ObjectOrderBy(TypedDict):
 class ObjectQueryCursor(TypedDict):
     values: list[object]
     object_id: str
+    active_index_version: NotRequired[str]
 
 
 class ObjectRecordRow(TypedDict):
@@ -34,6 +35,7 @@ class ObjectRecordRow(TypedDict):
     source_dataset_version_id: str | None
     source_hash: str | None
     object_version: int
+    object_change_sequence: NotRequired[int | None]
     deleted: bool
     deletion_reason: str | None
     created_at: str
@@ -84,6 +86,8 @@ class ObjectQueryItem(TypedDict):
     objectId: str
     objectVersion: int
     properties: dict[str, object]
+    searchProjectionVersion: NotRequired[int]
+    searchProjectionStale: NotRequired[bool]
 
 
 class ObjectQueryResult(TypedDict):

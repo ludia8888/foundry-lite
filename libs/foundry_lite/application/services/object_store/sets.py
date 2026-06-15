@@ -266,7 +266,7 @@ class ObjectSetsService(CoreService):
         if "ids" in definition:
             self._validate_static_object_set_ids(conn, ctx, object_type, definition["ids"])
         elif "filter" in definition:
-            self._validate_dynamic_object_set_filter(conn, object_type, definition["filter"])
+            self._validate_dynamic_object_set_filter(conn, ctx, object_type, definition["filter"])
         else:
             raise ValidationFailed(
                 "object set definition must include ids or filter",
@@ -294,10 +294,7 @@ class ObjectSetsService(CoreService):
             raise ValidationFailed("static object set references missing objects", details={"objectIds": missing})
 
     def _validate_dynamic_object_set_filter(
-        self,
-        conn: TransactionContext,
-        object_type: ObjectTypeRow,
-        filter_ast: object,
+        self, conn: TransactionContext, ctx: RequestContext, object_type: ObjectTypeRow, filter_ast: object
     ) -> None:
         if not isinstance(filter_ast, dict) or not filter_ast:
             raise ValidationFailed("dynamic object set filter is required")
@@ -305,31 +302,36 @@ class ObjectSetsService(CoreService):
             transaction=conn,
             object_type_id=object_type["id"],
         )
-        self._validate_filter_ast(cast(Mapping[str, object], filter_ast), property_names)
+        masked_property_names = self.policy.masked_property_names(ctx, object_type["api_name"])
+        self._validate_filter_ast(cast(Mapping[str, object], filter_ast), property_names, masked_property_names)
 
-    def _validate_filter_ast(self, filter_ast: Mapping[str, object], property_names: set[str]) -> None:
+    def _validate_filter_ast(
+        self, filter_ast: Mapping[str, object], property_names: set[str], masked_property_names: set[str]
+    ) -> None:
         if "and" in filter_ast:
-            self._validate_filter_group(filter_ast["and"], property_names)
+            self._validate_filter_group(filter_ast["and"], property_names, masked_property_names)
             return
         if "or" in filter_ast:
-            self._validate_filter_group(filter_ast["or"], property_names)
+            self._validate_filter_group(filter_ast["or"], property_names, masked_property_names)
             return
         prop = filter_ast.get("property")
         op = filter_ast.get("op")
         if prop not in property_names:
             raise ValidationFailed("object set filter references missing property", details={"property": prop})
+        if prop in masked_property_names:
+            raise ValidationFailed("object set filter references masked property", details={"property": prop})
         if op not in FILTER_OPERATIONS:
             raise ValidationFailed("unsupported filter operation", details={"op": op})
         if "value" not in filter_ast:
             raise ValidationFailed("object set filter value is required", details={"property": prop})
 
-    def _validate_filter_group(self, items: object, property_names: set[str]) -> None:
+    def _validate_filter_group(self, items: object, property_names: set[str], masked_property_names: set[str]) -> None:
         if not isinstance(items, list) or not items:
             raise ValidationFailed("logical filter group must be a non-empty list")
         for item in items:
             if not isinstance(item, dict):
                 raise ValidationFailed("logical filter item must be an object")
-            self._validate_filter_ast(cast(Mapping[str, object], item), property_names)
+            self._validate_filter_ast(cast(Mapping[str, object], item), property_names, masked_property_names)
 
     def _object_set_payload(
         self,

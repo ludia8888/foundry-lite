@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import cast
 
 from foundry_lite.application.action_types import ActionApplyResponse
-from foundry_lite.application.core import FoundryLiteCore
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.upload_limits import CSV_UPLOAD_LIMIT_ENV
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -101,11 +101,11 @@ def run_smoke(
     _reset_path(storage_root)
     _reset_path(workspace_root)
     workspace_root.mkdir(parents=True, exist_ok=True)
-    core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
     ctx = demo_admin_context()
 
-    csv_report, csv_findings = _measure_csv_ingest(core, ctx, workspace_root, profile.csv_rows)
-    object_report, object_findings = _measure_object_flow(core, ctx, workspace_root, profile)
+    csv_report, csv_findings = _measure_csv_ingest(foundry, ctx, workspace_root, profile.csv_rows)
+    object_report, object_findings = _measure_object_flow(foundry, ctx, workspace_root, profile)
     report = _build_report(profile, csv_report, object_report, should_enforce_targets)
     findings = [*csv_findings, *object_findings]
     if should_enforce_targets:
@@ -165,7 +165,7 @@ def write_report(output: Path, report: Mapping[str, object]) -> None:
 
 
 def _measure_csv_ingest(
-    core: FoundryLiteCore,
+    foundry: FoundryLite,
     ctx: RequestContext,
     workspace_root: Path,
     rows: int,
@@ -173,8 +173,8 @@ def _measure_csv_ingest(
     csv_path = workspace_root / "csv_ingest_orders.csv"
     _write_orders_csv(csv_path, rows)
     _allow_upload_size(csv_path)
-    core.ensure_dataset("perf.csv_ingest_orders", ctx=ctx, primary_key=["order_id"])
-    result, seconds = _measure(lambda: core.upload_csv("perf.csv_ingest_orders", csv_path, ctx=ctx))
+    foundry.datasets.ensure("perf.csv_ingest_orders", ctx=ctx, primary_key=["order_id"])
+    result, seconds = _measure(lambda: foundry.datasets.upload_csv("perf.csv_ingest_orders", csv_path, ctx=ctx))
     report = _operation_report("csv_ingest", rows, seconds)
     findings: list[PerformanceFinding] = []
     if result.row_count != rows:
@@ -190,7 +190,7 @@ def _measure_csv_ingest(
 
 
 def _measure_object_flow(
-    core: FoundryLiteCore,
+    foundry: FoundryLite,
     ctx: RequestContext,
     workspace_root: Path,
     profile: SmokeProfile,
@@ -201,12 +201,14 @@ def _measure_object_flow(
     _write_performance_ontology(ontology_path)
     _allow_upload_size(csv_path)
 
-    core.ensure_dataset("perf.object_orders", ctx=ctx, primary_key=["order_id"])
-    upload_result, upload_seconds = _measure(lambda: core.upload_csv("perf.object_orders", csv_path, ctx=ctx))
-    _, ontology_seconds = _measure(lambda: core.apply_ontology(ontology_path, ctx=ctx))
-    index_result, index_seconds = _measure(lambda: core.index_rebuild("PerfOrder", ctx=ctx))
-    query_report = _measure_object_query(core, ctx, profile)
-    action_report = _measure_action_apply(core, ctx, profile)
+    foundry.datasets.ensure("perf.object_orders", ctx=ctx, primary_key=["order_id"])
+    upload_result, upload_seconds = _measure(
+        lambda: foundry.datasets.upload_csv("perf.object_orders", csv_path, ctx=ctx)
+    )
+    _, ontology_seconds = _measure(lambda: foundry.ontology.apply(ontology_path, ctx=ctx))
+    index_result, index_seconds = _measure(lambda: foundry.objects.reindex("PerfOrder", ctx=ctx))
+    query_report = _measure_object_query(foundry, ctx, profile)
+    action_report = _measure_action_apply(foundry, ctx, profile)
 
     report: dict[str, object] = {
         "objectDatasetUpload": _operation_report("object_dataset_upload", profile.object_rows, upload_seconds),
@@ -223,7 +225,7 @@ def _measure_object_flow(
 
 
 def _measure_object_query(
-    core: FoundryLiteCore,
+    foundry: FoundryLite,
     ctx: RequestContext,
     profile: SmokeProfile,
 ) -> dict[str, object]:
@@ -232,7 +234,7 @@ def _measure_object_query(
     filter_ast = {"property": "bucket", "op": "eq", "value": 5}
     for _ in range(profile.query_iterations):
         result, seconds = _measure(
-            lambda: core.query_objects("PerfOrder", ctx=ctx, filter_ast=filter_ast, limit=profile.query_limit)
+            lambda: foundry.objects.query("PerfOrder", ctx=ctx, filter_ast=filter_ast, limit=profile.query_limit)
         )
         durations.append(seconds)
         item_counts.append(len(result["items"]))
@@ -249,7 +251,7 @@ def _measure_object_query(
 
 
 def _measure_action_apply(
-    core: FoundryLiteCore,
+    foundry: FoundryLite,
     ctx: RequestContext,
     profile: SmokeProfile,
 ) -> dict[str, object]:
@@ -257,12 +259,12 @@ def _measure_action_apply(
     statuses = []
     for index in range(profile.action_iterations):
         object_id = f"PO-{index:06d}"
-        target = core.get_object("PerfOrder", object_id, ctx=ctx)
+        target = foundry.objects.get("PerfOrder", object_id, ctx=ctx)
         object_version = target["objectVersion"]
         result, seconds = _measure(
             partial(
                 _apply_performance_action,
-                core,
+                foundry,
                 ctx,
                 object_id=object_id,
                 object_version=object_version,
@@ -463,14 +465,14 @@ actionTypes:
 
 
 def _apply_performance_action(
-    core: FoundryLiteCore,
+    foundry: FoundryLite,
     ctx: RequestContext,
     *,
     object_id: str,
     object_version: int,
     iteration: int,
 ) -> ActionApplyResponse:
-    return core.apply_action(
+    return foundry.actions.apply(
         "PerfApproveOrder",
         object_type="PerfOrder",
         object_id=object_id,

@@ -92,6 +92,16 @@ class DatasetStorageAdapter(Protocol):
         """Remove committed version artifacts after metadata persistence fails."""
         ...
 
+    def delete_staging_transaction(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        transaction_id: str,
+    ) -> bool:
+        """Remove uncommitted staging artifacts after a transaction aborts."""
+        ...
+
     def load_manifest(self, manifest_uri: str) -> DatasetManifest:
         """Load a committed dataset manifest by logical URI."""
         ...

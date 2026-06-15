@@ -6,7 +6,7 @@ import threading
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import ClassVar
+from typing import ClassVar, Protocol
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
@@ -21,6 +21,18 @@ from foundry_lite.application.ports.connector_adapter import (
 )
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.adapters import RestPullConnectorAdapter
+
+
+class _RedirectHandler(Protocol):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: object,
+        code: int,
+        msg: str,
+        headers: object,
+        newurl: str,
+    ) -> Request | None: ...
 
 
 class MockRestServer(AbstractContextManager["MockRestServer"]):
@@ -195,6 +207,25 @@ def test_rest_connector_rejects_non_http_source_url() -> None:
         )
 
 
+def test_rest_mutable_pagination_detected_or_marked_non_replayable() -> None:
+    with pytest.raises(ValidationFailed, match="non-replayable") as exc_info:
+        RestPullConnectorAdapter().snapshot(
+            ConnectorSnapshotRequest(
+                connector_name="rest",
+                resource_name="orders",
+                tenant_id="tenant-demo",
+                request_id="req-rest-page-number",
+                rest=RestSourceConfig(
+                    base_url="https://api.example.test",
+                    resource_path="/orders",
+                    pagination=RestPaginationConfig(strategy="page_number"),
+                ),
+            )
+        )
+
+    assert exc_info.value.details == {"pagination_strategy": "page_number", "non_replayable": True}
+
+
 @pytest.mark.parametrize(
     ("base_url", "reason"),
     [
@@ -268,6 +299,168 @@ def test_rest_connector_rejects_source_url_resolving_to_private_network(
     assert exc_info.value.details["reason"] == "resolved_private_ip"
 
 
+def test_rest_redirect_to_private_ip_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_getaddrinfo(
+        host: str,
+        port: int,
+        *,
+        type: socket.SocketKind,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, type, 0, "", ("93.184.216.34", port))]
+
+    class RedirectingOpener:
+        def __init__(self, handler: _RedirectHandler) -> None:
+            self._handler = handler
+
+        def open(self, request: Request, timeout: int) -> _FakeHTTPResponse:
+            self._handler.redirect_request(
+                request,
+                object(),
+                302,
+                "Found",
+                {},
+                "http://169.254.169.254/latest/meta-data",
+            )
+            return _FakeHTTPResponse({"items": [], "nextCursor": None})
+
+    def fake_build_opener(handler: _RedirectHandler) -> RedirectingOpener:
+        return RedirectingOpener(handler)
+
+    monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(rest_connector_module, "build_opener", fake_build_opener)
+
+    with pytest.raises(ValidationFailed, match="private or local network") as exc_info:
+        RestPullConnectorAdapter().snapshot(
+            ConnectorSnapshotRequest(
+                connector_name="rest",
+                resource_name="orders",
+                tenant_id="tenant-demo",
+                request_id="req-rest-private-redirect",
+                rest=RestSourceConfig(base_url="https://api.example.test", resource_path="/orders"),
+            )
+        )
+
+    assert exc_info.value.details["host"] == "169.254.169.254"
+    assert exc_info.value.details["reason"] == "link_local_ip"
+
+
+@pytest.mark.parametrize(
+    ("redirect_url", "host", "reason"),
+    [
+        ("http://2130706433/latest/meta-data", "2130706433", "loopback_ip"),
+        ("http://0177.0000.0000.0001/latest/meta-data", "0177.0000.0000.0001", "loopback_ip"),
+        ("http://%31%36%39.254.169.254/latest/meta-data", "%31%36%39.254.169.254", "link_local_ip"),
+        ("http://%6c%6f%63%61%6c%68%6f%73%74/orders", "%6c%6f%63%61%6c%68%6f%73%74", "local_hostname"),
+    ],
+)
+def test_rest_redirect_encoded_decimal_octal_private_hosts_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+    redirect_url: str,
+    host: str,
+    reason: str,
+) -> None:
+    def fake_getaddrinfo(
+        host: str,
+        port: int,
+        *,
+        type: socket.SocketKind,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, type, 0, "", ("93.184.216.34", port))]
+
+    class RedirectingOpener:
+        def __init__(self, handler: _RedirectHandler) -> None:
+            self._handler = handler
+
+        def open(self, request: Request, timeout: int) -> _FakeHTTPResponse:
+            self._handler.redirect_request(request, object(), 302, "Found", {}, redirect_url)
+            return _FakeHTTPResponse({"items": [], "nextCursor": None})
+
+    def fake_build_opener(handler: _RedirectHandler) -> RedirectingOpener:
+        return RedirectingOpener(handler)
+
+    monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(rest_connector_module, "build_opener", fake_build_opener)
+
+    with pytest.raises(ValidationFailed, match="private or local network") as exc_info:
+        RestPullConnectorAdapter().snapshot(
+            ConnectorSnapshotRequest(
+                connector_name="rest",
+                resource_name="orders",
+                tenant_id="tenant-demo",
+                request_id="req-rest-encoded-private-redirect",
+                rest=RestSourceConfig(base_url="https://api.example.test", resource_path="/orders"),
+            )
+        )
+
+    assert exc_info.value.details["host"] == host
+    assert exc_info.value.details["reason"] == reason
+
+
+def test_rest_url_validation_rejects_missing_host() -> None:
+    with pytest.raises(ValidationFailed, match="must include a host"):
+        rest_connector_module._validated_http_url("http://:80/orders")
+
+
+def test_rest_legacy_ipv4_parser_rejects_invalid_private_host_spellings() -> None:
+    assert rest_connector_module._legacy_ipv4_literal("127.0.0.999") is None
+    assert rest_connector_module._legacy_ipv4_literal("127:0:0:1") is None
+    assert rest_connector_module._ipv4_from_int("999999999999999999999", 10) is None
+    assert rest_connector_module._legacy_ipv4_part("0x7f") == 127
+    assert rest_connector_module._legacy_ipv4_part("0177") == 127
+    assert rest_connector_module._legacy_ipv4_part("127") == 127
+    assert rest_connector_module._legacy_ipv4_part("not-a-number") is None
+    assert rest_connector_module._int_part("0xzz", 16) is None
+
+
+def test_rest_dns_rebinding_to_private_ip_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolutions: list[str] = []
+
+    def fake_getaddrinfo(
+        host: str,
+        port: int,
+        *,
+        type: socket.SocketKind,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        address = "93.184.216.34" if not resolutions else "10.0.0.8"
+        resolutions.append(address)
+        return [(socket.AF_INET, type, 0, "", (address, port))]
+
+    class RebindingRedirectOpener:
+        def __init__(self, handler: _RedirectHandler) -> None:
+            self._handler = handler
+
+        def open(self, request: Request, timeout: int) -> _FakeHTTPResponse:
+            self._handler.redirect_request(
+                request,
+                object(),
+                302,
+                "Found",
+                {},
+                "https://api.example.test/orders?cursor=next",
+            )
+            return _FakeHTTPResponse({"items": [], "nextCursor": None})
+
+    def fake_build_opener(handler: _RedirectHandler) -> RebindingRedirectOpener:
+        return RebindingRedirectOpener(handler)
+
+    monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(rest_connector_module, "build_opener", fake_build_opener)
+
+    with pytest.raises(ValidationFailed, match="private or local network") as exc_info:
+        RestPullConnectorAdapter().snapshot(
+            ConnectorSnapshotRequest(
+                connector_name="rest",
+                resource_name="orders",
+                tenant_id="tenant-demo",
+                request_id="req-rest-dns-rebind",
+                rest=RestSourceConfig(base_url="https://api.example.test", resource_path="/orders"),
+            )
+        )
+
+    assert resolutions == ["93.184.216.34", "10.0.0.8"]
+    assert exc_info.value.details["reason"] == "resolved_private_ip"
+
+
 def test_rest_connector_rejects_unresolvable_source_host(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_getaddrinfo(
         host: str,
@@ -306,12 +499,16 @@ def test_rest_connector_accepts_source_url_resolving_to_global_address(
     ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
         return [(socket.AF_INET, type, 0, "", ("93.184.216.34", port))]
 
-    def fake_urlopen(request: Request, timeout: int) -> _FakeHTTPResponse:
-        requests.append((str(request.full_url), timeout))
-        return _FakeHTTPResponse({"items": [{"order_id": "O-1003"}], "nextCursor": ""})
+    class SuccessfulOpener:
+        def open(self, request: Request, timeout: int) -> _FakeHTTPResponse:
+            requests.append((str(request.full_url), timeout))
+            return _FakeHTTPResponse({"items": [{"order_id": "O-1003"}], "nextCursor": ""})
+
+    def fake_build_opener(_handler: object) -> SuccessfulOpener:
+        return SuccessfulOpener()
 
     monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
-    monkeypatch.setattr(rest_connector_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(rest_connector_module, "build_opener", fake_build_opener)
 
     snapshot = RestPullConnectorAdapter().snapshot(
         ConnectorSnapshotRequest(

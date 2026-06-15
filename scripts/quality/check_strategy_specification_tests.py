@@ -2,7 +2,7 @@
 
 Foundry-lite uses small evaluator/specification functions for object filters
 and action preconditions. Those rules must be testable without booting the API,
-the CLI, or the full FoundryLiteCore facade. This gate scans application code
+the CLI, or the full FoundryLite facade. This gate scans application code
 for strategy/specification-shaped modules and requires a direct unit/property
 test import for each one.
 """

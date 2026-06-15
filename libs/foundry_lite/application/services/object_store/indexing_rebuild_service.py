@@ -68,9 +68,10 @@ class ObjectIndexingRebuildMixin:
         active = self._active_object_record(conn, ctx, plan.object_type["api_name"], source.object_id)
         if existing is None:
             self._insert_new_object_record(conn, ctx, plan, source, active)
+            changed = True
         else:
-            self._refresh_existing_object_record(conn, ctx, plan, source, existing, active)
-        if plan.mode == "full":
+            changed = self._refresh_existing_object_record(conn, ctx, plan, source, existing, active)
+        if changed and plan.mode == "full":
             self._emit_object_changed(
                 conn,
                 ctx,
@@ -166,9 +167,12 @@ class ObjectIndexingRebuildMixin:
         source: ObjectIndexSourceRow,
         existing: ObjectRecordRow,
         active: ObjectRecordRow | None,
-    ) -> None:
+    ) -> bool:
         base_patch = dict(source.base_patch)
         edit_source = active or existing
+        current = self._merge_properties(conn, plan.object_type["id"], base_patch, edit_source["edit_properties"])
+        if self._reindex_is_noop(plan, existing, base_patch, current):
+            return False
         self._record_conflicts_for_base_update(
             conn,
             ctx,
@@ -178,8 +182,24 @@ class ObjectIndexingRebuildMixin:
             base_patch,
             source_dataset_version_id=plan.source_dataset_version_id,
         )
-        current = self._merge_properties(conn, plan.object_type["id"], base_patch, edit_source["edit_properties"])
         self._update_object_record_from_source(conn, ctx, existing, current, base_patch, plan.source_dataset_version_id)
+        return True
+
+    def _reindex_is_noop(
+        self,
+        plan: ObjectIndexRebuildPlan,
+        existing: ObjectRecordRow,
+        base_patch: ObjectPropertyMap,
+        current: ObjectPropertyMap,
+    ) -> bool:
+        # Re-indexing the identical source dataset version with unchanged base and
+        # merged properties must not bump object_version or emit object.changed,
+        # otherwise every replay invalidates held expectedObjectVersion values.
+        return (
+            plan.source_dataset_version_id == existing["source_dataset_version_id"]
+            and dict(base_patch) == existing["base_properties"]
+            and dict(current) == existing["properties"]
+        )
 
     def _emit_object_changed(
         self,

@@ -608,6 +608,28 @@ def test_object_read_repository_contract_casts_numeric_property_sort_and_cursor(
     assert [row["object_id"] for row in second_page] == ["O-07", "O-02"]
 
 
+def test_object_query_numeric_property_casts_for_sort_and_filter(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_object(row_id="obj_order_10", object_id="O-10", properties={"amount": "10"})
+    harness.add_object(row_id="obj_order_02", object_id="O-02", properties={"amount": "2"})
+    harness.add_object(row_id="obj_order_07", object_id="O-07", properties={"amount": 7})
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.query_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "amount", "op": "gte", "value": "7"},
+            order_by=[{"property": "amount", "direction": "asc"}],
+            cursor=None,
+            limit=3,
+        )
+
+    assert [row["object_id"] for row in rows] == ["O-07", "O-10"]
+
+
 def test_object_read_repository_contract_lists_active_outgoing_links(
     harness: ObjectReadHarness,
 ) -> None:
@@ -634,3 +656,24 @@ def test_object_read_repository_contract_lists_active_outgoing_links(
     assert [row["id"] for row in rows] == ["link_1"]
     assert rows[0]["to_api_name"] == "Customer"
     assert rows[0]["to_object_id"] == "C-1"
+
+
+def test_link_traversal_never_crosses_tenant_without_policy(harness: ObjectReadHarness) -> None:
+    harness.add_link(row_id="link_demo", from_object_id="O-1", to_object_id="C-1")
+    harness.add_link(
+        row_id="link_other_tenant",
+        tenant_id="tenant-other",
+        from_object_id="O-1",
+        to_object_id="C-other",
+    )
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.active_links_from(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            link_type_api_name="OrderCustomer",
+            from_api_name="Order",
+            from_object_id="O-1",
+        )
+
+    assert [row["to_object_id"] for row in rows] == ["C-1"]

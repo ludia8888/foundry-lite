@@ -107,6 +107,16 @@ class DatasetTransactionRepository(Protocol):
         """Return a dataset transaction row by id inside the caller transaction."""
         ...
 
+    def list_open_transactions(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        created_before: str,
+    ) -> list[DatasetTransactionRow]:
+        """Return OPEN dataset transactions created before a cutoff for stale-tx recovery."""
+        ...
+
     def abort_transaction(
         self,
         *,

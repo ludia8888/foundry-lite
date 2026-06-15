@@ -4,12 +4,19 @@ import hashlib
 import hmac
 import json
 import os
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite_api import main as api_main
 from foundry_lite_api.main import _header_or_request, app, healthz
 from foundry_lite_cli.main import _dispatch, _fresh_supply_chain_demo, _json_arg, _params, _storage_root_for_args, main
@@ -40,15 +47,34 @@ def test_api_without_role_headers_cannot_apply_action() -> None:
 def test_api_action_target_shape_is_validated_before_core(monkeypatch) -> None:
     class FailingCore:
         def apply_action(self, *_args, **_kwargs):
-            raise AssertionError("invalid request should not reach core")
+            raise AssertionError("invalid request should not reach foundry")
 
-    monkeypatch.setattr(api_main, "core", FailingCore())
+    monkeypatch.setattr(api_main, "foundry", FailingCore())
     response = TestClient(app).post(
         "/api/actions/ApproveOrder/apply",
         headers={"Idempotency-Key": "invalid-target-shape"},
         json={
             "target": {"objectType": "Order"},
             "expectedObjectVersion": 1,
+            "params": {"reason": "Inventory confirmed"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.headers["X-Request-ID"]
+
+
+def test_action_expected_object_version_required(monkeypatch) -> None:
+    class FailingCore:
+        def apply_action(self, *_args, **_kwargs):
+            raise AssertionError("invalid request should not reach foundry")
+
+    monkeypatch.setattr(api_main, "foundry", FailingCore())
+    response = TestClient(app).post(
+        "/api/actions/ApproveOrder/apply",
+        headers={"Idempotency-Key": "missing-expected-version"},
+        json={
+            "target": {"objectType": "Order", "objectId": "O-1001"},
             "params": {"reason": "Inventory confirmed"},
         },
     )
@@ -80,9 +106,9 @@ def test_cli_supply_chain_demo_repeats_with_parseable_json_output(tmp_path, monk
     assert (tmp_path / ".foundry-lite-demo" / "foundry-lite.db").exists()
 
 
-def test_api_object_set_create_and_query(core, monkeypatch) -> None:
-    ctx = prepare_indexed_demo(core)
-    monkeypatch.setattr(api_main, "core", core)
+def test_api_object_set_create_and_query(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    monkeypatch.setattr(api_main, "foundry", foundry)
 
     response = TestClient(app).post(
         "/api/object-sets",
@@ -115,19 +141,21 @@ def test_api_object_set_create_and_query(core, monkeypatch) -> None:
     assert fetched.json()["name"] == "Pending Orders"
 
 
-def test_api_webhook_ingest_verifies_signature_and_appends_dataset(core, monkeypatch) -> None:
+def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monkeypatch) -> None:
     ctx = demo_admin_context()
     secret = "local-webhook-secret"
     body = b'{"order_id":"O-9001","status":"PENDING"}'
+    timestamp = _webhook_timestamp()
     headers = {
         "Content-Type": "application/json",
-        "X-Foundry-Lite-Signature": _webhook_signature(body, secret),
+        "X-Foundry-Lite-Signature": _webhook_signature(body, secret, timestamp),
+        "X-Foundry-Lite-Timestamp": timestamp,
         "X-Foundry-Lite-Event-ID": "evt-order-9001",
         "X-User-ID": ctx.actor_user_id,
         "X-Roles": ",".join(ctx.roles),
     }
-    core.ensure_dataset("raw.webhook_orders", ctx=ctx, primary_key=["event_id"])
-    monkeypatch.setattr(api_main, "core", core)
+    foundry.datasets.ensure("raw.webhook_orders", ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_main, "foundry", foundry)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
     client = TestClient(app)
 
@@ -153,12 +181,12 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(core, monkeyp
     rejected_shape = client.post(
         "/api/connectors/webhooks/mock_saas/orders",
         params={"datasetRef": "raw.webhook_orders"},
-        headers={**headers, "X-Foundry-Lite-Signature": _webhook_signature(rejected_shape_body, secret)},
+        headers={**headers, "X-Foundry-Lite-Signature": _webhook_signature(rejected_shape_body, secret, timestamp)},
         content=rejected_shape_body,
     )
 
-    preview = core.preview_dataset("raw.webhook_orders", ctx=ctx)
-    transactions = _dataset_transactions(core.engine)
+    preview = foundry.datasets.preview("raw.webhook_orders", ctx=ctx)
+    transactions = _dataset_transactions(foundry.engine)
     assert response.status_code == 200
     assert duplicate.status_code == 200
     assert duplicate.json()["version_id"] == response.json()["version_id"]
@@ -170,19 +198,144 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(core, monkeyp
     assert len([tx for tx in transactions if tx["tx_type"] == "APPEND"]) == 1
     assert denied.status_code == 403
     assert rejected_shape.status_code == 422
-    deny_events = core.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
+    deny_events = foundry.operations.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
     assert deny_events[0]["action"] == "webhook:ingest"
 
 
-def test_api_operations_runs_cursor_pages_action_runs(core, monkeypatch) -> None:
-    ctx = prepare_indexed_demo(core)
-    monkeypatch.setattr(api_main, "core", core)
+def test_webhook_same_event_id_different_payload_is_deduped(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    secret = "local-webhook-secret"
+    event_id = "evt-order-volatile"
+    first_body = b'{"order_id":"O-9002","status":"PENDING","timestamp":"2026-06-15T01:00:00Z"}'
+    duplicate_body = b'{"order_id":"O-9002","status":"PENDING","timestamp":"2026-06-15T01:00:05Z"}'
+    changed_body = b'{"order_id":"O-9002","status":"SHIPPED","timestamp":"2026-06-15T01:00:06Z"}'
+    foundry.datasets.ensure("raw.webhook_dedupe_orders", ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
+    client = TestClient(app)
+
+    def headers(body: bytes) -> dict[str, str]:
+        timestamp = _webhook_timestamp()
+        return {
+            "Content-Type": "application/json",
+            "X-Foundry-Lite-Signature": _webhook_signature(body, secret, timestamp),
+            "X-Foundry-Lite-Timestamp": timestamp,
+            "X-Foundry-Lite-Event-ID": event_id,
+            "X-User-ID": ctx.actor_user_id,
+            "X-Roles": ",".join(ctx.roles),
+        }
+
+    first = client.post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_dedupe_orders"},
+        headers=headers(first_body),
+        content=first_body,
+    )
+    duplicate = client.post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_dedupe_orders"},
+        headers=headers(duplicate_body),
+        content=duplicate_body,
+    )
+    changed = client.post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_dedupe_orders"},
+        headers=headers(changed_body),
+        content=changed_body,
+    )
+
+    transactions = _dataset_transactions(foundry.engine)
+    append_transactions = [tx for tx in transactions if tx["tx_type"] == "APPEND"]
+    assert first.status_code == 200
+    assert duplicate.status_code == 200
+    assert duplicate.json()["version_id"] == first.json()["version_id"]
+    assert changed.status_code == 409
+    assert changed.json()["detail"]["code"] == "CONFLICT"
+    assert len(append_transactions) == 1
+
+
+def test_webhook_signature_replay_and_clock_skew_policy(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    secret = "local-webhook-secret"
+    body = b'{"order_id":"O-9004","status":"PENDING"}'
+    stale_timestamp = "2000-01-01T00:00:00+00:00"
+    headers = {
+        "Content-Type": "application/json",
+        "X-Foundry-Lite-Signature": _webhook_signature(body, secret, stale_timestamp),
+        "X-Foundry-Lite-Timestamp": stale_timestamp,
+        "X-Foundry-Lite-Event-ID": "evt-order-stale-signature",
+        "X-User-ID": ctx.actor_user_id,
+        "X-Roles": ",".join(ctx.roles),
+    }
+    foundry.datasets.ensure("raw.webhook_replay_orders", ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
+    client = TestClient(app)
+
+    replay = client.post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_replay_orders"},
+        headers=headers,
+        content=body,
+    )
+
+    deny_events = [
+        event
+        for event in foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+        if event["event_type"] == "permission.denied" and event["resource_id"] == "mock_saas:orders"
+    ]
+    assert replay.status_code == 403
+    assert replay.json()["detail"]["code"] == "PERMISSION_DENIED"
+    assert foundry.datasets.list_versions("raw.webhook_replay_orders", ctx=ctx) == []
+    assert deny_events
+
+
+def test_webhook_ack_not_sent_before_append_commit_or_has_replay_strategy(tmp_path, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    secret = "local-webhook-secret"
+    body = b'{"order_id":"O-9003","status":"PENDING"}'
+    timestamp = _webhook_timestamp()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Foundry-Lite-Signature": _webhook_signature(body, secret, timestamp),
+        "X-Foundry-Lite-Timestamp": timestamp,
+        "X-Foundry-Lite-Event-ID": "evt-order-commit-fail",
+        "X-User-ID": ctx.actor_user_id,
+        "X-Roles": ",".join(ctx.roles),
+    }
+
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    failing_foundry = FoundryLite(
+        dependencies=replace(dependencies, compute_adapter=_RowsToParquetFailingComputeAdapter())
+    )
+    failing_foundry.datasets.ensure("raw.webhook_commit_fail_orders", ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_main, "foundry", failing_foundry)
+    monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
+
+    response = TestClient(app).post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_commit_fail_orders"},
+        headers=headers,
+        content=body,
+    )
+
+    transactions = _dataset_transactions(failing_foundry.engine)
+    append_transactions = [tx for tx in transactions if tx["tx_type"] == "APPEND"]
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "VALIDATION_FAILED"
+    assert not [tx for tx in append_transactions if tx["status"] == "COMMITTED"]
+    assert [tx for tx in append_transactions if tx["status"] == "ABORTED"]
+
+
+def test_api_operations_runs_cursor_pages_action_runs(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    monkeypatch.setattr(api_main, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
 
-    first_order = core.get_object("Order", "O-1001", ctx=ctx)
-    second_order = core.get_object("Order", "O-1002", ctx=ctx)
-    core.apply_action(
+    first_order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    second_order = foundry.objects.get("Order", "O-1002", ctx=ctx)
+    foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -191,7 +344,7 @@ def test_api_operations_runs_cursor_pages_action_runs(core, monkeypatch) -> None
         idempotency_key="api-operations-page-one",
         ctx=ctx,
     )
-    core.apply_action(
+    foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1002",
@@ -234,9 +387,9 @@ def test_api_operations_runs_cursor_pages_action_runs(core, monkeypatch) -> None
     assert bad_cursor.status_code == 400
 
 
-def test_api_security_roles_mask_and_audit_denials(core, monkeypatch) -> None:
-    ctx = prepare_indexed_demo(core)
-    monkeypatch.setattr(api_main, "core", core)
+def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    monkeypatch.setattr(api_main, "foundry", foundry)
     client = TestClient(app)
     viewer_headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": "viewer-api", "X-Roles": "viewer"}
     finance_headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": "finance-api", "X-Roles": "finance"}
@@ -278,9 +431,9 @@ def test_api_security_roles_mask_and_audit_denials(core, monkeypatch) -> None:
     assert any(row["decision"] == "deny" for row in runs.json()["auditEvents"])
 
 
-def test_api_dataset_object_action_and_metrics_smoke(core, monkeypatch) -> None:
-    ctx = prepare_indexed_demo(core)
-    monkeypatch.setattr(api_main, "core", core)
+def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    monkeypatch.setattr(api_main, "foundry", foundry)
     client = TestClient(app)
     headers = {
         "X-Tenant-ID": ctx.tenant_id,
@@ -369,7 +522,7 @@ def test_api_dataset_object_action_and_metrics_smoke(core, monkeypatch) -> None:
     assert replay_detail["runId"] == replay["index_run_id"]
     assert replay_detail["status"] == "succeeded"
 
-    source_ref = _seed_failed_index_run(core.engine, tenant_id=ctx.tenant_id, run_id="index_api_failed")
+    source_ref = _seed_failed_index_run(foundry.engine, tenant_id=ctx.tenant_id, run_id="index_api_failed")
     failed_run_replay = client.post("/api/operations/runs/index/index_api_failed/replay", headers=headers)
     assert failed_run_replay.status_code == 200
     failed_replay = failed_run_replay.json()
@@ -379,7 +532,7 @@ def test_api_dataset_object_action_and_metrics_smoke(core, monkeypatch) -> None:
     assert replay_row["trigger_type"] == "failed_run_replay"
     assert replay_row["source_ref"] == {**source_ref, "replay_of_run_id": "index_api_failed"}
 
-    input_versions = _seed_failed_transform_run(core.engine, tenant_id=ctx.tenant_id, run_id="transform_api_failed")
+    input_versions = _seed_failed_transform_run(foundry.engine, tenant_id=ctx.tenant_id, run_id="transform_api_failed")
     failed_transform_runs = client.get(
         "/api/operations/runs",
         headers=headers,
@@ -434,11 +587,11 @@ def test_api_dataset_object_action_and_metrics_smoke(core, monkeypatch) -> None:
     assert missing_set.status_code == 404
 
 
-def test_api_operations_retry_dead_letter_event(core, monkeypatch) -> None:
-    ctx = prepare_indexed_demo(core)
-    _approve_order_for_materialization(core, ctx, idempotency_key="api-dlq-materialization")
-    _seed_dead_letter_event(core.engine, tenant_id=ctx.tenant_id, outbox_id="outbox_api_retry", dlq_id="dlq_api")
-    monkeypatch.setattr(api_main, "core", core)
+def test_api_operations_retry_dead_letter_event(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    _approve_order_for_materialization(foundry, ctx, idempotency_key="api-dlq-materialization")
+    _seed_dead_letter_event(foundry.engine, tenant_id=ctx.tenant_id, outbox_id="outbox_api_retry", dlq_id="dlq_api")
+    monkeypatch.setattr(api_main, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
 
@@ -466,20 +619,28 @@ def test_api_operations_retry_dead_letter_event(core, monkeypatch) -> None:
     assert any(row["event_type"] == "dead_letter_event.retry_requested" for row in runs["auditEvents"])
 
 
-def test_api_operations_retry_dead_letter_event_keeps_dlq_when_reprocess_fails(core, monkeypatch) -> None:
-    ctx = prepare_indexed_demo(core)
+def test_api_operations_retry_dead_letter_event_keeps_dlq_when_reprocess_fails(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    # The dead-letter event names a materialization that does not exist, so the
+    # reprocess step fails before the DLQ row is consumed. A failed reprocess
+    # must keep the dead-letter event and leave the source outbox event failed
+    # rather than silently reporting success (failure must not look like success).
     _seed_dead_letter_event(
-        core.engine, tenant_id=ctx.tenant_id, outbox_id="outbox_api_failed", dlq_id="dlq_api_failed"
+        foundry.engine,
+        tenant_id=ctx.tenant_id,
+        outbox_id="outbox_api_failed",
+        dlq_id="dlq_api_failed",
+        materialization="ops_missing_materialization",
     )
-    monkeypatch.setattr(api_main, "core", core)
+    monkeypatch.setattr(api_main, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
 
     retry = client.post("/api/operations/dead-letter-events/dlq_api_failed/retry", headers=headers)
     runs = client.get("/api/operations/runs", headers=headers).json()
 
-    assert retry.status_code == 400
-    assert retry.json()["detail"]["code"] == "VALIDATION_FAILED"
+    assert retry.status_code == 404
+    assert retry.json()["detail"]["code"] == "NOT_FOUND"
     assert _runtime_row(runs["deadLetterEvents"], "dlq_api_failed")["source_event_id"] == "outbox_api_failed"
     outbox = _runtime_row(runs["outboxEvents"], "outbox_api_failed")
     assert outbox["status"] == "failed"
@@ -487,7 +648,7 @@ def test_api_operations_retry_dead_letter_event_keeps_dlq_when_reprocess_fails(c
 
 
 def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
-    class FailingCore:
+    class _Operations:
         def query_runs(self, **_kwargs):
             raise ValidationFailed("invalid run filter")
 
@@ -497,16 +658,23 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
         def retry_dead_letter_event(self, *_args, **_kwargs):
             raise ValidationFailed("dead-letter event is not retryable")
 
-        def index_rebuild(self, *_args, **_kwargs):
+    class _Objects:
+        def reindex(self, *_args, **_kwargs):
             raise NotFound("object type not found")
 
-        def index_replay_run(self, *_args, **_kwargs):
+        def replay_index_run(self, *_args, **_kwargs):
             raise ValidationFailed("index run is not failed")
 
-        def retry_transform_run(self, *_args, **_kwargs):
+    class _Transforms:
+        def retry_run(self, *_args, **_kwargs):
             raise ValidationFailed("transform run is not failed")
 
-    monkeypatch.setattr(api_main, "core", FailingCore())
+    class FailingCore:
+        operations = _Operations()
+        objects = _Objects()
+        transforms = _Transforms()
+
+    monkeypatch.setattr(api_main, "foundry", FailingCore())
     client = TestClient(app)
 
     listing = client.get("/api/operations/runs", params={"runType": "missing"})
@@ -535,14 +703,17 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
 
 
 def test_api_object_set_errors_preserve_request_id(monkeypatch) -> None:
-    class FailingCore:
-        def query_object_sets(self, **_kwargs):
+    class _Objects:
+        def query_sets(self, **_kwargs):
             raise NotFound("object type not found")
 
-        def create_object_set(self, *_args, **_kwargs):
+        def create_set(self, *_args, **_kwargs):
             raise ValidationFailed("invalid object set")
 
-    monkeypatch.setattr(api_main, "core", FailingCore())
+    class FailingCore:
+        objects = _Objects()
+
+    monkeypatch.setattr(api_main, "foundry", FailingCore())
     client = TestClient(app)
 
     query = client.get("/api/object-sets", params={"objectType": "Missing"})
@@ -779,9 +950,20 @@ def test_cli_argument_helpers_reject_invalid_values(monkeypatch) -> None:
     assert _header_or_request("explicit", None, "X-Test") == "explicit"
 
 
-def _approve_order_for_materialization(core, ctx, *, idempotency_key: str) -> None:
-    order = core.get_object("Order", "O-1001", ctx=ctx)
-    core.apply_action(
+class _RowsToParquetFailingComputeAdapter(DuckDBComputeAdapter):
+    def rows_to_parquet(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        target_path: Path,
+        fieldnames: list[str],
+    ) -> None:
+        del rows, target_path, fieldnames
+        raise RuntimeError("webhook append commit failed")
+
+
+def _approve_order_for_materialization(foundry, ctx, *, idempotency_key: str) -> None:
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    foundry.actions.apply(
         "ApproveOrder",
         object_type="Order",
         object_id="O-1001",
@@ -792,8 +974,13 @@ def _approve_order_for_materialization(core, ctx, *, idempotency_key: str) -> No
     )
 
 
-def _webhook_signature(body: bytes, secret: str) -> str:
-    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+def _webhook_timestamp() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _webhook_signature(body: bytes, secret: str, timestamp: str) -> str:
+    signed_payload = timestamp.encode("utf-8") + b"." + body
+    digest = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
     return f"sha256={digest}"
 
 
@@ -807,13 +994,15 @@ def _source_run_link(links: list[dict[str, object]], *, run_type: str) -> dict[s
     return next(link for link in links if link["runType"] == run_type)
 
 
-def test_cli_dispatch_rejects_unsupported_command(core) -> None:
+def test_cli_dispatch_rejects_unsupported_command(foundry) -> None:
     args = type("Args", (), {"group": "unknown", "command": "nope"})()
     with pytest.raises(SystemExit):
-        _dispatch(core, demo_admin_context(), args)
+        _dispatch(foundry, demo_admin_context(), args)
 
 
-def _seed_dead_letter_event(engine, *, tenant_id: str, outbox_id: str, dlq_id: str) -> None:
+def _seed_dead_letter_event(
+    engine, *, tenant_id: str, outbox_id: str, dlq_id: str, materialization: str = "action_log"
+) -> None:
     with engine.begin() as conn:
         conn.execute(
             insert(db.outbox_events).values(
@@ -821,8 +1010,8 @@ def _seed_dead_letter_event(engine, *, tenant_id: str, outbox_id: str, dlq_id: s
                 tenant_id=tenant_id,
                 event_type="materialization.requested",
                 aggregate_type="materialization",
-                aggregate_id="action_log",
-                payload={"materialization": "action_log"},
+                aggregate_id=materialization,
+                payload={"materialization": materialization},
                 status="failed",
                 attempts=3,
                 idempotency_key=outbox_id,
@@ -837,7 +1026,7 @@ def _seed_dead_letter_event(engine, *, tenant_id: str, outbox_id: str, dlq_id: s
                 tenant_id=tenant_id,
                 source_event_id=outbox_id,
                 event_type="materialization.requested",
-                payload={"materialization": "action_log"},
+                payload={"materialization": materialization},
                 error={"message": "publisher failed"},
                 failed_at="2026-06-10T00:00:02Z",
                 retry_after=None,

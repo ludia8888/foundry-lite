@@ -56,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
         os.environ["FOUNDRY_LITE_OTEL_CONSOLE"] = "1"
     sys.path[:0] = [str(ROOT / "libs"), str(ROOT / "apps" / "cli"), str(ROOT / "apps" / "api")]
 
-    from foundry_lite.application.core import FoundryLiteCore
+    from foundry_lite.application.foundry import FoundryLite
     from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
     from foundry_lite.observability.tracing import configure_observability
 
@@ -71,8 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         started_at = time.perf_counter()
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("default")
-            core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=storage_root))
-            result = profiler.runcall(core.run_supply_chain_demo)
+            foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+            result = profiler.runcall(foundry.demo.run)
             captured_warnings.extend(caught)
         duration_seconds = time.perf_counter() - started_at
 

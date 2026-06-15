@@ -38,8 +38,8 @@ pnpm ci:gate
 | current-state doc drift | `check_doc_drift.py` | 현재 구현처럼 적은 문서의 source path/script/Python symbol이 실제 코드에 없어 문서가 코드보다 앞서는 문제 |
 | schema revision guard | `check_schema_revision_guard.py` | DB 테이블/컬럼/unique constraint 모양이 revision snapshot 없이 바뀌어 코드 가정만 남는 문제 |
 | mutation audit | `check_audit_on_mutation.py` | public service mutation이 repository write에 닿으면서 audit/outbox 증거가 없는 문제 |
-| transaction outbox/audit pair | `check_transaction_outbox_pair.py` | 같은 transaction 안에서 state write와 audit/outbox 증거가 함께 남지 않는 문제 |
-| action idempotency | `check_idempotency_on_action.py` | Action API/Core/Service/schema 사이에서 `Idempotency-Key` 필수 계약과 기존 action_run 재사용 경로가 끊기는 문제 |
+| transaction outbox/audit pair | `check_transaction_outbox_pair.py` + `test_action_commit_object_edit_audit_outbox_atomic` | 같은 transaction 안에서 state write와 audit/outbox 증거가 함께 남지 않는 문제. 정적 게이트는 call tree를 막고, action 실패 주입 테스트는 object/action/writeback/edit/audit/outbox 중간 실패가 실제 DB rollback에 묶이는지 확인한다. |
+| action idempotency | `check_idempotency_on_action.py` | Action API/Core/Service/schema 사이에서 `Idempotency-Key` 필수 계약, 기존 action_run 재사용 경로, same-key/different-request fingerprint conflict 방어가 끊기는 문제 |
 | error response request_id | `check_error_response_has_request_id.py` | API 에러 응답에서 운영 추적용 `request_id`가 빠지는 문제 |
 | log trace keys | `check_log_has_trace_keys.py` | 운영 로그가 `request_id`, `tenant_id`, run id 계열 키 없이 남아 trace/audit/API 에러와 이어지지 않는 문제 |
 | required operational metrics | `check_metrics_exposed.py` | Prometheus payload에서 dataset commit, transform, action, query, outbox lag, failed run, DLQ size 지표가 빠지는 문제 |
@@ -177,9 +177,9 @@ pnpm quality:architecture
 
 CI에서는 fan-out이 `10`을 넘는 내부 모듈을 막는다. 쉽게 말해, 한 파일이 너무 많은 내부 파일을 직접 알고 있으면 구조가 커질수록 고치기 어려워지기 때문이다.
 
-CI에서는 application module이 `500`줄을 넘는 것도 막는다. `FoundryLiteCore`는 Facade로 유지하고, 실제 구현은 Dataset, Transform, Ontology, Object, Action, Materialization, Runtime event, Demo orchestration service로 나눈다.
+CI에서는 application module이 `500`줄을 넘는 것도 막는다. `FoundryLite`는 Facade로 유지하고, 실제 구현은 Dataset, Transform, Ontology, Object, Action, Materialization, Runtime event, Demo orchestration service로 나눈다.
 
-현재 CI는 `core._...` private facade 위임 테스트를 `0`개로 강제한다. 내부 service/helper 테스트는 필요한 경우 책임 소유 module을 직접 대상으로 삼되, `FoundryLiteCore`가 숨은 private delegation layer로 되살아나면 안 된다.
+현재 CI는 `core._...` private facade 위임 테스트를 `0`개로 강제한다. 내부 service/helper 테스트는 필요한 경우 책임 소유 module을 직접 대상으로 삼되, `FoundryLite`가 숨은 private delegation layer로 되살아나면 안 된다.
 
 Repository contract test 중 PostgreSQL testcontainer 축은 release/CI evidence에 반드시 포함되어야 한다. Docker가 꺼진 로컬 개발 환경에서는 `FOUNDRY_LITE_SKIP_POSTGRES_CONTRACTS=1`로 임시 우회할 수 있지만, `pnpm ci:gate`는 이 값을 발견하면 즉시 실패한다. 즉, “로컬 편의”와 “출시 증거”를 분리한다.
 
