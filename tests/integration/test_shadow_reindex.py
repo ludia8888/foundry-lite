@@ -80,5 +80,53 @@ def test_shadow_reindex_validation_failure_keeps_existing_active_index(
     assert failed_runs[-1]["status"] == "failed"
 
 
+def test_reindex_same_dataset_version_idempotent(core: FoundryLiteCore) -> None:
+    ctx = prepare_indexed_demo(core)
+    before = core.get_object("Order", "O-1001", ctx=ctx)
+    changed_before = _object_changed_count(core, ctx, "Order/O-1001")
+
+    result = core.index_rebuild("Order", ctx=ctx)
+    after = core.get_object("Order", "O-1001", ctx=ctx)
+    changed_after = _object_changed_count(core, ctx, "Order/O-1001")
+
+    # Re-indexing the same source dataset version with unchanged content must not
+    # bump object_version or emit a spurious object.changed event. Otherwise every
+    # replay churns search/materialization projections and breaks any held
+    # expectedObjectVersion for in-flight actions.
+    assert result["rows_read"] == 3
+    assert after["objectVersion"] == before["objectVersion"]
+    assert after["properties"] == before["properties"]
+    assert changed_after == changed_before
+
+
+def test_reindex_same_dataset_version_does_not_break_expected_object_version(core: FoundryLiteCore) -> None:
+    ctx = prepare_indexed_demo(core)
+    order = core.get_object("Order", "O-1001", ctx=ctx)
+
+    core.index_rebuild("Order", ctx=ctx)
+
+    # The object version held before the no-op reindex must still satisfy the
+    # action precondition; an idempotent reindex cannot invalidate it.
+    applied = core.apply_action(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "Action after idempotent reindex"},
+        idempotency_key="reindex-idempotent-action",
+        ctx=ctx,
+    )
+
+    assert applied["status"] == "succeeded"
+
+
+def _object_changed_count(core: FoundryLiteCore, ctx: RequestContext, aggregate_id: str) -> int:
+    return sum(
+        1
+        for event in core.list_runs(ctx=ctx)["outboxEvents"]
+        if event["event_type"] == "object.changed" and event["aggregate_id"] == aggregate_id
+    )
+
+
 def _index_run(core: FoundryLiteCore, ctx: RequestContext, run_id: str) -> RuntimeRow:
     return next(run for run in core.list_runs(ctx=ctx)["indexRuns"] if run["id"] == run_id)

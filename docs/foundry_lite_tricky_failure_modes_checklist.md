@@ -691,9 +691,9 @@
 
 ### T1-017 — Same dataset version reindex is not idempotent
 
-- [ ] **Condition:** 같은 dataset_version을 재색인했는데 object_version이 불필요하게 증가한다.
-- [ ] **Guardrail:** unchanged base patch는 no-op으로 처리한다.
-- [ ] **Regression Test:** `test_reindex_same_dataset_version_idempotent`
+- [x] **Condition:** 같은 dataset_version을 재색인했는데 object_version이 불필요하게 증가한다.
+- [x] **Guardrail:** unchanged base patch는 no-op으로 처리한다.
+- [x] **Regression Test:** `test_reindex_same_dataset_version_idempotent`
 
 ---
 
@@ -1029,8 +1029,8 @@
 - [ ] E7. edit_wins property를 source value로 되돌리는 clear/edit reset policy가 있다.
 - [ ] E8. tombstoned object가 link traversal에 어떻게 보이는지 명시한다.
 - [x] E9. tombstone include/exclude가 query/materialization에서 일관된다.
-- [ ] E10. same dataset version reindex는 불필요한 object_version 증가를 만들지 않는다.
-- [ ] E11. reindex idempotency가 action expectedObjectVersion을 깨지 않는다.
+- [x] E10. same dataset version reindex는 불필요한 object_version 증가를 만들지 않는다.
+- [x] E11. reindex idempotency가 action expectedObjectVersion을 깨지 않는다.
 - [ ] E12. index progress cursor는 deterministic input ordering을 사용한다.
 - [ ] E13. primary key null row skip/fail 정책과 count가 기록된다.
 
@@ -1217,7 +1217,7 @@
 - [ ] `test_object_merge_edit_only_not_overwritten_by_source`
 - [ ] `test_object_version_increments_for_base_and_edit_updates`
 - [ ] `test_index_progress_cursor_advances_only_after_bulk_upsert_commit`
-- [ ] `test_reindex_same_dataset_version_idempotent`
+- [x] `test_reindex_same_dataset_version_idempotent`
 - [x] `test_shadow_reindex_replays_action_edits`
 - [x] `test_shadow_reindex_alias_switch_cursor_version_safe`
 - [ ] `test_shadow_reindex_validation_hash_includes_current_properties_and_tombstone`
