@@ -685,9 +685,9 @@
 
 ### T1-016 — Snapshot indexer progress cursor advances before upsert commit
 
-- [ ] **Condition:** rows 1~1000 read 후 progress=1000 저장, bulk upsert 실패.
-- [ ] **Guardrail:** progress cursor는 successful DB commit 이후 전진한다.
-- [ ] **Regression Test:** `test_index_progress_cursor_advances_only_after_bulk_upsert_commit`
+- [x] **Condition:** rows 1~1000 read 후 progress=1000 저장, bulk upsert 실패.
+- [x] **Guardrail:** progress cursor는 successful DB commit 이후 전진한다.
+- [x] **Regression Test:** `test_index_progress_cursor_advances_only_after_bulk_upsert_commit`
 
 ### T1-017 — Same dataset version reindex is not idempotent
 
@@ -1216,7 +1216,7 @@
 - [ ] `test_stream_partial_partition_batch_abort_policy`
 - [x] `test_object_merge_edit_only_not_overwritten_by_source`
 - [x] `test_object_version_increments_for_base_and_edit_updates`
-- [ ] `test_index_progress_cursor_advances_only_after_bulk_upsert_commit`
+- [x] `test_index_progress_cursor_advances_only_after_bulk_upsert_commit`
 - [x] `test_reindex_same_dataset_version_idempotent`
 - [x] `test_shadow_reindex_replays_action_edits`
 - [x] `test_shadow_reindex_alias_switch_cursor_version_safe`

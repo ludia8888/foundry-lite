@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.application.ports import RuntimeRow
+from foundry_lite.application.services.object_store.indexing import ObjectIndexingService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -151,6 +152,37 @@ def test_object_merge_edit_only_not_overwritten_by_source(core: FoundryLiteCore,
     assert reindexed["properties"]["operatorNote"] == "edit-only-survives"
     assert reindexed["properties"]["status"] == "APPROVED"
     assert reindexed["properties"]["amount"] == 1500.0
+
+
+def test_index_progress_cursor_advances_only_after_bulk_upsert_commit(
+    core: FoundryLiteCore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = prepare_indexed_demo(core)
+    before = core.get_object("Order", "O-1001", ctx=ctx)
+    original_index_object_row = ObjectIndexingService._index_object_row
+
+    def fail_during_bulk_upsert(self, conn, ctx, plan, row):
+        original_index_object_row(self, conn, ctx, plan, row)
+        raise RuntimeError("injected bulk upsert failure")
+
+    monkeypatch.setattr(ObjectIndexingService, "_index_object_row", fail_during_bulk_upsert)
+
+    with pytest.raises(RuntimeError, match="injected bulk upsert failure"):
+        core.index_rebuild("Order", ctx=ctx)
+
+    failed_run = next(
+        run
+        for run in core.list_runs(ctx=ctx)["indexRuns"]
+        if run["object_type_api_name"] == "Order" and run["status"] == "failed"
+    )
+    after = core.get_object("Order", "O-1001", ctx=ctx)
+
+    # The bulk upsert transaction rolled back, so the index progress cursor and
+    # rows_read must not advance and no partial object change becomes visible.
+    assert failed_run["cursor"] == {}
+    assert failed_run["rows_read"] == 0
+    assert after["objectVersion"] == before["objectVersion"]
+    assert after["properties"] == before["properties"]
 
 
 def _approve_with_note(
