@@ -16,6 +16,15 @@ class OntologyApplyResult(TypedDict):
     version_number: int
 
 
+class OntologyValidationResult(TypedDict):
+    """Public result returned after validating ontology YAML without activating it."""
+
+    status: str
+    object_type_count: int
+    link_type_count: int
+    action_type_count: int
+
+
 class ObjectTypeBacking(TypedDict):
     """Dataset backing declaration for an ontology object type."""
 

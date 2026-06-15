@@ -454,6 +454,26 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert versions.json()[0]["version_number"] == 1
     assert versions.json()[0]["row_count"] == 3
 
+    valid_ontology = Path("examples/supply-chain-demo/ontology/order-customer.yaml").read_text(encoding="utf-8")
+    ontology_validation = client.post("/api/ontology/validate", headers=headers, json={"yaml": valid_ontology})
+    assert ontology_validation.status_code == 200
+    assert ontology_validation.json() == {
+        "status": "valid",
+        "object_type_count": 2,
+        "link_type_count": 1,
+        "action_type_count": 1,
+    }
+    with foundry.engine.begin() as conn:
+        ontology_rows = conn.execute(select(db.ontology_versions.c.status)).scalars().all()
+    assert ontology_rows == ["active"]
+
+    invalid_ontology = valid_ontology.replace("column: order_id", "column: missing_order_id", 1)
+    ontology_error = client.post("/api/ontology/validate", headers=headers, json={"yaml": invalid_ontology})
+    assert ontology_error.status_code == 400
+    assert ontology_error.json()["detail"]["code"] == "VALIDATION_FAILED"
+    assert ontology_error.json()["detail"]["message"] == "primary key column missing"
+    assert ontology_error.json()["detail"]["details"] == {"column": "missing_order_id"}
+
     order = client.get("/api/objects/Order/O-1001", headers=headers, params={"explain": "true"})
     assert order.status_code == 200
     order_payload = order.json()

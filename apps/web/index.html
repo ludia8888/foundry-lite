@@ -308,6 +308,19 @@
               <textarea id="reason">Inventory confirmed</textarea>
             </label>
             <label>
+              Ontology YAML
+              <textarea id="ontologyYaml">objectTypes:
+  - apiName: BrokenOrder
+    primaryKey: orderId
+    backing:
+      dataset: clean.orders
+    properties:
+      - apiName: orderId
+        type: string
+        column: missing_order_id
+</textarea>
+            </label>
+            <label>
               Saved Set Name
               <input id="setName" value="Pending Orders" />
             </label>
@@ -353,6 +366,7 @@
             <div class="actions">
               <button id="healthBtn" type="button">Check</button>
               <button id="datasetBtn" type="button" class="secondary">Load Dataset</button>
+              <button id="ontologyBtn" type="button" class="secondary">Validate Ontology</button>
               <button id="queryBtn" type="button" class="secondary">Load List</button>
               <button id="loadBtn" type="button" class="secondary">Load Object</button>
               <button id="approveBtn" type="button" class="danger">ApproveOrder</button>
@@ -421,6 +435,15 @@
 
           <div class="panel">
             <header>
+              <h2>Ontology Validation</h2>
+            </header>
+            <div class="panel-body">
+              <pre id="ontologyResult" class="result compact">{}</pre>
+            </div>
+          </div>
+
+          <div class="panel">
+            <header>
               <h2>Object Explorer</h2>
             </header>
             <div class="panel-body">
@@ -467,6 +490,7 @@
       const statusDot = document.querySelector("#statusDot");
       const statusText = document.querySelector("#statusText");
       const datasetRef = document.querySelector("#datasetRef");
+      const ontologyYaml = document.querySelector("#ontologyYaml");
       const objectType = document.querySelector("#objectType");
       const objectId = document.querySelector("#objectId");
       const reason = document.querySelector("#reason");
@@ -479,6 +503,7 @@
       const operationRunId = document.querySelector("#operationRunId");
       const datasetResult = document.querySelector("#datasetResult");
       const queryResult = document.querySelector("#queryResult");
+      const ontologyResult = document.querySelector("#ontologyResult");
       const objectResult = document.querySelector("#objectResult");
       const setResult = document.querySelector("#setResult");
       const linkResult = document.querySelector("#linkResult");
@@ -530,6 +555,10 @@
 
       function showQuery(value) {
         queryResult.textContent = JSON.stringify(value, null, 2);
+      }
+
+      function showOntology(value) {
+        ontologyResult.textContent = JSON.stringify(value, null, 2);
       }
 
       function showSet(value) {
@@ -634,6 +663,15 @@
               body: JSON.stringify(payload),
             });
         showQuery(result);
+      }
+
+      async function validateOntology() {
+        const result = await request("/api/ontology/validate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ yaml: ontologyYaml.value }),
+        });
+        showOntology(result);
       }
 
       async function loadLinks() {
@@ -808,6 +846,7 @@
 
       document.querySelector("#healthBtn").addEventListener("click", checkHealth);
       document.querySelector("#datasetBtn").addEventListener("click", () => loadDataset().catch(showDataset));
+      document.querySelector("#ontologyBtn").addEventListener("click", () => validateOntology().catch(showOntology));
       document.querySelector("#queryBtn").addEventListener("click", () => loadObjectList().catch(showQuery));
       document.querySelector("#loadBtn").addEventListener("click", () => loadObject().catch(show));
       document.querySelector("#approveBtn").addEventListener("click", () => approveOrder().catch(show));

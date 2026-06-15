@@ -19,6 +19,7 @@ class PolicyService:
         "dataset:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
         "dataset:write": {"admin", "data_engineer"},
         "transform:run": {"admin", "data_engineer"},
+        "ontology:validate": {"admin", "data_engineer"},
         "ontology:activate": {"admin", "data_engineer"},
         "object:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
         "action:execute:ApproveOrder": {"admin", "ops_manager"},

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from foundry_lite.application.ports import OntologyApplyResult
+from foundry_lite.application.ports import OntologyApplyResult, OntologyValidationResult
 from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.observability.tracing import trace_public_methods
@@ -17,3 +17,6 @@ class OntologyRegistry:
 
     def apply(self, yaml_path: str | Path, *, ctx: RequestContext | None = None) -> OntologyApplyResult:
         return self._ontology.apply_ontology(yaml_path, ctx=ctx)
+
+    def validate(self, yaml_text: str, *, ctx: RequestContext | None = None) -> OntologyValidationResult:
+        return self._ontology.validate_yaml_text(yaml_text, ctx=ctx)
