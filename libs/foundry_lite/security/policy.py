@@ -47,7 +47,28 @@ class PolicyService:
         properties: dict[str, object],
     ) -> dict[str, object]:
         masked = dict(properties)
-        if object_type == "Order" and not (ctx.has_role("finance") or ctx.has_role("admin")):
-            if "margin" in masked:
-                masked["margin"] = "***MASKED***"
+        for property_name in self.masked_property_names(ctx, object_type):
+            if property_name in masked:
+                masked[property_name] = "***MASKED***"
         return masked
+
+    def mask_sensitive_properties(self, object_type: str, properties: dict[str, object]) -> dict[str, object]:
+        """Mask values that should never be copied into durable audit evidence."""
+        masked = dict(properties)
+        for property_name in self.sensitive_property_names(object_type):
+            if property_name in masked:
+                masked[property_name] = "***MASKED***"
+        return masked
+
+    def masked_property_names(self, ctx: RequestContext, object_type: str) -> set[str]:
+        """Return properties that must not be displayed or used for inference."""
+
+        if not (ctx.has_role("finance") or ctx.has_role("admin")):
+            return self.sensitive_property_names(object_type)
+        return set()
+
+    def sensitive_property_names(self, object_type: str) -> set[str]:
+        """Return properties that remain sensitive even for audit storage."""
+        if object_type == "Order":
+            return {"margin"}
+        return set()

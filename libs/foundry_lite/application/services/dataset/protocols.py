@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Literal, Protocol, overload
 
@@ -18,6 +18,8 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import CommitResult, StagedFileStats
 from foundry_lite.domain.context import RequestContext
+
+DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
 
 
 class DatasetRegistryLookup(Protocol):
@@ -54,6 +56,7 @@ class DatasetTransactionManager(Protocol):
         outbox_event_type: str,
         extra_checks: Sequence[DatasetCheckConfig] | None = None,
         transaction_metadata: DatasetTransactionMetadata | None = None,
+        after_persist: DatasetCommitMetadataHook | None = None,
     ) -> CommitResult: ...
 
     def _abort_transaction_after_error(

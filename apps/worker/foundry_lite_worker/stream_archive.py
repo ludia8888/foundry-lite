@@ -46,9 +46,11 @@ class StreamArchiveWorkerConfig:
     sync_name: str | None = None
 
     def request_context(self) -> RequestContext:
+        tenant_id = _required_worker_value("tenant_id", self.tenant_id)
+        actor_user_id = _required_worker_value("actor_user_id", self.actor_user_id)
         return RequestContext(
-            tenant_id=self.tenant_id,
-            actor_user_id=self.actor_user_id,
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
             request_id=self.request_id,
             roles=DEMO_ADMIN_ROLES,
         )
@@ -132,6 +134,13 @@ def config_from_env(env: Mapping[str, str] | None = None) -> StreamArchiveWorker
         tenant_id=values.get("FOUNDRY_LITE_TENANT_ID", DEFAULT_TENANT_ID),
         sync_name=values.get("FOUNDRY_LITE_STREAM_SYNC_NAME"),
     )
+
+
+def _required_worker_value(field: str, value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"stream archive worker requires {field}")
+    return normalized
 
 
 def main(argv: list[str] | None = None) -> int:

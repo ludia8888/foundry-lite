@@ -454,6 +454,7 @@ def _action_run_row(
         "parameters": {"reason": "ok"},
         "status": status,
         "idempotency_key": run_id,
+        "request_fingerprint": f"fingerprint-{run_id}",
         "error": None,
         "created_at": created_at,
         "completed_at": "2026-06-10T00:00:01Z",

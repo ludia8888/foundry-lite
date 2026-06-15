@@ -77,6 +77,7 @@ from foundry_lite.application.ports.dataset_version_repository import (
 )
 from foundry_lite.application.ports.materialization_repository import (
     MaterializationRecord,
+    MaterializationReplayResult,
     MaterializationRepository,
     MaterializationRow,
     MaterializationRunRecord,
@@ -253,6 +254,7 @@ __all__ = [
     "LinkTypeRow",
     "MaterializationRecord",
     "MaterializationRepository",
+    "MaterializationReplayResult",
     "MaterializationRow",
     "MaterializationRunRecord",
     "MaterializationSourceRef",

@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 
 from foundry_lite.application.ports import DatasetRow, RuntimeRow, TransactionContext
 from foundry_lite.application.ports.materialization_repository import (
     MaterializationRecord,
+    MaterializationReplayResult,
     MaterializationRow,
     MaterializationRunRecord,
     MaterializationSourceRef,
@@ -41,6 +43,8 @@ class MaterializationRunPlan:
     transaction_id: str
     run_id: str
     watermark: Mapping[str, object]
+    rows: Sequence[Mapping[str, object]]
+    fieldnames: list[str]
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,13 @@ class MaterializationService(CoreService):
         run_id = _new_id("mat_run")
         with self.engine.begin() as conn:
             tx_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, target_dataset, "SNAPSHOT")
+            watermark = self._materialization_watermark(conn, ctx, materialization["materialization_type"])
+            rows, fieldnames = self._materialization_rows(
+                conn,
+                materialization["materialization_type"],
+                ctx=ctx,
+                watermark=watermark,
+            )
             plan = MaterializationRunPlan(
                 api_name=api_name,
                 materialization_id=materialization["id"],
@@ -99,7 +110,9 @@ class MaterializationService(CoreService):
                 target_dataset=target_dataset,
                 transaction_id=tx_id,
                 run_id=run_id,
-                watermark=self._materialization_watermark(conn, materialization["materialization_type"]),
+                watermark=watermark,
+                rows=rows,
+                fieldnames=fieldnames,
             )
             self._insert_materialization_run(conn, ctx, plan)
         try:
@@ -107,6 +120,49 @@ class MaterializationService(CoreService):
         except Exception as exc:
             self._abort_materialization_run(ctx, plan, exc)
             raise
+
+    def replay_rows_for_run(
+        self,
+        materialization_run_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> MaterializationReplayResult:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "materialization:run", "materialization", materialization_run_id)
+        with self.engine.begin() as conn:
+            run = self._materialization_run_by_id(conn, ctx, materialization_run_id)
+            materialization = self.materialization_repository.materialization_by_id(
+                transaction=conn,
+                materialization_id=str(run["materialization_id"]),
+            )
+            if materialization is None:
+                raise NotFound("materialization not found", details={"materialization_run_id": materialization_run_id})
+            watermark = _run_watermark(run)
+            rows, _ = self._materialization_rows(
+                conn,
+                materialization["materialization_type"],
+                ctx=ctx,
+                watermark=watermark,
+            )
+        return MaterializationReplayResult(
+            materialization_run_id=materialization_run_id,
+            api_name=str(run["api_name"]),
+            watermark=watermark,
+            row_count=len(rows),
+            row_hash=_materialization_rows_hash(rows),
+            rows=rows,
+        )
+
+    def _materialization_run_by_id(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        materialization_run_id: str,
+    ) -> RuntimeRow:
+        for row in self.runtime_service._rows_for_tenant(conn, "materialization_runs", ctx):
+            if row["id"] == materialization_run_id:
+                return row
+        raise NotFound("materialization run not found", details={"materialization_run_id": materialization_run_id})
 
     def _insert_materialization_run(
         self,
@@ -140,7 +196,12 @@ class MaterializationService(CoreService):
     ) -> CommitResult:
         staged = self._write_materialization_rows(ctx, plan)
         with self.engine.begin() as conn:
-            result = self.dataset_transaction_service._finalize_open_transaction(
+
+            def after_persist(conn: TransactionContext, result: CommitResult) -> None:
+                self._mark_materialization_run_succeeded(conn, ctx, plan.run_id, result)
+                self._record_materialization_lineage(conn, ctx, plan, result)
+
+            return self.dataset_transaction_service._finalize_open_transaction(
                 conn,
                 ctx,
                 dataset=plan.target_dataset,
@@ -149,23 +210,22 @@ class MaterializationService(CoreService):
                 run_id=plan.run_id,
                 audit_action="materialization_commit",
                 outbox_event_type="materialization.completed",
+                extra_checks=({"type": "allow_empty"},),
+                after_persist=after_persist,
             )
-            self._mark_materialization_run_succeeded(conn, ctx, plan.run_id, result)
-            self._record_materialization_lineage(conn, ctx, plan, result)
-            return result
 
     def _write_materialization_rows(
         self,
         ctx: RequestContext,
         plan: MaterializationRunPlan,
     ) -> Path:
-        rows, fieldnames = self._materialization_rows(plan.materialization_type, ctx=ctx)
+        del ctx
         staged = self.dataset_transaction_service._staging_file(
             plan.target_dataset,
             plan.transaction_id,
             "part-00000.parquet",
         )
-        self.dataset_ingest_service._rows_to_parquet(rows, staged, fieldnames)
+        self.dataset_ingest_service._rows_to_parquet(plan.rows, staged, plan.fieldnames)
         return staged
 
     def _record_materialization_lineage(
@@ -262,34 +322,57 @@ class MaterializationService(CoreService):
     def _materialization_watermark(
         self,
         conn: TransactionContext,
+        ctx: RequestContext,
         materialization_type: str,
     ) -> Mapping[str, object]:
         if materialization_type == "action_log":
-            max_created = self.materialization_repository.latest_action_run_watermark(transaction=conn)
-            return {"action_run_created_at_lte": max_created}
-        max_updated = self.materialization_repository.latest_object_record_watermark(transaction=conn)
-        return {"object_updated_at_lte": max_updated}
+            watermark = self.materialization_repository.latest_action_run_watermark(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+            )
+            return {
+                "action_run_completed_at_lte": watermark["completed_at"],
+                "action_run_id_lte": watermark["action_run_id"],
+            }
+        active_version = self.materialization_repository.active_object_index_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_api_name="Order",
+        )
+        max_sequence = self.materialization_repository.latest_object_record_watermark(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_api_name="Order",
+            index_version=active_version,
+        )
+        return {"object_change_sequence_lte": max_sequence, "active_index_version": active_version}
 
     def _materialization_rows(
         self,
+        conn: TransactionContext,
         materialization_type: str,
         *,
         ctx: RequestContext,
+        watermark: Mapping[str, object],
     ) -> tuple[Sequence[Mapping[str, object]], list[str]]:
-        with self.engine.begin() as conn:
-            if materialization_type == "action_log":
-                return self._action_log_materialization_rows(conn, ctx)
-            return self._order_current_materialization_rows(conn, ctx)
+        if materialization_type == "action_log":
+            return self._action_log_materialization_rows(conn, ctx, watermark)
+        return self._order_current_materialization_rows(conn, ctx, watermark)
 
     def _action_log_materialization_rows(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
+        watermark: Mapping[str, object],
     ) -> tuple[Sequence[Mapping[str, object]], list[str]]:
         action_rows = self.runtime_service._rows_for_tenant(conn, "action_runs", ctx)
         edit_rows = self.runtime_service._rows_for_tenant(conn, "object_edits", ctx)
         edit_by_action = {row["action_run_id"]: row for row in edit_rows}
-        rows = [self._action_log_row(action, edit_by_action.get(action["id"], {})) for action in action_rows]
+        rows = [
+            self._action_log_row(action, edit_by_action.get(action["id"], {}))
+            for action in action_rows
+            if action["status"] == "succeeded" and _action_within_watermark(action, watermark)
+        ]
         return rows, [
             "action_run_id",
             "actor_user_id",
@@ -319,12 +402,9 @@ class MaterializationService(CoreService):
         self,
         conn: TransactionContext,
         ctx: RequestContext,
+        watermark: Mapping[str, object],
     ) -> tuple[Sequence[Mapping[str, object]], list[str]]:
-        records = [
-            row
-            for row in self.runtime_service._rows_for_tenant(conn, "object_records", ctx)
-            if row["object_type_api_name"] == "Order" and row.get("is_active", True) and not row["deleted"]
-        ]
+        records = self._order_records_at_watermark(conn, ctx, watermark)
         rows = [self._order_current_row(record) for record in records]
         return rows, [
             "orderId",
@@ -338,7 +418,7 @@ class MaterializationService(CoreService):
             "updatedAt",
         ]
 
-    def _order_current_row(self, record: RuntimeRow) -> Mapping[str, object]:
+    def _order_current_row(self, record: Mapping[str, object]) -> Mapping[str, object]:
         props = self._row_mapping(record, "properties")
         return {
             "orderId": props.get("orderId"),
@@ -352,6 +432,45 @@ class MaterializationService(CoreService):
             "updatedAt": record["updated_at"],
         }
 
-    def _row_mapping(self, row: RuntimeRow, key: str) -> Mapping[str, object]:
+    def _row_mapping(self, row: Mapping[str, object], key: str) -> Mapping[str, object]:
         value = row.get(key)
         return value if isinstance(value, Mapping) else {}
+
+    def _order_records_at_watermark(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        watermark: Mapping[str, object],
+    ) -> Sequence[Mapping[str, object]]:
+        max_sequence = watermark.get("object_change_sequence_lte")
+        index_version = watermark.get("active_index_version")
+        if not isinstance(max_sequence, int) or not isinstance(index_version, str):
+            return []
+        return self.materialization_repository.object_records_at_watermark(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_api_name="Order",
+            index_version=index_version,
+            max_object_change_sequence=max_sequence,
+        )
+
+
+def _action_within_watermark(row: RuntimeRow, watermark: Mapping[str, object]) -> bool:
+    completed_at = row.get("completed_at")
+    max_completed = watermark.get("action_run_completed_at_lte")
+    max_action_id = watermark.get("action_run_id_lte")
+    if not isinstance(completed_at, str) or not isinstance(max_completed, str):
+        return False
+    if completed_at < max_completed:
+        return True
+    return completed_at == max_completed and isinstance(max_action_id, str) and str(row["id"]) <= max_action_id
+
+
+def _run_watermark(run: RuntimeRow) -> Mapping[str, object]:
+    watermark = run.get("object_store_watermark") or run.get("source_cursor")
+    return watermark if isinstance(watermark, Mapping) else {}
+
+
+def _materialization_rows_hash(rows: Sequence[Mapping[str, object]]) -> str:
+    payload = json.dumps([dict(row) for row in rows], sort_keys=True, separators=(",", ":"), default=str)
+    return sha256(payload.encode("utf-8")).hexdigest()

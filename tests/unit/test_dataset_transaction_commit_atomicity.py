@@ -8,13 +8,14 @@ from foundry_lite.application.ports import DatasetVersionConflictError
 from foundry_lite.application.primitives import StagedFileStats
 from foundry_lite.application.services.dataset.transactions import DatasetTransactionService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, InvariantViolation
+from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, ValidationFailed
 from foundry_lite.infrastructure.adapters import LocalDatasetStorageAdapter
 
 
 class _ConflictTransactionRepository:
     def __init__(self) -> None:
         self.lock_calls: list[tuple[str, str]] = []
+        self.abort_called = False
         self.insert_file_called = False
         self.commit_transaction_called = False
 
@@ -39,6 +40,17 @@ class _ConflictTransactionRepository:
     def lock_dataset_for_version_allocation(self, *, transaction: object, tenant_id: str, dataset_id: str) -> None:
         del transaction
         self.lock_calls.append((tenant_id, dataset_id))
+
+    def abort_transaction(
+        self,
+        *,
+        transaction: object,
+        tenant_id: str,
+        transaction_id: str,
+        metadata: dict[str, object],
+    ) -> None:
+        del transaction, tenant_id, transaction_id, metadata
+        self.abort_called = True
 
     def insert_version(self, *, transaction: object, record: object) -> None:
         del transaction, record
@@ -86,6 +98,17 @@ class _Quality:
         return 1
 
 
+class _SchemaRaceQuality(_Quality):
+    def __init__(self, staged_path: Path, repository: _ConflictTransactionRepository) -> None:
+        super().__init__(staged_path)
+        self.repository = repository
+        self.saw_lock_before_compatibility_check = False
+
+    def _schema_compatibility_error(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+        self.saw_lock_before_compatibility_check = bool(self.repository.lock_calls)
+        return {"check": "schema_compatibility", "status": "failed", "reason": "latest_schema_changed"}
+
+
 class _VersionLookup:
     def _next_dataset_version_number(self, _conn: object, dataset_id: str) -> int:
         assert dataset_id == "ds_orders"
@@ -97,6 +120,8 @@ class _Runtime:
         raise AssertionError("metadata conflict must not emit commit outbox")
 
     def _audit(self, *_args: object, **_kwargs: object) -> None:
+        if _kwargs.get("action") == "abort":
+            return
         raise AssertionError("metadata conflict must not emit commit audit")
 
 
@@ -133,10 +158,30 @@ def test_dataset_finalize_cleans_orphan_artifacts_after_file_persistence_failure
     assert exc_info.value.details["orphan_cleanup"]["removed"] is True
 
 
+def test_schema_compatibility_revalidates_if_latest_schema_changes(tmp_path: Path) -> None:
+    staged = tmp_path / "staged.parquet"
+    staged.write_bytes(b"fake parquet bytes")
+    repository = _ConflictTransactionRepository()
+    quality = _SchemaRaceQuality(staged, repository)
+    service = _service(tmp_path, staged, repository, quality=quality)
+
+    with pytest.raises(ValidationFailed, match="dataset checks failed") as exc_info:
+        _finalize(service, staged)
+
+    failures = exc_info.value.details["failures"]
+    assert repository.lock_calls == [("tenant-demo", "ds_orders")]
+    assert quality.saw_lock_before_compatibility_check is True
+    assert repository.abort_called is True
+    assert repository.insert_file_called is False
+    assert repository.commit_transaction_called is False
+    assert failures == [{"check": "schema_compatibility", "status": "failed", "reason": "latest_schema_changed"}]
+
+
 def _service(
     tmp_path: Path,
     staged: Path,
     repository: _ConflictTransactionRepository,
+    quality: _Quality | None = None,
 ) -> DatasetTransactionService:
     storage = LocalDatasetStorageAdapter(tmp_path / "object-storage")
     service = DatasetTransactionService(
@@ -146,7 +191,7 @@ def _service(
     )
     service.bind_collaborators(
         {
-            "dataset_quality_service": _Quality(staged),
+            "dataset_quality_service": quality or _Quality(staged),
             "dataset_version_service": _VersionLookup(),
             "runtime_service": _Runtime(),
         }

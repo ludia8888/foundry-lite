@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from foundry_lite.application.core import FoundryLiteCore
-from foundry_lite.domain.context import RequestContext
+from foundry_lite.application.dependencies import CoreDependencies
+from foundry_lite.application.ports import AuditEventRecord, OutboxEventRecord
+from foundry_lite.application.ports.action_repository import (
+    ActionRunRecord,
+    ActionRunRow,
+    ActionWritebackRecord,
+    ObjectEditRecord,
+    ObjectTargetUpdate,
+)
+from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import (
     ConflictDetected,
     ExternalSystemError,
@@ -14,8 +24,117 @@ from foundry_lite.domain.errors import (
     PermissionDenied,
     ValidationFailed,
 )
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
 from tests.conftest import DEMO_ROOT, prepare_indexed_demo
+
+
+class _InjectedActionCommitFailure(RuntimeError):
+    pass
+
+
+class _FailingActionRepository:
+    def __init__(self, delegate: Any, *, fail_method: str) -> None:
+        self.delegate = delegate
+        self.fail_method = fail_method
+        self.enabled = True
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.delegate, name)
+
+    def insert_action_run_or_get_existing(self, *, transaction: Any, record: ActionRunRecord) -> ActionRunRow | None:
+        return self.delegate.insert_action_run_or_get_existing(transaction=transaction, record=record)
+
+    def insert_action_writeback(self, *, transaction: Any, record: ActionWritebackRecord) -> None:
+        self.delegate.insert_action_writeback(transaction=transaction, record=record)
+
+    def update_object_target(self, *, transaction: Any, record: ObjectTargetUpdate) -> bool:
+        return self.delegate.update_object_target(transaction=transaction, record=record)
+
+    def insert_object_edit(self, *, transaction: Any, record: ObjectEditRecord) -> None:
+        if self.enabled and self.fail_method == "insert_object_edit":
+            raise _InjectedActionCommitFailure("injected object edit failure")
+        self.delegate.insert_object_edit(transaction=transaction, record=record)
+
+    def update_action_run_terminal(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_run_id: str,
+        status: str,
+        error: Mapping[str, object] | None,
+        completed_at: str,
+    ) -> None:
+        if self.enabled and self.fail_method == "update_action_run_terminal" and status == "succeeded":
+            raise _InjectedActionCommitFailure("injected action terminal failure")
+        self.delegate.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            action_run_id=action_run_id,
+            status=status,
+            error=error,
+            completed_at=completed_at,
+        )
+
+
+class _FailingRuntimeRepository:
+    def __init__(self, delegate: Any, *, fail_audit: str | None = None, fail_outbox: str | None = None) -> None:
+        self.delegate = delegate
+        self.fail_audit = fail_audit
+        self.fail_outbox = fail_outbox
+        self.enabled = True
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.delegate, name)
+
+    def insert_audit_event(self, *, transaction: Any, record: AuditEventRecord) -> None:
+        if self.enabled and record.event_type == self.fail_audit:
+            raise _InjectedActionCommitFailure("injected action audit failure")
+        self.delegate.insert_audit_event(transaction=transaction, record=record)
+
+    def insert_outbox_event(self, *, transaction: Any, record: OutboxEventRecord) -> bool:
+        if self.enabled and record.event_type == self.fail_outbox:
+            raise _InjectedActionCommitFailure("injected action outbox failure")
+        return self.delegate.insert_outbox_event(transaction=transaction, record=record)
+
+
+def _core_with_action_failure(tmp_path: Path, fail_point: str) -> tuple[FoundryLiteCore, object]:
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    if fail_point.startswith("action:"):
+        repository = _FailingActionRepository(dependencies.action_repository, fail_method=fail_point.split(":", 1)[1])
+        return FoundryLiteCore(dependencies=replace(dependencies, action_repository=repository)), repository
+    repository = _runtime_failure_repository(dependencies, fail_point)
+    return FoundryLiteCore(dependencies=replace(dependencies, runtime_repository=repository)), repository
+
+
+def _runtime_failure_repository(dependencies: CoreDependencies, fail_point: str) -> _FailingRuntimeRepository:
+    if fail_point.startswith("audit:"):
+        return _FailingRuntimeRepository(dependencies.runtime_repository, fail_audit=fail_point.split(":", 1)[1])
+    return _FailingRuntimeRepository(dependencies.runtime_repository, fail_outbox=fail_point.split(":", 1)[1])
+
+
+def _disable_injected_failure(repository: object) -> None:
+    assert isinstance(repository, _FailingActionRepository | _FailingRuntimeRepository)
+    repository.enabled = False
+
+
+def _action_row_count(runs: Mapping[str, list[Mapping[str, object]]], idempotency_key: str) -> int:
+    return sum(row.get("idempotency_key") == idempotency_key for row in runs["actionRuns"])
+
+
+def _action_commit_evidence_counts(runs: Mapping[str, list[Mapping[str, object]]]) -> dict[str, int]:
+    return {
+        "writebacks": len(runs["actionWritebacks"]),
+        "edits": len(runs["objectEdits"]),
+        "audit_committed": _event_count(runs["auditEvents"], "action.run.committed"),
+        "outbox_action": _event_count(runs["outboxEvents"], "action.run.committed"),
+        "outbox_edit": _event_count(runs["outboxEvents"], "object.edit.committed"),
+    }
+
+
+def _event_count(rows: list[Mapping[str, object]], event_type: str) -> int:
+    return sum(row.get("event_type") == event_type for row in rows)
 
 
 @pytest.mark.integration_scenario("ontology_index")
@@ -111,6 +230,22 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
 
     assert replay["idempotentReplay"] is True
     assert replay["actionRunId"] == first["actionRunId"]
+    with pytest.raises(ConflictDetected) as idempotency_conflict:
+        core.apply_action(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "Different body with reused key"},
+            idempotency_key="same-key",
+            ctx=ctx,
+        )
+    conflict_runs = core.list_runs(ctx=ctx)
+    assert idempotency_conflict.value.details["action_run_id"] == first["actionRunId"]
+    assert any(
+        event["event_type"] == "action.run.idempotency_conflict" and event["resource_id"] == first["actionRunId"]
+        for event in conflict_runs["auditEvents"]
+    )
     with pytest.raises(ConflictDetected):
         core.apply_action(
             "ApproveOrder",
@@ -119,6 +254,63 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
             expected_object_version=order["objectVersion"],
             params={"reason": "Inventory confirmed again"},
             idempotency_key="different-key",
+            ctx=ctx,
+        )
+
+
+def test_action_same_idempotency_key_different_body_returns_409(core: FoundryLiteCore) -> None:
+    ctx = prepare_indexed_demo(core)
+    order = core.get_object("Order", "O-1001", ctx=ctx)
+    first = core.apply_action(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "Inventory confirmed"},
+        idempotency_key="same-key-different-body",
+        ctx=ctx,
+    )
+
+    with pytest.raises(ConflictDetected) as exc_info:
+        core.apply_action(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "Different body"},
+            idempotency_key="same-key-different-body",
+            ctx=ctx,
+        )
+
+    runs = core.list_runs(ctx=ctx)
+    assert exc_info.value.details["action_run_id"] == first["actionRunId"]
+    assert any(
+        event["event_type"] == "action.run.idempotency_conflict" and event["resource_id"] == first["actionRunId"]
+        for event in runs["auditEvents"]
+    )
+
+
+def test_action_precondition_stale_read_conflicts_on_commit(core: FoundryLiteCore) -> None:
+    ctx = prepare_indexed_demo(core)
+    order = core.get_object("Order", "O-1001", ctx=ctx)
+    core.apply_action(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "First writer"},
+        idempotency_key="first-writer",
+        ctx=ctx,
+    )
+
+    with pytest.raises(ConflictDetected):
+        core.apply_action(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "Stale writer"},
+            idempotency_key="stale-writer",
             ctx=ctx,
         )
 
@@ -173,6 +365,78 @@ def test_before_commit_writeback_failure_does_not_edit_object(
     assert any(event["event_type"] == "action.run.failed" for event in audit_events)
 
 
+@pytest.mark.parametrize(
+    "fail_point",
+    [
+        "action:insert_object_edit",
+        "action:update_action_run_terminal",
+        "outbox:object.edit.committed",
+        "audit:action.run.committed",
+    ],
+)
+def test_action_commit_object_edit_audit_outbox_atomic(tmp_path: Path, fail_point: str) -> None:
+    core, failing_repository = _core_with_action_failure(tmp_path, fail_point)
+    ctx = prepare_indexed_demo(core)
+    order = core.get_object("Order", "O-1001", ctx=ctx)
+    before = core.list_runs(ctx=ctx)
+
+    with pytest.raises(_InjectedActionCommitFailure):
+        core.apply_action(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "Atomicity proof"},
+            idempotency_key="atomicity-proof",
+            ctx=ctx,
+        )
+
+    after_failure = core.list_runs(ctx=ctx)
+    unchanged = core.get_object("Order", "O-1001", ctx=ctx)
+    assert unchanged["objectVersion"] == order["objectVersion"]
+    assert unchanged["properties"]["status"] == "PENDING"
+    assert _action_row_count(after_failure, "atomicity-proof") == 0
+    assert _action_commit_evidence_counts(after_failure) == _action_commit_evidence_counts(before)
+
+    _disable_injected_failure(failing_repository)
+    retry = core.apply_action(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "Atomicity proof"},
+        idempotency_key="atomicity-proof",
+        ctx=ctx,
+    )
+    assert retry["status"] == "succeeded"
+
+
+def test_action_audit_masks_sensitive_params(core: FoundryLiteCore, tmp_path: Path) -> None:
+    ctx = _prepare_demo_with_ontology(core, _margin_action_ontology(tmp_path))
+    order = core.get_object("Order", "O-1001", ctx=ctx)
+
+    result = core.apply_action(
+        "AdjustMargin",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"margin": 9999.99},
+        idempotency_key="audit-mask-margin",
+        ctx=ctx,
+    )
+
+    changed = core.get_object("Order", "O-1001", ctx=ctx)
+    audit = next(
+        event
+        for event in core.list_runs(ctx=ctx)["auditEvents"]
+        if event["event_type"] == "action.run.committed" and event["resource_id"] == result["actionRunId"]
+    )
+    assert changed["properties"]["margin"] == 9999.99
+    assert result["patch"]["margin"] == 9999.99
+    assert audit["before_ref"]["margin"] == "***MASKED***"
+    assert audit["after_ref"]["patch"]["margin"] == "***MASKED***"
+
+
 @pytest.mark.integration_scenario("permission_tenant_isolation")
 def test_viewer_sees_masked_margin_and_cannot_approve_order(
     core: FoundryLiteCore,
@@ -188,10 +452,38 @@ def test_viewer_sees_masked_margin_and_cannot_approve_order(
     order = core.get_object("Order", "O-1001", ctx=viewer)
     dataset_preview = core.preview_dataset("clean.orders", ctx=viewer, limit=1)
     finance_order = core.get_object("Order", "O-1001", ctx=finance)
+    finance_query = core.query_objects(
+        "Order",
+        ctx=finance,
+        filter_ast={"property": "margin", "op": "gte", "value": 80.0},
+        order_by=[{"property": "margin", "direction": "desc"}],
+        limit=2,
+    )
 
     assert order["properties"]["margin"] == "***MASKED***"
     assert dataset_preview[0]["order_id"] == "O-1001"
     assert finance_order["properties"]["margin"] != "***MASKED***"
+    assert [item["objectId"] for item in finance_query["items"]] == ["O-1001", "O-1002"]
+    with pytest.raises(ValidationFailed, match="masked property"):
+        core.query_objects(
+            "Order",
+            ctx=viewer,
+            filter_ast={"property": "margin", "op": "gte", "value": 80.0},
+        )
+    with pytest.raises(ValidationFailed, match="masked property"):
+        core.query_objects(
+            "Order",
+            ctx=viewer,
+            order_by=[{"property": "margin", "direction": "desc"}],
+        )
+    with pytest.raises(ValidationFailed, match="masked property"):
+        core.create_object_set(
+            "Masked Margin Orders",
+            "Order",
+            set_type="dynamic",
+            filter_ast={"property": "margin", "op": "gte", "value": 80.0},
+            ctx=viewer,
+        )
     with pytest.raises(PermissionDenied):
         core.apply_ontology(str(DEMO_ROOT / "ontology" / "order-customer.yaml"), ctx=viewer)
     with pytest.raises(NotFound):
@@ -241,3 +533,49 @@ def test_only_ops_manager_or_admin_can_execute_approve_order(
 
     assert approved["status"] == "succeeded"
     assert any(event["decision"] == "deny" for event in core.list_runs()["auditEvents"])
+
+
+def _prepare_demo_with_ontology(core: FoundryLiteCore, ontology_path: Path) -> RequestContext:
+    ctx = demo_admin_context()
+    core.seed_supply_chain_demo_files()
+    core.ensure_dataset("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
+    core.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    core.ensure_dataset("clean.orders", ctx=ctx, primary_key=["order_id"])
+    core.ensure_dataset("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    core.register_supply_chain_demo_transforms(ctx)
+    core.upload_csv("raw.erp_orders", str(DEMO_ROOT / "data" / "orders.csv"), ctx=ctx)
+    core.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
+    core.run_transform("clean_orders", ctx=ctx)
+    core.run_transform("clean_customers", ctx=ctx)
+    core.apply_ontology(str(ontology_path), ctx=ctx)
+    core.index_rebuild("Order", ctx=ctx)
+    return ctx
+
+
+def _margin_action_ontology(tmp_path: Path) -> Path:
+    ontology = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
+    ontology = ontology.replace(
+        "      - apiName: margin\n        column: margin\n        type: float\n        classification: finance",
+        "      - apiName: margin\n"
+        "        column: margin\n"
+        "        type: float\n"
+        "        classification: finance\n"
+        "        editable: true\n"
+        "        editPolicy: edit_wins",
+    )
+    ontology = f"""{ontology}
+  - apiName: AdjustMargin
+    displayName: Adjust margin
+    target: Order
+    parameters:
+      - apiName: margin
+        type: float
+        required: true
+    mutations:
+      - type: setProperty
+        property: margin
+        valueFrom: params.margin
+"""
+    path = tmp_path / "order-customer-margin-action.yaml"
+    path.write_text(ontology, encoding="utf-8")
+    return path

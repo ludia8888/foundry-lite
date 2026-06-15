@@ -28,6 +28,7 @@ class ActionRunRow(TypedDict):
     parameters: ActionParameters
     status: str
     idempotency_key: str
+    request_fingerprint: str
     error: ActionErrorPayload | None
     created_at: str
     completed_at: str | None
@@ -47,6 +48,7 @@ class ActionRunRecord:
     parameters: ActionParameters
     status: str
     idempotency_key: str
+    request_fingerprint: str
     error: ActionErrorPayload | None
     created_at: str
     completed_at: str | None

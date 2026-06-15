@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
@@ -24,6 +24,16 @@ class MaterializationTriggerConfig(TypedDict):
     """Trigger settings for a materialization specification."""
 
     type: str
+
+
+class ActionRunWatermark(TypedDict):
+    """Last completed action included in an action-log materialization."""
+
+    completed_at: str | None
+    action_run_id: str | None
+
+
+ObjectRecordVersionRow = Mapping[str, object]
 
 
 class MaterializationRow(TypedDict):
@@ -68,6 +78,16 @@ class MaterializationRunRecord:
     completed_at: str | None
 
 
+@dataclass(frozen=True)
+class MaterializationReplayResult:
+    materialization_run_id: str
+    api_name: str
+    watermark: Mapping[str, object]
+    row_count: int
+    row_hash: str
+    rows: Sequence[Mapping[str, object]]
+
+
 class MaterializationRepository(Protocol):
     """DB boundary for materialization specs, runs, and source watermark reads."""
 
@@ -110,10 +130,44 @@ class MaterializationRepository(Protocol):
         """Mark a materialization run as terminal (succeeded/failed/aborted)."""
         ...
 
-    def latest_action_run_watermark(self, *, transaction: TransactionContext) -> str | None:
-        """Return the latest action_runs.created_at watermark (or None if empty)."""
+    def latest_action_run_watermark(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+    ) -> ActionRunWatermark:
+        """Return the latest completed action cursor for a tenant."""
         ...
 
-    def latest_object_record_watermark(self, *, transaction: TransactionContext) -> str | None:
-        """Return the latest object_records.updated_at watermark (or None if empty)."""
+    def latest_object_record_watermark(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_api_name: str,
+        index_version: str,
+    ) -> int | None:
+        """Return the latest object change sequence visible in one active index."""
+        ...
+
+    def active_object_index_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_api_name: str,
+    ) -> str:
+        """Return the active object index version for a materialized object type."""
+        ...
+
+    def object_records_at_watermark(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_api_name: str,
+        index_version: str,
+        max_object_change_sequence: int,
+    ) -> list[ObjectRecordVersionRow]:
+        """Return object rows as they existed at a fixed object change watermark."""
         ...

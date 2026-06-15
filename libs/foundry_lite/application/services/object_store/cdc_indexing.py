@@ -37,11 +37,14 @@ def parse_object_cdc_event(
 ) -> ObjectCdcEvent:
     op = _event_op(raw)
     pk = _json_mapping(raw, "pk", "pk_json")
+    primary_key_columns = _primary_key_columns(object_type, properties)
+    object_id = _object_id(pk, primary_key_columns)
     data = _event_data(raw, op)
+    _require_primary_key_stable(raw, op, primary_key_columns, object_id)
     return ObjectCdcEvent(
         event_id=_event_id(raw),
         op=op,
-        object_id=_object_id(pk, _primary_key_columns(object_type, properties)),
+        object_id=object_id,
         base_patch=_base_patch(data, properties),
         ordering=_json_mapping(raw, "ordering", "ordering_json"),
     )
@@ -104,6 +107,33 @@ def _event_data(raw: Mapping[str, object], op: str) -> Mapping[str, object]:
     if data is None and op != "d":
         raise ValidationFailed("CDC upsert event after payload is required", details={"op": op})
     return data or {}
+
+
+def _require_primary_key_stable(
+    raw: Mapping[str, object],
+    op: str,
+    columns: Sequence[str],
+    event_object_id: str,
+) -> None:
+    before_id = _payload_object_id(_nullable_json_mapping(raw, "before", "before_json"), columns)
+    after_id = _payload_object_id(_nullable_json_mapping(raw, "after", "after_json"), columns)
+    if before_id is not None and after_id is not None and before_id != after_id:
+        raise ValidationFailed(
+            "CDC primary key update is not supported",
+            details={"before_object_id": before_id, "after_object_id": after_id},
+        )
+    payload_id = before_id if op == "d" else after_id
+    if payload_id is not None and payload_id != event_object_id:
+        raise ValidationFailed(
+            "CDC primary key payload does not match event key",
+            details={"event_object_id": event_object_id, "payload_object_id": payload_id},
+        )
+
+
+def _payload_object_id(payload: Mapping[str, object] | None, columns: Sequence[str]) -> str | None:
+    if payload is None or any(column not in payload for column in columns):
+        return None
+    return _object_id(payload, columns)
 
 
 def _base_patch(raw: Mapping[str, object], properties: Sequence[PropertyTypeRow]) -> ObjectPropertyMap:

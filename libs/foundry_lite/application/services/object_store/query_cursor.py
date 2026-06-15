@@ -20,9 +20,11 @@ def encode_object_query_cursor(
     row: ObjectRecordRow,
     order_by: Sequence[ObjectOrderBy],
     filter_ast: Mapping[str, object] | None,
+    active_index_version: str,
 ) -> str:
     payload = _signed_payload(
         {
+            "activeIndexVersion": active_index_version,
             "order": _order_signature(order_by),
             "shape": _shape_checksum(order_by, filter_ast),
             "values": [_json_ready(row["properties"].get(order["property"])) for order in order_by],
@@ -37,12 +39,21 @@ def decode_object_query_cursor(
     cursor: str | None,
     order_by: Sequence[ObjectOrderBy],
     filter_ast: Mapping[str, object] | None,
+    active_index_version: str,
 ) -> ObjectQueryCursor | None:
     if cursor is None:
         return None
     if not cursor.startswith(CURSOR_PREFIX):
         raise ValidationFailed("invalid object query cursor")
     payload = _cursor_payload(cursor)
+    if payload.get("activeIndexVersion") != active_index_version:
+        raise ValidationFailed(
+            "object query cursor active index version changed",
+            details={
+                "cursorActiveIndexVersion": payload.get("activeIndexVersion"),
+                "currentActiveIndexVersion": active_index_version,
+            },
+        )
     if payload.get("order") != _order_signature(order_by):
         raise ValidationFailed("object query cursor does not match orderBy")
     if payload.get("shape") != _shape_checksum(order_by, filter_ast):
@@ -53,7 +64,7 @@ def decode_object_query_cursor(
         raise ValidationFailed("invalid object query cursor")
     if len(values) != len(order_by):
         raise ValidationFailed("object query cursor does not match orderBy")
-    return {"values": values, "object_id": object_id}
+    return {"values": values, "object_id": object_id, "active_index_version": active_index_version}
 
 
 def _cursor_payload(cursor: str) -> dict[str, object]:

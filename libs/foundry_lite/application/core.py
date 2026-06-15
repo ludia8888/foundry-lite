@@ -14,6 +14,7 @@ from foundry_lite.application.ports import (
     DatasetRow,
     DatasetVersionRow,
     LineageEdgeRow,
+    MaterializationReplayResult,
     ObjectIndexCdcResult,
     ObjectIndexRebuildResult,
     ObjectIndexShadowRebuildResult,
@@ -207,6 +208,7 @@ class FoundryLiteCore:
         payload: Mapping[str, object],
         raw_body: bytes,
         signature: str,
+        signature_timestamp: str,
         secret: str,
         event_id: str | None = None,
         ctx: RequestContext | None = None,
@@ -218,6 +220,7 @@ class FoundryLiteCore:
             payload=payload,
             raw_body=raw_body,
             signature=signature,
+            signature_timestamp=signature_timestamp,
             secret=secret,
             event_id=event_id,
             ctx=ctx,
@@ -436,12 +439,12 @@ class FoundryLiteCore:
     def materialize(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         return self._services.materialization.materialize(api_name, ctx=ctx)
 
-    def lineage_for_resource(
-        self,
-        resource_id: str,
-        *,
-        ctx: RequestContext | None = None,
-    ) -> list[LineageEdgeRow]:
+    def replay_materialization_rows(
+        self, materialization_run_id: str, *, ctx: RequestContext | None = None
+    ) -> MaterializationReplayResult:
+        return self._services.materialization.replay_rows_for_run(materialization_run_id, ctx=ctx)
+
+    def lineage_for_resource(self, resource_id: str, *, ctx: RequestContext | None = None) -> list[LineageEdgeRow]:
         return self._services.runtime.lineage_for_resource(resource_id, ctx=ctx)
 
     def list_runs(self, *, ctx: RequestContext | None = None) -> RuntimeRunSnapshot:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol
 
 from foundry_lite.application.ports import (
@@ -15,6 +15,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.search_adapter import (
     SearchDocument,
+    SearchHit,
     SearchIndexAdapter,
     SearchIndexMapping,
     SearchQuery,
@@ -83,7 +84,7 @@ class ObjectSearchService(CoreService):
         mapping = self._search_mapping(ctx, object_type_api_name)
         _require_searchable_properties(mapping)
         hits = self.search_adapter.search(_search_query(ctx, object_type_api_name, search_text, mapping, query_limit))
-        items = self._items_for_hits(ctx, object_type_api_name, [hit.document_id for hit in hits])
+        items = self._items_for_hits(ctx, object_type_api_name, hits)
         return {"items": items, "nextCursor": None}
 
     def index_search_rebuild(
@@ -128,15 +129,23 @@ class ObjectSearchService(CoreService):
         self,
         ctx: RequestContext,
         object_type_api_name: str,
-        document_ids: Sequence[str],
+        hits: Sequence[SearchHit],
     ) -> list[ObjectQueryItem]:
         """Load current object rows for search hits that still exist."""
 
         with self.engine.begin() as conn:
-            rows = [
-                self._record_if_active(conn, ctx, object_type_api_name, document_id) for document_id in document_ids
-            ]
-        return [_object_query_item(ctx, self.policy, object_type_api_name, row) for row in rows if row is not None]
+            rows = [(hit, self._record_if_active(conn, ctx, object_type_api_name, hit.document_id)) for hit in hits]
+        return [
+            _object_query_item(
+                ctx,
+                self.policy,
+                object_type_api_name,
+                row,
+                search_projection_version=hit.document.version,
+            )
+            for hit, row in rows
+            if row is not None
+        ]
 
     def _record_if_active(
         self,
@@ -182,7 +191,7 @@ class ObjectSearchService(CoreService):
         with self.engine.begin() as conn:
             object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
             properties = self.ontology_service._properties_for_object_type(conn, object_type["id"])
-        return _search_mapping(ctx, object_type_api_name, properties)
+        return _search_mapping(ctx, object_type_api_name, properties, self.policy.masked_property_names)
 
     def _sync_changed_record(
         self,
@@ -264,14 +273,22 @@ def _search_mapping(
     ctx: RequestContext,
     object_type_api_name: str,
     properties: Sequence[PropertyTypeRow],
+    masked_property_names_for: Callable[[RequestContext, str], set[str]],
 ) -> SearchIndexMapping:
     """Translate ontology indexed/searchable flags into adapter fields."""
 
+    masked_property_names = masked_property_names_for(ctx, object_type_api_name)
     return SearchIndexMapping(
         tenant_id=ctx.tenant_id,
         object_type=object_type_api_name,
-        indexed_properties=tuple(prop["api_name"] for prop in properties if prop["indexed"]),
-        searchable_properties=tuple(prop["api_name"] for prop in properties if prop["searchable"]),
+        indexed_properties=tuple(
+            prop["api_name"] for prop in properties if prop["indexed"] and prop["api_name"] not in masked_property_names
+        ),
+        searchable_properties=tuple(
+            prop["api_name"]
+            for prop in properties
+            if prop["searchable"] and prop["api_name"] not in masked_property_names
+        ),
     )
 
 
@@ -326,11 +343,17 @@ def _object_query_item(
     policy: PolicyService,
     object_type_api_name: str,
     row: ObjectRecordRow,
+    *,
+    search_projection_version: int | None = None,
 ) -> ObjectQueryItem:
     masked = policy.mask_properties(ctx, object_type_api_name, dict(row["properties"]))
-    return {
+    item: ObjectQueryItem = {
         "objectType": object_type_api_name,
         "objectId": row["object_id"],
         "objectVersion": row["object_version"],
         "properties": masked,
     }
+    if search_projection_version is not None:
+        item["searchProjectionVersion"] = search_projection_version
+        item["searchProjectionStale"] = search_projection_version < row["object_version"]
+    return item

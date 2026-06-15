@@ -32,6 +32,8 @@ class OpenSearchClientLike(Protocol):
 
     def index(self, *, index: str, id: str, body: Mapping[str, object], **_options: object) -> object: ...
 
+    def update(self, *, index: str, id: str, body: Mapping[str, object], **_options: object) -> object: ...
+
     def delete(self, *, index: str, id: str, **_options: object) -> object: ...
 
     def search(self, *, index: str, body: Mapping[str, object], size: int) -> Mapping[str, object]: ...
@@ -76,10 +78,10 @@ class OpenSearchAdapter:
         self.client.indices.create(index=index_name, body=body)
 
     def upsert_document(self, document: SearchDocument) -> None:
-        self.client.index(
+        self.client.update(
             index=self._index_name(document.tenant_id, document.object_type),
             id=document.document_id,
-            body=_document_body(document),
+            body=_version_guarded_update_body(document),
             refresh=True,
         )
 
@@ -152,6 +154,21 @@ def _document_body(document: SearchDocument) -> Mapping[str, object]:
         "object_id": document.document_id,
         "version": document.version,
         "properties": dict(document.properties),
+    }
+
+
+def _version_guarded_update_body(document: SearchDocument) -> Mapping[str, object]:
+    body = _document_body(document)
+    return {
+        "script": {
+            "source": (
+                "if (ctx._source.version == null || params.version > ctx._source.version) "
+                "{ ctx._source.clear(); ctx._source.putAll(params.document); } "
+                "else { ctx.op = 'noop'; }"
+            ),
+            "params": {"version": document.version, "document": body},
+        },
+        "upsert": body,
     }
 
 

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from typing import Any, cast
+from uuid import uuid4
 
 from sqlalchemy import and_, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import IntegrityError
 
 from foundry_lite.application.ports.action_repository import (
     ActionRunRecord,
@@ -15,6 +17,7 @@ from foundry_lite.application.ports.action_repository import (
     ObjectTargetUpdate,
 )
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
 
 
 class SqlAlchemyActionRepository:
@@ -63,6 +66,7 @@ class SqlAlchemyActionRepository:
                 parameters=dict(record.parameters),
                 status=record.status,
                 idempotency_key=record.idempotency_key,
+                request_fingerprint=record.request_fingerprint,
                 error=dict(record.error) if record.error is not None else None,
                 created_at=record.created_at,
                 completed_at=record.completed_at,
@@ -70,23 +74,19 @@ class SqlAlchemyActionRepository:
         )
 
     def insert_action_run_or_get_existing(self, *, transaction: Any, record: ActionRunRecord) -> ActionRunRow | None:
-        savepoint = transaction.begin_nested()
-        try:
-            self.insert_action_run(transaction=transaction, record=record)
-        except IntegrityError:
-            savepoint.rollback()
-            existing = self.action_run_by_idempotency(
-                transaction=transaction,
-                tenant_id=record.tenant_id,
-                action_type_id=record.action_type_id,
-                actor_user_id=record.actor_user_id,
-                idempotency_key=record.idempotency_key,
-            )
-            if existing is None:
-                raise
-            return existing
-        savepoint.commit()
-        return None
+        inserted_id = transaction.execute(_action_run_insert_or_ignore(transaction, record)).scalar_one_or_none()
+        if inserted_id == record.action_run_id:
+            return None
+        existing = self.action_run_by_idempotency(
+            transaction=transaction,
+            tenant_id=record.tenant_id,
+            action_type_id=record.action_type_id,
+            actor_user_id=record.actor_user_id,
+            idempotency_key=record.idempotency_key,
+        )
+        if existing is None:
+            raise RuntimeError("action idempotency insert had no persisted winner")
+        return existing
 
     def update_action_run_terminal(
         self,
@@ -123,6 +123,7 @@ class SqlAlchemyActionRepository:
         )
 
     def update_object_target(self, *, transaction: Any, record: ObjectTargetUpdate) -> bool:
+        object_change_sequence = next_object_change_sequence(transaction, record.tenant_id)
         result = transaction.execute(
             update(db.object_records)
             .where(
@@ -136,10 +137,14 @@ class SqlAlchemyActionRepository:
                 edit_properties=dict(record.edit_properties),
                 properties=dict(record.properties),
                 object_version=record.next_object_version,
+                object_change_sequence=object_change_sequence,
                 updated_at=record.updated_at,
             )
         )
-        return result.rowcount == 1
+        updated = result.rowcount == 1
+        if updated:
+            _insert_object_record_version_from_current(transaction, record.tenant_id, record.object_record_id)
+        return updated
 
     def insert_object_edit(self, *, transaction: Any, record: ObjectEditRecord) -> None:
         transaction.execute(
@@ -158,3 +163,80 @@ class SqlAlchemyActionRepository:
                 created_at=record.created_at,
             )
         )
+
+
+def _action_run_values(record: ActionRunRecord) -> dict[str, object]:
+    return {
+        "id": record.action_run_id,
+        "tenant_id": record.tenant_id,
+        "action_type_id": record.action_type_id,
+        "action_type_api_name": record.action_type_api_name,
+        "actor_user_id": record.actor_user_id,
+        "target_object_type_id": record.target_object_type_id,
+        "target_object_type_api_name": record.target_object_type_api_name,
+        "target_object_id": record.target_object_id,
+        "expected_object_version": record.expected_object_version,
+        "parameters": dict(record.parameters),
+        "status": record.status,
+        "idempotency_key": record.idempotency_key,
+        "request_fingerprint": record.request_fingerprint,
+        "error": dict(record.error) if record.error is not None else None,
+        "created_at": record.created_at,
+        "completed_at": record.completed_at,
+    }
+
+
+def _action_run_insert_or_ignore(transaction: Any, record: ActionRunRecord) -> Any:
+    values = _action_run_values(record)
+    conflict_columns = ["tenant_id", "action_type_id", "actor_user_id", "idempotency_key"]
+    if transaction.dialect.name == "postgresql":
+        return (
+            postgres_insert(db.action_runs)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=conflict_columns)
+            .returning(db.action_runs.c.id)
+        )
+    if transaction.dialect.name == "sqlite":
+        return (
+            sqlite_insert(db.action_runs)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=conflict_columns)
+            .returning(db.action_runs.c.id)
+        )
+    return insert(db.action_runs).values(**values).returning(db.action_runs.c.id)
+
+
+def _insert_object_record_version_from_current(transaction: Any, tenant_id: str, record_id: str) -> None:
+    row = (
+        transaction.execute(
+            select(db.object_records).where(
+                and_(db.object_records.c.tenant_id == tenant_id, db.object_records.c.id == record_id)
+            )
+        )
+        .mappings()
+        .one()
+    )
+    transaction.execute(
+        insert(db.object_record_versions).values(
+            id=f"object_record_version_{uuid4().hex}",
+            tenant_id=row["tenant_id"],
+            object_record_id=row["id"],
+            object_type_id=row["object_type_id"],
+            object_type_api_name=row["object_type_api_name"],
+            object_id=row["object_id"],
+            index_version=row["index_version"],
+            is_active=row["is_active"],
+            properties=row["properties"],
+            base_properties=row["base_properties"],
+            edit_properties=row["edit_properties"],
+            property_versions=row["property_versions"],
+            source_dataset_version_id=row["source_dataset_version_id"],
+            source_hash=row["source_hash"],
+            object_version=row["object_version"],
+            object_change_sequence=row["object_change_sequence"],
+            deleted=row["deleted"],
+            deletion_reason=row["deletion_reason"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+    )

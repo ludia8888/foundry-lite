@@ -43,6 +43,17 @@ def test_production_header_trust_profile_fails_fast() -> None:
         auth_provider_from_env(env)
 
 
+@pytest.mark.parametrize("auth_profile", ["header-trust", "local_header_trust", "demo", "demo_admin"])
+def test_production_refuses_dev_header_trust_auth(auth_profile: str) -> None:
+    with pytest.raises(AuthProfileConfigurationError, match="production cannot use"):
+        auth_provider_from_env(
+            {
+                AUTH_PROFILE_ENV: auth_profile,
+                RUNTIME_PROFILE_ENV: "production",
+            }
+        )
+
+
 def test_production_demo_profile_fails_fast() -> None:
     with pytest.raises(AuthProfileConfigurationError, match="cannot use FOUNDRY_LITE_AUTH_PROFILE=demo"):
         auth_provider_for_profile("demo", runtime_profile="prod")

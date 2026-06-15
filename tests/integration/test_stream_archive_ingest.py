@@ -56,6 +56,29 @@ def test_stream_archive_restart_resumes_after_committed_offset(tmp_path: Path) -
     assert latest["metadata"]["streamCursor"]["offset"] == 2
 
 
+def test_stream_offset_not_advanced_when_append_commit_fails(tmp_path: Path) -> None:
+    core, dependencies = _core_with_stream(tmp_path)
+    failing_core = FoundryLiteCore(dependencies=replace(dependencies, compute_adapter=_ExplodingRowsComputeAdapter()))
+    ctx = demo_admin_context()
+    stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events", limit=1)
+    core.ensure_dataset("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
+    _publish_shipment(dependencies.stream_adapter, "S-100", ctx=ctx)
+    _publish_shipment(dependencies.stream_adapter, "S-101", ctx=ctx)
+
+    first = core.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+    with pytest.raises(ValidationFailed, match="stream archive failed"):
+        failing_core.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+    retry = core.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+
+    latest = _latest_stream_transaction(core, dependencies, ctx, "raw.shipment_events")
+    preview = core.preview_dataset("raw.shipment_events", ctx=ctx)
+    assert first is not None
+    assert retry is not None
+    assert retry.row_count == 1
+    assert preview[0]["event_id"] == "shipment_events:0:1"
+    assert latest["metadata"]["streamCursor"]["offset"] == 1
+
+
 def test_stream_archive_cursor_requires_matching_schema_strategy() -> None:
     stream = StreamArchiveConfig(
         stream_name="shipments",

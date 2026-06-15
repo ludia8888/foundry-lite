@@ -28,6 +28,7 @@ from foundry_lite.application.services.transform_runs import (
     start_failed_transform_retry,
     start_transform_run,
 )
+from foundry_lite.application.services.transform_sql_guards import validate_sql_transform_uses_declared_inputs
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -87,6 +88,7 @@ class TransformService(CoreService):
         mode: str,
         language: str,
     ) -> TransformRow:
+        language = _supported_transform_language(language)
         normalized_checks = self._normalized_checks(checks)
         with self.engine.begin() as conn:
             existing = self._transform_by_api_name(conn, ctx, api_name)
@@ -190,7 +192,12 @@ class TransformService(CoreService):
         staged: Path,
     ) -> CommitResult:
         """Finalize the dataset version and close the transform run atomically."""
-        result = self.dataset_transaction_service._finalize_open_transaction(
+
+        def after_persist(conn: TransactionContext, result: CommitResult) -> None:
+            self._record_transform_lineage(conn, ctx, plan, result)
+            self._mark_transform_run_succeeded(conn, ctx, plan.run_id, result)
+
+        return self.dataset_transaction_service._finalize_open_transaction(
             conn,
             ctx,
             dataset=plan.output_dataset,
@@ -200,10 +207,8 @@ class TransformService(CoreService):
             audit_action="transform_output_commit",
             outbox_event_type="dataset.version.committed",
             extra_checks=plan.checks,
+            after_persist=after_persist,
         )
-        self._record_transform_lineage(conn, ctx, plan, result)
-        self._mark_transform_run_succeeded(conn, ctx, plan.run_id, result)
-        return result
 
     def _record_transform_lineage(
         self,
@@ -435,6 +440,7 @@ class TransformService(CoreService):
         staged: Path,
     ) -> None:
         sql = Path(entrypoint).read_text(encoding="utf-8")
+        validate_sql_transform_uses_declared_inputs(sql)
         input_paths_by_ref = {
             dataset_ref: self.dataset_transaction_service._version_file_path(
                 self.dataset_version_service._get_version_by_id(version_id)
@@ -463,3 +469,13 @@ def _transform_retry_response(plan: TransformRunPlan, result: CommitResult) -> T
         "manifest_uri": result.manifest_uri,
         "schema_hash": result.schema_hash,
     }
+
+
+def _supported_transform_language(language: str) -> str:
+    normalized = language.strip().lower()
+    if normalized == "sql":
+        return normalized
+    raise ValidationFailed(
+        "unsupported transform language",
+        details={"language": language, "supported_languages": ["sql"]},
+    )

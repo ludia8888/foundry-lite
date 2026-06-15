@@ -23,6 +23,7 @@ class ActionApplyCommand:
     expected_object_version: int
     params: dict[str, object]
     idempotency_key: str
+    request_fingerprint: str
     simulate_writeback_failure: bool
 
 

@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from foundry_lite.application.ports.action_repository import ActionRunRecord, ActionRunRow
+from foundry_lite.application.services.action_helpers import action_request_fingerprint
 from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.domain.context import RequestContext
 
@@ -99,6 +100,13 @@ def _action_run_row() -> ActionRunRow:
         "parameters": {"reason": "Inventory confirmed"},
         "status": "succeeded",
         "idempotency_key": "same-key",
+        "request_fingerprint": action_request_fingerprint(
+            action_api_name="ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=1,
+            params={"reason": "Inventory confirmed"},
+        ),
         "error": None,
         "created_at": "2026-06-13T00:00:00Z",
         "completed_at": "2026-06-13T00:00:01Z",

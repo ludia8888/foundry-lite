@@ -25,6 +25,7 @@ from foundry_lite.application.services.action_helpers import (
     action_patch,
     action_replay_response,
     action_success_response,
+    audit_idempotency_conflict,
     previous_action_values,
     writeback_error_payload,
 )
@@ -99,7 +100,7 @@ class ActionService(CoreService):
             action_type = self.ontology_service._active_action_type(conn, ctx, command.action_api_name)
             existing = self._existing_action_run(conn, ctx, action_type, command.idempotency_key)
             if existing is not None:
-                return ActionApplyOutcome(response=action_replay_response(existing))
+                return self._replay_existing_action_run(conn, ctx, existing, command.request_fingerprint)
             raced_existing = self._insert_action_run(
                 conn,
                 ctx,
@@ -108,7 +109,7 @@ class ActionService(CoreService):
                 command=command,
             )
             if raced_existing is not None:
-                return ActionApplyOutcome(response=action_replay_response(raced_existing))
+                return self._replay_existing_action_run(conn, ctx, raced_existing, command.request_fingerprint)
             outcome = self._complete_received_action_run(
                 conn,
                 ctx,
@@ -215,11 +216,33 @@ class ActionService(CoreService):
                 parameters=command.params,
                 status="received",
                 idempotency_key=command.idempotency_key,
+                request_fingerprint=command.request_fingerprint,
                 error=None,
                 created_at=_now(),
                 completed_at=None,
             ),
         )
+
+    def _replay_existing_action_run(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        existing: ActionRunRow,
+        request_fingerprint: str,
+    ) -> ActionApplyOutcome:
+        if existing["request_fingerprint"] == request_fingerprint:
+            return ActionApplyOutcome(response=action_replay_response(existing))
+        error = ConflictDetected(
+            "idempotency key conflict",
+            details={
+                "action_run_id": existing["id"],
+                "idempotency_key": existing["idempotency_key"],
+                "existing_request_fingerprint": existing["request_fingerprint"],
+                "request_fingerprint": request_fingerprint,
+            },
+        )
+        audit_idempotency_conflict(self.runtime_service, conn, ctx, existing, request_fingerprint)
+        return ActionApplyOutcome(deferred_error=error)
 
     def _action_request_error(
         self,
@@ -363,7 +386,7 @@ class ActionService(CoreService):
             completed_at=_now(),
         )
         self._publish_action_commit_events(conn, ctx, action_run_id, record, edit_id)
-        self._audit_action_commit(conn, ctx, action_run_id, previous_values, patch, edit_id)
+        self._audit_action_commit(conn, ctx, action_run_id, record, previous_values, patch, edit_id)
         return action_success_response(action_run_id, record, edit_id, patch)
 
     def _audit_action_commit(
@@ -371,10 +394,12 @@ class ActionService(CoreService):
         conn: TransactionContext,
         ctx: RequestContext,
         action_run_id: str,
+        record: ObjectRecordRow,
         previous_values: ObjectProperties,
         patch: ObjectPatch,
         edit_id: str,
     ) -> None:
+        object_type = record["object_type_api_name"]
         self.runtime_service._audit(
             conn,
             ctx,
@@ -382,8 +407,11 @@ class ActionService(CoreService):
             resource_type="action_run",
             resource_id=action_run_id,
             action="apply",
-            before_ref=dict(previous_values),
-            after_ref={"patch": dict(patch), "object_edit_id": edit_id},
+            before_ref=self.policy.mask_sensitive_properties(object_type, dict(previous_values)),
+            after_ref={
+                "patch": self.policy.mask_sensitive_properties(object_type, dict(patch)),
+                "object_edit_id": edit_id,
+            },
             correlation_id=action_run_id,
         )
 

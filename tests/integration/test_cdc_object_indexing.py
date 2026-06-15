@@ -39,6 +39,14 @@ def test_cdc_object_indexing_updates_tombstones_and_skips_stale_events(tmp_path:
     stale = _cdc_event("topic:0:11", "u", 11, after={"order_id": "O-1001", "status": "REVIEW", "amount": 700})
     stale_result = core.index_cdc_events("Order", [stale], ctx=ctx)
     after_stale = core.get_object("Order", "O-1001", ctx=ctx)
+    stale_snapshot = _cdc_event(
+        "topic:0:10",
+        "r",
+        10,
+        after={"order_id": "O-1001", "status": "SNAPSHOT_PENDING", "amount": 650},
+    )
+    stale_snapshot_result = core.index_cdc_events("Order", [stale_snapshot], ctx=ctx)
+    after_stale_snapshot = core.get_object("Order", "O-1001", ctx=ctx)
     delete = _cdc_event(
         "topic:0:13",
         "d",
@@ -47,7 +55,18 @@ def test_cdc_object_indexing_updates_tombstones_and_skips_stale_events(tmp_path:
     )
     delete_result = core.index_cdc_events("Order", [delete], ctx=ctx)
     deleted = core.get_object("Order", "O-1001", ctx=ctx)
+    late_update_after_delete = _cdc_event(
+        "topic:0:11-retry",
+        "u",
+        11,
+        after={"order_id": "O-1001", "status": "REOPENED", "amount": 999},
+    )
+    late_update_result = core.index_cdc_events("Order", [late_update_after_delete], ctx=ctx)
+    still_deleted = core.get_object("Order", "O-1001", ctx=ctx)
     active_page = core.query_objects("Order", ctx=ctx)
+    core.ensure_dataset("ops.order_current", ctx=ctx, primary_key=["orderId"])
+    order_current = core.materialize("order_current", ctx=ctx)
+    order_current_rows = _materialization_rows_for_version(core, ctx, order_current.version_id)
 
     assert update_result["objects_upserted"] == 1
     assert updated["properties"]["status"] == "APPROVED"
@@ -55,11 +74,18 @@ def test_cdc_object_indexing_updates_tombstones_and_skips_stale_events(tmp_path:
     assert stale_result["events_skipped"] == 1
     assert after_stale["objectVersion"] == updated_version
     assert after_stale["properties"]["status"] == "APPROVED"
+    assert stale_snapshot_result["events_skipped"] == 1
+    assert after_stale_snapshot["objectVersion"] == updated_version
+    assert after_stale_snapshot["properties"]["status"] == "APPROVED"
     assert _object_changed_count(core, ctx, "O-1001") == object_changed_count + 1
     assert delete_result["objects_deleted"] == 1
     assert deleted.get("deleted") is True
     assert deleted.get("deletionReason") == "source_deleted"
+    assert late_update_result["events_skipped"] == 1
+    assert still_deleted.get("deleted") is True
+    assert still_deleted.get("deletionReason") == "source_deleted"
     assert active_page["items"] == []
+    assert order_current_rows == []
     assert _index_run(core, ctx, delete_result["index_run_id"])["trigger_type"] == "cdc_incremental"
 
 
@@ -179,6 +205,19 @@ def _object_changed_count(core: FoundryLiteCore, ctx: RequestContext, object_id:
 
 def _index_run(core: FoundryLiteCore, ctx: RequestContext, run_id: str) -> dict[str, object]:
     return dict(next(row for row in core.query_runs(ctx=ctx, run_type="index")["indexRuns"] if row["id"] == run_id))
+
+
+def _materialization_rows_for_version(
+    core: FoundryLiteCore,
+    ctx: RequestContext,
+    version_id: str,
+) -> list[dict[str, object]]:
+    run = next(
+        row
+        for row in core.query_runs(ctx=ctx, run_type="materialization")["materializationRuns"]
+        if row["target_dataset_version_id"] == version_id
+    )
+    return [dict(row) for row in core.replay_materialization_rows(str(run["id"]), ctx=ctx).rows]
 
 
 def _object_index_version(core: FoundryLiteCore, ctx: RequestContext, object_id: str) -> str:

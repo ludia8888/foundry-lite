@@ -253,6 +253,18 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
     assert config.sync_name == "custom-sync"
 
 
+def test_worker_requires_tenant_context_for_background_jobs(tmp_path: Path) -> None:
+    config = worker_module.config_from_env(
+        {
+            "FOUNDRY_LITE_HOME": str(tmp_path),
+            "FOUNDRY_LITE_TENANT_ID": " ",
+        }
+    )
+
+    with pytest.raises(ValueError, match="requires tenant_id"):
+        config.request_context()
+
+
 def test_stream_archive_worker_builds_debezium_adapter_for_cdc(tmp_path: Path) -> None:
     config = StreamArchiveWorkerConfig(
         dataset_ref="raw_cdc.erp_orders",

@@ -8,7 +8,7 @@ from foundry_lite.application.ports import RestSourceConfig
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure import schema as db
-from foundry_lite.infrastructure.adapters import RestPullConnectorAdapter
+from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter, RestPullConnectorAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from sqlalchemy import select
 
@@ -76,6 +76,50 @@ def test_rest_connector_snapshot_resumes_from_committed_cursor(tmp_path) -> None
     }
 
 
+def test_rest_cursor_not_advanced_when_dataset_commit_fails(tmp_path) -> None:
+    with MockRestServer() as server:
+        dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+        core = FoundryLiteCore(dependencies=replace(dependencies, connector_adapter=RestPullConnectorAdapter()))
+        failing_core = FoundryLiteCore(
+            dependencies=replace(
+                dependencies,
+                compute_adapter=_ExplodingRowsComputeAdapter(),
+                connector_adapter=RestPullConnectorAdapter(),
+            )
+        )
+        ctx = demo_admin_context()
+        rest = RestSourceConfig(base_url=server.base_url, resource_path="/orders", allow_private_network=True)
+        core.ensure_dataset("raw.rest_orders", ctx=ctx, primary_key=["order_id"])
+
+        core.sync_connector_snapshot(
+            "raw.rest_orders",
+            connector_name="rest",
+            resource_name="orders",
+            ctx=ctx,
+            rest=rest,
+        )
+        with pytest.raises(ValidationFailed, match="connector snapshot sync failed"):
+            failing_core.sync_connector_snapshot(
+                "raw.rest_orders",
+                connector_name="rest",
+                resource_name="orders",
+                ctx=ctx,
+                rest=rest,
+            )
+        retry = core.sync_connector_snapshot(
+            "raw.rest_orders",
+            connector_name="rest",
+            resource_name="orders",
+            ctx=ctx,
+            rest=rest,
+        )
+
+    latest_metadata = _transaction_metadata(core, retry.transaction_id)
+    assert [request["cursor"] for request in server.requests] == [None, "page-2", "page-2"]
+    assert latest_metadata["connectorCursor"]["requestCursor"] == {"cursor": "page-2"}
+    assert latest_metadata["connectorCursor"]["nextCursor"] is None
+
+
 def test_rest_connector_rate_limit_failure_is_visible_in_operations(tmp_path) -> None:
     with MockRestServer() as server:
         core = _core_with_rest_connector(tmp_path)
@@ -115,3 +159,8 @@ def _transaction_metadata(core: FoundryLiteCore, transaction_id: str) -> dict[st
             .one()
         )
         return dict(row["metadata"])
+
+
+class _ExplodingRowsComputeAdapter(DuckDBComputeAdapter):
+    def rows_to_parquet(self, *_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("connector snapshot parquet write failed")

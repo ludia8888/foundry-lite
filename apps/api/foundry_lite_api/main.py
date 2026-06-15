@@ -340,6 +340,7 @@ async def ingest_webhook(
     payload: WebhookPayloadRequest,
     dataset_ref: str = Query(alias="datasetRef"),
     signature: str = Header(alias="X-Foundry-Lite-Signature"),
+    signature_timestamp: str = Header(alias="X-Foundry-Lite-Timestamp"),
     event_id: str | None = Header(default=None, alias="X-Foundry-Lite-Event-ID"),
 ):
     try:
@@ -351,6 +352,7 @@ async def ingest_webhook(
             payload=_webhook_payload(payload),
             raw_body=raw_body,
             signature=signature,
+            signature_timestamp=signature_timestamp,
             secret=_webhook_signing_key(),
             event_id=event_id,
             ctx=_ctx(request),

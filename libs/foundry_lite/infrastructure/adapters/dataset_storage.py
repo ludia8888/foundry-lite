@@ -42,6 +42,12 @@ class LocalDatasetStorageAdapter:
                     True,
                     "Committed artifact cleanup could not reach storage; retry cleanup.",
                 ),
+                AdapterFailureMode(
+                    "delete_staging_transaction",
+                    "unavailable",
+                    True,
+                    "Staging cleanup could not reach storage; retry cleanup or inspect the transaction.",
+                ),
             ),
         )
 
@@ -49,7 +55,7 @@ class LocalDatasetStorageAdapter:
         return self._uri_for(self._dataset_dir(tenant_id, dataset_id))
 
     def staging_file(self, *, tenant_id: str, dataset_id: str, transaction_id: str, file_name: str) -> Path:
-        path = self._dataset_dir(tenant_id, dataset_id) / "_staging" / transaction_id / file_name
+        path = self._staging_dir(tenant_id, dataset_id, transaction_id) / file_name
         path.parent.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -90,6 +96,7 @@ class LocalDatasetStorageAdapter:
             "storage_profile": self.profile_name,
         }
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+        self._verify_committed_manifest(manifest_path, final_parquet, manifest_file)
         return StoredDatasetCommit(
             manifest_uri=self._uri_for(manifest_path),
             data_file_uri=data_file_uri,
@@ -113,18 +120,55 @@ class LocalDatasetStorageAdapter:
         shutil.rmtree(version_dir)
         return True
 
+    def delete_staging_transaction(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        transaction_id: str,
+    ) -> bool:
+        staging_dir = self._staging_dir(tenant_id, dataset_id, transaction_id)
+        if not staging_dir.exists():
+            return False
+        shutil.rmtree(staging_dir)
+        return True
+
     def load_manifest(self, manifest_uri: str) -> DatasetManifest:
         return cast(DatasetManifest, json.loads(self._path_for(manifest_uri).read_text(encoding="utf-8")))
 
     def first_data_file_path(self, manifest_uri: str) -> Path:
         manifest = self.load_manifest(manifest_uri)
-        return self._path_for(manifest["files"][0]["uri"])
+        files = manifest.get("files") or []
+        if not files:
+            raise ValueError(f"dataset manifest has no files: {manifest_uri}")
+        path = self._path_for(files[0]["uri"])
+        if not path.exists():
+            raise FileNotFoundError(str(path))
+        return path
+
+    def _verify_committed_manifest(
+        self,
+        manifest_path: Path,
+        data_path: Path,
+        manifest_file: DatasetManifestFile,
+    ) -> None:
+        manifest = self.load_manifest(self._uri_for(manifest_path))
+        files = manifest.get("files") or []
+        if not files or files[0]["uri"] != self._uri_for(data_path):
+            raise ValueError("dataset manifest does not reference the committed data file")
+        if data_path.stat().st_size != manifest_file["byte_size"]:
+            raise ValueError("dataset manifest byte size does not match committed data file")
+        if _file_hash(data_path) != manifest_file["content_hash"]:
+            raise ValueError("dataset manifest content hash does not match committed data file")
 
     def _dataset_dir(self, tenant_id: str, dataset_id: str) -> Path:
         return self.root / tenant_id / "datasets" / dataset_id
 
     def _version_dir(self, tenant_id: str, dataset_id: str, branch: str, version_id: str) -> Path:
         return self._dataset_dir(tenant_id, dataset_id) / f"branch={branch}" / f"version={version_id}"
+
+    def _staging_dir(self, tenant_id: str, dataset_id: str, transaction_id: str) -> Path:
+        return self._dataset_dir(tenant_id, dataset_id) / "_staging" / transaction_id
 
     def _uri_for(self, path: Path) -> str:
         if self.uri_scheme is None:

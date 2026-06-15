@@ -4,14 +4,14 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from foundry_lite.application.action_types import ActionApplyCommand, ActionApplyResponse
-from foundry_lite.application.ports import ActionMutationDefinition, ActionTypeRow, ObjectRecordRow
+from foundry_lite.application.ports import ActionMutationDefinition, ActionTypeRow, ObjectRecordRow, TransactionContext
 from foundry_lite.application.ports.action_repository import (
     ActionErrorPayload,
     ActionRunRow,
     ObjectPatch,
     ObjectProperties,
 )
-from foundry_lite.application.primitives import MOCK_WRITEBACK_CONNECTOR
+from foundry_lite.application.primitives import MOCK_WRITEBACK_CONNECTOR, _json_hash
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ExternalSystemError, ValidationFailed
 
@@ -28,6 +28,22 @@ class SupportsErrorPayload(Protocol):
     ) -> ActionErrorPayload: ...
 
 
+class SupportsAudit(Protocol):
+    def _audit(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        *,
+        event_type: str,
+        resource_type: str,
+        resource_id: str,
+        action: str,
+        decision: str = "allow",
+        after_ref: Mapping[str, object] | None = None,
+        correlation_id: str | None = None,
+    ) -> None: ...
+
+
 def action_command(
     action_api_name: str,
     object_type: str,
@@ -39,14 +55,42 @@ def action_command(
 ) -> ActionApplyCommand:
     if not idempotency_key:
         raise ValidationFailed("idempotency key is required")
+    normalized_params = dict(params)
     return ActionApplyCommand(
         action_api_name=action_api_name,
         object_type=object_type,
         object_id=object_id,
         expected_object_version=expected_object_version,
-        params=dict(params),
+        params=normalized_params,
         idempotency_key=idempotency_key,
+        request_fingerprint=action_request_fingerprint(
+            action_api_name=action_api_name,
+            object_type=object_type,
+            object_id=object_id,
+            expected_object_version=expected_object_version,
+            params=normalized_params,
+        ),
         simulate_writeback_failure=simulate_writeback_failure,
+    )
+
+
+def action_request_fingerprint(
+    *,
+    action_api_name: str,
+    object_type: str,
+    object_id: str,
+    expected_object_version: int,
+    params: Mapping[str, object],
+) -> str:
+    return _json_hash(
+        {
+            "version": 1,
+            "actionApiName": action_api_name,
+            "objectType": object_type,
+            "objectId": object_id,
+            "expectedObjectVersion": expected_object_version,
+            "params": dict(params),
+        }
     )
 
 
@@ -60,6 +104,30 @@ def action_replay_response(existing: ActionRunRow) -> ActionApplyResponse:
             "objectId": existing["target_object_id"],
         },
     }
+
+
+def audit_idempotency_conflict(
+    runtime_service: SupportsAudit,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    existing: ActionRunRow,
+    request_fingerprint: str,
+) -> None:
+    runtime_service._audit(
+        conn,
+        ctx,
+        event_type="action.run.idempotency_conflict",
+        resource_type="action_run",
+        resource_id=existing["id"],
+        action="apply",
+        decision="deny",
+        after_ref={
+            "idempotency_key": existing["idempotency_key"],
+            "existing_request_fingerprint": existing["request_fingerprint"],
+            "request_fingerprint": request_fingerprint,
+        },
+        correlation_id=existing["id"],
+    )
 
 
 def writeback_error_payload(

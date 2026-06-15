@@ -7,9 +7,11 @@ from sqlalchemy import and_, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.materialization_repository import (
+    ActionRunWatermark,
     MaterializationRecord,
     MaterializationRow,
     MaterializationRunRecord,
+    ObjectRecordVersionRow,
 )
 from foundry_lite.infrastructure import schema as db
 
@@ -111,8 +113,155 @@ class SqlAlchemyMaterializationRepository:
             )
         )
 
-    def latest_action_run_watermark(self, *, transaction: Any) -> str | None:
-        return transaction.execute(select(func.max(db.action_runs.c.created_at))).scalar()
+    def latest_action_run_watermark(self, *, transaction: Any, tenant_id: str) -> ActionRunWatermark:
+        row = (
+            transaction.execute(
+                select(db.action_runs.c.completed_at, db.action_runs.c.id)
+                .where(and_(db.action_runs.c.tenant_id == tenant_id, db.action_runs.c.completed_at.is_not(None)))
+                .order_by(db.action_runs.c.completed_at.desc(), db.action_runs.c.id.desc())
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            return {"completed_at": None, "action_run_id": None}
+        return {"completed_at": str(row["completed_at"]), "action_run_id": str(row["id"])}
 
-    def latest_object_record_watermark(self, *, transaction: Any) -> str | None:
-        return transaction.execute(select(func.max(db.object_records.c.updated_at))).scalar()
+    def latest_object_record_watermark(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        index_version: str,
+    ) -> int | None:
+        value = transaction.execute(
+            select(func.max(db.object_records.c.object_change_sequence)).where(
+                and_(
+                    db.object_records.c.tenant_id == tenant_id,
+                    db.object_records.c.object_type_api_name == object_type_api_name,
+                    db.object_records.c.index_version == index_version,
+                    db.object_records.c.is_active == True,  # noqa: E712
+                )
+            )
+        ).scalar()
+        return int(value) if value is not None else None
+
+    def active_object_index_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+    ) -> str:
+        pointer = self._active_index_pointer(transaction, tenant_id, object_type_api_name)
+        if pointer is not None:
+            return pointer
+        return self._legacy_active_index_version(transaction, tenant_id, object_type_api_name)
+
+    def _active_index_pointer(
+        self,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+    ) -> str | None:
+        row = (
+            transaction.execute(
+                select(db.object_index_versions.c.active_index_version)
+                .select_from(
+                    db.object_index_versions.join(
+                        db.object_types,
+                        and_(
+                            db.object_types.c.tenant_id == db.object_index_versions.c.tenant_id,
+                            db.object_types.c.id == db.object_index_versions.c.object_type_id,
+                        ),
+                    )
+                )
+                .where(
+                    and_(
+                        db.object_index_versions.c.tenant_id == tenant_id,
+                        db.object_types.c.api_name == object_type_api_name,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return str(row["active_index_version"]) if row else None
+
+    def _legacy_active_index_version(self, transaction: Any, tenant_id: str, object_type_api_name: str) -> str:
+        row = (
+            transaction.execute(
+                select(db.object_records.c.index_version)
+                .where(
+                    and_(
+                        db.object_records.c.tenant_id == tenant_id,
+                        db.object_records.c.object_type_api_name == object_type_api_name,
+                        db.object_records.c.is_active == True,  # noqa: E712
+                    )
+                )
+                .order_by(db.object_records.c.updated_at.desc(), db.object_records.c.index_version)
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        return str(row["index_version"]) if row else "active"
+
+    def object_records_at_watermark(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        index_version: str,
+        max_object_change_sequence: int,
+    ) -> list[ObjectRecordVersionRow]:
+        latest = (
+            select(
+                db.object_record_versions.c.object_type_id,
+                db.object_record_versions.c.object_id,
+                db.object_record_versions.c.index_version,
+                func.max(db.object_record_versions.c.object_change_sequence).label("max_sequence"),
+            )
+            .where(
+                and_(
+                    db.object_record_versions.c.tenant_id == tenant_id,
+                    db.object_record_versions.c.object_type_api_name == object_type_api_name,
+                    db.object_record_versions.c.index_version == index_version,
+                    db.object_record_versions.c.object_change_sequence <= max_object_change_sequence,
+                )
+            )
+            .group_by(
+                db.object_record_versions.c.object_type_id,
+                db.object_record_versions.c.object_id,
+                db.object_record_versions.c.index_version,
+            )
+            .subquery()
+        )
+        rows = transaction.execute(_object_record_versions_at_watermark_statement(tenant_id, latest)).mappings().all()
+        return [cast(ObjectRecordVersionRow, dict(row)) for row in rows]
+
+
+def _object_record_versions_at_watermark_statement(tenant_id: str, latest: Any) -> Any:
+    return (
+        select(db.object_record_versions)
+        .join(
+            latest,
+            and_(
+                db.object_record_versions.c.object_type_id == latest.c.object_type_id,
+                db.object_record_versions.c.object_id == latest.c.object_id,
+                db.object_record_versions.c.index_version == latest.c.index_version,
+                db.object_record_versions.c.object_change_sequence == latest.c.max_sequence,
+            ),
+        )
+        .where(
+            and_(
+                db.object_record_versions.c.tenant_id == tenant_id,
+                db.object_record_versions.c.is_active == True,  # noqa: E712
+                db.object_record_versions.c.deleted == False,  # noqa: E712
+            )
+        )
+        .order_by(db.object_record_versions.c.object_id)
+    )

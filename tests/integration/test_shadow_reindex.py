@@ -9,7 +9,7 @@ from foundry_lite.domain.errors import ValidationFailed
 from tests.conftest import prepare_indexed_demo
 
 
-def test_shadow_reindex_switches_after_validation_and_replays_action_edits(
+def test_shadow_reindex_replays_action_edits(
     core: FoundryLiteCore,
 ) -> None:
     ctx = prepare_indexed_demo(core)
@@ -42,6 +42,24 @@ def test_shadow_reindex_switches_after_validation_and_replays_action_edits(
     assert [item["objectId"] for item in query_page["items"]] == ["O-1001", "O-1002", "O-1003"]
     assert run["trigger_type"] == "shadow_reindex"
     assert run["status"] == "succeeded"
+
+
+def test_shadow_reindex_alias_switch_cursor_version_safe(
+    core: FoundryLiteCore,
+) -> None:
+    ctx = prepare_indexed_demo(core)
+    order_by = [{"property": "amount", "direction": "desc"}]
+    first_page = core.query_objects("Order", ctx=ctx, order_by=order_by, limit=1)
+    cursor = first_page["nextCursor"]
+    assert cursor is not None
+
+    result = core.index_shadow_rebuild("Order", ctx=ctx)
+
+    with pytest.raises(ValidationFailed, match="active index version"):
+        core.query_objects("Order", ctx=ctx, order_by=order_by, cursor=cursor)
+    assert result["is_switched"] is True
+    fresh_page = core.query_objects("Order", ctx=ctx, order_by=order_by, limit=3)
+    assert [item["objectId"] for item in fresh_page["items"]] == ["O-1001", "O-1002", "O-1003"]
 
 
 def test_shadow_reindex_validation_failure_keeps_existing_active_index(

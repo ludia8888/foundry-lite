@@ -312,16 +312,23 @@ transaction 밖 audit 실패, preparatory lifecycle write 허용, JSON report �
 - `ActionService.apply_action`은 빈 key를 `ValidationFailed`로 거부해야 한다.
 - 새 `action_run` insert 전에 기존 action_run을 idempotency key로 조회하고,
   있으면 replay response를 반환해야 한다.
-- `ActionRunRecord`에는 idempotency key가 저장되어야 한다.
+- 기존 action_run replay는 저장된 `request_fingerprint`가 현재 canonical request와
+  같을 때만 허용해야 한다.
+- same-key/different-request reuse는 `idempotency key conflict`와
+  `action.run.idempotency_conflict` audit evidence로 거부해야 한다.
+- `ActionRunRow`와 `ActionRunRecord`에는 `request_fingerprint`가 포함되어야 한다.
+- `ActionRunRecord`에는 idempotency key와 request fingerprint가 저장되어야 한다.
 - `ActionRepository`는 `action_run_by_idempotency(..., idempotency_key=...)` lookup을
   제공해야 한다.
 - `action_runs` schema에는 `tenant_id`, `action_type_id`, `actor_user_id`,
   `idempotency_key` unique constraint가 있어야 한다.
+- `action_runs` schema에는 `request_fingerprint` column이 있어야 한다.
 - 결과는 `artifacts/quality/action_idempotency.json`에 남긴다.
 
 Self-test: `tests/unit/test_quality_action_idempotency.py`가 완전한 계약 통과,
 API header 누락 실패, 기존 action_run lookup이 insert 뒤로 밀린 경우 실패,
-schema unique constraint 누락 실패, JSON report 생성을 검증한다.
+request fingerprint guard/storage/schema 누락 실패, schema unique constraint 누락 실패,
+JSON report 생성을 검증한다.
 
 ### Tier G13 — contract test per port (✅ 완료 2026-06-11 G13)
 
@@ -536,7 +543,10 @@ Self-test: `tests/unit/test_quality_outbox_consistency.py`가 정상 state chang
 
 현재 보장 범위: G18은 동적 게이트다. service mutation 함수 안에서 state change와
 outbox insert가 같은 transaction scope에 있는지 정적으로 강제하는 검증은 G11이
-담당한다.
+담당한다. Action Runtime은 추가로
+`test_action_commit_object_edit_audit_outbox_atomic`가 object record
+update 이후, object edit insert, action terminal update, outbox insert, audit insert
+실패를 주입해 같은 transaction rollback에 묶이는지 검증한다.
 
 ### Tier G19 — flaky detector (✅ 완료 2026-06-11 G19)
 
@@ -1110,7 +1120,7 @@ method-registry magic dispatch로 돌아가는 것을 차단한다.
 | ID | 게이트 | 매핑 조항 | 정량 기준 | Root cause |
 |---|---|---|---|---|
 | G11 | `check_transaction_outbox_pair.py` | §7.1 33, §10.2 audit/outbox | service mutation transaction block에서 repository write와 audit/outbox proof를 같은 call tree에 강제 | outbox/audit 누락 차단 |
-| G12 | `check_idempotency_on_action.py` | §6.3 30, §7.3 | API `Idempotency-Key` header, Core/Service required parameter, existing action_run replay, schema unique constraint. 위반 0 | 중복 액션 차단 |
+| G12 | `check_idempotency_on_action.py` | §6.3 30, §7.3 | API `Idempotency-Key` header, Core/Service required parameter, existing action_run replay, request fingerprint comparison, idempotency-conflict audit, schema unique constraint and fingerprint column. 위반 0 | 중복 액션·잘못된 replay 차단 |
 | G13 | `check_contract_test_per_port.py` | §4.3 27 | `libs/foundry_lite/application/ports/*.py`마다 `tests/contracts/test_*_contract.py` 1:1 존재. 누락 0 | 새 boundary가 부정통하게 들어오는 것 차단 |
 | D1 | `check_strategy_specification_tests.py` | §4.2 22 | strategy/specification module missing direct test 0 | 조건 규칙이 API/Core 테스트에 갇히는 문제 차단 |
 | G14 | `check_doc_drift.py` | AGENTS.md, implementation-status.md | 문서에 명시된 클래스/모듈/메서드 이름이 코드에 실재하는지 grep + AST 검증 | 문서 과장 차단 |

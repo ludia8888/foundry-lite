@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn, Protocol
 
@@ -23,6 +24,18 @@ from foundry_lite.application.services.dataset.protocols import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, PermissionDenied, ValidationFailed
+
+_WEBHOOK_MAX_CLOCK_SKEW_SECONDS = 300
+_WEBHOOK_EVENT_ID_KEYS = ("provider_event_id", "providerEventId", "event_id", "eventId", "delivery_id", "deliveryId")
+_WEBHOOK_VOLATILE_KEYS = frozenset(
+    {
+        "deliveryattempt",
+        "receivedat",
+        "signature",
+        "timestamp",
+        "ts",
+    }
+)
 
 
 class WebhookIngestRuntime(Protocol):
@@ -76,6 +89,7 @@ def ingest_webhook_event(
     payload: Mapping[str, object],
     raw_body: bytes,
     signature: str,
+    signature_timestamp: str,
     secret: str,
     event_id: str | None = None,
     ctx: RequestContext | None = None,
@@ -90,6 +104,7 @@ def ingest_webhook_event(
         payload,
         raw_body,
         signature,
+        signature_timestamp,
         secret,
         event_id,
     )
@@ -151,6 +166,7 @@ def _prepare_webhook_ingest(
     payload: Mapping[str, object],
     raw_body: bytes,
     signature: str,
+    signature_timestamp: str,
     secret: str,
     event_id: str | None,
 ) -> WebhookIngest:
@@ -162,6 +178,7 @@ def _prepare_webhook_ingest(
         resource_name,
         raw_body,
         signature,
+        signature_timestamp,
         secret,
     )
     runtime.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
@@ -179,10 +196,15 @@ def _require_valid_webhook_signature(
     resource_name: str,
     raw_body: bytes,
     signature: str,
+    signature_timestamp: str,
     secret: str,
 ) -> None:
-    if _webhook_signature_valid(raw_body, signature, secret):
-        return
+    try:
+        if _webhook_signature_valid(raw_body, signature, signature_timestamp, secret):
+            return
+    except PermissionDenied:
+        _audit_webhook_signature_denied(runtime, ctx, dataset_ref, connector_name, resource_name)
+        raise
     _audit_webhook_signature_denied(runtime, ctx, dataset_ref, connector_name, resource_name)
     raise PermissionDenied("invalid webhook signature", details={"connector": connector_name})
 
@@ -293,11 +315,28 @@ def _audit_webhook_signature_denied(
         )
 
 
-def _webhook_signature_valid(raw_body: bytes, signature: str, secret: str) -> bool:
+def _webhook_signature_valid(raw_body: bytes, signature: str, signature_timestamp: str, secret: str) -> bool:
     if not secret:
         raise ValidationFailed("webhook secret is not configured")
-    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    _require_fresh_webhook_timestamp(signature_timestamp)
+    signed_payload = signature_timestamp.encode("utf-8") + b"." + raw_body
+    expected = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
     return hmac.compare_digest(signature, f"sha256={expected}")
+
+
+def _require_fresh_webhook_timestamp(signature_timestamp: str) -> None:
+    try:
+        parsed = datetime.fromisoformat(signature_timestamp.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise PermissionDenied("invalid webhook timestamp", details={"timestamp": signature_timestamp}) from exc
+    if parsed.tzinfo is None:
+        raise PermissionDenied("invalid webhook timestamp", details={"timestamp": signature_timestamp})
+    skew = abs((datetime.now(UTC) - parsed.astimezone(UTC)).total_seconds())
+    if skew > _WEBHOOK_MAX_CLOCK_SKEW_SECONDS:
+        raise PermissionDenied(
+            "webhook timestamp outside replay window",
+            details={"max_clock_skew_seconds": _WEBHOOK_MAX_CLOCK_SKEW_SECONDS},
+        )
 
 
 def _webhook_event_row(
@@ -323,7 +362,9 @@ def _webhook_event_id(
 ) -> str:
     if event_id:
         return event_id
-    digest = hashlib.sha256(f"{connector_name}\0{resource_name}\0{_webhook_payload_json(payload)}".encode()).hexdigest()
+    payload_event_id = _webhook_payload_event_id(payload)
+    payload_identity = payload_event_id if payload_event_id is not None else _webhook_canonical_payload_json(payload)
+    digest = hashlib.sha256(f"{connector_name}\0{resource_name}\0{payload_identity}".encode()).hexdigest()
     return f"weh_{digest}"
 
 
@@ -332,7 +373,35 @@ def _webhook_payload_json(payload: Mapping[str, object]) -> str:
 
 
 def _webhook_payload_hash(payload: Mapping[str, object]) -> str:
-    return hashlib.sha256(_webhook_payload_json(payload).encode()).hexdigest()
+    return hashlib.sha256(_webhook_canonical_payload_json(payload).encode()).hexdigest()
+
+
+def _webhook_payload_event_id(payload: Mapping[str, object]) -> str | None:
+    for key in _WEBHOOK_EVENT_ID_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _webhook_canonical_payload_json(payload: Mapping[str, object]) -> str:
+    return json.dumps(_stable_webhook_payload(payload), sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _stable_webhook_payload(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _stable_webhook_payload(item)
+            for key, item in value.items()
+            if _webhook_key_signature(str(key)) not in _WEBHOOK_VOLATILE_KEYS
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_stable_webhook_payload(item) for item in value]
+    return value
+
+
+def _webhook_key_signature(key: str) -> str:
+    return key.replace("_", "").replace("-", "").lower()
 
 
 def _webhook_transaction_metadata(

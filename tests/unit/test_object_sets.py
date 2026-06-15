@@ -77,6 +77,26 @@ def test_object_sets_static_dynamic_visibility_and_expiry(core: FoundryLiteCore)
     assert any(event["event_type"] == "object_set.expired_deleted" for event in audit_events)
 
 
+def test_static_object_set_rechecks_object_permission(core: FoundryLiteCore) -> None:
+    admin = prepare_indexed_demo(core)
+    static_set = core.create_object_set(
+        "Public Margin Snapshot",
+        "Order",
+        set_type="static",
+        object_ids=["O-1001"],
+        visibility="public",
+        ctx=admin,
+    )
+    viewer = RequestContext(actor_user_id="viewer-user", roles=("viewer",))
+
+    payload = core.get_object_set(static_set["id"], ctx=viewer)
+    item = payload["items"][0]
+
+    assert payload["objectIds"] == ["O-1001"]
+    assert item["objectId"] == "O-1001"
+    assert item["properties"]["margin"] == "***MASKED***"
+
+
 class _PagedObjectQuery:
     def __init__(self, pages: dict[str | None, ObjectQueryResult]) -> None:
         self.pages = pages
@@ -117,6 +137,14 @@ class _PagedObjectQuery:
 
 
 def test_dynamic_object_set_members_page_with_public_query_limit() -> None:
+    _assert_dynamic_object_set_members_page_with_public_query_limit()
+
+
+def test_dynamic_object_set_cannot_bypass_page_limit() -> None:
+    _assert_dynamic_object_set_members_page_with_public_query_limit()
+
+
+def _assert_dynamic_object_set_members_page_with_public_query_limit() -> None:
     pending_filter = {"property": "status", "op": "eq", "value": "PENDING"}
     pages: dict[str | None, ObjectQueryResult] = {
         None: {
