@@ -154,6 +154,44 @@ def test_object_merge_edit_only_not_overwritten_by_source(core: FoundryLiteCore,
     assert reindexed["properties"]["amount"] == 1500.0
 
 
+def test_shadow_reindex_catches_up_delta_edits_before_switch(
+    core: FoundryLiteCore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = prepare_indexed_demo(core)
+    order = core.get_object("Order", "O-1001", ctx=ctx)
+    original_read = ObjectIndexingService._read_index_source_rows
+    applied: dict[str, object] = {}
+
+    def read_then_apply_delta_edit(self, plan):
+        rows = original_read(self, plan)
+        if not applied:
+            applied.update(
+                core.apply_action(
+                    "ApproveOrder",
+                    object_type="Order",
+                    object_id="O-1001",
+                    expected_object_version=order["objectVersion"],
+                    params={"reason": "delta edit during reindex"},
+                    idempotency_key="delta-edit-during-reindex",
+                    ctx=ctx,
+                )
+            )
+        return rows
+
+    monkeypatch.setattr(ObjectIndexingService, "_read_index_source_rows", read_then_apply_delta_edit)
+
+    result = core.index_shadow_rebuild("Order", ctx=ctx)
+    after_switch = core.get_object("Order", "O-1001", ctx=ctx)
+
+    # An action edit committed after the shadow source rows are read but before
+    # the alias switch is still replayed into the switched index, because the
+    # rebuild captures edit properties and switches inside one transaction.
+    assert applied["status"] == "succeeded"
+    assert result["is_switched"] is True
+    assert after_switch["properties"]["status"] == "APPROVED"
+    assert after_switch["properties"]["operatorNote"] == "delta edit during reindex"
+
+
 def test_index_progress_cursor_advances_only_after_bulk_upsert_commit(
     core: FoundryLiteCore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

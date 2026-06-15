@@ -735,15 +735,15 @@
 
 ### T1-023 — Shadow reindex validation hash too weak
 
-- [ ] **Condition:** count/object_id hash만 비교하고 current_properties/tombstone/link를 비교하지 않는다.
-- [ ] **Guardrail:** canonical JSON projection hash를 사용한다.
-- [ ] **Regression Test:** `test_shadow_reindex_validation_hash_includes_current_properties_and_tombstone`
+- [x] **Condition:** count/object_id hash만 비교하고 current_properties/tombstone/link를 비교하지 않는다.
+- [x] **Guardrail:** canonical JSON projection hash를 사용한다.
+- [x] **Regression Test:** `test_shadow_reindex_validation_hash_includes_current_properties_and_tombstone`
 
 ### T1-024 — Reindex catch-up misses edits after watermark
 
-- [ ] **Condition:** reindex watermark 이후 들어온 action edits가 alias switch 전 반영되지 않는다.
-- [ ] **Guardrail:** switch 직전 delta edits > watermark를 replay한다.
-- [ ] **Regression Test:** `test_shadow_reindex_catches_up_delta_edits_before_switch`
+- [x] **Condition:** reindex watermark 이후 들어온 action edits가 alias switch 전 반영되지 않는다.
+- [x] **Guardrail:** switch 직전 delta edits > watermark를 replay한다.
+- [x] **Regression Test:** `test_shadow_reindex_catches_up_delta_edits_before_switch`
 
 ### T1-025 — Old index cleanup before cursor TTL
 
@@ -1121,11 +1121,11 @@
 - [ ] J7. search rebuild가 모든 objects를 메모리에 올리지 않는다.
 - [ ] J8. shadow reindex는 existing object_records를 truncate하지 않는다.
 - [x] J9. shadow reindex는 action edits를 replay한다.
-- [ ] J10. validation hash는 count만 보지 않는다.
+- [x] J10. validation hash는 count만 보지 않는다.
 - [ ] J11. validation hash는 tombstone/link/current_properties를 포함한다.
 - [x] J12. alias switch 중 cursor pagination 안전성이 있다.
 - [ ] J13. old index cleanup은 cursor TTL 이후다.
-- [ ] J14. reindex delta catch-up이 있다.
+- [x] J14. reindex delta catch-up이 있다.
 - [ ] J15. full/shadow mode config typo를 막는다.
 
 ## K. Security / Governance
@@ -1220,8 +1220,8 @@
 - [x] `test_reindex_same_dataset_version_idempotent`
 - [x] `test_shadow_reindex_replays_action_edits`
 - [x] `test_shadow_reindex_alias_switch_cursor_version_safe`
-- [ ] `test_shadow_reindex_validation_hash_includes_current_properties_and_tombstone`
-- [ ] `test_shadow_reindex_catches_up_delta_edits_before_switch`
+- [x] `test_shadow_reindex_validation_hash_includes_current_properties_and_tombstone`
+- [x] `test_shadow_reindex_catches_up_delta_edits_before_switch`
 - [ ] `test_old_search_index_retained_until_cursor_ttl`
 - [x] `test_search_stale_event_cannot_overwrite_newer_doc`
 - [x] `test_action_form_refetches_object_store_after_search_hit`
