@@ -442,11 +442,11 @@
 
 ### T0-037 — CDC multi-row transaction partial apply
 
-- [ ] **Trigger:** source DB transaction 안의 여러 row 변경이 CDC로 들어오고 일부만 object store에 반영된다.
-- [ ] **Failure:** source transaction atomicity가 object world에서 깨진다.
+- [x] **Trigger:** source DB transaction 안의 여러 row 변경이 CDC로 들어오고 일부만 object store에 반영된다.
+- [x] **Failure:** source transaction atomicity가 object world에서 깨진다.
 - [ ] **Guardrail:** source transaction id/lsn group을 기록한다.
-- [ ] **Guardrail:** partial failure는 retry 가능한 group status로 남긴다.
-- [ ] **Regression Test:** `test_cdc_source_transaction_group_not_partially_committed_without_status`
+- [x] **Guardrail:** partial failure는 retry 가능한 group status로 남긴다.
+- [x] **Regression Test:** `test_cdc_source_transaction_group_not_partially_committed_without_status`
 
 ---
 
@@ -1210,7 +1210,7 @@
 - [x] `test_cdc_object_indexing_updates_tombstones_and_skips_stale_events`
 - [x] `test_cdc_pk_update_policy`
 - [x] `test_cdc_duplicate_event_idempotent`
-- [ ] `test_cdc_source_transaction_group_not_partially_committed_without_status`
+- [x] `test_cdc_source_transaction_group_not_partially_committed_without_status`
 - [x] `test_stream_offset_not_advanced_when_append_commit_fails`
 - [ ] `test_stream_rebalance_mid_batch_dedupes_offsets`
 - [ ] `test_stream_partial_partition_batch_abort_policy`

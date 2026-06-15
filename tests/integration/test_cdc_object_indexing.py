@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.application.ports import TabularRow
+from foundry_lite.application.services.object_store.indexing import ObjectIndexingService
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.compute import DuckDBComputeAdapter
@@ -131,6 +133,43 @@ def test_cdc_duplicate_event_idempotent(tmp_path: Path) -> None:
     assert duplicate["objects_upserted"] == 0
     assert after_duplicate["objectVersion"] == after_first["objectVersion"]
     assert after_duplicate["properties"] == after_first["properties"]
+
+
+def test_cdc_source_transaction_group_not_partially_committed_without_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    _seed_order_snapshot(core, tmp_path, ctx)
+    core.apply_ontology(str(_order_ontology(tmp_path)), ctx=ctx)
+    core.index_rebuild("Order", ctx=ctx)
+
+    # Two row changes delivered together as one source transaction group.
+    group = [
+        _cdc_event("topic:0:50", "c", 50, after={"order_id": "O-5001", "status": "NEW", "amount": 100}),
+        _cdc_event("topic:0:51", "c", 51, after={"order_id": "O-5002", "status": "NEW", "amount": 200}),
+    ]
+    original_apply = ObjectIndexingService._apply_cdc_event
+
+    def fail_on_second(self, conn, ctx, object_type, event):
+        if event.object_id == "O-5002":
+            raise RuntimeError("injected mid-group cdc failure")
+        return original_apply(self, conn, ctx, object_type, event)
+
+    monkeypatch.setattr(ObjectIndexingService, "_apply_cdc_event", fail_on_second)
+
+    with pytest.raises(RuntimeError, match="injected mid-group cdc failure"):
+        core.index_cdc_events("Order", group, ctx=ctx)
+
+    active_ids = {item["objectId"] for item in core.query_objects("Order", ctx=ctx)["items"]}
+    failed_runs = [run for run in core.query_runs(ctx=ctx, run_type="index")["indexRuns"] if run["status"] == "failed"]
+
+    # The whole CDC batch rolls back atomically: neither row of the source
+    # transaction group is partially committed, and the failure surfaces as a
+    # retryable FAILED index run rather than a silent partial apply.
+    assert active_ids == {"O-1001"}
+    assert len(failed_runs) >= 1
+    assert failed_runs[-1]["error"]["message"] == "injected mid-group cdc failure"
 
 
 def test_empty_shadow_reindex_persists_active_pointer_for_next_cdc_insert(tmp_path: Path) -> None:
