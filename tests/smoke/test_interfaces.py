@@ -449,6 +449,11 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert preview.status_code == 200
     assert preview.json()[0]["order_id"] == "O-1001"
 
+    versions = client.get("/api/datasets/clean/orders/versions", headers=headers)
+    assert versions.status_code == 200
+    assert versions.json()[0]["version_number"] == 1
+    assert versions.json()[0]["row_count"] == 3
+
     order = client.get("/api/objects/Order/O-1001", headers=headers, params={"explain": "true"})
     assert order.status_code == 200
     order_payload = order.json()

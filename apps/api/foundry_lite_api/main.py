@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from foundry_lite.application.action_types import ActionApplyResponse
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
+    DatasetVersionRow,
     ObjectIndexRebuildResult,
     ObjectLinkPayload,
     ObjectPayload,
@@ -200,6 +201,14 @@ def metrics() -> Response:
 def preview_dataset(request: Request, namespace: str, name: str, limit: int = 100) -> list[TabularRow]:
     try:
         return foundry.datasets.preview(f"{namespace}.{name}", limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/datasets/{namespace}/{name}/versions")
+def list_dataset_versions(request: Request, namespace: str, name: str) -> list[DatasetVersionRow]:
+    try:
+        return foundry.datasets.list_versions(f"{namespace}.{name}", ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

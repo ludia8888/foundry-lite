@@ -1096,11 +1096,11 @@ CLI/API만 있는 플랫폼에서 벗어나, 사용자가 Web에서 dataset vers
 
 **Acceptance Gate**
 
-- [ ] Web에서 CSV upload 또는 기존 dataset version 확인이 가능하다. ([S22-A1](./docs/sprint-evidence-ledger.md#s22-a1))
+- [x] Web에서 CSV upload 또는 기존 dataset version 확인이 가능하다. 현재 Web 증거는 기존 committed dataset version과 preview 확인 경로다. ([S22-A1](./docs/sprint-evidence-ledger.md#s22-a1))
 - [ ] Web에서 ontology YAML validation error를 확인할 수 있다. ([S22-A2](./docs/sprint-evidence-ledger.md#s22-a2))
-- [ ] Web Object Explorer에서 Order 목록과 상세를 조회할 수 있다. 현재 E2E는 Order 상세 조회만 증명하며, 목록 화면은 별도 UI scope로 남긴다. ([S22-A3](./docs/sprint-evidence-ledger.md#s22-a3))
+- [x] Web Object Explorer에서 Order 목록과 상세를 조회할 수 있다. ([S22-A3](./docs/sprint-evidence-ledger.md#s22-a3))
 - [x] Object Explorer에서 Order → Customer link를 볼 수 있다. ([S22-A4](./docs/sprint-evidence-ledger.md#s22-a4))
-- [ ] 새로고침해도 state가 서버 기준으로 복원된다. ([S22-A5](./docs/sprint-evidence-ledger.md#s22-a5))
+- [x] 새로고침해도 state가 서버 기준으로 복원된다. ([S22-A5](./docs/sprint-evidence-ledger.md#s22-a5))
 
 **Demo / Proof**
 
