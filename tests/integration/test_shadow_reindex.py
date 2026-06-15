@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from foundry_lite.application.core import FoundryLiteCore
 from foundry_lite.application.ports import RuntimeRow
@@ -118,6 +120,65 @@ def test_reindex_same_dataset_version_does_not_break_expected_object_version(cor
     )
 
     assert applied["status"] == "succeeded"
+
+
+def test_object_version_increments_for_base_and_edit_updates(core: FoundryLiteCore, tmp_path: Path) -> None:
+    ctx = prepare_indexed_demo(core)
+    base_order = core.get_object("Order", "O-1001", ctx=ctx)
+
+    edited = _approve_with_note(core, ctx, base_order["objectVersion"], "version-increment-edit")
+    _reindex_with_changed_amount(core, tmp_path, ctx, amount="1500.0")
+    reindexed = core.get_object("Order", "O-1001", ctx=ctx)
+
+    # An edit update and a base update must each advance object_version, so a
+    # later optimistic-concurrency precondition reflects every mutation.
+    assert edited["objectVersion"] > base_order["objectVersion"]
+    assert reindexed["objectVersion"] > edited["objectVersion"]
+    assert reindexed["properties"]["amount"] == 1500.0
+
+
+def test_object_merge_edit_only_not_overwritten_by_source(core: FoundryLiteCore, tmp_path: Path) -> None:
+    ctx = prepare_indexed_demo(core)
+    base_order = core.get_object("Order", "O-1001", ctx=ctx)
+
+    _approve_with_note(core, ctx, base_order["objectVersion"], "edit-only-survives")
+    _reindex_with_changed_amount(core, tmp_path, ctx, amount="1500.0")
+    reindexed = core.get_object("Order", "O-1001", ctx=ctx)
+
+    # operatorNote is edit_only, so a source reindex that changes base properties
+    # must not overwrite it; the edit_wins status edit also survives while the
+    # source-backed amount is refreshed.
+    assert reindexed["properties"]["operatorNote"] == "edit-only-survives"
+    assert reindexed["properties"]["status"] == "APPROVED"
+    assert reindexed["properties"]["amount"] == 1500.0
+
+
+def _approve_with_note(
+    core: FoundryLiteCore, ctx: RequestContext, expected_object_version: int, note: str
+) -> RuntimeRow:
+    core.apply_action(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=expected_object_version,
+        params={"reason": note},
+        idempotency_key=f"merge-version-{note}",
+        ctx=ctx,
+    )
+    return core.get_object("Order", "O-1001", ctx=ctx)
+
+
+def _reindex_with_changed_amount(core: FoundryLiteCore, tmp_path: Path, ctx: RequestContext, *, amount: str) -> None:
+    modified_csv = tmp_path / "orders_v2.csv"
+    modified_csv.write_text(
+        "order_id,customer_id,source_status,amount,margin,order_ts,region\n"
+        f"O-1001,C-100,PENDING,{amount},230.0,2026-06-09T10:00:00Z,NA\n"
+        "O-1002,C-101,REVIEW,800.0,80.0,2026-06-09T11:00:00Z,EU\n"
+        "O-1003,C-100,APPROVED,300.0,20.0,2026-06-09T12:00:00Z,NA\n"
+    )
+    core.upload_csv("raw.erp_orders", str(modified_csv), ctx=ctx)
+    core.run_transform("clean_orders", ctx=ctx)
+    core.index_rebuild("Order", ctx=ctx)
 
 
 def _object_changed_count(core: FoundryLiteCore, ctx: RequestContext, aggregate_id: str) -> int:

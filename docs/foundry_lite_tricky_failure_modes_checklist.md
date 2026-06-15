@@ -671,17 +671,17 @@
 
 ### T1-014 — Base/edit merge policy regression
 
-- [ ] **Condition:** edit_only property가 source update로 덮인다.
-- [ ] **Guardrail:** base_properties와 edit_properties를 물리 분리한다.
-- [ ] **Guardrail:** current_properties는 merge policy로만 계산한다.
-- [ ] **Regression Test:** `test_object_merge_edit_only_not_overwritten_by_source`
+- [x] **Condition:** edit_only property가 source update로 덮인다.
+- [x] **Guardrail:** base_properties와 edit_properties를 물리 분리한다.
+- [x] **Guardrail:** current_properties는 merge policy로만 계산한다.
+- [x] **Regression Test:** `test_object_merge_edit_only_not_overwritten_by_source`
 
 ### T1-015 — object_version increment missing
 
-- [ ] **Condition:** base/edit/link/tombstone/conflict resolve 중 하나에서 object_version 증가 누락.
-- [ ] **Guardrail:** current view에 영향을 주는 모든 mutation은 object_version을 증가시킨다.
+- [x] **Condition:** base/edit/link/tombstone/conflict resolve 중 하나에서 object_version 증가 누락.
+- [x] **Guardrail:** current view에 영향을 주는 모든 mutation은 object_version을 증가시킨다.
 - [ ] **Guardrail:** DB trigger 또는 invariant checker를 둔다.
-- [ ] **Regression Test:** `test_object_version_increments_for_base_and_edit_updates`
+- [x] **Regression Test:** `test_object_version_increments_for_base_and_edit_updates`
 
 ### T1-016 — Snapshot indexer progress cursor advances before upsert commit
 
@@ -1214,8 +1214,8 @@
 - [x] `test_stream_offset_not_advanced_when_append_commit_fails`
 - [ ] `test_stream_rebalance_mid_batch_dedupes_offsets`
 - [ ] `test_stream_partial_partition_batch_abort_policy`
-- [ ] `test_object_merge_edit_only_not_overwritten_by_source`
-- [ ] `test_object_version_increments_for_base_and_edit_updates`
+- [x] `test_object_merge_edit_only_not_overwritten_by_source`
+- [x] `test_object_version_increments_for_base_and_edit_updates`
 - [ ] `test_index_progress_cursor_advances_only_after_bulk_upsert_commit`
 - [x] `test_reindex_same_dataset_version_idempotent`
 - [x] `test_shadow_reindex_replays_action_edits`
