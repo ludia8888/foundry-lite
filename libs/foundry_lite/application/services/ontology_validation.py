@@ -1,3 +1,5 @@
+"""Validation rules shared by ontology activation and preview checks."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
@@ -36,6 +38,7 @@ def validate_persisted_object_type(
     actions: Iterable[ActionTypeRow],
     columns: Mapping[str, Mapping[str, object]],
 ) -> None:
+    """Validate an already-persisted object type against its dataset schema."""
     property_by_api = {prop["api_name"]: prop for prop in properties}
     _validate_persisted_primary_key_property(object_type, property_by_api, columns)
     _validate_persisted_dataset_properties(object_type, property_by_api.values(), columns)
@@ -49,6 +52,7 @@ def validate_persisted_link(
     object_by_api: Mapping[str, ObjectTypeRow],
     columns: Mapping[str, Mapping[str, object]],
 ) -> None:
+    """Validate a persisted link type against object references and keys."""
     if link["from_api_name"] not in object_by_api or link["to_api_name"] not in object_by_api:
         raise ValidationFailed("link object type missing", details={"linkType": link["api_name"]})
     missing_keys = [key for key in (link["backing"]["fromKey"], link["backing"]["toKey"]) if key not in columns]
@@ -60,6 +64,7 @@ def validate_persisted_link(
 
 
 def ontology_validation_result(definition: YamlObject) -> OntologyValidationResult:
+    """Build the success payload returned by ontology preview validation."""
     return {
         "status": "valid",
         "object_type_count": len(mapping_sequence(definition, "objectTypes")),
@@ -74,6 +79,7 @@ def validate_ontology_definition(
     definition: YamlObject,
     dataset_columns_for_ref: DatasetColumnsLookup,
 ) -> None:
+    """Validate a YAML ontology definition without persisting it."""
     object_defs = _object_definitions_by_api(definition)
     for object_def in object_defs.values():
         _validate_yaml_object_type(conn, ctx, definition, object_def, dataset_columns_for_ref)
@@ -82,6 +88,7 @@ def validate_ontology_definition(
 
 
 def _object_definitions_by_api(definition: YamlObject) -> dict[str, YamlObject]:
+    """Return object definitions keyed by API name, rejecting duplicates."""
     object_defs: dict[str, YamlObject] = {}
     for item in mapping_sequence(definition, "objectTypes"):
         api_name = required_str(item, "apiName")
@@ -96,6 +103,7 @@ def _validate_persisted_primary_key_property(
     property_by_api: Mapping[str, PropertyTypeRow],
     columns: Mapping[str, Mapping[str, object]],
 ) -> None:
+    """Ensure the persisted primary key property maps to a non-null column."""
     pk_prop = object_type["primary_key_property"]
     if pk_prop not in property_by_api:
         raise ValidationFailed("primary key property missing", details={"objectType": object_type["api_name"]})
@@ -111,6 +119,7 @@ def _validate_persisted_dataset_properties(
     properties: Iterable[PropertyTypeRow],
     columns: Mapping[str, Mapping[str, object]],
 ) -> None:
+    """Ensure persisted dataset-backed properties still map to columns."""
     for prop in properties:
         if prop["source"] == "dataset" and prop["column_name"] not in columns:
             raise ValidationFailed(
@@ -123,6 +132,7 @@ def _validate_persisted_action_mutation_property(
     mutation: object,
     property_by_api: Mapping[str, PropertyTypeRow],
 ) -> None:
+    """Ensure a persisted action mutation targets an editable property."""
     if not isinstance(mutation, Mapping):
         raise ValidationFailed("action mutation must be a mapping")
     prop = mutation.get("property")
@@ -139,6 +149,7 @@ def _validate_yaml_object_type(
     object_def: YamlObject,
     dataset_columns_for_ref: DatasetColumnsLookup,
 ) -> None:
+    """Validate one YAML object type against the referenced dataset."""
     object_api_name = required_str(object_def, "apiName")
     columns = dataset_columns_for_ref(conn, ctx, object_type_backing(object_def)["dataset"])
     property_defs = _property_definitions_by_api(object_def)
@@ -148,6 +159,7 @@ def _validate_yaml_object_type(
 
 
 def _property_definitions_by_api(object_def: YamlObject) -> dict[str, YamlObject]:
+    """Return property definitions keyed by API name, rejecting duplicates."""
     property_defs: dict[str, YamlObject] = {}
     for prop in mapping_sequence(object_def, "properties"):
         prop_api = required_str(prop, "apiName")
@@ -162,6 +174,7 @@ def _validate_yaml_primary_key(
     property_defs: Mapping[str, YamlObject],
     columns: Mapping[str, Mapping[str, object]],
 ) -> None:
+    """Ensure a YAML object primary key maps to a non-null dataset column."""
     pk_prop = required_str(object_def, "primaryKey")
     if pk_prop not in property_defs:
         raise ValidationFailed(
@@ -180,6 +193,7 @@ def _validate_yaml_dataset_properties(
     properties: Iterable[YamlObject],
     columns: Mapping[str, Mapping[str, object]],
 ) -> None:
+    """Ensure YAML dataset-backed properties refer to existing columns."""
     for prop in properties:
         source = optional_str(prop, "source", "dataset" if "column" in prop else "edit_layer")
         if source == "dataset" and optional_str(prop, "column") not in columns:
@@ -194,6 +208,7 @@ def _validate_yaml_action_mutations(
     object_api_name: str,
     property_defs: Mapping[str, YamlObject],
 ) -> None:
+    """Validate YAML action mutations for one target object type."""
     for action_def in mapping_sequence(definition, "actionTypes"):
         if required_str(action_def, "target") != object_api_name:
             continue
@@ -205,6 +220,7 @@ def _validate_yaml_action_mutation_property(
     mutation: ActionMutationDefinition,
     property_defs: Mapping[str, YamlObject],
 ) -> None:
+    """Ensure a YAML action mutation targets an editable property."""
     prop = mutation.get("property")
     if not isinstance(prop, str) or prop not in property_defs:
         raise ValidationFailed("action mutation property missing", details=dict(mutation))
@@ -219,6 +235,7 @@ def _validate_yaml_link(
     object_defs: Mapping[str, YamlObject],
     dataset_columns_for_ref: DatasetColumnsLookup,
 ) -> None:
+    """Validate a YAML link type against object references and backing keys."""
     from_api = required_str(link_def, "from")
     to_api = required_str(link_def, "to")
     if from_api not in object_defs or to_api not in object_defs:
