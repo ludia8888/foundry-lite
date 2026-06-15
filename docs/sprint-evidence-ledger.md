@@ -29,6 +29,7 @@
 | `PR-12` | Sprint 40 CDC object indexing, tombstone delete, replay/stale skip, and object.changed trigger proof | [PR #12](https://github.com/ludia8888/foundry-lite/pull/12), [f19bad9ad77f1cd8fea5de982bdafd5993c5099c](https://github.com/ludia8888/foundry-lite/commit/f19bad9ad77f1cd8fea5de982bdafd5993c5099c) | 2026-06-14 08:48 KST |
 | `PR-14` | Sprint 41 shadow reindex, active index pointer, count/hash validation, and action-edit replay proof | [PR #14](https://github.com/ludia8888/foundry-lite/pull/14), [b292e63956a910b1614d66851edcd6489a36897b](https://github.com/ludia8888/foundry-lite/commit/b292e63956a910b1614d66851edcd6489a36897b), [5b00d9c027cc8d7669c4d4d309d924e0bdf2f791](https://github.com/ludia8888/foundry-lite/commit/5b00d9c027cc8d7669c4d4d309d924e0bdf2f791) | 2026-06-14 11:15 KST |
 | `PR-16` | Sprint 42 OpenSearch-compatible search projection, query planner branch, rebuild CLI, and drift detection proof | [PR #16](https://github.com/ludia8888/foundry-lite/pull/16), [5b9b0cac557d6f90914070f54881a3ac35a26354](https://github.com/ludia8888/foundry-lite/commit/5b9b0cac557d6f90914070f54881a3ac35a26354), [72718f3ffbcfc85c962d3de00f67a885cde41ec1](https://github.com/ludia8888/foundry-lite/commit/72718f3ffbcfc85c962d3de00f67a885cde41ec1) | 2026-06-14 16:43 KST |
+| `PR-22` | Action service workflow refactor: action command/idempotency, unit-of-work mutation commit, and writeback evidence split while keeping `action_service.py` below the application module cap | [PR #22](https://github.com/ludia8888/foundry-lite/pull/22), [86dd93d007ec5bfb506ecbf3093bb5eae640de26](https://github.com/ludia8888/foundry-lite/commit/86dd93d007ec5bfb506ecbf3093bb5eae640de26) | 2026-06-15 KST |
 | `GATE-FOUNDATION` | 품질 게이트, release gate, infra boundary hardening | [e1fc49e81c2262c69321eaf6b991f425969b6e35](https://github.com/ludia8888/foundry-lite/commit/e1fc49e81c2262c69321eaf6b991f425969b6e35) | main history |
 | `AUTH-PORT` | `AuthProvider` port, HeaderTrust/Demo local adapters | [b14c70f843dc0faedbde72f5639a28f15389de09](https://github.com/ludia8888/foundry-lite/commit/b14c70f843dc0faedbde72f5639a28f15389de09) | main history |
 | `OBJECT-READ-PORT` | `ObjectReadRepository` boundary extraction | [87a08d7b79795354d3d8782981746978e6e1d07c](https://github.com/ludia8888/foundry-lite/commit/87a08d7b79795354d3d8782981746978e6e1d07c) | main history |
@@ -38,6 +39,14 @@
 | `MVP-HONESTY` | MVP honesty and quality-gate hardening before PR workflow | [c96591dd6c056fac524bec51565b811d1a77614f](https://github.com/ludia8888/foundry-lite/commit/c96591dd6c056fac524bec51565b811d1a77614f), [d24ab67a786456cbb7fb97e0409ac66b865b0414](https://github.com/ludia8888/foundry-lite/commit/d24ab67a786456cbb7fb97e0409ac66b865b0414) | main history |
 
 ## Current Verification Evidence
+
+<a id="verify-static"></a>
+<a id="verify-full-ci-gate"></a>
+<a id="verify-mvp-web-object-link"></a>
+<a id="verify-materialization-watermarks"></a>
+<a id="verify-materialized-transform-pinning"></a>
+<a id="verify-action-idempotency-fingerprint"></a>
+<a id="verify-action-commit-atomicity"></a>
 
 2026-06-15 KST에 현재 checkout에서 다시 확인한 명령이다.
 
@@ -96,6 +105,7 @@
 | `VERIFY-DATASET-STORAGE-SPLIT-BRAIN` | `uv run pytest tests/unit/test_dataset_storage_consistency.py tests/unit/test_dataset_transaction_commit_atomicity.py tests/contracts/test_dataset_storage_adapter_contract.py -q` | PASS. `14 passed`. The focused tests force DB file-row persistence failure after storage promotion, prove the promoted version directory is removed, and prove the FAILED sync run keeps `orphan_cleanup` evidence. They also delete a committed manifest and committed data file to prove `inspect_dataset`/`preview_dataset` return an operator-facing `committed_version_storage_missing` invariant with dataset/version/manifest details. `test_abort_cleanup_never_deletes_committed_manifest` proves a later aborted upload does not remove the earlier committed manifest or data file. `test_schema_compatibility_revalidates_if_latest_schema_changes` proves schema compatibility validation runs under the dataset version-allocation lock. The local/fake storage contract still proves `manifest_uri` can restore the committed file list, and the local adapter verifies manifest file URI, byte size, and content hash after write, including empty-file-list, wrong-file-reference, byte-size, and content-hash rejection paths. |
 | `VERIFY-ACTION-IDEMPOTENCY-FINGERPRINT` | `DOCKER_HOST=unix:///Users/isihyeon/.colima/default/docker.sock TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock uv run pytest tests/unit/test_action_service_idempotency.py tests/contracts/test_action_repository_contract.py tests/integration/test_ontology_action_security.py::test_action_apply_is_idempotent_and_rejects_stale_object_version tests/unit/test_quality_action_idempotency.py -q`; `uv run python scripts/quality/check_idempotency_on_action.py`; `uv run python scripts/quality/check_schema_revision_guard.py` | PASS. Focused action/idempotency suite now returns `24 passed` outside the sandbox with Docker socket access for the PostgreSQL repository contract. It proves same-key replay keeps one action run, concurrent same-key inserts replay the persisted winner, same-key/different-request reuse raises `ConflictDetected`, `action.run.idempotency_conflict` audit evidence is written, `action_runs.request_fingerprint` is stored across fake/SQLite/PostgreSQL repositories, and G12 blocks removal of the fingerprint storage, fingerprint guard, conflict audit, or schema column. Schema revision `infra/schema_revisions/20260614_0004_action_request_fingerprint.json` freezes the added column. |
 | `VERIFY-ACTION-COMMIT-ATOMICITY` | `uv run pytest tests/contracts/test_action_repository_contract.py::test_sqlalchemy_action_run_insert_or_get_existing_rolls_back_with_outer_transaction tests/integration/test_ontology_action_security.py::test_action_commit_object_edit_audit_outbox_atomic -q` | PASS. `5 passed`. The proof injects failures at the action commit boundary after object-record mutation, at object-edit insertion, before terminal action success, during `object.edit.committed` outbox insertion, and during `action.run.committed` audit insertion. Each failure leaves the Order unchanged, writes no durable action run/writeback/object edit/action audit/action outbox evidence for the failed idempotency key, and allows the same idempotency key to succeed after the injected failure is disabled. The repository contract catches the root cause found during this work: savepoint-based idempotency winner insertion could escape an outer rollback on SQLite, so the implementation now uses dialect-native conflict-ignore insert semantics. |
+| `VERIFY-MVP-WEB-OBJECT-LINK` | `uv run pytest tests/smoke/test_interfaces.py::test_api_dataset_object_action_and_metrics_smoke -q`; `pnpm exec playwright test tests/e2e/foundry-lite.spec.ts` | PASS. API smoke returned `1 passed`, and Playwright returned `1 passed`. This proves `GET /api/objects/Order/O-1001/links/OrderCustomer` exposes the Customer link through FastAPI, and the Web Object Explorer can load the same `OrderCustomer` link panel showing target `Customer` object id `C-100` before applying `ApproveOrder`. |
 
 ## Commit-Point Risk Tracking
 
@@ -170,6 +180,22 @@ claim more than the code and gates currently prove.
 
 No Sprint 02A Scale Foundation evidence item remains open in the current checkout. Production Temporal/Kafka/OpenSearch/connector adapters are still later implementation work; this Sprint 02A item freezes the port, DTO, state, trace, and failure semantics they must preserve.
 
+## Sprint 20 - Link Type and Link Traversal
+
+<a id="s20-a1"></a>
+<a id="s20-a2"></a>
+<a id="s20-a3"></a>
+<a id="s20-a4"></a>
+<a id="s20-a5"></a>
+
+| Evidence id | Checkbox meaning | Git / test evidence | Current status |
+|---|---|---|---|
+| `S20-A1` | `OrderCustomer` link is created from `clean.orders.customer_id` | `examples/supply-chain-demo/ontology/order-customer.yaml`; `tests/integration/test_closed_loop.py::test_supply_chain_closed_loop_updates_customer_risk_and_records_replay_state`; `tests/integration/test_ontology_action_security.py::test_ontology_import_indexes_order_customer_and_supports_object_query`; `tests/contracts/test_object_index_repository_contract.py::test_object_index_repository_contract_reads_link_types_and_upserts_links` | Done |
+| `S20-A2` | an Order can traverse to its connected Customer through the public object link path | `foundry.objects.links("Order", "O-1001", "OrderCustomer")`; `flite object links Order O-1001 OrderCustomer`; `GET /api/objects/Order/O-1001/links/OrderCustomer`; `VERIFY-MVP-WEB-OBJECT-LINK` | Done |
+| `S20-A3` | Customer-to-Order reverse traversal exists or a reverse link is explicitly modeled | The current ontology defines the forward `OrderCustomer` many-to-one link only | Open |
+| `S20-A4` | missing target-object link policy is recorded as warning or error | `tests/unit/test_helpers_and_query.py::test_link_skips_missing_target_object` proves missing targets are hidden, but warning/error evidence is not yet separated | Partial |
+| `S20-A5` | link index run records `links_upserted` | `ObjectIndexRebuildCounts.links_upserted`; `IndexRunRecord.links_upserted`; `tests/contracts/test_object_index_repository_contract.py::test_object_index_repository_contract_reads_link_types_and_upserts_links` | Done |
+
 ## Sprint 21 - Object Sets
 
 <a id="s21-a1"></a>
@@ -187,6 +213,22 @@ No Sprint 02A Scale Foundation evidence item remains open in the current checkou
 | `S21-A4` | unauthorized users cannot see another user's private set | `OBJECT-SETS`; `MVP-CORE` | Done |
 | `S21-A5` | expired temporary sets are hidden or cleanup candidates | `OBJECT-SETS` | Done |
 | `S21-A6` | dynamic set paging does not bypass Object Query page limit | `PR-4`; `S36A-A7`; `VERIFY-DYNAMIC-OBJECT-SET-PAGE-LIMIT`; `test_dynamic_object_set_cannot_bypass_page_limit` | Done |
+
+## Sprint 22 - Dataset/Ontology/Object Minimal UI Vertical Slice
+
+<a id="s22-a1"></a>
+<a id="s22-a2"></a>
+<a id="s22-a3"></a>
+<a id="s22-a4"></a>
+<a id="s22-a5"></a>
+
+| Evidence id | Checkbox meaning | Git / test evidence | Current status |
+|---|---|---|---|
+| `S22-A1` | Web can confirm CSV upload or an existing dataset version | Dataset preview exists in API/CLI, but Web dataset screen is not isolated in E2E | Open |
+| `S22-A2` | Web can show ontology YAML validation errors | Core/API validation exists, but Web ontology manager proof is not isolated | Open |
+| `S22-A3` | Web Object Explorer can load Order list and detail | `tests/e2e/foundry-lite.spec.ts`; `apps/web/index.html`; browser SDK `objects.Order.get` | Partial. Object detail load is covered; an object list screen remains future UI scope |
+| `S22-A4` | Object Explorer can show the Order to Customer link | `GET /api/objects/Order/O-1001/links/OrderCustomer`; `apps/web/index.html` Object Links panel; `VERIFY-MVP-WEB-OBJECT-LINK` | Done |
+| `S22-A5` | refresh restores state from server | E2E uses server reload for initial state, but refresh-specific assertion is not isolated | Partial |
 
 ## Sprint 25 - Action Apply Transaction and Optimistic Concurrency
 
@@ -345,6 +387,42 @@ No Sprint 02A Scale Foundation evidence item remains open in the current checkou
 | `S36A-A9` | production auth profile fails fast on header-trust/demo auth | `PR-2`; `AUTH-PORT`; `VERIFY-PRODUCTION-AUTH-GUARD`; `test_production_refuses_dev_header_trust_auth` | Done |
 | `S36A-A10` | package/browser SDK outputs expose same method surface | `PR-2` | Done |
 | `S36A-A11` | same Idempotency-Key cannot be reused with a different request body | `S26-A2`; `VERIFY-ACTION-IDEMPOTENCY-FINGERPRINT` | Done |
+
+## MVP Core Completion Gate Evidence Map
+
+<a id="mvp-core-raw-dataset"></a>
+<a id="mvp-core-scale-foundation"></a>
+<a id="mvp-core-transform"></a>
+<a id="mvp-core-ontology"></a>
+<a id="mvp-core-object-index"></a>
+<a id="mvp-core-object-link-ui"></a>
+<a id="mvp-core-action"></a>
+<a id="mvp-core-mutation-ledger"></a>
+<a id="mvp-core-materialization"></a>
+<a id="mvp-core-downstream-transform"></a>
+<a id="mvp-core-operations-replay"></a>
+<a id="mvp-core-quality-gate"></a>
+<a id="mvp-core-regression-trace"></a>
+<a id="mvp-core-coverage"></a>
+<a id="mvp-core-integration-smoke"></a>
+
+| Gate item | Evidence accepted today | Current status |
+|---|---|---|
+| CSV or PostgreSQL snapshot commits raw dataset | `S36-P1`, `S36-P6`, `VERIFY-FULL-CI-GATE`, `test_mvp_testcontainers_closed_loop.py` | Done for current MVP local/PostgreSQL closed-loop path |
+| Scale Foundation boundary keeps infra behind ports/adapters | `S02A-A1`-`S02A-O2`, `VERIFY-INFRA-BOUNDARIES`, `VERIFY-STATIC` | Done for Sprint 02A boundary scope |
+| SQL/DuckDB transform creates clean dataset | `VERIFY-TRANSFORM-INPUT-PINNING`, `VERIFY-FULL-CI-GATE`, `test_supply_chain_closed_loop_updates_customer_risk_and_records_replay_state` | Done |
+| Ontology draft validates and activates | `S20-A1`, `S22-A4`, `test_ontology_import_indexes_order_customer_and_supports_object_query` | Done |
+| clean dataset rows index into Order/Customer objects | `S20-A1`, `S36-P6`, `VERIFY-FULL-CI-GATE`, `test_ontology_import_indexes_order_customer_and_supports_object_query` | Done |
+| Web Object Explorer loads Order and shows Order to Customer link | `S22-A3`, `S22-A4`, `VERIFY-MVP-WEB-OBJECT-LINK` | Done |
+| ApproveOrder action executes | `S25-A1`, `S35-A4`, `VERIFY-ACTION-IDEMPOTENCY-FINGERPRINT`, `VERIFY-MVP-WEB-OBJECT-LINK` | Done |
+| object records, edits, action runs, audit, and outbox stay consistent | `S25-A4`, `S25-A5`, `VERIFY-ACTION-COMMIT-ATOMICITY`, `VERIFY-FULL-CI-GATE` audit/outbox gates | Done for internal DB mutation path; external ERP writeback remains future scope |
+| action_log and object_snapshot materialize as datasets | `S30-A1`-`S30-A4`, `S31-A1`-`S31-A5`, `VERIFY-MATERIALIZATION-WATERMARKS` | Done |
+| downstream transform reads materialized dataset and updates Customer object | `VERIFY-MATERIALIZED-TRANSFORM-PINNING`, `test_action_materialization_writes_dataset_versions_and_manifest_rows` | Done |
+| lineage/audit/operations surfaces trace the path and replay MVP failures | `S33-A1`-`S33-A5`, `VERIFY-FULL-CI-GATE`, Playwright source run/retry controls | Done for MVP failed transform/index/DLQ paths; broader sync/action/materialization replay remains future Operations scope |
+| Python backend quality gate passes | `VERIFY-STATIC`, `VERIFY-FULL-CI-GATE`, GitHub PR #22 required checks | Done |
+| root-cause regression shields and traceable error state exist | `VERIFY-TRICKY-FAILURE-FOCUSED`, `VERIFY-ACTION-COMMIT-ATOMICITY`, `VERIFY-ACTION-IDEMPOTENCY-FINGERPRINT`, G21/G22 gates in `VERIFY-STATIC` | Done |
+| line, branch, and public callable/function coverage are at least 95% | `VERIFY-FULL-CI-GATE` total coverage `96.13%`, layer coverage minimum `97.65%`, public callable smoke coverage `100.00%` | Done |
+| required integration tests and smoke tests run and pass | `VERIFY-FULL-CI-GATE` full pytest `805 passed`, flaky detector `3` repeated random/parallel runs with `805 passed`, Playwright passed | Done |
 
 ## Sprint 37 - REST Pull Connector and Webhook Listener
 

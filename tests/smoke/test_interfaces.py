@@ -457,6 +457,11 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert source_run["relation"] == "indexed_from"
     assert source_run["operationPath"] == f"/api/operations/runs/index/{source_run['runId']}"
 
+    links = client.get("/api/objects/Order/O-1001/links/OrderCustomer", headers=headers)
+    assert links.status_code == 200
+    assert links.json()[0]["to"]["objectType"] == "Customer"
+    assert links.json()[0]["to"]["objectId"] == "C-100"
+
     source_run_detail = client.get(source_run["operationPath"], headers=headers)
     assert source_run_detail.status_code == 200
     assert source_run_detail.json()["runType"] == "index"
