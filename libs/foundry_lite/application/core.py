@@ -54,10 +54,7 @@ __all__ += ["_json_ready", "_normalize_duckdb_type", "_required_row"]
 
 @trace_public_methods
 class FoundryLiteCore:
-    """Facade for the MVP closed loop.
-
-    Public use cases stay here while injected services own each domain workflow.
-    """
+    """Facade for the MVP closed loop; injected services own each domain workflow."""
 
     def __init__(self, *, dependencies: CoreDependencies) -> None:
         # CoreDependencies is assembled by composition roots, not this facade.
@@ -152,6 +149,9 @@ class FoundryLiteCore:
 
     def list_dataset_versions(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> list[DatasetVersionRow]:
         return self._services.dataset.registry.list_dataset_versions(dataset_ref, ctx=ctx)
+
+    def abort_stale_open_transactions(self, created_before: str, *, ctx: RequestContext | None = None) -> list[str]:
+        return self._services.dataset.recovery.abort_stale_open_transactions(created_before, ctx=ctx)
 
     def preview_dataset(
         self,

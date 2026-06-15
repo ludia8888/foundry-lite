@@ -73,6 +73,15 @@ class FakeDatasetTransactionRepository:
         row = self.transactions.get(transaction_id)
         return dict(row) if row else None
 
+    def list_open_transactions(self, *, transaction: Any, tenant_id: str, created_before: str) -> list[dict[str, Any]]:
+        del transaction
+        rows = [
+            dict(row)
+            for row in self.transactions.values()
+            if row["tenant_id"] == tenant_id and row["status"] == "OPEN" and row["created_at"] < created_before
+        ]
+        return sorted(rows, key=lambda row: row["created_at"])
+
     def abort_transaction(
         self, *, transaction: Any, tenant_id: str, transaction_id: str, metadata: dict[str, Any]
     ) -> None:
@@ -288,7 +297,9 @@ class SqlAlchemyTransactionHarness:
             return dict(row) if row else None
 
 
-def _transaction_record(transaction_id: str, *, status: str = "OPEN") -> DatasetTransactionRecord:
+def _transaction_record(
+    transaction_id: str, *, status: str = "OPEN", created_at: str = "2026-06-10T00:00:00Z"
+) -> DatasetTransactionRecord:
     return DatasetTransactionRecord(
         transaction_id=transaction_id,
         tenant_id="tenant-demo",
@@ -300,7 +311,7 @@ def _transaction_record(transaction_id: str, *, status: str = "OPEN") -> Dataset
         committed_version_id=None,
         schema_version=None,
         created_by="user-demo",
-        created_at="2026-06-10T00:00:00Z",
+        created_at=created_at,
         committed_at=None,
         metadata={},
     )
@@ -497,6 +508,33 @@ def test_dataset_transaction_repository_contract_commit_flow(harness: Transactio
     assert committed["committed_version_id"] == "dsv_orders_1"
     assert harness.versions()[0]["version_id" if "version_id" in harness.versions()[0] else "id"] == "dsv_orders_1"
     assert harness.files()[0]["uri"] == "memory://part-00000.parquet"
+
+
+def test_dataset_transaction_repository_contract_lists_stale_open_transactions(harness: TransactionHarness) -> None:
+    repository = harness.repository
+
+    def create_and_list(transaction: Any) -> list[dict[str, Any]]:
+        repository.create_open_transaction(
+            transaction=transaction, record=_transaction_record("dstx_old", created_at="2026-06-10T00:00:00Z")
+        )
+        repository.create_open_transaction(
+            transaction=transaction, record=_transaction_record("dstx_new", created_at="2026-06-15T00:00:00Z")
+        )
+        repository.create_open_transaction(
+            transaction=transaction,
+            record=_transaction_record("dstx_done", status="COMMITTED", created_at="2026-06-09T00:00:00Z"),
+        )
+        return list(
+            repository.list_open_transactions(
+                transaction=transaction, tenant_id="tenant-demo", created_before="2026-06-12T00:00:00Z"
+            )
+        )
+
+    stale = harness.call_in_transaction(create_and_list)
+
+    # Only OPEN transactions created before the cutoff are returned: the recent
+    # OPEN transaction and the already-committed transaction are excluded.
+    assert [row["id"] for row in stale] == ["dstx_old"]
 
 
 def test_dataset_transaction_repository_contract_latest_committed_metadata(

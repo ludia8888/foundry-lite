@@ -564,10 +564,10 @@
 
 ### T1-002 — OOM/crash after upload leaves OPEN transaction
 
-- [ ] **Condition:** CSV/Parquet 변환 중 process OOMKilled.
+- [x] **Condition:** CSV/Parquet 변환 중 process OOMKilled.
 - [ ] **Guardrail:** heartbeat/lease 기반 stale OPEN transaction detector를 둔다.
-- [ ] **Guardrail:** old OPEN tx는 `STALE` 또는 `ABORTED_BY_WATCHDOG`로 수습한다.
-- [ ] **Regression Test:** `test_failed_upload_oom_leaves_recoverable_aborted_or_stale_open_tx`
+- [x] **Guardrail:** old OPEN tx는 `STALE` 또는 `ABORTED_BY_WATCHDOG`로 수습한다.
+- [x] **Regression Test:** `test_failed_upload_oom_leaves_recoverable_aborted_or_stale_open_tx`
 
 ### T1-003 — Disk full / inode full during staging
 
@@ -857,7 +857,7 @@
 - [ ] **T3-004:** OpenSearch bulk indexing memory budget test 존재.
 - [ ] **T3-005:** Materialization snapshot memory budget test 존재.
 - [ ] **T3-006:** API/worker node pool 또는 resource isolation 계획 존재.
-- [ ] **T3-007:** OOMKilled 후 stale run/transaction detector 존재.
+- [x] **T3-007:** OOMKilled 후 stale run/transaction detector 존재.
 
 ## 6.2 Disk / Inode / WAL
 
@@ -1173,7 +1173,7 @@
 - [x] `test_concurrent_dataset_commits_allocate_strictly_increasing_versions`
 - [x] `test_dataset_health_check_reads_candidate_not_latest`
 - [x] `test_schema_compatibility_revalidates_if_latest_schema_changes`
-- [ ] `test_failed_upload_oom_leaves_recoverable_aborted_or_stale_open_tx`
+- [x] `test_failed_upload_oom_leaves_recoverable_aborted_or_stale_open_tx`
 - [x] `test_abort_cleanup_never_deletes_committed_manifest`
 - [x] `test_csv_primary_key_preserves_leading_zeroes`
 - [x] `test_transform_input_latest_is_pinned_to_version_id`
