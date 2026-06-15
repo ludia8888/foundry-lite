@@ -110,6 +110,29 @@ def test_cdc_object_indexing_inserts_new_object_and_new_tombstone(tmp_path: Path
     assert deleted.get("deletionReason") == "source_deleted"
 
 
+def test_cdc_duplicate_event_idempotent(tmp_path: Path) -> None:
+    core = FoundryLiteCore(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    _seed_order_snapshot(core, tmp_path, ctx)
+    core.apply_ontology(str(_order_ontology(tmp_path)), ctx=ctx)
+    core.index_rebuild("Order", ctx=ctx)
+
+    update = _cdc_event("topic:0:30", "u", 30, after={"order_id": "O-1001", "status": "APPROVED", "amount": 900})
+    first = core.index_cdc_events("Order", [update], ctx=ctx)
+    after_first = core.get_object("Order", "O-1001", ctx=ctx)
+    duplicate = core.index_cdc_events("Order", [update], ctx=ctx)
+    after_duplicate = core.get_object("Order", "O-1001", ctx=ctx)
+
+    # Re-delivering the exact same CDC event (same topic/partition/offset id and
+    # ordering) must be a no-op: no second upsert, no object_version bump, and no
+    # property drift, so at-least-once delivery cannot double-apply a change.
+    assert first["objects_upserted"] == 1
+    assert duplicate["events_skipped"] == 1
+    assert duplicate["objects_upserted"] == 0
+    assert after_duplicate["objectVersion"] == after_first["objectVersion"]
+    assert after_duplicate["properties"] == after_first["properties"]
+
+
 def test_empty_shadow_reindex_persists_active_pointer_for_next_cdc_insert(tmp_path: Path) -> None:
     compute = EmptyReindexReadComputeAdapter()
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")

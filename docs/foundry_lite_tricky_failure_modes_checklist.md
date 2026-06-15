@@ -1,7 +1,7 @@
 # Foundry-lite Tricky Failure Modes & Race Condition Checklist
 
 **작성일:** 2026-06-15  
-**범위:** Foundry-lite Sprint 문서 기반. Hermes Agent 관련 항목은 제외한다.  
+**범위:** Foundry-lite Sprint 문서 기반.
 **목적:** 스프린트 문서의 `Dataset → Transform → Ontology → Object → Action → Materialization → Downstream Transform` 폐루프에서 발생 가능한 tricky bug, race condition, fallback bug, 장애 조건, 하드웨어/네트워크/OOM 계열 failure mode를 티어별 체크리스트로 관리한다.
 
 ---
@@ -351,11 +351,11 @@
 
 ### T0-026 — Outbox event publish before DB commit
 
-- [ ] **Trigger:** object update transaction이 commit되기 전 webhook/Kafka/Slack publish를 직접 호출한다.
-- [ ] **Failure:** DB rollback 후 외부 시스템만 변경을 관측한다.
+- [x] **Trigger:** object update transaction이 commit되기 전 webhook/Kafka/Slack publish를 직접 호출한다.
+- [x] **Failure:** DB rollback 후 외부 시스템만 변경을 관측한다.
 - [ ] **Guardrail:** external publish는 outbox worker만 수행한다.
-- [ ] **Guardrail:** outbox row는 domain DB transaction 안에서 insert한다.
-- [ ] **Regression Test:** `test_outbox_event_not_published_before_domain_commit`
+- [x] **Guardrail:** outbox row는 domain DB transaction 안에서 insert한다.
+- [x] **Regression Test:** `test_outbox_event_not_published_before_domain_commit`
 
 ### T0-027 — Duplicate outbox publish
 
@@ -1198,7 +1198,7 @@
 - [ ] `test_action_external_success_local_failure_compensation_required`
 - [ ] `test_action_external_timeout_is_outcome_unknown_not_failed`
 - [ ] `test_action_retry_reuses_external_idempotency_key`
-- [ ] `test_outbox_event_not_published_before_domain_commit`
+- [x] `test_outbox_event_not_published_before_domain_commit`
 - [ ] `test_outbox_duplicate_workers_do_not_double_publish`
 - [ ] `test_dlq_stale_event_retry_noops_if_object_version_old`
 - [x] `test_materialization_created_at_tie_does_not_skip_rows`
@@ -1209,7 +1209,7 @@
 - [x] `test_downstream_transform_consumes_materialized_version_id_not_latest`
 - [x] `test_cdc_object_indexing_updates_tombstones_and_skips_stale_events`
 - [x] `test_cdc_pk_update_policy`
-- [ ] `test_cdc_duplicate_event_idempotent`
+- [x] `test_cdc_duplicate_event_idempotent`
 - [ ] `test_cdc_source_transaction_group_not_partially_committed_without_status`
 - [x] `test_stream_offset_not_advanced_when_append_commit_fails`
 - [ ] `test_stream_rebalance_mid_batch_dedupes_offsets`

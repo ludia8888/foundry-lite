@@ -411,6 +411,52 @@ def test_action_commit_object_edit_audit_outbox_atomic(tmp_path: Path, fail_poin
     assert retry["status"] == "succeeded"
 
 
+def test_outbox_event_not_published_before_domain_commit(tmp_path: Path) -> None:
+    # The action emits outbox events through the runtime outbox table inside the
+    # same domain transaction; there is no direct external publish call. Injecting
+    # a failure on the second outbox insert rolls the whole commit back, so the
+    # earlier action.run.committed outbox row inserted in the same transaction
+    # must also vanish: an outbox event is never durable (and therefore never
+    # publishable by the outbox drain path) before the domain commit succeeds.
+    core, failing_repository = _core_with_action_failure(tmp_path, "outbox:object.edit.committed")
+    ctx = prepare_indexed_demo(core)
+    order = core.get_object("Order", "O-1001", ctx=ctx)
+    before = _action_commit_evidence_counts(core.list_runs(ctx=ctx))
+
+    with pytest.raises(_InjectedActionCommitFailure):
+        core.apply_action(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "Outbox-before-commit proof"},
+            idempotency_key="outbox-before-commit",
+            ctx=ctx,
+        )
+
+    after_failure = core.list_runs(ctx=ctx)
+    assert _action_commit_evidence_counts(after_failure) == before
+    assert _event_count(after_failure["outboxEvents"], "action.run.committed") == before["outbox_action"]
+    assert _event_count(after_failure["outboxEvents"], "object.edit.committed") == before["outbox_edit"]
+
+    _disable_injected_failure(failing_repository)
+    committed = core.apply_action(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "Outbox-before-commit proof"},
+        idempotency_key="outbox-before-commit",
+        ctx=ctx,
+    )
+    after_commit = _action_commit_evidence_counts(core.list_runs(ctx=ctx))
+
+    # Only after the domain commit succeeds do the outbox rows appear.
+    assert committed["status"] == "succeeded"
+    assert after_commit["outbox_action"] == before["outbox_action"] + 1
+    assert after_commit["outbox_edit"] == before["outbox_edit"] + 1
+
+
 def test_action_audit_masks_sensitive_params(core: FoundryLiteCore, tmp_path: Path) -> None:
     ctx = _prepare_demo_with_ontology(core, _margin_action_ontology(tmp_path))
     order = core.get_object("Order", "O-1001", ctx=ctx)
