@@ -10,6 +10,10 @@ from foundry_lite.infrastructure.adapters.debezium_cdc import (
     DebeziumPostgresStreamAdapter,
 )
 from foundry_lite.infrastructure.adapters.elasticsearch_search import ElasticsearchAdapter, ElasticsearchAdapterConfig
+from foundry_lite.infrastructure.adapters.iceberg_dataset_storage import (
+    IcebergDatasetStorageAdapter,
+    IcebergDatasetStorageAdapterConfig,
+)
 from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamAdapter,
     KafkaStreamAdapterConfig,
@@ -52,6 +56,8 @@ __all__ = [
     "ElasticsearchAdapter",
     "ElasticsearchAdapterConfig",
     "RestPullConnectorAdapter",
+    "IcebergDatasetStorageAdapter",
+    "IcebergDatasetStorageAdapterConfig",
     "S3DatasetStorageAdapter",
     "S3DatasetStorageAdapterConfig",
 ]

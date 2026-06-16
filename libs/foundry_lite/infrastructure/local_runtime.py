@@ -18,6 +18,8 @@ from foundry_lite.infrastructure.adapters import (
     FakeSearchAdapter,
     FakeStreamAdapter,
     FakeWorkflowAdapter,
+    IcebergDatasetStorageAdapter,
+    IcebergDatasetStorageAdapterConfig,
     LocalConnectorAdapter,
     LocalDatasetStorageAdapter,
     LocalSearchAdapter,
@@ -99,11 +101,13 @@ def _dataset_storage_adapter(adapter_profile: str, object_storage_root: Path) ->
         return FakeDatasetStorageAdapter(object_storage_root)
     if adapter_profile == "s3-storage":
         return S3DatasetStorageAdapter(_s3_storage_config(object_storage_root))
+    if adapter_profile == "iceberg":
+        return IcebergDatasetStorageAdapter(_iceberg_storage_config(object_storage_root))
     raise ValueError(f"unknown adapter profile: {adapter_profile}")
 
 
 def _compute_adapter(adapter_profile: str) -> DuckDBComputeAdapter:
-    if adapter_profile in {"local", "s3-storage"}:
+    if adapter_profile in {"local", "s3-storage", "iceberg"}:
         return DuckDBComputeAdapter()
     if adapter_profile == "fake-storage":
         return FakeComputeAdapter()
@@ -111,7 +115,7 @@ def _compute_adapter(adapter_profile: str) -> DuckDBComputeAdapter:
 
 
 def _connector_adapter(adapter_profile: str) -> LocalConnectorAdapter:
-    if adapter_profile in {"local", "s3-storage"}:
+    if adapter_profile in {"local", "s3-storage", "iceberg"}:
         return LocalConnectorAdapter()
     if adapter_profile == "fake-storage":
         return FakeConnectorAdapter()
@@ -120,7 +124,7 @@ def _connector_adapter(adapter_profile: str) -> LocalConnectorAdapter:
 
 def _search_adapter(adapter_profile: str) -> SearchAdapter:
     search_profile = os.getenv("FOUNDRY_LITE_SEARCH_PROFILE", adapter_profile)
-    if search_profile in {"local", "s3-storage"}:
+    if search_profile in {"local", "s3-storage", "iceberg"}:
         return LocalSearchAdapter()
     if search_profile == "fake-storage":
         return FakeSearchAdapter()
@@ -131,7 +135,7 @@ def _search_adapter(adapter_profile: str) -> SearchAdapter:
 
 
 def _stream_adapter(adapter_profile: str) -> LocalStreamAdapter:
-    if adapter_profile in {"local", "s3-storage"}:
+    if adapter_profile in {"local", "s3-storage", "iceberg"}:
         return LocalStreamAdapter()
     if adapter_profile == "fake-storage":
         return FakeStreamAdapter()
@@ -139,7 +143,7 @@ def _stream_adapter(adapter_profile: str) -> LocalStreamAdapter:
 
 
 def _workflow_adapter(adapter_profile: str) -> LocalWorkflowAdapter:
-    if adapter_profile in {"local", "s3-storage"}:
+    if adapter_profile in {"local", "s3-storage", "iceberg"}:
         return LocalWorkflowAdapter()
     if adapter_profile == "fake-storage":
         return FakeWorkflowAdapter()
@@ -156,4 +160,17 @@ def _s3_storage_config(object_storage_root: Path) -> S3DatasetStorageAdapterConf
         prefix=os.getenv("FOUNDRY_LITE_S3_PREFIX", "foundry-lite"),
         cache_root=object_storage_root / "_s3-cache",
         should_create_bucket_if_missing=os.getenv("FOUNDRY_LITE_S3_CREATE_BUCKET", "1") != "0",
+    )
+
+
+def _iceberg_storage_config(object_storage_root: Path) -> IcebergDatasetStorageAdapterConfig:
+    return IcebergDatasetStorageAdapterConfig(
+        catalog_uri=os.environ["FOUNDRY_LITE_ICEBERG_CATALOG_URI"],
+        warehouse=os.environ["FOUNDRY_LITE_ICEBERG_WAREHOUSE"],
+        namespace=os.getenv("FOUNDRY_LITE_ICEBERG_NAMESPACE", "foundry_lite"),
+        cache_root=object_storage_root / "_iceberg-cache",
+        s3_endpoint_url=os.getenv("FOUNDRY_LITE_S3_ENDPOINT_URL"),
+        s3_access_key_id=os.getenv("FOUNDRY_LITE_S3_ACCESS_KEY_ID"),
+        s3_secret_access_key=os.getenv("FOUNDRY_LITE_S3_SECRET_ACCESS_KEY"),
+        s3_region=os.getenv("FOUNDRY_LITE_S3_REGION", "us-east-1"),
     )

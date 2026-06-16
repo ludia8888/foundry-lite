@@ -981,6 +981,22 @@
 - [ ] A15. unique check case-sensitive/case-insensitive policy를 명시한다. _(범위: check 레이어 — S3 storage ratchet 밖)_
 - [x] A16. 제품이 `FOUNDRY_LITE_ADAPTER_PROFILE=s3-storage` 설정으로 부팅될 때 composition-root가 실제로 S3 어댑터를 선택·구동한다 (어댑터 직접 주입이 아니라 선택 경로 + HTTP 엔트리포인트 e2e). (`test_s3_composition_root_selects_adapter_from_profile_and_runs_full_cycle`, `test_s3_api_end_to_end_preview_reads_through_s3_and_surfaces_corruption`)
 
+### A-ICE. Iceberg table catalog (2번째 인프라 ratchet, profile `iceberg`)
+
+각 dataset version = Iceberg table snapshot 1개, `manifest_uri`에 `snapshot_id` 핀. 데이터/메타데이터는 object storage(S3/MinIO), SQL catalog가 포인터 추적.
+
+- [x] AI1. catalog 스냅샷 commit 후 DB dataset_versions commit 실패 시 orphan 스냅샷을 정리한다(DB가 SoT). (`test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot`)
+- [x] AI2. DB version은 COMMITTED인데 Iceberg 테이블/메타데이터가 사라진 경우를 `committed_version_storage_missing`으로 진단한다. (`test_iceberg_missing_table_on_read_marks_storage_corruption`)
+- [x] AI3. metadata.json이 파싱 불가(손상)면 retryable이 아니라 `committed_version_storage_corrupt`로 진단한다. (`test_iceberg_corrupt_table_metadata_is_corruption_not_retryable`)
+- [x] AI4. catalog가 가리키는 S3 데이터파일 손상을 corruption으로 진단한다. (`test_iceberg_corrupted_data_file_surfaces_through_engine_as_corruption`)
+- [x] AI5. catalog outage(commit 실패)가 FAILED run + retryable adapterFailure로 Operations에 노출된다. (`test_iceberg_catalog_failure_is_visible_in_operations`)
+- [x] AI6. 모호한 commit(timeout) 후 retry가 중복 version을 만들지 않는다. (`test_iceberg_retry_after_ambiguous_commit_does_not_duplicate_version`)
+- [x] AI7. 같은 version id 재사용을 conflict로 거부한다. (`test_iceberg_duplicate_version_commit_is_rejected`)
+- [x] AI8. 호환 스키마 진화(컬럼 추가)를 지원하고 옛 버전 핀 읽기는 옛 내용을 유지한다. (`test_iceberg_compatible_schema_evolution_across_versions`)
+- [x] AI9. 스냅샷 격리 — 나중 commit/out-of-band head 변경이 이미 commit된 version의 핀 읽기를 바꾸지 않는다. (`test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots`, `test_iceberg_pinned_snapshot_survives_out_of_band_pointer_change`)
+- [x] AI10. 코어 엔진 + S3 warehouse end-to-end: composition-root가 `iceberg` 프로필 선택→ensure/upload/preview가 MinIO 위 Iceberg로 라운드트립. (`test_iceberg_engine_and_s3_warehouse_end_to_end`)
+- [x] AI11. 반복 commit이 모든 version의 핀 내용을 무손실로 유지한다. 동시 same-table commit은 version allocator(SELECT FOR UPDATE)가 직렬화; Iceberg optimistic concurrency는 backstop. (`test_iceberg_repeated_commits_keep_every_version_independently_readable`)
+
 ## B. Source / Sync / Connector
 
 - [ ] B1. testConnection 성공과 actual query 권한 차이를 검증한다.

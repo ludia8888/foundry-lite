@@ -40,6 +40,7 @@
     "quality:shadow-reindex": "uv run pytest tests/contracts/test_object_index_repository_contract.py tests/contracts/test_object_read_repository_contract.py tests/contracts/test_object_set_repository_contract.py tests/integration/test_shadow_reindex.py -q",
     "quality:search-indexing": "uv run pytest tests/contracts/test_search_adapter_contract.py tests/integration/test_search_indexing.py -q",
     "quality:s3-storage": "uv run pytest tests/integration/test_s3_dataset_storage_adapter.py -q",
+    "quality:iceberg": "uv run pytest tests/integration/test_iceberg_dataset_storage_adapter.py -q",
     "quality:regression-bugfix": "uv run python scripts/quality/check_regression_test_per_bugfix.py",
     "quality:pr-root-cause": "uv run python scripts/quality/check_pr_root_cause_section.py",
     "quality:doc-drift": "uv run python scripts/quality/check_doc_drift.py",
