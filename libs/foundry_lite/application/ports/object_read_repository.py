@@ -104,6 +104,12 @@ class ObjectLinkTarget(TypedDict):
     objectType: str
     objectId: str
     properties: dict[str, object]
+    targetMissing: NotRequired[bool]
+
+
+class ObjectLinkWarning(TypedDict):
+    type: str
+    message: str
 
 
 ObjectLinkPayload = TypedDict(
@@ -112,6 +118,7 @@ ObjectLinkPayload = TypedDict(
         "linkType": str,
         "from": ObjectReference,
         "to": ObjectLinkTarget,
+        "warning": NotRequired[ObjectLinkWarning],
     },
 )
 
