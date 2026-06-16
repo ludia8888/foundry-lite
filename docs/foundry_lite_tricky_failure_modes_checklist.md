@@ -210,12 +210,16 @@
 
 ### T0-011 — Multipart upload partial object
 
-- [ ] **Trigger:** multipart upload 중 network timeout 또는 process crash.
-- [ ] **Failure:** Parquet footer가 깨지거나 일부 row만 존재한다.
-- [ ] **Guardrail:** upload complete 후 byte_size/content_hash를 재검증한다.
+- [x] **Trigger:** multipart upload 중 network timeout 또는 process crash.
+- [x] **Failure:** Parquet footer가 깨지거나 일부 row만 존재한다.
+- [x] **Guardrail:** upload complete 후 byte_size/content_hash를 재검증한다.
 - [ ] **Guardrail:** Parquet footer validation을 수행한다.
-- [ ] **Guardrail:** writer row_count만 믿지 말고 reader validation도 수행한다.
-- [ ] **Regression Test:** `test_partial_multipart_upload_never_becomes_committed_version`
+- [x] **Guardrail:** writer row_count만 믿지 않고 S3 read-back byte_size/content_hash를 검증한다 (commit뿐 아니라 매 read마다 `_verify_local_copy`).
+- [x] **Guardrail:** 진짜 multipart 중단 시 `list_objects_v2`에 안 잡히는 orphan part를 `_abort_multipart_uploads`로 정리한다.
+- [x] **Regression Test:** `test_s3_partial_multipart_upload_never_becomes_committed_version`
+- [x] **Regression Test:** `test_s3_real_multipart_upload_failure_aborts_orphaned_parts`
+- [x] **Regression Test:** `test_s3_read_path_detects_truncated_data_object`
+- [x] **Regression Test:** `test_s3_retry_after_storage_timeout_does_not_duplicate_version`
 
 ### T0-012 — Dataset version_number 경합
 
@@ -962,7 +966,7 @@
 - [ ] A5. staging path transaction_id collision을 방지한다.
 - [ ] A6. abort cleanup이 retry 중인 attempt file을 삭제하지 않는다.
 - [ ] A7. signedUrl expired를 dataset corruption으로 오판하지 않는다.
-- [ ] A8. object storage list incomplete 상황에서도 cleanup이 안전하다.
+- [x] A8. object storage list incomplete 상황에서도 cleanup이 안전하다. (`test_s3_failed_commit_cleanup_uses_known_keys_not_listing` — failed-commit cleanup은 list 대신 known key로 삭제)
 - [ ] A9. APPEND transaction 동시 commit ordering을 검증한다.
 - [x] A10. SNAPSHOT commit 중 downstream transform이 previous latest를 읽지 않는다.
 - [ ] A11. branch HEAD와 global latest를 혼동하지 않는다.
@@ -1179,6 +1183,14 @@
 - [x] `test_schema_compatibility_revalidates_if_latest_schema_changes`
 - [x] `test_failed_upload_oom_leaves_recoverable_aborted_or_stale_open_tx`
 - [x] `test_abort_cleanup_never_deletes_committed_manifest`
+- [x] `test_s3_dataset_storage_adapter_contract`
+- [x] `test_s3_partial_multipart_upload_never_becomes_committed_version`
+- [x] `test_s3_commit_storage_success_db_failure_creates_orphan_cleanup_evidence`
+- [x] `test_s3_committed_manifest_missing_marks_storage_corruption`
+- [x] `test_s3_abort_cleanup_never_deletes_committed_manifest`
+- [x] `test_s3_concurrent_dataset_commits_allocate_strictly_increasing_versions`
+- [x] `test_s3_retry_after_storage_timeout_does_not_duplicate_version`
+- [x] `test_s3_storage_failure_is_visible_in_operations`
 - [x] `test_csv_primary_key_preserves_leading_zeroes`
 - [x] `test_transform_input_latest_is_pinned_to_version_id`
 - [x] `test_transform_retry_after_commit_does_not_create_second_output_version`

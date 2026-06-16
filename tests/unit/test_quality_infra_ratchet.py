@@ -34,28 +34,35 @@ def _write_minimum_ratchet_tree(root: Path) -> None:
     docs = root / "docs"
     scripts = root / "scripts"
     quality = scripts / "quality"
+    s3_tests = root / "tests" / "integration"
     docs.mkdir(parents=True)
     quality.mkdir(parents=True)
+    s3_tests.mkdir(parents=True)
     (docs / "infra-ratchet.md").write_text(_minimum_ratchet_doc(), encoding="utf-8")
     (docs / "commit-point-risk-register.md").write_text(
         "Production storage split-brain extensions\ntest_partial_multipart_upload_never_becomes_committed_version\n",
         encoding="utf-8",
     )
     (docs / "foundry_lite_tricky_failure_modes_checklist.md").write_text(
-        "T0-011\ntest_partial_multipart_upload_never_becomes_committed_version\n",
+        "T0-011\ntest_s3_partial_multipart_upload_never_becomes_committed_version\n",
         encoding="utf-8",
     )
     (docs / "implementation-status.md").write_text(
-        "Infra Ratchet\nproduction S3-like adapters\n",
+        "Infra Ratchet\nS3DatasetStorageAdapter\n",
         encoding="utf-8",
     )
     (root / "README.md").write_text("Infra Ratchet\ncheck_infra_ratchet.py\n", encoding="utf-8")
     (root / "package.json").write_text(
         '{"scripts":{"quality:infra-ratchet":"uv run python scripts/quality/check_infra_ratchet.py",'
-        '"quality:static":"pnpm quality:infra-ratchet"}}',
+        '"quality:s3-storage":"uv run pytest tests/integration/test_s3_dataset_storage_adapter.py -q",'
+        '"quality:static":"pnpm quality:infra-ratchet && pnpm quality:s3-storage"}}',
         encoding="utf-8",
     )
-    (scripts / "ci_gate.sh").write_text("scripts/quality/check_infra_ratchet.py\n", encoding="utf-8")
+    (scripts / "ci_gate.sh").write_text(
+        "scripts/quality/check_infra_ratchet.py\npnpm --silent quality:s3-storage\n",
+        encoding="utf-8",
+    )
+    (s3_tests / "test_s3_dataset_storage_adapter.py").write_text(_minimum_s3_tests(), encoding="utf-8")
 
 
 def _minimum_ratchet_doc() -> str:
@@ -70,3 +77,7 @@ def _minimum_ratchet_doc() -> str:
         *gate.REQUIRED_S3_TEST_NAMES,
     ]
     return "\n".join(required_terms)
+
+
+def _minimum_s3_tests() -> str:
+    return "\n".join(f"def {name}(): pass" for name in gate.REQUIRED_S3_TEST_NAMES)

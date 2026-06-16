@@ -36,6 +36,8 @@ from foundry_lite.infrastructure.adapters import (  # noqa: E402
     LocalStreamAdapter,
     LocalWorkflowAdapter,
     RestPullConnectorAdapter,
+    S3DatasetStorageAdapter,
+    S3DatasetStorageAdapterConfig,
 )
 from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthProvider  # noqa: E402
 
@@ -46,6 +48,7 @@ REQUIRED_PROFILES = frozenset(
         "fake-compute",
         "local",
         "fake-storage",
+        "s3-storage",
         "local-workflow",
         "fake-workflow",
         "local-stream",
@@ -79,6 +82,15 @@ def load_contracts() -> tuple[AdapterFailureContract, ...]:
             FakeComputeAdapter(),
             LocalDatasetStorageAdapter(storage_root / "local"),
             FakeDatasetStorageAdapter(storage_root / "fake"),
+            S3DatasetStorageAdapter(
+                S3DatasetStorageAdapterConfig(
+                    bucket="foundry-lite-taxonomy",
+                    endpoint_url="http://s3:9000",
+                    cache_root=storage_root / "s3-cache",
+                    should_create_bucket_if_missing=False,
+                ),
+                client=object(),
+            ),
             LocalWorkflowAdapter(),
             FakeWorkflowAdapter(),
             LocalStreamAdapter(),

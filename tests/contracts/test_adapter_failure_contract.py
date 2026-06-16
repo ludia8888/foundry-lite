@@ -25,6 +25,8 @@ from foundry_lite.infrastructure.adapters import (
     LocalStreamAdapter,
     LocalWorkflowAdapter,
     RestPullConnectorAdapter,
+    S3DatasetStorageAdapter,
+    S3DatasetStorageAdapterConfig,
 )
 from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthProvider
 
@@ -35,6 +37,7 @@ from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthPr
         "fake-compute",
         "local-storage",
         "fake-storage",
+        "s3-storage",
         "local-workflow",
         "fake-workflow",
         "local-stream",
@@ -82,6 +85,15 @@ def _adapter_failure_contract(profile: str, tmp_path: Path) -> AdapterFailureCon
         "fake-compute": FakeComputeAdapter(),
         "local-storage": LocalDatasetStorageAdapter(tmp_path / "local"),
         "fake-storage": FakeDatasetStorageAdapter(tmp_path / "fake"),
+        "s3-storage": S3DatasetStorageAdapter(
+            S3DatasetStorageAdapterConfig(
+                bucket="foundry-lite-contract",
+                endpoint_url="http://s3:9000",
+                cache_root=tmp_path / "s3-cache",
+                should_create_bucket_if_missing=False,
+            ),
+            client=object(),
+        ),
         "local-workflow": LocalWorkflowAdapter(),
         "fake-workflow": FakeWorkflowAdapter(),
         "local-stream": LocalStreamAdapter(),

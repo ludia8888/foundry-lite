@@ -6,6 +6,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 
 from foundry_lite.application.dependencies import CoreDependencies
+from foundry_lite.application.ports.dataset_storage import DatasetStorageAdapter
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.infrastructure.adapters import (
     DuckDBComputeAdapter,
@@ -22,6 +23,8 @@ from foundry_lite.infrastructure.adapters import (
     LocalSearchAdapter,
     LocalStreamAdapter,
     LocalWorkflowAdapter,
+    S3DatasetStorageAdapter,
+    S3DatasetStorageAdapterConfig,
 )
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
@@ -89,16 +92,18 @@ def create_local_core_dependencies(
     )
 
 
-def _dataset_storage_adapter(adapter_profile: str, object_storage_root: Path) -> LocalDatasetStorageAdapter:
+def _dataset_storage_adapter(adapter_profile: str, object_storage_root: Path) -> DatasetStorageAdapter:
     if adapter_profile == "local":
         return LocalDatasetStorageAdapter(object_storage_root)
     if adapter_profile == "fake-storage":
         return FakeDatasetStorageAdapter(object_storage_root)
+    if adapter_profile == "s3-storage":
+        return S3DatasetStorageAdapter(_s3_storage_config(object_storage_root))
     raise ValueError(f"unknown adapter profile: {adapter_profile}")
 
 
 def _compute_adapter(adapter_profile: str) -> DuckDBComputeAdapter:
-    if adapter_profile == "local":
+    if adapter_profile in {"local", "s3-storage"}:
         return DuckDBComputeAdapter()
     if adapter_profile == "fake-storage":
         return FakeComputeAdapter()
@@ -106,7 +111,7 @@ def _compute_adapter(adapter_profile: str) -> DuckDBComputeAdapter:
 
 
 def _connector_adapter(adapter_profile: str) -> LocalConnectorAdapter:
-    if adapter_profile == "local":
+    if adapter_profile in {"local", "s3-storage"}:
         return LocalConnectorAdapter()
     if adapter_profile == "fake-storage":
         return FakeConnectorAdapter()
@@ -115,7 +120,7 @@ def _connector_adapter(adapter_profile: str) -> LocalConnectorAdapter:
 
 def _search_adapter(adapter_profile: str) -> SearchAdapter:
     search_profile = os.getenv("FOUNDRY_LITE_SEARCH_PROFILE", adapter_profile)
-    if search_profile == "local":
+    if search_profile in {"local", "s3-storage"}:
         return LocalSearchAdapter()
     if search_profile == "fake-storage":
         return FakeSearchAdapter()
@@ -126,7 +131,7 @@ def _search_adapter(adapter_profile: str) -> SearchAdapter:
 
 
 def _stream_adapter(adapter_profile: str) -> LocalStreamAdapter:
-    if adapter_profile == "local":
+    if adapter_profile in {"local", "s3-storage"}:
         return LocalStreamAdapter()
     if adapter_profile == "fake-storage":
         return FakeStreamAdapter()
@@ -134,8 +139,21 @@ def _stream_adapter(adapter_profile: str) -> LocalStreamAdapter:
 
 
 def _workflow_adapter(adapter_profile: str) -> LocalWorkflowAdapter:
-    if adapter_profile == "local":
+    if adapter_profile in {"local", "s3-storage"}:
         return LocalWorkflowAdapter()
     if adapter_profile == "fake-storage":
         return FakeWorkflowAdapter()
     raise ValueError(f"unknown adapter profile: {adapter_profile}")
+
+
+def _s3_storage_config(object_storage_root: Path) -> S3DatasetStorageAdapterConfig:
+    return S3DatasetStorageAdapterConfig(
+        bucket=os.environ["FOUNDRY_LITE_S3_BUCKET"],
+        endpoint_url=os.getenv("FOUNDRY_LITE_S3_ENDPOINT_URL"),
+        access_key_id=os.getenv("FOUNDRY_LITE_S3_ACCESS_KEY_ID"),
+        secret_access_key=os.getenv("FOUNDRY_LITE_S3_SECRET_ACCESS_KEY"),
+        region_name=os.getenv("FOUNDRY_LITE_S3_REGION", "us-east-1"),
+        prefix=os.getenv("FOUNDRY_LITE_S3_PREFIX", "foundry-lite"),
+        cache_root=object_storage_root / "_s3-cache",
+        should_create_bucket_if_missing=os.getenv("FOUNDRY_LITE_S3_CREATE_BUCKET", "1") != "0",
+    )

@@ -765,6 +765,7 @@ flowchart TB
 | `check_metrics_exposed.py` | 필수 운영 metrics 누락 |
 | `check_flaky_detector.py` | 반복 실행에서 흔들리는 test suite |
 | `check_infra_ratchet.py` | 인프라를 한 번에 하나씩 추가하고 실패/동시성/재시도/부분 성공/복구/운영 증거를 문서·CI에 고정하지 않는 문제 |
+| `quality:s3-storage` | MinIO/S3 storage adapter가 정상 경로만 통과하고 multipart 실패, retry, cleanup, operator evidence를 놓치는 문제 |
 
 ### Infra Ratchet
 
@@ -775,6 +776,13 @@ recovery cleanup, operator evidence, docs sync를 모두 갖춘 뒤에야 다음
 있고, `check_infra_ratchet.py`가 README, implementation status, tricky failure
 checklist, commit-point risk register, `package.json`, `ci_gate.sh` 연결을 static
 lane에서 검사한다.
+
+첫 active ratchet은 MinIO-backed `S3DatasetStorageAdapter`다. `quality:s3-storage`
+는 MinIO/Testcontainers 위에서 S3 adapter contract, partial multipart timeout,
+storage-success/DB-failure split brain, committed manifest missing, abort cleanup,
+concurrent version-prefix writes, retry-after-timeout, failed-run adapter evidence를
+검사한다. 따라서 다음 인프라인 Iceberg는 S3-compatible storage semantics 위에서만
+진행한다.
 
 ### 필수 통합 시나리오
 
