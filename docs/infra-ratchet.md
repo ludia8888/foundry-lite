@@ -54,13 +54,13 @@ ratchet discipline.
 
 ## Active Ratchet Queue
 
-| Order | Infrastructure                   | Status         | Why this order                                                                                                                | Cannot advance until                                                                                                                                          |
-| ----- | -------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | MinIO/S3 DatasetStorageAdapter   | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet.                                          |
-| 2     | Iceberg Catalog/TableAdapter     | active-covered | Iceberg adds a table metadata/catalog commit point on top of object storage.                                                  | `quality:iceberg` stays green in CI; each dataset version pins an exact Iceberg snapshot id and the DB COMMITTED version remains the serving source of truth. |
-| 3     | Spark ComputeAdapter             | active-next    | Spark should consume the same Dataset API and pinned versions without knowing storage internals.                              | Iceberg/S3 inputs can be previewed and transformed without API divergence.                                                                                    |
-| 4     | Temporal WorkflowAdapter         | later          | Durable workflow execution changes retry/time semantics for long-running operations.                                          | Storage/table/compute commit points already have recovery evidence.                                                                                           |
-| 5     | Managed Elasticsearch deployment | later          | The adapter/projection proof exists; deployment/operations should follow after storage commit points.                         | Search remains a rebuildable projection and live cluster failure evidence is added.                                                                           |
+| Order | Infrastructure                   | Status         | Why this order                                                                                                                | Cannot advance until                                                                                                                                                         |
+| ----- | -------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | MinIO/S3 DatasetStorageAdapter   | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet.                                                         |
+| 2     | Iceberg Catalog/TableAdapter     | active-covered | Iceberg adds a table metadata/catalog commit point on top of object storage.                                                  | `quality:iceberg` stays green in CI; each dataset version pins an exact Iceberg snapshot id and the DB COMMITTED version remains the serving source of truth.                |
+| 3     | Spark ComputeAdapter             | active-covered | Spark should consume the same Dataset API and pinned versions without knowing storage internals.                              | `quality:spark` stays green in CI; Spark runs transforms on local parquet (engine materializes pinned versions) and output commits through the dataset transaction protocol. |
+| 4     | Temporal WorkflowAdapter         | active-next    | Durable workflow execution changes retry/time semantics for long-running operations.                                          | Storage/table/compute commit points already have recovery evidence.                                                                                                          |
+| 5     | Managed Elasticsearch deployment | later          | The adapter/projection proof exists; deployment/operations should follow after storage commit points.                         | Search remains a rebuildable projection and live cluster failure evidence is added.                                                                                          |
 
 ## Active Ratchet: MinIO/S3 DatasetStorageAdapter
 
@@ -165,6 +165,41 @@ Concurrency note: the dataset version allocator (`SELECT ... FOR UPDATE`)
 serializes commits to one dataset, so concurrent same-table Iceberg commits do
 not occur in the engine; Iceberg optimistic concurrency is the backstop and the
 duplicate-version guard rejects reuse of a committed version id.
+
+### Active Ratchet: Spark (covered)
+
+`SparkComputeAdapter` implements the same `ComputeAdapter` port (profile `spark`),
+selected independently of storage by `FOUNDRY_LITE_COMPUTE_PROFILE=spark` so a
+Spark runner can transform datasets backed by any storage profile. The engine
+materializes each pinned dataset version through the storage adapter to a local
+parquet path before calling compute, so Spark stays unaware of S3/Iceberg
+internals (the exit criteria hold structurally). Spark runs CSV ingest and SQL
+transforms; its directory output is coalesced to one part file and promoted to
+the single-file target the dataset transaction protocol expects. Local parquet
+reads (preview/inspect/check) reuse the shared reader. `quality:spark` runs the
+proof suite and is wired into the `ci_gate.sh` runtime lane after Iceberg.
+
+Reserved Spark ratchet tests (must stay green):
+
+```text
+test_spark_compute_adapter_contract_parity
+test_spark_transform_substitutes_inputs_and_writes_single_parquet_file
+test_spark_and_duckdb_produce_equivalent_transform_output
+test_spark_unsupported_plan_kind_is_validation_error
+test_spark_invalid_csv_input_is_validation_error
+test_spark_engine_transform_commits_with_lineage_and_health
+test_spark_transform_failure_aborts_output_transaction
+```
+
+Scope note: this ratchet proves the Spark adapter contract, SQL-semantics parity
+with DuckDB, single-file output promotion, engine-level transform commit with
+lineage/health, and failure → output-transaction abort with FAILED-run evidence,
+all on a local (`local[1]`) Spark session. Genuinely distributed failure modes —
+speculative-execution double-write (T1-010), driver-success-but-executor-output-
+missing (C9), timeout-then-cluster-cancel (C10), and shuffle/dynamic-allocation
+failures (C11) — are not reproducible in local mode and require a real Spark
+cluster; they are deferred (documented, not silently skipped), analogous to the
+real-AWS deferral on the S3 ratchet.
 
 ## Pull Request Exit Checklist
 

@@ -1025,13 +1025,25 @@
 - [ ] C6. pandas object dtype output으로 schema instability가 생기지 않는다.
 - [ ] C7. timezone parsing이 DuckDB/Python/Spark에서 일관된다.
 - [ ] C8. DuckDB version upgrade가 schema/hash를 바꾸는지 테스트한다.
-- [ ] C9. Spark driver success but executor output missing case를 검증한다.
-- [ ] C10. Spark timeout 후 cluster job이 계속 실행되지 않게 cancel한다.
-- [ ] C11. Spark dynamic allocation/shuffle failure를 처리한다.
-- [ ] C12. Spark speculative task double-write를 막는다.
-- [ ] C13. Spark도 Foundry lineage model을 사용한다.
-- [ ] C14. DuckDB/Spark fallback이 SQL semantics를 바꾸지 않는다.
+- [ ] C9. Spark driver success but executor output missing case를 검증한다. _(분산 클러스터 전용 — local[1] 재현 불가, 실 클러스터 필요로 deferred. infra-ratchet.md Spark scope note)_
+- [ ] C10. Spark timeout 후 cluster job이 계속 실행되지 않게 cancel한다. _(분산 전용 — deferred; local[1] timeout은 `_compute_error` timeout으로 분류돼 output transaction abort됨)_
+- [ ] C11. Spark dynamic allocation/shuffle failure를 처리한다. _(분산 전용 — deferred)_
+- [ ] C12. Spark speculative task double-write를 막는다. _(= T1-010, 분산 전용 — deferred; local single-file 출력은 `_write_single_parquet`가 1개 part만 promote)_
+- [x] C13. Spark도 Foundry lineage model을 사용한다. (`test_spark_engine_transform_commits_with_lineage_and_health` — 엔진이 Spark로 transform 실행, version+lineage 커밋, transform-service-core 수정 0)
+- [x] C14. DuckDB/Spark fallback이 SQL semantics를 바꾸지 않는다. (`test_spark_and_duckdb_produce_equivalent_transform_output`)
 - [ ] C15. compute resource config default가 unbounded memory가 아니다.
+
+### C-SPARK. Spark ComputeAdapter (3번째 인프라 ratchet, profile `spark`)
+
+`FOUNDRY_LITE_COMPUTE_PROFILE=spark`로 storage와 독립 선택. 엔진이 pinned version을 로컬 parquet로 materialize → Spark는 storage 내부 모름. local[1] 세션.
+
+- [x] CS1. adapter-contract + normal-path: CSV→parquet→preview/inspect/check가 Spark 프로필로 동작. (`test_spark_compute_adapter_contract_parity`)
+- [x] CS2. Spark 디렉터리 출력을 단일 parquet 파일 target으로 promote(part 1개만), 잔여 dir 없음. (`test_spark_transform_substitutes_inputs_and_writes_single_parquet_file`)
+- [x] CS3. SQL semantics가 DuckDB와 동일(parity). (`test_spark_and_duckdb_produce_equivalent_transform_output`)
+- [x] CS4. unsupported plan/invalid CSV는 non-retryable validation으로 분류. (`test_spark_unsupported_plan_kind_is_validation_error`, `test_spark_invalid_csv_input_is_validation_error`)
+- [x] CS5. 엔진이 Spark로 transform 실행, transform-service-core 수정 없이 version+lineage 커밋. (`test_spark_engine_transform_commits_with_lineage_and_health`)
+- [x] CS6. Spark job 실패 시 output transaction abort — 커밋된 output version 없음 + FAILED transform run. (`test_spark_transform_failure_aborts_output_transaction`)
+- [ ] CS7. 분산 클러스터 전용 모드(speculative double-write/executor-output-missing/timeout-cancel/shuffle failure)는 local[1] 재현 불가 — 실 클러스터 필요로 deferred (C9~C12, infra-ratchet.md Spark scope note).
 
 ## D. Ontology / Schema / SDK
 
