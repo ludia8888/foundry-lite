@@ -471,6 +471,18 @@ def test_link_reports_missing_target_object(foundry: FoundryLite) -> None:
     assert links[0]["warning"]["type"] == "link_target_missing"
 
 
+def test_link_reverse_traverses_customer_to_orders(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+
+    links = foundry.objects.links("Customer", "C-100", "OrderCustomer", ctx=ctx)
+
+    assert {link["to"]["objectId"] for link in links} == {"O-1001", "O-1003"}
+    assert {link["from"]["objectType"] for link in links} == {"Customer"}
+    assert {link["from"]["objectId"] for link in links} == {"C-100"}
+    assert {link["to"]["objectType"] for link in links} == {"Order"}
+    assert {link["linkType"] for link in links} == {"OrderCustomer"}
+
+
 def test_transforms_sdk_decorator_and_logging(caplog) -> None:
     @transform(orders=Input("raw.erp_orders"), out=Output("clean.orders"))
     def compute() -> None:

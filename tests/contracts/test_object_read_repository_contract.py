@@ -119,6 +119,27 @@ class FakeObjectReadRepository:
             and row["deleted"] is False
         ]
 
+    def active_links_to(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        link_type_api_name: str,
+        to_api_name: str,
+        to_object_id: str,
+    ) -> list[ObjectLinkRow]:
+        del transaction
+        return [
+            cast(ObjectLinkRow, dict(row))
+            for row in self.object_links
+            if row["tenant_id"] == tenant_id
+            and row["link_type_api_name"] == link_type_api_name
+            and row.get("is_active", True) is True
+            and row["to_api_name"] == to_api_name
+            and row["to_object_id"] == to_object_id
+            and row["deleted"] is False
+        ]
+
     def _property_data_types(self, object_type_api_name: str) -> dict[str, str]:
         return {
             property_name: data_type
@@ -656,6 +677,40 @@ def test_object_read_repository_contract_lists_active_outgoing_links(
     assert [row["id"] for row in rows] == ["link_1"]
     assert rows[0]["to_api_name"] == "Customer"
     assert rows[0]["to_object_id"] == "C-1"
+
+
+def test_object_read_repository_contract_lists_active_incoming_links(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_link(row_id="link_1", from_object_id="O-1", to_object_id="C-1")
+    harness.add_link(row_id="link_2", from_object_id="O-2", to_object_id="C-1")
+    harness.add_link(
+        row_id="link_shadow",
+        from_object_id="O-shadow",
+        to_object_id="C-1",
+        index_version="index_run_shadow",
+        is_active=False,
+    )
+    harness.add_link(row_id="link_deleted", from_object_id="O-deleted", to_object_id="C-1", deleted=True)
+    harness.add_link(
+        row_id="link_other_type",
+        link_type_id="lt_order_warehouse",
+        link_type_api_name="OrderWarehouse",
+        to_object_id="C-1",
+    )
+    harness.add_link(row_id="link_other_tenant", tenant_id="tenant-other", to_object_id="C-1")
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.active_links_to(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            link_type_api_name="OrderCustomer",
+            to_api_name="Customer",
+            to_object_id="C-1",
+        )
+
+    assert [row["id"] for row in rows] == ["link_1", "link_2"]
+    assert [row["from_object_id"] for row in rows] == ["O-1", "O-2"]
 
 
 def test_link_traversal_never_crosses_tenant_without_policy(harness: ObjectReadHarness) -> None:
