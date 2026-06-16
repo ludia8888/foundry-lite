@@ -347,6 +347,48 @@ def test_github_ci_fetches_history_and_checks_pr_root_cause() -> None:
     assert "scripts/quality/check_pr_root_cause_section.py --event-path" in workflow
 
 
+def test_github_workflows_use_node24_action_versions() -> None:
+    ci_workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    codeql_workflow = (ROOT / ".github" / "workflows" / "codeql.yml").read_text(encoding="utf-8")
+
+    node24_ci_actions = (
+        "actions/checkout@v6",
+        "astral-sh/setup-uv@v8.2.0",
+        "actions/setup-python@v6",
+        "pnpm/action-setup@v6",
+        "actions/setup-node@v6",
+        "actions/setup-go@v6",
+        "actions/upload-artifact@v7",
+    )
+    node24_codeql_actions = (
+        "actions/checkout@v6",
+        "actions/setup-python@v6",
+        "github/codeql-action/init@v4",
+        "github/codeql-action/analyze@v4",
+        "actions/upload-artifact@v7",
+    )
+    deprecated_node20_actions = (
+        "actions/checkout@v4",
+        "astral-sh/setup-uv@v5",
+        "actions/setup-python@v5",
+        "pnpm/action-setup@v4",
+        "actions/setup-node@v4",
+        "actions/setup-go@v5",
+        "actions/upload-artifact@v4",
+        "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24",
+    )
+
+    for action_ref in node24_ci_actions:
+        assert action_ref in ci_workflow
+
+    for action_ref in node24_codeql_actions:
+        assert action_ref in codeql_workflow
+
+    for action_ref in deprecated_node20_actions:
+        assert action_ref not in ci_workflow
+        assert action_ref not in codeql_workflow
+
+
 def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
