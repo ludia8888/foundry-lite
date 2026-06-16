@@ -433,7 +433,7 @@ S3/MinIO 같은 object storage에서 원자적 rename에 의존하지 않고, st
 - [x] 파일은 먼저 staging에 쓰이고 commit 후 manifest에 의해 version에 귀속된다. ([S05-A1](./docs/sprint-evidence-ledger.md#s05-a1))
 - [x] manifest_uri만으로 dataset version의 파일 목록을 복원할 수 있다. ([S05-A2](./docs/sprint-evidence-ledger.md#s05-a2))
 - [x] 중간 실패 후 재시도해도 중복 version이 생기지 않는다. ([S05-A3](./docs/sprint-evidence-ledger.md#s05-a3))
-- [ ] content_hash가 같은 파일 재첨부 정책이 명확하다.
+- [x] content_hash가 같은 파일 재첨부 정책이 명확하다. 같은 내용도 새 transaction/version으로 기록하고 기존 committed version을 dedupe/수정하지 않는다. ([S05-A4](./docs/sprint-evidence-ledger.md#s05-a4))
 - [x] MinIO 없이 mocked adapter로 unit test가 돈다. ([S05-A5](./docs/sprint-evidence-ledger.md#s05-a5))
 
 **Demo / Proof**
