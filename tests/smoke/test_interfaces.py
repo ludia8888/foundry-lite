@@ -510,7 +510,8 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
         },
     )
     assert action.status_code == 200
-    assert action.json()["status"] == "succeeded"
+    action_payload = action.json()
+    assert action_payload["status"] == "succeeded"
 
     operation_runs = client.get("/api/operations/runs", headers=headers)
     assert operation_runs.status_code == 200
@@ -527,6 +528,14 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     filtered = filtered_runs.json()
     assert filtered["transformRuns"] == []
     action_run = next(row for row in filtered["actionRuns"] if row["target_object_id"] == "O-1001")
+    assert action_run["actor_user_id"] == ctx.actor_user_id
+    assert action_run["action_type_api_name"] == "ApproveOrder"
+    assert action_run["target_object_type_api_name"] == "Order"
+    assert action_run["status"] == "succeeded"
+    assert action_run["parameters"] == {"reason": "Inventory confirmed"}
+    assert action_run["error"] is None
+    assert isinstance(action_run["created_at"], str)
+    assert isinstance(action_run["completed_at"], str)
 
     run_detail = client.get(f"/api/operations/runs/action/{action_run['id']}", headers=headers)
     assert run_detail.status_code == 200
@@ -539,6 +548,23 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert any(event["event_type"] == "action.run.committed" for event in detail["relatedOutboxEvents"])
     assert any(event["event_type"] == "action.run.committed" for event in detail["relatedAuditEvents"])
     assert any(edit["action_run_id"] == action_run["id"] for edit in detail["relatedObjectEdits"])
+
+    action_log = client.post("/api/materializations/action_log/run", headers=headers)
+    assert action_log.status_code == 200
+    assert action_log.json()["dataset_ref"] == "ops.action_log"
+    assert action_log.json()["row_count"] == 1
+    action_log_preview = client.get("/api/datasets/ops/action_log/preview", headers=headers)
+    assert action_log_preview.status_code == 200
+    assert action_log_preview.json()[0]["action_run_id"] == action_payload["actionRunId"]
+    assert action_log_preview.json()[0]["actor_user_id"] == ctx.actor_user_id
+    assert action_log_preview.json()[0]["target_object_id"] == "O-1001"
+    assert action_log_preview.json()[0]["parameters_json"] == '{"reason": "Inventory confirmed"}'
+
+    missing_materialization = client.post("/api/materializations/missing/run", headers=headers)
+    assert missing_materialization.status_code == 404
+    assert missing_materialization.json()["detail"]["code"] == "NOT_FOUND"
+    assert missing_materialization.json()["detail"]["details"] == {"api_name": "missing"}
+    assert "request_id" in missing_materialization.json()["detail"]
 
     index_replay = client.post("/api/operations/index/Order/replay", headers=headers)
     assert index_replay.status_code == 200

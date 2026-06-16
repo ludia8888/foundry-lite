@@ -376,6 +376,7 @@
               <button id="runsBtn" type="button" class="secondary">Load Runs</button>
               <button id="runDetailBtn" type="button" class="secondary">Load Run Detail</button>
               <button id="sourceRunBtn" type="button" class="secondary">Source Run</button>
+              <button id="materializeActionLogBtn" type="button" class="secondary">Run Action Log</button>
               <button id="retryTransformBtn" type="button" class="secondary">Retry Failed Transform</button>
               <button id="replayIndexBtn" type="button" class="secondary">Replay Index</button>
               <button id="replayFailedIndexBtn" type="button" class="secondary">Replay Failed Index</button>
@@ -697,6 +698,14 @@
         await loadRuns();
       }
 
+      async function materializeActionLog() {
+        const materialization = await request("/api/materializations/action_log/run", { method: "POST" });
+        datasetRef.value = "ops.action_log";
+        await loadDataset();
+        const runs = await request("/api/operations/runs");
+        showRuns({ ...runs, lastMaterialization: materialization });
+      }
+
       async function savePendingSet() {
         const created = await request("/api/object-sets", {
           method: "POST",
@@ -856,6 +865,9 @@
       document.querySelector("#runsBtn").addEventListener("click", () => loadRuns().catch(showRuns));
       document.querySelector("#runDetailBtn").addEventListener("click", () => loadRunDetail().catch(showRuns));
       document.querySelector("#sourceRunBtn").addEventListener("click", () => loadSourceRunDetail().catch(showRuns));
+      document
+        .querySelector("#materializeActionLogBtn")
+        .addEventListener("click", () => materializeActionLog().catch(showRuns));
       document
         .querySelector("#retryTransformBtn")
         .addEventListener("click", () => retryFailedTransformRun().catch(showRuns));
