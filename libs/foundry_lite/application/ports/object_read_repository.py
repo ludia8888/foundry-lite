@@ -172,3 +172,15 @@ class ObjectReadRepository(Protocol):
     ) -> list[ObjectLinkRow]:
         """Return non-deleted outgoing links for one object and link type."""
         ...
+
+    def active_links_to(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        link_type_api_name: str,
+        to_api_name: str,
+        to_object_id: str,
+    ) -> list[ObjectLinkRow]:
+        """Return non-deleted incoming links for one object and link type."""
+        ...

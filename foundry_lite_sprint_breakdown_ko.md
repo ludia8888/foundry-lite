@@ -1018,7 +1018,7 @@ Object API와 CLI로 pending high-risk orders를 조회한다.
 
 - [x] `OrderCustomer` link가 clean.orders의 customer_id로 생성된다. ([S20-A1](./docs/sprint-evidence-ledger.md#s20-a1))
 - [x] Order detail에서 연결된 Customer를 조회할 수 있다. ([S20-A2](./docs/sprint-evidence-ledger.md#s20-a2))
-- [ ] Customer에서 Order 목록으로 역방향 traversal이 가능하거나 명확한 reverse link가 정의된다. 현재 MVP 경로는 forward `OrderCustomer` link만 명시한다. ([S20-A3](./docs/sprint-evidence-ledger.md#s20-a3))
+- [x] Customer에서 Order 목록으로 역방향 traversal이 가능하다. `OrderCustomer` active link row를 incoming 방향으로 읽어 `Customer/C-100 -> Order/O-1001,O-1003` payload를 반환한다. ([S20-A3](./docs/sprint-evidence-ledger.md#s20-a3))
 - [x] 존재하지 않는 target object link는 warning/error 정책에 따라 기록된다. link row는 유지하되 target object가 active index에 없으면 `targetMissing=true`와 `link_target_missing` warning으로 반환한다. ([S20-A4](./docs/sprint-evidence-ledger.md#s20-a4))
 - [x] link index run count가 `links_upserted`로 기록된다. ([S20-A5](./docs/sprint-evidence-ledger.md#s20-a5))
 

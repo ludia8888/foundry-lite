@@ -123,6 +123,33 @@ class SqlAlchemyObjectReadRepository:
         )
         return [cast(ObjectLinkRow, dict(row)) for row in rows]
 
+    def active_links_to(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        link_type_api_name: str,
+        to_api_name: str,
+        to_object_id: str,
+    ) -> list[ObjectLinkRow]:
+        rows = (
+            transaction.execute(
+                select(db.object_links).where(
+                    and_(
+                        db.object_links.c.tenant_id == tenant_id,
+                        db.object_links.c.link_type_api_name == link_type_api_name,
+                        db.object_links.c.is_active == True,  # noqa: E712
+                        db.object_links.c.to_api_name == to_api_name,
+                        db.object_links.c.to_object_id == to_object_id,
+                        db.object_links.c.deleted == False,  # noqa: E712
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(ObjectLinkRow, dict(row)) for row in rows]
+
     def _property_data_types(
         self,
         transaction: Any,
