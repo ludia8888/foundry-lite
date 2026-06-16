@@ -974,6 +974,7 @@
 - [ ] A13. CSV null/empty string policy가 schema/check/ontology에서 일관된다.
 - [ ] A14. not_null check가 whitespace-only string을 어떻게 볼지 명시한다.
 - [ ] A15. unique check case-sensitive/case-insensitive policy를 명시한다.
+- [x] A16. 제품이 `FOUNDRY_LITE_ADAPTER_PROFILE=s3-storage` 설정으로 부팅될 때 composition-root가 실제로 S3 어댑터를 선택·구동한다 (어댑터 직접 주입이 아니라 선택 경로 + HTTP 엔트리포인트 e2e). (`test_s3_composition_root_selects_adapter_from_profile_and_runs_full_cycle`, `test_s3_api_end_to_end_preview_reads_through_s3_and_surfaces_corruption`)
 
 ## B. Source / Sync / Connector
 

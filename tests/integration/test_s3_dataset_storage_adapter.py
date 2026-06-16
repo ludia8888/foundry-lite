@@ -13,7 +13,9 @@ from urllib.error import URLError
 from urllib.request import urlopen
 from uuid import uuid4
 
+import foundry_lite_api.main as api_main
 import pytest
+from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import DatasetFileRecord
 from foundry_lite.application.ports.adapter_failure import AdapterError
@@ -547,6 +549,87 @@ def test_s3_list_keys_paginates_beyond_single_response(tmp_path: Path) -> None:
 
     assert adapter._list_keys("p") == ["p/a", "p/b", "p/c"]
     assert fake.continuation_tokens == [None, "page-2"]
+
+
+def test_s3_composition_root_selects_adapter_from_profile_and_runs_full_cycle(
+    minio_server: MinioServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bucket = f"flite-{uuid4().hex}"
+    _set_s3_env(monkeypatch, minio_server, bucket)
+
+    # Build dependencies through the real composition root selected by profile,
+    # NOT by injecting an adapter. This exercises local_runtime's s3-storage
+    # branch and _s3_storage_config (env -> S3DatasetStorageAdapterConfig).
+    deps = create_local_core_dependencies(
+        adapter_profile="s3-storage",
+        storage_root=tmp_path / "runtime",
+        db_url=f"sqlite:///{tmp_path / 'composition-root.db'}",
+    )
+    assert isinstance(deps.dataset_storage, S3DatasetStorageAdapter)
+    assert deps.dataset_storage.config.bucket == bucket
+    assert deps.dataset_storage.config.endpoint_url == minio_server.endpoint_url
+
+    foundry = FoundryLite(dependencies=deps)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+
+    preview = foundry.datasets.preview("raw.orders", ctx=ctx)
+    assert [(row["id"], row["amount"]) for row in preview] == [("O-1", 100)]
+    # The bytes really live in the configured MinIO bucket, not on local disk.
+    assert _object_keys(_s3_client(minio_server), bucket, "manifest.json")
+
+
+def test_s3_api_end_to_end_preview_reads_through_s3_and_surfaces_corruption(
+    minio_server: MinioServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bucket = f"flite-{uuid4().hex}"
+    _set_s3_env(monkeypatch, minio_server, bucket)
+    deps = create_local_core_dependencies(
+        adapter_profile="s3-storage",
+        storage_root=tmp_path / "api-runtime",
+        db_url=f"sqlite:///{tmp_path / 'api.db'}",
+    )
+    assert isinstance(deps.dataset_storage, S3DatasetStorageAdapter)
+    foundry = FoundryLite(dependencies=deps)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    committed = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+
+    # Drive the real FastAPI entrypoint against the S3-backed composition root.
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    client = TestClient(api_main.app)
+    headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
+
+    versions = client.get("/api/datasets/raw/orders/versions", headers=headers)
+    assert versions.status_code == 200
+    assert any(row["id"] == committed.version_id for row in versions.json())
+
+    preview = client.get("/api/datasets/raw/orders/preview", headers=headers)
+    assert preview.status_code == 200
+    assert [(row["id"], row["amount"]) for row in preview.json()] == [("O-1", 100)]
+
+    # Tricky: delete the committed manifest directly in MinIO. The HTTP read path
+    # must surface storage corruption, not silently serve a broken version.
+    manifest_key = _key_from_uri(deps.dataset_storage, committed.manifest_uri)
+    _s3_client(minio_server).delete_object(Bucket=bucket, Key=manifest_key)
+
+    corrupted = client.get("/api/datasets/raw/orders/preview", headers=headers)
+    assert corrupted.status_code == 400
+    assert corrupted.json()["detail"]["details"]["error_type"] == "committed_version_storage_missing"
+
+
+def _set_s3_env(monkeypatch: pytest.MonkeyPatch, minio_server: MinioServer, bucket: str) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_S3_BUCKET", bucket)
+    monkeypatch.setenv("FOUNDRY_LITE_S3_ENDPOINT_URL", minio_server.endpoint_url)
+    monkeypatch.setenv("FOUNDRY_LITE_S3_ACCESS_KEY_ID", MINIO_ACCESS_KEY)
+    monkeypatch.setenv("FOUNDRY_LITE_S3_SECRET_ACCESS_KEY", MINIO_SECRET_KEY)
+    monkeypatch.setenv("FOUNDRY_LITE_S3_REGION", "us-east-1")
+    monkeypatch.setenv("FOUNDRY_LITE_S3_PREFIX", f"tests/{uuid4().hex}")
 
 
 def _adapter(
