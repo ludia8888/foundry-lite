@@ -140,6 +140,9 @@ run_static_gate() {
   echo "== Static: adapter failure taxonomy contract =="
   uv run python scripts/quality/check_adapter_failure_taxonomy.py
 
+  echo "== Static: infra ratchet rollout discipline =="
+  uv run python scripts/quality/check_infra_ratchet.py
+
   echo "== Static: no skipped/flaky/xfail release bypasses =="
   uv run python scripts/quality/check_no_test_bypasses.py
   uv run python scripts/quality/check_no_test_sleep.py

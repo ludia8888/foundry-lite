@@ -19,6 +19,9 @@
 4. **Self-test 동반**: 게이트가 fail해야 할 때 fail하는지 검증하는 단위 테스트가 같이 들어온다.
 5. **JSON 리포트 산출**: `artifacts/quality/<gate>.json`. 트렌드 추적 가능.
 6. **문서 매핑 주석**: 게이트 파일 docstring에 "Enforces guideline §X.Y" 명시. 문서 ↔ 게이트 양방향 추적성.
+7. **Infra Ratchet 준수**: 새 production-style 인프라는 한 번에 하나씩 추가하고,
+   정상/실패/동시성/재시도/부분 성공/복구/운영 증거가 CI와 문서에 고정되어야 다음
+   인프라로 넘어간다.
 
 ---
 
@@ -84,6 +87,7 @@
 | 26 | trace key boundary 유지 | `check_trace_continuity.py` | dynamic | ✅ |
 | 27 | 새 boundary에 contract test 동반 | `check_contract_test_per_port.py` | 0개 누락 | ✅ |
 | 28 | adapter 실패 의미 표준화 | `check_adapter_failure_taxonomy.py` | 17 adapter profile | ✅ |
+| 28.1 | 인프라는 한 번에 하나씩 실패/동시성/복구 증거와 함께 추가 | `check_infra_ratchet.py` | infra ratchet doc/CI/doc-sync violation 0 | ✅ |
 
 ### §5 코드 컨벤션
 

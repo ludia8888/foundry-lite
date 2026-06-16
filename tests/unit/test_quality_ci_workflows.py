@@ -244,6 +244,18 @@ def test_adapter_failure_taxonomy_is_release_gate_step() -> None:
     assert "pnpm quality:adapter-failure-taxonomy" in package_json
 
 
+def test_infra_ratchet_is_release_gate_step_after_adapter_taxonomy() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    taxonomy_step = "scripts/quality/check_adapter_failure_taxonomy.py"
+    ratchet_step = "scripts/quality/check_infra_ratchet.py"
+    assert ratchet_step in script
+    assert script.index(taxonomy_step) < script.index(ratchet_step)
+    assert '"quality:infra-ratchet"' in package_json
+    assert "pnpm quality:infra-ratchet" in package_json
+
+
 def test_stream_archive_worker_script_is_exposed() -> None:
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 

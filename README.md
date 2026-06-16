@@ -731,6 +731,7 @@ flowchart TB
     STATIC --> G6["no pragma no cover"]
     STATIC --> G7["error response request_id"]
     STATIC --> G8["tier coverage"]
+    STATIC --> G9["infra ratchet"]
     RUNTIME --> R1["audit count"]
     RUNTIME --> R2["outbox consistency"]
     RUNTIME --> R3["OpenLineage"]
@@ -763,6 +764,17 @@ flowchart TB
 | `check_action_idempotency.py` | action idempotency contract 회귀 |
 | `check_metrics_exposed.py` | 필수 운영 metrics 누락 |
 | `check_flaky_detector.py` | 반복 실행에서 흔들리는 test suite |
+| `check_infra_ratchet.py` | 인프라를 한 번에 하나씩 추가하고 실패/동시성/재시도/부분 성공/복구/운영 증거를 문서·CI에 고정하지 않는 문제 |
+
+### Infra Ratchet
+
+새 인프라는 한 번에 하나씩만 추가한다. 각 인프라는 adapter contract, normal path,
+failure injection, concurrency race, retry/idempotency, partial success,
+recovery cleanup, operator evidence, docs sync를 모두 갖춘 뒤에야 다음 인프라로
+넘어간다. 이 규율은 [docs/infra-ratchet.md](docs/infra-ratchet.md)에 정의되어
+있고, `check_infra_ratchet.py`가 README, implementation status, tricky failure
+checklist, commit-point risk register, `package.json`, `ci_gate.sh` 연결을 static
+lane에서 검사한다.
 
 ### 필수 통합 시나리오
 
@@ -870,6 +882,7 @@ gantt
 |---|---|
 | [docs/implementation-status.md](docs/implementation-status.md) | 현재 커밋이 실제로 보장하는 것과 아직 목표인 것의 경계 |
 | [docs/mvp-scope.md](docs/mvp-scope.md) | v1 core에 포함되는 것과 명시적으로 제외되는 것 |
+| [docs/infra-ratchet.md](docs/infra-ratchet.md) | 인프라를 하나씩 추가하고 실패/동시성/재시도/부분 성공/복구/운영 증거를 CI에 고정하는 규칙 |
 | [foundry_lite_development_plan_ko_sprintified.md](foundry_lite_development_plan_ko_sprintified.md) | 제품 목표와 설계 원본 |
 | [foundry_lite_sprint_breakdown_ko.md](foundry_lite_sprint_breakdown_ko.md) | 스프린트 순서와 Must-Win Goal 원본 |
 | [foundry_lite_python_engineering_guidelines_ko.md](foundry_lite_python_engineering_guidelines_ko.md) | Python 백엔드 구현 표준 |
