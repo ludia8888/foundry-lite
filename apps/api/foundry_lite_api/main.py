@@ -363,6 +363,24 @@ def retry_failed_transform_run(request: Request, run_id: str) -> TransformRetryR
         raise _handle_error(exc, request) from exc
 
 
+@app.post("/api/materializations/{api_name}/run")
+def run_materialization(request: Request, api_name: str) -> JsonObject:
+    try:
+        result = foundry.materialization.run(api_name, ctx=_ctx(request))
+        return {
+            "dataset_id": result.dataset_id,
+            "dataset_ref": result.dataset_ref,
+            "transaction_id": result.transaction_id,
+            "version_id": result.version_id,
+            "version_number": result.version_number,
+            "row_count": result.row_count,
+            "manifest_uri": result.manifest_uri,
+            "schema_hash": result.schema_hash,
+        }
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.post("/api/connectors/webhooks/{connector_name}/{resource_name}")
 async def ingest_webhook(
     request: Request,

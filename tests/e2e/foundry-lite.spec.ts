@@ -45,6 +45,14 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await expect(page.locator("#metricOutbox")).toHaveText(/^[1-9]\d*$/);
   await expect(page.locator("#metricDlq")).toHaveText("0");
 
+  await page.locator("#materializeActionLogBtn").click();
+  await expect(page.locator("#datasetResult")).toContainText('"dataset": "ops.action_log"');
+  await expect(page.locator("#datasetResult")).toContainText('"action_run_id"');
+  await expect(page.locator("#datasetResult")).toContainText('"actor_user_id": "web-demo-operator"');
+  await expect(page.locator("#datasetResult")).toContainText('"parameters_json": "{\\"reason\\": \\"Inventory confirmed\\"}"');
+  await expect(page.locator("#runResult")).toContainText('"lastMaterialization"');
+  await expect(page.locator("#runResult")).toContainText('"dataset_ref": "ops.action_log"');
+
   await page.reload();
   await expect(page.locator("#statusText")).toHaveText("ok");
   await expect(page.locator("#datasetResult")).toContainText('"dataset": "clean.orders"');

@@ -1255,7 +1255,7 @@ ApproveOrder action apply dry-run으로 parameter/precondition 결과를 반환�
 - [x] 동일 Idempotency-Key 반복/동시 호출은 기존 action_run을 replay하고 object_edit을 추가로 만들지 않는다. ([S26-A1](./docs/sprint-evidence-ledger.md#s26-a1), [S36A-A1](./docs/sprint-evidence-ledger.md#s36a-a1))
 - [x] 동일 Idempotency-Key를 다른 요청 본문으로 재사용하면 replay하지 않고 conflict와 audit evidence로 남긴다. ([S26-A2](./docs/sprint-evidence-ledger.md#s26-a2))
 - [x] 다른 Idempotency-Key로 같은 object를 수정하면 expectedObjectVersion 규칙에 따라 처리된다. ([S26-A3](./docs/sprint-evidence-ledger.md#s26-a3))
-- [ ] Action log에서 actor, params subset, target, status, error, created/completed time이 보인다.
+- [x] Action log에서 actor, params subset, target, status, error, created/completed time이 보인다. Operations API action run listing/detail이 해당 필드를 노출하고 smoke test가 검증한다. ([S26-A4](./docs/sprint-evidence-ledger.md#s26-a4))
 - [ ] 감사 이벤트는 action_run_id와 object_edit_id를 참조한다.
 - [ ] 민감 parameter는 audit에서 masking할 수 있는 구조다.
 
@@ -1411,9 +1411,9 @@ Action Runtime 안에 갇힌 운영 변경 기록을 dataset 세계로 되돌린
 
 - [x] ApproveOrder 실행 후 materialization을 돌리면 `ops.action_log` dataset version이 생긴다. ([S30-A1](./docs/sprint-evidence-ledger.md#s30-a1))
 - [x] action_run_id, actor, target, status, parameters subset, edit patch가 dataset에 포함된다. ([S30-A2](./docs/sprint-evidence-ledger.md#s30-a2))
-- [ ] 같은 cursor로 재실행해도 중복 row 정책이 명확하다. 현재 `action_log` cursor는 `completed_at + action_run_id` 기준으로 보강됐지만, 같은 cursor를 명시적으로 재실행하는 전용 regression은 아직 남아 있다.
-- [ ] failed materialization은 output transaction을 abort한다.
-- [ ] Dataset UI에서 `ops.action_log` preview가 가능하다.
+- [x] 같은 cursor로 재실행해도 중복 row 정책이 명확하다. `action_log` cursor는 `completed_at + action_run_id` 기준이고 같은 cursor 재실행 regression이 중복 row를 차단한다. ([S30-A3](./docs/sprint-evidence-ledger.md#s30-a3))
+- [x] failed materialization은 output transaction을 abort한다. ([S30-A4](./docs/sprint-evidence-ledger.md#s30-a4))
+- [x] Dataset UI에서 `ops.action_log` preview가 가능하다. Web의 Run Action Log control이 materialization을 실행하고 Dataset panel에서 `ops.action_log` preview를 보여준다. ([S30-A5](./docs/sprint-evidence-ledger.md#s30-a5))
 
 **Demo / Proof**
 
