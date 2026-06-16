@@ -349,6 +349,24 @@ def _file_record() -> DatasetFileRecord:
     )
 
 
+def _file_record_for(version_number: int, content_hash: str = "hash-demo") -> DatasetFileRecord:
+    return DatasetFileRecord(
+        file_id=f"dsf_orders_{version_number}",
+        tenant_id="tenant-demo",
+        dataset_version_id=f"dsv_orders_{version_number}",
+        uri=f"memory://part-{version_number:05d}.parquet",
+        file_format="parquet",
+        row_count=3,
+        byte_size=100,
+        content_hash=content_hash,
+        partition_values={},
+    )
+
+
+def _version_row_id(row: dict[str, Any]) -> str:
+    return str(row["version_id" if "version_id" in row else "id"])
+
+
 def _version_record_for(transaction_id: str, version_number: int) -> DatasetVersionRecord:
     return DatasetVersionRecord(
         version_id=f"dsv_orders_{version_number}",
@@ -508,6 +526,41 @@ def test_dataset_transaction_repository_contract_commit_flow(harness: Transactio
     assert committed["committed_version_id"] == "dsv_orders_1"
     assert harness.versions()[0]["version_id" if "version_id" in harness.versions()[0] else "id"] == "dsv_orders_1"
     assert harness.files()[0]["uri"] == "memory://part-00000.parquet"
+
+
+def test_dataset_transaction_repository_contract_allows_same_content_hash_as_new_version(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def commit_same_content_hash_twice(transaction: Any) -> None:
+        for version_number in (1, 2):
+            transaction_id = f"dstx_same_hash_{version_number}"
+            repository.create_open_transaction(transaction=transaction, record=_transaction_record(transaction_id))
+            repository.insert_version(
+                transaction=transaction,
+                record=_version_record_for(transaction_id, version_number),
+            )
+            repository.insert_file(
+                transaction=transaction,
+                record=_file_record_for(version_number, content_hash="same-content-hash"),
+            )
+            repository.commit_transaction(
+                transaction=transaction,
+                tenant_id="tenant-demo",
+                transaction_id=transaction_id,
+                committed_version_id=f"dsv_orders_{version_number}",
+                schema_version=1,
+                committed_at=f"2026-06-10T00:0{version_number}:30Z",
+            )
+
+    harness.call_in_transaction(commit_same_content_hash_twice)
+
+    version_ids = {_version_row_id(row) for row in harness.versions()}
+    files = harness.files()
+    assert version_ids == {"dsv_orders_1", "dsv_orders_2"}
+    assert {file["dataset_version_id"] for file in files} == version_ids
+    assert {file["content_hash"] for file in files} == {"same-content-hash"}
 
 
 def test_dataset_transaction_repository_contract_lists_stale_open_transactions(harness: TransactionHarness) -> None:
