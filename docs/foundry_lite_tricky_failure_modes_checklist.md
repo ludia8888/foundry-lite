@@ -14,6 +14,8 @@
 - [ ] PR마다 해당 subsystem의 failure mode checklist 중 영향받는 항목을 체크한다.
 - [ ] P0/Tier 0 항목은 “구현 완료”가 아니라 “regression test 존재”를 완료 기준으로 본다.
 - [ ] 장애 주입 테스트는 정상 E2E보다 우선순위가 높다.
+- [ ] 새 production-style 인프라는 [Infra Ratchet](./infra-ratchet.md)을 따라 하나씩만 추가한다.
+- [ ] 인프라 ratchet PR은 normal path뿐 아니라 failure-injection, concurrency-race, retry-idempotency, partial-success, recovery-cleanup, operator-evidence를 모두 확인한다.
 - [ ] 모든 write path는 아래 질문에 답해야 한다.
   - [ ] 진짜 commit point는 어디인가?
   - [ ] cursor, offset, watermark는 언제 전진하는가?
