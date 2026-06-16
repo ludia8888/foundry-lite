@@ -35,17 +35,17 @@ pick one infrastructure
 Every active infrastructure ratchet must have these proof classes before the
 next infrastructure can move from `next` to `active`.
 
-| Proof class | Meaning | CI/document evidence |
-|---|---|---|
-| `adapter-contract` | The new adapter obeys the same application port contract as local/fake profiles. | contract tests plus `check_contract_test_per_port.py` |
-| `normal-path` | A realistic happy path works through the public API/facade, not private helpers only. | unit/integration/smoke test |
-| `failure-injection` | At least one targeted failure is injected at the dangerous commit point. | named regression test |
-| `concurrency-race` | Parallel or repeated operations cannot silently create duplicate/losing state. | concurrent or repeated test |
-| `retry-idempotency` | Retrying after an ambiguous or failed attempt does not create a second logical success. | retry regression test |
-| `partial-success` | If external storage/system succeeds but local metadata fails, serving state remains safe. | split-brain regression test |
-| `recovery-cleanup` | Cleanup is reachability-safe and never deletes committed evidence. | cleanup regression test |
-| `operator-evidence` | Failure is visible in run/audit/transaction/error evidence, not only logs. | runtime evidence assertion |
-| `docs-sync` | Current status, risk register, tricky checklist, and sprint evidence agree. | `check_infra_ratchet.py` + `check_doc_drift.py` |
+| Proof class         | Meaning                                                                                   | CI/document evidence                                  |
+| ------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `adapter-contract`  | The new adapter obeys the same application port contract as local/fake profiles.          | contract tests plus `check_contract_test_per_port.py` |
+| `normal-path`       | A realistic happy path works through the public API/facade, not private helpers only.     | unit/integration/smoke test                           |
+| `failure-injection` | At least one targeted failure is injected at the dangerous commit point.                  | named regression test                                 |
+| `concurrency-race`  | Parallel or repeated operations cannot silently create duplicate/losing state.            | concurrent or repeated test                           |
+| `retry-idempotency` | Retrying after an ambiguous or failed attempt does not create a second logical success.   | retry regression test                                 |
+| `partial-success`   | If external storage/system succeeds but local metadata fails, serving state remains safe. | split-brain regression test                           |
+| `recovery-cleanup`  | Cleanup is reachability-safe and never deletes committed evidence.                        | cleanup regression test                               |
+| `operator-evidence` | Failure is visible in run/audit/transaction/error evidence, not only logs.                | runtime evidence assertion                            |
+| `docs-sync`         | Current status, risk register, tricky checklist, and sprint evidence agree.               | `check_infra_ratchet.py` + `check_doc_drift.py`       |
 
 The static CI lane runs `scripts/quality/check_infra_ratchet.py`, which verifies
 that this document, the tricky failure checklist, commit-point risk register,
@@ -54,13 +54,13 @@ ratchet discipline.
 
 ## Active Ratchet Queue
 
-| Order | Infrastructure | Status | Why this order | Cannot advance until |
-|---|---|---|---|---|
-| 1 | MinIO/S3 DatasetStorageAdapter | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet. |
-| 2 | Iceberg Catalog/TableAdapter | active-next | Iceberg adds a table metadata/catalog commit point on top of object storage. | S3 adapter semantics are proven and serving continues to rely on Foundry dataset commit state. |
-| 3 | Spark ComputeAdapter | blocked-by-iceberg | Spark should consume the same Dataset API and pinned versions without knowing storage internals. | Iceberg/S3 inputs can be previewed and transformed without API divergence. |
-| 4 | Temporal WorkflowAdapter | later | Durable workflow execution changes retry/time semantics for long-running operations. | Storage/table/compute commit points already have recovery evidence. |
-| 5 | Managed Elasticsearch deployment | later | The adapter/projection proof exists; deployment/operations should follow after storage commit points. | Search remains a rebuildable projection and live cluster failure evidence is added. |
+| Order | Infrastructure                   | Status         | Why this order                                                                                                                | Cannot advance until                                                                                                                                          |
+| ----- | -------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | MinIO/S3 DatasetStorageAdapter   | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet.                                          |
+| 2     | Iceberg Catalog/TableAdapter     | active-covered | Iceberg adds a table metadata/catalog commit point on top of object storage.                                                  | `quality:iceberg` stays green in CI; each dataset version pins an exact Iceberg snapshot id and the DB COMMITTED version remains the serving source of truth. |
+| 3     | Spark ComputeAdapter             | active-next    | Spark should consume the same Dataset API and pinned versions without knowing storage internals.                              | Iceberg/S3 inputs can be previewed and transformed without API divergence.                                                                                    |
+| 4     | Temporal WorkflowAdapter         | later          | Durable workflow execution changes retry/time semantics for long-running operations.                                          | Storage/table/compute commit points already have recovery evidence.                                                                                           |
+| 5     | Managed Elasticsearch deployment | later          | The adapter/projection proof exists; deployment/operations should follow after storage commit points.                         | Search remains a rebuildable projection and live cluster failure evidence is added.                                                                           |
 
 ## Active Ratchet: MinIO/S3 DatasetStorageAdapter
 
@@ -96,14 +96,14 @@ against a live S3-compatible object store.
 
 Required implementation constraints:
 
-| Constraint | Reason |
-|---|---|
-| Optional dependency only, for example `foundry-lite[s3]`. | Non-S3 local/dev deployments should not inherit cloud SDK requirements. |
-| MinIO/Testcontainers before AWS S3. | We need deterministic failure injection before real cloud operations. |
-| No S3 rename-as-commit assumption. | S3 object writes and metadata DB commits are separate failure domains. |
-| Manifest verification after upload. | Writer row count alone is not proof that the readable object is complete. |
-| Reachability-safe cleanup. | Prefix delete must not remove committed artifacts. |
-| Operator evidence on every failed promotion/cleanup. | A failed object-storage action must be diagnosable without opening the bucket manually. |
+| Constraint                                                | Reason                                                                                  |
+| --------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Optional dependency only, for example `foundry-lite[s3]`. | Non-S3 local/dev deployments should not inherit cloud SDK requirements.                 |
+| MinIO/Testcontainers before AWS S3.                       | We need deterministic failure injection before real cloud operations.                   |
+| No S3 rename-as-commit assumption.                        | S3 object writes and metadata DB commits are separate failure domains.                  |
+| Manifest verification after upload.                       | Writer row count alone is not proof that the readable object is complete.               |
+| Reachability-safe cleanup.                                | Prefix delete must not remove committed artifacts.                                      |
+| Operator evidence on every failed promotion/cleanup.      | A failed object-storage action must be diagnosable without opening the bucket manually. |
 
 ## Iceberg After S3
 
@@ -125,13 +125,46 @@ but Iceberg metadata location/snapshot is missing or unreadable
 Therefore Iceberg should add a catalog/table boundary above the S3 storage
 ratchet. The exit criteria are:
 
-| Requirement | Meaning |
-|---|---|
-| Same Dataset API | Parquet manifest datasets and Iceberg datasets are read through the same dataset facade. |
-| Pinned snapshot metadata | `dataset_versions` stores the Iceberg metadata location and snapshot id used by transforms. |
-| Schema policy parity | Existing compatible/breaking schema rules apply to Iceberg evolution. |
-| Split-brain evidence | Catalog commit success plus DB failure leaves recoverable operator evidence, not silent serving drift. |
-| Transform ignorance | DuckDB/Spark-compatible readers consume the dataset without application services branching on infrastructure. |
+| Requirement              | Meaning                                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------- |
+| Same Dataset API         | Parquet manifest datasets and Iceberg datasets are read through the same dataset facade.                      |
+| Pinned snapshot metadata | `dataset_versions` stores the Iceberg metadata location and snapshot id used by transforms.                   |
+| Schema policy parity     | Existing compatible/breaking schema rules apply to Iceberg evolution.                                         |
+| Split-brain evidence     | Catalog commit success plus DB failure leaves recoverable operator evidence, not silent serving drift.        |
+| Transform ignorance      | DuckDB/Spark-compatible readers consume the dataset without application services branching on infrastructure. |
+
+### Active Ratchet: Iceberg (covered)
+
+`IcebergDatasetStorageAdapter` is wired behind the same `DatasetStorageAdapter`
+port (profile `iceberg`), selected by `FOUNDRY_LITE_ADAPTER_PROFILE=iceberg`.
+Each Foundry dataset version is committed as one Iceberg table snapshot; the
+`manifest_uri` pins an exact `snapshot_id`, so reads stay isolated from later
+commits and the DB COMMITTED version remains the serving source of truth. Data
+files and table metadata live in object storage (S3/MinIO); a SQL catalog tracks
+the metadata pointer. `quality:iceberg` runs the proof suite against MinIO and is
+wired into the `ci_gate.sh` runtime lane after the S3 ratchet.
+
+Reserved Iceberg ratchet tests (must stay green):
+
+```text
+test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots
+test_iceberg_duplicate_version_commit_is_rejected
+test_iceberg_engine_and_s3_warehouse_end_to_end
+test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot
+test_iceberg_missing_table_on_read_marks_storage_corruption
+test_iceberg_corrupted_data_file_surfaces_through_engine_as_corruption
+test_iceberg_catalog_failure_is_visible_in_operations
+test_iceberg_corrupt_table_metadata_is_corruption_not_retryable
+test_iceberg_retry_after_ambiguous_commit_does_not_duplicate_version
+test_iceberg_compatible_schema_evolution_across_versions
+test_iceberg_pinned_snapshot_survives_out_of_band_pointer_change
+test_iceberg_repeated_commits_keep_every_version_independently_readable
+```
+
+Concurrency note: the dataset version allocator (`SELECT ... FOR UPDATE`)
+serializes commits to one dataset, so concurrent same-table Iceberg commits do
+not occur in the engine; Iceberg optimistic concurrency is the backstop and the
+duplicate-version guard rejects reuse of a committed version id.
 
 ## Pull Request Exit Checklist
 

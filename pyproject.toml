@@ -29,6 +29,10 @@ elasticsearch = [
 s3 = [
   "boto3>=1.35",
 ]
+iceberg = [
+  "pyiceberg>=0.8",
+  "pyarrow>=17.0",
+]
 
 [dependency-groups]
 dev = [
@@ -57,6 +61,8 @@ dev = [
   "interrogate>=1.7.0",
   "tach==0.35.0",
   "confluent-kafka>=2.6",
+  "pyiceberg>=0.8",
+  "pyarrow>=17.0",
 ]
 
 [project.scripts]
