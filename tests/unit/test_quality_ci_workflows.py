@@ -118,13 +118,31 @@ def test_flaky_detector_repeats_parallel_pytest_three_times() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
-    coverage_step = "uv run pytest tests \\\n  --cov=libs/foundry_lite"
+    coverage_step = "uv run pytest tests \\\n    --cov=libs/foundry_lite"
     flaky_step = "scripts/quality/check_flaky_detector.py"
     assert flaky_step in script
     assert "--iterations 3" in script
     assert '--command "uv run pytest tests -n auto --no-header -q"' in script
     assert script.index(coverage_step) < script.index(flaky_step)
     assert '"quality:flaky-detector"' in package_json
+
+
+def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    for lane in ("static", "coverage", "flaky", "runtime", "e2e"):
+        assert f'"ci:gate:{lane}": "bash scripts/ci_gate.sh {lane}"' in package_json
+        assert f"{lane})" in script
+
+    assert "Usage: bash scripts/ci_gate.sh [all|static|coverage|flaky|runtime|e2e]" in script
+    assert "run_all_gate()" in script
+    assert "run_static_gate" in script
+    assert "run_coverage_gate" in script
+    assert "run_flaky_gate" in script
+    assert "run_runtime_gate" in script
+    assert "run_e2e_gate" in script
+    assert "Foundry-lite CI gate passed." in script
 
 
 def test_pragma_no_cover_budget_is_release_gate_step() -> None:
@@ -329,6 +347,37 @@ def test_github_ci_fetches_history_and_checks_pr_root_cause() -> None:
     assert "scripts/quality/check_pr_root_cause_section.py --event-path" in workflow
 
 
+def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    for job_name in ("quality-static", "quality-coverage", "quality-flaky", "quality-runtime", "quality-e2e"):
+        assert f"name: {job_name}" in workflow
+
+    assert "group: foundry-lite-ci-${{ github.workflow }}-${{ github.ref }}" in workflow
+    assert "cancel-in-progress: true" in workflow
+    assert "name: quality-gate" in workflow
+    assert "needs:" in workflow
+    assert "quality_static" in workflow
+    assert "quality_coverage" in workflow
+    assert "quality_flaky" in workflow
+    assert "quality_runtime" in workflow
+    assert "quality_e2e" in workflow
+    assert "if: always()" in workflow
+    assert 'test "${{ needs.quality_static.result }}" = "success"' in workflow
+    assert 'test "${{ needs.quality_coverage.result }}" = "success"' in workflow
+    assert 'test "${{ needs.quality_flaky.result }}" = "success"' in workflow
+    assert 'test "${{ needs.quality_runtime.result }}" = "success"' in workflow
+    assert 'test "${{ needs.quality_e2e.result }}" = "success"' in workflow
+    assert "Run coverage quality lane" in workflow
+    assert "run: pnpm ci:gate:coverage" in workflow
+    assert "Run flaky quality lane" in workflow
+    assert "run: pnpm ci:gate:flaky" in workflow
+    assert "Run runtime quality lane" in workflow
+    assert "run: pnpm ci:gate:runtime" in workflow
+    assert "Run E2E quality lane" in workflow
+    assert "run: pnpm ci:gate:e2e" in workflow
+
+
 def test_doc_drift_is_release_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
@@ -375,7 +424,7 @@ def test_github_ci_installs_gitleaks_before_release_gate() -> None:
 
     assert "actions/setup-go" in workflow
     assert "go install github.com/zricethezav/gitleaks/v8@v8.30.1" in workflow
-    assert workflow.index("Install gitleaks") < workflow.index("Run release gate")
+    assert workflow.index("Install gitleaks") < workflow.index("Run static quality lane")
 
 
 def test_codeql_workflow_fails_on_sarif_findings() -> None:

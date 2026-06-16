@@ -12,7 +12,23 @@
 pnpm ci:gate
 ```
 
-이 명령은 아래를 순서대로 실행한다.
+이 명령은 로컬에서 아래 검사를 순서대로 실행한다. GitHub Actions에서는 같은
+`scripts/ci_gate.sh`를 `static`, `coverage`, `flaky`, `runtime`, `e2e` lane으로
+나누어 동시에 실행한다. 마지막 `quality-gate` aggregate job은 모든 lane이 성공했는지
+다시 확인하므로 branch protection이 요구하는 gate 이름은 유지되고, 검사 기준이나
+반복 횟수는 낮아지지 않는다.
+
+| 실행 위치 | 명령/잡 | 역할 |
+|---|---|---|
+| 로컬 | `pnpm ci:gate` | 전체 release evidence를 직렬로 실행 |
+| GitHub Actions | `quality-static` | 정적 분석, 타입, 아키텍처, 문서 drift, 보안/복잡도 gate |
+| GitHub Actions | `quality-coverage` | 전체 pytest branch coverage, 95% global/tier/public API coverage |
+| GitHub Actions | `quality-flaky` | 전체 pytest suite를 `pytest-xdist`로 3회 반복해 flaky outcome 차단 |
+| GitHub Actions | `quality-runtime` | 데모, OpenLineage, audit/outbox, data correctness, trace, diagnostics |
+| GitHub Actions | `quality-e2e` | Playwright browser E2E |
+| GitHub Actions | `quality-gate` | 위 모든 lane 결과를 required check 하나로 집계 |
+
+전체 게이트가 포함하는 검사는 아래와 같다.
 
 | 구분 | 도구 | 잡는 문제 |
 |---|---|---|
