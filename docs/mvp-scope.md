@@ -15,6 +15,20 @@
 - `ops.action_log` and `ops.order_current` materialization.
 - Downstream `customer_risk` transform that consumes materialized operational state.
 
+## Implemented Outside The V1 Core Gate
+
+These items are not required to claim the Sprint 00-36 MVP core complete, but
+they do have code and test evidence in the current checkout. Their production
+packaging, always-on workers, and managed infrastructure are still separate
+future work.
+
+- REST pull connector adapter and signed webhook append ingest.
+- Local/fake stream archive writer plus Kafka-compatible adapter and one-shot worker proof.
+- Debezium-shaped CDC archive proof plus live Debezium/PostgreSQL topic proof.
+- CDC object indexing for upsert, tombstone delete, idempotent replay, stale-event skip, and `object.changed` trigger evidence.
+- Elasticsearch-compatible search projection, rebuild, orphan-drift detection, and object-store fallback proof.
+- Shadow reindex, active index pointer, count/hash validation, and action-edit replay proof.
+
 ## Explicitly Deferred
 
 - PostgreSQL JSONB production object store.
@@ -23,9 +37,9 @@
 - Temporal worker execution.
 - Real CEL or JSON Logic evaluator.
 - Real external ERP/webhook writeback.
-- Kafka/Redpanda streaming ingest.
-- Debezium CDC.
-- OpenSearch live cluster deployment and managed operations beyond the Sprint 42 adapter/projection proof.
+- Continuously running Kafka/Redpanda stream workers and deployment-specific broker packaging beyond the current adapter/one-shot worker proof.
+- Continuously running CDC object-indexing workers and production CDC deployment packaging beyond the current archive/indexing proof.
+- Elasticsearch live cluster deployment and managed operations beyond the current adapter/projection proof.
 - Iceberg production catalog.
 - Spark runner.
 - Production Flink runner.

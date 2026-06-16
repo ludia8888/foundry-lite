@@ -93,7 +93,11 @@ Foundry-lite는 다음 ID를 최대한 끊기지 않게 남긴다.
 
 API 에러 응답에는 `request_id`가 들어간다. 운영자는 이 값을 기준으로 trace, metrics, audit event를 이어서 볼 수 있다.
 
-현재 API는 실제 인증 시스템을 갖고 있지 않다. 헤더가 없으면 `viewer` 역할로 처리되며, Web/CLI 데모는 명시적인 demo role header/context를 사용한다.
+현재 API는 `AuthProvider` port를 통해 local/demo/header-trust profile을 선택한다.
+local/default profile은 `X-Tenant-ID`, `X-User-ID`, `X-Roles` header를 신뢰하지만,
+`FOUNDRY_LITE_RUNTIME_PROFILE=production`에서는 header-trust/demo auth profile을
+startup에서 거부한다. Web/CLI demo는 명시적인 demo admin context를 사용하며,
+real JWT/OIDC adapter는 future work다.
 
 ## 3. OpenTelemetry
 
@@ -256,11 +260,12 @@ uv run python -m trace --count --summary apps/cli/foundry_lite_cli/main.py demo 
 현재 커밋은 로컬 core slice다.
 
 - object store는 PostgreSQL JSONB가 아니라 SQLite + SQLAlchemy JSON column이다.
-- PostgreSQL snapshot connector는 아직 없다.
+- PostgreSQL snapshot connector production implementation은 아직 없다. 다만
+  PostgreSQL-backed repository closed-loop proof는 테스트 증거로 존재한다.
 - action precondition은 CEL이 아니라 제한된 `safeExpression` subset이다.
 - ERP writeback은 실제 외부 호출이 아니라 `mock_erp_simulator` 기록이다.
 - Alembic migration과 Temporal worker는 아직 구현되지 않았다. 현재 release gate는 `check_schema_revision_guard.py`로 SQLAlchemy metadata와 `infra/schema_revisions` snapshot이 어긋나는지만 차단한다.
-- Scale Foundation은 문서상 Sprint 02A 목표로 명시되었고, 현재 로컬 slice는 storage/metadata/compute/event/search/workflow/connector/auth boundary를 port/adapter 계약으로 노출한다. stream은 local/fake proof에 더해 production-compatible `KafkaStreamAdapter`, worker composition root, Testcontainers 기반 live Kafka-compatible broker proof, Debezium-shaped CDC envelope archive proof, live Debezium Connect/PostgreSQL CDC topic proof를 갖는다. object indexing은 `backing.cdc` mapping과 `cdc_incremental` index run proof를 통해 CDC update/delete가 batch rebuild 없이 object base layer와 `object.changed` trigger로 이어지는 경로를 갖는다. active object index version은 row에서만 추론하지 않고 `object_index_versions` registry에 저장하므로, row가 0개인 object type도 이후 CDC/search worker가 쓸 serving version을 잃지 않는다. shadow promotion은 이전 active version과 일치할 때만 pointer를 바꾸는 compare-and-swap 규칙을 사용하므로, 같은 object type의 동시 promotion이 silent last-writer-wins로 끝나지 않는다. search는 `OpenSearchAdapter`, ontology-derived mapping, rebuild consistency, orphan detection proof를 갖지만 live OpenSearch cluster deployment는 아직 별도 운영 과제다. workflow/connector의 production Temporal/외부 connector adapter 교체도 이후 구현에서 trace key와 contract test를 유지해야 한다.
+- Scale Foundation은 문서상 Sprint 02A 목표로 명시되었고, 현재 로컬 slice는 storage/metadata/compute/event/search/workflow/connector/auth boundary를 port/adapter 계약으로 노출한다. stream은 local/fake proof에 더해 production-compatible `KafkaStreamAdapter`, worker composition root, Testcontainers 기반 live Kafka-compatible broker proof, Debezium-shaped CDC envelope archive proof, live Debezium Connect/PostgreSQL CDC topic proof를 갖는다. object indexing은 `backing.cdc` mapping과 `cdc_incremental` index run proof를 통해 CDC update/delete가 batch rebuild 없이 object base layer와 `object.changed` trigger로 이어지는 경로를 갖는다. active object index version은 row에서만 추론하지 않고 `object_index_versions` registry에 저장하므로, row가 0개인 object type도 이후 CDC/search worker가 쓸 serving version을 잃지 않는다. shadow promotion은 이전 active version과 일치할 때만 pointer를 바꾸는 compare-and-swap 규칙을 사용하므로, 같은 object type의 동시 promotion이 silent last-writer-wins로 끝나지 않는다. search는 `ElasticsearchAdapter`, ontology-derived mapping, rebuild consistency, orphan detection proof를 갖지만 live Elasticsearch cluster deployment는 아직 별도 운영 과제다. workflow/connector의 production Temporal/외부 connector adapter 교체도 이후 구현에서 trace key와 contract test를 유지해야 한다.
 
 ## 8. Playwright E2E
 

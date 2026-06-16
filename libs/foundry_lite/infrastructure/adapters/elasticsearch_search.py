@@ -1,4 +1,4 @@
-"""OpenSearch-compatible adapter for object search projections."""
+"""Elasticsearch-compatible adapter for object search projections."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from foundry_lite.application.ports.search_adapter import (
 INDEX_TOKEN_PATTERN = re.compile(r"[^a-z0-9_-]+")
 
 
-class OpenSearchIndicesLike(Protocol):
+class ElasticsearchIndicesLike(Protocol):
     def exists(self, *, index: str) -> bool: ...
 
     def create(self, *, index: str, body: Mapping[str, object]) -> object: ...
@@ -27,8 +27,8 @@ class OpenSearchIndicesLike(Protocol):
     def put_mapping(self, *, index: str, body: Mapping[str, object]) -> object: ...
 
 
-class OpenSearchClientLike(Protocol):
-    indices: OpenSearchIndicesLike
+class ElasticsearchClientLike(Protocol):
+    indices: ElasticsearchIndicesLike
 
     def index(self, *, index: str, id: str, body: Mapping[str, object], **_options: object) -> object: ...
 
@@ -40,7 +40,7 @@ class OpenSearchClientLike(Protocol):
 
 
 @dataclass(frozen=True)
-class OpenSearchAdapterConfig:
+class ElasticsearchAdapterConfig:
     endpoint: str
     index_prefix: str = "foundry-lite"
     username: str | None = None
@@ -48,12 +48,12 @@ class OpenSearchAdapterConfig:
     request_timeout_seconds: int = 30
 
 
-class OpenSearchAdapter:
-    """Search adapter that keeps OpenSearch as a rebuildable projection."""
+class ElasticsearchAdapter:
+    """Search adapter that keeps Elasticsearch as a rebuildable projection."""
 
-    profile_name = "opensearch"
+    profile_name = "elasticsearch"
 
-    def __init__(self, config: OpenSearchAdapterConfig, *, client: OpenSearchClientLike | None = None) -> None:
+    def __init__(self, config: ElasticsearchAdapterConfig, *, client: ElasticsearchClientLike | None = None) -> None:
         self.config = config
         self._client = client
 
@@ -61,11 +61,11 @@ class OpenSearchAdapter:
         return AdapterFailureContract(
             adapter_profile=self.profile_name,
             modes=(
-                AdapterFailureMode("configure_index", "unavailable", True, "OpenSearch mapping update failed."),
-                AdapterFailureMode("upsert_document", "timeout", True, "OpenSearch document upsert timed out.", 30),
-                AdapterFailureMode("delete_document", "unavailable", True, "OpenSearch document delete failed."),
-                AdapterFailureMode("document_ids", "timeout", True, "OpenSearch consistency scan timed out.", 30),
-                AdapterFailureMode("search", "timeout", True, "OpenSearch query timed out.", 30),
+                AdapterFailureMode("configure_index", "unavailable", True, "Elasticsearch mapping update failed."),
+                AdapterFailureMode("upsert_document", "timeout", True, "Elasticsearch document upsert timed out.", 30),
+                AdapterFailureMode("delete_document", "unavailable", True, "Elasticsearch document delete failed."),
+                AdapterFailureMode("document_ids", "timeout", True, "Elasticsearch consistency scan timed out.", 30),
+                AdapterFailureMode("search", "timeout", True, "Elasticsearch query timed out.", 30),
             ),
         )
 
@@ -86,7 +86,12 @@ class OpenSearchAdapter:
         )
 
     def delete_document(self, *, tenant_id: str, object_type: str, document_id: str) -> None:
-        self.client.delete(index=self._index_name(tenant_id, object_type), id=document_id, ignore=(404,), refresh=True)
+        self.client.delete(
+            index=self._index_name(tenant_id, object_type),
+            id=document_id,
+            ignore_status=(404,),
+            refresh=True,
+        )
 
     def document_ids(self, *, tenant_id: str, object_type: str) -> list[str]:
         response = self.client.search(
@@ -105,7 +110,7 @@ class OpenSearchAdapter:
         return [_search_hit(hit, query) for hit in _raw_hits(response)]
 
     @property
-    def client(self) -> OpenSearchClientLike:
+    def client(self) -> ElasticsearchClientLike:
         if self._client is None:
             self._client = _build_client(self.config)
         return self._client
@@ -117,12 +122,12 @@ class OpenSearchAdapter:
         return f"{prefix}-{tenant}-{object_name}"
 
 
-def _build_client(config: OpenSearchAdapterConfig) -> OpenSearchClientLike:
-    module = importlib.import_module("opensearchpy")
-    client_type = cast(Callable[..., object], module.OpenSearch)
+def _build_client(config: ElasticsearchAdapterConfig) -> ElasticsearchClientLike:
+    module = importlib.import_module("elasticsearch")
+    client_type = cast(Callable[..., object], module.Elasticsearch)
     auth = (config.username, config.password) if config.username and config.password else None
-    client = client_type(hosts=[config.endpoint], http_auth=auth, request_timeout=config.request_timeout_seconds)
-    return cast(OpenSearchClientLike, client)
+    client = client_type(hosts=[config.endpoint], basic_auth=auth, request_timeout=config.request_timeout_seconds)
+    return cast(ElasticsearchClientLike, client)
 
 
 def _index_token(value: str) -> str:

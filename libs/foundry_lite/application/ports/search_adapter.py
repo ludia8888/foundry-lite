@@ -30,7 +30,7 @@ class SearchIndexMapping:
 
 @dataclass(frozen=True)
 class SearchQuery:
-    """Vendor-neutral object search query used by local and OpenSearch adapters."""
+    """Vendor-neutral object search query used by local and Elasticsearch adapters."""
 
     tenant_id: str
     object_type: str
@@ -50,7 +50,7 @@ class SearchHit:
 
 
 class SearchIndexAdapter(Protocol):
-    """Scale Foundation boundary for future OpenSearch-style object search."""
+    """Scale Foundation boundary for future Elasticsearch-style object search."""
 
     @property
     def profile_name(self) -> str: ...

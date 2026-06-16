@@ -4,6 +4,8 @@
 **범위:** Foundry-lite Sprint 문서 기반.
 **목적:** 스프린트 문서의 `Dataset → Transform → Ontology → Object → Action → Materialization → Downstream Transform` 폐루프에서 발생 가능한 tricky bug, race condition, fallback bug, 장애 조건, 하드웨어/네트워크/OOM 계열 failure mode를 티어별 체크리스트로 관리한다.
 
+> 체크박스 해석 주의: 이 문서의 `[ ]`는 대부분 “아직 남겨둔 위험/테스트 후보”다. 최신 구현 완료 상태와 직접 동기화되는 체크박스는 [Sprint Evidence Ledger](./sprint-evidence-ledger.md)와 [Commit-Point Risk Register](./commit-point-risk-register.md)의 evidence/status를 따른다. 따라서 이 문서의 미체크 항목은 자동으로 stale 문서가 아니라, future hardening backlog 또는 아직 별도 proof가 필요한 실패 모드다.
+
 ---
 
 ## 0. 이 문서를 쓰는 방법
@@ -52,7 +54,7 @@
 
 **특징:** source of truth는 살아 있지만, UI/search/SDK/materialization/object set이 다른 의미를 보여준다.
 
-- [ ] OpenSearch fallback이 원래 검색 의미와 다른 결과를 정상처럼 보여준다.
+- [ ] Elasticsearch fallback이 원래 검색 의미와 다른 결과를 정상처럼 보여준다.
 - [ ] SDK가 idempotency/concurrency 규칙을 숨긴다.
 - [ ] UI가 stale object state를 보여준다.
 - [x] masking이 display에는 적용되지만 filter/sort/search에는 빠진다.
@@ -470,13 +472,13 @@
 
 ### T0-040 — Search stale event overwrites newer document
 
-- [x] **Trigger:** OpenSearch doc version 12 이후, old object.changed version 11이 retry된다.
+- [x] **Trigger:** Elasticsearch doc version 12 이후, old object.changed version 11이 retry된다.
 - [x] **Failure:** search projection이 과거 상태로 회귀한다.
-- [x] **Guardrail:** OpenSearch doc에 object_version을 저장한다.
+- [x] **Guardrail:** Elasticsearch doc에 object_version을 저장한다.
 - [x] **Guardrail:** update script는 incoming_version > existing_version일 때만 update한다.
 - [x] **Regression Test:** `test_search_stale_event_cannot_overwrite_newer_doc`
 
-### T0-041 — OpenSearch used as source of truth
+### T0-041 — Elasticsearch used as source of truth
 
 - [x] **Trigger:** action form이 search hit의 stale state를 그대로 사용한다.
 - [x] **Failure:** stale object state 기준으로 action이 실행된다.
@@ -819,7 +821,7 @@
 
 ### T2-007 — Search fallback changes semantics without degraded flag
 
-- [ ] **Condition:** OpenSearch down 후 Postgres ILIKE fallback을 정상 결과처럼 보여준다.
+- [ ] **Condition:** Elasticsearch down 후 Postgres ILIKE fallback을 정상 결과처럼 보여준다.
 - [ ] **Guardrail:** response에 `degraded=true`, `planner=postgres_fallback`을 포함한다.
 - [ ] **Regression Test:** `test_search_fallback_marks_degraded`
 
@@ -854,7 +856,7 @@
 - [ ] **T3-001:** CSV upload OOMKilled recovery test 존재.
 - [ ] **T3-002:** DuckDB transform OOMKilled recovery test 존재.
 - [ ] **T3-003:** Python transform MemoryError vs container OOMKilled 구분.
-- [ ] **T3-004:** OpenSearch bulk indexing memory budget test 존재.
+- [ ] **T3-004:** Elasticsearch bulk indexing memory budget test 존재.
 - [ ] **T3-005:** Materialization snapshot memory budget test 존재.
 - [ ] **T3-006:** API/worker node pool 또는 resource isolation 계획 존재.
 - [x] **T3-007:** OOMKilled 후 stale run/transaction detector 존재.
@@ -878,7 +880,7 @@
 - [ ] **T3-019:** TLS certificate rotation mid-run handling.
 - [ ] **T3-020:** external REST timeout classification.
 - [ ] **T3-021:** Kafka rebalance mid-batch test.
-- [ ] **T3-022:** OpenSearch timeout does not block source of truth commit.
+- [ ] **T3-022:** Elasticsearch timeout does not block source of truth commit.
 
 ## 6.4 Kubernetes / Deployment
 
@@ -927,7 +929,7 @@
 - [ ] **T4-009:** fast CI profile and release profile are separated.
 - [ ] **T4-010:** release profile includes 100k/1M row performance smoke.
 - [ ] **T4-011:** fake adapter contract test includes failure injection.
-- [ ] **T4-012:** production-like adapter smoke exists for Postgres/MinIO/Kafka/OpenSearch.
+- [ ] **T4-012:** production-like adapter smoke exists for Postgres/MinIO/Kafka/Elasticsearch.
 - [ ] **T4-013:** coverage excludes generated/mocked-only paths from false confidence.
 - [ ] **T4-014:** E2E verifies data correctness, not only HTTP 200.
 - [ ] **T4-015:** hash comparison includes current_properties, tombstone, links, not only count.
@@ -1112,12 +1114,12 @@
 
 ## J. Search / Reindex
 
-- [x] J1. OpenSearch는 source of truth가 아니다.
+- [x] J1. Elasticsearch는 source of truth가 아니다.
 - [x] J2. stale event가 newer index doc을 덮지 않는다.
 - [ ] J3. fallback은 degraded flag를 표시한다.
 - [x] J4. masked property는 indexed/searchable이 아니다.
 - [ ] J5. ontology activation 후 search mapping drift를 감지한다.
-- [ ] J6. orphan OpenSearch docs를 drift detection으로 찾는다.
+- [ ] J6. orphan Elasticsearch docs를 drift detection으로 찾는다.
 - [ ] J7. search rebuild가 모든 objects를 메모리에 올리지 않는다.
 - [ ] J8. shadow reindex는 existing object_records를 truncate하지 않는다.
 - [x] J9. shadow reindex는 action edits를 replay한다.
@@ -1270,7 +1272,7 @@
 - [ ] OOM during CSV → Parquet.
 - [ ] OOM during DuckDB transform.
 - [ ] OOM during materialization snapshot.
-- [ ] OOM during OpenSearch bulk indexing.
+- [ ] OOM during Elasticsearch bulk indexing.
 - [ ] Disk full during staging write.
 - [ ] Disk full during DuckDB temp spill.
 - [ ] Inode full during many small staging files.
@@ -1285,7 +1287,7 @@
 - [ ] DB connection lost after commit request, before client receives result.
 - [ ] Kafka rebalance mid-batch.
 - [ ] Kafka broker unavailable after polling but before archive commit.
-- [ ] OpenSearch unavailable after object commit.
+- [ ] Elasticsearch unavailable after object commit.
 - [ ] External REST writeback timeout after server processed request.
 - [ ] DNS rebinding during REST connector request.
 - [ ] TLS cert rotation during long-running source sync.
@@ -1344,7 +1346,7 @@
 
 - [x] shadow reindex action edits replay
 - [x] alias switch cursor
-- [x] OpenSearch stale event
+- [x] Elasticsearch stale event
 - [ ] fallback degraded
 - [x] masked search
 

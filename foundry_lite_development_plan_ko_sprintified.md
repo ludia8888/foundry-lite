@@ -3,9 +3,11 @@
 **작성일:** 2026-06-09  
 **개정 상태:** 2026-06-09 심층리뷰 반영본  
 **목표:** Palantir Foundry 전체를 복제하는 것이 아니라, 핵심 철학인 “데이터 유입 → 변환 → 온톨로지 인덱싱 → 운영 객체 조회 → 액션 실행 → 데이터셋으로 환류”가 실제로 반복 실행되는 **재현 가능한 운영 폐루프 MVP**를 단일 모노레포 안에 구현한다.  
-**개정 원칙:** v1은 기능 나열식 MVP가 아니라, replay 가능한 최소 폐루프를 안정적으로 구현하는 vertical slice로 제한한다. Kafka/CDC/OpenSearch/Spark/복잡한 보안 모델은 production 구현을 v1.5 이후로 이관하되, 나중에 쉽게 갈아끼울 수 있는 port/interface, adapter contract, trace key, composition root 경계는 Sprint 02A Scale Foundation에서 먼저 고정한다.
+**개정 원칙:** v1은 기능 나열식 MVP가 아니라, replay 가능한 최소 폐루프를 안정적으로 구현하는 vertical slice로 제한한다. Kafka/CDC/Elasticsearch/Spark/복잡한 보안 모델은 MVP core 완료 조건에서 제외하되, 나중에 쉽게 갈아끼울 수 있는 port/interface, adapter contract, trace key, composition root 경계는 Sprint 02A Scale Foundation에서 먼저 고정한다.
 
-> 현재 구현 상태 주의: 2026-06-14 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. 완료 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
+> 현재 구현 상태 주의: 2026-06-16 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. 완료 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
+>
+> 구현 동기화 메모: 현재 checkout은 Sprint 00~36, Sprint 02A, Sprint 36A의 MVP core/운영 안정성 체크를 완료한 상태다. Sprint 37~42의 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다. Sprint 43~45의 Iceberg, Spark, Kubernetes/backup-restore 운영 패키지는 아직 future scope다. PostgreSQL snapshot connector production implementation, Alembic migration history, Temporal workflow execution, executable Python transform runner는 MVP core 완료 조건에서 제외되며 현재 status 문서의 future/deferred 경계를 따른다.
 
 ---
 
@@ -17,7 +19,7 @@
 - 실행 순서와 스프린트별 완료 조건은 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)을 원본으로 본다.
 - Foundry 공개 문서에서 가져온 외부 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 원본으로 본다.
 - Python 백엔드 구현 원칙과 코드 품질 기준은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)를 원본으로 본다.
-- 네 문서는 모두 같은 v1 폐루프와 Python 백엔드 품질 기준을 기준으로 연결된다: `CSV/PostgreSQL snapshot → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`.
+- 네 문서는 모두 같은 v1 폐루프와 Python 백엔드 품질 기준을 기준으로 연결된다: `CSV/local snapshot 또는 PostgreSQL-backed repository proof → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`.
 
 ### 함께 읽을 문서
 
@@ -43,17 +45,17 @@
 
 Foundry-lite는 단순 BI/ETL 툴이 아니다. 이 시스템의 정체성은 **운영 객체 시스템(Operational Object System)** 이다. 외부 시스템의 데이터는 raw dataset/stream으로 들어오고, transform을 통해 clean dataset이 되며, clean dataset은 Ontology의 object/link/action 모델로 인덱싱된다. 사용자는 테이블을 직접 수정하는 것이 아니라 **객체 위에서 액션을 실행**한다. 액션은 object state, action log, side effect, writeback, materialized dataset을 만든다. 이 결과가 다시 pipeline input으로 들어가면서 조직의 운영 상태가 지속적으로 학습·갱신된다.
 
-가장 작은 완성형은 다음 v1 폐루프가 end-to-end로 돌아가는 상태다. 이 폐루프는 intentionally small이다. 확장형 Kafka/CDC/streaming path는 Phase 6에서 붙인다.
+가장 작은 완성형은 다음 v1 폐루프가 end-to-end로 돌아가는 상태다. 이 폐루프는 intentionally small이다. Kafka/CDC/REST/Webhook/Elasticsearch path는 MVP core 완료 조건 밖의 post-MVP 확장으로 분리하며, 현재 checkout에는 Sprint 37~42 proof가 들어와 있다.
 
 ```text
-Files / PostgreSQL snapshot
+Files / local snapshot
 → Connector / Sync
 → Raw Dataset
 → DuckDB SQL Transform
 → Clean Dataset
 → Ontology Mapping
 → Funnel-lite Snapshot Indexer
-→ PostgreSQL Object Store / Object Query Service
+→ SQLAlchemy Object Store / Object Query Service
 → Object Explorer / Action Form
 → Action Runtime
 → Object Edit / Action Log / Outbox
@@ -66,12 +68,12 @@ Files / PostgreSQL snapshot
 이번 수정본은 Foundry-lite의 장기 비전과 v1 구현 범위를 분리한다. Foundry-lite의 장기 방향은 Ontology 중심 폐루프 플랫폼이지만, v1은 다음 수직 slice를 안정적으로 완성하는 데 집중한다.
 
 ```text
-CSV/PostgreSQL snapshot
+CSV/local snapshot 또는 PostgreSQL-backed repository proof
 → immutable raw dataset version
 → DuckDB SQL transform
 → immutable clean dataset version
 → Ontology object/link/action mapping
-→ PostgreSQL JSONB object store
+→ SQLAlchemy object store
 → object query / object explorer
 → action runtime with optimistic concurrency
 → action_log + object_snapshot materialization
@@ -80,7 +82,7 @@ CSV/PostgreSQL snapshot
 
 P0 결정:
 
-- v1 필수 범위에서 Kafka/CDC/Webhook/REST sync/OpenSearch/Spark/Iceberg day-1 강제/React hooks를 제외한다.
+- v1 필수 범위에서 Kafka/CDC/Webhook/REST sync/Elasticsearch/Spark/Iceberg day-1 강제/React hooks를 제외한다. 단, REST/Webhook/Kafka/CDC/Elasticsearch proof가 존재하면 post-MVP 증거로 따로 기록한다.
 - `COMMITTED` dataset version은 immutable이며, 실패한 run은 staging/manifest를 commit하지 않는다.
 - v1 branch는 `main`과 `dev` namespace 및 `dev → main promotion`만 지원한다.
 - Ontology activation 전에 dataset/schema/property/link/action/writeback/security reference를 검증한다.
@@ -88,7 +90,7 @@ P0 결정:
 - Reindex/replay를 위해 `index_runs`, cursor, count/hash validation, shadow swap 전략을 명시한다.
 - Materialization은 v1에서 `action_log`와 `object_snapshot` 두 종류만 필수로 구현한다.
 - 보안은 v1에서 tenant isolation, RBAC, object read/action execute, property masking, audit-all-writes로 제한한다.
-- Scale Foundation은 Sprint 02A에서 먼저 고정한다. Spark/Flink/Kafka/Iceberg/OpenSearch를 바로 구현하지 않더라도, `StorageAdapter`, `MetadataRepository`, `ComputeAdapter`, `EventPublisher`, `WorkflowAdapter`, `SearchAdapter`, `ConnectorAdapter`, `AuthProvider`의 port/contract/test boundary는 MVP 초기에 만든다.
+- Scale Foundation은 Sprint 02A에서 먼저 고정한다. Spark/Flink/Kafka/Iceberg/Elasticsearch를 production infrastructure로 바로 강제하지 않더라도, `StorageAdapter`, `MetadataRepository`, `ComputeAdapter`, `EventPublisher`, `WorkflowAdapter`, `SearchAdapter`, `ConnectorAdapter`, `AuthProvider`의 port/contract/test boundary는 MVP 초기에 만든다.
 
 ### 0.2 설계-스프린트 연결표
 
@@ -208,8 +210,8 @@ v1은 “Foundry 전체 기능 축소판”이 아니라 **재현 가능한 최�
 1. **Data Connection-lite**
    - CSV 파일 업로드
    - Parquet 파일 read/import는 adapter interface만 열어두고, v1 필수 acceptance에서는 제외
-   - PostgreSQL snapshot pull sync
-   - REST/Webhook/Kafka/CDC는 v1 필수가 아니라 Phase 6 또는 v1.5 확장
+   - PostgreSQL snapshot connector는 boundary와 PostgreSQL-backed repository closed-loop proof를 갖지만, production snapshot connector implementation은 현재 MVP core 완료 조건에서 제외한다.
+   - REST/Webhook/Kafka/CDC는 v1 core 필수가 아니다. 다만 현재 checkout에는 Sprint 37~40의 REST/Webhook, stream archive, Debezium CDC, CDC object indexing proof가 존재한다.
 
 2. **Dataset Registry**
    - dataset 생성/조회
@@ -223,7 +225,7 @@ v1은 “Foundry 전체 기능 축소판”이 아니라 **재현 가능한 최�
 
 3. **Transform Engine**
    - canonical runner: SQL + DuckDB
-   - Python transform SDK는 v1 후반 prototype으로 제한
+   - Python transform SDK는 skeleton/fail-closed boundary로 제한하며, executable Python runner는 future scope다.
    - Polars는 Python runner 내부 선택지
    - Spark는 interface만 정의하고 Phase 7에서 구현
    - append-only incremental mode만 허용
@@ -244,7 +246,7 @@ v1은 “Foundry 전체 기능 축소판”이 아니라 **재현 가능한 최�
    - dataset snapshot을 object store로 index
    - action edit committed event를 받아 search/materialization trigger 처리
    - CDC/stream indexing은 Phase 6
-   - OpenSearch는 adapter interface만 유지하고 v1은 PostgreSQL index 사용
+   - Elasticsearch는 adapter interface만 유지하고 v1은 PostgreSQL index 사용
    - object_changed event는 Postgres outbox에 기록
    - reindex/replay CLI와 `index_runs` 상태 기록
 
@@ -300,16 +302,19 @@ v1은 “Foundry 전체 기능 축소판”이 아니라 **재현 가능한 최�
 
 ### 2.2 v1에서 하지 않을 것
 
-아래는 v1에서 의도적으로 제외한다.
+아래는 v1 MVP core 완료 조건에서 의도적으로 제외한다. 일부 항목은 현재
+checkout에 post-MVP proof가 이미 들어와 있지만, always-on production worker,
+managed infrastructure, 광범위한 SaaS 일반화까지 v1 core 성공 조건으로 요구하지는
+않는다.
 
-- Kafka/Redpanda stream ingest의 production 구현
-- Debezium CDC ingest
-- REST pull sync 일반화
-- Webhook listener 일반화
+- Kafka/Redpanda stream ingest의 continuously running production worker와 deployment packaging
+- Debezium CDC production deployment와 continuously running CDC object-indexing worker
+- REST pull sync의 durable connector registry, retry worker, 광범위한 SaaS connector 일반화
+- Webhook listener의 durable inbox, retry worker, 광범위한 SaaS event 일반화
 - Palantir 수준의 multi-tenant enterprise security 완전체
 - mandatory markings, CBAC, cross-organization collaboration
 - 수십억~수백억 object indexing 최적화
-- OpenSearch 기반 full-text/large search production path
+- Elasticsearch live cluster deployment와 managed operations
 - Spark/Flink runner 구현
 - full visual pipeline builder
 - full visual ontology manager
@@ -321,28 +326,28 @@ v1은 “Foundry 전체 기능 축소판”이 아니라 **재현 가능한 최�
 
 단, 설계는 이 기능들이 나중에 추가될 수 있게 adapter/interface와 metadata boundary를 남긴다.
 
-### 2.3 v1.5 이후로 이관한 기능
+### 2.3 Post-MVP Proof / Future Boundary
 
-| 기능 | 이관 시점 | v1에서 남기는 것 |
+| 기능 | 현재 checkout 상태 | MVP core 밖에 남는 것 |
 |---|---|---|
-| REST pull sync | v1.5 | Connector interface, source metadata |
-| Webhook push ingest | v1.5 | Listener metadata schema |
-| Kafka/Redpanda ingest | Phase 6 | Outbox event schema, StreamAdapter interface |
-| Debezium CDC | Phase 6 | CDC envelope schema 문서화 |
-| OpenSearch | Phase 7 | SearchAdapter interface |
-| Spark runner | Phase 7 | ComputeAdapter interface |
-| Iceberg production catalog | Phase 7 | DatasetStorageAdapter abstraction |
-| Generated TS SDK | v1 후반 | OpenAPI/metadata endpoint |
-| React hooks | v1.5 | SDK package boundary |
-| Functions on Objects | v2 | derived property expression only |
-| Complex ABAC/CBAC | v2 | policy DSL extension point |
+| REST pull sync | `RestPullConnectorAdapter`와 cursor/rate-limit/SSRF guard proof 존재 | durable connector registry, retry workers, SaaS별 production adapter |
+| Webhook push ingest | timestamp-bound HMAC signed append ingest proof 존재 | durable inbox, retry workers, SaaS event 일반화 |
+| Kafka/Redpanda ingest | local/fake stream archive, Kafka-compatible adapter, one-shot worker, live broker proof 존재 | continuously running worker, rebalance/commit-unknown hardening, deployment packaging |
+| Debezium CDC | Debezium-shaped archive, live Debezium/PostgreSQL topic, CDC object indexing proof 존재 | production CDC deployment, always-on CDC object-indexing worker |
+| Elasticsearch | Elasticsearch-compatible adapter, projection, rebuild, orphan drift proof 존재 | live cluster deployment, managed operations |
+| Spark runner | future | `ComputeAdapter` boundary |
+| Iceberg production catalog | future | `DatasetStorageAdapter` abstraction |
+| Generated TS SDK | package/browser generated SDK surface 존재 | richer generated hooks/client ergonomics |
+| React hooks | future | SDK package boundary |
+| Functions on Objects | future | derived property expression only |
+| Complex ABAC/CBAC | future | policy DSL extension point |
 
 ### 2.4 v1 성공 기준
 
 v1은 다음 acceptance를 모두 만족해야 한다.
 
 ```text
-CSV upload 또는 PostgreSQL snapshot sync
+CSV/local snapshot 또는 PostgreSQL-backed repository closed-loop proof
 → raw dataset committed
 → DuckDB SQL transform
 → clean dataset committed
@@ -366,7 +371,7 @@ CSV upload 또는 PostgreSQL snapshot sync
 
 - Python 백엔드 중심
 - TypeScript는 Web UI와 generated SDK에 사용
-- Python transform 지원
+- SQL/DuckDB transform을 canonical path로 두고, Python transform은 SDK skeleton/fail-closed boundary로 제한
 - Docker Compose로 로컬 완전 실행
 - Kubernetes로 scale-out 가능
 - storage/queue/compute는 interface로 추상화
@@ -382,49 +387,52 @@ v1은 선택지를 줄여 구현 속도와 디버깅 가능성을 우선한다.
 |---|---|---|
 | Monorepo | pnpm workspace + Turborepo + uv workspace | Web/SDK와 Python 백엔드를 한 저장소에서 관리 |
 | API | **Python 3.12 + FastAPI + Pydantic v2** | Python 백엔드 기준을 고정하고 request/response validation을 명확히 함 |
-| Backend persistence | SQLAlchemy 2.x + Alembic + psycopg | PostgreSQL transaction, migration, repository 구현 표준화 |
-| Worker | Temporal Python SDK | Python application service와 같은 타입/테스트 기준으로 workflow 실행 |
+| Backend persistence | SQLAlchemy 2.x + schema revision guard | 현재는 SQLAlchemy metadata bootstrap과 frozen schema revision으로 drift를 막고, Alembic migration history는 future scope |
+| Worker | local/direct workflow adapter + stream archive worker entrypoint | Temporal workflow execution은 future scope이고, 현재는 port/adapter contract와 one-shot stream worker proof를 사용 |
 | CLI | Typer | 운영자와 개발자가 같은 Python service를 명령어로 실행 |
 | Web | Next.js + TanStack Query + shadcn/ui | 운영 UI 빠르게 개발 |
-| Metadata DB | PostgreSQL | schema, transaction, object store, audit에 적합 |
-| Object Storage | MinIO local / S3-compatible production | lake 파일 저장 표준화 |
+| Metadata DB | SQLite/local SQLAlchemy + PostgreSQL contract coverage | schema, transaction, object store, audit 의미를 repository port 뒤에 고정 |
+| Object Storage | local filesystem + fake storage URI | lake 파일 저장 contract를 고정하고 S3/MinIO/Iceberg production path는 future scope |
 | Lake format | Parquet manifest first, Iceberg-ready | v1 commit protocol 단순화, 이후 Iceberg 전환 가능 |
-| Event | PostgreSQL outbox first | Kafka 없이도 폐루프와 replay를 구현 |
-| Stream | Redpanda/Kafka는 Phase 6 | v1에서는 StreamAdapter interface만 유지 |
-| CDC | Debezium은 Phase 6 | v1 필수에서 제외 |
+| Event | SQLAlchemy outbox first | Kafka 없이도 MVP core 폐루프와 replay를 구현 |
+| Stream | local/fake stream + Kafka-compatible adapter/one-shot worker proof | v1 core 필수는 아니지만 Sprint 38 proof는 존재, continuously running production worker는 future scope |
+| CDC | Debezium-shaped archive + live Debezium/PostgreSQL topic proof | v1 core 필수는 아니지만 Sprint 39~40 proof는 존재, production CDC worker packaging은 future scope |
 | Batch compute | DuckDB canonical runner | local/small production에서 transaction/lineage 단순화 |
-| Python compute | Python runner prototype + Polars optional | v1 후반 보조 runner |
-| Spark | Phase 7 adapter | v1 구현 제외 |
-| Workflow | Temporal | durable workflow/action/writeback/retry/replay |
-| Search index | PostgreSQL JSONB + generated columns | 초기 단순화, 큰 object search 때 OpenSearch 확장 |
-| Auth | FastAPI auth stub + OIDC abstraction | 로컬 개발 단순화, 기업 인증 대응 가능 |
+| Python compute | transforms SDK skeleton + fail-closed registration | executable Python runner와 sandboxed SDK IO abstraction은 future scope |
+| Spark | future adapter | v1 구현 제외 |
+| Workflow | local/fake WorkflowAdapter contract | Temporal workflow/action/writeback/retry/replay는 future scope |
+| Search index | local/fake + Elasticsearch-compatible adapter/projection proof | object store가 source of truth이고 managed Elasticsearch deployment는 future scope |
+| Auth | `AuthProvider` local/demo/header-trust profile + production unsafe-profile guard | 로컬 개발은 단순하게 유지하되, production에서 demo/header-trust 인증이 켜지는 실수를 startup에서 차단 |
 | Observability | Structured logs + OpenTelemetry interface | Prometheus/Grafana/Loki는 docker-compose full profile |
 | Schema validation | Pydantic + JSON Schema + Zod for Web boundary | Python API 계약을 원본으로 두고 Web/SDK와 연결 |
 | Python quality gate | ruff + mypy 또는 pyright + pytest | Clean Code, 타입 안정성, 회귀 방지를 CI에서 확인 |
 | Test coverage gate | line/branch/function coverage 95%+, integration/smoke 100% pass | 코드가 작동하는지뿐 아니라 안전하게 바꿀 수 있는지 확인 |
 
-### 3.3 왜 Temporal을 중심 orchestration으로 쓰는가
+### 3.3 왜 Temporal을 future orchestration target으로 두는가
 
 Foundry-lite에는 ETL schedule뿐 아니라 action writeback, side effect, index replay, materialization retry가 필요하다. 단순 queue는 실패 복구와 장기 workflow 추적이 약하다. Temporal은 워크플로우를 코드로 정의하면서 event history 기반으로 재시작/복구할 수 있으므로 action runtime과 pipeline runner 양쪽에 적합하다.
 
-다만 데이터 asset catalog UI가 필요해지면 나중에 Dagster를 transform authoring layer로 붙일 수 있다. v1에서는 자체 Dataset Registry + Temporal worker가 더 단순하다.
+다만 데이터 asset catalog UI가 필요해지면 나중에 Dagster를 transform authoring layer로 붙일 수 있다. 현재 MVP core는 자체 Dataset Registry + local/direct workflow boundary로 닫고, Temporal worker execution은 future scope로 둔다.
 
 ### 3.4 Scale path
 
 초기에는 다음처럼 실행한다.
 
 ```text
-Local / Small Production, v1 default
-- PostgreSQL
-- MinIO
-- Temporal dev cluster
-- API container
-- Web container
-- Worker container
+Current local checkout
+- SQLite/local SQLAlchemy metadata and object store
+- local filesystem object storage
+- local/direct workflow adapter
+- API, Web, CLI, and one-shot stream archive worker entrypoint
+- PostgreSQL/Kafka/Debezium proofs through focused Testcontainers paths
 
-Local full profile, optional
-- Redpanda single-node
-- OpenSearch single-node
+Target local / small production profile
+- PostgreSQL
+- MinIO or S3-compatible object storage
+- Temporal worker execution
+- Redpanda/Kafka stream profile
+- Elasticsearch live cluster profile
+- API/Web/Worker containers
 ```
 
 데이터가 커지면 다음으로 확장한다.
@@ -436,7 +444,7 @@ Scale Production
 - Spark cluster for batch
 - Flink for streaming
 - Kafka/Redpanda multi-broker
-- OpenSearch cluster
+- Elasticsearch cluster
 - Kubernetes HPA for workers
 - PostgreSQL primary/replica, partitioned audit/action/object tables
 ```
@@ -451,24 +459,24 @@ v1에서 반드시 지켜야 할 boundary는 다음이다.
 
 ```text
 DatasetStorageAdapter
-- local/minio parquet manifest 구현
-- iceberg 구현은 Phase 7
+- 현재 local filesystem/fake-storage parquet manifest 구현
+- MinIO/S3/Iceberg production path는 future scope
 
 ComputeAdapter
-- duckdb 구현
-- spark 구현은 Phase 7
+- 현재 DuckDB SQL runner 구현
+- Spark runner는 future scope
 
 SearchAdapter
-- postgres 구현
-- opensearch 구현은 Phase 7
+- 현재 local/fake + Elasticsearch-compatible adapter/projection proof 구현
+- managed Elasticsearch deployment는 future scope
 
 EventPublisher
-- postgres outbox 구현
-- kafka/redpanda publisher는 Phase 6
+- 현재 SQLAlchemy outbox/DLQ/replay cursor 구현
+- Kafka-compatible stream archive proof는 존재하지만 full publisher/always-on worker는 future scope
 
 AuthProvider
-- FastAPI local auth stub 구현
-- OIDC provider는 interface 유지
+- 현재 local/demo/header-trust profile과 production unsafe-profile guard 구현
+- OIDC/JWT provider는 future scope
 ```
 
 domain/application layer는 adapter interface만 알고, concrete implementation은 `apps/api` 또는 `apps/worker` composition root에서 주입한다.
@@ -484,16 +492,16 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
 | Boundary | Local/MVP implementation | Scale implementation | 반드시 유지할 product contract | 필수 trace key |
 |---|---|---|---|---|
 | MetadataRepository | SQLite 또는 local SQLAlchemy | PostgreSQL primary/replica, partitioned tables | tenant, dataset, ontology, action, audit metadata 의미 불변 | `tenant_id`, `request_id`, `resource_id` |
-| DatasetStorageAdapter | local filesystem / MinIO-compatible manifest | S3/GCS/Azure Blob + Iceberg catalog | staging → manifest → committed version protocol 불변 | `dataset_id`, `transaction_id`, `version_id` |
-| DatasetTransactionRepository | 단일 DB transaction | PostgreSQL transaction + Alembic migration | OPEN → COMMITTED/ABORTED 상태 전이 불변 | `transaction_id`, `run_id` |
+| DatasetStorageAdapter | local filesystem / fake storage manifest | MinIO/S3/GCS/Azure Blob + Iceberg catalog | staging → manifest → committed version protocol 불변 | `dataset_id`, `transaction_id`, `version_id` |
+| DatasetTransactionRepository | SQLAlchemy transaction + schema revision guard | PostgreSQL transaction + Alembic migration history | OPEN → COMMITTED/ABORTED 상태 전이 불변 | `transaction_id`, `run_id` |
 | DatasetVersionRepository | SQLAlchemy version/schema reads | PostgreSQL indexed version/schema reads | 최신 버전, 특정 버전, schema version 조회 의미 불변 | `dataset_id`, `version_id`, `schema_version` |
 | RuntimeRepository | SQLAlchemy audit/outbox/lineage/run table | PostgreSQL partitioned audit/outbox, future publisher state | audit, outbox, lineage, run state의 key 의미 불변 | `tenant_id`, `request_id`, `run_id`, `correlation_id` |
 | ComputeAdapter | DuckDB SQL runner | Spark batch, later Flink bounded job | input version binding, output staging, health gate, lineage 불변 | `transform_run_id`, `input_version_id`, `output_version_id` |
-| StreamAdapter/EventPublisher | PostgreSQL outbox | Kafka/Redpanda publisher and consumer | event idempotency, DLQ, replay cursor 의미 불변 | `event_id`, `correlation_id`, `cursor` |
-| SearchAdapter | PostgreSQL JSON/generated index | OpenSearch projection | object store가 source of truth이고 search는 재생성 가능한 projection | `object_type`, `object_id`, `index_version` |
+| StreamAdapter/EventPublisher | SQLAlchemy outbox + local/fake stream + Kafka-compatible one-shot worker proof | Kafka/Redpanda publisher and continuously running consumer | event idempotency, DLQ, replay cursor 의미 불변 | `event_id`, `correlation_id`, `cursor` |
+| SearchAdapter | local/fake + Elasticsearch-compatible projection proof | managed Elasticsearch projection | object store가 source of truth이고 search는 재생성 가능한 projection | `object_type`, `object_id`, `index_version` |
 | WorkflowAdapter | direct call or local worker skeleton | Temporal workflow/activity | retry, timeout, durable run state, replay 가능성 불변 | `workflow_id`, `run_id`, `attempt` |
-| ConnectorAdapter | CSV/local file, mock REST/ERP | REST, webhook, CDC, SaaS connector | sync run lifecycle, cursor, transaction commit protocol 불변 | `source_id`, `sync_run_id`, `cursor` |
-| AuthProvider/PolicyAdapter | dev header context + RBAC | OIDC/SSO, ABAC/CBAC extension | tenant isolation, permission decision, audit deny 의미 불변 | `actor_user_id`, `tenant_id`, `policy_decision_id` |
+| ConnectorAdapter | CSV/local file, REST pull, signed webhook, Debezium wrapper proof | durable connector registry, retry workers, SaaS connector | sync run lifecycle, cursor, transaction commit protocol 불변 | `source_id`, `sync_run_id`, `cursor` |
+| AuthProvider/PolicyAdapter | local/demo/header-trust profile + RBAC + production unsafe-profile guard | OIDC/SSO, ABAC/CBAC extension | tenant isolation, permission decision, audit deny 의미 불변 | `actor_user_id`, `tenant_id`, `policy_decision_id` |
 
 #### Scale Foundation Checklist
 
@@ -505,7 +513,7 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
   - [x] `DatasetVersionRepository`는 committed version/schema DB read 경계를 맡고 local/fake contract test를 통과한다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
   - [x] `RuntimeRepository`는 audit/outbox/lineage/list-runs DB 경계를 맡고 local/fake contract test를 통과한다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
   - [x] `ComputeAdapter`는 CSV/Parquet/SQL transform/health-check 실행 경계를 맡고 DuckDB local/fake contract test를 통과한다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
-  - [x] `StreamAdapter`, `SearchAdapter`, `WorkflowAdapter`, `ConnectorAdapter`, `AuthProvider`는 port와 local/fake adapter contract를 갖는다. production Kafka/OpenSearch/Temporal/connector/OIDC 구현은 이후 스프린트 범위다. ([S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2))
+  - [x] `StreamAdapter`, `SearchAdapter`, `WorkflowAdapter`, `ConnectorAdapter`, `AuthProvider`는 port와 local/fake adapter contract를 갖는다. Kafka-compatible stream worker proof와 Elasticsearch-compatible projection proof는 존재하고, production Kafka publisher/managed Elasticsearch/Temporal/connector/OIDC 구현은 이후 스프린트 범위다. ([S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2))
 - [x] concrete 구현 선택은 `apps/api`, `apps/worker`, `apps/cli` 같은 composition root에서만 한다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
   - [x] API와 CLI는 `create_local_core_dependencies(...)` composition root에서 adapter profile을 선택한다. ([S02A-P4](./docs/sprint-evidence-ledger.md#s02a-p4))
   - [x] DB schema bootstrap/reset 구현 선택은 `SqlAlchemyMetadataRepository`를 통해 local runtime에 주입된다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
@@ -579,8 +587,8 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
                │       └───────────────┬───────────────┘
                │                       │
 ┌──────────────▼───────────────────────▼──────────────────────┐
-│                       Workflow Engine                         │
-│ Temporal: sync, transform, index, action, materialization      │
+│                       Workflow Boundary                       │
+│ local/direct today, Temporal workflow execution future         │
 └───────┬──────────────┬──────────────┬──────────────┬────────┘
         │              │              │              │
 ┌───────▼─────┐ ┌──────▼──────┐ ┌─────▼────────┐ ┌──▼──────────┐
@@ -590,11 +598,11 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
         │              │              │             │
 ┌───────▼──────────────▼──────────────▼─────────────▼──────────┐
 │                          Data Plane                            │
-│ MinIO/S3 Parquet manifests, PostgreSQL object store            │
+│ local/S3-ready manifests, SQLAlchemy object store              │
 └───────────────────────────────────────────────────────────────┘
 ┌───────────────────────────────────────────────────────────────┐
 │                          Event Plane                           │
-│ PostgreSQL outbox, DLQ, replay cursors, future Kafka adapter    │
+│ SQLAlchemy outbox, DLQ, replay cursors, Kafka-compatible proof  │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -617,16 +625,16 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
 - object storage files
 - Parquet manifest / future Iceberg tables
 - object store tables
-- future OpenSearch indexes
+- Elasticsearch-compatible search projection proof / future managed cluster
 - external systems
 
-**Event plane**은 durable event와 replay 경계를 담당한다. v1에서는 Kafka 없이 PostgreSQL outbox를 canonical event log로 사용한다.
+**Event plane**은 durable event와 replay 경계를 담당한다. 현재 MVP core에서는 Kafka 없이 SQLAlchemy outbox를 canonical event log로 사용한다. Kafka-compatible stream archive proof는 존재하지만, full publisher와 continuously running worker는 future scope다.
 
 - outbox_events
 - dead_letter_events
 - index cursors
 - materialization cursors
-- future Kafka/Redpanda topics
+- Kafka/Redpanda topics for post-MVP stream/CDC paths
 - `dataset.version.committed`, `object.changed`, `action.run.committed`, `materialization.requested` events
 
 이 분리가 있어야 scale-out이 가능하다. API는 metadata와 user-facing transaction을 처리하고, 대량 파일 처리와 index rebuild는 worker가 한다. Event plane은 data plane과 control plane 사이의 신뢰 가능한 연결 조직이다.
@@ -987,22 +995,27 @@ class Connector(Protocol[ConfigT]):
 
 ### 6.3 지원 connector v1
 
-v1 필수 connector는 두 개다.
+현재 MVP core 필수 connector는 CSV/local snapshot path다. PostgreSQL snapshot은 설계 목표와 repository/Testcontainers proof는 있지만 production connector implementation은 future/deferred다.
 
 - File upload connector: CSV
-- PostgreSQL snapshot sync
+- PostgreSQL snapshot sync: production implementation future/deferred
+
+MVP 이후 현재 proof:
+
+- REST API paginated sync
+- Webhook listener connector
+- Kafka-compatible stream archive
+- Debezium CDC archive/indexing
 
 v1 optional/prototype:
 
 - Parquet import reader
 - Local/S3 directory connector
 
-v1.5 이후:
+추가 future:
 
-- REST API paginated sync
-- Webhook listener connector
-- Kafka topic sync
-- Debezium CDC topic sync
+- production connector registry/retry workers
+- continuously running stream/CDC workers
 
 ### 6.4 Sync run lifecycle
 
@@ -1022,7 +1035,7 @@ Sync는 dataset transaction을 연 뒤 파일을 쓴다. health check 통과 후
 
 ### 6.5 CDC ingest, Phase 6
 
-CDC는 v1 필수 기능이 아니다. 다만 Phase 6 확장을 위해 envelope와 경계를 미리 정의한다.
+CDC는 v1 MVP core 필수 기능이 아니다. 다만 현재 checkout에는 Debezium-shaped archive, live Debezium/PostgreSQL topic, CDC object indexing proof가 존재한다. production CDC deployment와 continuously running object-indexing worker는 future scope다.
 
 CDC event envelope 표준:
 
@@ -1041,7 +1054,7 @@ CDC event envelope 표준:
 }
 ```
 
-Phase 6 target flow:
+Post-MVP proof/target flow:
 
 ```text
 Debezium → Kafka topic raw.pg_erp.orders.cdc
@@ -1049,12 +1062,12 @@ Debezium → Kafka topic raw.pg_erp.orders.cdc
 → Funnel-lite stream consumer → Order object upsert/delete
 ```
 
-v1 구현에서는 이 경로를 사용하지 않는다.
+MVP core 완료 조건은 이 경로를 요구하지 않는다. 현재 증거는 Sprint 39~40 post-MVP proof로 기록한다.
 
 
 ### 6.6 Virtual Table-lite
 
-Virtual table은 source에 있는 외부 table을 복사하지 않고 등록하는 개념이다. v1에서는 metadata schema와 transform input adapter boundary만 둔다. production object backing direct virtual table은 v1.5 이후다.
+Virtual table은 source에 있는 외부 table을 복사하지 않고 등록하는 개념이다. 현재 MVP core에서는 metadata schema와 transform input adapter boundary만 둔다. production object backing direct virtual table은 future scope다.
 
 ```sql
 create table virtual_tables (
@@ -1092,7 +1105,7 @@ Inputs → Transform Logic → Outputs
 
 ### 7.2 Transform definition
 
-v1의 canonical runner는 SQL + DuckDB다. Python transform은 v1 후반 prototype이며, output commit은 반드시 DatasetOutput API를 통해서만 허용한다.
+v1의 canonical runner는 SQL + DuckDB다. Python transform은 현재 SDK skeleton과 fail-closed registration boundary까지만 둔다. executable Python runner와 sandboxed DatasetInput/DatasetOutput API는 future scope이며, 그때도 output commit은 반드시 DatasetOutput API를 통해서만 허용한다.
 
 ```yaml
 id: clean_orders
@@ -1479,11 +1492,11 @@ Dataset lake는 대량 분석과 재현성에 좋지만, 운영 앱의 object qu
 
 ### 9.2 저장 전략
 
-v1은 PostgreSQL 기반 hybrid object store를 사용한다.
+현재 MVP는 SQLAlchemy 기반 object store와 JSON column을 사용한다. PostgreSQL JSONB object store와 production index/RLS 운영은 future target이다.
 
-- 기본: generic object table + JSONB properties
+- 기본: generic object table + SQLAlchemy JSON properties
 - 자주 쓰는 indexed property: generated column or 별도 typed index table
-- 검색/대규모 필터: PostgreSQL first, OpenSearch는 Phase 7 adapter
+- 검색/대규모 필터: object store가 source of truth이고, Elasticsearch-compatible projection proof는 존재하지만 managed cluster 운영은 future scope
 - 대규모 object type: object type별 physical table로 승격 가능
 
 ### 9.3 Core tables
@@ -1916,10 +1929,10 @@ count/hash validation이 실패하면 shadow 결과는 폐기하고 active view�
 
 | Query type | Engine |
 |---|---|
-| get by id | PostgreSQL PK |
-| simple filter | PostgreSQL JSONB/generated columns |
-| full-text search | OpenSearch if enabled |
-| large aggregation | Postgres first, later Trino/DuckDB over materialized dataset |
+| get by id | SQLAlchemy object store primary key lookup |
+| simple filter | SQLAlchemy JSON/object property query path |
+| full-text search | Elasticsearch-compatible projection if enabled, object store remains source of truth |
+| large aggregation | materialized dataset first, later Trino/DuckDB/Spark over materialized dataset |
 | link traversal | object_links table + object_records join |
 
 
@@ -2153,9 +2166,9 @@ v1에서 구현하는 materialization은 두 개만 필수다.
 |---|---|---|
 | object_snapshot | 필수 | object current view를 dataset으로 출력 |
 | action_log | 필수 | action_run/action_edits를 dataset으로 출력 |
-| object_delta | v1.5 | object_changed event만 dataset/stream으로 출력 |
-| link_snapshot | v1.5 | object links를 dataset으로 출력 |
-| external_export | v1.5+ | dataset/object를 외부 DB/S3/API로 export |
+| object_delta | post-MVP/future | object_changed event만 dataset/stream으로 출력 |
+| link_snapshot | post-MVP/future | object links를 dataset으로 출력 |
+| external_export | post-MVP/future | dataset/object를 외부 DB/S3/API로 export |
 
 v1 closed-loop demo는 `object_snapshot`과 `action_log`만 사용한다.
 
@@ -2488,7 +2501,7 @@ GET /api/materializations/{materializationId}/runs
 
 프론트엔드/외부 앱 개발자가 raw REST endpoint를 직접 다루지 않고 Ontology 중심으로 개발하게 한다.
 
-v1에서는 OpenAPI + minimal generated client를 우선하고, full generated TypeScript SDK는 v1 후반 목표로 둔다. React hooks는 v1.5로 이관한다.
+현재 checkout에는 ontology metadata에서 생성되는 TypeScript package/browser SDK surface가 있다. React hooks와 더 풍부한 generated client ergonomics는 future scope다.
 
 ### 16.2 Generated TypeScript SDK
 
@@ -2519,9 +2532,9 @@ await client.actions.ApproveOrder.apply({
 ```
 
 
-### 16.3 React hooks, v1.5
+### 16.3 React hooks, future
 
-React hooks는 v1.5 기능이다. v1 UI는 TanStack Query를 직접 사용하고, SDK package boundary만 유지한다.
+React hooks는 future 기능이다. 현재 UI는 TanStack Query와 generated browser SDK boundary를 사용한다.
 
 ```ts
 const { data: order } = useObject('Order', orderId);
@@ -2739,9 +2752,9 @@ foundry-lite/
 
 ### 19.1 왜 Outbox가 필요한가
 
-DB transaction과 Kafka publish는 원자적으로 묶기 어렵다. 따라서 PostgreSQL transaction 안에서 outbox row를 쓰고, outbox publisher가 외부 event bus 또는 internal worker queue로 발행한다.
+DB transaction과 Kafka publish는 원자적으로 묶기 어렵다. 따라서 현재 MVP core는 DB transaction 안에서 outbox row를 쓰고, 이후 publisher가 외부 event bus 또는 internal worker queue로 발행할 수 있는 경계를 둔다.
 
-v1에서는 PostgreSQL outbox가 canonical event plane이다. Kafka/Redpanda publish는 Phase 6 adapter다.
+현재 checkout에서는 SQLAlchemy outbox가 canonical event plane이다. Kafka-compatible stream archive proof는 존재하지만, Kafka/Redpanda outbox publisher와 continuously running worker는 future scope다.
 
 ```sql
 create table outbox_events (
@@ -2812,7 +2825,7 @@ Sources:
 - ERP PostgreSQL: orders
 - CRM CSV: customers
 - WMS CSV: inventory
-- Shipment events: Phase 6 optional Kafka topic
+- Shipment events: post-MVP Kafka-compatible stream archive proof / future production topic
 - Mock external ERP REST API: order approval writeback demo adapter
 
 Ontology:
@@ -2875,172 +2888,21 @@ Actions:
 ---
 
 
-## 21. 개발 로드맵
+## 21. 개발 로드맵 현재 동기화
 
-### Phase 0 — Scaffold and infra
+상세 실행 순서와 체크박스의 원본은 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)이다. 이 섹션은 오래된 Phase 할 일 목록이 아니라, 2026-06-16 현재 checkout 기준으로 “무엇이 완료되었고 무엇이 proof/future인지”를 요약한다.
 
-Deliverables:
-
-- pnpm/turbo monorepo
-- API/Web/Worker/CLI skeleton
-- Docker Compose: Postgres, MinIO, Temporal
-- Docker Compose full profile: Redpanda, OpenSearch optional
-- DB migration system
-- shared config/logging/errors
-- auth stub
-- module dependency lint rule
-
-Exit criteria:
-
-- `pnpm dev`로 API/Web/Worker 실행
-- `/healthz` green
-- Temporal worker connected
-- Postgres migrations pass
-- core packages do not import app/infra packages
-
-### Phase 1 — Dataset transaction vertical slice
-
-Deliverables:
-
-- dataset CRUD
-- schema registry
-- transaction open/commit/abort
-- immutable dataset version
-- MinIO file writer
-- CSV upload connector
-- PostgreSQL snapshot connector
-- dataset preview with DuckDB
-- sync run tracking
-- basic health checks
-- dataset commit protocol with staging + manifest
-
-Exit criteria:
-
-- CSV upload → raw dataset committed
-- PostgreSQL query sync → raw dataset committed
-- failed validation aborts transaction
-- committed dataset version cannot be mutated
-
-### Phase 2 — Transform vertical slice
-
-Deliverables:
-
-- SQL transform runner with DuckDB
-- transform definition registry
-- transform run lifecycle
-- input/output version binding
-- output staging + manifest commit
-- health checks: row count, primary key uniqueness, not-null
-- lineage edges
-- scheduled runs via Temporal
-- Python transform SDK prototype only after SQL path is stable
-
-Exit criteria:
-
-- raw datasets → clean dataset
-- lineage graph visible
-- health check blocks bad output
-- failed transform leaves no committed output version
-
-### Phase 3 — Ontology/Object vertical slice
-
-Deliverables:
-
-- ontology YAML import/validate/activate
-- object type/property/link definitions
-- activation validation
-- dataset backing mapping
-- object store schema
-- Funnel-lite snapshot indexer
-- index_runs table
-- object query API
-- simple link traversal
-- object explorer UI
-
-Exit criteria:
-
-- clean dataset rows become objects
-- object properties queryable
-- links traversable
-- reindex run status visible
-
-### Phase 4 — Action vertical slice
-
-Deliverables:
-
-- action type DSL
-- safe expression evaluator for preconditions
-- action apply API
-- validation/preconditions/permissions
-- expectedObjectVersion optimistic concurrency
-- object edit transaction
-- action log
-- outbox event
-- side effect webhook prototype
-- Object Explorer action form
-
-Exit criteria:
-
-- user action changes object state
-- concurrent stale action returns 409 conflict
-- action log visible
-- idempotent retry returns existing action_run
-- outbox event is retryable
-
-### Phase 5 — Materialization and closed loop
-
-Deliverables:
-
-- object_snapshot materialization
-- action_log materialization
-- materialization cursor/watermark contract
-- downstream transform trigger
-- closed-loop demo
-- replay CLI minimum
-
-Exit criteria:
-
-- action result appears as dataset
-- downstream transform consumes action_log
-- downstream object state changes
-- object_snapshot/action_log share a clear source cursor
-
-### Phase 6 — Streaming / CDC
-
-Deliverables:
-
-- Redpanda stream ingest
-- Debezium PostgreSQL CDC connector
-- stream archive writer
-- CDC object indexing
-- stream checkpoint/cursor
-- Kafka publisher adapter for outbox
-- DLQ/replay
-
-Exit criteria:
-
-- DB row update flows to Kafka
-- object state updates without batch rebuild
-- delete events mark object deleted
-
-### Phase 7 — Scale hardening
-
-Deliverables:
-
-- Iceberg table support
-- Spark runner adapter
-- OpenSearch index adapter
-- K8s Helm chart
-- worker autoscaling
-- partitioned object/action/audit tables
-- reindex shadow swap
-- backup/restore docs
-
-Exit criteria:
-
-- 10M+ object test
-- reindex does not block reads
-- action latency p95 target met
+| 범위 | 현재 상태 | 남은 것 |
+|---|---|---|
+| Scaffold / API / Web / CLI / Worker skeleton | 완료. 모노레포, FastAPI, Web, CLI, worker entrypoint, shared config/logging/error boundary가 있다. | production packaging polish |
+| Dataset transaction vertical slice | 완료. CSV/local snapshot, immutable dataset version, staging/manifest commit, schema/health guard, preview, sync run tracking이 있다. | PostgreSQL snapshot connector production implementation, MinIO/S3 production adapter hardening |
+| Transform vertical slice | 완료. DuckDB SQL transform, input/output version binding, lineage, health gate, failed-run cleanup이 있다. | executable Python runner, sandboxed SDK IO, Temporal scheduling |
+| Ontology / Object vertical slice | 완료. YAML import/validate/activate, object/link/action definitions, object indexing, query, links, object explorer, shadow reindex proof가 있다. | very large object-type serving optimization |
+| Action vertical slice | 완료. `ApproveOrder`, safeExpression subset, permission/precondition, expectedObjectVersion, idempotency, action log, outbox, audit, UI action form이 있다. | real external ERP/webhook writeback and compensation worker |
+| Materialization / closed loop | 완료. `object_snapshot`, `action_log`, watermark/source version proof, downstream transform, lineage/audit/operations tracing이 있다. | additional materialization types and external export |
+| Streaming / CDC post-MVP proof | 부분 완료. REST/Webhook, Kafka-compatible stream archive, live broker proof, Debezium archive/live topic, CDC object indexing proof가 있다. | continuously running workers, rebalance/commit-unknown failure injection, production deployment packaging |
+| Search post-MVP proof | 부분 완료. Elasticsearch-compatible adapter/projection/rebuild/orphan drift proof가 있다. | managed live Elasticsearch cluster deployment |
+| Scale hardening | 일부 proof. active index pointer, shadow swap, PostgreSQL contract coverage, RLS contract proof가 있다. | Iceberg, Spark, Kubernetes/Helm, backup/restore production evidence |
 
 ## 22. Performance targets
 
@@ -3122,12 +2984,11 @@ flite materialize run order_current_dataset
 
 ### 24.2 Integration tests
 
-Testcontainers로 다음을 띄운다.
+Focused Testcontainers proof에서 다음을 띄운다.
 
 - Postgres
-- MinIO
-- Redpanda
-- Temporal test server
+- Kafka-compatible broker
+- Debezium Connect/PostgreSQL CDC path
 
 테스트:
 
@@ -3163,14 +3024,14 @@ Playwright:
 
 아래 기준은 권장값이 아니라 release gate다. 비개발자 관점으로 말하면, “테스트를 어느 정도 했다”가 아니라 “출시해도 추적과 복구가 가능한 수준까지 검증했다”는 뜻이다.
 
-- [ ] Python 백엔드 line coverage는 95% 이상이다.
-- [ ] Python 백엔드 branch coverage는 95% 이상이다.
-- [ ] Python 백엔드 public function/method coverage는 95% 이상이다.
-- [ ] domain/application/infrastructure/API/worker/CLI 영역별 커버리지가 평균 수치로 가려지지 않는다.
-- [ ] 필수 integration test는 100% 실행되고 100% 통과한다.
-- [ ] 필수 smoke test는 100% 실행되고 100% 통과한다.
-- [ ] skipped/flaky/xfail 테스트는 release gate 통과 근거로 쓰지 않는다.
-- reindex result hash comparison
+- [x] Python 백엔드 line coverage는 95% 이상이다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] Python 백엔드 branch coverage는 95% 이상이다. ([quality gate roadmap G6/G8](./docs/quality-gate-roadmap.md#tier-g8--layer-coverage-floor--완료-2026-06-11-g8))
+- [x] Python 백엔드 public function/method coverage는 95% 이상이다. ([MVP Core Coverage](./docs/sprint-evidence-ledger.md#mvp-core-coverage))
+- [x] domain/application/infrastructure/API/worker/CLI 영역별 커버리지가 평균 수치로 가려지지 않는다. ([Tier G8](./docs/quality-gate-roadmap.md#tier-g8--layer-coverage-floor--완료-2026-06-11-g8))
+- [x] 필수 integration test는 100% 실행되고 100% 통과한다. ([MVP Core Integration/Smoke](./docs/sprint-evidence-ledger.md#mvp-core-integration-smoke))
+- [x] 필수 smoke test는 100% 실행되고 100% 통과한다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] skipped/flaky/xfail 테스트는 release gate 통과 근거로 쓰지 않는다. ([flaky detector evidence](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] reindex result hash comparison은 shadow reindex/count-hash validation proof로 검증한다. ([VERIFY-SHADOW-REINDEX](./docs/sprint-evidence-ledger.md#verify-shadow-reindex))
 
 ---
 
@@ -3181,7 +3042,7 @@ Playwright:
 완화:
 
 - v1 scope guardrail을 문서에 고정
-- Kafka/CDC/OpenSearch/Spark/REST/Webhook은 Phase 6/7 또는 v1.5로 분리
+- Kafka/CDC/Elasticsearch/REST/Webhook은 MVP core 밖 post-MVP proof로 기록하고, Spark/Iceberg/Kubernetes는 future scope로 분리
 - 각 sprint는 하나의 수직 slice exit criteria로 종료
 - demo에 필요 없는 connector/visual builder 개발 금지
 
@@ -3196,14 +3057,14 @@ Playwright:
 - Functions on Objects arbitrary execution 제외
 - activation validation을 강제
 
-### 25.3 Object Store generic JSONB 성능 리스크
+### 25.3 Object Store generic JSON/JSONB 성능 리스크
 
 완화:
 
 - index profile 도입
 - generated column promotion
 - object type별 physical table 승격
-- OpenSearch adapter
+- Elasticsearch-compatible projection proof
 - v1 query contract와 scale-mode performance target을 분리
 
 ### 25.4 External writeback consistency 리스크
@@ -3239,7 +3100,7 @@ Playwright:
 
 완화:
 
-- v1은 단순 DAG + Temporal
+- 현재 MVP core는 local/direct workflow boundary를 사용하고, Temporal execution은 future scope로 둔다.
 - DuckDB-first runner로 commit/lineage/check contract 고정
 - 복잡한 asset orchestration은 Dagster integration optional
 - transform SDK interface는 외부 orchestrator로도 호출 가능하게 설계
@@ -3264,21 +3125,21 @@ Playwright:
 
 ### 작업 목록
 
-- [ ] Monorepo scaffold
-- [ ] FastAPI API skeleton
-- [ ] Postgres migrations
-- [ ] Tables: datasets, dataset_schemas, dataset_transactions, dataset_versions, dataset_files
-- [ ] MinIO storage adapter
-- [ ] Dataset transaction state machine
-- [ ] CSV upload endpoint
-- [ ] staging path writer
-- [ ] schema inference
-- [ ] commit manifest writer
-- [ ] health checks: row count, primary key uniqueness optional
-- [ ] dataset preview endpoint with DuckDB
-- [ ] minimal dataset list/detail UI
-- [ ] audit write for dataset transaction
-- [ ] outbox event: dataset.version.committed
+- [x] Monorepo scaffold. ([S01-A1](./docs/sprint-evidence-ledger.md#s01-a1))
+- [x] FastAPI API skeleton. ([S01-A2](./docs/sprint-evidence-ledger.md#s01-a2))
+- [x] SQLAlchemy schema bootstrap과 schema revision guard. Alembic/Postgres migration history는 future/deferred다. ([VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static))
+- [x] Tables: datasets, dataset_schemas, dataset_transactions, dataset_versions, dataset_files. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
+- [x] Local filesystem storage adapter와 fake storage swap proof. MinIO/S3 production adapter hardening은 future scope다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] Dataset transaction state machine. ([VERIFY-FAILED-MUTATION-STATE](./docs/sprint-evidence-ledger.md#verify-failed-mutation-state))
+- [x] CSV upload endpoint/path. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
+- [x] staging path writer. ([VERIFY-DATASET-STORAGE-SPLIT-BRAIN](./docs/sprint-evidence-ledger.md#verify-dataset-storage-split-brain))
+- [x] schema inference. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
+- [x] commit manifest writer. ([VERIFY-DATASET-STORAGE-SPLIT-BRAIN](./docs/sprint-evidence-ledger.md#verify-dataset-storage-split-brain))
+- [x] health checks: row count, primary key uniqueness optional. ([VERIFY-DATASET-HEALTH-CANDIDATE](./docs/sprint-evidence-ledger.md#verify-dataset-health-candidate))
+- [x] dataset preview endpoint with DuckDB. ([S22-A1](./docs/sprint-evidence-ledger.md#s22-a1))
+- [x] minimal dataset list/detail UI. ([S22-A1](./docs/sprint-evidence-ledger.md#s22-a1))
+- [x] audit write for dataset transaction. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] outbox event: dataset.version.committed. ([G18 outbox consistency](./docs/quality-gate-roadmap.md))
 
 ### 첫 데모
 
@@ -3293,7 +3154,7 @@ flite dataset inspect raw.erp_orders --version latest
 
 ### 다음 구현 묶음 예고
 
-다음 묶음에서는 [Transform Engine 설계](#7-transform-engine-설계)에 따라 DuckDB SQL transform을 붙인다.
+다음 묶음은 이미 MVP core에 포함되어 완료되었다. 현재 DuckDB SQL transform, lineage, materialization, downstream transform까지 폐루프 증거가 있다.
 
 ```bash
 flite transform run clean_orders
@@ -3303,18 +3164,18 @@ flite lineage dataset clean.orders
 
 ## 27. 구현 전 P0 체크리스트
 
-코딩 시작 전 아래 항목은 문서와 migration 초안에 반영되어 있어야 한다.
+이 체크리스트는 구현 전 P0였고, 2026-06-16 현재는 아래 상태로 동기화한다.
 
-- [ ] v1 필수 connector가 CSV upload, PostgreSQL snapshot으로 제한되어 있다.
-- [ ] `COMMITTED` dataset version immutability가 DB 제약과 repository method에서 강제된다.
-- [ ] staging → manifest commit protocol이 sync/transform/materialization에 공통 적용된다.
-- [ ] ontology activation validation checklist가 구현 가능한 validator 단위로 쪼개져 있다.
-- [ ] Action API request schema에 `expectedObjectVersion`이 포함되어 있다.
-- [ ] `action_runs` idempotency unique key가 actor 또는 target scope를 포함한다.
-- [ ] `index_runs` 테이블과 reindex/replay CLI skeleton이 있다.
-- [ ] materialization run이 `source_cursor`와 `object_store_watermark`를 기록한다.
-- [ ] security v1 boundary가 tenant/RBAC/property masking/audit-all-writes로 제한되어 있다.
-- [ ] Operations UI 또는 CLI가 failed sync/transform/index/action/materialization을 볼 수 있다.
+- [x] v1 MVP core 필수 connector는 CSV/local snapshot path로 제한하고, PostgreSQL-backed repository proof는 테스트 증거로 분리한다. PostgreSQL snapshot production connector는 future/deferred다.
+- [x] `COMMITTED` dataset version immutability가 repository method와 release gate에서 강제된다. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
+- [x] staging → manifest commit protocol이 sync/transform/materialization에 공통 적용된다. ([VERIFY-DATASET-STORAGE-SPLIT-BRAIN](./docs/sprint-evidence-ledger.md#verify-dataset-storage-split-brain), [VERIFY-MATERIALIZATION-COMMIT-FAILURE](./docs/sprint-evidence-ledger.md#verify-materialization-commit-failure))
+- [x] ontology activation validation checklist가 validator 단위로 구현되어 있다. ([MVP-ONTOLOGY](./docs/sprint-evidence-ledger.md#mvp-core-ontology))
+- [x] Action API request schema에 `expectedObjectVersion`이 포함되어 있다. ([S25-A3](./docs/sprint-evidence-ledger.md#s25-a3))
+- [x] `action_runs` idempotency key/request fingerprint replay/conflict guard가 있다. ([VERIFY-ACTION-IDEMPOTENCY-FINGERPRINT](./docs/sprint-evidence-ledger.md#verify-action-idempotency-fingerprint))
+- [x] `index_runs` 테이블과 reindex/replay CLI/API/Web path가 있다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5))
+- [x] materialization run이 source cursor와 object store watermark를 기록한다. ([VERIFY-MATERIALIZATION-WATERMARKS](./docs/sprint-evidence-ledger.md#verify-materialization-watermarks))
+- [x] security v1 boundary가 tenant/RBAC/property masking/audit-all-writes로 제한되어 있다. ([Security commit points](./docs/sprint-evidence-ledger.md#security-commit-points))
+- [x] Operations UI/API/CLI가 failed sync/transform/index/action/materialization 계열 run을 추적하고, current MVP 실패 경로 replay/retry proof를 제공한다. ([MVP-OPERATIONS](./docs/sprint-evidence-ledger.md#mvp-core-operations-replay))
 
 ---
 
@@ -3324,8 +3185,8 @@ flite lineage dataset clean.orders
 
 | 항목 | 변경 내용 |
 |---|---|
-| v1 범위 | Kafka/CDC/OpenSearch/Spark/복잡 보안을 제외하고 CSV/PostgreSQL snapshot → DuckDB transform → Ontology/Object → Action → Materialization 폐루프로 축소 |
-| 스택 | Python 3.12 + FastAPI + Pydantic v2 + SQLAlchemy/Alembic, DuckDB canonical, PostgreSQL outbox first로 확정 |
+| v1 범위 | Kafka/CDC/Elasticsearch/Spark/복잡 보안을 MVP core 완료 조건에서 제외하고 CSV/local snapshot 또는 PostgreSQL-backed repository proof → DuckDB transform → Ontology/Object → Action → Materialization 폐루프로 축소 |
+| 스택 | Python 3.12 + FastAPI + Pydantic v2 + SQLAlchemy schema revision guard, DuckDB canonical, SQLAlchemy outbox first로 확정. Alembic migration history와 production PostgreSQL outbox 운영은 future scope |
 | Architecture | Control/Data/Event plane 분리, module dependency rule 추가 |
 | Dataset | immutable version, staging + manifest commit protocol, schema compatibility, dev→main promotion 추가 |
 | Transform | SQL/DuckDB-first, output commit protocol, append-only incremental constraint 추가 |
@@ -3374,18 +3235,19 @@ flite lineage dataset clean.orders
 - Sprint 15~23: Ontology, Object Store, Object Query, Outbox로 운영 객체 조회 기반을 만든다.
 - Sprint 24~32: Action Runtime, side effect, materialization으로 운영 변경이 다시 dataset으로 돌아오는 폐루프를 완성한다.
 - Sprint 33~36: Operations, Security, SDK, E2E release gate로 v1 MVP를 검증한다.
-- Sprint 37~45: REST/Webhook, Kafka/CDC, OpenSearch, Iceberg, Spark, Kubernetes는 MVP 이후 확장으로 둔다.
+- Sprint 37~42: REST/Webhook, Kafka-compatible stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다.
+- Sprint 43~45: Iceberg, Spark, Kubernetes/backup-restore 운영 패키지는 아직 future scope로 둔다.
 - 모든 Python 백엔드 스프린트는 Clean Code, SRP, 타입 검사, 테스트 기준을 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)에 맞춘다.
 - 모든 Python 백엔드 스프린트는 [안티패턴 방지와 강제 대응 원칙](./foundry_lite_python_engineering_guidelines_ko.md#18-안티패턴-방지와-강제-대응-원칙)을 통과해야 한다.
 - 모든 Python 백엔드 스프린트는 line/branch/function coverage 95% 이상과 필수 integration/smoke 100% 통과 기준을 만족해야 한다.
 
 ### MVP Core Completion Gate
 
-Sprint 00~36과 Sprint 02A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 상세 acceptance는 [스프린트 실행 계획의 MVP Core Completion Gate](./foundry_lite_sprint_breakdown_ko.md#mvp-core-completion-gate)를 원본으로 보고, 항목별 증거는 [Sprint Evidence Ledger의 MVP Core Completion Gate Evidence Map](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map)에 둔다. real ERP writeback, production backup/restore, Kafka/CDC/Iceberg 같은 확장은 Sprint 37 이후 또는 future backlog로 남긴다.
+Sprint 00~36, Sprint 02A, Sprint 36A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 상세 acceptance는 [스프린트 실행 계획의 MVP Core Completion Gate](./foundry_lite_sprint_breakdown_ko.md#mvp-core-completion-gate)를 원본으로 보고, 항목별 증거는 [Sprint Evidence Ledger의 MVP Core Completion Gate Evidence Map](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map)에 둔다. real ERP writeback, production backup/restore, Iceberg/Spark/Kubernetes 같은 확장은 future backlog로 남긴다. Sprint 37~42는 MVP 이후 확장 proof로 구현 증거가 있지만, MVP core 완료 조건을 넓히지는 않는다.
 
-- [x] CSV 또는 PostgreSQL snapshot으로 raw dataset을 commit한다.
+- [x] CSV/local snapshot 또는 PostgreSQL-backed repository closed-loop path로 raw dataset을 commit한다.
 - [x] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다.
-- [x] SQL/DuckDB 또는 Python transform으로 clean dataset을 만든다.
+- [x] SQL/DuckDB transform으로 clean dataset을 만든다. Python transform execution은 fail-closed future scope다.
 - [x] Ontology draft를 validate/activate한다.
 - [x] clean dataset rows를 Order/Customer objects로 index한다.
 - [x] Object Explorer에서 Order를 조회하고 Order -> Customer link를 본다.

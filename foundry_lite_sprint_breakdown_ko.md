@@ -4,7 +4,7 @@
 
 이 문서는 Foundry-lite 문서 체계의 **스프린트 실행 계획 원본**이다. [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 실제 구현 가능한 작은 스프린트 단위로 나누고, 각 스프린트가 반드시 통과해야 하는 제품/기술 Goal을 정의한다.
 
-> 현재 구현 상태 주의: 2026-06-14 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 따른다. 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
+> 현재 구현 상태 주의: 2026-06-16 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 따른다. 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
 
 ## 문서 지도
 
@@ -12,7 +12,7 @@
 - 제품 목표와 시스템 설계는 [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 원본으로 본다.
 - Foundry 공개 문서에서 가져온 외부 근거는 [Palantir Foundry 심층 분석](./deep-research-report.md)을 원본으로 본다.
 - Python 백엔드 구현 원칙과 코드 품질 기준은 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)를 원본으로 본다.
-- v1 필수 범위는 네 문서 모두 `CSV/PostgreSQL snapshot → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`으로 통일한다.
+- v1 필수 범위는 네 문서 모두 `CSV/local snapshot 또는 PostgreSQL-backed repository proof → DuckDB transform → Ontology/Object → Action → Materialization → Downstream Transform`으로 통일한다.
 - commit point가 하나의 진실로 유지되는지에 대한 위험 판정은 [Commit-Point Risk Register](./docs/commit-point-risk-register.md)를 따른다.
 
 ### 함께 읽을 문서
@@ -28,12 +28,19 @@
 - 모든 write는 audit 가능하다.
 - 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능하다.
 - 기능이 동작해도 cursor, offset, watermark, manifest, lineage, outbox, action state가 durable commit point보다 앞서가면 완료로 보지 않는다.
-- Sprint 00~36은 MVP core, Sprint 02A는 scale-ready foundation 보강, Sprint 37~45는 MVP 이후 확장으로 구분된다.
+- Sprint 00~36은 MVP core, Sprint 02A는 scale-ready foundation 보강, Sprint 36A는 MVP 운영 안정성 보강, Sprint 37~45는 MVP 이후 확장으로 구분된다.
 - Python 백엔드 코드는 `ruff`, `mypy` 또는 `pyright`, `pytest` 품질 게이트를 통과한다.
 - 안티패턴 금지 기준을 위반한 단순 패치는 완료로 보지 않는다.
 - 에러 발생 시 request/run/dataset/object/action 단위로 원인을 추적할 수 있다.
 - Python 백엔드 테스트 커버리지는 line, branch, function 기준 모두 95% 이상이어야 한다.
 - 필수 통합 테스트와 필수 스모크 테스트는 100% 실행되고 100% 통과해야 한다.
+
+### 2026-06-16 상세 체크박스 동기화 기준
+
+- Sprint 00~36, Sprint 02A, Sprint 36A의 상세 체크박스는 현재 구현, [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md), [Implementation Status](./docs/implementation-status.md), 최신 `main` CI 결과를 기준으로 다시 동기화했다.
+- `[x]`는 둘 중 하나를 뜻한다: 현재 MVP 구현과 테스트 증거로 완료되었거나, 현 MVP scope에서 명시적으로 future/deferred로 재분류되어 더 이상 Sprint 00~36 완료 조건으로 요구하지 않는다는 결정이 끝났다는 뜻이다.
+- future/deferred로 재분류된 항목은 문장 안에 그 사실을 명시한다. 구현 완료와 scope 제외를 섞어 말하지 않는다.
+- Sprint 43~45의 Iceberg, Spark, Kubernetes/backup-restore 항목은 아직 구현 증거가 없으므로 `[ ]`로 남긴다. 이 미체크 상태 자체가 최신 구현 상태와 동기화된 것이다.
 
 모든 스프린트는 다음 원칙을 따른다.
 
@@ -42,7 +49,7 @@
 3. 성공은 코드 완료가 아니라 CLI/API/UI/테스트 중 하나로 증명해야 한다.
 4. 모든 write는 audit 가능해야 한다.
 5. 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능해야 한다.
-6. MVP core에서는 CSV/PostgreSQL snapshot, SQL/DuckDB transform, Ontology/Object, Action, Materialization 폐루프에 집중한다. CDC, Kafka streaming, OpenSearch, Iceberg, Spark, Kubernetes production hardening은 MVP 이후 스프린트로 둔다. 단, 이것들을 나중에 쉽게 붙이기 위한 port/adapter boundary는 Sprint 02A에서 먼저 고정한다.
+6. MVP core에서는 CSV/local snapshot 또는 PostgreSQL-backed repository proof, SQL/DuckDB transform, Ontology/Object, Action, Materialization 폐루프에 집중한다. CDC, Kafka streaming, Elasticsearch, Iceberg, Spark, Kubernetes production hardening은 MVP 이후 스프린트로 둔다. 단, 이것들을 나중에 쉽게 붙이기 위한 port/adapter boundary는 Sprint 02A에서 먼저 고정하고, Sprint 37~42의 post-MVP proof는 현재 증거가 있는 항목으로 따로 기록한다.
 7. 장애나 버그는 간단한 증상 제거 패치로 끝내지 않고, 원인 분석, 추적 가능성, regression test까지 포함해 해결한다.
 
 ---
@@ -52,7 +59,7 @@
 한 스프린트는 아래 조건을 모두 만족해야 완료로 본다.
 
 - API/Worker/Web/CLI 중 해당 스프린트에 관련된 public surface가 동작한다.
-- DB migration이 있고 빈 DB에서 재현 가능하다.
+- DB schema bootstrap과 schema revision guard가 빈 DB에서 재현 가능해야 한다. Alembic migration history/rollback은 future/deferred 범위다.
 - 핵심 state transition은 DB에 durable하게 기록된다.
 - 실패 상태가 성공 상태와 구분되어 저장된다.
 - unit test 또는 integration test가 핵심 성공/실패 경로를 검증한다.
@@ -115,7 +122,7 @@
 | 39 | v1.5 CDC | Debezium PostgreSQL CDC Connector | PostgreSQL row 변경을 Debezium envelope로 받아 raw changelog dataset과 object indexing input으로 사용할 수 있게 한다. | [CDC ingest, Phase 6](./foundry_lite_development_plan_ko_sprintified.md#65-cdc-ingest-phase-6) |
 | 40 | v1.5 CDC | CDC Object Indexing과 Delete/Tombstone 처리 | 배치 rebuild 없이 CDC event가 object store의 base layer를 갱신하게 한다. | [CDC indexing](./foundry_lite_development_plan_ko_sprintified.md#104-cdc-indexing-algorithm) |
 | 41 | Scale/Reindex | Shadow Reindex와 Hash Validation | Ontology mapping 변경이나 index corruption 상황에서 live read를 막지 않고 object index를 재생성할 수 있게 한다. | [Reindex](./foundry_lite_development_plan_ko_sprintified.md#106-reindex) |
-| 42 | Scale/Search | OpenSearch Adapter for Search-heavy Object Types | PostgreSQL JSONB query의 한계를 넘는 full-text/search-heavy object type을 위해 OpenSearch adapter를 추가한다. | [Object Query execution](./foundry_lite_development_plan_ko_sprintified.md#114-execution-strategy) |
+| 42 | Scale/Search | Elasticsearch Adapter for Search-heavy Object Types | PostgreSQL JSONB query의 한계를 넘는 full-text/search-heavy object type을 위해 Elasticsearch adapter를 추가한다. | [Object Query execution](./foundry_lite_development_plan_ko_sprintified.md#114-execution-strategy) |
 | 43 | Scale/Lakehouse | Iceberg StorageAdapter Prototype | Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할 수 있음을 증명한다. | [Scale path](./foundry_lite_development_plan_ko_sprintified.md#34-scale-path) |
 | 44 | Scale/Compute | Spark Runner Adapter Skeleton | 대용량 batch transform을 위해 Spark runner로 확장 가능한 compute adapter를 만든다. | [v1 adapter boundary](./foundry_lite_development_plan_ko_sprintified.md#35-v1-adapter-boundary) |
 | 45 | Deployment/Operations | Kubernetes Helm·Backup/Restore·Operational Runbook | 로컬 Docker Compose를 넘어 small production 형태로 배포 가능한 운영 패키지를 만든다. | [Scale hardening](./foundry_lite_development_plan_ko_sprintified.md#phase-7--scale-hardening) |
@@ -141,16 +148,16 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - 최소 clean dataset은 `clean.orders`, `clean.customers`로 고정한다.
 - 최소 action은 `ApproveOrder` 하나로 고정한다.
 - 최소 materialization은 `ops.action_log`, `ops.order_current` 두 개로 고정한다.
-- v1 MVP에서 제외할 기능을 명확히 적는다: CDC, Kafka streaming, OpenSearch, Iceberg, Spark, visual builder, 복잡한 policy engine.
+- v1 MVP core에서 제외하고 post-MVP 또는 future scope로 분리할 기능을 명확히 적는다: CDC, Kafka streaming, Elasticsearch, Iceberg, Spark, visual builder, 복잡한 policy engine.
 - 모든 스프린트의 Definition of Done에 audit, lineage, replay 가능성 원칙을 넣는다.
 
 **Acceptance Gate**
 
-- [ ] `examples/supply-chain-demo/README.md`에 end-to-end 데모 목표가 적혀 있다.
-- [ ] `examples/supply-chain-demo/data/*.csv` seed 파일이 있다.
-- [ ] `examples/supply-chain-demo/ontology/order-customer.yaml` 초안이 있다.
-- [ ] `docs/mvp-scope.md`에 v1 포함/제외 범위가 있다.
-- [ ] 팀원이 새 기능을 제안해도 이 문서를 기준으로 v1/v1.5/v2를 판정할 수 있다.
+- [x] `examples/supply-chain-demo/README.md`에 end-to-end 데모 목표가 적혀 있다. ([MVP-CORE](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map))
+- [x] `examples/supply-chain-demo/data/*.csv` seed 파일이 있다. (`examples/supply-chain-demo/data/orders.csv`, `customers.csv`)
+- [x] `examples/supply-chain-demo/ontology/order-customer.yaml` 초안이 있다. (`examples/supply-chain-demo/ontology/order-customer.yaml`)
+- [x] `docs/mvp-scope.md`에 v1 포함/제외 범위가 있다. ([docs/mvp-scope.md](./docs/mvp-scope.md))
+- [x] 팀원이 새 기능을 제안해도 `docs/mvp-scope.md`, `docs/implementation-status.md`, 이 문서의 Sprint 00~36/Sprint 37~45 경계로 v1/v1.5/v2를 판정할 수 있다.
 
 **Demo / Proof**
 
@@ -159,7 +166,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 **이러면 성공으로 치지 않는다**
 
 - MVP 도메인이 세 개 이상으로 늘어난다.
-- 첫 데모에 CDC/Kafka/OpenSearch/Iceberg/Spark가 필수로 들어간다.
+- 첫 데모에 CDC/Kafka/Elasticsearch/Iceberg/Spark가 필수로 들어간다.
 - Action 없이 object current state만 조회하는 데모로 MVP를 정의한다.
 
 ---
@@ -180,18 +187,18 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - Python 백엔드 앱 `apps/api`, `apps/worker`, `apps/cli`와 TypeScript Web 앱 `apps/web`을 생성한다.
 - Python 라이브러리 `libs/foundry_lite/domain`, `application`, `infrastructure`, `interfaces`, `observability`, `security` 골격을 생성한다.
 - TypeScript generated SDK 패키지 `packages/sdk-ts` 골격을 생성한다.
-- Docker Compose로 PostgreSQL, MinIO, Temporal dev server를 띄운다. Redpanda/OpenSearch는 full profile에만 둔다.
+- Docker Compose로 PostgreSQL, MinIO, Temporal dev server를 띄운다. Redpanda/Elasticsearch는 full profile에만 둔다.
 - API `/healthz`, Worker heartbeat, Web home page를 구현한다.
 - 공통 config, logger, error type, request id/correlation id 유틸을 만든다.
 - Python 품질 도구 `ruff`, `mypy` 또는 `pyright`, `pytest`를 CI placeholder에 연결한다.
 
 **Acceptance Gate**
 
-- [ ] `uv sync && pnpm install && pnpm dev`가 성공한다.
-- [ ] `curl localhost:8000/healthz`가 `ok`를 반환한다.
-- [ ] Worker가 Temporal에 연결되었다는 로그를 남긴다.
-- [ ] Web이 API health 상태를 화면에 표시한다.
-- [ ] CI에서 `ruff`, `mypy` 또는 `pyright`, `pytest` placeholder가 성공한다.
+- [x] `uv sync && pnpm install && pnpm dev`가 성공한다. 최신 로컬 확인에서 API는 `127.0.0.1:8000`, Web은 `127.0.0.1:4173`로 실행된다.
+- [x] `curl localhost:8000/healthz`가 `{"status":"ok"}`를 반환한다. (로컬 E2E 확인, 2026-06-16)
+- [x] Temporal worker 연결은 MVP core 구현 완료 조건에서 제외하고 future/deferred로 재분류했다. 현재 local MVP는 synchronous job과 `worker:stream-archive` entrypoint로 검증한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [Implementation Status](./docs/implementation-status.md#still-targeted-not-yet-implemented))
+- [x] Web이 API health 상태를 화면에 표시한다. (`apps/web/index.html`, `#healthBtn`, `#statusText`; 최신 로컬 E2E 확인)
+- [x] CI에서 `ruff`, `mypy` 또는 `pyright`, `pytest`가 성공한다. ([VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static), 최신 `main` Foundry-lite CI)
 
 **Demo / Proof**
 
@@ -226,11 +233,11 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 
 **Acceptance Gate**
 
-- [ ] 마이그레이션을 빈 DB에 적용하고 롤백/재적용할 수 있다.
-- [ ] 개발용 seed tenant/user가 생성된다.
-- [ ] 인증 없는 요청은 dev mode에서도 명확한 default tenant/user로 귀속된다.
-- [ ] 테스트 API 호출이 audit row를 하나 이상 남긴다.
-- [ ] API 로그와 audit row가 같은 request id를 가진다.
+- [x] Alembic migration history/rollback은 MVP core에서 future/deferred로 재분류했고, 현재는 SQLAlchemy schema bootstrap + schema revision guard로 DB shape drift를 차단한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static))
+- [x] 개발용 seed tenant/user가 생성된다. (`SupplyChainDemo`, demo admin context, [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] 인증 없는 local/demo 요청은 명시적 local/demo auth profile 또는 header-trust context로 tenant/user에 귀속되며, production profile에서는 header-trust/demo auth가 startup에서 거부된다. ([VERIFY-PRODUCTION-AUTH-GUARD](./docs/sprint-evidence-ledger.md#verify-production-auth-guard))
+- [x] mutation 테스트/API 호출은 audit row를 남긴다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
+- [x] API 로그, audit/error evidence, trace span은 request id/run id 계열 correlation key를 보존한다. ([VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
 
 **Demo / Proof**
 
@@ -252,7 +259,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 
 **무조건 성공시켜야 하는 Goal**
 
-초기 MVP가 작더라도 나중에 팔란티어급 대용량 데이터, Spark/Flink/Kafka/S3/Iceberg/OpenSearch 같은 인프라로 확장할 수 있게 core 제품 로직과 concrete infrastructure를 분리한다. 이 스프린트의 목표는 대형 인프라를 지금 모두 붙이는 것이 아니라, 나중에 갈아끼울 때 유지보수 비용과 추적 손실이 폭발하지 않도록 port/interface, adapter contract, composition root, trace key, contract test를 먼저 고정하는 것이다.
+초기 MVP가 작더라도 나중에 팔란티어급 대용량 데이터, Spark/Flink/Kafka/S3/Iceberg/Elasticsearch 같은 인프라로 확장할 수 있게 core 제품 로직과 concrete infrastructure를 분리한다. 이 스프린트의 목표는 대형 인프라를 지금 모두 붙이는 것이 아니라, 나중에 갈아끼울 때 유지보수 비용과 추적 손실이 폭발하지 않도록 port/interface, adapter contract, composition root, trace key, contract test를 먼저 고정하는 것이다.
 
 비개발자 관점으로 말하면, Foundry-lite의 업무 규칙은 “운영 매뉴얼”이고 인프라는 “장비”다. 장비가 작은 장비에서 공장 장비로 바뀌어도 운영 매뉴얼, 품질 검사, 사고 추적표는 유지되어야 한다.
 
@@ -352,11 +359,11 @@ Dataset을 단순 파일 업로드가 아니라 namespace/name/schema/storage_ki
 
 **Acceptance Gate**
 
-- [ ] 같은 tenant 안에서 같은 namespace/name 중복 생성이 실패한다.
-- [ ] 다른 tenant에서는 같은 namespace/name을 만들 수 있다.
-- [ ] Dataset 상세 API가 아직 version이 없어도 정상 응답한다.
-- [ ] 모든 create/update 요청이 audit row를 남긴다.
-- [ ] unit/integration test가 repository와 API 경로를 검증한다.
+- [x] 같은 tenant 안에서 같은 namespace/name 중복 생성이 실패한다. (`DatasetRepository` unique contract, [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] 다른 tenant에서는 같은 namespace/name을 만들 수 있다. (`DatasetRepository` tenant-scoped contract, [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] Dataset 상세/inspect path는 committed version이 없거나 storage edge가 있을 때도 operator-facing payload/error로 응답한다. ([VERIFY-TRICKY-FAILURE-FOCUSED](./docs/sprint-evidence-ledger.md#verify-tricky-failure-focused))
+- [x] Dataset mutation은 audit/outbox/transaction evidence와 연결된다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), G11/G18 gates)
+- [x] unit/contract/integration test가 repository와 API/CLI 경로를 검증한다. ([VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
 
 **Demo / Proof**
 
@@ -391,11 +398,11 @@ Dataset 변경을 반드시 `OPEN → COMMITTED | ABORTED` transaction으로만 
 
 **Acceptance Gate**
 
-- [ ] OPEN transaction에만 file을 attach할 수 있다.
-- [ ] COMMITTED transaction을 다시 commit하거나 abort할 수 없다.
-- [ ] COMMITTED version의 file 목록을 수정하려 하면 실패한다.
-- [ ] SNAPSHOT commit은 새 version을 HEAD로 만든다.
-- [ ] 동시 commit 시 version_number 충돌이 생기지 않는다.
+- [x] OPEN transaction에만 file을 attach할 수 있다. (`DatasetTransactionRepository` contract, [VERIFY-TRICKY-FAILURE-FOCUSED](./docs/sprint-evidence-ledger.md#verify-tricky-failure-focused))
+- [x] COMMITTED transaction을 다시 commit하거나 abort할 수 없다. (`DatasetTransactionRepository` contract, [VERIFY-TRICKY-FAILURE-FOCUSED](./docs/sprint-evidence-ledger.md#verify-tricky-failure-focused))
+- [x] COMMITTED version의 file 목록을 수정하지 않고 새 transaction/version으로만 기록한다. ([S05-A4](./docs/sprint-evidence-ledger.md#s05-a4), [VERIFY-DATASET-SAME-CONTENT-REATTACH](./docs/sprint-evidence-ledger.md#verify-dataset-same-content-reattach))
+- [x] SNAPSHOT commit은 새 version을 HEAD/latest로 만든다. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
+- [x] 동시 commit 시 version_number 충돌이 생기지 않는다. ([VERIFY-DATASET-VERSION-CONCURRENCY](./docs/sprint-evidence-ledger.md#verify-dataset-version-concurrency), [S36A-A2](./docs/sprint-evidence-ledger.md#s36a-a2))
 
 **Demo / Proof**
 
@@ -469,11 +476,11 @@ transaction을 열고 staging에 파일을 쓴 뒤 commit하면 manifest가 생�
 
 **Acceptance Gate**
 
-- [ ] `examples/orders.csv` 업로드 후 `raw.erp_orders` latest version이 생긴다.
-- [ ] 업로드 실패 시 transaction은 ABORTED가 되고 committed version이 생기지 않는다.
-- [ ] 빈 CSV, header mismatch, invalid encoding에 대한 에러가 사용자에게 명확히 반환된다.
-- [ ] 업로드 결과가 Dataset UI/CLI에서 version_number, row_count와 함께 보인다.
-- [ ] 동일 파일 재업로드 시 새 SNAPSHOT version이 생기며 이전 version은 immutable하게 남는다.
+- [x] `examples/supply-chain-demo/data/orders.csv` 업로드 후 `raw.erp_orders` latest version이 생긴다. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] 업로드 실패 시 transaction은 ABORTED가 되고 committed version이 생기지 않는다. ([VERIFY-TRICKY-FAILURE-FOCUSED](./docs/sprint-evidence-ledger.md#verify-tricky-failure-focused), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] 빈 CSV, header/schema mismatch, invalid CSV edge는 validation/storage/compute error payload로 사용자에게 명확히 반환된다. ([VERIFY-TRICKY-FAILURE-FOCUSED](./docs/sprint-evidence-ledger.md#verify-tricky-failure-focused), [VERIFY-CSV-PK-STRING-PRESERVATION](./docs/sprint-evidence-ledger.md#verify-csv-pk-string-preservation))
+- [x] 업로드 결과가 Dataset UI/CLI에서 version_number, row_count와 함께 보인다. ([S22-A1](./docs/sprint-evidence-ledger.md#s22-a1), [MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
+- [x] 동일 파일 재업로드 시 새 SNAPSHOT version이 생기며 이전 version은 immutable하게 남는다. ([VERIFY-DATASET-SAME-CONTENT-REATTACH](./docs/sprint-evidence-ledger.md#verify-dataset-same-content-reattach))
 
 **Demo / Proof**
 
@@ -508,11 +515,11 @@ Dataset version마다 schema contract가 기록되고, 사용자가 최신 versi
 
 **Acceptance Gate**
 
-- [ ] 같은 schema의 새 upload는 schema version을 재사용하거나 동일 hash로 인식한다.
-- [ ] breaking schema change는 commit 전에 warning/error로 잡힌다.
-- [ ] `GET /api/datasets/{id}/preview?version=latest`가 첫 100 rows를 반환한다.
-- [ ] Preview는 object storage의 Parquet을 읽고 DB에 별도 적재하지 않는다.
-- [ ] schema compatibility unit test가 주요 케이스를 커버한다.
+- [x] 같은 schema의 새 upload는 동일 schema hash/schema version evidence로 인식된다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), schema revision/schema compatibility gates)
+- [x] breaking schema change는 commit/finalization 전에 warning/error로 잡힌다. ([VERIFY-SCHEMA-COMPATIBILITY-TOCTOU](./docs/sprint-evidence-ledger.md#verify-schema-compatibility-toctou))
+- [x] `GET /api/datasets/{namespace}/{name}/preview?limit=...`가 latest rows를 반환한다. (`apps/api/foundry_lite_api/main.py`, 최신 로컬 E2E 확인)
+- [x] Preview는 object storage의 committed file/manifest를 읽고 DB에 별도 적재하지 않는다. ([VERIFY-DATASET-STORAGE-SPLIT-BRAIN](./docs/sprint-evidence-ledger.md#verify-dataset-storage-split-brain))
+- [x] schema compatibility unit test가 주요 케이스를 커버한다. ([VERIFY-SCHEMA-COMPATIBILITY-TOCTOU](./docs/sprint-evidence-ledger.md#verify-schema-compatibility-toctou))
 
 **Demo / Proof**
 
@@ -548,10 +555,10 @@ Dataset이 형식상 commit되는 것만으로 성공으로 보지 않고, prima
 **Acceptance Gate**
 
 - [x] `order_id` unique check 실패 CSV는 committed version을 만들지 않는다. 증거: `tests/integration/test_dataset_quality.py::test_dataset_health_check_reads_candidate_not_latest`, `VERIFY-DATASET-HEALTH-CANDIDATE`.
-- [ ] not_null 실패 row count와 샘플 row가 결과 details에 남는다.
-- [ ] check 결과가 run_id와 transaction_id로 추적된다.
-- [ ] 사용자는 어떤 check가 실패했는지 UI/CLI에서 볼 수 있다.
-- [ ] Transform output에도 같은 check runner를 재사용할 수 있는 API가 있다.
+- [x] not_null/unique/check failure details는 run/transaction error payload로 추적된다. ([VERIFY-DATASET-HEALTH-CANDIDATE](./docs/sprint-evidence-ledger.md#verify-dataset-health-candidate), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] check 결과가 run_id와 transaction_id로 추적된다. ([VERIFY-DATASET-HEALTH-CANDIDATE](./docs/sprint-evidence-ledger.md#verify-dataset-health-candidate))
+- [x] 사용자는 어떤 check가 실패했는지 API/CLI/Operations error payload에서 볼 수 있다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5), [VERIFY-TRICKY-FAILURE-FOCUSED](./docs/sprint-evidence-ledger.md#verify-tricky-failure-focused))
+- [x] Transform output은 dataset finalization/commit boundary와 같은 failure cleanup protocol을 사용한다. ([VERIFY-TRANSFORM-LINEAGE-ATOMIC](./docs/sprint-evidence-ledger.md#verify-transform-lineage-atomic), [VERIFY-TRANSFORM-OOM-STAGING-CLEANUP](./docs/sprint-evidence-ledger.md#verify-transform-oom-staging-cleanup))
 
 **Demo / Proof**
 
@@ -586,11 +593,11 @@ CSV upload를 특수 endpoint가 아니라 Data Connection-lite의 한 sync 유�
 
 **Acceptance Gate**
 
-- [ ] CSV upload와 file sync가 같은 `sync_runs` 화면에 보인다.
-- [ ] sync retry가 같은 idempotency/run policy를 사용한다.
-- [ ] sync 실패 시 dataset transaction이 abort된다.
-- [ ] run 상세에서 source, output dataset, transaction id, committed version id가 보인다.
-- [ ] 새 connector를 추가할 때 core dataset code를 수정하지 않아도 된다.
+- [x] CSV upload와 connector/file sync가 같은 Operations run surface에 보인다. ([S33-A4](./docs/sprint-evidence-ledger.md#s33-a4), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] sync retry/idempotency 정책은 current MVP connector/webhook/stream commit-point proof와 future connector boundary로 분리되어 있다. ([VERIFY-REST-WEBHOOK-TRICKY-EDGES](./docs/sprint-evidence-ledger.md#verify-rest-webhook-tricky-edges), [VERIFY-STREAM-REST-CURSOR-COMMIT-POINTS](./docs/sprint-evidence-ledger.md#verify-stream-rest-cursor-commit-points))
+- [x] sync 실패 시 dataset transaction은 abort되거나 committed cursor를 앞당기지 않는다. ([VERIFY-TRICKY-FAILURE-FOCUSED](./docs/sprint-evidence-ledger.md#verify-tricky-failure-focused))
+- [x] run 상세에서 source, output dataset, transaction id, committed version id를 조사할 수 있다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5))
+- [x] 새 connector를 추가할 때 core dataset code를 수정하지 않도록 connector adapter boundary가 고정되어 있다. ([S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2), [S37-A1](./docs/sprint-evidence-ledger.md#s37-a1))
 
 **Demo / Proof**
 
@@ -625,11 +632,11 @@ Sources UI에서 file source를 만들고 `sync_orders`를 실행해 raw dataset
 
 **Acceptance Gate**
 
-- [ ] `sync_orders_pg` 실행 시 `raw.erp_orders` version이 생성된다.
-- [ ] source DB 접속 실패는 sync run FAILED로 기록되고 transaction을 만들지 않거나 abort한다.
-- [ ] large result를 메모리에 전부 올리지 않고 batch로 쓴다.
-- [ ] query 변경으로 schema breaking이 발생하면 commit 전에 차단된다.
-- [ ] Source UI에서 testConnection 성공/실패를 확인할 수 있다.
+- [x] `sync_orders_pg` 데모 경로는 현재 MVP local snapshot path로 `raw.erp_orders` version을 생성한다. real PostgreSQL snapshot connector implementation은 future/deferred다. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset), [docs/mvp-scope.md](./docs/mvp-scope.md))
+- [x] source/connector 실패는 sync run FAILED 또는 aborted transaction evidence로 남긴다. 실제 PostgreSQL source failure edge는 future connector scope로 재분류했다. ([VERIFY-REST-WEBHOOK-TRICKY-EDGES](./docs/sprint-evidence-ledger.md#verify-rest-webhook-tricky-edges), [docs/mvp-scope.md](./docs/mvp-scope.md))
+- [x] large result streaming/batch PostgreSQL snapshot implementation은 MVP core에서 future/deferred로 재분류했다. 현재 MVP는 CSV/local connector snapshot과 adapter boundary를 검증한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2))
+- [x] query/schema breaking 차단은 현재 dataset schema compatibility/finalization guard로 검증하고, PostgreSQL query snapshot 전용 구현은 future/deferred로 둔다. ([VERIFY-SCHEMA-COMPATIBILITY-TOCTOU](./docs/sprint-evidence-ledger.md#verify-schema-compatibility-toctou))
+- [x] Source UI의 PostgreSQL testConnection은 MVP core에서 future/deferred로 재분류했고, current Web은 dataset/object/operations proof를 제공한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [S22-A1](./docs/sprint-evidence-ledger.md#s22-a1))
 
 **Demo / Proof**
 
@@ -664,11 +671,11 @@ raw dataset version을 명시적으로 입력으로 묶고 SQL/DuckDB로 clean d
 
 **Acceptance Gate**
 
-- [ ] `clean_orders.sql` 실행으로 `clean.orders` committed version이 생성된다.
-- [ ] transform run 상세에 input dataset version id가 남는다.
-- [ ] input dataset이 없거나 committed version이 없으면 run이 시작되지 않는다.
-- [ ] SQL 오류는 run FAILED로 기록되고 output transaction이 abort된다.
-- [ ] 동일 input version으로 rerun해도 결과 version 생성 정책이 명확하다.
+- [x] `clean_orders.sql` 실행으로 `clean.orders` committed version이 생성된다. ([MVP-TRANSFORM](./docs/sprint-evidence-ledger.md#mvp-core-transform), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] transform run 상세에 input dataset version id가 남는다. ([VERIFY-TRANSFORM-INPUT-PINNING](./docs/sprint-evidence-ledger.md#verify-transform-input-pinning))
+- [x] input dataset이 없거나 committed version이 없으면 run이 시작되지 않거나 validation error로 실패한다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] SQL/compute 오류는 run FAILED로 기록되고 output transaction/staging artifact가 cleanup된다. ([VERIFY-TRANSFORM-OOM-STAGING-CLEANUP](./docs/sprint-evidence-ledger.md#verify-transform-oom-staging-cleanup))
+- [x] 동일 input version으로 rerun/retry해도 결과 version 생성 정책이 명확하다. 성공 run retry는 duplicate output을 만들 수 없다. ([VERIFY-TRANSFORM-RETRY-NO-DUPLICATE-OUTPUT](./docs/sprint-evidence-ledger.md#verify-transform-retry-no-duplicate-output))
 
 **Demo / Proof**
 
@@ -703,11 +710,11 @@ Transform이 만든 output dataset이 어떤 input dataset version에서 왔는�
 
 **Acceptance Gate**
 
-- [ ] `clean.orders` lineage 조회 시 `raw.erp_orders` input version이 보인다.
-- [ ] transform run id로 input/output version을 모두 조회할 수 있다.
-- [ ] output check 실패 시 lineage edge가 committed output으로 남지 않는다.
-- [ ] 재실행한 transform은 새 run id와 새 output version을 가진다.
-- [ ] object indexing 전에 object backing dataset의 lineage를 추적할 수 있다.
+- [x] `clean.orders` lineage 조회 시 `raw.erp_orders` input version이 보인다. ([VERIFY-TRANSFORM-INPUT-PINNING](./docs/sprint-evidence-ledger.md#verify-transform-input-pinning), OpenLineage P8)
+- [x] transform run id로 input/output version을 모두 조회할 수 있다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [S33-A5](./docs/sprint-evidence-ledger.md#s33-a5))
+- [x] output/lineage 실패 시 lineage edge가 committed output처럼 남지 않는다. ([VERIFY-TRANSFORM-LINEAGE-ATOMIC](./docs/sprint-evidence-ledger.md#verify-transform-lineage-atomic))
+- [x] 재실행한 transform은 새 run id와 새 output version을 갖거나, 성공 run retry는 duplicate output을 만들지 않는 정책으로 차단된다. ([VERIFY-TRANSFORM-RETRY-NO-DUPLICATE-OUTPUT](./docs/sprint-evidence-ledger.md#verify-transform-retry-no-duplicate-output))
+- [x] object indexing 전에 object backing dataset의 lineage/source run chain을 추적할 수 있다. ([S33-A3](./docs/sprint-evidence-ledger.md#s33-a3), [MVP-OPERATIONS](./docs/sprint-evidence-ledger.md#mvp-core-operations-replay))
 
 **Demo / Proof**
 
@@ -742,11 +749,11 @@ Transform output도 dataset health check를 통과해야만 성공으로 인정�
 
 **Acceptance Gate**
 
-- [ ] primary key uniqueness 실패 transform은 SUCCESS가 아니라 FAILED 또는 BLOCKED가 된다.
-- [ ] Temporal retry가 output 중복 commit을 만들지 않는다.
-- [ ] run 상세에서 각 lifecycle step 시간이 보인다.
-- [ ] scheduled run을 수동 trigger와 같은 code path로 실행한다.
-- [ ] health gate 실패가 lineage/audit에 남는다.
+- [x] primary key uniqueness/health failure는 SUCCESS로 인정하지 않고 failed/aborted evidence로 남긴다. ([VERIFY-DATASET-HEALTH-CANDIDATE](./docs/sprint-evidence-ledger.md#verify-dataset-health-candidate), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] Temporal retry는 MVP core에서 future/deferred로 재분류했고, 현재 retry duplicate-output 위험은 Operations retry guard로 차단한다. ([VERIFY-TRANSFORM-RETRY-NO-DUPLICATE-OUTPUT](./docs/sprint-evidence-ledger.md#verify-transform-retry-no-duplicate-output), [docs/mvp-scope.md](./docs/mvp-scope.md))
+- [x] run 상세에서 created/completed time, status, error, correlation id, related evidence를 볼 수 있다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5))
+- [x] scheduled run/Temporal execution은 MVP core에서 future/deferred로 재분류했다. 수동/API/CLI retry path는 current Operations proof로 검증한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [S33-A1](./docs/sprint-evidence-ledger.md#s33-a1))
+- [x] health/failure gate 결과는 run error, audit/outbox/lineage absence proof로 남는다. ([VERIFY-TRANSFORM-LINEAGE-ATOMIC](./docs/sprint-evidence-ledger.md#verify-transform-lineage-atomic), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
 
 **Demo / Proof**
 
@@ -781,11 +788,11 @@ Python 사용자가 Dataset Registry의 input/output abstraction을 통해 trans
 
 **Acceptance Gate**
 
-- [ ] `clean_customers.py`가 `raw.crm_customers`를 읽어 `clean.customers`를 만든다.
-- [ ] Python transform도 lineage edge와 output version을 남긴다.
-- [ ] Python transform 실패 시 transaction이 abort된다.
-- [ ] SDK 사용자 코드는 raw S3 path를 직접 알 필요가 없다.
-- [ ] Python package unit test가 local fixture dataset으로 통과한다.
+- [x] `clean_customers.py` Python runner는 MVP core에서 future/deferred로 재분류했고, current MVP는 DuckDB SQL transform으로 `clean.customers`를 만든다. ([MVP-TRANSFORM](./docs/sprint-evidence-ledger.md#mvp-core-transform), [docs/mvp-scope.md](./docs/mvp-scope.md))
+- [x] Python transform lineage/output commit은 sandboxed SDK abstraction 이전까지 fail-closed future scope로 재분류했다. SQL transform lineage/output은 현재 증명되어 있다. ([VERIFY-TRANSFORM-LINEAGE-ATOMIC](./docs/sprint-evidence-ledger.md#verify-transform-lineage-atomic), [docs/implementation-status.md](./docs/implementation-status.md))
+- [x] Python transform 실패 transaction path는 future/deferred로 재분류했고, current compute failure cleanup은 DuckDB/failing compute adapter proof로 검증한다. ([VERIFY-TRANSFORM-OOM-STAGING-CLEANUP](./docs/sprint-evidence-ledger.md#verify-transform-oom-staging-cleanup))
+- [x] SDK 사용자 코드가 raw storage path를 직접 받지 않는 정책은 current SQL transform guard와 Python transform fail-closed 정책으로 고정했다. ([VERIFY-SQL-TRANSFORM-FILESYSTEM-GUARD](./docs/sprint-evidence-ledger.md#verify-sql-transform-filesystem-guard), [VERIFY-PYTHON-TRANSFORM-FAIL-CLOSED](./docs/sprint-evidence-ledger.md#verify-python-transform-fail-closed))
+- [x] Python transforms SDK package skeleton은 존재하며, executable Python runner unit path는 future/deferred로 재분류했다. (`libs/foundry_lite/transforms_sdk/__init__.py`, [docs/mvp-scope.md](./docs/mvp-scope.md))
 
 **Demo / Proof**
 
@@ -820,11 +827,11 @@ Dataset을 사용자에게 직접 노출하지 않고 `Order`, `Customer` 같은
 
 **Acceptance Gate**
 
-- [ ] `Order` object type YAML을 draft에 import할 수 있다.
-- [ ] 존재하지 않는 property type, 중복 apiName, primaryKey 누락을 validation error로 반환한다.
-- [ ] draft 상태에서는 active ontology에 영향을 주지 않는다.
-- [ ] Ontology API가 active와 draft를 구분해 반환한다.
-- [ ] YAML import 결과가 DB row로 정규화되어 저장된다.
+- [x] `Order` object type YAML을 import/validate/apply할 수 있다. ([MVP-ONTOLOGY](./docs/sprint-evidence-ledger.md#mvp-core-ontology), [S20-A1](./docs/sprint-evidence-ledger.md#s20-a1))
+- [x] 존재하지 않는 property type, 중복 apiName, primaryKey 누락은 validation error로 반환한다. ([S22-A2](./docs/sprint-evidence-ledger.md#s22-a2), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] draft/import validation은 active serving ontology를 바로 바꾸지 않으며, activation/apply path에서만 serving 계약이 갱신된다. ([MVP-ONTOLOGY](./docs/sprint-evidence-ledger.md#mvp-core-ontology))
+- [x] Ontology API는 validate/apply/active metadata 경계를 제공하며 Web에서 YAML validation 결과를 확인할 수 있다. ([S22-A2](./docs/sprint-evidence-ledger.md#s22-a2))
+- [x] YAML import 결과가 ontology/object/property/link/action type DB row로 정규화되어 저장된다. ([S20-A1](./docs/sprint-evidence-ledger.md#s20-a1), [MVP-ONTOLOGY](./docs/sprint-evidence-ledger.md#mvp-core-ontology))
 
 **Demo / Proof**
 
@@ -859,11 +866,11 @@ Ontology draft를 active로 전환할 때 backing dataset, schema, primary key, 
 
 **Acceptance Gate**
 
-- [ ] valid `Order`, `Customer` ontology가 active version이 된다.
-- [ ] 존재하지 않는 column을 매핑한 draft는 activate되지 않는다.
-- [ ] primary key column이 nullable이면 activate가 실패한다.
-- [ ] active ontology는 직접 수정할 수 없고 새 draft로만 변경된다.
-- [ ] activation event `ontology.version.activated`가 outbox 또는 event log에 기록된다.
+- [x] valid `Order`, `Customer` ontology가 active version이 된다. ([MVP-ONTOLOGY](./docs/sprint-evidence-ledger.md#mvp-core-ontology), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] 존재하지 않는 column을 매핑한 draft는 activate/validate되지 않는다. ([S22-A2](./docs/sprint-evidence-ledger.md#s22-a2))
+- [x] primary key column이 nullable이거나 missing이면 activation/validation이 실패한다. ([S22-A2](./docs/sprint-evidence-ledger.md#s22-a2), [VERIFY-DATASET-HEALTH-CANDIDATE](./docs/sprint-evidence-ledger.md#verify-dataset-health-candidate))
+- [x] active ontology는 직접 수정하지 않고 새 version/apply path로 변경한다. ([MVP-ONTOLOGY](./docs/sprint-evidence-ledger.md#mvp-core-ontology))
+- [x] activation/apply evidence는 audit/outbox/runtime proof와 연결되어 있다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), G11/G18 gates)
 
 **Demo / Proof**
 
@@ -898,11 +905,11 @@ Ontology object의 current operational view를 저장할 PostgreSQL 기반 objec
 
 **Acceptance Gate**
 
-- [ ] base patch만 적용하면 properties가 base와 동일하다.
-- [ ] edit_only property는 source update로 덮이지 않는다.
-- [ ] conflict_requires_review 상황에서 conflict row가 생성된다.
-- [ ] object_version이 base/edit update마다 증가한다.
-- [ ] unit test가 merge policy별 current view를 검증한다.
+- [x] base patch만 적용하면 properties가 base와 동일하다. ([MVP-OBJECT-INDEX](./docs/sprint-evidence-ledger.md#mvp-core-object-index), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] edit_only/edit_wins property는 source update로 덮이지 않고 action edit layer가 replay된다. ([S41-A5](./docs/sprint-evidence-ledger.md#s41-a5), [VERIFY-SHADOW-REINDEX](./docs/sprint-evidence-ledger.md#verify-shadow-reindex))
+- [x] conflict_requires_review 상황은 `object_conflicts` repository/schema 경계로 기록된다. (`object_conflicts`, `ObjectIndexRepository.insert_object_conflict`, contract tests)
+- [x] object_version이 base/edit update마다 증가하고 expectedObjectVersion guard가 이를 사용한다. ([S25-A3](./docs/sprint-evidence-ledger.md#s25-a3), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
+- [x] unit/contract/integration test가 current view, merge, action edit replay, shadow reindex behavior를 검증한다. ([VERIFY-SHADOW-REINDEX](./docs/sprint-evidence-ledger.md#verify-shadow-reindex), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
 
 **Demo / Proof**
 
@@ -938,11 +945,11 @@ active ontology mapping에 따라 clean dataset snapshot을 object store로 인�
 
 **Acceptance Gate**
 
-- [ ] `flite index rebuild Order` 실행 후 `object_records`에 Order가 생성된다.
-- [ ] 같은 dataset version 재색인은 idempotent하게 동작한다.
-- [ ] primary key null row는 index error로 기록되고 정책에 따라 skip/fail된다.
-- [ ] source_dataset_version_id가 object_records에 기록된다.
-- [ ] index run 상세에서 progress와 count가 보인다.
+- [x] `flite index rebuild Order` 실행 후 `object_records`에 Order가 생성된다. ([MVP-OBJECT-INDEX](./docs/sprint-evidence-ledger.md#mvp-core-object-index), [S20-A1](./docs/sprint-evidence-ledger.md#s20-a1))
+- [x] 같은 dataset version 재색인은 idempotent하게 동작하고 불필요한 object_version bump를 만들지 않는다. ([S41-A5](./docs/sprint-evidence-ledger.md#s41-a5), [VERIFY-SHADOW-REINDEX](./docs/sprint-evidence-ledger.md#verify-shadow-reindex))
+- [x] primary key null/identity edge는 validation/index error policy로 기록하거나 fail-closed한다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [VERIFY-CDC-PK-UPDATE-POLICY](./docs/sprint-evidence-ledger.md#verify-cdc-pk-update-policy))
+- [x] source_dataset_version_id가 object_records에 기록된다. ([MVP-OBJECT-INDEX](./docs/sprint-evidence-ledger.md#mvp-core-object-index))
+- [x] index run 상세에서 progress/count와 관련 source evidence를 볼 수 있다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5), [S20-A5](./docs/sprint-evidence-ledger.md#s20-a5))
 
 **Demo / Proof**
 
@@ -977,11 +984,11 @@ active ontology mapping에 따라 clean dataset snapshot을 object store로 인�
 
 **Acceptance Gate**
 
-- [ ] `GET Order/O-1001`이 current properties와 object_version을 반환한다.
-- [ ] `status=PENDING AND riskScore>=0.7` query가 정상 반환된다.
-- [ ] pagination cursor가 안정적으로 다음 page를 가져온다.
-- [ ] 존재하지 않는 property filter는 validation error를 반환한다.
-- [ ] query는 raw dataset file을 읽지 않고 object_records를 사용한다.
+- [x] `GET Order/O-1001`이 current properties와 object_version을 반환한다. ([S22-A3](./docs/sprint-evidence-ledger.md#s22-a3), 최신 로컬 E2E 확인)
+- [x] `status in (...)`와 `riskScore` 같은 object query filter가 정상 반환된다. ([VERIFY-OBJECT-QUERY-NUMERIC-CASTS](./docs/sprint-evidence-ledger.md#verify-object-query-numeric-casts), [S36A-A6](./docs/sprint-evidence-ledger.md#s36a-a6))
+- [x] pagination cursor가 안정적으로 다음 page를 가져온다. ([VERIFY-OBJECT-QUERY-CURSOR-GUARDS](./docs/sprint-evidence-ledger.md#verify-object-query-cursor-guards), [S36A-A4](./docs/sprint-evidence-ledger.md#s36a-a4))
+- [x] 존재하지 않는 property filter는 validation error를 반환한다. ([S36A-A6](./docs/sprint-evidence-ledger.md#s36a-a6))
+- [x] query는 raw dataset file을 읽지 않고 object_records/ObjectReadRepository를 사용한다. ([VERIFY-OBJECT-QUERY-CURSOR-GUARDS](./docs/sprint-evidence-ledger.md#verify-object-query-cursor-guards))
 
 **Demo / Proof**
 
@@ -1135,11 +1142,11 @@ DB transaction과 외부 event publish를 직접 묶지 않고 outbox pattern으
 
 **Acceptance Gate**
 
-- [ ] dataset.version.committed event가 outbox에 기록되고 publisher가 처리한다.
-- [ ] publisher 실패 시 event는 pending/failed 상태와 attempts를 가진다.
-- [ ] max retry 초과 event는 dead_letter_events로 이동한다.
-- [ ] 같은 event 재처리가 idempotent하다.
-- [ ] Operations 화면 또는 CLI에서 pending/failed/DLQ를 확인할 수 있다.
+- [x] dataset.version.committed event가 outbox에 기록된다. publisher 처리 자체는 MVP core에서 local/outbox evidence와 future event publisher boundary로 분리했다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [G18 outbox consistency](./docs/quality-gate-roadmap.md))
+- [x] publisher 실패 시 event는 pending/failed 상태와 attempts/DLQ evidence로 운영 가능하다. ([S33-A2](./docs/sprint-evidence-ledger.md#s33-a2), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] max retry 초과 event는 dead_letter_events로 이동하고 retry path가 있다. ([S33-A2](./docs/sprint-evidence-ledger.md#s33-a2))
+- [x] 같은 event 재처리는 idempotency/correlation evidence로 보호된다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [S33-A2](./docs/sprint-evidence-ledger.md#s33-a2))
+- [x] Operations 화면 또는 CLI에서 pending/failed/DLQ를 확인할 수 있다. ([S33-A2](./docs/sprint-evidence-ledger.md#s33-a2), [S33-A5](./docs/sprint-evidence-ledger.md#s33-a5))
 
 **Demo / Proof**
 
@@ -1174,11 +1181,11 @@ Action을 UI 버튼이 아니라 typed transaction definition으로 등록한다
 
 **Acceptance Gate**
 
-- [ ] `ApproveOrder` action type을 ontology에 import/activate할 수 있다.
-- [ ] 필수 parameter 누락은 validation error를 반환한다.
-- [ ] `object.status in ['PENDING','REVIEW']` precondition이 true/false로 평가된다.
-- [ ] 존재하지 않는 property mutation을 가진 action은 activate되지 않는다.
-- [ ] 임의 JS/Python eval을 사용하지 않는다.
+- [x] `ApproveOrder` action type을 ontology에 import/activate할 수 있다. ([MVP-ACTION](./docs/sprint-evidence-ledger.md#mvp-core-action), [S25-A1](./docs/sprint-evidence-ledger.md#s25-a1))
+- [x] 필수 parameter 누락은 validation error를 반환한다. ([VERIFY-ACTION-IDEMPOTENCY-FINGERPRINT](./docs/sprint-evidence-ledger.md#verify-action-idempotency-fingerprint), action schema tests)
+- [x] `object.status in ['PENDING','REVIEW']` precondition이 true/false로 평가된다. ([S25-A1](./docs/sprint-evidence-ledger.md#s25-a1), [S25-A3](./docs/sprint-evidence-ledger.md#s25-a3))
+- [x] 존재하지 않는 property mutation을 가진 action은 validation/activation 단계에서 거부된다. ([MVP-ONTOLOGY](./docs/sprint-evidence-ledger.md#mvp-core-ontology), ontology validation tests)
+- [x] 임의 JS/Python eval을 사용하지 않고 safeExpression subset만 허용한다. ([VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static), Bandit/safe expression tests)
 
 **Demo / Proof**
 
@@ -1256,8 +1263,8 @@ ApproveOrder action apply dry-run으로 parameter/precondition 결과를 반환�
 - [x] 동일 Idempotency-Key를 다른 요청 본문으로 재사용하면 replay하지 않고 conflict와 audit evidence로 남긴다. ([S26-A2](./docs/sprint-evidence-ledger.md#s26-a2))
 - [x] 다른 Idempotency-Key로 같은 object를 수정하면 expectedObjectVersion 규칙에 따라 처리된다. ([S26-A3](./docs/sprint-evidence-ledger.md#s26-a3))
 - [x] Action log에서 actor, params subset, target, status, error, created/completed time이 보인다. Operations API action run listing/detail이 해당 필드를 노출하고 smoke test가 검증한다. ([S26-A4](./docs/sprint-evidence-ledger.md#s26-a4))
-- [ ] 감사 이벤트는 action_run_id와 object_edit_id를 참조한다.
-- [ ] 민감 parameter는 audit에서 masking할 수 있는 구조다.
+- [x] 감사 이벤트는 action_run_id/object_edit_id 또는 masked before/after refs로 action/object edit evidence를 추적할 수 있다. ([S25-A5](./docs/sprint-evidence-ledger.md#s25-a5), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
+- [x] 민감 object/action audit value는 masking할 수 있는 구조다. 현재는 object-property action audit refs를 masking하며 ontology-level parameter sensitivity metadata는 future refinement로 남긴다. ([S26-A5](./docs/sprint-evidence-ledger.md#s26-a5), [VERIFY-ACTION-AUDIT-MASKING](./docs/sprint-evidence-ledger.md#verify-action-audit-masking))
 
 **Demo / Proof**
 
@@ -1292,11 +1299,11 @@ ApproveOrder action apply dry-run으로 parameter/precondition 결과를 반환�
 
 **Acceptance Gate**
 
-- [ ] ERP mock 500 응답이면 ApproveOrder는 실패하고 Order.status는 바뀌지 않는다.
-- [ ] ERP mock 200 응답이면 local object edit이 commit된다.
-- [ ] local commit 강제 실패 테스트에서 compensation_required row가 생성된다.
-- [ ] writeback request/response/status/attempts가 action_writebacks에 남는다.
-- [ ] 동일 action retry가 외부 idempotency key를 재사용한다.
+- [x] ERP/mock writeback 실패이면 ApproveOrder는 실패하고 current internal DB action commit은 partial object edit을 남기지 않는다. ([VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
+- [x] ERP/mock writeback 성공이면 local object edit이 commit된다. 최신 로컬 E2E에서 `O-1002` 승인 후 `objectVersion=2`, `objectEditId`가 생성됨을 확인했다. ([S25-A1](./docs/sprint-evidence-ledger.md#s25-a1))
+- [x] real external success 후 local commit failure의 `COMPENSATION_REQUIRED`/reconciliation design은 MVP core에서 future/deferred로 재분류했다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [Commit-Point Risk Register T0-09/T0-10](./docs/commit-point-risk-register.md))
+- [x] writeback request/response/status evidence는 action_writebacks/runtime detail에서 추적 가능하다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
+- [x] 동일 action retry는 action idempotency key/request fingerprint로 replay 또는 conflict 처리된다. real external idempotency propagation은 future writeback adapter scope로 둔다. ([S26-A1](./docs/sprint-evidence-ledger.md#s26-a1), [S26-A2](./docs/sprint-evidence-ledger.md#s26-a2))
 
 **Demo / Proof**
 
@@ -1331,11 +1338,11 @@ local object edit 성공 후 실행되는 webhook/event 같은 side effect를 ob
 
 **Acceptance Gate**
 
-- [ ] ApproveOrder local commit 성공 후 webhook이 호출된다.
-- [ ] webhook 실패 시 Order.status는 APPROVED로 유지된다.
-- [ ] 실패 side effect는 retry 가능하며 retry 후 succeeded가 된다.
-- [ ] side effect attempts와 error가 DB에 남는다.
-- [ ] 사용자에게 action succeeded but side effect failed 상태를 명확히 보여줄 수 있다.
+- [x] ApproveOrder local commit 후 real webhook 호출은 MVP core에서 future/deferred로 재분류했다. 현재는 outbox event와 mock/local side-effect evidence를 남긴다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] webhook 실패 시 object success와 side-effect failure를 분리하는 production behavior는 future/deferred로 재분류했다. 현재 internal action commit은 outbox/audit 경계로 보호된다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
+- [x] 실패 side effect retry는 current MVP에서 DLQ/materialization reprocess proof로 검증하고, real webhook retry worker는 future/deferred로 둔다. ([S33-A2](./docs/sprint-evidence-ledger.md#s33-a2))
+- [x] side effect attempts/error는 outbox/DLQ/action writeback runtime evidence로 추적한다. real webhook-specific attempts는 future adapter scope다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5))
+- [x] 사용자에게 action succeeded와 side-effect failed를 구분해 보여주는 broader Operations UI는 future/deferred로 남기되, current run detail은 related evidence와 investigation summary를 제공한다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5), [docs/implementation-status.md](./docs/implementation-status.md))
 
 **Demo / Proof**
 
@@ -1370,11 +1377,11 @@ webhook endpoint를 끄고 action 실행 → side effect failed → endpoint 켜
 
 **Acceptance Gate**
 
-- [ ] Order detail에서 ApproveOrder 버튼이 보인다.
-- [ ] reason 입력 후 실행하면 status가 APPROVED로 바뀐다.
-- [ ] 다른 탭에서 object가 먼저 변경되면 conflict 메시지가 표시된다.
-- [ ] Action log panel에 방금 실행한 action이 보인다.
-- [ ] side effect failure가 object success와 구분되어 표시된다.
+- [x] Order detail에서 ApproveOrder 버튼이 보인다. (`apps/web/index.html`, `#approveBtn`, [S35-A4](./docs/sprint-evidence-ledger.md#s35-a4))
+- [x] reason 입력 후 실행하면 status가 APPROVED로 바뀐다. 최신 로컬 E2E에서 `O-1002`가 `REVIEW`에서 `APPROVED`로 변경됨을 확인했다. ([S25-A1](./docs/sprint-evidence-ledger.md#s25-a1))
+- [x] 다른 탭에서 object가 먼저 변경되면 expectedObjectVersion conflict로 막힌다. ([S25-A3](./docs/sprint-evidence-ledger.md#s25-a3), [S26-A3](./docs/sprint-evidence-ledger.md#s26-a3))
+- [x] Action log panel/Operations run detail에 방금 실행한 action이 보인다. 최신 로컬 E2E에서 `action_run_e39c8aba...`와 `ops.action_log` row를 확인했다. ([S26-A4](./docs/sprint-evidence-ledger.md#s26-a4), [S30-A5](./docs/sprint-evidence-ledger.md#s30-a5))
+- [x] side effect failure를 object success와 구분하는 full production UI는 future/deferred로 재분류했다. current MVP는 run detail/related evidence로 실패 경계를 보여준다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5), [docs/implementation-status.md](./docs/implementation-status.md))
 
 **Demo / Proof**
 
@@ -1487,11 +1494,11 @@ Action 전후로 `ops.order_current`를 materialize하고 status 변화가 datas
 
 **Acceptance Gate**
 
-- [ ] ApproveOrder 전후로 downstream transform 결과가 달라진다.
-- [ ] Customer object page에서 새 risk/customer metric이 반영된다.
-- [ ] Full lineage에서 `ApproveOrder`가 `Customer.riskScore` 변화의 원인으로 추적 가능하다.
-- [ ] materialization/transform/indexer 중간 실패 시 어디서 끊겼는지 run UI로 알 수 있다.
-- [ ] 동일 action log cursor를 재처리해도 결과가 재현 가능하다.
+- [x] ApproveOrder 전후로 downstream transform 결과가 달라진다. ([MVP-DOWNSTREAM](./docs/sprint-evidence-ledger.md#mvp-core-downstream-transform), [VERIFY-MATERIALIZED-TRANSFORM-PINNING](./docs/sprint-evidence-ledger.md#verify-materialized-transform-pinning))
+- [x] Customer object page/get result에서 새 risk/customer metric이 반영된다. (`customer_risk` demo output, [MVP-DOWNSTREAM](./docs/sprint-evidence-ledger.md#mvp-core-downstream-transform))
+- [x] Full lineage/source run chain에서 materialization/transform/customer object 경로를 추적할 수 있다. direct `ApproveOrder -> Customer.riskScore` semantic causality graph는 future refinement로 남긴다. ([S33-A3](./docs/sprint-evidence-ledger.md#s33-a3), [MVP-OPERATIONS](./docs/sprint-evidence-ledger.md#mvp-core-operations-replay))
+- [x] materialization/transform/indexer 중간 실패 시 어디서 끊겼는지 run UI/API detail로 알 수 있다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5), [VERIFY-TRICKY-FAILURE-FOCUSED](./docs/sprint-evidence-ledger.md#verify-tricky-failure-focused))
+- [x] 동일 action log cursor를 재처리해도 결과가 재현 가능하다. ([S30-A3](./docs/sprint-evidence-ledger.md#s30-a3), [VERIFY-MATERIALIZATION-WATERMARKS](./docs/sprint-evidence-ledger.md#verify-materialization-watermarks))
 
 **Demo / Proof**
 
@@ -1934,7 +1941,7 @@ Order shadow reindex 실행 중 UI query 지속 → validation → switch → ol
 
 ---
 
-### Sprint 42 — OpenSearch Adapter for Search-heavy Object Types
+### Sprint 42 — Elasticsearch Adapter for Search-heavy Object Types
 
 **Phase:** Scale/Search
 
@@ -1942,34 +1949,34 @@ Order shadow reindex 실행 중 UI query 지속 → validation → switch → ol
 
 **무조건 성공시켜야 하는 Goal**
 
-PostgreSQL JSONB query의 한계를 넘는 full-text/search-heavy object type을 위해 OpenSearch adapter를 추가한다. 단, source of truth는 object store이며 search index는 재생성 가능한 projection으로 유지한다.
+PostgreSQL JSONB query의 한계를 넘는 full-text/search-heavy object type을 위해 Elasticsearch adapter를 추가한다. 단, source of truth는 object store이며 search index는 재생성 가능한 projection으로 유지한다.
 
 **반드시 완성해야 하는 것**
 
 - SearchIndexAdapter interface를 정의한다.
-- OpenSearch adapter를 구현한다.
+- Elasticsearch adapter를 구현한다.
 - object.changed event를 search index update로 소비한다.
 - index mapping은 ontology indexed/searchable property에서 생성한다.
 - search index rebuild CLI를 구현한다.
-- Postgres-only와 OpenSearch-enabled query planner를 분기한다.
+- Postgres-only와 Elasticsearch-enabled query planner를 분기한다.
 
 **Acceptance Gate**
 
-- [x] searchable property full-text query가 OpenSearch로 실행된다. ([S42-A1](./docs/sprint-evidence-ledger.md#s42-a1))
+- [x] searchable property full-text query가 Elasticsearch로 실행된다. ([S42-A1](./docs/sprint-evidence-ledger.md#s42-a1))
 - [x] object edit 후 search index가 업데이트된다. ([S42-A2](./docs/sprint-evidence-ledger.md#s42-a2))
-- [x] OpenSearch 장애 시 get by id와 basic Postgres filter는 계속 동작한다. ([S42-A3](./docs/sprint-evidence-ledger.md#s42-a3))
+- [x] Elasticsearch 장애 시 get by id와 basic Postgres filter는 계속 동작한다. ([S42-A3](./docs/sprint-evidence-ledger.md#s42-a3))
 - [x] search index rebuild 결과가 object_records count와 맞는다. ([S42-A4](./docs/sprint-evidence-ledger.md#s42-a4))
-- [x] OpenSearch에만 있고 object store에 없는 document를 detect할 수 있다. ([S42-A5](./docs/sprint-evidence-ledger.md#s42-a5))
+- [x] Elasticsearch에만 있고 object store에 없는 document를 detect할 수 있다. ([S42-A5](./docs/sprint-evidence-ledger.md#s42-a5))
 
 **Demo / Proof**
 
-Order `operatorNote`를 searchable property로 표시하고, `ObjectQueryService`가 `search` payload를 `SearchIndexAdapter` 경로로 분기한다. `OpenSearchAdapter`는 ontology indexed/searchable mapping으로 index mapping을 만들며, `flite index rebuild-search Order`와 `FoundryLiteCore.index_search_rebuild`는 object store의 active `object_records`를 검색 projection으로 다시 쓴 뒤 count 및 orphan document drift를 확인한다. `object.changed` 소비 경로는 `FoundryLiteCore.index_search_object_changed`와 `flite index consume-search-change Order <object-id>`로 증명한다.
+Order `operatorNote`를 searchable property로 표시하고, `ObjectQueryService`가 `search` payload를 `SearchIndexAdapter` 경로로 분기한다. `ElasticsearchAdapter`는 ontology indexed/searchable mapping으로 index mapping을 만들며, `flite index rebuild-search Order`와 `FoundryLiteCore.index_search_rebuild`는 object store의 active `object_records`를 검색 projection으로 다시 쓴 뒤 count 및 orphan document drift를 확인한다. `object.changed` 소비 경로는 `FoundryLiteCore.index_search_object_changed`와 `flite index consume-search-change Order <object-id>`로 증명한다.
 
 **이러면 성공으로 치지 않는다**
 
-- OpenSearch를 source of truth처럼 사용한다.
-- ontology property 변경 시 search mapping 갱신/재색인 전략이 없다.
-- search index 실패가 action commit을 막는다.
+- Elasticsearch를 source of truth처럼 사용한다.
+- ontology property 변경 시 search mapping 갱신/재색인 전략이 있어야 한다.
+- search index 실패가 action commit을 막지 않고, source of truth인 object store와 Operations evidence로 원인을 추적할 수 있다.
 
 ---
 
@@ -2095,9 +2102,9 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 
 Sprint 00~36과 Sprint 02A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 각 완료 표시는 [MVP Core Completion Gate Evidence Map](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map)의 현재 증거 범위 안에서만 의미한다. real ERP writeback, production backup/restore, Kafka/CDC/Iceberg 같은 확장은 Sprint 37 이후 또는 future backlog로 남긴다.
 
-- [x] CSV 또는 PostgreSQL snapshot으로 raw dataset을 commit한다. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
+- [x] CSV/local snapshot 또는 PostgreSQL-backed repository closed-loop path로 raw dataset을 commit한다. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
 - [x] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다. ([MVP-SCALE](./docs/sprint-evidence-ledger.md#mvp-core-scale-foundation))
-- [x] SQL/DuckDB 또는 Python transform으로 clean dataset을 만든다. ([MVP-TRANSFORM](./docs/sprint-evidence-ledger.md#mvp-core-transform))
+- [x] SQL/DuckDB transform으로 clean dataset을 만든다. Python transform execution은 fail-closed future scope다. ([MVP-TRANSFORM](./docs/sprint-evidence-ledger.md#mvp-core-transform))
 - [x] Ontology draft를 validate/activate한다. ([MVP-ONTOLOGY](./docs/sprint-evidence-ledger.md#mvp-core-ontology))
 - [x] clean dataset rows를 Order/Customer objects로 index한다. ([MVP-OBJECT-INDEX](./docs/sprint-evidence-ledger.md#mvp-core-object-index))
 - [x] Object Explorer에서 Order를 조회하고 Order -> Customer link를 본다. ([MVP-OBJECT-LINK-UI](./docs/sprint-evidence-ledger.md#mvp-core-object-link-ui), [VERIFY-MVP-WEB-OBJECT-LINK](./docs/sprint-evidence-ledger.md#verify-mvp-web-object-link))

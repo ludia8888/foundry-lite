@@ -596,7 +596,7 @@ probe, trace 누락, 필수 키 누락, request context mismatch, JSON report �
 
 `scripts/quality/check_adapter_failure_taxonomy.py`는 현재 concrete adapter profile이
 공통 `AdapterFailureContract`를 노출하는지 검증한다. 비개발자 관점으로 말하면,
-"부품을 Kafka, OpenSearch, Temporal, S3 같은 다른 인프라로 갈아끼웠는데 실패
+"부품을 Kafka, Elasticsearch, Temporal, S3 같은 다른 인프라로 갈아끼웠는데 실패
 메시지와 재시도 기준이 제각각이라 운영자가 판단할 수 없는" 문제를 막는다.
 
 검사 기준:
@@ -847,7 +847,7 @@ CodeQL은 정적 분석 중 유일하게 **interprocedural taint propagation**�
 
 Self-test: `tests/unit/test_quality_codeql_queries.py`가 qlpack 매니페스트, § 인용, @id/@kind/@problem.severity 메타, run.sh 실행권한, codeql 미설치 시 graceful local skip, 알려진 CodeQL API 호환성(`getAnInstance`)을 검증한다. `tests/unit/test_quality_codeql_sarif_gate.py`는 SARIF finding을 workflow failure로 바꾸는 hard gate를 검증한다.
 
-### Tier P6 — Pyright strict (✅ 부분 완료 2026-06-10 P6)
+### Tier P6 — Pyright strict (✅ 부분 완료, #28 완료 2026-06-16 sync)
 
 `pyright`는 디폴트 `basic` 모드로 전체 코드베이스를 보지만 `[tool.pyright]
 strict = [...]` 리스트의 경로는 **strict 모드**로 격상된다. 이 리스트가
@@ -862,98 +862,27 @@ strict = [...]` 리스트의 경로는 **strict 모드**로 격상된다. 이 �
 | `libs/foundry_lite/security` | 보안 결정 영역 — Any 사용 금지 |
 | `libs/foundry_lite/application/services/base.py` | CoreService DI 토대 |
 
-남은 application/services/* 와 infrastructure 어댑터는 점진적으로 strict
-리스트에 추가. 새 boundary 추출 시 ports/* 가 strict이므로 Protocol 위반이
-즉시 fail — 정통화 강제 메커니즘.
+전체 코드베이스를 한 번에 strict로 올리는 일은 아직 future expansion이다. 대신
+현재 구현은 strict boundary와 별도로 **application/app broad `Any` 재도입 방지
+게이트**를 완료했다. 즉, “Pyright strict 전체 전환”은 부분 완료지만, 로드맵
+#28의 application/app `Any` cleanup 목표는 완료 상태다.
 
-2026-06-12 진행: API/CLI JSON entrypoint의 `dict[str, Any]` 노출은 0으로
-줄였다. `ActionApplyRequest.params`, object-set `filter`, CLI JSON argument는
-`dict[str, object]`로 고정했고, `apps/api`/`apps/cli`는 `Any` import 없이
-`mypy`/`pyright`를 통과한다. 추가로 safe-expression/action precondition
-helper와 object query filter evaluator도 `Any` 없이 JSON-ready `object` 값을
-받고, 문자열·리스트·객체 모양을 검증한 뒤 평가한다. 다만 application service
-내부의 collaborator, DB transaction handle, JSON row mapping에는 넓은 `Any`가
-아직 남아 있으므로 #28은 계속 △다.
+2026-06-12~2026-06-16 sync 결과:
 
-2026-06-12 추가 진행: Action apply 경로의 `ActionService`와
-`action_helpers`는 `ActionTypeRow`, `ObjectRecordRow`, `ObjectPatch`,
-`ObjectProperties`, `ActionWritebackPayload`, `ActionErrorPayload`,
-`TransactionContext`를 사용해 action type, target object, patch, writeback,
-transaction handle 계약을 더 좁혔다. `ActionMutationDefinition`은 실제 runtime
-검증과 맞게 `type`/`property` 필드를 필수로 선언한다.
+- API/CLI JSON entrypoint의 `dict[str, Any]` 노출은 0이다.
+- `libs/foundry_lite/application`, `apps/api`, `apps/cli`, `apps/worker`의 broad
+  `Any` baseline은 0이다.
+- `check_application_any_budget.py`가 application/app boundary에 broad `Any`가
+  다시 들어오는 것을 차단한다.
+- `check_dict_any_budget.py`가 `dict[str, Any]` function signature baseline 0을
+  고정한다.
+- action, object indexing, ontology, object set, transform, materialization,
+  runtime, dataset, demo orchestration 경로는 typed row/helper/Protocol과
+  `TransactionContext` 경계로 좁혀졌다.
 
-2026-06-12 추가 진행: Object indexing 경로의 `ObjectIndexingService`는
-`TabularRow`, `ObjectRecordRow`, `ObjectPropertyMap`, `IndexRunError`,
-`ObjectConflictRecord`, `TransactionContext`, typed collaborator Protocol을
-사용해 Parquet row, object record, conflict value, runtime failure payload,
-transaction handle 계약을 더 좁혔다. application 전체의 넓은 `Any` 잔량은
-201개에서 163개로 감소했다. 다만 `OntologyService`, object set,
-transform/materialization/runtime service 내부에는 아직 broad `Any`가 남아
-있으므로 #28은 계속 △다.
-
-2026-06-12 추가 진행: `OntologyService`는 `TransactionContext`와
-`OntologyDatasetRegistry`, `OntologyDatasetVersions`,
-`OntologyRuntimeBoundary` Protocol을 사용해 ontology activation/import/validation
-경로의 transaction handle, dataset lookup, dataset schema lookup, runtime
-audit/outbox collaborator 계약을 더 좁혔다. ontology 내부의 넓은 `Any`는
-36개에서 12개로 줄었고, application 전체 잔량은 163개에서 139개로 감소했다.
-YAML declaration mapping과 dataset schema column mapping에는 아직 broad
-`Any`가 남아 있으므로 #28은 계속 △다.
-
-2026-06-12 추가 진행: `ObjectSetsService`는 `TransactionContext`와
-`SetObjectQuery`, `SetOntologyLookup`, `SetRuntimeBoundary` Protocol을 사용해
-object set 생성/검증/조회 경로의 transaction handle, object query, ontology
-lookup, runtime audit/outbox collaborator 계약을 더 좁혔다. static object id와
-dynamic filter 입력은 `object`로 받은 뒤 runtime 검증 후 repository/query
-경계로 넘긴다. object set 내부의 넓은 `Any`는 19개에서 0개로 줄었고,
-application 전체 잔량은 139개에서 120개로 감소했다. transform,
-materialization, runtime service 내부에는 아직 broad `Any`가 남아 있으므로 #28은
-계속 △다.
-
-2026-06-12 추가 진행: `TransformService`와 `MaterializationService`는
-`TransactionContext`와 typed collaborator Protocol을 사용해 transform run,
-lineage, materialization commit 경로의 service collaborator와 transaction
-handle 계약을 더 좁혔다. runtime table row는 runtime row mapping과
-`Mapping[str, object]`로 다루고, materialized parquet row도 JSON-ready `object` 값으로
-고정한다. transform 내부의 넓은 `Any`는 18개에서 0개로, materialization
-내부의 넓은 `Any`는 17개에서 0개로 줄었고, application 전체 잔량은
-120개에서 85개로 감소했다. runtime service, dataset service 일부, ontology
-YAML/schema mapping, base DI 경계에는 아직 broad `Any`가 남아 있으므로 #28은
-계속 △다.
-
-2026-06-12 추가 진행: `RuntimeService`는 `TransactionContext`,
-runtime row mapping, `Mapping[str, object]`, `FoundryLiteError`를 사용해
-audit, outbox, lineage, error payload 경계의 넓은 `Any`를 제거했다.
-`OntologyService`는 YAML 선언 검증을 `ontology_yaml.py` helper로 분리하고,
-object/link backing, action parameter schema, action definition,
-dataset schema column mapping을 typed helper로 만든다. runtime 내부의 넓은
-`Any`는 12개에서 0개로, ontology 내부의 넓은 `Any`는 12개에서 0개로
-줄었고, application 전체 잔량은 85개에서 61개로 감소했다. demo orchestration,
-dataset service 일부, object store read/link helpers, base DI 경계에는 아직
-broad `Any`가 남아 있으므로 #28은 계속 △다.
-
-2026-06-12 추가 진행: object store read/link 경계에서
-`ObjectRecordsService`, `ObjectLinksService`, `ObjectQueryService`가
-`ObjectRecordRow`, `ObjectLinkRow`, `TransactionContext`, typed collaborator
-Protocol, 명시적 property sort key를 사용하도록 바꿨다. object store
-read/link helper 내부의 넓은 `Any`는 11개에서 0개로 줄었고, application
-전체 잔량은 61개에서 50개로 감소했다. demo orchestration, dataset service
-일부, primitives JSON helper, base DI 경계에는 아직 broad `Any`가 남아
-있으므로 #28은 계속 △다.
-
-2026-06-12 추가 진행: `DatasetIngestService`, `DatasetRegistryService`,
-`DatasetQualityService`, `DatasetTransactionService`, `DatasetVersionService`는
-dataset 전용 collaborator Protocol과 `TransactionContext`를 사용하도록
-정리했다. `DemoService`는 demo orchestration 전용 Protocol로 action,
-dataset, transform, ontology, object, materialization collaborator 계약을
-고정했다. `CoreDependencies`/`CoreService`의 engine은 `TransactionManager`
-Protocol로 좁혔고, primitives JSON helper는 `object` 입력/출력으로 바꿨다.
-그 결과 application 내부 넓은 `Any`는 50개에서 0개가 됐고,
-`check_application_any_budget.py`가 `libs/foundry_lite/application`,
-`apps/api`, `apps/cli`, `apps/worker`에서 broad `Any` 재도입을 baseline 0으로
-차단한다. 인프라 repository/observability의 runtime edge `Any`는 #28의
-application/app boundary 밖 adapter 영역으로 남겨두며, #28은 ✅ 완료로
-전환한다.
+인프라 repository/observability의 runtime edge `Any`는 #28의 application/app
+boundary 밖 adapter 영역이다. 이후 strict 확장은 이 adapter edge를 대상으로
+별도 이슈와 baseline을 세워 진행한다.
 
 ### Tier P11 — interrogate docstring coverage (✅ 완료 2026-06-10 P11)
 
@@ -1049,7 +978,7 @@ function-local lazy import (application/core.py:53)를 P2가 첫 시도에 검�
 |---|---|
 | `layered-core` | §4.1 의존성 방향 (apps → infra → application → domain) |
 | `domain-purity` | §4.1 domain은 framework 0개 (fastapi/pydantic/sqlalchemy/duckdb/boto3/kafka/pyspark/temporalio) |
-| `application-no-vendor-sdk` | §4.3 application은 vendor SDK 0개 (위와 동일 + opensearchpy/elasticsearch) |
+| `application-no-vendor-sdk` | §4.3 application은 vendor SDK 0개 (위와 동일 + elasticsearch) |
 | `apps-no-direct-infra` | §3.1 apps/* 가 infrastructure.repositories 직접 import 금지 (composition root 예외만 명시) |
 
 `scripts/quality/check_infra_import_boundary.py` 와 `check_dependency_graph.py` 는

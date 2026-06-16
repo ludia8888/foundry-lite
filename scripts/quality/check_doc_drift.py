@@ -64,7 +64,7 @@ EXTERNAL_OR_VALUE_SYMBOLS = {
     "JWT",
     "OIDC",
     "OpenLineage",
-    "OpenSearch",
+    "Elasticsearch",
     "PostgreSQL",
     "Protocol",
     "RBAC",

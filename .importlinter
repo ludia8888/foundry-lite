@@ -67,7 +67,6 @@ forbidden_modules =
     kafka
     pyspark
     temporalio
-    opensearchpy
     elasticsearch
 
 # ──────────────────────────────────────────────────────────────────────────
