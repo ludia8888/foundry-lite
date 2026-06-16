@@ -182,6 +182,28 @@ class _TransientHeadClient:
         raise TimeoutError("head timed out")
 
 
+class _FakeClientError(Exception):
+    """botocore.ClientError-shaped error carrying an S3 error code and HTTP status."""
+
+    def __init__(self, code: str, status: int) -> None:
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
+
+
+class _AccessExpiredClient:
+    """Reads fail with an expired/forbidden (403) error, not a missing-object 404."""
+
+    def __init__(self, wrapped: Any) -> None:
+        self._wrapped = wrapped
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._wrapped, name)
+
+    def get_object(self, **kwargs: Any) -> object:
+        del kwargs
+        raise _FakeClientError("ExpiredToken", 403)
+
+
 @pytest.fixture(scope="session")
 def minio_server() -> Iterator[MinioServer]:
     container = (
@@ -623,6 +645,125 @@ def test_s3_api_end_to_end_preview_reads_through_s3_and_surfaces_corruption(
     assert corrupted.json()["detail"]["details"]["error_type"] == "committed_version_storage_missing"
 
 
+def test_s3_real_multipart_interrupt_during_upload_is_visible_in_operations(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    client = _s3_client(minio_server)
+    adapter = _adapter(tmp_path, minio_server, client=_MultipartInterruptClient(client))
+    foundry = _foundry_with_storage(tmp_path, adapter)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+
+    with pytest.raises(ValidationFailed, match="csv upload failed"):
+        foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+
+    failed_run = next(run for run in foundry.operations.list_runs(ctx=ctx)["syncRuns"] if run["status"] == "FAILED")
+    failure = failed_run["error"]["adapterFailure"]
+    assert failure["adapterProfile"] == "s3-storage"
+    assert failure["operation"] == "commit_staged_file"
+    assert failure["retryable"] is True
+    # The interrupted multipart upload leaves no orphaned parts anywhere in the bucket.
+    pending = client.list_multipart_uploads(Bucket=adapter.config.bucket, Prefix=adapter.config.prefix).get("Uploads")
+    assert (pending or []) == []
+
+
+def test_s3_corrupted_data_object_surfaces_through_engine_as_storage_corruption(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    client = _s3_client(minio_server)
+    adapter = _adapter(tmp_path, minio_server, client=client)
+    foundry = _foundry_with_storage(tmp_path, adapter)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    committed = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+
+    # Silently corrupt the committed data object (same length to hit the hash check).
+    data_key = _key_from_uri(adapter, adapter.load_manifest(committed.manifest_uri)["files"][0]["uri"])
+    original = client.get_object(Bucket=adapter.config.bucket, Key=data_key)["Body"].read()
+    client.put_object(Bucket=adapter.config.bucket, Key=data_key, Body=b"X" * len(original))
+
+    with pytest.raises(InvariantViolation) as exc_info:
+        foundry.datasets.preview("raw.orders", ctx=ctx, version=committed.version_id)
+
+    assert exc_info.value.details["error_type"] == "committed_version_storage_corrupt"
+
+
+def test_s3_transient_read_during_inspect_surfaces_retryable_not_corruption(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    client = _s3_client(minio_server)
+    adapter = _adapter(tmp_path, minio_server, client=client)
+    foundry = _foundry_with_storage(tmp_path, adapter)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    committed = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+
+    # After a healthy commit, reads start timing out. This must surface as a retryable
+    # adapter failure through the engine, not be mislabelled as storage corruption.
+    adapter._client = _TransientGetClient(client)
+    with pytest.raises(AdapterError) as exc_info:
+        foundry.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)
+
+    assert exc_info.value.failure.kind == "timeout"
+    assert exc_info.value.failure.is_retryable is True
+
+
+def test_s3_committed_manifest_row_count_matches_actual_parquet_rows(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    # A2: lock the invariant that the manifest row_count is the real parquet row
+    # count, not a writer-reported number the storage layer trusts blindly.
+    adapter = _adapter(tmp_path, minio_server, client=_s3_client(minio_server))
+    foundry = _foundry_with_storage(tmp_path, adapter)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    committed = foundry.datasets.upload_csv("raw.orders", _multi_row_csv_file(tmp_path), ctx=ctx)
+
+    manifest_row_count = adapter.load_manifest(committed.manifest_uri)["files"][0]["row_count"]
+    actual_rows = foundry.datasets.preview("raw.orders", ctx=ctx, version=committed.version_id, limit=100)
+    assert manifest_row_count == len(actual_rows) == 3
+
+
+def test_s3_staging_cleanup_is_isolated_per_transaction(minio_server: MinioServer, tmp_path: Path) -> None:
+    # A6: aborting/cleaning one transaction's staging must not delete another
+    # in-flight transaction's staged attempt file.
+    adapter = _adapter(tmp_path, minio_server)
+    keep = adapter.staging_file(
+        tenant_id="tenant_demo", dataset_id="ds_orders", transaction_id="dstx_keep", file_name="part-00000.parquet"
+    )
+    keep.write_bytes(b"in-flight retry attempt")
+    drop = adapter.staging_file(
+        tenant_id="tenant_demo", dataset_id="ds_orders", transaction_id="dstx_drop", file_name="part-00000.parquet"
+    )
+    drop.write_bytes(b"failed attempt")
+
+    assert adapter.delete_staging_transaction(
+        tenant_id="tenant_demo", dataset_id="ds_orders", transaction_id="dstx_drop"
+    )
+    assert not drop.exists()
+    assert keep.exists()
+
+
+def test_s3_access_expiry_on_read_is_retryable_not_corruption(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    # A7: a 403/expired-credential read must surface as a retryable adapter failure,
+    # never be mislabelled as missing-object storage corruption. (We use boto3
+    # credentials, not presigned URLs, but the 403-vs-404 boundary is the same.)
+    adapter = _adapter(tmp_path, minio_server, client=_AccessExpiredClient(_s3_client(minio_server)))
+
+    with pytest.raises(AdapterError) as exc_info:
+        adapter.load_manifest(f"s3://{adapter.config.bucket}/any/manifest.json")
+
+    assert exc_info.value.failure.is_retryable is True
+    assert exc_info.value.failure.kind != "not_found"
+
+
 def _set_s3_env(monkeypatch: pytest.MonkeyPatch, minio_server: MinioServer, bucket: str) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_S3_BUCKET", bucket)
     monkeypatch.setenv("FOUNDRY_LITE_S3_ENDPOINT_URL", minio_server.endpoint_url)
@@ -737,6 +878,12 @@ def _csv_file(tmp_path: Path) -> Path:
 def _duplicate_csv_file(tmp_path: Path) -> Path:
     path = tmp_path / f"duplicate-orders-{uuid4().hex}.csv"
     path.write_text("id,amount\nO-2,200\nO-2,201\n", encoding="utf-8")
+    return path
+
+
+def _multi_row_csv_file(tmp_path: Path) -> Path:
+    path = tmp_path / f"multi-orders-{uuid4().hex}.csv"
+    path.write_text("id,amount\nO-1,100\nO-2,200\nO-3,300\n", encoding="utf-8")
     return path
 
 

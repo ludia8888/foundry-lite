@@ -206,20 +206,25 @@
 - [x] **Guardrail:** DB commit 전 manifest stat + read verify를 수행한다.
 - [x] **Guardrail:** manifest content hash를 검증한다.
 - [x] **Guardrail:** commit 후 storage missing은 `committed_version_storage_missing`으로 진단한다.
+- [x] **Guardrail:** committed data object 손상(같은 길이, 다른 내용)은 매 read의 hash 검증으로 `committed_version_storage_corrupt`로 진단한다.
+- [x] **Guardrail:** 일시적 read 장애(timeout/403)는 corruption이 아니라 retryable adapter failure로 분류한다.
 - [x] **Regression Test:** `test_dataset_commit_db_success_manifest_missing_marks_storage_corruption`
+- [x] **Regression Test (엔진 경유):** `test_s3_corrupted_data_object_surfaces_through_engine_as_storage_corruption`
+- [x] **Regression Test (엔진 경유):** `test_s3_transient_read_during_inspect_surfaces_retryable_not_corruption`
 
 ### T0-011 — Multipart upload partial object
 
 - [x] **Trigger:** multipart upload 중 network timeout 또는 process crash.
 - [x] **Failure:** Parquet footer가 깨지거나 일부 row만 존재한다.
 - [x] **Guardrail:** upload complete 후 byte_size/content_hash를 재검증한다.
-- [ ] **Guardrail:** Parquet footer validation을 수행한다.
+- [ ] **Guardrail:** Parquet footer validation을 수행한다. _(범위 결정: storage 계약은 byte-fidelity(size+content_hash)이며 truncation/손상은 매 read hash 검증으로 잡힌다. parquet 구조(footer/magic bytes) 유효성은 compute/read 레이어(DuckDB `read_parquet`) 소관 — S3 storage ratchet 밖, 별도 compute hardening으로 이관. 조용히 건너뛴 것이 아니라 명시적 deferral.)_
 - [x] **Guardrail:** writer row_count만 믿지 않고 S3 read-back byte_size/content_hash를 검증한다 (commit뿐 아니라 매 read마다 `_verify_local_copy`).
 - [x] **Guardrail:** 진짜 multipart 중단 시 `list_objects_v2`에 안 잡히는 orphan part를 `_abort_multipart_uploads`로 정리한다.
 - [x] **Regression Test:** `test_s3_partial_multipart_upload_never_becomes_committed_version`
 - [x] **Regression Test:** `test_s3_real_multipart_upload_failure_aborts_orphaned_parts`
 - [x] **Regression Test:** `test_s3_read_path_detects_truncated_data_object`
 - [x] **Regression Test:** `test_s3_retry_after_storage_timeout_does_not_duplicate_version`
+- [x] **Regression Test (엔진 경유 운영 노출):** `test_s3_real_multipart_interrupt_during_upload_is_visible_in_operations`
 
 ### T0-012 — Dataset version_number 경합
 
@@ -960,20 +965,20 @@
 ## A. Dataset / Storage / Manifest
 
 - [x] A1. manifest JSON은 valid하지만 file list 중 하나가 없는 경우를 검증한다.
-- [ ] A2. file byte_size/hash는 맞지만 row_count metadata가 잘못된 경우를 검증한다.
-- [ ] A3. Parquet schema와 dataset_schemas schema_hash가 다른 경우를 검증한다.
-- [ ] A4. manifest_uri가 같은데 content overwrite가 불가능하게 한다.
-- [ ] A5. staging path transaction_id collision을 방지한다.
-- [ ] A6. abort cleanup이 retry 중인 attempt file을 삭제하지 않는다.
-- [ ] A7. signedUrl expired를 dataset corruption으로 오판하지 않는다.
+- [x] A2. file byte_size/hash는 맞지만 row_count metadata가 잘못된 경우를 검증한다. (DuckDB가 권위 있는 count, post-commit gate가 DB 메타 대조; `test_s3_committed_manifest_row_count_matches_actual_parquet_rows`가 manifest row_count == 실제 parquet rows 불변식 고정)
+- [ ] A3. Parquet schema와 dataset*schemas schema_hash가 다른 경우를 검증한다. *(범위: schema 검증은 compute/check 레이어 — S3 storage ratchet 밖. `VERIFY-SCHEMA-COMPATIBILITY-TOCTOU` 참고)\_
+- [x] A4. manifest_uri가 같은데 content overwrite가 불가능하게 한다. (`_guard_version_not_committed`가 committed version 재사용을 non-retryable conflict로 거부; `test_s3_duplicate_version_commit_is_rejected_without_destroying_existing`)
+- [ ] A5. staging path transaction*id collision을 방지한다. *(transaction*id는 engine `_new_id("dstx")` uuid로 생성돼 충돌 불가; 경로 격리는 `test_s3_staging_cleanup_is_isolated_per_transaction`이 증명)*
+- [x] A6. abort cleanup이 retry 중인 attempt file을 삭제하지 않는다. (commit-실패 cleanup은 version-key, staging cleanup은 transaction-key로 분리; `test_s3_staging_cleanup_is_isolated_per_transaction`)
+- [x] A7. signedUrl expired를 dataset corruption으로 오판하지 않는다. (S3 어댑터는 presigned URL이 아니라 boto3 자격증명 사용; 403/만료는 non-404 → retryable AdapterError, corruption 아님; `test_s3_access_expiry_on_read_is_retryable_not_corruption`)
 - [x] A8. object storage list incomplete 상황에서도 cleanup이 안전하다. (`test_s3_failed_commit_cleanup_uses_known_keys_not_listing` — failed-commit cleanup은 list 대신 known key로 삭제)
-- [ ] A9. APPEND transaction 동시 commit ordering을 검증한다.
+- [x] A9. APPEND transaction 동시 commit ordering을 검증한다. (APPEND는 구현·사용됨(webhook/stream); dataset FOR UPDATE lock + strictly-increasing version_number로 SNAPSHOT과 동일 경로에서 순서 보장; `VERIFY-DATASET-VERSION-CONCURRENCY`, `test_s3_concurrent_dataset_commits_allocate_strictly_increasing_versions`)
 - [x] A10. SNAPSHOT commit 중 downstream transform이 previous latest를 읽지 않는다.
 - [ ] A11. branch HEAD와 global latest를 혼동하지 않는다.
-- [ ] A12. content_hash 기준을 compressed bytes/logical rows 중 하나로 고정한다.
-- [ ] A13. CSV null/empty string policy가 schema/check/ontology에서 일관된다.
-- [ ] A14. not_null check가 whitespace-only string을 어떻게 볼지 명시한다.
-- [ ] A15. unique check case-sensitive/case-insensitive policy를 명시한다.
+- [x] A12. content_hash 기준을 compressed bytes/logical rows 중 하나로 고정한다. (압축 parquet 파일 바이트 hash(`_file_hash`)로 고정; dedup 키가 아니라 verify/trace 키로 사용 — `VERIFY-DATASET-SAME-CONTENT-REATTACH`, S05-A4)
+- [ ] A13. CSV null/empty string policy가 schema/check/ontology에서 일관된다. _(범위: CSV 파싱/check 정책은 compute/check 레이어 — S3 storage ratchet 밖)_
+- [ ] A14. not*null check가 whitespace-only string을 어떻게 볼지 명시한다. *(범위: check 레이어 — S3 storage ratchet 밖)\_
+- [ ] A15. unique check case-sensitive/case-insensitive policy를 명시한다. _(범위: check 레이어 — S3 storage ratchet 밖)_
 - [x] A16. 제품이 `FOUNDRY_LITE_ADAPTER_PROFILE=s3-storage` 설정으로 부팅될 때 composition-root가 실제로 S3 어댑터를 선택·구동한다 (어댑터 직접 주입이 아니라 선택 경로 + HTTP 엔트리포인트 e2e). (`test_s3_composition_root_selects_adapter_from_profile_and_runs_full_cycle`, `test_s3_api_end_to_end_preview_reads_through_s3_and_surfaces_corruption`)
 
 ## B. Source / Sync / Connector
