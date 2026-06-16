@@ -455,7 +455,7 @@ linkTypes:
         foundry.ontology.apply(bad_link, ctx=ctx)
 
 
-def test_link_skips_missing_target_object(foundry: FoundryLite) -> None:
+def test_link_reports_missing_target_object(foundry: FoundryLite) -> None:
     prepare_indexed_demo(foundry)
     with foundry.engine.begin() as conn:
         conn.execute(
@@ -463,7 +463,12 @@ def test_link_skips_missing_target_object(foundry: FoundryLite) -> None:
                 (db.object_records.c.object_type_api_name == "Customer") & (db.object_records.c.object_id == "C-100")
             )
         )
-    assert foundry.objects.links("Order", "O-1001", "OrderCustomer") == []
+    links = foundry.objects.links("Order", "O-1001", "OrderCustomer")
+
+    assert links[0]["to"]["objectType"] == "Customer"
+    assert links[0]["to"]["objectId"] == "C-100"
+    assert links[0]["to"]["targetMissing"] is True
+    assert links[0]["warning"]["type"] == "link_target_missing"
 
 
 def test_transforms_sdk_decorator_and_logging(caplog) -> None:

@@ -35,6 +35,9 @@ class ObjectLinksService(CoreService):
                     conn, ctx, link["to_api_name"], link["to_object_id"]
                 )
                 if target is None:
+                    results.append(
+                        self._missing_target_payload(link_type_api_name, object_type_api_name, object_id, link)
+                    )
                     continue
                 results.append(
                     self._link_payload(
@@ -64,5 +67,27 @@ class ObjectLinksService(CoreService):
                 "objectType": link["to_api_name"],
                 "objectId": link["to_object_id"],
                 "properties": self.policy.mask_properties(ctx, link["to_api_name"], dict(target["properties"])),
+            },
+        }
+
+    def _missing_target_payload(
+        self,
+        link_type_api_name: str,
+        object_type_api_name: str,
+        object_id: str,
+        link: ObjectLinkRow,
+    ) -> ObjectLinkPayload:
+        return {
+            "linkType": link_type_api_name,
+            "from": {"objectType": object_type_api_name, "objectId": object_id},
+            "to": {
+                "objectType": link["to_api_name"],
+                "objectId": link["to_object_id"],
+                "properties": {},
+                "targetMissing": True,
+            },
+            "warning": {
+                "type": "link_target_missing",
+                "message": "link target object is not available in the active object index",
             },
         }
