@@ -232,9 +232,9 @@ run_flaky_gate() {
 
   echo "== Dynamic: flaky pytest detector (3 repeated random + parallel runs) =="
   # Re-run the suite without coverage instrumentation under pytest-xdist three
-  # times. pytest-randomly chooses a fresh seed each run, so order coupling,
-  # shared-resource races, or unstable collection cannot be waved through as
-  # "passed once".
+  # times. The detector injects a fresh pytest-randomly seed per iteration and
+  # shares that seed across xdist workers, so order coupling, shared-resource
+  # races, or unstable collection cannot be waved through as "passed once".
   uv run python scripts/quality/check_flaky_detector.py \
     --iterations 3 \
     --command "uv run pytest tests -n auto --no-header -q"

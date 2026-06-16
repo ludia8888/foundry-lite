@@ -25,6 +25,8 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "flaky_detector.json"
 DEFAULT_COMMAND = "uv run pytest tests -n auto --no-header -q"
 DEFAULT_ITERATIONS = 3
+PYTEST_RANDOMLY_SEED_MAX = 2**32 - 1
+STDIO_TAIL_LINES = 120
 SUMMARY_TOKEN = re.compile(r"\d+\s+(?:passed|failed|error|errors|skipped|xfailed|xpassed|warnings?|deselected)")
 
 
@@ -34,6 +36,8 @@ class FlakyRun:
     returncode: int
     summary: str
     duration_seconds: float
+    command: list[str]
+    randomly_seed: int | None
     stdout_tail: list[str]
     stderr_tail: list[str]
 
@@ -47,7 +51,7 @@ class FlakyReport:
     runs: list[FlakyRun]
 
 
-def _tail_lines(value: str, *, limit: int = 20) -> list[str]:
+def _tail_lines(value: str, *, limit: int = STDIO_TAIL_LINES) -> list[str]:
     lines = [line for line in value.splitlines() if line.strip()]
     return lines[-limit:]
 
@@ -60,11 +64,56 @@ def _pytest_summary(stdout: str, stderr: str) -> str:
     return "<no pytest summary>"
 
 
-def _run_once(command: Sequence[str], *, cwd: Path, iteration: int) -> FlakyRun:
+def _uses_pytest(command: Sequence[str]) -> bool:
+    return any(Path(token).name in {"pytest", "py.test"} for token in command)
+
+
+def _has_explicit_randomly_seed(command: Sequence[str]) -> bool:
+    # pytest-randomly CLI flag, not a credential.
+    return any(
+        token == "--randomly-seed" or token.startswith("--randomly-seed=")  # nosec B105
+        for token in command
+    )
+
+
+def _disables_pytest_randomly(command: Sequence[str]) -> bool:
+    for index, token in enumerate(command):
+        if token == "-p" and index + 1 < len(command) and command[index + 1] == "no:randomly":  # nosec B105
+            return True
+        # pytest plugin flag, not a credential.
+        if token == "-pno:randomly":  # nosec B105
+            return True
+    return False
+
+
+def _should_manage_randomly_seed(command: Sequence[str]) -> bool:
+    return _uses_pytest(command) and not _has_explicit_randomly_seed(command) and not _disables_pytest_randomly(command)
+
+
+def _seed_for_iteration(seed_base: int, iteration: int) -> int:
+    seed = (seed_base + ((iteration - 1) * 1_000_003)) % PYTEST_RANDOMLY_SEED_MAX
+    return seed or PYTEST_RANDOMLY_SEED_MAX
+
+
+def _command_for_iteration(
+    command: Sequence[str],
+    *,
+    iteration: int,
+    seed_base: int | None,
+) -> tuple[list[str], int | None]:
+    if seed_base is None:
+        return list(command), None
+
+    seed = _seed_for_iteration(seed_base, iteration)
+    return [*command, f"--randomly-seed={seed}"], seed
+
+
+def _run_once(command: Sequence[str], *, cwd: Path, iteration: int, seed_base: int | None) -> FlakyRun:
+    iteration_command, randomly_seed = _command_for_iteration(command, iteration=iteration, seed_base=seed_base)
     started_at = time.monotonic()
     # The command is CI-controlled and never uses shell=True.
     result = subprocess.run(  # nosec B603
-        list(command),
+        iteration_command,
         cwd=cwd,
         capture_output=True,
         text=True,
@@ -77,6 +126,8 @@ def _run_once(command: Sequence[str], *, cwd: Path, iteration: int) -> FlakyRun:
         returncode=result.returncode,
         summary=_pytest_summary(result.stdout, result.stderr),
         duration_seconds=round(duration, 3),
+        command=iteration_command,
+        randomly_seed=randomly_seed,
         stdout_tail=_tail_lines(result.stdout),
         stderr_tail=_tail_lines(result.stderr),
     )
@@ -85,7 +136,8 @@ def _run_once(command: Sequence[str], *, cwd: Path, iteration: int) -> FlakyRun:
 def run_gate(command: Sequence[str], *, iterations: int, cwd: Path) -> FlakyReport:
     if iterations < 2:
         raise ValueError("flaky detection needs at least two iterations")
-    runs = [_run_once(command, cwd=cwd, iteration=index) for index in range(1, iterations + 1)]
+    seed_base = time.time_ns() % PYTEST_RANDOMLY_SEED_MAX if _should_manage_randomly_seed(command) else None
+    runs = [_run_once(command, cwd=cwd, iteration=index, seed_base=seed_base) for index in range(1, iterations + 1)]
     outcomes = {(run.returncode, run.summary) for run in runs}
     is_stable_outcome = len(outcomes) == 1
     gate_pass = is_stable_outcome and all(run.returncode == 0 for run in runs)
@@ -112,7 +164,8 @@ def write_report(output: Path, report: FlakyReport) -> None:
 def _print_failure(report: FlakyReport, output: Path) -> None:
     print("Release gate blocked: pytest results were not stable across repeated runs.")
     for run in report.runs:
-        print(f"- iteration {run.iteration}: rc={run.returncode}, summary={run.summary}")
+        seed_note = f", randomly_seed={run.randomly_seed}" if run.randomly_seed is not None else ""
+        print(f"- iteration {run.iteration}: rc={run.returncode}, summary={run.summary}{seed_note}")
     if not report.is_stable_outcome:
         print("- repeated runs produced different outcomes")
     print(f"Report: {output.relative_to(ROOT)}")

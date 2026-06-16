@@ -30,6 +30,19 @@ REPO_ROOT = _repo_root()
 DEMO_ROOT = REPO_ROOT / "examples" / "supply-chain-demo"
 
 
+def _configure_xdist_foundry_home(worker_id: str | None) -> None:
+    if not worker_id or os.environ.get("FOUNDRY_LITE_HOME"):
+        return
+
+    os.environ["FOUNDRY_LITE_HOME"] = str(REPO_ROOT / ".foundry-lite-pytest-xdist" / f"{worker_id}-{os.getpid()}")
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    worker_input = getattr(config, "workerinput", None)
+    worker_id = worker_input.get("workerid") if isinstance(worker_input, dict) else None
+    _configure_xdist_foundry_home(worker_id)
+
+
 @pytest.fixture
 def foundry(tmp_path: Path) -> FoundryLite:
     return FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
