@@ -9,12 +9,12 @@ from foundry_lite.infrastructure.adapters.debezium_cdc import (
     DebeziumPostgresSourceConfig,
     DebeziumPostgresStreamAdapter,
 )
+from foundry_lite.infrastructure.adapters.elasticsearch_search import ElasticsearchAdapter, ElasticsearchAdapterConfig
 from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamAdapter,
     KafkaStreamAdapterConfig,
     KafkaStreamSubscription,
 )
-from foundry_lite.infrastructure.adapters.opensearch_search import OpenSearchAdapter, OpenSearchAdapterConfig
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
 from foundry_lite.infrastructure.adapters.scale_foundation import (
     FakeConnectorAdapter,
@@ -45,7 +45,7 @@ __all__ = [
     "LocalSearchAdapter",
     "LocalStreamAdapter",
     "LocalWorkflowAdapter",
-    "OpenSearchAdapter",
-    "OpenSearchAdapterConfig",
+    "ElasticsearchAdapter",
+    "ElasticsearchAdapterConfig",
     "RestPullConnectorAdapter",
 ]

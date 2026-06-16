@@ -54,12 +54,12 @@ def test_runtime_adapter_factories_fail_closed_for_unknown_profiles(tmp_path: Pa
         _workflow_adapter("typo-profile")
 
 
-def test_runtime_search_adapter_selects_opensearch_and_rejects_unknown_profile(
+def test_runtime_search_adapter_selects_elasticsearch_and_rejects_unknown_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("FOUNDRY_LITE_SEARCH_PROFILE", "opensearch")
+    monkeypatch.setenv("FOUNDRY_LITE_SEARCH_PROFILE", "elasticsearch")
     adapter = _search_adapter("local")
-    assert adapter.profile_name == "opensearch"
+    assert adapter.profile_name == "elasticsearch"
 
     monkeypatch.setenv("FOUNDRY_LITE_SEARCH_PROFILE", "missing-search")
     with pytest.raises(ValueError, match="unknown search adapter profile"):

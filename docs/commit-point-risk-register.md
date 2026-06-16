@@ -8,8 +8,8 @@ have succeeded while another durable state still points to a different reality.
 The product loop under review is:
 
 ```text
-CSV/PostgreSQL snapshot -> DuckDB transform -> Ontology/Object -> Action
--> Materialization -> Downstream Transform
+CSV/local snapshot or PostgreSQL-backed repository proof -> DuckDB transform
+-> Ontology/Object -> Action -> Materialization -> Downstream Transform
 ```
 
 The most important question for every row is not "does the feature run?", but
@@ -59,7 +59,7 @@ repair later.
 | T0-20 | CDC primary-key update policy | Sprint 39, 40 | Covered | `VERIFY-CDC-PK-UPDATE-POLICY` freezes the current MVP policy as fail-closed: a CDC update where `before` and `after` primary keys identify different object ids raises `ValidationFailed` during parsing instead of silently creating a second active object, deleting/recreating identity, or breaking action/link history. |
 | T0-21 | Shadow reindex switches without action-edit replay | Sprint 41 | Covered | `S41-A5` and `VERIFY-SHADOW-REINDEX` prove action edit properties replay into the shadow rebuild before switch. |
 | T0-22 | Shadow alias/pointer switch mixes old/new cursor pages | Sprint 41 | Covered | `S41-H1`, `S41-H2`, `VERIFY-ACTIVE-INDEX-POINTER-FLAKE`, and `VERIFY-SHADOW-SEARCH-PROJECTION-EDGES` prove explicit active pointer persistence, compare-and-swap promotion, stable concurrent first-pointer creation, cursor tokens bound to `active_index_version`, and fail-safe cursor rejection after a shadow promotion changes the serving index. |
-| T0-23 | OpenSearch treated as source of truth | Sprint 42 | Covered | `S42-A3` and `VERIFY-SHADOW-SEARCH-PROJECTION-EDGES` prove search failure does not block get/basic filters, stale lower-version search updates cannot overwrite newer projection docs, and search-hit entry re-reads the object store while exposing both the stale projection version and current object version before action execution. |
+| T0-23 | Elasticsearch treated as source of truth | Sprint 42 | Covered | `S42-A3` and `VERIFY-SHADOW-SEARCH-PROJECTION-EDGES` prove search failure does not block get/basic filters, stale lower-version search updates cannot overwrite newer projection docs, and search-hit entry re-reads the object store while exposing both the stale projection version and current object version before action execution. |
 | T0-24 | Masking applied only to display, not filter/sort/search | Sprint 34, 42 | Partial | `S34-A3` and `test_masked_property_cannot_filter_sort_search` now prove non-finance/non-admin users cannot use masked `Order.margin` in object query filters, sort order, full-text search mapping, or dynamic object-set filters; search still re-reads object records for response masking. Remaining future proof: aggregate/export/materialized-dataset paths must apply the same property-permission rule when those surfaces exist. |
 | T0-25 | PostgreSQL RLS tenant context leaks through connection pool | Sprint 34 | Covered | `S34-A4` and `test_rls_tenant_context_reset_between_pooled_connections` prove RLS hides tenant rows with/without tenant context and that the same pooled PostgreSQL backend connection can be reused across tenant-demo, no-tenant, and tenant-other transactions without leaking the previous transaction's tenant context. The test asserts the same `pg_backend_pid()` is reused while `SET LOCAL` tenant context resets at transaction end. |
 | T0-26 | Dev header-trust auth enabled in production | Sprint 36A | Covered | `S36A-A9`, `VERIFY-PRODUCTION-AUTH-GUARD`, and `test_production_refuses_dev_header_trust_auth` prove production runtime fails startup when `header-trust`, `local_header_trust`, `demo`, or `demo_admin` auth is selected. |

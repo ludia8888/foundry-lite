@@ -131,7 +131,7 @@ Foundry-lite는 Python 기반 modular monolith 안에서 dataset transaction, tr
 | Object Store | Order/Customer object indexing, query, link traversal, object sets, shadow reindex proof, CDC indexing proof | 대규모 production search/object serving 튜닝은 미래 과제입니다. |
 | Action Runtime | `ApproveOrder`, expected object version, idempotency, audit, outbox, object edit | real ERP writeback은 mock/local proof 수준입니다. |
 | Materialization | `ops.action_log`, `ops.order_current`, watermark/source version proof | 더 많은 materialization type은 v1.5 이후 영역입니다. |
-| Search | local/fake search adapter, optional OpenSearch adapter, rebuild/orphan proof | managed live OpenSearch 운영 배포는 아직 미래 과제입니다. |
+| Search | local/fake search adapter, optional Elasticsearch adapter, rebuild/orphan proof | managed live Elasticsearch 운영 배포는 아직 미래 과제입니다. |
 | Stream/CDC | local/fake stream adapter, Kafka-compatible worker proof, Debezium-shaped CDC proof | 계속 도는 production worker와 운영 패키징은 아직 미래 과제입니다. |
 | Security | tenant context, RBAC, property masking, deny audit, Postgres RLS contract proof | real JWT/OIDC adapter는 아직 미래 과제입니다. |
 | Observability | structured trace keys, OpenTelemetry, Prometheus metrics, Grafana compose profile | 운영 환경 전체 배포 runbook은 아직 확장 과제입니다. |
@@ -322,7 +322,7 @@ flowchart TB
         S2["PostgreSQL"]
         S3["Spark / Flink"]
         S4["Kafka / Redpanda"]
-        S5["OpenSearch"]
+        S5["Elasticsearch"]
         S6["Temporal"]
         S7["SaaS / REST / CDC connectors"]
         S8["OIDC / SSO"]
@@ -550,7 +550,7 @@ Scale Foundation의 핵심은 "지금은 작은 구현으로 돌리되, 제품 �
 | `DatasetTransactionRepository` | SQLAlchemy transaction rows | stronger transactional DB semantics | `tests/contracts/test_dataset_transaction_repository_contract.py` |
 | `ComputeAdapter` | DuckDB, fake compute | Spark/Flink/Ray-style runners | `tests/contracts/test_compute_adapter_contract.py` |
 | `StreamAdapter` | local/fake stream, Kafka-compatible adapter proof | Kafka/Redpanda production profile | `tests/contracts/test_stream_adapter_contract.py` |
-| `SearchAdapter` | local/fake, optional OpenSearch adapter | managed OpenSearch operations | `tests/contracts/test_search_adapter_contract.py` |
+| `SearchAdapter` | local/fake, optional Elasticsearch adapter | managed Elasticsearch operations | `tests/contracts/test_search_adapter_contract.py` |
 | `WorkflowAdapter` | local/fake workflow | Temporal | `tests/contracts/test_workflow_adapter_contract.py` |
 | `ConnectorAdapter` | local/fake, REST adapter, Debezium wrapper proof | SaaS connectors, durable registry, retry workers | `tests/contracts/test_connector_adapter_contract.py` |
 | `AuthProvider` | header trust/demo profiles | OIDC/SSO/JWT | `tests/contracts/test_auth_provider_contract.py` |
@@ -825,7 +825,7 @@ sequenceDiagram
 
 ## 로드맵
 
-Sprint 00-36은 MVP core, Sprint 02A는 scale-ready foundation, Sprint 37-45는 MVP 이후 확장입니다.
+Sprint 00-36은 MVP core, Sprint 02A는 scale-ready foundation, Sprint 36A는 MVP 운영 안정성 보강입니다. Sprint 37-42는 현재 checkout에 MVP 이후 확장 proof가 들어와 있고, Sprint 43-45의 Iceberg/Spark/Kubernetes 운영 패키지는 아직 future scope입니다.
 
 ```mermaid
 gantt
@@ -841,8 +841,9 @@ gantt
     Operations security SDK release gate :done, s33, 2026-06-12, 3d
     section Scale Foundation
     Port adapter contract boundary       :done, s02a, 2026-06-09, 4d
+    Operational hardening                :done, s36a, 2026-06-13, 1d
     section v1.5 Expansion
-    REST webhook stream CDC search       :active, s37, 2026-06-14, 5d
+    REST webhook stream CDC search       :done, s37, 2026-06-14, 5d
     Iceberg Spark deployment hardening   :s43, 2026-06-19, 5d
 ```
 
@@ -858,8 +859,9 @@ gantt
 | Real CEL/JSON Logic evaluator | 목표, 현재 safeExpression subset |
 | Real external ERP/webhook writeback | 목표, 현재 mock/local proof |
 | Production connector registry/retry workers | 목표 |
-| Managed OpenSearch deployment | 목표, adapter/projection proof는 존재 |
+| Managed Elasticsearch deployment | 목표, adapter/projection proof는 존재 |
 | Continuously running CDC/search workers | 목표 |
+| Iceberg/Spark/Kubernetes production package | 목표, Sprint 43-45 future scope |
 | Broader Operations UI | 목표, 기본 panel/detail/retry/replay는 존재 |
 
 ## 문서 지도

@@ -4,6 +4,8 @@
 
 이 문서는 Foundry-lite 문서 체계의 **외부 근거 원본**이다. Palantir Foundry 공개 문서에서 확인 가능한 원칙을 정리하고, 그 원칙이 [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md), [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md), [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)에 어떻게 반영되는지 연결한다.
 
+> 체크박스 해석 주의: 이 문서의 `[ ]`는 제품 구현 완료 상태가 아니라, 공개 근거를 설계 문서에 연결해 읽기 위한 추적 템플릿이다. 현재 구현 완료 여부는 [Implementation Status](./docs/implementation-status.md), [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md), [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)을 따른다.
+
 - [ ] 이 문서는 Foundry 공개 문서에서 확인 가능한 아키텍처 원칙과 기능 경계를 정리한다.
 - [ ] 제품 목표와 구현 설계의 원본은 [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)다.
 - [ ] 실행 순서와 완료 체크리스트의 원본은 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)이다.
@@ -217,9 +219,9 @@ Foundry의 공개 기술 스택은 “한 가지 프레임워크로 모든 것�
 ### Foundry-lite 설계 반영
 
 - [ ] v1 compute는 Spark/Flink가 아니라 [DuckDB canonical runner](./foundry_lite_development_plan_ko_sprintified.md#7-transform-engine-설계)로 제한한다.
-- [ ] Spark, OpenSearch, Iceberg production catalog는 [Sprint 42~44](./foundry_lite_sprint_breakdown_ko.md#sprint-42--opensearch-adapter-for-search-heavy-object-types) 이후 확장으로 둔다.
+- [ ] Spark와 Iceberg production catalog는 Sprint 43~44 future scope로 둔다. Elasticsearch는 현재 adapter/projection proof가 있고, managed live cluster 운영은 [Sprint 42 이후 운영 과제](./foundry_lite_sprint_breakdown_ko.md#sprint-42--elasticsearch-adapter-for-search-heavy-object-types)로 둔다.
 - [ ] TypeScript/OpenAPI 기반 SDK 방향은 [OSDK-lite 설계](./foundry_lite_development_plan_ko_sprintified.md#16-osdk-lite-설계)와 [Sprint 35](./foundry_lite_sprint_breakdown_ko.md#sprint-35--generated-typescript-sdk와-web-sdk-전환)에 반영한다.
-- [ ] API/Worker/CLI 백엔드는 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)에 따라 Python 3.12+, FastAPI, Pydantic, SQLAlchemy/Alembic, Temporal Python SDK 기준으로 구현한다.
+- [ ] API/Worker/CLI 백엔드는 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)에 따라 Python 3.12+, FastAPI, Pydantic v2, SQLAlchemy, DuckDB, Typer, local/direct workflow boundary 기준으로 구현한다. Alembic migration history와 Temporal Python SDK execution은 future scope다.
 
 ## 종단간 데이터 흐름
 
@@ -352,7 +354,7 @@ Foundry에서 공개적으로 확인되는 엔지니어링 프랙티스는 다�
 
 ### Foundry-lite 설계 반영
 
-- [ ] 내부 구현 제품명을 추측하지 않고, Foundry-lite는 PostgreSQL, MinIO/S3, DuckDB, Temporal처럼 명시적으로 선택한 v1 스택만 문서화한다.
+- [ ] 내부 구현 제품명을 추측하지 않고, Foundry-lite는 현재 checkout의 SQLAlchemy/local filesystem/DuckDB/local workflow boundary와, future target인 PostgreSQL/MinIO/S3/Temporal을 명시적으로 구분해 문서화한다.
 - [ ] 공개 문서에서 확인된 원칙은 유지하되, 구현은 [v1 adapter boundary](./foundry_lite_development_plan_ko_sprintified.md#35-v1-adapter-boundary)를 통해 나중에 교체 가능하게 둔다.
 - [ ] 최신성 검증이 필요한 Palantir 제품 세부는 새 구현 결정을 내리기 전 별도 조사로 갱신한다.
 - [ ] MVP 구현자는 이 보고서를 Foundry의 내부 복제 문서가 아니라 Foundry-lite의 설계 원칙 참고 문서로 읽는다.

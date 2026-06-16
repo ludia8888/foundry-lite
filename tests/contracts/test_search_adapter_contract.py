@@ -3,14 +3,14 @@ from __future__ import annotations
 import pytest
 from foundry_lite.application.ports.search_adapter import SearchAdapter, SearchDocument, SearchIndexMapping, SearchQuery
 from foundry_lite.infrastructure.adapters import (
+    ElasticsearchAdapter,
+    ElasticsearchAdapterConfig,
     FakeSearchAdapter,
     LocalSearchAdapter,
-    OpenSearchAdapter,
-    OpenSearchAdapterConfig,
 )
 
 
-class FakeOpenSearchIndices:
+class FakeElasticsearchIndices:
     def __init__(self) -> None:
         self.created: set[str] = set()
 
@@ -26,9 +26,9 @@ class FakeOpenSearchIndices:
         return {"acknowledged": True, "body": body}
 
 
-class FakeOpenSearchClient:
+class FakeElasticsearchClient:
     def __init__(self) -> None:
-        self.indices = FakeOpenSearchIndices()
+        self.indices = FakeElasticsearchIndices()
         self.documents: dict[tuple[str, str], dict[str, object]] = {}
 
     def index(self, *, index: str, id: str, body: dict[str, object], refresh: bool = False) -> object:
@@ -60,9 +60,9 @@ class FakeOpenSearchClient:
         self.documents[(index, id)] = dict(document)
         return {"result": "updated", "refresh": refresh}
 
-    def delete(self, *, index: str, id: str, ignore: tuple[int, ...] = (), refresh: bool = False) -> object:
+    def delete(self, *, index: str, id: str, ignore_status: tuple[int, ...] = (), refresh: bool = False) -> object:
         self.documents.pop((index, id), None)
-        return {"result": "deleted", "ignore": ignore, "refresh": refresh}
+        return {"result": "deleted", "ignore_status": ignore_status, "refresh": refresh}
 
     def search(self, *, index: str, body: dict[str, object], size: int) -> dict[str, object]:
         hits = [
@@ -73,14 +73,17 @@ class FakeOpenSearchClient:
         return {"hits": {"hits": hits[:size]}}
 
 
-@pytest.fixture(params=["local", "fake", "opensearch"])
+@pytest.fixture(params=["local", "fake", "elasticsearch"])
 def adapter(request: pytest.FixtureRequest) -> SearchAdapter:
     profile = str(request.param)
     if profile == "local":
         return LocalSearchAdapter()
     if profile == "fake":
         return FakeSearchAdapter()
-    return OpenSearchAdapter(OpenSearchAdapterConfig(endpoint="http://search:9200"), client=FakeOpenSearchClient())
+    return ElasticsearchAdapter(
+        ElasticsearchAdapterConfig(endpoint="http://search:9200"),
+        client=FakeElasticsearchClient(),
+    )
 
 
 def test_search_adapter_contract_upsert_search_and_delete(adapter: SearchAdapter) -> None:

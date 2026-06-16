@@ -9,6 +9,8 @@ from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.infrastructure.adapters import (
     DuckDBComputeAdapter,
+    ElasticsearchAdapter,
+    ElasticsearchAdapterConfig,
     FakeComputeAdapter,
     FakeConnectorAdapter,
     FakeDatasetStorageAdapter,
@@ -20,8 +22,6 @@ from foundry_lite.infrastructure.adapters import (
     LocalSearchAdapter,
     LocalStreamAdapter,
     LocalWorkflowAdapter,
-    OpenSearchAdapter,
-    OpenSearchAdapterConfig,
 )
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
@@ -119,9 +119,9 @@ def _search_adapter(adapter_profile: str) -> SearchAdapter:
         return LocalSearchAdapter()
     if search_profile == "fake-storage":
         return FakeSearchAdapter()
-    if search_profile == "opensearch":
-        endpoint = os.getenv("FOUNDRY_LITE_OPENSEARCH_URL", "http://localhost:9200")
-        return OpenSearchAdapter(OpenSearchAdapterConfig(endpoint=endpoint))
+    if search_profile == "elasticsearch":
+        endpoint = os.getenv("FOUNDRY_LITE_ELASTICSEARCH_URL", "http://localhost:9200")
+        return ElasticsearchAdapter(ElasticsearchAdapterConfig(endpoint=endpoint))
     raise ValueError(f"unknown search adapter profile: {search_profile}")
 
 

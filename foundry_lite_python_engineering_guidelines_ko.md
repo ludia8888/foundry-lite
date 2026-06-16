@@ -48,9 +48,9 @@ Foundry-lite의 v1 백엔드는 **Python**을 기본 언어로 한다. 프론트
 
 - [ ] Python 버전은 `3.12` 이상을 기본으로 한다.
 - [ ] API 서버는 `FastAPI`와 `Pydantic v2`를 사용한다.
-- [ ] DB migration은 `Alembic`을 사용한다.
+- [ ] 현재 DB schema는 SQLAlchemy metadata bootstrap + schema revision guard로 관리하고, `Alembic` migration history는 future scope로 둔다.
 - [ ] DB 접근은 `SQLAlchemy 2.x`를 기본으로 하되, transaction 경계는 application service에서 명시한다.
-- [ ] Worker는 `Temporal Python SDK`를 사용한다.
+- [ ] 현재 Worker는 local/direct `WorkflowAdapter`와 one-shot stream archive entrypoint를 사용하고, `Temporal Python SDK` execution은 future scope로 둔다.
 - [ ] CLI는 `Typer`를 사용한다.
 - [ ] 데이터 처리 runner는 `DuckDB`, `Polars`, `Pandas`를 상황에 맞게 사용하되, Dataset commit protocol은 공통으로 지킨다.
 - [ ] 코드 품질 도구는 `ruff`, `mypy` 또는 `pyright`, `pytest`를 사용한다.
@@ -153,7 +153,7 @@ Foundry-lite는 백엔드 모듈을 기능별로 나누되, 의존성 방향은 
 ```text
 apps/
   api/                         # FastAPI 진입점
-  worker/                      # Temporal worker 진입점
+  worker/                      # local/direct worker entrypoint, future Temporal worker 진입점
   cli/                         # Typer CLI 진입점
   web/                         # Next.js frontend
 
@@ -165,7 +165,7 @@ libs/
       object_store/
       action_runtime/
     application/               # use case와 transaction orchestration
-    infrastructure/            # DB, object storage, Temporal, external adapter
+    infrastructure/            # DB, object storage, workflow, stream/search/connector adapter
     interfaces/                # API schemas, CLI adapters, generated contracts
     observability/             # logging, metrics, tracing helpers
     security/                  # auth context, RBAC, tenant isolation helpers
@@ -236,15 +236,15 @@ Scale Foundation은 “처음부터 Spark, Flink, Kafka, S3를 모두 붙인다�
 | Boundary | 현재 작은 구현 | 나중의 큰 구현 | code가 지켜야 하는 규칙 |
 |---|---|---|---|
 | MetadataRepository | SQLite/SQLAlchemy local DB | PostgreSQL, partitioned tables | service는 DB dialect 세부를 알지 않는다. |
-| DatasetStorageAdapter | local filesystem, MinIO | S3/GCS/Azure Blob, Iceberg storage | dataset commit protocol은 storage 종류와 무관해야 한다. |
-| DatasetTransactionRepository | 단일 DB transaction | PostgreSQL transaction + Alembic | OPEN/COMMITTED/ABORTED 상태 전이는 동일해야 한다. |
+| DatasetStorageAdapter | local filesystem, fake storage | MinIO/S3/GCS/Azure Blob, Iceberg storage | dataset commit protocol은 storage 종류와 무관해야 한다. |
+| DatasetTransactionRepository | SQLAlchemy transaction + schema revision guard | PostgreSQL transaction + Alembic migration history | OPEN/COMMITTED/ABORTED 상태 전이는 동일해야 한다. |
 | RuntimeRepository | SQLAlchemy audit/outbox/lineage/run table | PostgreSQL partitioned audit/outbox, later stream publisher state | audit, outbox, lineage, run state의 key 의미가 동일해야 한다. |
 | ComputeAdapter | DuckDB | Spark, Flink bounded job, Ray | input version, output staging, lineage, health gate는 동일해야 한다. |
-| EventPublisher/StreamAdapter | PostgreSQL outbox | Kafka/Redpanda | event idempotency, DLQ, replay cursor는 동일해야 한다. |
-| SearchAdapter | PostgreSQL JSON/generated column | OpenSearch | search는 projection이고 object store가 source of truth다. |
+| EventPublisher/StreamAdapter | SQLAlchemy outbox + local/fake stream + Kafka-compatible proof | Kafka/Redpanda publisher and continuously running worker | event idempotency, DLQ, replay cursor는 동일해야 한다. |
+| SearchAdapter | local/fake + Elasticsearch-compatible projection proof | managed Elasticsearch cluster | search는 projection이고 object store가 source of truth다. |
 | WorkflowAdapter | direct call/local worker | Temporal | retry, timeout, run state, replay key를 잃지 않는다. |
-| ConnectorAdapter | CSV/local/mock connector | REST, webhook, CDC, SaaS connector | sync run lifecycle과 cursor/checkpoint 의미가 동일해야 한다. |
-| AuthProvider/PolicyAdapter | dev header + RBAC | OIDC/SSO, ABAC/CBAC | permission decision과 audit deny 형식이 동일해야 한다. |
+| ConnectorAdapter | CSV/local, REST, webhook, Debezium wrapper proof | durable registry, retry workers, SaaS connector | sync run lifecycle과 cursor/checkpoint 의미가 동일해야 한다. |
+| AuthProvider/PolicyAdapter | local/demo/header-trust + RBAC + production unsafe-profile guard | OIDC/SSO, ABAC/CBAC | permission decision과 audit deny 형식이 동일해야 한다. |
 
 Infra swap 체크리스트:
 
@@ -261,7 +261,7 @@ Infra swap 체크리스트:
 
 Scale Foundation 이후 금지:
 
-- [ ] application service가 `boto3`, `pyspark`, Kafka client, OpenSearch client, Temporal client, vendor SaaS SDK를 직접 import한다.
+- [ ] application service가 `boto3`, `pyspark`, Kafka client, Elasticsearch client, Temporal client, vendor SaaS SDK를 직접 import한다.
 - [ ] repository가 permission, precondition, merge policy 같은 비즈니스 판단을 한다.
 - [ ] adapter가 외부 실패를 숨기고 성공처럼 반환한다.
 - [ ] Spark/Kafka/S3 같은 대형 도구를 붙였지만 dataset transaction, audit, lineage, replay contract를 우회한다.
@@ -383,7 +383,7 @@ Foundry-lite는 데이터 변경 이력이 핵심이다. “DB에 저장됐다�
 | PermissionError | 권한 없음, tenant mismatch | audit deny 기록 |
 | ConflictError | object version 충돌, duplicate idempotency key | 재조회/재시도 안내 |
 | NotFoundError | dataset/action/object 없음 | 404와 request_id 반환 |
-| ExternalSystemError | PostgreSQL snapshot 실패, webhook 실패 | retry 또는 DLQ |
+| ExternalSystemError | REST/webhook/stream adapter 실패, future PostgreSQL snapshot 실패 | retry 또는 DLQ |
 | InternalError | 예상하지 못한 버그 | 상세 내부 정보 숨기고 trace/log로 추적 |
 
 ### 8.2 에러 처리 체크리스트
@@ -434,7 +434,9 @@ except Exception:
 
 ## 9. Worker와 비동기 작업
 
-### 9.1 Temporal 원칙
+### 9.1 Workflow / Temporal 원칙
+
+현재 MVP core는 local/direct workflow boundary를 사용한다. 아래 원칙은 future Temporal execution을 도입할 때도 반드시 유지해야 하는 durable workflow 기준이다.
 
 - [ ] Workflow는 결정적이어야 한다.
 - [ ] 외부 API 호출, DB write, 파일 write는 Activity에서 수행한다.

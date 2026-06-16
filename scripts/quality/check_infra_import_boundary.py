@@ -18,7 +18,7 @@ SCALE_INFRA_MODULES = {
     "botocore",
     "confluent_kafka",
     "kafka",
-    "opensearchpy",
+    "elasticsearch",
     "pyflink",
     "pyspark",
     "temporalio",
