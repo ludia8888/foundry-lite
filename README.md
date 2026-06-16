@@ -694,14 +694,34 @@ Foundry-lite는 "기능이 돌아간다"만으로 완료로 보지 않습니다.
 
 ```mermaid
 flowchart TB
-    START["pnpm ci:gate"] --> STATIC["Static checks"]
+    LOCAL["local: pnpm ci:gate"] --> SERIAL["same gates, serial order"]
+
+    PR["GitHub PR / push"] --> STATIC["quality-static"]
+    PR --> COVERAGE["quality-coverage"]
+    PR --> FLAKY["quality-flaky"]
+    PR --> RUNTIME["quality-runtime"]
+    PR --> E2E["quality-e2e"]
+
     STATIC --> TYPES["ruff + mypy + pyright"]
-    TYPES --> ARCH["architecture/import/service DAG gates"]
-    ARCH --> CONTRACT["port/repository/adapter contract tests"]
-    CONTRACT --> UNIT["unit + integration + smoke tests"]
-    UNIT --> RUNTIME["runtime correctness gates"]
-    RUNTIME --> E2E["Playwright E2E"]
-    E2E --> REPORT["artifacts/quality reports"]
+    STATIC --> ARCH["architecture/import/service DAG gates"]
+    STATIC --> CONTRACT["port/repository/adapter contract presence"]
+    STATIC --> SECURITY["Bandit + Semgrep + gitleaks + pip-audit"]
+    COVERAGE --> UNIT["unit + integration + smoke tests"]
+    COVERAGE --> COVERAGE_FLOORS["95% branch + tier/public API coverage"]
+    FLAKY --> REPEAT["3 repeated random + xdist pytest runs"]
+    RUNTIME --> RUNTIME_PROOFS["runtime correctness gates"]
+    E2E --> BROWSER["Playwright browser E2E"]
+
+    TYPES --> AGG["quality-gate aggregate"]
+    ARCH --> AGG
+    CONTRACT --> AGG
+    SECURITY --> AGG
+    UNIT --> AGG
+    COVERAGE_FLOORS --> AGG
+    REPEAT --> AGG
+    RUNTIME_PROOFS --> AGG
+    BROWSER --> AGG
+    AGG --> REPORT["artifacts/quality reports"]
 
     STATIC --> G1["router purity"]
     STATIC --> G2["audit on mutation"]
@@ -717,6 +737,8 @@ flowchart TB
     RUNTIME --> R4["trace continuity"]
     RUNTIME --> R5["failed mutation state"]
 ```
+
+로컬의 `pnpm ci:gate`는 사람이 한 번에 전체 release evidence를 확인하기 쉽도록 여전히 직렬로 돈다. GitHub Actions에서는 같은 스크립트를 `static`, `coverage`, `flaky`, `runtime`, `e2e` lane으로 나누어 동시에 실행하고, 마지막 `quality-gate` aggregate job이 모든 lane의 성공을 확인한다. 즉, branch protection이 보는 required check 이름은 유지하면서도 검사 강도는 낮추지 않는다.
 
 ### 대표 gate
 

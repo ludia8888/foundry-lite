@@ -1027,8 +1027,14 @@ not yet in `ci_gate.sh`. Either a future mutmut release or a migration to
 | `pytest-randomly` | **테스트 순서 의존성** — 한 테스트가 다른 테스트의 부작용에 암묵적으로 의존. seed가 매번 바뀌므로 PR에 들어오면 즉시 실패. |
 | `pytest-xdist` | **race / 공유 자원 충돌** — 같은 파일 경로/env var/tmp 디렉토리에 두 테스트가 동시 쓰기. `-n auto`로 매 게이트 실행마다 검증. |
 
-`ci_gate.sh`는 (a) coverage 측정용 serial pytest 1회 + (b) G19
+`ci_gate.sh`는 (a) coverage 측정용 pytest 1회 + (b) G19
 `check_flaky_detector.py`가 소유한 `-n auto` parallel pytest 3회를 둘 다 돈다.
+로컬 `pnpm ci:gate`는 사람이 한 번에 전체 release evidence를 확인하도록 이 둘을
+직렬로 실행한다. GitHub Actions에서는 같은 스크립트를 `coverage` lane과 `flaky`
+lane으로 분리해 동시에 실행한다. 반복 횟수, coverage threshold, 실패 조건은 그대로
+두며, 마지막 `quality-gate` aggregate job이 두 lane을 포함한 모든 quality lane의
+성공을 확인한다.
+
 parallel run은 coverage 산출 없이 통과/실패와 반복 결과 안정성을 본다.
 
 ### Tier P2 — import-linter로 흡수된 게이트 (✅ 완료 2026-06-10 P2)
