@@ -43,6 +43,8 @@ REQUIRED_S3_TEST_NAMES = (
     "test_s3_storage_failure_is_visible_in_operations",
 )
 
+S3_RATCHET_TEST_PATH = Path("tests/integration/test_s3_dataset_storage_adapter.py")
+
 
 @dataclass(frozen=True)
 class InfraRatchetFinding:
@@ -117,11 +119,11 @@ def _cross_document_findings(root: Path) -> list[InfraRatchetFinding]:
         ),
         root / "docs" / "foundry_lite_tricky_failure_modes_checklist.md": (
             "T0-011",
-            "test_partial_multipart_upload_never_becomes_committed_version",
+            "test_s3_partial_multipart_upload_never_becomes_committed_version",
         ),
         root / "docs" / "implementation-status.md": (
             "Infra Ratchet",
-            "production S3-like adapters",
+            "S3DatasetStorageAdapter",
         ),
         root / "README.md": (
             "Infra Ratchet",
@@ -152,6 +154,8 @@ def _ci_findings(root: Path) -> list[InfraRatchetFinding]:
                 (
                     '"quality:infra-ratchet"',
                     "pnpm quality:infra-ratchet",
+                    '"quality:s3-storage"',
+                    "tests/integration/test_s3_dataset_storage_adapter.py",
                 ),
                 code="missing_ci_wiring",
             )
@@ -163,11 +167,21 @@ def _ci_findings(root: Path) -> list[InfraRatchetFinding]:
             _missing_terms(
                 ci_path,
                 _text(ci_path),
-                ("scripts/quality/check_infra_ratchet.py",),
+                (
+                    "scripts/quality/check_infra_ratchet.py",
+                    "pnpm --silent quality:s3-storage",
+                ),
                 code="missing_ci_wiring",
             )
         )
     return findings
+
+
+def _s3_test_findings(root: Path) -> list[InfraRatchetFinding]:
+    test_path = root / S3_RATCHET_TEST_PATH
+    if not test_path.exists():
+        return [_missing_file(test_path)]
+    return _missing_terms(test_path, _text(test_path), REQUIRED_S3_TEST_NAMES, code="missing_s3_ratchet_test")
 
 
 def collect_findings(root: Path = ROOT) -> list[InfraRatchetFinding]:
@@ -175,6 +189,7 @@ def collect_findings(root: Path = ROOT) -> list[InfraRatchetFinding]:
     findings.extend(_document_findings(root))
     findings.extend(_cross_document_findings(root))
     findings.extend(_ci_findings(root))
+    findings.extend(_s3_test_findings(root))
     return findings
 
 

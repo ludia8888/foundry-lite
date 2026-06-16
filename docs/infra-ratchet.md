@@ -56,8 +56,8 @@ ratchet discipline.
 
 | Order | Infrastructure | Status | Why this order | Cannot advance until |
 |---|---|---|---|---|
-| 1 | MinIO/S3 DatasetStorageAdapter | active-next | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | S3 split-brain, multipart/partial-object, retry, concurrency, cleanup, and operator-evidence proofs exist. |
-| 2 | Iceberg Catalog/TableAdapter | blocked-by-s3 | Iceberg adds a table metadata/catalog commit point on top of object storage. | S3 adapter semantics are proven and serving continues to rely on Foundry dataset commit state. |
+| 1 | MinIO/S3 DatasetStorageAdapter | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet. |
+| 2 | Iceberg Catalog/TableAdapter | active-next | Iceberg adds a table metadata/catalog commit point on top of object storage. | S3 adapter semantics are proven and serving continues to rely on Foundry dataset commit state. |
 | 3 | Spark ComputeAdapter | blocked-by-iceberg | Spark should consume the same Dataset API and pinned versions without knowing storage internals. | Iceberg/S3 inputs can be previewed and transformed without API divergence. |
 | 4 | Temporal WorkflowAdapter | later | Durable workflow execution changes retry/time semantics for long-running operations. | Storage/table/compute commit points already have recovery evidence. |
 | 5 | Managed Elasticsearch deployment | later | The adapter/projection proof exists; deployment/operations should follow after storage commit points. | Search remains a rebuildable projection and live cluster failure evidence is added. |
@@ -82,6 +82,17 @@ test_s3_concurrent_dataset_commits_allocate_strictly_increasing_versions
 test_s3_retry_after_storage_timeout_does_not_duplicate_version
 test_s3_storage_failure_is_visible_in_operations
 ```
+
+Current CI binding:
+
+```text
+pnpm --silent quality:s3-storage
+```
+
+This focused gate runs `tests/integration/test_s3_dataset_storage_adapter.py`
+against MinIO/Testcontainers. The tests use deterministic fault injection on
+the S3 client for timeout/partial-upload edges while still proving the adapter
+against a live S3-compatible object store.
 
 Required implementation constraints:
 

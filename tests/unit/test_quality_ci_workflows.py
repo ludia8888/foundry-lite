@@ -256,6 +256,16 @@ def test_infra_ratchet_is_release_gate_step_after_adapter_taxonomy() -> None:
     assert "pnpm quality:infra-ratchet" in package_json
 
 
+def test_s3_storage_ratchet_is_runtime_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"quality:s3-storage"' in package_json
+    assert "tests/integration/test_s3_dataset_storage_adapter.py" in package_json
+    assert "pnpm --silent quality:s3-storage" in script
+    assert script.index("maybe_run_testcontainers_preflight") < script.index("pnpm --silent quality:s3-storage")
+
+
 def test_stream_archive_worker_script_is_exposed() -> None:
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 

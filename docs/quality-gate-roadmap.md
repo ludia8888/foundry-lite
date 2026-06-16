@@ -86,8 +86,9 @@
 | 25 | fake/local adapter contract test 동일 | contract tests | pass | △ (수동) |
 | 26 | trace key boundary 유지 | `check_trace_continuity.py` | dynamic | ✅ |
 | 27 | 새 boundary에 contract test 동반 | `check_contract_test_per_port.py` | 0개 누락 | ✅ |
-| 28 | adapter 실패 의미 표준화 | `check_adapter_failure_taxonomy.py` | 17 adapter profile | ✅ |
+| 28 | adapter 실패 의미 표준화 | `check_adapter_failure_taxonomy.py` | 19 adapter profile | ✅ |
 | 28.1 | 인프라는 한 번에 하나씩 실패/동시성/복구 증거와 함께 추가 | `check_infra_ratchet.py` | infra ratchet doc/CI/doc-sync violation 0 | ✅ |
+| 28.2 | MinIO/S3 storage ratchet | `quality:s3-storage` | S3 contract/failure/concurrency/retry/cleanup/operator evidence 8 tests | ✅ |
 
 ### §5 코드 컨벤션
 

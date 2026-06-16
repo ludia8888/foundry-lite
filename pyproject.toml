@@ -26,10 +26,14 @@ kafka = [
 elasticsearch = [
   "elasticsearch>=8.15",
 ]
+s3 = [
+  "boto3>=1.35",
+]
 
 [dependency-groups]
 dev = [
   "bandit>=1.7",
+  "boto3>=1.35",
   "httpx2>=2.3.0",
   "mypy>=1.10",
   "pip-audit>=2.7",

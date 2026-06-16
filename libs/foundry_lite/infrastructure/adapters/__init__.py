@@ -16,6 +16,10 @@ from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamSubscription,
 )
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
+from foundry_lite.infrastructure.adapters.s3_dataset_storage import (
+    S3DatasetStorageAdapter,
+    S3DatasetStorageAdapterConfig,
+)
 from foundry_lite.infrastructure.adapters.scale_foundation import (
     FakeConnectorAdapter,
     FakeSearchAdapter,
@@ -48,4 +52,6 @@ __all__ = [
     "ElasticsearchAdapter",
     "ElasticsearchAdapterConfig",
     "RestPullConnectorAdapter",
+    "S3DatasetStorageAdapter",
+    "S3DatasetStorageAdapterConfig",
 ]
