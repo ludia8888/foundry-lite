@@ -564,13 +564,15 @@ test가 경합 스케줄을 직접 만들어야 하며, 그 테스트가 들어�
 검사 기준:
 - 기본 명령은 `uv run pytest tests -n auto --no-header -q`이다.
 - 반복 횟수는 `3`회이며, 각 회차는 pytest-randomly의 fresh seed와 pytest-xdist의
-  병렬 실행을 사용한다.
+  병렬 실행을 사용한다. 단, 한 회차 안의 xdist worker들은 같은 `--randomly-seed`를
+  공유해 테스트 수집 순서 자체가 흔들리지 않게 한다.
 - 모든 회차 return code는 `0`이어야 한다.
 - 모든 회차의 pytest summary는 같아야 한다.
 - 결과는 `artifacts/quality/flaky_detector.json`에 남긴다.
 
 Self-test: `tests/unit/test_quality_flaky_detector.py`가 안정적으로 통과하는 fake runner,
-중간 1회 실패 runner, 통과하더라도 summary가 바뀌는 runner를 검증한다.
+중간 1회 실패 runner, 통과하더라도 summary가 바뀌는 runner, pytest 명령의 회차별 seed
+주입을 검증한다.
 
 ### Tier G16A — adapter error trace-key validation (✅ 완료 2026-06-11)
 

@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 
 ENV = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _run_pytest(tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -136,3 +137,28 @@ def test_xdist_runs_tests_in_parallel(tmp_path: Path) -> None:
     # We do not inspect timing directly here because pytest-xdist's own
     # startup cost makes wall-clock thresholds flaky; the fact that both
     # tests passed under -n 2 is the operational proof.
+
+
+def test_api_smoke_module_collection_is_xdist_safe_without_shared_default_home() -> None:
+    env = {**ENV}
+    env.pop("FOUNDRY_LITE_HOME", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "--no-header",
+            "-n",
+            "2",
+            "--randomly-seed=267726546",
+            "tests/smoke/test_interfaces.py::test_api_healthz_returns_ok",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
