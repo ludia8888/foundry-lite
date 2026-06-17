@@ -252,6 +252,9 @@ run_runtime_gate() {
   echo "== Dynamic: Iceberg storage ratchet =="
   pnpm --silent quality:iceberg
 
+  echo "== Dynamic: Spark compute ratchet =="
+  pnpm --silent quality:spark
+
   echo "== Dynamic: supply-chain demo smoke =="
   rm -rf .foundry-lite-ci-smoke
   FOUNDRY_LITE_HOME=.foundry-lite-ci-smoke pnpm --silent demo:supply-chain --fresh > artifacts/demo/supply-chain.json

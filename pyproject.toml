@@ -63,6 +63,7 @@ dev = [
   "confluent-kafka>=2.6",
   "pyiceberg>=0.8",
   "pyarrow>=17.0",
+  "pyspark>=3.5",
 ]
 
 [project.scripts]

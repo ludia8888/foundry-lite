@@ -27,6 +27,7 @@ from foundry_lite.infrastructure.adapters import (
     LocalWorkflowAdapter,
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
+    SparkComputeAdapter,
 )
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
@@ -107,11 +108,16 @@ def _dataset_storage_adapter(adapter_profile: str, object_storage_root: Path) ->
 
 
 def _compute_adapter(adapter_profile: str) -> DuckDBComputeAdapter:
-    if adapter_profile in {"local", "s3-storage", "iceberg"}:
+    # Compute is selectable independently of storage (like search) so a Spark
+    # runner can transform datasets backed by any storage profile.
+    compute_profile = os.getenv("FOUNDRY_LITE_COMPUTE_PROFILE", adapter_profile)
+    if compute_profile == "spark":
+        return SparkComputeAdapter()
+    if compute_profile in {"local", "s3-storage", "iceberg"}:
         return DuckDBComputeAdapter()
-    if adapter_profile == "fake-storage":
+    if compute_profile == "fake-storage":
         return FakeComputeAdapter()
-    raise ValueError(f"unknown adapter profile: {adapter_profile}")
+    raise ValueError(f"unknown compute profile: {compute_profile}")
 
 
 def _connector_adapter(adapter_profile: str) -> LocalConnectorAdapter:

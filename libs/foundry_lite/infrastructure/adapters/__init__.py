@@ -34,6 +34,7 @@ from foundry_lite.infrastructure.adapters.scale_foundation import (
     LocalStreamAdapter,
     LocalWorkflowAdapter,
 )
+from foundry_lite.infrastructure.adapters.spark_compute import SparkComputeAdapter
 
 __all__ = [
     "DuckDBComputeAdapter",
@@ -42,6 +43,7 @@ __all__ = [
     "FakeConnectorAdapter",
     "FakeDatasetStorageAdapter",
     "FakeComputeAdapter",
+    "SparkComputeAdapter",
     "FakeSearchAdapter",
     "FakeStreamAdapter",
     "FakeWorkflowAdapter",
