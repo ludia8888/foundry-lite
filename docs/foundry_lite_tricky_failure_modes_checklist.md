@@ -991,11 +991,13 @@
 - [x] AI4. catalog가 가리키는 S3 데이터파일 손상을 corruption으로 진단한다. (`test_iceberg_corrupted_data_file_surfaces_through_engine_as_corruption`)
 - [x] AI5. catalog outage(commit 실패)가 FAILED run + retryable adapterFailure로 Operations에 노출된다. (`test_iceberg_catalog_failure_is_visible_in_operations`)
 - [x] AI6. 모호한 commit(timeout) 후 retry가 중복 version을 만들지 않는다. (`test_iceberg_retry_after_ambiguous_commit_does_not_duplicate_version`)
-- [x] AI7. 같은 version id 재사용을 conflict로 거부한다. (`test_iceberg_duplicate_version_commit_is_rejected`)
+- [x] AI7. 같은 version id 재사용을 conflict로 거부하고, duplicate guard의 catalog timeout을 "없는 version"으로 오판하지 않는다. (`test_iceberg_duplicate_version_commit_is_rejected`, `test_iceberg_duplicate_guard_transient_catalog_error_is_retryable`)
 - [x] AI8. 호환 스키마 진화(컬럼 추가)를 지원하고 옛 버전 핀 읽기는 옛 내용을 유지한다. (`test_iceberg_compatible_schema_evolution_across_versions`)
 - [x] AI9. 스냅샷 격리 — 나중 commit/out-of-band head 변경이 이미 commit된 version의 핀 읽기를 바꾸지 않는다. (`test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots`, `test_iceberg_pinned_snapshot_survives_out_of_band_pointer_change`)
 - [x] AI10. 코어 엔진 + S3 warehouse end-to-end: composition-root가 `iceberg` 프로필 선택→ensure/upload/preview가 MinIO 위 Iceberg로 라운드트립. (`test_iceberg_engine_and_s3_warehouse_end_to_end`)
 - [x] AI11. 반복 commit이 모든 version의 핀 내용을 무손실로 유지한다. 동시 same-table commit은 version allocator(SELECT FOR UPDATE)가 직렬화; Iceberg optimistic concurrency는 backstop. (`test_iceberg_repeated_commits_keep_every_version_independently_readable`)
+- [x] AI12. Iceberg manifest의 `content_hash`는 URI/size/row_count 토큰이 아니라 실제 object bytes hash이며, 같은 크기 tamper도 corruption으로 진단한다. (`test_iceberg_manifest_hash_is_real_object_bytes_and_catches_same_size_tamper`)
+- [x] AI13. `load_manifest()`가 public manifest metadata인 `branch`와 `created_at`을 commit 시점 값으로 복원한다. (`test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots`)
 
 ## B. Source / Sync / Connector
 
@@ -1043,7 +1045,8 @@
 - [x] CS4. unsupported plan/invalid CSV는 non-retryable validation으로 분류. (`test_spark_unsupported_plan_kind_is_validation_error`, `test_spark_invalid_csv_input_is_validation_error`)
 - [x] CS5. 엔진이 Spark로 transform 실행, transform-service-core 수정 없이 version+lineage 커밋. (`test_spark_engine_transform_commits_with_lineage_and_health`)
 - [x] CS6. Spark job 실패 시 output transaction abort — 커밋된 output version 없음 + FAILED transform run. (`test_spark_transform_failure_aborts_output_transaction`)
-- [ ] CS7. 분산 클러스터 전용 모드(speculative double-write/executor-output-missing/timeout-cancel/shuffle failure)는 local[1] 재현 불가 — 실 클러스터 필요로 deferred (C9~C12, infra-ratchet.md Spark scope note).
+- [x] CS7. 같은 SparkSession에서 동시에 transform이 실행돼도 session-scoped temp view가 서로 덮어쓰지 않는다. (`test_spark_concurrent_transforms_use_isolated_temp_views`)
+- [ ] CS8. 분산 클러스터 전용 모드(speculative double-write/executor-output-missing/timeout-cancel/shuffle failure)는 local[1] 재현 불가 — 실 클러스터 필요로 deferred (C9~C12, infra-ratchet.md Spark scope note).
 
 ## D. Ontology / Schema / SDK
 

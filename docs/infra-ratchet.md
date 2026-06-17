@@ -149,10 +149,12 @@ Reserved Iceberg ratchet tests (must stay green):
 ```text
 test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots
 test_iceberg_duplicate_version_commit_is_rejected
+test_iceberg_duplicate_guard_transient_catalog_error_is_retryable
 test_iceberg_engine_and_s3_warehouse_end_to_end
 test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot
 test_iceberg_missing_table_on_read_marks_storage_corruption
 test_iceberg_corrupted_data_file_surfaces_through_engine_as_corruption
+test_iceberg_manifest_hash_is_real_object_bytes_and_catches_same_size_tamper
 test_iceberg_catalog_failure_is_visible_in_operations
 test_iceberg_corrupt_table_metadata_is_corruption_not_retryable
 test_iceberg_retry_after_ambiguous_commit_does_not_duplicate_version
@@ -164,7 +166,12 @@ test_iceberg_repeated_commits_keep_every_version_independently_readable
 Concurrency note: the dataset version allocator (`SELECT ... FOR UPDATE`)
 serializes commits to one dataset, so concurrent same-table Iceberg commits do
 not occur in the engine; Iceberg optimistic concurrency is the backstop and the
-duplicate-version guard rejects reuse of a committed version id.
+duplicate-version guard rejects reuse of a committed version id. The guard is
+fail-closed: transient catalog lookup failures are retryable `AdapterError`s, not
+"not found" answers. Iceberg data-file integrity uses a Foundry sidecar manifest
+stored beside the table data; read paths compare the current object bytes against
+the commit-time hash so same-size/same-row-count parquet replacement is
+corruption, not a silent update.
 
 ### Active Ratchet: Spark (covered)
 
@@ -189,12 +196,13 @@ test_spark_unsupported_plan_kind_is_validation_error
 test_spark_invalid_csv_input_is_validation_error
 test_spark_engine_transform_commits_with_lineage_and_health
 test_spark_transform_failure_aborts_output_transaction
+test_spark_concurrent_transforms_use_isolated_temp_views
 ```
 
 Scope note: this ratchet proves the Spark adapter contract, SQL-semantics parity
 with DuckDB, single-file output promotion, engine-level transform commit with
 lineage/health, and failure → output-transaction abort with FAILED-run evidence,
-all on a local (`local[1]`) Spark session. Genuinely distributed failure modes —
+plus same-session concurrent transform temp-view isolation. Genuinely distributed failure modes —
 speculative-execution double-write (T1-010), driver-success-but-executor-output-
 missing (C9), timeout-then-cluster-cancel (C10), and shuffle/dynamic-allocation
 failures (C11) — are not reproducible in local mode and require a real Spark

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Event, Lock
 from typing import Any
 from uuid import uuid4
 
@@ -140,11 +142,105 @@ def test_spark_transform_failure_aborts_output_transaction(spark_session: Any, t
     assert failed
 
 
+def test_spark_concurrent_transforms_use_isolated_temp_views(tmp_path: Path) -> None:
+    session = _ContendedSparkSession(expected_registrations=2)
+    adapter = _TextOutputSparkAdapter(session=session)
+    left = tmp_path / "left.parquet"
+    right = tmp_path / "right.parquet"
+    left.write_text("left", encoding="utf-8")
+    right.write_text("right", encoding="utf-8")
+    left_out = tmp_path / "left-out.txt"
+    right_out = tmp_path / "right-out.txt"
+
+    def run(source: Path, target: Path) -> None:
+        adapter.execute_transform(
+            SqlTransformPlan(
+                "select marker from {{ input('raw.orders') }}",
+                {"raw.orders": source},
+                target,
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(run, left, left_out), executor.submit(run, right, right_out)]
+        for future in futures:
+            future.result()
+
+    assert left_out.read_text(encoding="utf-8") == "left"
+    assert right_out.read_text(encoding="utf-8") == "right"
+    assert session.views == {}
+    assert all(view.startswith("foundry_input_") for view in session.dropped_views)
+
+
 class _FailingSparkTransform(SparkComputeAdapter):
     """Spark compute whose transform execution always fails (job timeout)."""
 
     def execute_transform(self, plan: Any) -> None:
         raise self._compute_error("execute_transform", TimeoutError("spark job timed out"))
+
+
+class _TextOutputSparkAdapter(SparkComputeAdapter):
+    """Spark adapter variant that writes the fake frame marker as text."""
+
+    def _write_single_parquet(self, frame: Any, target_path: Path) -> None:
+        target_path.write_text(str(frame.marker), encoding="utf-8")
+
+
+class _ContendedSparkSession:
+    """Fake Spark session that exposes session-scoped temp-view contamination."""
+
+    def __init__(self, *, expected_registrations: int) -> None:
+        self.expected_registrations = expected_registrations
+        self.registered = 0
+        self.views: dict[str, str] = {}
+        self.dropped_views: list[str] = []
+        self.ready = Event()
+        self.lock = Lock()
+        self.catalog = _FakeSparkCatalog(self)
+        self.read = _FakeSparkReader(self)
+
+    def sql(self, sql: str) -> object:
+        if not self.ready.wait(timeout=5):
+            raise TimeoutError("concurrent Spark view registration did not happen")
+        view = sql.split(" from ", 1)[1].split()[0]
+        with self.lock:
+            return _FakeSparkResult(self.views[view])
+
+
+class _FakeSparkReader:
+    def __init__(self, session: _ContendedSparkSession) -> None:
+        self.session = session
+
+    def parquet(self, path: str) -> object:
+        return _FakeSparkInputFrame(self.session, Path(path).stem)
+
+
+class _FakeSparkInputFrame:
+    def __init__(self, session: _ContendedSparkSession, marker: str) -> None:
+        self.session = session
+        self.marker = marker
+
+    def createOrReplaceTempView(self, view: str) -> None:
+        with self.session.lock:
+            self.session.views[view] = self.marker
+            self.session.registered += 1
+            if self.session.registered >= self.session.expected_registrations:
+                self.session.ready.set()
+
+
+class _FakeSparkCatalog:
+    def __init__(self, session: _ContendedSparkSession) -> None:
+        self.session = session
+
+    def dropTempView(self, view: str) -> None:
+        with self.session.lock:
+            self.session.views.pop(view, None)
+            self.session.dropped_views.append(view)
+
+
+class _FakeSparkResult:
+    def __init__(self, marker: str) -> None:
+        self.marker = marker
 
 
 def _spark_foundry(tmp_path: Path, spark_session: Any, *, compute: SparkComputeAdapter | None = None) -> FoundryLite:

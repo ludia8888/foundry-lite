@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from foundry_lite.application.ports import DatasetManifest, DatasetManifestFile, StoredDatasetCommit
 from foundry_lite.application.ports.adapter_failure import (
@@ -21,7 +22,9 @@ from foundry_lite.application.ports.adapter_failure import (
 
 _VERSION_PROP = "foundry.version_id"
 _DATASET_PROP = "foundry.dataset_ref"
+_BRANCH_PROP = "foundry.branch"
 _SCHEMA_PROP = "foundry.schema_hash"
+_CREATED_AT_PROP = "foundry.created_at"
 _URI_SCHEME = "iceberg://"
 
 
@@ -163,14 +166,15 @@ class IcebergDatasetStorageAdapter:
         if snapshot is None:
             raise FileNotFoundError(manifest_uri)
         props = snapshot.summary.additional_properties
-        files = self._manifest_files(table, snapshot_id)
+        sidecar = self._load_sidecar_manifest(table, snapshot_id)
+        files = self._manifest_files(table, snapshot_id, expected_files=_expected_files(sidecar))
         return {
             "version_id": props.get(_VERSION_PROP, ""),
             "dataset": props.get(_DATASET_PROP, ""),
-            "branch": identifier.rsplit(".", 1)[-1],
+            "branch": props.get(_BRANCH_PROP, sidecar.get("branch", "")),
             "schema_hash": props.get(_SCHEMA_PROP, ""),
             "files": files,
-            "created_at": "",
+            "created_at": props.get(_CREATED_AT_PROP, sidecar.get("created_at", "")),
             "storage_profile": self.profile_name,
         }
 
@@ -180,7 +184,8 @@ class IcebergDatasetStorageAdapter:
         table = self._load_table(identifier)
         if table.snapshot_by_id(snapshot_id) is None:
             raise FileNotFoundError(manifest_uri)
-        self._verify_snapshot_files(table, snapshot_id, manifest_uri)
+        sidecar = self._load_sidecar_manifest(table, snapshot_id)
+        self._verify_snapshot_files(table, snapshot_id, manifest_uri, expected_files=_expected_files(sidecar))
         return self._materialize_snapshot(table, snapshot_id, identifier)
 
     # -- commit helpers ---------------------------------------------------
@@ -211,8 +216,9 @@ class IcebergDatasetStorageAdapter:
             snapshot_properties={
                 _VERSION_PROP: version_id,
                 _DATASET_PROP: dataset_ref,
+                _BRANCH_PROP: branch,
                 _SCHEMA_PROP: schema_hash,
-                "foundry.created_at": created_at,
+                _CREATED_AT_PROP: created_at,
             },
         )
         snapshot = self._reload(identifier).current_snapshot()
@@ -221,12 +227,27 @@ class IcebergDatasetStorageAdapter:
         snapshot_id = snapshot.snapshot_id
         manifest_uri = self._manifest_uri(identifier, snapshot_id)
         files = self._manifest_files(self._load_table(identifier), snapshot_id)
+        content_hash = _snapshot_token(files)
+        self._write_sidecar_manifest(
+            self._load_table(identifier),
+            snapshot_id,
+            {
+                "version_id": version_id,
+                "dataset": dataset_ref,
+                "branch": branch,
+                "schema_hash": schema_hash,
+                "files": files,
+                "created_at": created_at,
+                "storage_profile": self.profile_name,
+            },
+            content_hash,
+        )
         return StoredDatasetCommit(
             manifest_uri=manifest_uri,
             data_file_uri=files[0]["uri"] if files else manifest_uri,
             data_file_path=self._materialize_snapshot(self._load_table(identifier), snapshot_id, identifier),
             byte_size=sum(f["byte_size"] for f in files),
-            content_hash=_snapshot_token(snapshot_id, files),
+            content_hash=content_hash,
             manifest={
                 "version_id": version_id,
                 "dataset": dataset_ref,
@@ -280,25 +301,45 @@ class IcebergDatasetStorageAdapter:
 
     # -- read helpers -----------------------------------------------------
 
-    def _manifest_files(self, table: Any, snapshot_id: int) -> list[DatasetManifestFile]:
+    def _manifest_files(
+        self,
+        table: Any,
+        snapshot_id: int,
+        *,
+        expected_files: Mapping[str, DatasetManifestFile] | None = None,
+    ) -> list[DatasetManifestFile]:
         """Manifest files."""
         files: list[DatasetManifestFile] = []
+        actual_uris: set[str] = set()
         for task in table.scan(snapshot_id=snapshot_id).plan_files():
             data = task.file
+            uri = str(data.file_path)
+            expected = expected_files.get(uri) if expected_files is not None else None
+            content_hash = self._hash_iceberg_file(table, uri)
+            if expected is not None:
+                self._verify_manifest_file(uri, data, content_hash, expected)
+            actual_uris.add(uri)
             files.append(
                 {
-                    "uri": str(data.file_path),
+                    "uri": uri,
                     "format": "parquet",
                     "row_count": int(data.record_count),
                     "byte_size": int(data.file_size_in_bytes),
-                    "content_hash": _file_token(
-                        str(data.file_path), int(data.file_size_in_bytes), int(data.record_count)
-                    ),
+                    "content_hash": content_hash,
                 }
             )
+        if expected_files is not None and set(expected_files) != actual_uris:
+            raise ValueError("Iceberg snapshot file list differs from the committed Foundry manifest")
         return files
 
-    def _verify_snapshot_files(self, table: Any, snapshot_id: int, manifest_uri: str) -> None:
+    def _verify_snapshot_files(
+        self,
+        table: Any,
+        snapshot_id: int,
+        manifest_uri: str,
+        *,
+        expected_files: Mapping[str, DatasetManifestFile],
+    ) -> None:
         """Verify snapshot files."""
         io = table.io
         for task in table.scan(snapshot_id=snapshot_id).plan_files():
@@ -313,6 +354,69 @@ class IcebergDatasetStorageAdapter:
                 raise FileNotFoundError(f"{manifest_uri}::{data.file_path}")
             if actual != int(data.file_size_in_bytes):
                 raise ValueError(f"Iceberg data file size mismatch: {data.file_path}")
+        self._manifest_files(table, snapshot_id, expected_files=expected_files)
+
+    def _verify_manifest_file(
+        self,
+        uri: str,
+        data: Any,
+        content_hash: str,
+        expected: DatasetManifestFile,
+    ) -> None:
+        """Verify manifest file."""
+        if int(data.file_size_in_bytes) != expected["byte_size"]:
+            raise ValueError(f"Iceberg data file byte size differs from committed manifest: {uri}")
+        if int(data.record_count) != expected["row_count"]:
+            raise ValueError(f"Iceberg data file row count differs from committed manifest: {uri}")
+        if content_hash != expected["content_hash"]:
+            raise ValueError(f"Iceberg data file content hash differs from committed manifest: {uri}")
+
+    def _hash_iceberg_file(self, table: Any, uri: str) -> str:
+        """Hash iceberg file."""
+        digest = hashlib.sha256()
+        try:
+            with table.io.new_input(uri).open() as stream:
+                while chunk := stream.read(1024 * 1024):
+                    digest.update(chunk)
+        except Exception as exc:  # noqa: BLE001 - classified by the adapter contract
+            raise self._adapter_error("load_manifest", exc) from exc
+        return digest.hexdigest()
+
+    def _write_sidecar_manifest(
+        self,
+        table: Any,
+        snapshot_id: int,
+        manifest: DatasetManifest,
+        content_hash: str,
+    ) -> None:
+        """Write sidecar manifest."""
+        payload = dict(manifest)
+        payload["content_hash"] = content_hash
+        body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+        output = table.io.new_output(self._sidecar_manifest_location(table, snapshot_id))
+        with output.create(overwrite=True) as stream:
+            stream.write(body)
+
+    def _load_sidecar_manifest(self, table: Any, snapshot_id: int) -> Mapping[str, object]:
+        """Load sidecar manifest."""
+        location = self._sidecar_manifest_location(table, snapshot_id)
+        sidecar = table.io.new_input(location)
+        try:
+            if not sidecar.exists():
+                raise FileNotFoundError(location)
+            with sidecar.open() as stream:
+                payload = json.loads(stream.read().decode("utf-8"))
+        except FileNotFoundError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - malformed sidecar is committed-storage corruption
+            raise ValueError(f"Iceberg Foundry sidecar manifest is corrupt: {location}: {exc}") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"Iceberg Foundry sidecar manifest is not an object: {location}")
+        return payload
+
+    def _sidecar_manifest_location(self, table: Any, snapshot_id: int) -> str:
+        """Sidecar manifest location."""
+        return f"{table.location().rstrip('/')}/foundry-manifests/snapshot-{snapshot_id}.json"
 
     def _materialize_snapshot(self, table: Any, snapshot_id: int, identifier: str) -> Path:
         """Materialize snapshot."""
@@ -374,8 +478,12 @@ class IcebergDatasetStorageAdapter:
         """Find snapshot id."""
         try:
             table = self._catalog.load_table(identifier)
-        except Exception:
-            return None
+        except Exception as exc:
+            if _is_missing_table(exc):
+                return None
+            if _is_corrupt_metadata(exc):
+                raise ValueError(f"Iceberg table metadata is corrupt: {identifier}: {exc}") from exc
+            raise self._adapter_error("commit_staged_file", exc, idempotency_key=version_id) from exc
         for snapshot in table.snapshots():
             if snapshot.summary.additional_properties.get(_VERSION_PROP) == version_id:
                 return int(snapshot.snapshot_id)
@@ -467,12 +575,30 @@ def _sanitize(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
 
 
-def _file_token(path: str, size: int, records: int) -> str:
-    """File token."""
-    return hashlib.sha256(f"{path}|{size}|{records}".encode()).hexdigest()
+def _expected_files(sidecar: Mapping[str, object]) -> Mapping[str, DatasetManifestFile]:
+    """Expected files."""
+    files = sidecar.get("files")
+    if not isinstance(files, list):
+        raise ValueError("Iceberg Foundry sidecar manifest does not contain a file list")
+    expected: dict[str, DatasetManifestFile] = {}
+    for raw in files:
+        if not isinstance(raw, dict):
+            raise ValueError("Iceberg Foundry sidecar manifest contains a malformed file entry")
+        raw_file = cast(Mapping[str, object], raw)
+        entry: DatasetManifestFile = {
+            "uri": str(raw_file["uri"]),
+            "format": str(raw_file["format"]),
+            "row_count": int(str(raw_file["row_count"])),
+            "byte_size": int(str(raw_file["byte_size"])),
+            "content_hash": str(raw_file["content_hash"]),
+        }
+        expected[entry["uri"]] = entry
+    return expected
 
 
-def _snapshot_token(snapshot_id: int, files: list[DatasetManifestFile]) -> str:
+def _snapshot_token(files: list[DatasetManifestFile]) -> str:
     """Snapshot token."""
-    parts = "|".join(sorted(f"{f['uri']}:{f['byte_size']}:{f['row_count']}" for f in files))
-    return hashlib.sha256(f"{snapshot_id}|{parts}".encode()).hexdigest()
+    if len(files) == 1:
+        return files[0]["content_hash"]
+    parts = "|".join(sorted(f"{f['content_hash']}:{f['byte_size']}:{f['row_count']}" for f in files))
+    return hashlib.sha256(parts.encode()).hexdigest()

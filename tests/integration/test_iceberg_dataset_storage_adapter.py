@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
@@ -7,7 +8,7 @@ from importlib import import_module
 from pathlib import Path
 from threading import Event
 from time import monotonic
-from typing import Any
+from typing import Any, cast
 from urllib.error import URLError
 from urllib.request import urlopen
 from uuid import uuid4
@@ -25,7 +26,7 @@ from foundry_lite.infrastructure.adapters import (
     IcebergDatasetStorageAdapterConfig,
 )
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
-from testcontainers.core.container import DockerContainer
+from testcontainers.core.container import DockerContainer  # type: ignore[import-untyped]
 
 
 class _FailingFileInsertRepository:
@@ -70,6 +71,23 @@ class _FailOnceCatalog:
         return self._wrapped.create_table(*args, **kwargs)
 
 
+class _FailNextLoadCatalog:
+    """Times out on the next table lookup, then behaves normally."""
+
+    def __init__(self, wrapped: Any) -> None:
+        self._wrapped = wrapped
+        self._failed = False
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._wrapped, name)
+
+    def load_table(self, *args: Any, **kwargs: Any) -> object:
+        if not self._failed:
+            self._failed = True
+            raise TimeoutError("catalog lookup timed out during duplicate guard")
+        return self._wrapped.load_table(*args, **kwargs)
+
+
 MINIO_ACCESS_KEY = "foundry_lite"
 MINIO_SECRET_KEY = "foundry_lite_password"
 
@@ -107,6 +125,8 @@ def test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots(
     first = _commit(adapter, _staged(adapter, tmp_path, ["O-1", "O-2"], [100, 200]), version_id="dsv_1")
     manifest = adapter.load_manifest(first.manifest_uri)
     assert manifest["version_id"] == "dsv_1"
+    assert manifest["branch"] == "main"
+    assert manifest["created_at"] == "2026-06-16T00:00:00Z"
     assert manifest["files"][0]["row_count"] == 2
     assert pq.read_table(adapter.first_data_file_path(first.manifest_uri)).to_pydict()["id"] == ["O-1", "O-2"]
 
@@ -125,6 +145,25 @@ def test_iceberg_duplicate_version_commit_is_rejected(minio_server: MinioServer,
     with pytest.raises(AdapterError) as exc_info:
         _commit(adapter, _staged(adapter, tmp_path, ["O-2"], [200]), version_id="dsv_dup")
     assert exc_info.value.failure.kind == "conflict"
+
+
+def test_iceberg_duplicate_guard_transient_catalog_error_is_retryable(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    bucket = _make_bucket(minio_server)
+    healthy = _adapter(tmp_path, minio_server, bucket)
+    committed = _commit(healthy, _staged(healthy, tmp_path, ["O-1"], [100]), version_id="dsv_guard")
+    identifier, _ = healthy._parse_manifest_uri(committed.manifest_uri)
+    before = [snapshot.snapshot_id for snapshot in healthy._load_table(identifier).snapshots()]
+
+    flaky = IcebergDatasetStorageAdapter(healthy.config, catalog=_FailNextLoadCatalog(healthy._catalog))
+    with pytest.raises(AdapterError) as exc_info:
+        _commit(flaky, _staged(flaky, tmp_path, ["O-2"], [200]), version_id="dsv_guard")
+
+    assert exc_info.value.failure.kind == "timeout"
+    assert exc_info.value.failure.operation == "commit_staged_file"
+    assert [snapshot.snapshot_id for snapshot in healthy._load_table(identifier).snapshots()] == before
 
 
 def test_iceberg_engine_and_s3_warehouse_end_to_end(
@@ -170,13 +209,16 @@ def test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot(
     with pytest.raises(InvariantViolation) as exc_info:
         foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
 
-    cleanup = exc_info.value.details["orphan_cleanup"]
+    cleanup = cast(dict[str, Any], exc_info.value.details["orphan_cleanup"])
     assert cleanup["removed"] is True
     # The orphaned version's snapshot is gone — its manifest no longer resolves.
     with pytest.raises(FileNotFoundError):
         adapter.load_manifest(str(cleanup["manifest_uri"]))
     failed_run = next(run for run in foundry.operations.list_runs(ctx=ctx)["syncRuns"] if run["status"] == "FAILED")
-    assert failed_run["error"]["details"]["orphan_cleanup"]["manifest_uri"] == cleanup["manifest_uri"]
+    error = cast(dict[str, Any], failed_run["error"])
+    details = cast(dict[str, Any], error["details"])
+    orphan_cleanup = cast(dict[str, Any], details["orphan_cleanup"])
+    assert orphan_cleanup["manifest_uri"] == cleanup["manifest_uri"]
 
 
 def test_iceberg_missing_table_on_read_marks_storage_corruption(
@@ -220,6 +262,29 @@ def test_iceberg_corrupted_data_file_surfaces_through_engine_as_corruption(
     assert exc_info.value.details["error_type"] == "committed_version_storage_corrupt"
 
 
+def test_iceberg_manifest_hash_is_real_object_bytes_and_catches_same_size_tamper(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    bucket = _make_bucket(minio_server)
+    adapter = _adapter(tmp_path, minio_server, bucket)
+    foundry = _foundry_with_storage(tmp_path, adapter)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    committed = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+
+    manifest = adapter.load_manifest(committed.manifest_uri)
+    data_uri = manifest["files"][0]["uri"]
+    key = data_uri.removeprefix(f"s3://{bucket}/")
+    original = _s3_client(minio_server).get_object(Bucket=bucket, Key=key)["Body"].read()
+    assert manifest["files"][0]["content_hash"] == hashlib.sha256(original).hexdigest()
+
+    _s3_client(minio_server).put_object(Bucket=bucket, Key=key, Body=b"X" * len(original))
+    with pytest.raises(InvariantViolation) as exc_info:
+        foundry.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)
+    assert exc_info.value.details["error_type"] == "committed_version_storage_corrupt"
+
+
 def test_iceberg_catalog_failure_is_visible_in_operations(
     minio_server: MinioServer,
     tmp_path: Path,
@@ -237,7 +302,8 @@ def test_iceberg_catalog_failure_is_visible_in_operations(
         foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
 
     failed_run = next(run for run in foundry.operations.list_runs(ctx=ctx)["syncRuns"] if run["status"] == "FAILED")
-    failure = failed_run["error"]["adapterFailure"]
+    error = cast(dict[str, Any], failed_run["error"])
+    failure = cast(dict[str, Any], error["adapterFailure"])
     assert failure["adapterProfile"] == "iceberg"
     assert failure["operation"] == "commit_staged_file"
     assert failure["retryable"] is True
@@ -367,7 +433,7 @@ def _foundry_with_storage(
         storage_root=tmp_path / f"runtime-{uuid4().hex}",
         db_url=f"sqlite:///{tmp_path / f'meta-{uuid4().hex}.db'}",
     )
-    repository = dependencies.dataset_transaction_repository
+    repository: Any = dependencies.dataset_transaction_repository
     if failing_file_insert:
         repository = _FailingFileInsertRepository(dependencies.dataset_transaction_repository)
     return FoundryLite(
