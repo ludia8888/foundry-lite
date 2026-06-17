@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -94,11 +95,14 @@ class SparkComputeAdapter(DuckDBComputeAdapter):
                 details={"plan_kind": type(plan).__name__},
             )
         sql = plan.sql_template
+        run_id = uuid4().hex
+        views: list[str] = []
         try:
             for index, (dataset_ref, parquet_path) in enumerate(plan.input_paths_by_ref.items()):
-                view = f"input_{index}"
+                view = f"foundry_input_{run_id}_{index}"
                 _sql_identifier(view)
                 self._spark.read.parquet(str(parquet_path)).createOrReplaceTempView(view)
+                views.append(view)
                 sql = sql.replace(f"{{{{ input('{dataset_ref}') }}}}", view)
             unresolved = INPUT_PATTERN.findall(sql)
             if unresolved:
@@ -109,6 +113,8 @@ class SparkComputeAdapter(DuckDBComputeAdapter):
             raise
         except Exception as exc:  # noqa: BLE001 - classified for the failure contract
             raise self._compute_error("execute_transform", exc) from exc
+        finally:
+            self._drop_temp_views(views)
 
     def _write_single_parquet(self, frame: Any, target_path: Path) -> None:
         """Coalesce a Spark frame to one part file and promote it to ``target_path``."""
@@ -138,6 +144,12 @@ class SparkComputeAdapter(DuckDBComputeAdapter):
                 timeout_seconds=600 if kind == "timeout" else None,
             )
         )
+
+    def _drop_temp_views(self, views: list[str]) -> None:
+        """Drop per-execution temp views without masking the transform result."""
+        for view in views:
+            with suppress(Exception):
+                self._spark.catalog.dropTempView(view)
 
 
 def _is_parse_error(exc: Exception) -> bool:
