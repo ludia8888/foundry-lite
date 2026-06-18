@@ -421,6 +421,119 @@
           "adapterFailure"
         ]
       }
+    },
+    {
+      "id": "temporal",
+      "name": "Temporal WorkflowAdapter",
+      "status": "active-covered",
+      "qualityScript": "quality:temporal",
+      "ciCommand": "pnpm --silent quality:temporal",
+      "testPaths": [
+        "tests/integration/test_temporal_workflow_ratchet.py"
+      ],
+      "proofs": {
+        "adapter-contract": [
+          "test_temporal_adapter_declares_failure_taxonomy"
+        ],
+        "normal-path": [
+          "test_start_workflow_returns_processed_output"
+        ],
+        "failure-injection": [
+          "test_business_failure_returns_durable_error_payload",
+          "test_execution_timeout_is_reported_as_retryable_timeout",
+          "test_cancelled_workflow_is_reported_as_cancelled"
+        ],
+        "concurrency-race": [
+          "test_concurrent_starts_on_one_key_produce_one_run"
+        ],
+        "retry-idempotency": [
+          "test_flaky_activity_is_retried_until_success",
+          "test_same_idempotency_key_returns_existing_run_without_duplicate"
+        ],
+        "partial-success": [
+          "test_flaky_activity_is_retried_until_success"
+        ],
+        "recovery-cleanup": [
+          "test_same_idempotency_key_returns_existing_run_without_duplicate"
+        ],
+        "operator-evidence": [
+          "test_business_failure_returns_durable_error_payload"
+        ],
+        "docs-sync": [
+          "test_infra_tricky_matrix_gate_passes_current_docs_and_ci",
+          "test_infra_ratchet_gate_passes_current_docs_and_ci"
+        ]
+      },
+      "trickyItems": [
+        {
+          "id": "WF1",
+          "tests": [
+            "test_temporal_adapter_declares_failure_taxonomy"
+          ]
+        },
+        {
+          "id": "WF2",
+          "tests": [
+            "test_start_workflow_returns_processed_output"
+          ]
+        },
+        {
+          "id": "WF3",
+          "tests": [
+            "test_flaky_activity_is_retried_until_success"
+          ]
+        },
+        {
+          "id": "WF4",
+          "tests": [
+            "test_same_idempotency_key_returns_existing_run_without_duplicate"
+          ]
+        },
+        {
+          "id": "WF5",
+          "tests": [
+            "test_concurrent_starts_on_one_key_produce_one_run"
+          ]
+        },
+        {
+          "id": "WF6",
+          "tests": [
+            "test_business_failure_returns_durable_error_payload"
+          ]
+        },
+        {
+          "id": "WF7",
+          "tests": [
+            "test_execution_timeout_is_reported_as_retryable_timeout"
+          ]
+        },
+        {
+          "id": "WF8",
+          "tests": [
+            "test_cancelled_workflow_is_reported_as_cancelled"
+          ]
+        }
+      ],
+      "sourceOfTruthRules": [
+        "workflow_start_is_idempotent_by_idempotency_key",
+        "external_side_effects_commit_atomically_or_via_outbox",
+        "external_failure_requires_compensation_not_silent_local_rollback"
+      ],
+      "operatorEvidence": {
+        "runField": "workflowRuns",
+        "requiredPayloadPaths": [
+          "workflowRuns[].status",
+          "workflowRuns[].error.adapterProfile",
+          "workflowRuns[].error.operation",
+          "workflowRuns[].error.kind",
+          "workflowRuns[].error.retryable"
+        ],
+        "durableEvidenceCategories": [
+          "run",
+          "error",
+          "adapterFailure"
+        ]
+      }
     }
   ],
   "crossCuttingFlowProofs": [
@@ -735,6 +848,14 @@
         "futureTest": "test_action_external_success_local_failure_compensation_required",
         "owningDoc": "docs/foundry_lite_tricky_failure_modes_checklist.md"
       }
+    },
+    "workflow_start_is_idempotent_by_idempotency_key": {
+      "description": "A durable workflow start is idempotent by idempotency_key: re-start (or a concurrent start) attaches to the existing run and returns its outcome, never a duplicate run.",
+      "status": "enforced",
+      "tests": [
+        "test_same_idempotency_key_returns_existing_run_without_duplicate",
+        "test_concurrent_starts_on_one_key_produce_one_run"
+      ]
     }
   }
 }

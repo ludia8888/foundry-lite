@@ -1057,6 +1057,20 @@
 - [x] CS9. S3+Iceberg+Spark 조합에서 Spark transform 실패가 output transaction을 abort하고 committed output version을 남기지 않는다. (`test_iceberg_s3_spark_failure_aborts_without_output_version`)
 - [ ] CS10. 분산 클러스터 전용 모드(speculative double-write/executor-output-missing/timeout-cancel/shuffle failure)는 local[1] 재현 불가 — 실 클러스터 필요로 deferred (C9~C12, infra-ratchet.md Spark scope note).
 
+### C-TEMPORAL. Temporal WorkflowAdapter (4번째 인프라 ratchet, profile `temporal`)
+
+`FOUNDRY_LITE_WORKFLOW_PROFILE=temporal`로 storage/compute와 독립 선택. 어댑터는 workflow를 등록된 string 타입명으로 시작하므로 workflow 정의를 import하지 않는다(worker만 등록). async 코어 + sync 브리지. time-skipping 테스트 서버로 retry backoff/execution timeout을 결정론적으로 fast-forward. Scale Foundation 경계(엔진 미사용)라 독립 family — S3/Iceberg/Spark composition stack에는 들어가지 않는다.
+
+- [x] WF1. adapter-contract: profile/failure taxonomy(timeout·unavailable·unknown·not_found, idempotency-key required) 선언. (`test_temporal_adapter_declares_failure_taxonomy`)
+- [x] WF2. normal-path: start-and-wait가 입력을 처리한 output을 반환하고 run_id=workflow id. (`test_start_workflow_returns_processed_output`)
+- [x] WF3. retry-idempotency: activity가 두 번 실패 후 성공할 때까지 재시도(backoff는 time-skipping이 건너뜀), partial-success로 run 성공. (`test_flaky_activity_is_retried_until_success`)
+- [x] WF4. recovery-cleanup: 같은 idempotency_key로 재시작하면 중복 run을 만들지 않고 기존 완료 run에 재접속해 동일 결과 반환(REJECT_DUPLICATE→AlreadyStarted→handle.result). (`test_same_idempotency_key_returns_existing_run_without_duplicate`)
+- [x] WF5. concurrency-race: 같은 key로 동시에 두 번 start해도 하나의 run만 생기고 둘 다 같은 결과를 받는다. (`test_concurrent_starts_on_one_key_produce_one_run`)
+- [x] WF6. failure-injection + operator-evidence: 비즈니스 실패(non-retryable ApplicationError)는 silent success가 아니라 status=failed + 내구성 있는 error payload(adapterProfile/operation/kind/retryable/operatorMessage/workflowId/temporalRunId)로 표면화된다. (`test_business_failure_returns_durable_error_payload`)
+- [x] WF7. failure-injection(timeout): execution timeout을 초과한 run은 status=failed + kind=timeout + retryable=true + timeoutSeconds로 보고된다. (`test_execution_timeout_is_reported_as_retryable_timeout`)
+- [x] WF8. failure-injection(cancel): 취소된 run은 status=cancelled로 분류되고(workflow_run describe 매핑 + start 경로 재접속 분류 모두), 다른 terminal 상태와 구분된다. (`test_cancelled_workflow_is_reported_as_cancelled`)
+- [ ] WF9. 분산 worker crash mid-activity / signal·query / continue-as-new / 실 Temporal 클러스터 failover는 time-skipping 단일 worker로 재현 불가 — 실 클러스터 필요로 deferred (infra-ratchet.md Temporal scope note).
+
 ## D. Ontology / Schema / SDK
 
 - [ ] D1. draft import partial failure가 rollback된다.

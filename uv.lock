@@ -710,6 +710,9 @@ kafka = [
 s3 = [
     { name = "boto3" },
 ]
+temporal = [
+    { name = "temporalio" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -763,9 +766,10 @@ requires-dist = [
     { name = "pytz", specifier = ">=2026.2" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
+    { name = "temporalio", marker = "extra == 'temporal'", specifier = ">=1.7" },
     { name = "uvicorn", specifier = ">=0.29" },
 ]
-provides-extras = ["kafka", "elasticsearch", "s3", "iceberg"]
+provides-extras = ["kafka", "elasticsearch", "s3", "iceberg", "temporal"]
 
 [package.metadata.requires-dev]
 dev = [

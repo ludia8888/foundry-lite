@@ -43,6 +43,7 @@
     "quality:s3-storage": "uv run pytest tests/integration/test_s3_dataset_storage_adapter.py -q",
     "quality:iceberg": "uv run pytest tests/integration/test_iceberg_dataset_storage_adapter.py -q",
     "quality:spark": "uv run pytest tests/integration/test_spark_compute_adapter.py -q",
+    "quality:temporal": "uv run pytest tests/integration/test_temporal_workflow_ratchet.py -q",
     "quality:infra-composition": "uv run pytest tests/integration/test_infra_composition_ratchet.py -q",
     "quality:regression-bugfix": "uv run python scripts/quality/check_regression_test_per_bugfix.py",
     "quality:pr-root-cause": "uv run python scripts/quality/check_pr_root_cause_section.py",

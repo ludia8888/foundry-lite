@@ -273,6 +273,9 @@ run_runtime_gate() {
   echo "== Dynamic: Spark compute ratchet =="
   pnpm --silent quality:spark
 
+  echo "== Dynamic: Temporal workflow ratchet =="
+  pnpm --silent quality:temporal
+
   echo "== Dynamic: S3 + Iceberg + Spark composition ratchet =="
   pnpm --silent quality:infra-composition
 

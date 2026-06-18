@@ -50,7 +50,7 @@ def test_runtime_adapter_factories_fail_closed_for_unknown_profiles(tmp_path: Pa
         _connector_adapter("typo-profile")
     with pytest.raises(ValueError, match="unknown adapter profile"):
         _stream_adapter("typo-profile")
-    with pytest.raises(ValueError, match="unknown adapter profile"):
+    with pytest.raises(ValueError, match="unknown workflow profile"):
         _workflow_adapter("typo-profile")
 
 
@@ -64,6 +64,18 @@ def test_runtime_search_adapter_selects_elasticsearch_and_rejects_unknown_profil
     monkeypatch.setenv("FOUNDRY_LITE_SEARCH_PROFILE", "missing-search")
     with pytest.raises(ValueError, match="unknown search adapter profile"):
         _search_adapter("local")
+
+
+def test_runtime_workflow_adapter_selects_temporal_and_rejects_unknown_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_WORKFLOW_PROFILE", "temporal")
+    adapter = _workflow_adapter("local")
+    assert adapter.profile_name == "temporal"
+
+    monkeypatch.setenv("FOUNDRY_LITE_WORKFLOW_PROFILE", "missing-workflow")
+    with pytest.raises(ValueError, match="unknown workflow profile"):
+        _workflow_adapter("local")
 
 
 def test_object_change_sequence_rejects_unknown_dialect() -> None:
