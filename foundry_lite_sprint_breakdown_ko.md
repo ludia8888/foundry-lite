@@ -4,7 +4,7 @@
 
 이 문서는 Foundry-lite 문서 체계의 **스프린트 실행 계획 원본**이다. [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 실제 구현 가능한 작은 스프린트 단위로 나누고, 각 스프린트가 반드시 통과해야 하는 제품/기술 Goal을 정의한다.
 
-> 현재 구현 상태 주의: 2026-06-16 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 따른다. 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
+> 현재 구현 상태 주의: 2026-06-18 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 따른다. 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
 
 ## 문서 지도
 
@@ -28,14 +28,14 @@
 - 모든 write는 audit 가능하다.
 - 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능하다.
 - 기능이 동작해도 cursor, offset, watermark, manifest, lineage, outbox, action state가 durable commit point보다 앞서가면 완료로 보지 않는다.
-- Sprint 00~36은 MVP core, Sprint 02A는 scale-ready foundation 보강, Sprint 36A는 MVP 운영 안정성 보강, Sprint 37~45는 MVP 이후 확장으로 구분된다.
+- Sprint 00~36은 MVP core, Sprint 02A는 scale-ready foundation 보강, Sprint 36A는 MVP 운영 안정성 보강, Sprint 37 이후는 MVP 이후 확장으로 구분된다.
 - Python 백엔드 코드는 `ruff`, `mypy` 또는 `pyright`, `pytest` 품질 게이트를 통과한다.
 - 안티패턴 금지 기준을 위반한 단순 패치는 완료로 보지 않는다.
 - 에러 발생 시 request/run/dataset/object/action 단위로 원인을 추적할 수 있다.
 - Python 백엔드 테스트 커버리지는 line, branch, function 기준 모두 95% 이상이어야 한다.
 - 필수 통합 테스트와 필수 스모크 테스트는 100% 실행되고 100% 통과해야 한다.
 
-### 2026-06-16 상세 체크박스 동기화 기준
+### 2026-06-18 상세 체크박스 동기화 기준
 
 - Sprint 00~36, Sprint 02A, Sprint 36A의 상세 체크박스는 현재 구현, [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md), [Implementation Status](./docs/implementation-status.md), 최신 `main` CI 결과를 기준으로 다시 동기화했다.
 - `[x]`는 둘 중 하나를 뜻한다: 현재 MVP 구현과 테스트 증거로 완료되었거나, 현 MVP scope에서 명시적으로 future/deferred로 재분류되어 더 이상 Sprint 00~36 완료 조건으로 요구하지 않는다는 결정이 끝났다는 뜻이다.
@@ -51,7 +51,7 @@
 3. 성공은 코드 완료가 아니라 CLI/API/UI/테스트 중 하나로 증명해야 한다.
 4. 모든 write는 audit 가능해야 한다.
 5. 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능해야 한다.
-6. MVP core에서는 CSV/local snapshot 또는 PostgreSQL-backed repository proof, SQL/DuckDB transform, Ontology/Object, Action, Materialization 폐루프에 집중한다. CDC, Kafka streaming, Elasticsearch, Iceberg, Spark, Kubernetes production hardening은 MVP 이후 스프린트로 둔다. 단, 이것들을 나중에 쉽게 붙이기 위한 port/adapter boundary는 Sprint 02A에서 먼저 고정하고, Sprint 37~42의 post-MVP proof는 현재 증거가 있는 항목으로 따로 기록한다.
+6. MVP core에서는 CSV/local snapshot 또는 PostgreSQL-backed repository proof, SQL/DuckDB transform, Ontology/Object, Action, Materialization 폐루프에 집중한다. CDC, Kafka streaming, Elasticsearch, Iceberg, Spark, Kubernetes production hardening은 MVP 이후 스프린트로 둔다. 단, 이것들을 나중에 쉽게 붙이기 위한 port/adapter boundary는 Sprint 02A에서 먼저 고정하고, Sprint 37~44의 post-MVP proof 중 현재 증거가 있는 항목은 active-covered로 따로 기록한다.
 7. 장애나 버그는 간단한 증상 제거 패치로 끝내지 않고, 원인 분석, 추적 가능성, regression test까지 포함해 해결한다.
 
 ---
@@ -61,7 +61,7 @@
 한 스프린트는 아래 조건을 모두 만족해야 완료로 본다.
 
 - API/Worker/Web/CLI 중 해당 스프린트에 관련된 public surface가 동작한다.
-- DB schema bootstrap과 schema revision guard가 빈 DB에서 재현 가능해야 한다. Alembic migration history/rollback은 future/deferred 범위다.
+- DB schema bootstrap, schema revision guard, and Alembic baseline migration parity가 빈 DB에서 재현 가능해야 한다. Multi-step Alembic upgrade/rollback 운영은 future/deferred 범위다.
 - 핵심 state transition은 DB에 durable하게 기록된다.
 - 실패 상태가 성공 상태와 구분되어 저장된다.
 - unit test 또는 integration test가 핵심 성공/실패 경로를 검증한다.
@@ -159,7 +159,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] `examples/supply-chain-demo/data/*.csv` seed 파일이 있다. (`examples/supply-chain-demo/data/orders.csv`, `customers.csv`)
 - [x] `examples/supply-chain-demo/ontology/order-customer.yaml` 초안이 있다. (`examples/supply-chain-demo/ontology/order-customer.yaml`)
 - [x] `docs/mvp-scope.md`에 v1 포함/제외 범위가 있다. ([docs/mvp-scope.md](./docs/mvp-scope.md))
-- [x] 팀원이 새 기능을 제안해도 `docs/mvp-scope.md`, `docs/implementation-status.md`, 이 문서의 Sprint 00~36/Sprint 37~45 경계로 v1/v1.5/v2를 판정할 수 있다.
+- [x] 팀원이 새 기능을 제안해도 `docs/mvp-scope.md`, `docs/implementation-status.md`, 이 문서의 Sprint 00~36/Sprint 37 이후 경계로 v1/v1.5/v2를 판정할 수 있다.
 
 **Demo / Proof**
 
@@ -226,7 +226,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 
 **반드시 완성해야 하는 것**
 
-- Alembic migration을 선택하고 API/Worker에서 같은 migration을 사용한다.
+- Alembic baseline migration을 선택하고 API/Worker가 같은 schema source-of-truth를 사용한다.
 - `tenants`, `users`, `teams`, `roles`, `user_roles` 최소 테이블을 만든다.
 - 개발용 auth stub을 만들어 `x-user-id`, `x-tenant-id`로 context를 주입한다.
 - API request middleware에서 request id/correlation id를 생성한다.
@@ -235,7 +235,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 
 **Acceptance Gate**
 
-- [x] Alembic migration history/rollback은 MVP core에서 future/deferred로 재분류했고, 현재는 SQLAlchemy schema bootstrap + schema revision guard로 DB shape drift를 차단한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static))
+- [x] Alembic baseline migration parity는 현재 증거가 있고, multi-step migration history/rollback operations는 MVP core에서 future/deferred로 재분류했다. 현재는 SQLAlchemy schema bootstrap + schema revision guard + Alembic fresh-DB parity guard로 DB shape drift를 차단한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static))
 - [x] 개발용 seed tenant/user가 생성된다. (`SupplyChainDemo`, demo admin context, [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
 - [x] 인증 없는 local/demo 요청은 명시적 local/demo auth profile 또는 header-trust context로 tenant/user에 귀속되며, production profile에서는 header-trust/demo auth가 startup에서 거부된다. ([VERIFY-PRODUCTION-AUTH-GUARD](./docs/sprint-evidence-ledger.md#verify-production-auth-guard))
 - [x] mutation 테스트/API 호출은 audit row를 남긴다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))

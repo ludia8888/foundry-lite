@@ -68,6 +68,30 @@ Each sprint below is complete only when all relevant items are true.
 - [ ] `docs/implementation-status.md`, `docs/sprint-evidence-ledger.md`, and
       the relevant matrix/checklist docs are updated in the same change.
 
+### 2.1 Proof Class And CI Lane Contract
+
+S46 must turn this table into machine-readable gate data. Until then, it is the
+review contract for every roadmap PR.
+
+| Proof class | What it proves | Default lane | Required operator evidence |
+|---|---|---|---|
+| `source-of-truth` | DB committed version, run state, outbox/audit, or declared external state remains the serving truth; projections cannot silently become truth. | runtime | Artifact or summary names the source-of-truth rule and the projection that tried to drift. |
+| `adapter-contract` | A new vendor/profile implementation obeys the same port contract as local/fake. | runtime | Typed adapter failure payload includes kind, retryability, timeout/idempotency context, and operator message. |
+| `normal-path` | The feature works through public facade/API/CLI/SDK/UI, not a private repository shortcut. | runtime | Run/audit/transaction payload carries tenant, actor, request id, and output identity. |
+| `failure-injection` | The riskiest commit point fails safely when storage/catalog/network/DB/action side effect breaks. | runtime | Failure is visible in run/error/transaction/audit/outbox/trace payloads, not only logs. |
+| `concurrency-race` | Parallel writers/workers/rebalances cannot corrupt source-of-truth or produce stale last-writer-wins output. | runtime | Winning/losing actor and conflict reason are durable enough for an operator to explain. |
+| `retry-idempotency` | Retrying after timeout/unknown/duplicate delivery creates one logical success or a clear conflict. | runtime | Idempotency key, request fingerprint, cursor/offset/watermark, or external correlation id is recorded. |
+| `partial-success-cleanup` | A half-written object/file/snapshot/run cannot become serving state or orphaned silent debt. | runtime | Cleanup result or orphan evidence is recorded with the failed run/transaction. |
+| `composition-compatibility` | The new feature still works with every already-active infra family and active stack. | runtime for focused composition, release for expensive/cloud variants | Summary names every active stack combination tested or explicitly deferred. |
+| `performance-scale` | Larger data sizes do not break the contract under production-like limits. | release | Uploaded artifact includes profile, row/object counts, duration, and failing threshold. |
+| `staging-cloud-chaos` | Real cluster/cloud/failover behavior matches local/Testcontainers proof. | release | Uploaded artifact includes environment, injected fault, recovery result, and residual risk. |
+| `docs-sync` | README/status/sprint/risk/checklist/matrix docs say the same thing as code and gates. | static/runtime depending on gate | Failure message points to the conflicting sentence and owning doc. |
+
+Operator-evidence rule: if a developer has to inspect only console logs to
+understand a dangerous failure, the proof is incomplete. The payload must leave
+enough durable evidence for a PR reviewer, GitHub Actions summary, or on-call
+operator to identify the root cause and the file/contract likely responsible.
+
 ## 3. Sprint Order
 
 | Sprint | Priority | Outcome | Depends on | Status |

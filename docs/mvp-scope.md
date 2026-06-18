@@ -33,12 +33,13 @@ future work.
 - Temporal workflow adapter ratchet: idempotent start, timeout/unavailable/cancel/error-payload semantics are covered at the adapter boundary, but product workflows do not yet run through Temporal.
 - Ontology-driven sensitive classification: `finance`/`pii` classifications mask object properties, dataset preview columns, object-query/search/object-set inference surfaces, explain payloads, action audit refs, and Operations run/detail payloads for unprivileged roles.
 - Runtime profile packaging extras: S3, Iceberg, Spark, Temporal, Elasticsearch, Kafka, and PostgreSQL profile libraries are guarded as installable optional extras.
+- Alembic baseline migration: `alembic upgrade head` can create a fresh DB whose tables/columns match the SQLAlchemy metadata, guarded by `tests/integration/test_migrations.py`.
 
 ## Explicitly Deferred
 
 - PostgreSQL JSONB production object store.
 - PostgreSQL snapshot connector implementation.
-- Alembic migration history.
+- Multi-step Alembic upgrade/rollback workflows and production migration runbooks beyond the current baseline migration parity guard.
 - Real CEL or JSON Logic evaluator.
 - Real external ERP/webhook writeback.
 - Continuously running Kafka/Redpanda stream workers and deployment-specific broker packaging beyond the current adapter/one-shot worker proof.

@@ -884,7 +884,7 @@ gantt
 | 목표 | 상태 |
 |---|---|
 | PostgreSQL JSONB production object store | 목표, 현재 local SQLite/SQLAlchemy 중심 |
-| Alembic migration history | 목표, 현재 schema revision guard로 drift 차단 |
+| Alembic migration operations | baseline migration + metadata parity test는 존재, multi-step upgrade/rollback 운영은 목표 |
 | Managed Temporal worker operations | adapter/time-skipping ratchet은 active-covered, 운영 배포는 목표 |
 | Real CEL/JSON Logic evaluator | 목표, 현재 safeExpression subset |
 | Real external ERP/webhook writeback | 목표, 현재 mock/local proof |
