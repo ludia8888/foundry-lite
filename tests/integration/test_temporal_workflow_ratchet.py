@@ -25,6 +25,8 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any
 
+import pytest
+from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.workflow_adapter import WorkflowStartRequest
 from foundry_lite.infrastructure.adapters.temporal_workflow import (
     TemporalWorkflowAdapter,
@@ -95,6 +97,21 @@ _ALL_WORKFLOWS = [FoundryWorkflow, FlakyWorkflow, SleepyWorkflow, FailingWorkflo
 _ALL_ACTIVITIES = [run_workflow_step, flaky_step]
 
 
+class _UnavailableStartClient:
+    async def start_workflow(self, *_args: object, **_kwargs: object) -> object:
+        raise ConnectionError("Temporal frontend unavailable")
+
+
+class _UnavailableLookupClient:
+    def get_workflow_handle(self, _run_id: str) -> object:
+        return _UnavailableDescribeHandle()
+
+
+class _UnavailableDescribeHandle:
+    async def describe(self) -> object:
+        raise ConnectionError("Temporal describe unavailable")
+
+
 @asynccontextmanager
 async def _harness(*, execution_timeout_seconds: int = 300):
     """Boot a time-skipping server + worker and yield (env, adapter)."""
@@ -144,6 +161,7 @@ def test_temporal_adapter_declares_failure_taxonomy() -> None:
     assert modes[("start_workflow", "unavailable")].is_retryable is True
     assert modes[("start_workflow", "unknown")].is_retryable is False
     assert modes[("workflow_run", "not_found")].is_retryable is False
+    assert modes[("workflow_run", "unavailable")].is_retryable is True
 
 
 # --- normal-path -----------------------------------------------------------
@@ -250,6 +268,42 @@ def test_execution_timeout_is_reported_as_retryable_timeout() -> None:
             assert run.error["kind"] == "timeout"
             assert run.error["retryable"] is True
             assert run.error["timeoutSeconds"] == 2
+
+    _run(body)
+
+
+def test_start_workflow_temporal_unavailable_returns_retryable_error_payload() -> None:
+    async def body() -> None:
+        adapter = TemporalWorkflowAdapter(client=_UnavailableStartClient())
+
+        run = await adapter.start_workflow_async(_request(FOUNDRY_WORKFLOW_NAME, "wf-unavailable", value=1))
+
+        assert run.status == "failed"
+        assert run.output == {}
+        assert run.error is not None
+        assert run.error["adapterProfile"] == "temporal"
+        assert run.error["operation"] == "start_workflow"
+        assert run.error["kind"] == "unavailable"
+        assert run.error["retryable"] is True
+        assert run.error["idempotencyKey"] == "wf-unavailable"
+        assert run.error["details"]["workflowId"] == "wf-unavailable"
+
+    _run(body)
+
+
+def test_workflow_run_temporal_unavailable_raises_retryable_adapter_error() -> None:
+    async def body() -> None:
+        adapter = TemporalWorkflowAdapter(client=_UnavailableLookupClient())
+
+        with pytest.raises(AdapterError) as raised:
+            await adapter.workflow_run_async("wf-lookup-down")
+
+        failure = raised.value.failure
+        assert failure.adapter_profile == "temporal"
+        assert failure.operation == "workflow_run"
+        assert failure.kind == "unavailable"
+        assert failure.is_retryable is True
+        assert failure.details["workflowId"] == "wf-lookup-down"
 
     _run(body)
 

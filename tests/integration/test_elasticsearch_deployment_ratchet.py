@@ -27,6 +27,8 @@ Proof classes (docs/infra-ratchet.md):
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Lock
 from typing import Any, cast
 
 import elastic_transport as et
@@ -76,6 +78,7 @@ class FakeElasticsearchClient:
         self.docs: dict[tuple[str, str], dict[str, Any]] = {}
         self.force_create = False
         self._faults: dict[str, BaseException] = {}
+        self._lock = Lock()
 
     def fail(self, operation: str, exc: BaseException) -> None:
         self._faults[operation] = exc
@@ -87,31 +90,36 @@ class FakeElasticsearchClient:
 
     def index(self, *, index: str, id: str, body: Mapping[str, object], **_options: object) -> object:
         self.maybe_fail("index")
-        self.docs[(index, id)] = dict(body)
+        with self._lock:
+            self.docs[(index, id)] = dict(body)
         return {"result": "created"}
 
     def update(self, *, index: str, id: str, body: Mapping[str, object], **_options: object) -> object:
         self.maybe_fail("update")
-        params = cast(Mapping[str, Any], body["script"])["params"]
-        key = (index, id)
-        current = self.docs.get(key)
-        if current is None:
-            self.docs[key] = dict(cast(Mapping[str, Any], body["upsert"]))
-            return {"result": "created"}
-        if params["version"] > current.get("version", -1):
-            self.docs[key] = dict(params["document"])
-            return {"result": "updated"}
+        with self._lock:
+            params = cast(Mapping[str, Any], body["script"])["params"]
+            key = (index, id)
+            current = self.docs.get(key)
+            if current is None:
+                self.docs[key] = dict(cast(Mapping[str, Any], body["upsert"]))
+                return {"result": "created"}
+            if params["version"] > current.get("version", -1):
+                self.docs[key] = dict(params["document"])
+                return {"result": "updated"}
         return {"result": "noop"}
 
     def delete(self, *, index: str, id: str, **_options: object) -> object:
         self.maybe_fail("delete")
-        self.docs.pop((index, id), None)
+        with self._lock:
+            self.docs.pop((index, id), None)
         return {"result": "deleted"}
 
-    def search(self, *, index: str, body: Mapping[str, object], size: int) -> Mapping[str, object]:
+    def search(self, *, index: str, body: Mapping[str, object]) -> Mapping[str, object]:
         self.maybe_fail("search")
         matched = [doc for (idx, _id), doc in sorted(self.docs.items()) if idx == index and _matches(doc, body)]
-        return {"hits": {"hits": [{"_source": doc, "_score": 1.0} for doc in matched[:size]]}}
+        size = body.get("size", 10)
+        limit = size if isinstance(size, int) and not isinstance(size, bool) else 10
+        return {"hits": {"hits": [{"_source": doc, "_score": 1.0} for doc in matched[:limit]]}}
 
 
 def _matches(doc: Mapping[str, Any], body: Mapping[str, object]) -> bool:
@@ -222,15 +230,20 @@ def test_elasticsearch_cluster_failures_map_to_typed_adapter_error(
 def test_elasticsearch_version_guard_keeps_highest_version_under_concurrent_upserts() -> None:
     adapter, _ = _adapter()
     adapter.configure_index(_mapping())
-    adapter.upsert_document(_doc(2, "NEW"))
-    # a stale writer (lower version) must not overwrite a fresher projection
-    adapter.upsert_document(_doc(1, "STALE"))
-    assert adapter.search(_query())[0].document.properties["status"] == "NEW"
-    # a newer writer wins
-    adapter.upsert_document(_doc(3, "FRESH"))
+    documents = [_doc(2, "V2"), _doc(1, "STALE"), _doc(5, "WINNER"), _doc(4, "V4"), _doc(3, "V3")]
+    barrier = Barrier(len(documents))
+
+    def write(document: SearchDocument) -> None:
+        barrier.wait()
+        adapter.upsert_document(document)
+
+    with ThreadPoolExecutor(max_workers=len(documents)) as pool:
+        for future in [pool.submit(write, document) for document in documents]:
+            future.result()
+
     winner = adapter.search(_query())[0]
-    assert winner.document.properties["status"] == "FRESH"
-    assert winner.document.version == 3
+    assert winner.document.properties["status"] == "WINNER"
+    assert winner.document.version == 5
 
 
 # -- retry-idempotency ------------------------------------------------------

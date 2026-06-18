@@ -362,6 +362,18 @@ def test_root_cause_meta_gates_are_release_gate_steps() -> None:
     assert "pnpm quality:pr-root-cause" in package_json
 
 
+def test_runtime_lane_writes_root_cause_summary_from_failure_trap() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    summary_script = (ROOT / "scripts" / "quality" / "write_runtime_root_cause_summary.py").read_text(encoding="utf-8")
+
+    assert "trap 'runtime_gate_failed \"$?\"' ERR" in script
+    assert "runtime_lane_failure.json" in script
+    assert "run_runtime_contract_gates" in script
+    assert script.index("run_runtime_contract_gates") < script.index("quality:cdc-stream-archive")
+    assert "runtime_lane_failure.json" in summary_script
+    assert "failed step:" in summary_script
+
+
 def test_github_ci_fetches_history_and_checks_pr_root_cause() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 

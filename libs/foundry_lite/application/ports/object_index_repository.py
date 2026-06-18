@@ -23,6 +23,10 @@ class IndexRunSourceRef(TypedDict, total=False):
     index_version: str
     baseline_count: int
     baseline_hash: str
+    adapter_profile: str
+    object_id: str
+    request_id: str
+    resource_id: str
 
 
 class IndexRunCursor(TypedDict, total=False):
@@ -40,6 +44,7 @@ class IndexRunError(TypedDict, total=False):
     type: str
     message: str
     details: Mapping[str, object]
+    adapterFailure: Mapping[str, object]
     trace: Mapping[str, str]
 
 

@@ -14,6 +14,8 @@ proofs live in test_elasticsearch_deployment_ratchet.py.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from typing import Any, cast
 from uuid import uuid4
 
@@ -107,6 +109,25 @@ def test_elasticsearch_live_version_guard_rejects_stale_writer(live_url: str) ->
     winner = adapter.search(_query())[0]
     assert winner.document.properties["status"] == "FRESH"
     assert winner.document.version == 3
+
+
+def test_elasticsearch_live_version_guard_keeps_highest_version_under_concurrent_writers(live_url: str) -> None:
+    adapter = _adapter(live_url)
+    adapter.configure_index(_mapping())
+    documents = [_doc(1, "STALE"), _doc(4, "V4"), _doc(2, "V2"), _doc(5, "WINNER"), _doc(3, "V3")]
+    barrier = Barrier(len(documents))
+
+    def write(document: SearchDocument) -> None:
+        barrier.wait()
+        adapter.upsert_document(document)
+
+    with ThreadPoolExecutor(max_workers=len(documents)) as pool:
+        for future in [pool.submit(write, document) for document in documents]:
+            future.result()
+
+    winner = adapter.search(_query())[0]
+    assert winner.document.version == 5
+    assert winner.document.properties["status"] == "WINNER"
 
 
 def test_elasticsearch_live_cluster_outage_is_typed_adapter_error() -> None:

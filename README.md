@@ -131,7 +131,7 @@ Foundry-lite는 Python 기반 modular monolith 안에서 dataset transaction, tr
 | Object Store | Order/Customer object indexing, query, link traversal, object sets, shadow reindex proof, CDC indexing proof | 대규모 production search/object serving 튜닝은 미래 과제입니다. |
 | Action Runtime | `ApproveOrder`, expected object version, idempotency, audit, outbox, object edit | real ERP writeback은 mock/local proof 수준입니다. |
 | Materialization | `ops.action_log`, `ops.order_current`, watermark/source version proof | 더 많은 materialization type은 v1.5 이후 영역입니다. |
-| Search | local/fake search adapter, optional Elasticsearch adapter, rebuild/orphan proof | managed live Elasticsearch 운영 배포는 아직 미래 과제입니다. |
+| Search | local/fake search adapter, optional Elasticsearch adapter, rebuild/orphan proof, live Testcontainers Elasticsearch ratchet | managed cloud Elasticsearch packaging/ops runbook은 아직 미래 과제입니다. |
 | Stream/CDC | local/fake stream adapter, Kafka-compatible worker proof, Debezium-shaped CDC proof | 계속 도는 production worker와 운영 패키징은 아직 미래 과제입니다. |
 | Security | tenant context, RBAC, property masking, deny audit, Postgres RLS contract proof | real JWT/OIDC adapter는 아직 미래 과제입니다. |
 | Observability | structured trace keys, OpenTelemetry, Prometheus metrics, Grafana compose profile | 운영 환경 전체 배포 runbook은 아직 확장 과제입니다. |
@@ -550,7 +550,7 @@ Scale Foundation의 핵심은 "지금은 작은 구현으로 돌리되, 제품 �
 | `DatasetTransactionRepository` | SQLAlchemy transaction rows | stronger transactional DB semantics | `tests/contracts/test_dataset_transaction_repository_contract.py` |
 | `ComputeAdapter` | DuckDB, fake compute | Spark/Flink/Ray-style runners | `tests/contracts/test_compute_adapter_contract.py` |
 | `StreamAdapter` | local/fake stream, Kafka-compatible adapter proof | Kafka/Redpanda production profile | `tests/contracts/test_stream_adapter_contract.py` |
-| `SearchAdapter` | local/fake, optional Elasticsearch adapter | managed Elasticsearch operations | `tests/contracts/test_search_adapter_contract.py` |
+| `SearchAdapter` | local/fake, optional Elasticsearch adapter with live-cluster ratchet | managed cloud Elasticsearch operations | `tests/contracts/test_search_adapter_contract.py` |
 | `WorkflowAdapter` | local/fake workflow | Temporal | `tests/contracts/test_workflow_adapter_contract.py` |
 | `ConnectorAdapter` | local/fake, REST adapter, Debezium wrapper proof | SaaS connectors, durable registry, retry workers | `tests/contracts/test_connector_adapter_contract.py` |
 | `AuthProvider` | header trust/demo profiles | OIDC/SSO/JWT | `tests/contracts/test_auth_provider_contract.py` |
@@ -882,11 +882,11 @@ gantt
 |---|---|
 | PostgreSQL JSONB production object store | 목표, 현재 local SQLite/SQLAlchemy 중심 |
 | Alembic migration history | 목표, 현재 schema revision guard로 drift 차단 |
-| Temporal workflow/worker execution | 목표, 현재 workflow port/local adapter proof |
+| Managed Temporal worker operations | adapter/time-skipping ratchet은 active-covered, 운영 배포는 목표 |
 | Real CEL/JSON Logic evaluator | 목표, 현재 safeExpression subset |
 | Real external ERP/webhook writeback | 목표, 현재 mock/local proof |
 | Production connector registry/retry workers | 목표 |
-| Managed Elasticsearch deployment | 목표, adapter/projection proof는 존재 |
+| Managed Elasticsearch deployment | live Testcontainers ratchet은 active-covered, managed cloud packaging은 목표 |
 | Continuously running CDC/search workers | 목표 |
 | Iceberg/Spark/Kubernetes production package | 목표, Sprint 43-45 future scope |
 | Broader Operations UI | 목표, 기본 panel/detail/retry/replay는 존재 |

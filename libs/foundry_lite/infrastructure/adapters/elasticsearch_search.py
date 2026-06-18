@@ -44,7 +44,7 @@ class ElasticsearchClientLike(Protocol):
 
     def delete(self, *, index: str, id: str, **_options: object) -> object: ...
 
-    def search(self, *, index: str, body: Mapping[str, object], size: int) -> Mapping[str, object]: ...
+    def search(self, *, index: str, body: Mapping[str, object]) -> Mapping[str, object]: ...
 
 
 @dataclass(frozen=True)
@@ -106,6 +106,7 @@ class ElasticsearchAdapter:
                 index=self._index_name(document.tenant_id, document.object_type),
                 id=document.document_id,
                 body=_version_guarded_update_body(document),
+                retry_on_conflict=5,
                 refresh=True,
             )
 
@@ -122,8 +123,7 @@ class ElasticsearchAdapter:
         with self._guard("document_ids"):
             response = self.client.search(
                 index=self._index_name(tenant_id, object_type),
-                body={"query": {"match_all": {}}, "_source": ["object_id"]},
-                size=10_000,
+                body={"query": {"match_all": {}}, "_source": ["object_id"], "size": 10_000},
             )
         return sorted(_hit_document_id(hit) for hit in _raw_hits(response) if _hit_document_id(hit))
 
@@ -132,7 +132,6 @@ class ElasticsearchAdapter:
             response = self.client.search(
                 index=self._index_name(query.tenant_id, query.object_type),
                 body=_search_body(query),
-                size=query.limit,
             )
         return [_search_hit(hit, query) for hit in _raw_hits(response)]
 
@@ -280,7 +279,7 @@ def _search_body(query: SearchQuery) -> Mapping[str, object]:
         *({"term": {f"properties.{name}": value}} for name, value in query.terms.items()),
     ]
     must = [_full_text_query(query)] if query.text else [{"match_all": {}}]
-    return {"query": {"bool": {"filter": filters, "must": must}}}
+    return {"query": {"bool": {"filter": filters, "must": must}}, "size": query.limit}
 
 
 def _full_text_query(query: SearchQuery) -> Mapping[str, object]:

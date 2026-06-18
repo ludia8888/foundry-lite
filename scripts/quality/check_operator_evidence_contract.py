@@ -3,9 +3,10 @@
 A dangerous runtime failure must be visible in durable evidence (run/audit/
 transaction/error/outbox/trace payloads), never only in a log line. This gate
 enforces, per active infra, that the operator-evidence proof:
-- names at least one regression test that exists,
+- names at least one regression test that is collected by pytest,
 - declares the durable payload paths that failure must persist,
 - declares at least one durable evidence category.
+- maps every required payload path to the test(s) that assert it.
 
 The runtime payload keys themselves are asserted by the named integration tests
 (e.g. `test_s3_storage_failure_is_visible_in_operations`), which inject the
@@ -61,6 +62,7 @@ def _family_findings(family: dict, known_tests: set[str]) -> list[Finding]:
     oe_tests = (family.get("proofs", {}) or {}).get("operator-evidence") or []
     findings = _test_findings(fid, test_path, oe_tests, known_tests)
     findings.extend(_field_findings(fid, test_path, evidence))
+    findings.extend(_assertion_findings(fid, test_path, evidence, oe_tests, known_tests))
     return findings
 
 
@@ -106,6 +108,83 @@ def _field_findings(fid: str, test_path: str, evidence: dict) -> list[Finding]:
                 )
             )
     return out
+
+
+def _assertion_findings(
+    fid: str,
+    test_path: str,
+    evidence: dict,
+    oe_tests: list[str],
+    known_tests: set[str],
+) -> list[Finding]:
+    required_paths = evidence.get("requiredPayloadPaths") or []
+    assertions = evidence.get("testAssertions") or {}
+    if not isinstance(assertions, dict) or not assertions:
+        return [
+            Finding(
+                area=f"{fid} / operator-evidence",
+                problem="operatorEvidence.testAssertions is empty or missing",
+                why="Each required payload path must name the pytest evidence that asserts it.",
+                suggested_files=(_MATRIX, test_path),
+            )
+        ]
+    findings: list[Finding] = []
+    for path in required_paths:
+        findings.extend(_path_assertion_findings(fid, test_path, str(path), assertions, oe_tests, known_tests))
+    return findings
+
+
+def _path_assertion_findings(
+    fid: str,
+    test_path: str,
+    path: str,
+    assertions: dict,
+    oe_tests: list[str],
+    known_tests: set[str],
+) -> list[Finding]:
+    mapped_tests = assertions.get(path) or []
+    if not mapped_tests:
+        return [
+            Finding(
+                area=f"{fid} / operator-evidence",
+                problem=f"required payload path has no assertion mapping: {path}",
+                why="A declared operator payload path must be tied to a specific regression test.",
+                suggested_files=(_MATRIX, test_path),
+            )
+        ]
+    return _assertion_test_findings(fid, test_path, path, mapped_tests, oe_tests, known_tests)
+
+
+def _assertion_test_findings(
+    fid: str,
+    test_path: str,
+    path: str,
+    mapped_tests: list[str],
+    oe_tests: list[str],
+    known_tests: set[str],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    for test_name in mapped_tests:
+        if test_name not in oe_tests:
+            findings.append(
+                Finding(
+                    area=f"{fid} / operator-evidence",
+                    problem=f"assertion test is not listed under proofs.operator-evidence: {test_name}",
+                    why=f"The path '{path}' must be asserted by an operator-evidence proof test.",
+                    suggested_files=(_MATRIX, test_path),
+                    tests=(test_name,),
+                )
+            )
+        if test_name not in known_tests:
+            findings.append(
+                Finding(
+                    area=f"{fid} / operator-evidence",
+                    problem=f"assertion test is not collected by pytest: {test_name}",
+                    suggested_files=(_MATRIX, test_path),
+                    tests=(test_name,),
+                )
+            )
+    return findings
 
 
 def main() -> int:

@@ -33,11 +33,29 @@ def _load(gate: str) -> dict | None:
         return None
 
 
+def _load_runtime_failure() -> dict | None:
+    path = ARTIFACTS / "runtime_lane_failure.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"failedStep": "unknown", "exitCode": "unknown"}
+    return data if isinstance(data, dict) else {"failedStep": "unknown", "exitCode": "unknown"}
+
+
 def build_summary() -> tuple[str, bool]:
     rows = ["## Foundry-lite Runtime Evidence Gate", "", "| Area | Status | Problem |", "|---|---:|---|"]
     suggested: list[str] = []
     root_cause: list[str] = []
     any_fail = False
+    runtime_failure = _load_runtime_failure()
+    if runtime_failure is not None:
+        any_fail = True
+        failed_step = runtime_failure.get("failedStep", "unknown")
+        exit_code = runtime_failure.get("exitCode", "unknown")
+        rows.append(f"| Runtime lane | ❌ | failed step: {failed_step} (exit {exit_code}) |")
+        root_cause.append(f"- **Runtime lane:** inspect the focused gate for `{failed_step}` first.")
 
     for gate, label in _GATES:
         data = _load(gate)
