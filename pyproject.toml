@@ -68,6 +68,7 @@ dev = [
   "pyarrow>=17.0",
   "pyspark>=3.5",
   "temporalio>=1.7",
+  "elasticsearch>=8.15",
 ]
 
 [project.scripts]

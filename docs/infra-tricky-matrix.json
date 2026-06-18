@@ -534,6 +534,124 @@
           "adapterFailure"
         ]
       }
+    },
+    {
+      "id": "elasticsearch",
+      "name": "Managed Elasticsearch deployment",
+      "status": "active-covered",
+      "qualityScript": "quality:elasticsearch",
+      "ciCommand": "pnpm --silent quality:elasticsearch",
+      "testPaths": [
+        "tests/integration/test_elasticsearch_deployment_ratchet.py",
+        "tests/integration/test_elasticsearch_live_cluster.py"
+      ],
+      "proofs": {
+        "adapter-contract": [
+          "test_elasticsearch_adapter_contract_declares_search_failure_modes"
+        ],
+        "normal-path": [
+          "test_elasticsearch_normal_path_indexes_and_searches",
+          "test_elasticsearch_live_round_trip_indexes_and_searches"
+        ],
+        "failure-injection": [
+          "test_elasticsearch_cluster_failures_map_to_typed_adapter_error",
+          "test_elasticsearch_create_failure_other_than_already_exists_is_classified",
+          "test_elasticsearch_live_cluster_outage_is_typed_adapter_error"
+        ],
+        "concurrency-race": [
+          "test_elasticsearch_version_guard_keeps_highest_version_under_concurrent_upserts",
+          "test_elasticsearch_live_version_guard_rejects_stale_writer"
+        ],
+        "retry-idempotency": [
+          "test_elasticsearch_configure_index_is_idempotent_on_already_exists",
+          "test_elasticsearch_repeated_same_version_upsert_is_noop"
+        ],
+        "partial-success": [
+          "test_elasticsearch_one_document_failure_does_not_lose_others"
+        ],
+        "recovery-cleanup": [
+          "test_elasticsearch_index_is_rebuildable_projection_after_loss"
+        ],
+        "operator-evidence": [
+          "test_elasticsearch_failure_carries_durable_operator_payload"
+        ],
+        "docs-sync": [
+          "test_infra_tricky_matrix_gate_passes_current_docs_and_ci",
+          "test_infra_ratchet_gate_passes_current_docs_and_ci"
+        ]
+      },
+      "trickyItems": [
+        {
+          "id": "ES1",
+          "tests": [
+            "test_elasticsearch_adapter_contract_declares_search_failure_modes"
+          ]
+        },
+        {
+          "id": "ES2",
+          "tests": [
+            "test_elasticsearch_normal_path_indexes_and_searches"
+          ]
+        },
+        {
+          "id": "ES3",
+          "tests": [
+            "test_elasticsearch_cluster_failures_map_to_typed_adapter_error"
+          ]
+        },
+        {
+          "id": "ES4",
+          "tests": [
+            "test_elasticsearch_version_guard_keeps_highest_version_under_concurrent_upserts"
+          ]
+        },
+        {
+          "id": "ES5",
+          "tests": [
+            "test_elasticsearch_configure_index_is_idempotent_on_already_exists"
+          ]
+        },
+        {
+          "id": "ES6",
+          "tests": [
+            "test_elasticsearch_one_document_failure_does_not_lose_others"
+          ]
+        },
+        {
+          "id": "ES7",
+          "tests": [
+            "test_elasticsearch_index_is_rebuildable_projection_after_loss"
+          ]
+        },
+        {
+          "id": "ES8",
+          "tests": [
+            "test_elasticsearch_failure_carries_durable_operator_payload"
+          ]
+        },
+        {
+          "id": "ES9",
+          "tests": [
+            "test_elasticsearch_live_cluster_outage_is_typed_adapter_error"
+          ]
+        }
+      ],
+      "sourceOfTruthRules": [
+        "search_index_is_projection_not_truth"
+      ],
+      "operatorEvidence": {
+        "runField": "syncRuns",
+        "requiredPayloadPaths": [
+          "error.adapterFailure.adapterProfile",
+          "error.adapterFailure.operation",
+          "error.adapterFailure.kind",
+          "error.adapterFailure.retryable"
+        ],
+        "durableEvidenceCategories": [
+          "error",
+          "adapterFailure"
+        ]
+      }
     }
   ],
   "crossCuttingFlowProofs": [
