@@ -162,3 +162,15 @@ def test_api_smoke_module_collection_is_xdist_safe_without_shared_default_home()
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_temporal_ratchet_serializes_test_server_download_under_xdist() -> None:
+    source = (ROOT / "tests" / "integration" / "test_temporal_workflow_ratchet.py").read_text(encoding="utf-8")
+
+    lock_call = "with _temporal_test_server_download_lock():"
+    server_start = "WorkflowEnvironment.start_time_skipping()"
+    assert "_TEMPORAL_TEST_SERVER_LOCK" in source
+    assert "fcntl.flock" in source
+    assert lock_call in source
+    assert server_start in source
+    assert source.index(lock_call) < source.index(server_start)

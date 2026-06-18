@@ -20,10 +20,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Callable, Coroutine
-from contextlib import asynccontextmanager
+import tempfile
+from collections.abc import Callable, Coroutine, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback; CI/dev are POSIX.
+    fcntl = None  # type: ignore[assignment]
 
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
@@ -95,6 +102,7 @@ class FailingWorkflow:
 
 _ALL_WORKFLOWS = [FoundryWorkflow, FlakyWorkflow, SleepyWorkflow, FailingWorkflow]
 _ALL_ACTIVITIES = [run_workflow_step, flaky_step]
+_TEMPORAL_TEST_SERVER_LOCK = "foundry-lite-temporal-test-server-download.lock"
 
 
 class _UnavailableStartClient:
@@ -112,10 +120,29 @@ class _UnavailableDescribeHandle:
         raise ConnectionError("Temporal describe unavailable")
 
 
+@contextmanager
+def _temporal_test_server_download_lock(lock_path: Path | None = None) -> Iterator[None]:
+    """Serialize Temporal SDK test-server downloads across xdist workers."""
+    if fcntl is None:
+        yield
+        return
+
+    path = lock_path or Path(tempfile.gettempdir()) / _TEMPORAL_TEST_SERVER_LOCK
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 @asynccontextmanager
 async def _harness(*, execution_timeout_seconds: int = 300):
     """Boot a time-skipping server + worker and yield (env, adapter)."""
-    async with await WorkflowEnvironment.start_time_skipping() as env:
+    with _temporal_test_server_download_lock():
+        env_context = await WorkflowEnvironment.start_time_skipping()
+    async with env_context as env:
         async with Worker(
             env.client,
             task_queue=FOUNDRY_TASK_QUEUE,
