@@ -158,6 +158,12 @@ run_static_gate() {
   echo "== Static: infra tricky matrix =="
   uv run python scripts/quality/check_infra_tricky_matrix.py
 
+  echo "== Static: semantic documentation consistency =="
+  uv run python scripts/quality/check_semantic_doc_consistency.py
+
+  echo "== Static: data engineering pattern matrix =="
+  uv run python scripts/quality/check_data_pattern_matrix.py
+
   echo "== Static: generated TypeScript SDK drift =="
   uv run python scripts/generate_sdk_ts.py --check
 

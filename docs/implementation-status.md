@@ -40,7 +40,7 @@
 
 ## Still Targeted, Not Yet Implemented
 
-- S46+ data-platform expansion roadmap: [Data Platform Expansion Roadmap](./data-platform-expansion-roadmap.md) is the proposed post-MVP execution plan. The first implementation target is S46 Semantic SSOT + Data Engineering Pattern Matrix, which should reconcile README/development plan/sprint breakdown/implementation status/infra matrix wording before S47+ product features begin.
+- S46 data-platform expansion guardrails: [Data Platform Expansion Roadmap](./data-platform-expansion-roadmap.md) is the post-MVP execution plan, and S46 now provides [Data Engineering Pattern Matrix](./data-engineering-pattern-matrix.json), `quality:semantic-doc-consistency`, and `quality:data-pattern-matrix`. These gates keep README/current-status wording, deferred/partial data-pattern claims, active-covered proof levels, future tests, and active infra references synchronized before S47+ product features begin. The next roadmap implementation target is S47 Record DLQ + Replay.
 - PostgreSQL JSONB object store with production indexes and row-level security.
 - Production connector registry/config persistence, managed retry workers, and more SaaS-specific connector adapters.
 - Real CEL or JSON Logic evaluator.

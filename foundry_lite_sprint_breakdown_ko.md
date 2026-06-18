@@ -816,7 +816,7 @@ Python 사용자가 Dataset Registry의 input/output abstraction을 통해 trans
 
 **무조건 성공시켜야 하는 Goal**
 
-Dataset을 사용자에게 직접 노출하지 않고 `Order`, `Customer` 같은 object type으로 끌어올릴 수 있는 최소 ontology metadata를 만든다. 아직 indexing은 하지 않아도, object/property/backing mapping을 draft로 저장할 수 있어야 한다.
+Dataset을 사용자에게 직접 노출하지 않고 `Order`, `Customer` 같은 object type으로 끌어올릴 수 있는 최소 ontology metadata를 만든다. 이 Sprint 11 단계에서는 indexing 전 단계로, object/property/backing mapping을 draft로 저장할 수 있어야 한다.
 
 **반드시 완성해야 하는 것**
 
@@ -1788,7 +1788,7 @@ mock SaaS REST source와 webhook source를 만들어 raw datasets로 유입한�
 
 **무조건 성공시켜야 하는 Goal**
 
-Kafka-compatible stream event를 raw archive dataset으로 남겨 replay 가능한 stream ingestion 기반을 만든다. 아직 object CDC indexing까지는 하지 않고, stream offset/checkpoint를 안정적으로 저장하는 것이 핵심이다.
+Kafka-compatible stream event를 raw archive dataset으로 남겨 replay 가능한 stream ingestion 기반을 만든다. 이 Sprint 38 단계에서는 object CDC indexing 전 단계로 stream offset/checkpoint를 안정적으로 저장하는 것이 핵심이며, 현재 checkout에는 Sprint 40 CDC object-indexing proof가 따로 존재한다.
 
 **반드시 완성해야 하는 것**
 

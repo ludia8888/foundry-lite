@@ -158,55 +158,65 @@ state so a future PR cannot claim a pattern is covered without evidence.
 
 Semantic documentation consistency:
 
-- [ ] Use `docs/infra-tricky-matrix.json` active families as one input source.
-- [ ] Check that `docs/implementation-status.md` describes every active family
+- [x] Use `docs/infra-tricky-matrix.json` active families as one input source.
+- [x] Check that `docs/implementation-status.md` describes every active family
       as current evidence.
-- [ ] Fail CI if an active family is described as future without a clear scope
+- [x] Fail CI if an active family is described as future without a clear scope
       qualifier.
-- [ ] Fail CI if a deferred feature is described as implemented.
-- [ ] Compare README capability tables with matrix/status documents.
+- [x] Fail CI if a deferred feature is described as implemented.
+- [x] Compare README capability tables with matrix/status documents.
 
 Data engineering pattern matrix:
 
-- [ ] Add `docs/data-engineering-pattern-matrix.json`.
-- [ ] Restrict status values to `enforced`, `partial`, `deferred`, and
+- [x] Add `docs/data-engineering-pattern-matrix.json`.
+- [x] Restrict status values to `enforced`, `partial`, `deferred`, and
       `not-applicable`.
-- [ ] Require `reason`, `riskTier`, `owner`, `futureTests`, and `owningDoc` for
+- [x] Require `reason`, `riskTier`, `owner`, `futureTests`, and `owningDoc` for
       every deferred item.
-- [ ] Require a clear rationale for every not-applicable item.
-- [ ] Reference existing infra family IDs instead of duplicating the infra
+- [x] Require a clear rationale for every not-applicable item.
+- [x] Reference existing infra family IDs instead of duplicating the infra
       ratchet matrix.
 
 Proof level:
 
-- [ ] Add proof levels: L1 unit, L2 deterministic integration, L3 live
+- [x] Add proof levels: L0 registered gap, L1 unit, L2 deterministic integration, L3 live
       Testcontainers, L4 active-stack composition, L5 staging/cloud, and
       L6 failover/chaos.
-- [ ] Document what `active-covered` means in terms of proof level.
+- [x] Document what `active-covered` means in terms of proof level.
 
-### Proposed Commands
+`active-covered` means the repo has focused adapter/runtime proof and durable
+operator/source-of-truth evidence for the declared local or Testcontainers
+profile. It does not mean managed cloud operations, real cluster failover, or
+L5/L6 chaos proof is complete. In this roadmap's proof scale, a single active
+infra family must reach at least L3, while active-stack composition proof is L4.
+
+### Commands
 
 ```text
 quality:semantic-doc-consistency
 quality:data-pattern-matrix
 ```
 
-### Proposed Tests
+### Tests
 
-- [ ] `test_semantic_docs_reject_active_infra_described_as_future`
-- [ ] `test_implementation_status_lists_every_active_matrix_family`
-- [ ] `test_readme_does_not_claim_deferred_feature_as_active`
-- [ ] `test_data_pattern_matrix_requires_reason_for_not_applicable`
-- [ ] `test_data_pattern_matrix_requires_future_test_for_deferred`
-- [ ] `test_proof_level_is_valid_and_monotonic`
+- [x] `test_semantic_docs_reject_active_infra_described_as_future`
+- [x] `test_implementation_status_lists_every_active_matrix_family`
+- [x] `test_readme_does_not_claim_deferred_feature_as_active`
+- [x] `test_readme_must_mention_deferred_pattern_alias`
+- [x] `test_non_readme_doc_cannot_claim_deferred_feature_as_active`
+- [x] `test_data_pattern_matrix_requires_active_covered_meaning`
+- [x] `test_data_pattern_matrix_requires_readme_alias_for_deferred`
+- [x] `test_data_pattern_matrix_requires_reason_for_not_applicable`
+- [x] `test_data_pattern_matrix_requires_future_test_for_deferred`
+- [x] `test_proof_level_is_valid_and_monotonic`
 
 ### Done
 
-- [ ] Current/future/partial wording agrees across README, development plan,
+- [x] Current/future/partial wording agrees across README, development plan,
       sprint breakdown, implementation status, infra ratchet, and matrix docs.
-- [ ] A new data-engineering pattern gap cannot merge without being registered
+- [x] A new data-engineering pattern gap cannot merge without being registered
       in the matrix.
-- [ ] CI output points to the conflicting sentence and the document to edit.
+- [x] CI output points to the conflicting sentence and the document to edit.
 
 ## 5. Later Sprint Intake Summary
 

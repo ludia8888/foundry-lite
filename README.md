@@ -338,14 +338,14 @@ flowchart TB
     P6 --> L6
     P7 --> L7
     P8 --> L8
-    P1 -. future .-> S1
-    P2 -. future .-> S2
-    P3 -. future .-> S3
-    P4 -. future .-> S4
+    P1 -. future managed storage .-> S1
+    P2 -. future catalog operations .-> S2
+    P3 -. future cluster operations .-> S3
+    P4 -. future orchestration service .-> S4
     P5 -. optional .-> S5
-    P6 -. future .-> S6
-    P7 -. future .-> S7
-    P8 -. future .-> S8
+    P6 -. future product workflow .-> S6
+    P7 -. future connector operations .-> S7
+    P8 -. future product UI .-> S8
 ```
 
 ### 4. 모든 변경은 추적 가능해야 합니다
@@ -762,6 +762,8 @@ flowchart TB
 | `check_doc_drift.py` | 현재 구현 문서가 실제 코드 경로/심볼과 어긋나는 문제 |
 | `check_checklist_evidence.py` | tricky failure checklist의 `[x] test_*` 완료 증거가 실제 pytest 수집 결과와 어긋나는 문제 |
 | `check_infra_tricky_matrix.py` | active 인프라/조합 stack이 관련 tricky 항목, proof class, pytest, CI command를 빠뜨리는 문제 |
+| `check_semantic_doc_consistency.py` | active-covered 인프라를 범위 설명 없이 future로 되돌려 쓰는 문서 drift |
+| `check_data_pattern_matrix.py` | 데이터 엔지니어링 패턴 gap이 owner/reason/future test 없이 사라지는 문제 |
 | `check_schema_revision_guard.py` | schema.py 변경이 revision snapshot 없이 들어오는 문제 |
 | `check_action_idempotency.py` | action idempotency contract 회귀 |
 | `check_metrics_exposed.py` | 필수 운영 metrics 누락 |
@@ -891,9 +893,11 @@ gantt
 | Production connector registry/retry workers | 목표 |
 | Managed Elasticsearch deployment | live Testcontainers ratchet은 active-covered, managed cloud packaging은 목표 |
 | Continuously running CDC/search workers | 목표 |
+| Record DLQ replay | 목표, S47 future scope |
+| Late data and watermark policy | 목표, S48 future scope |
 | Iceberg/Spark active-stack hardening | adapter/profile/composition ratchet은 active-covered, production cluster/catalog operations은 목표 |
 | Kubernetes and backup/restore package | 목표, S45/S57 future scope |
-| Data platform expansion S46-S64 | proposed roadmap, 현재 구현 완료 주장 아님 |
+| Data platform expansion S46-S64 | S46 semantic/data-pattern guardrails는 active, S47+ product/data 기능은 목표 |
 | Broader Operations UI | 목표, 기본 panel/detail/retry/replay는 존재 |
 
 ## 문서 지도
@@ -903,6 +907,7 @@ gantt
 | [docs/implementation-status.md](docs/implementation-status.md) | 현재 커밋이 실제로 보장하는 것과 아직 목표인 것의 경계 |
 | [docs/mvp-scope.md](docs/mvp-scope.md) | v1 core에 포함되는 것과 명시적으로 제외되는 것 |
 | [docs/infra-ratchet.md](docs/infra-ratchet.md) | 인프라를 하나씩 추가하고 실패/동시성/재시도/부분 성공/복구/운영 증거를 CI에 고정하는 규칙 |
+| [docs/data-engineering-pattern-matrix.json](docs/data-engineering-pattern-matrix.json) | S46 데이터 엔지니어링 패턴별 current/partial/deferred 상태와 증거·미래 테스트 |
 | [docs/data-platform-expansion-roadmap.md](docs/data-platform-expansion-roadmap.md) | 다운로드 확장 계획을 현재 코드/문서와 대조해 정리한 S46 이후 실행 로드맵 |
 | [docs/data-platform-expansion-sprint-plan-ko.md](docs/data-platform-expansion-sprint-plan-ko.md) | 다운로드 원본을 repo 안에 보존한 상세 proposed sprint plan |
 | [foundry_lite_development_plan_ko_sprintified.md](foundry_lite_development_plan_ko_sprintified.md) | 제품 목표와 설계 원본 |

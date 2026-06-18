@@ -1157,14 +1157,15 @@ CodeQL, Semgrep, AST-grep, Tach, import-linter, vulture, interrogate,
 Pyright strict, pytest-randomly, pytest-xdist, gitleaks는 위 Tier 섹션으로
 승격했다.
 
-### S46 후보 — Semantic SSOT / Data Pattern Matrix
+### S46 — Semantic SSOT / Data Pattern Matrix
 
 [Data Platform Expansion Roadmap](./data-platform-expansion-roadmap.md)의 첫 번째
 post-MVP 작업은 문서와 machine-readable matrix가 서로 다른 현재 상태를 주장하지 못하게
-하는 것이다. 이 항목은 아직 구현된 게이트가 아니라 S46에서 추가할 후보이며, 구현 시에는
-이 문서의 [게이트 추가/변경 워크플로](#5-게이트-추가변경-워크플로)를 그대로 따른다.
+하는 것이다. 2026-06-18 현재 S46 정적 게이트가 구현되어 static lane에 연결되었다.
+S47 이후 product/data 기능은 이 matrix와 semantic-doc consistency gate를 먼저
+통과해야 한다.
 
-| 후보 게이트 | 제안 명령 | Root cause |
+| 게이트 | 명령 | Root cause |
 |---|---|---|
 | Semantic documentation consistency | `quality:semantic-doc-consistency` | active-covered infra를 future라고 쓰거나 deferred 기능을 current로 쓰는 문서 drift 차단 |
 | Data engineering pattern matrix | `quality:data-pattern-matrix` | 데이터 엔지니어링 패턴 gap이 owner/reason/future test 없이 사라지는 것 차단 |

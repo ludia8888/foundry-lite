@@ -409,7 +409,7 @@ v1은 선택지를 줄여 구현 속도와 디버깅 가능성을 우선한다.
 | Python quality gate | ruff + mypy 또는 pyright + pytest | Clean Code, 타입 안정성, 회귀 방지를 CI에서 확인 |
 | Test coverage gate | line/branch/function coverage 95%+, integration/smoke 100% pass | 코드가 작동하는지뿐 아니라 안전하게 바꿀 수 있는지 확인 |
 
-### 3.3 왜 Temporal을 future orchestration target으로 두는가
+### 3.3 왜 Temporal product workflow orchestration을 S52 target으로 두는가
 
 Foundry-lite에는 ETL schedule뿐 아니라 action writeback, side effect, index replay, materialization retry가 필요하다. 단순 queue는 실패 복구와 장기 workflow 추적이 약하다. Temporal은 워크플로우를 코드로 정의하면서 event history 기반으로 재시작/복구할 수 있으므로 action runtime과 pipeline runner 양쪽에 적합하다.
 
@@ -624,7 +624,7 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
 **Data plane**은 실제 데이터를 저장·처리한다.
 
 - object storage files
-- Parquet manifest / future Iceberg tables
+- Parquet manifest / Iceberg table ratchet / future managed catalog operations
 - object store tables
 - Elasticsearch-compatible search projection proof / future managed cluster
 - external systems
@@ -2896,10 +2896,10 @@ Actions:
 | 범위 | 현재 상태 | 남은 것 |
 |---|---|---|
 | Scaffold / API / Web / CLI / Worker skeleton | 완료. 모노레포, FastAPI, Web, CLI, worker entrypoint, shared config/logging/error boundary가 있다. | production packaging polish |
-| Dataset transaction vertical slice | 완료. CSV/local snapshot, immutable dataset version, staging/manifest commit, schema/health guard, preview, sync run tracking이 있다. S3/Iceberg storage ratchet은 post-MVP proof로 active-covered다. | PostgreSQL snapshot connector production implementation, Iceberg maintenance/catalog operations, managed retention/compaction |
+| Dataset transaction vertical slice | 완료. CSV/local snapshot, immutable dataset version, staging/manifest commit, schema/health guard, preview, sync run tracking이 있다. S3/Iceberg storage ratchet은 post-MVP proof로 active-covered다. | PostgreSQL snapshot connector production implementation, future Iceberg maintenance/catalog operations, managed retention/compaction |
 | Transform vertical slice | 완료. DuckDB SQL transform, input/output version binding, lineage, health gate, failed-run cleanup이 있다. | executable Python runner, sandboxed SDK IO, Temporal scheduling |
 | Ontology / Object vertical slice | 완료. YAML import/validate/activate, object/link/action definitions, object indexing, query, links, object explorer, shadow reindex proof가 있다. | very large object-type serving optimization |
-| Action vertical slice | 완료. `ApproveOrder`, safeExpression subset, permission/precondition, expectedObjectVersion, idempotency, action log, outbox, audit, UI action form이 있다. | real external ERP/webhook writeback and compensation worker |
+| Action vertical slice | 완료. `ApproveOrder`, safeExpression subset, permission/precondition, expectedObjectVersion, idempotency, action log, outbox, audit, UI action form이 있다. | future real external ERP/webhook writeback and compensation worker |
 | Materialization / closed loop | 완료. `object_snapshot`, `action_log`, watermark/source version proof, downstream transform, lineage/audit/operations tracing이 있다. | additional materialization types and external export |
 | Streaming / CDC post-MVP proof | 부분 완료. REST/Webhook, Kafka-compatible stream archive, live broker proof, Debezium archive/live topic, CDC object indexing proof가 있다. | continuously running workers, rebalance/commit-unknown failure injection, production deployment packaging |
 | Search post-MVP proof | 부분 완료. Elasticsearch-compatible adapter/projection/rebuild/orphan drift proof가 있다. | managed live Elasticsearch cluster deployment |

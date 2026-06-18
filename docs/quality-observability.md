@@ -270,7 +270,7 @@ uv run python -m trace --count --summary apps/cli/foundry_lite_cli/main.py demo 
 
 ## 8. S46+ Gate Expansion
 
-S46 이후 로드맵은 [Data Platform Expansion Roadmap](./data-platform-expansion-roadmap.md)을 따른다. 새 gate를 추가할 때는 runtime lane과 release lane을 분리한다. PR에서 빠르게 root cause를 잡아야 하는 source-of-truth, adapter contract, failure injection, concurrency/race, retry/idempotency, partial-success cleanup, operator evidence, composition compatibility proof는 runtime lane에 둔다. 큰 데이터/클라우드/chaos 성격의 느린 proof는 release lane에 두고 JSON/Markdown artifact를 업로드한다.
+S46 이후 로드맵은 [Data Platform Expansion Roadmap](./data-platform-expansion-roadmap.md)을 따른다. S46 static gate로 `quality:semantic-doc-consistency`와 `quality:data-pattern-matrix`가 추가되어 active-covered infra를 범위 설명 없이 future로 되돌려 쓰는 문서 drift, deferred/partial 패턴을 current처럼 쓰는 README/status drift, owner/reason/future test 없는 데이터 패턴 gap을 차단한다. 새 runtime gate를 추가할 때는 runtime lane과 release lane을 분리한다. PR에서 빠르게 root cause를 잡아야 하는 source-of-truth, adapter contract, failure injection, concurrency/race, retry/idempotency, partial-success cleanup, operator evidence, composition compatibility proof는 runtime lane에 둔다. 큰 데이터/클라우드/chaos 성격의 느린 proof는 release lane에 두고 JSON/Markdown artifact를 업로드한다.
 
 비개발자 관점에서 가장 중요한 규칙은 단순하다. 실패가 로그에만 남으면 부족하다. 실패한 run, audit event, dataset transaction, outbox/error payload, trace summary 중 적절한 곳에 "무슨 계약이 깨졌고 어디를 보면 되는지"가 남아야 한다.
 

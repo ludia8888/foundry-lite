@@ -1,0 +1,302 @@
+{
+  "schemaVersion": 1,
+  "statusValues": [
+    "enforced",
+    "partial",
+    "deferred",
+    "not-applicable"
+  ],
+  "proofLevels": [
+    {
+      "id": "L0",
+      "name": "registered gap"
+    },
+    {
+      "id": "L1",
+      "name": "unit"
+    },
+    {
+      "id": "L2",
+      "name": "deterministic integration"
+    },
+    {
+      "id": "L3",
+      "name": "live Testcontainers"
+    },
+    {
+      "id": "L4",
+      "name": "active-stack composition"
+    },
+    {
+      "id": "L5",
+      "name": "staging/cloud"
+    },
+    {
+      "id": "L6",
+      "name": "failover/chaos"
+    }
+  ],
+  "activeCoveredMeaning": "active-covered means the current repo has focused adapter/runtime proof and durable operator/source-of-truth evidence for the declared local or Testcontainers profile. It does not mean managed cloud operations, real cluster failover, or L5/L6 chaos proof is complete.",
+  "activeCoveredMinimumProofLevel": "L3",
+  "activeStackCompositionProofLevel": "L4",
+  "patterns": [
+    {
+      "id": "committed-version-source-of-truth",
+      "name": "Committed dataset version remains serving truth",
+      "status": "enforced",
+      "riskTier": "P0",
+      "owner": "dataset-runtime",
+      "owningDoc": "docs/implementation-status.md",
+      "reason": "Metadata DB committed dataset versions remain the serving truth even when S3, Iceberg, Spark, or CDC artifacts exist.",
+      "activeInfraRefs": [
+        "s3-storage",
+        "iceberg",
+        "spark",
+        "debezium-cdc"
+      ],
+      "proofLevel": "L4",
+      "evidenceRefs": [
+        "test_s3_commit_storage_success_db_failure_creates_orphan_cleanup_evidence",
+        "test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end"
+      ]
+    },
+    {
+      "id": "projection-not-serving-truth",
+      "name": "Search and CDC projections cannot become source of truth",
+      "status": "enforced",
+      "riskTier": "P0",
+      "owner": "object-search-runtime",
+      "owningDoc": "docs/commit-point-risk-register.md",
+      "reason": "Object store and committed dataset state are re-read before sensitive object/search/action decisions.",
+      "activeInfraRefs": [
+        "elasticsearch",
+        "debezium-cdc"
+      ],
+      "proofLevel": "L3",
+      "evidenceRefs": [
+        "test_elasticsearch_index_is_rebuildable_projection_after_loss",
+        "test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end"
+      ]
+    },
+    {
+      "id": "dangerous-failure-operator-evidence",
+      "name": "Dangerous failures leave durable operator evidence",
+      "status": "enforced",
+      "riskTier": "P0",
+      "owner": "operations-runtime",
+      "owningDoc": "docs/quality-observability.md",
+      "reason": "Adapter and commit-point failures must be visible in run/error/audit/outbox/trace evidence, not only logs.",
+      "activeInfraRefs": [
+        "s3-storage",
+        "iceberg",
+        "spark",
+        "temporal",
+        "elasticsearch"
+      ],
+      "proofLevel": "L3",
+      "evidenceRefs": [
+        "test_s3_storage_failure_is_visible_in_operations",
+        "test_iceberg_catalog_failure_is_visible_in_operations",
+        "test_elasticsearch_failure_carries_durable_operator_payload",
+        "test_temporal_adapter_declares_failure_taxonomy"
+      ]
+    },
+    {
+      "id": "active-stack-composition-compatibility",
+      "name": "Active stack features retest together",
+      "status": "enforced",
+      "riskTier": "P0",
+      "owner": "infra-runtime",
+      "owningDoc": "docs/infra-ratchet.md",
+      "reason": "S3, Iceberg, Spark, and Debezium CDC cannot advance as isolated happy paths once they are active together.",
+      "activeInfraRefs": [
+        "s3-storage",
+        "iceberg",
+        "spark",
+        "debezium-cdc"
+      ],
+      "proofLevel": "L4",
+      "evidenceRefs": [
+        "test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end",
+        "test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version"
+      ]
+    },
+    {
+      "id": "materialization-watermark-replay",
+      "name": "Materialization watermarks are replayable",
+      "status": "enforced",
+      "riskTier": "P0",
+      "owner": "materialization-runtime",
+      "owningDoc": "docs/commit-point-risk-register.md",
+      "reason": "Current materialization outputs pin enough cursor state to retry without skipping or duplicating successful rows.",
+      "activeInfraRefs": [],
+      "proofLevel": "L2",
+      "evidenceRefs": [
+        "test_materialization_late_commit_action_not_skipped",
+        "test_materialization_cursor_not_advanced_before_dataset_commit",
+        "test_materialization_retry_after_commit_metadata_failure_does_not_duplicate_output"
+      ]
+    },
+    {
+      "id": "schema-migration-guard",
+      "name": "Schema drift is blocked before runtime mismatch",
+      "status": "partial",
+      "riskTier": "P1",
+      "owner": "metadata-runtime",
+      "owningDoc": "docs/quality-gate-roadmap.md",
+      "reason": "The schema revision guard protects SQLAlchemy metadata snapshots, while multi-step upgrade and rollback operations are still broader S55 work.",
+      "activeInfraRefs": [],
+      "proofLevel": "L1",
+      "evidenceRefs": [
+        "test_schema_revision_guard_passes_matching_snapshot"
+      ],
+      "futureTests": [
+        "test_schema_migration_upgrade_and_rollback_preserve_committed_versions"
+      ],
+      "readmeAliases": [
+        "Alembic migration operations",
+        "schema migration"
+      ]
+    },
+    {
+      "id": "record-level-dlq-replay",
+      "name": "Bad records are quarantined and replayed independently",
+      "status": "deferred",
+      "riskTier": "P0",
+      "owner": "ingest-runtime",
+      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "reason": "Current DLQ coverage is operations/outbox oriented; S47 must add record-level quarantine and replay semantics.",
+      "activeInfraRefs": [
+        "debezium-cdc"
+      ],
+      "proofLevel": "L0",
+      "futureTests": [
+        "test_record_dlq_quarantines_bad_row_without_blocking_valid_rows",
+        "test_record_dlq_replay_is_idempotent_after_schema_fix"
+      ],
+      "readmeAliases": [
+        "Record DLQ",
+        "record-level DLQ",
+        "DLQ replay"
+      ]
+    },
+    {
+      "id": "late-data-watermark-policy",
+      "name": "Late data and watermark movement are explicit",
+      "status": "deferred",
+      "riskTier": "P1",
+      "owner": "ingest-runtime",
+      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "reason": "Current commit cursors are durable, but event-time/source-time/process-time late-data policy is future S48 work.",
+      "activeInfraRefs": [
+        "debezium-cdc"
+      ],
+      "proofLevel": "L0",
+      "futureTests": [
+        "test_late_event_routes_to_record_dlq_without_moving_watermark",
+        "test_watermark_never_moves_backward_across_retry"
+      ],
+      "readmeAliases": [
+        "Late data",
+        "watermark policy"
+      ]
+    },
+    {
+      "id": "iceberg-maintenance-and-retention",
+      "name": "Iceberg maintenance does not delete serving snapshots",
+      "status": "deferred",
+      "riskTier": "P1",
+      "owner": "storage-runtime",
+      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "reason": "Iceberg snapshot pinning is active-covered, but compaction, retention, and orphan cleanup are S50 work.",
+      "activeInfraRefs": [
+        "iceberg",
+        "s3-storage"
+      ],
+      "proofLevel": "L0",
+      "futureTests": [
+        "test_iceberg_retention_keeps_all_committed_dataset_versions_readable",
+        "test_iceberg_orphan_cleanup_never_deletes_serving_snapshot_files"
+      ],
+      "readmeAliases": [
+        "Iceberg maintenance",
+        "Iceberg/Spark active-stack hardening"
+      ]
+    },
+    {
+      "id": "temporal-product-workflows",
+      "name": "Product workflows execute through Temporal",
+      "status": "deferred",
+      "riskTier": "P0",
+      "owner": "workflow-runtime",
+      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "reason": "Temporal adapter semantics are covered, but product action/writeback/retry workflows do not yet execute through Temporal.",
+      "activeInfraRefs": [
+        "temporal"
+      ],
+      "proofLevel": "L0",
+      "futureTests": [
+        "test_temporal_action_workflow_retries_without_double_success",
+        "test_temporal_workflow_timeout_records_reconciliation_evidence"
+      ],
+      "readmeAliases": [
+        "Managed Temporal worker operations",
+        "Temporal product workflow"
+      ]
+    },
+    {
+      "id": "external-writeback-saga",
+      "name": "External writeback uses saga and reconciliation evidence",
+      "status": "deferred",
+      "riskTier": "P0",
+      "owner": "action-runtime",
+      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "reason": "Current writeback is simulated; S53 must handle external success plus local failure as compensation/reconciliation.",
+      "activeInfraRefs": [
+        "temporal"
+      ],
+      "proofLevel": "L0",
+      "futureTests": [
+        "test_external_writeback_success_local_failure_requires_compensation",
+        "test_external_timeout_is_unknown_until_reconciled"
+      ],
+      "readmeAliases": [
+        "Real external ERP/webhook writeback",
+        "external writeback saga"
+      ]
+    },
+    {
+      "id": "frontend-direct-db-access",
+      "name": "Frontend and agents never bypass public API or SDK",
+      "status": "partial",
+      "riskTier": "Product",
+      "owner": "product-surface",
+      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "reason": "The generated SDK and Object Explorer use public surfaces, but the full S61-S64 workspace track is not complete.",
+      "activeInfraRefs": [],
+      "proofLevel": "L1",
+      "evidenceRefs": [
+        "test_sdk_package_and_browser_outputs_share_client_surface"
+      ],
+      "futureTests": [
+        "test_frontend_workspace_uses_generated_sdk_only_for_object_actions"
+      ],
+      "readmeAliases": [
+        "Broader Operations UI",
+        "Frontend workspace"
+      ]
+    },
+    {
+      "id": "production-flink-runner",
+      "name": "Flink runner",
+      "status": "not-applicable",
+      "riskTier": "P2",
+      "owner": "compute-runtime",
+      "owningDoc": "docs/mvp-scope.md",
+      "reason": "Flink remains outside the current S46 execution path.",
+      "activeInfraRefs": [],
+      "proofLevel": "L0",
+      "notApplicableReason": "Spark is the current compute ratchet; Flink is explicitly deferred until a later compute-family decision."
+    }
+  ]
+}
