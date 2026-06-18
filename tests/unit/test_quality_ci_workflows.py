@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 from pathlib import Path
+from types import ModuleType
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_python_module(path: Path, name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_ci_gate_does_not_run_heavy_codeql_locally() -> None:
@@ -372,6 +383,52 @@ def test_runtime_lane_writes_root_cause_summary_from_failure_trap() -> None:
     assert script.index("run_runtime_contract_gates") < script.index("quality:cdc-stream-archive")
     assert "runtime_lane_failure.json" in summary_script
     assert "failed step:" in summary_script
+
+
+def test_runtime_root_cause_summary_preserves_runtime_failure_evidence(tmp_path, monkeypatch) -> None:
+    module = _load_python_module(
+        ROOT / "scripts" / "quality" / "write_runtime_root_cause_summary.py",
+        "write_runtime_root_cause_summary_test",
+    )
+    artifacts = tmp_path / "quality"
+    artifacts.mkdir()
+    (artifacts / "runtime_lane_failure.json").write_text(
+        json.dumps({"failedStep": "Temporal workflow ratchet", "exitCode": 17}),
+        encoding="utf-8",
+    )
+    for gate in ("source_of_truth_contract", "operator_evidence"):
+        (artifacts / f"{gate}.json").write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
+    (artifacts / "proof_matrix.json").write_text(
+        json.dumps(
+            {
+                "status": "FAIL",
+                "findings": [
+                    {
+                        "problem": "missing operator evidence proof",
+                        "why": "failure must remain inspectable after the log line is gone",
+                        "suggestedFiles": ["docs/infra-tricky-matrix.json"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "ARTIFACTS", artifacts)
+    summary, any_fail = module.build_summary()
+
+    assert any_fail
+    assert "failed step: Temporal workflow ratchet (exit 17)" in summary
+    assert "missing operator evidence proof" in summary
+    assert "failure must remain inspectable after the log line is gone" in summary
+    assert "`docs/infra-tricky-matrix.json`" in summary
+
+
+def test_proof_matrix_pytest_collection_subprocess_import_is_bandit_justified() -> None:
+    helper = (ROOT / "scripts" / "quality" / "_proof_matrix_lib.py").read_text(encoding="utf-8")
+
+    assert "import subprocess  # nosec B404" in helper
+    assert "subprocess.run(command" in helper
 
 
 def test_github_ci_fetches_history_and_checks_pr_root_cause() -> None:
