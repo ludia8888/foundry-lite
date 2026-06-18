@@ -45,6 +45,7 @@ postgres = [
 
 [dependency-groups]
 dev = [
+  "alembic>=1.13",
   "bandit>=1.7",
   "boto3>=1.35",
   "httpx2>=2.3.0",
@@ -102,7 +103,7 @@ exclude_also = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["mutants"]
+extend-exclude = ["mutants", "migrations/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

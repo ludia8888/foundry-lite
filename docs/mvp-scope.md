@@ -28,20 +28,26 @@ future work.
 - CDC object indexing for upsert, tombstone delete, idempotent replay, stale-event skip, and `object.changed` trigger evidence.
 - Elasticsearch-compatible search projection, rebuild, orphan-drift detection, and object-store fallback proof.
 - Shadow reindex, active index pointer, count/hash validation, and action-edit replay proof.
+- Iceberg dataset storage ratchet: dataset versions pin Iceberg snapshot metadata behind the existing Dataset API, with MinIO/S3-backed proof and failure evidence.
+- Spark compute ratchet: Spark implements the `ComputeAdapter` boundary for CSV ingest and SQL transforms, with lineage/health/abort proof and S3+Iceberg+Spark composition evidence.
+- Temporal workflow adapter ratchet: idempotent start, timeout/unavailable/cancel/error-payload semantics are covered at the adapter boundary, but product workflows do not yet run through Temporal.
+- Ontology-driven sensitive classification: `finance`/`pii` classifications mask object properties, dataset preview columns, object-query/search/object-set inference surfaces, explain payloads, action audit refs, and Operations run/detail payloads for unprivileged roles.
+- Runtime profile packaging extras: S3, Iceberg, Spark, Temporal, Elasticsearch, Kafka, and PostgreSQL profile libraries are guarded as installable optional extras.
 
 ## Explicitly Deferred
 
 - PostgreSQL JSONB production object store.
 - PostgreSQL snapshot connector implementation.
 - Alembic migration history.
-- Temporal worker execution.
 - Real CEL or JSON Logic evaluator.
 - Real external ERP/webhook writeback.
 - Continuously running Kafka/Redpanda stream workers and deployment-specific broker packaging beyond the current adapter/one-shot worker proof.
 - Continuously running CDC object-indexing workers and production CDC deployment packaging beyond the current archive/indexing proof.
-- Elasticsearch live cluster deployment and managed operations beyond the current adapter/projection proof.
-- Iceberg production catalog.
-- Spark runner.
+- Managed Elasticsearch deployment and operations beyond the current adapter/projection/live-cluster proof.
+- Iceberg maintenance, production catalog operations, and managed retention/compaction beyond the current storage ratchet.
+- Real Spark cluster deployment and distributed failure modes beyond the current local adapter/composition ratchet.
+- Temporal product workflow execution and managed worker operations beyond the current adapter ratchet.
+- Kubernetes Helm, backup, restore, and operational runbooks.
 - Production Flink runner.
 - Full infra-swap implementation for every boundary; v1 first fixes the boundary and contract tests, then later sprints add production-scale implementations.
 - Full visual pipeline builder.

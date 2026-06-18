@@ -40,7 +40,9 @@
 - Sprint 00~36, Sprint 02A, Sprint 36A의 상세 체크박스는 현재 구현, [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md), [Implementation Status](./docs/implementation-status.md), 최신 `main` CI 결과를 기준으로 다시 동기화했다.
 - `[x]`는 둘 중 하나를 뜻한다: 현재 MVP 구현과 테스트 증거로 완료되었거나, 현 MVP scope에서 명시적으로 future/deferred로 재분류되어 더 이상 Sprint 00~36 완료 조건으로 요구하지 않는다는 결정이 끝났다는 뜻이다.
 - future/deferred로 재분류된 항목은 문장 안에 그 사실을 명시한다. 구현 완료와 scope 제외를 섞어 말하지 않는다.
-- Sprint 43~45의 Iceberg, Spark, Kubernetes/backup-restore 항목은 아직 구현 증거가 없으므로 `[ ]`로 남긴다. 이 미체크 상태 자체가 최신 구현 상태와 동기화된 것이다.
+- Sprint 43 Iceberg와 Sprint 44 Spark 항목은 현재 `docs/infra-ratchet.md`, `docs/infra-tricky-matrix.json`, `quality:iceberg`, `quality:spark`, `quality:infra-composition` 증거 기준으로 다시 동기화한다. 단, production cluster 운영과 분산 장애/운영 runbook은 별도 future scope다.
+- Sprint 45 Kubernetes/backup-restore 항목은 아직 구현 증거가 없으므로 `[ ]`로 남긴다. 이 미체크 상태 자체가 최신 구현 상태와 동기화된 것이다.
+- Sprint 46 이후 post-MVP 확장 순서는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 따른다. 첫 실행 단위는 S46 Semantic SSOT + Data Engineering Pattern Matrix다.
 
 모든 스프린트는 다음 원칙을 따른다.
 
@@ -2001,15 +2003,15 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 
 **Acceptance Gate**
 
-- [ ] 새 iceberg dataset을 만들고 append/snapshot commit할 수 있다.
-- [ ] 기존 transform runner가 storage_kind 차이를 몰라도 input을 읽는다.
-- [ ] dataset_versions가 Iceberg metadata location을 참조한다.
-- [ ] schema evolution compatible/breaking 판정이 기존 policy와 일치한다.
-- [ ] Parquet manifest dataset과 Iceberg dataset이 같은 Dataset API로 조회된다.
+- [x] 새 iceberg dataset을 만들고 append/snapshot commit할 수 있다. ([VERIFY-ICEBERG-RATCHET](./docs/sprint-evidence-ledger.md#verify-iceberg-ratchet))
+- [x] 기존 transform runner가 storage_kind 차이를 몰라도 input을 읽는다. ([VERIFY-INFRA-COMPOSITION-RATCHET](./docs/sprint-evidence-ledger.md#verify-infra-composition-ratchet))
+- [x] dataset_versions가 Iceberg metadata location/snapshot id를 참조한다. ([VERIFY-ICEBERG-RATCHET](./docs/sprint-evidence-ledger.md#verify-iceberg-ratchet))
+- [x] schema evolution compatible/breaking 판정이 기존 policy와 일치한다. ([VERIFY-ICEBERG-RATCHET](./docs/sprint-evidence-ledger.md#verify-iceberg-ratchet))
+- [x] Parquet manifest dataset과 Iceberg dataset이 같은 Dataset API로 조회된다. ([VERIFY-ICEBERG-RATCHET](./docs/sprint-evidence-ledger.md#verify-iceberg-ratchet))
 
 **Demo / Proof**
 
-`raw.erp_orders_iceberg` sync → transform input으로 사용 → preview/lineage 확인.
+`raw.erp_orders_iceberg` sync → transform input으로 사용 → preview/lineage 확인. 현재 evidence는 `quality:iceberg`와 `quality:infra-composition`이며, production Iceberg catalog operations와 managed maintenance는 post-MVP future scope다.
 
 **이러면 성공으로 치지 않는다**
 
@@ -2040,15 +2042,15 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 
 **Acceptance Gate**
 
-- [ ] 같은 `clean_orders.sql`을 DuckDB와 Spark runner 중 하나로 실행할 수 있다.
-- [ ] Spark 실패 시 output transaction이 abort된다.
-- [ ] Spark run도 lineage와 health checks를 남긴다.
-- [ ] ComputeAdapter 교체로 transform service core를 수정하지 않는다.
-- [ ] 작은 fixture data로 Spark runner integration test가 통과한다.
+- [x] 같은 `clean_orders.sql`을 DuckDB와 Spark runner 중 하나로 실행할 수 있다. ([VERIFY-SPARK-RATCHET](./docs/sprint-evidence-ledger.md#verify-spark-ratchet))
+- [x] Spark 실패 시 output transaction이 abort된다. ([VERIFY-SPARK-RATCHET](./docs/sprint-evidence-ledger.md#verify-spark-ratchet))
+- [x] Spark run도 lineage와 health checks를 남긴다. ([VERIFY-SPARK-RATCHET](./docs/sprint-evidence-ledger.md#verify-spark-ratchet))
+- [x] ComputeAdapter 교체로 transform service core를 수정하지 않는다. ([VERIFY-SPARK-RATCHET](./docs/sprint-evidence-ledger.md#verify-spark-ratchet))
+- [x] 작은 fixture data로 Spark runner integration test가 통과한다. ([VERIFY-SPARK-RATCHET](./docs/sprint-evidence-ledger.md#verify-spark-ratchet))
 
 **Demo / Proof**
 
-`flite transform run clean_orders --engine spark`로 같은 output contract를 확인한다.
+`quality:spark`와 `quality:infra-composition`으로 DuckDB/Spark parity, Spark output commit/abort, lineage/health, S3+Iceberg+Spark composition을 확인한다. Spark cluster deployment, speculative execution, executor-output-missing 같은 분산 클러스터 전용 failure는 future scope다.
 
 **이러면 성공으로 치지 않는다**
 
@@ -2095,6 +2097,38 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 - 운영 배포가 개발자 로컬 `.env`에 의존한다.
 - migration이 앱 시작 시 임의로 실행되어 race condition이 생긴다.
 - DB backup만 있고 object storage manifest/file 복구 검증이 없다.
+
+---
+
+## Post-MVP Data Platform Expansion Roadmap
+
+Sprint 46 이후의 상세 순서와 공통 Exit Checklist는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 원본으로 본다. 이 섹션은 기존 Sprint Breakdown이 S45에서 끊겨 보이지 않도록 연결하는 요약이다. 각 항목은 proposed 상태이며, 체크박스는 실제 코드/테스트/CI/docs 증거가 생길 때만 `[x]`로 바꾼다.
+
+| Sprint | 우선순위 | 핵심 결과 | 의존성 | 상태 |
+|---|---:|---|---|---|
+| S46 | P0 | Semantic SSOT + Data Pattern Matrix | 현재 CI 하네스 | [ ] Proposed |
+| S47 | P0 | Record DLQ + Replay | S46 | [ ] Proposed |
+| S48 | P1 | Late Data + Watermark | S47 | [ ] Proposed |
+| S49 | P1 | Multi-file Dataset + Partitioning | S46 | [ ] Proposed |
+| S50 | P1 | Iceberg Maintenance | S49 | [ ] Proposed |
+| S51 | P0 | Continuous CDC Worker + Rebalance Safety | S47 | [ ] Proposed |
+| S52 | P0 | Temporal Engine Integration | S51 | [ ] Proposed |
+| S53 | P0 | External Writeback + Saga/Reconciliation | S52 | [ ] Proposed |
+| S54 | P1 | Data Quality Contracts | S47, S48 | [ ] Proposed |
+| S55 | P1 | DB/Dataset/Ontology Schema Migration | S54 | [ ] Proposed |
+| S56 | P1 | Proactive Observability + SLO | S48, S51, S52 | [ ] Proposed |
+| S57 | P0 | Backup/Restore Commit-point Ratchet | S50, S52, S53 | [ ] Proposed |
+| S58A | P1 | OIDC/JWT + Secret Provider | 독립 가능 | [ ] Proposed |
+| S58B | P1 | Anonymization/Pseudonymization | S58A | [ ] Proposed |
+| S58C | P1 | Right-to-Erasure Lifecycle | S50, S57, S58B | [ ] Proposed |
+| S59 | P2 | Real Cluster/Cloud/Chaos Proofs | 관련 sprint | [ ] Proposed |
+| S60 | P1 | Fine-grained Lineage + AI Evidence | S54, S55 | [ ] Proposed |
+| S61 | Product | Frontend Foundation + Generated SDK | 현재 API | [ ] Proposed |
+| S62 | Product | Object/Dataset Explorer | S61 | [ ] Proposed |
+| S63 | Product | Insight/Action Workspace | S61, S53, S60 | [ ] Proposed |
+| S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [ ] Proposed |
+
+첫 실행 순서는 `S46 -> S47 -> S48 -> S51 -> S52 -> S53`이다. Scale path는 `S49 -> S50 -> S57`, Product surface path는 `S61 -> S62 -> S63 -> S64`로 병렬 진행한다.
 
 ---
 

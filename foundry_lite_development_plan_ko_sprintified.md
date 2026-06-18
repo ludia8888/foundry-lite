@@ -7,7 +7,7 @@
 
 > 현재 구현 상태 주의: 2026-06-16 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. 완료 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
 >
-> 구현 동기화 메모: 현재 checkout은 Sprint 00~36, Sprint 02A, Sprint 36A의 MVP core/운영 안정성 체크를 완료한 상태다. Sprint 37~42의 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다. Sprint 43~45의 Iceberg, Spark, Kubernetes/backup-restore 운영 패키지는 아직 future scope다. PostgreSQL snapshot connector production implementation, Alembic migration history, Temporal workflow execution, executable Python transform runner는 MVP core 완료 조건에서 제외되며 현재 status 문서의 future/deferred 경계를 따른다.
+> 구현 동기화 메모: 현재 checkout은 Sprint 00~36, Sprint 02A, Sprint 36A의 MVP core/운영 안정성 체크를 완료한 상태다. Sprint 37~42의 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다. Sprint 43 Iceberg ratchet과 Sprint 44 Spark ratchet은 `docs/infra-ratchet.md`와 `docs/infra-tricky-matrix.json` 기준 active-covered proof가 있으며, Sprint 45 Kubernetes/backup-restore 운영 패키지는 아직 future scope다. S46 이후 확장 순서는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 따르되, 현재 구현 완료 여부는 항상 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. PostgreSQL snapshot connector production implementation, Alembic migration history, Temporal product workflow execution, executable Python transform runner는 MVP core 완료 조건에서 제외되며 현재 status 문서의 future/deferred 경계를 따른다.
 
 ---
 
@@ -24,6 +24,7 @@
 ### 함께 읽을 문서
 
 - [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md): 이 설계를 어떤 순서로 구현하고, 각 단계가 무엇을 통과해야 완료인지 확인한다.
+- [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md): S46 이후 post-MVP 데이터 플랫폼 확장 순서와 공통 Exit Checklist를 확인한다.
 - [Palantir Foundry 심층 분석](./deep-research-report.md): Ontology, Dataset, Action, Materialization 같은 설계 결정이 어떤 공개 근거에서 왔는지 확인한다.
 - [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md): 백엔드를 Python으로 구현할 때 지켜야 할 Clean Code, SRP, 테스트, 트랜잭션, 운영 로그 기준을 확인한다.
 
@@ -334,9 +335,9 @@ managed infrastructure, 광범위한 SaaS 일반화까지 v1 core 성공 조건�
 | Webhook push ingest | timestamp-bound HMAC signed append ingest proof 존재 | durable inbox, retry workers, SaaS event 일반화 |
 | Kafka/Redpanda ingest | local/fake stream archive, Kafka-compatible adapter, one-shot worker, live broker proof 존재 | continuously running worker, rebalance/commit-unknown hardening, deployment packaging |
 | Debezium CDC | Debezium-shaped archive, live Debezium/PostgreSQL topic, CDC object indexing proof 존재 | production CDC deployment, always-on CDC object-indexing worker |
-| Elasticsearch | Elasticsearch-compatible adapter, projection, rebuild, orphan drift proof 존재 | live cluster deployment, managed operations |
-| Spark runner | future | `ComputeAdapter` boundary |
-| Iceberg production catalog | future | `DatasetStorageAdapter` abstraction |
+| Elasticsearch | Elasticsearch-compatible adapter, projection, rebuild, orphan drift proof와 live Testcontainers proof 존재 | managed cloud packaging, deployment operations |
+| Spark runner | `SparkComputeAdapter` ratchet와 S3+Iceberg+Spark composition proof 존재 | real cluster deployment, distributed Spark failure modes |
+| Iceberg storage/catalog ratchet | Iceberg snapshot/version pinning proof와 MinIO/S3-backed composition proof 존재 | maintenance, retention, managed catalog operations |
 | Generated TS SDK | package/browser generated SDK surface 존재 | richer generated hooks/client ergonomics |
 | React hooks | future | SDK package boundary |
 | Functions on Objects | future | derived property expression only |
@@ -388,19 +389,19 @@ v1은 선택지를 줄여 구현 속도와 디버깅 가능성을 우선한다.
 | Monorepo | pnpm workspace + Turborepo + uv workspace | Web/SDK와 Python 백엔드를 한 저장소에서 관리 |
 | API | **Python 3.12 + FastAPI + Pydantic v2** | Python 백엔드 기준을 고정하고 request/response validation을 명확히 함 |
 | Backend persistence | SQLAlchemy 2.x + schema revision guard | 현재는 SQLAlchemy metadata bootstrap과 frozen schema revision으로 drift를 막고, Alembic migration history는 future scope |
-| Worker | local/direct workflow adapter + stream archive worker entrypoint | Temporal workflow execution은 future scope이고, 현재는 port/adapter contract와 one-shot stream worker proof를 사용 |
+| Worker | local/direct workflow adapter + stream archive worker entrypoint + Temporal adapter ratchet | Temporal product workflow execution은 future scope이고, 현재는 port/adapter contract, one-shot stream worker proof, Temporal adapter proof를 사용 |
 | CLI | Typer | 운영자와 개발자가 같은 Python service를 명령어로 실행 |
 | Web | Next.js + TanStack Query + shadcn/ui | 운영 UI 빠르게 개발 |
 | Metadata DB | SQLite/local SQLAlchemy + PostgreSQL contract coverage | schema, transaction, object store, audit 의미를 repository port 뒤에 고정 |
-| Object Storage | local filesystem + fake storage URI | lake 파일 저장 contract를 고정하고 S3/MinIO/Iceberg production path는 future scope |
-| Lake format | Parquet manifest first, Iceberg-ready | v1 commit protocol 단순화, 이후 Iceberg 전환 가능 |
+| Object Storage | local filesystem + fake storage URI + S3/MinIO adapter + Iceberg storage ratchet | lake 파일 저장 contract를 유지하고 managed catalog/maintenance 운영은 future scope |
+| Lake format | Parquet manifest first + Iceberg snapshot/version pinning proof | v1 commit protocol은 유지하고 managed Iceberg operations는 이후 확장 |
 | Event | SQLAlchemy outbox first | Kafka 없이도 MVP core 폐루프와 replay를 구현 |
 | Stream | local/fake stream + Kafka-compatible adapter/one-shot worker proof | v1 core 필수는 아니지만 Sprint 38 proof는 존재, continuously running production worker는 future scope |
 | CDC | Debezium-shaped archive + live Debezium/PostgreSQL topic proof | v1 core 필수는 아니지만 Sprint 39~40 proof는 존재, production CDC worker packaging은 future scope |
 | Batch compute | DuckDB canonical runner | local/small production에서 transaction/lineage 단순화 |
 | Python compute | transforms SDK skeleton + fail-closed registration | executable Python runner와 sandboxed SDK IO abstraction은 future scope |
-| Spark | future adapter | v1 구현 제외 |
-| Workflow | local/fake WorkflowAdapter contract | Temporal workflow/action/writeback/retry/replay는 future scope |
+| Spark | Spark ComputeAdapter ratchet | v1 core 필수는 아니지만 post-MVP proof는 존재, real cluster 운영은 future scope |
+| Workflow | local/fake WorkflowAdapter contract + Temporal adapter ratchet | Temporal이 product workflow/action/writeback/retry/replay를 실제 구동하는 것은 future scope |
 | Search index | local/fake + Elasticsearch-compatible adapter/projection proof | object store가 source of truth이고 managed Elasticsearch deployment는 future scope |
 | Auth | `AuthProvider` local/demo/header-trust profile + production unsafe-profile guard | 로컬 개발은 단순하게 유지하되, production에서 demo/header-trust 인증이 켜지는 실수를 startup에서 차단 |
 | Observability | Structured logs + OpenTelemetry interface | Prometheus/Grafana/Loki는 docker-compose full profile |
@@ -459,12 +460,12 @@ v1에서 반드시 지켜야 할 boundary는 다음이다.
 
 ```text
 DatasetStorageAdapter
-- 현재 local filesystem/fake-storage parquet manifest 구현
-- MinIO/S3/Iceberg production path는 future scope
+- 현재 local filesystem/fake-storage parquet manifest, S3/MinIO adapter, Iceberg storage ratchet 구현
+- managed Iceberg catalog operations와 maintenance는 future scope
 
 ComputeAdapter
-- 현재 DuckDB SQL runner 구현
-- Spark runner는 future scope
+- 현재 DuckDB SQL runner와 Spark ComputeAdapter ratchet 구현
+- real Spark cluster operations와 분산 장애 proof는 future scope
 
 SearchAdapter
 - 현재 local/fake + Elasticsearch-compatible adapter/projection proof 구현
@@ -3042,7 +3043,7 @@ Playwright:
 완화:
 
 - v1 scope guardrail을 문서에 고정
-- Kafka/CDC/Elasticsearch/REST/Webhook은 MVP core 밖 post-MVP proof로 기록하고, Spark/Iceberg/Kubernetes는 future scope로 분리
+- Kafka/CDC/Elasticsearch/REST/Webhook과 Spark/Iceberg는 MVP core 밖 post-MVP proof로 기록하고, Kubernetes/backup-restore와 managed production operations는 future scope로 분리
 - 각 sprint는 하나의 수직 slice exit criteria로 종료
 - demo에 필요 없는 connector/visual builder 개발 금지
 
@@ -3236,14 +3237,16 @@ flite lineage dataset clean.orders
 - Sprint 24~32: Action Runtime, side effect, materialization으로 운영 변경이 다시 dataset으로 돌아오는 폐루프를 완성한다.
 - Sprint 33~36: Operations, Security, SDK, E2E release gate로 v1 MVP를 검증한다.
 - Sprint 37~42: REST/Webhook, Kafka-compatible stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다.
-- Sprint 43~45: Iceberg, Spark, Kubernetes/backup-restore 운영 패키지는 아직 future scope로 둔다.
+- Sprint 43~44: Iceberg와 Spark ratchet은 active-covered proof가 있다. Production cluster 운영, Spark 분산 장애, catalog 운영 runbook 같은 범위는 별도 future scope다.
+- Sprint 45: Kubernetes/backup-restore 운영 패키지는 아직 future scope로 둔다.
+- Sprint 46~64: post-MVP 데이터 플랫폼 확장 순서는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 원본으로 본다. 첫 실행은 S46 Semantic SSOT + Data Engineering Pattern Matrix다.
 - 모든 Python 백엔드 스프린트는 Clean Code, SRP, 타입 검사, 테스트 기준을 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)에 맞춘다.
 - 모든 Python 백엔드 스프린트는 [안티패턴 방지와 강제 대응 원칙](./foundry_lite_python_engineering_guidelines_ko.md#18-안티패턴-방지와-강제-대응-원칙)을 통과해야 한다.
 - 모든 Python 백엔드 스프린트는 line/branch/function coverage 95% 이상과 필수 integration/smoke 100% 통과 기준을 만족해야 한다.
 
 ### MVP Core Completion Gate
 
-Sprint 00~36, Sprint 02A, Sprint 36A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 상세 acceptance는 [스프린트 실행 계획의 MVP Core Completion Gate](./foundry_lite_sprint_breakdown_ko.md#mvp-core-completion-gate)를 원본으로 보고, 항목별 증거는 [Sprint Evidence Ledger의 MVP Core Completion Gate Evidence Map](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map)에 둔다. real ERP writeback, production backup/restore, Iceberg/Spark/Kubernetes 같은 확장은 future backlog로 남긴다. Sprint 37~42는 MVP 이후 확장 proof로 구현 증거가 있지만, MVP core 완료 조건을 넓히지는 않는다.
+Sprint 00~36, Sprint 02A, Sprint 36A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 상세 acceptance는 [스프린트 실행 계획의 MVP Core Completion Gate](./foundry_lite_sprint_breakdown_ko.md#mvp-core-completion-gate)를 원본으로 보고, 항목별 증거는 [Sprint Evidence Ledger의 MVP Core Completion Gate Evidence Map](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map)에 둔다. real ERP writeback, production backup/restore, Kubernetes, managed Iceberg/Spark operations 같은 확장은 future backlog로 남긴다. Sprint 37~44는 MVP 이후 확장 proof로 구현 증거가 있지만, MVP core 완료 조건을 넓히지는 않는다.
 
 - [x] CSV/local snapshot 또는 PostgreSQL-backed repository closed-loop path로 raw dataset을 commit한다.
 - [x] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다.
