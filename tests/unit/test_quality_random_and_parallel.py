@@ -171,6 +171,15 @@ def test_temporal_ratchet_serializes_test_server_download_under_xdist() -> None:
     server_start = "WorkflowEnvironment.start_time_skipping()"
     assert "_TEMPORAL_TEST_SERVER_LOCK" in source
     assert "fcntl.flock" in source
+    assert "_clear_stale_temporal_downloads" in source
+    assert "_temporal_test_server_warm" in source
+    assert "temporal-test-server-*.downloading" in source
     assert lock_call in source
     assert server_start in source
-    assert source.index(lock_call) < source.index(server_start)
+
+    warm_block = source.split("def _temporal_test_server_warm", maxsplit=1)[1].split(
+        "@asynccontextmanager", maxsplit=1
+    )[0]
+    harness_block = source.split("async def _harness", maxsplit=1)[1]
+    assert warm_block.index(lock_call) < warm_block.index("asyncio.run(_start_stop())")
+    assert harness_block.index(lock_call) < harness_block.index(server_start)
