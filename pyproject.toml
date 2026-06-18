@@ -33,6 +33,9 @@ iceberg = [
   "pyiceberg>=0.8",
   "pyarrow>=17.0",
 ]
+temporal = [
+  "temporalio>=1.7",
+]
 
 [dependency-groups]
 dev = [

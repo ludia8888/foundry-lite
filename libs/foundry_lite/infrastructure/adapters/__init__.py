@@ -35,6 +35,10 @@ from foundry_lite.infrastructure.adapters.scale_foundation import (
     LocalWorkflowAdapter,
 )
 from foundry_lite.infrastructure.adapters.spark_compute import SparkComputeAdapter
+from foundry_lite.infrastructure.adapters.temporal_workflow import (
+    TemporalWorkflowAdapter,
+    TemporalWorkflowAdapterConfig,
+)
 
 __all__ = [
     "DuckDBComputeAdapter",
@@ -62,4 +66,6 @@ __all__ = [
     "IcebergDatasetStorageAdapterConfig",
     "S3DatasetStorageAdapter",
     "S3DatasetStorageAdapterConfig",
+    "TemporalWorkflowAdapter",
+    "TemporalWorkflowAdapterConfig",
 ]

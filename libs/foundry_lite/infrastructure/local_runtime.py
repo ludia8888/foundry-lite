@@ -8,6 +8,7 @@ from sqlalchemy import create_engine
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports.dataset_storage import DatasetStorageAdapter
 from foundry_lite.application.ports.search_adapter import SearchAdapter
+from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.infrastructure.adapters import (
     DuckDBComputeAdapter,
     ElasticsearchAdapter,
@@ -28,6 +29,8 @@ from foundry_lite.infrastructure.adapters import (
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
     SparkComputeAdapter,
+    TemporalWorkflowAdapter,
+    TemporalWorkflowAdapterConfig,
 )
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
@@ -148,12 +151,27 @@ def _stream_adapter(adapter_profile: str) -> LocalStreamAdapter:
     raise ValueError(f"unknown adapter profile: {adapter_profile}")
 
 
-def _workflow_adapter(adapter_profile: str) -> LocalWorkflowAdapter:
-    if adapter_profile in {"local", "s3-storage", "iceberg"}:
+def _workflow_adapter(adapter_profile: str) -> WorkflowAdapter:
+    # Workflow orchestration is selectable independently of storage (like compute
+    # and search) so a Temporal cluster can drive durable workflows regardless of
+    # which storage profile backs datasets.
+    workflow_profile = os.getenv("FOUNDRY_LITE_WORKFLOW_PROFILE", adapter_profile)
+    if workflow_profile == "temporal":
+        return TemporalWorkflowAdapter(_temporal_workflow_config())
+    if workflow_profile in {"local", "s3-storage", "iceberg"}:
         return LocalWorkflowAdapter()
-    if adapter_profile == "fake-storage":
+    if workflow_profile == "fake-storage":
         return FakeWorkflowAdapter()
-    raise ValueError(f"unknown adapter profile: {adapter_profile}")
+    raise ValueError(f"unknown workflow profile: {workflow_profile}")
+
+
+def _temporal_workflow_config() -> TemporalWorkflowAdapterConfig:
+    return TemporalWorkflowAdapterConfig(
+        address=os.getenv("FOUNDRY_LITE_TEMPORAL_ADDRESS", "localhost:7233"),
+        namespace=os.getenv("FOUNDRY_LITE_TEMPORAL_NAMESPACE", "default"),
+        task_queue=os.getenv("FOUNDRY_LITE_TEMPORAL_TASK_QUEUE", "foundry-lite"),
+        execution_timeout_seconds=int(os.getenv("FOUNDRY_LITE_TEMPORAL_EXECUTION_TIMEOUT", "300")),
+    )
 
 
 def _s3_storage_config(object_storage_root: Path) -> S3DatasetStorageAdapterConfig:
