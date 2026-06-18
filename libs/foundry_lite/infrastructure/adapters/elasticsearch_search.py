@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import importlib
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
+from foundry_lite.application.ports.adapter_failure import (
+    AdapterError,
+    AdapterFailure,
+    AdapterFailureContract,
+    AdapterFailureKind,
+    AdapterFailureMode,
+)
 from foundry_lite.application.ports.search_adapter import (
     SearchDocument,
     SearchHit,
@@ -17,6 +24,7 @@ from foundry_lite.application.ports.search_adapter import (
 )
 
 INDEX_TOKEN_PATTERN = re.compile(r"[^a-z0-9_-]+")
+_RESOURCE_ALREADY_EXISTS = "resource_already_exists_exception"
 
 
 class ElasticsearchIndicesLike(Protocol):
@@ -46,6 +54,10 @@ class ElasticsearchAdapterConfig:
     username: str | None = None
     password: str | None = None
     request_timeout_seconds: int = 30
+    # Idempotent operations (indexed-by-id upserts, scripted updates, reads) are
+    # safe to retry; retrying on a dropped response heals transient transport
+    # blips without duplicating side effects.
+    max_retries: int = 3
 
 
 class ElasticsearchAdapter:
@@ -72,42 +84,73 @@ class ElasticsearchAdapter:
     def configure_index(self, mapping: SearchIndexMapping) -> None:
         index_name = self._index_name(mapping.tenant_id, mapping.object_type)
         body = {"mappings": _index_mappings(mapping)}
-        if self.client.indices.exists(index=index_name):
-            self.client.indices.put_mapping(index=index_name, body=body["mappings"])
-            return
-        self.client.indices.create(index=index_name, body=body)
+        with self._guard("configure_index"):
+            if self.client.indices.exists(index=index_name):
+                self.client.indices.put_mapping(index=index_name, body=body["mappings"])
+                return
+            self._create_index(index_name, body)
+
+    def _create_index(self, index_name: str, body: Mapping[str, object]) -> None:
+        try:
+            self.client.indices.create(index=index_name, body=body)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            # Idempotent: a concurrent create or a retried request whose response
+            # was lost both surface as already-exists; the index is present.
+            if _is_already_exists(exc):
+                return
+            raise
 
     def upsert_document(self, document: SearchDocument) -> None:
-        self.client.update(
-            index=self._index_name(document.tenant_id, document.object_type),
-            id=document.document_id,
-            body=_version_guarded_update_body(document),
-            refresh=True,
-        )
+        with self._guard("upsert_document"):
+            self.client.update(
+                index=self._index_name(document.tenant_id, document.object_type),
+                id=document.document_id,
+                body=_version_guarded_update_body(document),
+                refresh=True,
+            )
 
     def delete_document(self, *, tenant_id: str, object_type: str, document_id: str) -> None:
-        self.client.delete(
-            index=self._index_name(tenant_id, object_type),
-            id=document_id,
-            ignore_status=(404,),
-            refresh=True,
-        )
+        with self._guard("delete_document"):
+            self.client.delete(
+                index=self._index_name(tenant_id, object_type),
+                id=document_id,
+                ignore_status=(404,),
+                refresh=True,
+            )
 
     def document_ids(self, *, tenant_id: str, object_type: str) -> list[str]:
-        response = self.client.search(
-            index=self._index_name(tenant_id, object_type),
-            body={"query": {"match_all": {}}, "_source": ["object_id"]},
-            size=10_000,
-        )
+        with self._guard("document_ids"):
+            response = self.client.search(
+                index=self._index_name(tenant_id, object_type),
+                body={"query": {"match_all": {}}, "_source": ["object_id"]},
+                size=10_000,
+            )
         return sorted(_hit_document_id(hit) for hit in _raw_hits(response) if _hit_document_id(hit))
 
     def search(self, query: SearchQuery) -> list[SearchHit]:
-        response = self.client.search(
-            index=self._index_name(query.tenant_id, query.object_type),
-            body=_search_body(query),
-            size=query.limit,
-        )
+        with self._guard("search"):
+            response = self.client.search(
+                index=self._index_name(query.tenant_id, query.object_type),
+                body=_search_body(query),
+                size=query.limit,
+            )
         return [_search_hit(hit, query) for hit in _raw_hits(response)]
+
+    @contextmanager
+    def _guard(self, operation: str) -> Generator[None]:
+        """Convert raw Elasticsearch transport/API errors into typed AdapterErrors.
+
+        The failure_contract promises a stable taxonomy; without this, a live
+        cluster outage would leak elastic_transport/elasticsearch exceptions and
+        break the operator-evidence and retry contracts. Cluster-unavailability
+        keeps search a rebuildable projection — it never corrupts serving truth.
+        """
+        try:
+            yield
+        except AdapterError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - re-raised as a classified AdapterError
+            raise _classify_es_error(self.profile_name, operation, exc) from exc
 
     @property
     def client(self) -> ElasticsearchClientLike:
@@ -126,8 +169,61 @@ def _build_client(config: ElasticsearchAdapterConfig) -> ElasticsearchClientLike
     module = importlib.import_module("elasticsearch")
     client_type = cast(Callable[..., object], module.Elasticsearch)
     auth = (config.username, config.password) if config.username and config.password else None
-    client = client_type(hosts=[config.endpoint], basic_auth=auth, request_timeout=config.request_timeout_seconds)
+    client = client_type(
+        hosts=[config.endpoint],
+        basic_auth=auth,
+        request_timeout=config.request_timeout_seconds,
+        retry_on_timeout=True,
+        max_retries=config.max_retries,
+    )
     return cast(ElasticsearchClientLike, client)
+
+
+def _is_already_exists(exc: Exception) -> bool:
+    """True when an index-create failed only because the index already exists."""
+    return _RESOURCE_ALREADY_EXISTS in str(getattr(exc, "body", "")) or _RESOURCE_ALREADY_EXISTS in str(exc)
+
+
+def _classify_es_error(profile: str, operation: str, exc: Exception) -> AdapterError:
+    """Map an Elasticsearch transport/API exception to a typed, classified AdapterError."""
+    transport = importlib.import_module("elastic_transport")
+    kind, retryable, timeout = _es_failure_kind(transport, exc)
+    return AdapterError(
+        AdapterFailure(
+            adapter_profile=profile,
+            operation=operation,
+            kind=kind,
+            is_retryable=retryable,
+            operator_message=f"Elasticsearch {operation} failed ({kind}): {exc}",
+            timeout_seconds=timeout,
+            details={"exceptionType": type(exc).__name__},
+        )
+    )
+
+
+def _es_failure_kind(transport: object, exc: Exception) -> tuple[AdapterFailureKind, bool, int | None]:
+    connection_timeout = getattr(transport, "ConnectionTimeout", ())
+    connection_error = getattr(transport, "ConnectionError", ())
+    api_error = getattr(transport, "ApiError", ())
+    if isinstance(exc, connection_timeout):
+        return "timeout", True, 30
+    if isinstance(exc, api_error):
+        return _api_error_kind(exc)
+    if isinstance(exc, connection_error):
+        # Connection refused / DNS / TLS — the cluster is unreachable, not wrong.
+        return "unavailable", True, None
+    return "unknown", False, None
+
+
+def _api_error_kind(exc: Exception) -> tuple[AdapterFailureKind, bool, int | None]:
+    status = getattr(getattr(exc, "meta", None), "status", None)
+    if status == 429:
+        return "rate_limited", True, None
+    if isinstance(status, int) and status >= 500:
+        return "unavailable", True, None
+    if status == 409:
+        return "conflict", False, None
+    return "validation", False, None
 
 
 def _index_token(value: str) -> str:

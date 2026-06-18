@@ -98,13 +98,13 @@ tests against the currently active stack.
 
 ## Active Ratchet Queue
 
-| Order | Infrastructure                   | Status         | Why this order                                                                                                                | Cannot advance until                                                                                                                                                                                                                                                                                                                                                 |
-| ----- | -------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | MinIO/S3 DatasetStorageAdapter   | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet.                                                                                                                                                                                                                                                 |
-| 2     | Iceberg Catalog/TableAdapter     | active-covered | Iceberg adds a table metadata/catalog commit point on top of object storage.                                                  | `quality:iceberg` stays green in CI; each dataset version pins an exact Iceberg snapshot id and the DB COMMITTED version remains the serving source of truth.                                                                                                                                                                                                        |
-| 3     | Spark ComputeAdapter             | active-covered | Spark should consume the same Dataset API and pinned versions without knowing storage internals.                              | `quality:spark` and `quality:infra-composition` stay green in CI; Spark runs transforms on local parquet materialized from pinned versions and the composition gate proves Iceberg-on-S3 input/output.                                                                                                                                                               |
-| 4     | Temporal WorkflowAdapter         | active-covered | Durable workflow execution changes retry/time semantics for long-running operations.                                          | `quality:temporal` stays green in CI; workflow start is idempotent by idempotency_key and a workflow failure/timeout/cancel surfaces in a durable run error payload, proven on the time-skipping test server. Orthogonal Scale-Foundation boundary (engine does not yet drive it), so it is a standalone family, not part of the S3+Iceberg+Spark composition stack. |
-| 5     | Managed Elasticsearch deployment | later          | The adapter/projection proof exists; deployment/operations should follow after storage commit points.                         | Search remains a rebuildable projection and live cluster failure evidence is added.                                                                                                                                                                                                                                                                                  |
+| Order | Infrastructure                   | Status         | Why this order                                                                                                                | Cannot advance until                                                                                                                                                                                                                                                                                                                                                                   |
+| ----- | -------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | MinIO/S3 DatasetStorageAdapter   | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet.                                                                                                                                                                                                                                                                   |
+| 2     | Iceberg Catalog/TableAdapter     | active-covered | Iceberg adds a table metadata/catalog commit point on top of object storage.                                                  | `quality:iceberg` stays green in CI; each dataset version pins an exact Iceberg snapshot id and the DB COMMITTED version remains the serving source of truth.                                                                                                                                                                                                                          |
+| 3     | Spark ComputeAdapter             | active-covered | Spark should consume the same Dataset API and pinned versions without knowing storage internals.                              | `quality:spark` and `quality:infra-composition` stay green in CI; Spark runs transforms on local parquet materialized from pinned versions and the composition gate proves Iceberg-on-S3 input/output.                                                                                                                                                                                 |
+| 4     | Temporal WorkflowAdapter         | active-covered | Durable workflow execution changes retry/time semantics for long-running operations.                                          | `quality:temporal` stays green in CI; workflow start is idempotent by idempotency_key and a workflow failure/timeout/cancel surfaces in a durable run error payload, proven on the time-skipping test server. Orthogonal Scale-Foundation boundary (engine does not yet drive it), so it is a standalone family, not part of the S3+Iceberg+Spark composition stack.                   |
+| 5     | Managed Elasticsearch deployment | active-covered | The adapter/projection proof existed; this ratchet adds live cluster failure evidence and the projection-rebuild contract.    | `quality:elasticsearch` stays green in CI; a cluster outage surfaces as a typed AdapterError (timeout/unavailable/rate_limited/validation), search stays a rebuildable projection, and the version guard holds under concurrent writers. Orthogonal projection (not a storage/compute commit point), so it is a standalone family, not part of the S3+Iceberg+Spark composition stack. |
 
 ## Active Ratchet: MinIO/S3 DatasetStorageAdapter
 
@@ -295,6 +295,37 @@ test_iceberg_s3_spark_failure_aborts_without_output_version
 test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end
 test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version
 ```
+
+### Temporal WorkflowAdapter scope note
+
+This ratchet proves idempotent start-and-wait (workflow id = idempotency_key,
+re-start/concurrent-start re-attaches with no duplicate run), activity retry,
+execution-timeout → retryable timeout, business failure and cancellation →
+durable classified run error payload, on Temporal's time-skipping test server.
+Distributed worker crash mid-activity, signals/queries, continue-as-new, and real
+Temporal cluster failover are not reproducible on a single time-skipping worker
+and are deferred (documented, not silently skipped). Temporal is an orthogonal
+Scale-Foundation boundary the engine does not yet drive, so it is a standalone
+family, not part of the S3+Iceberg+Spark composition stack.
+
+### Managed Elasticsearch deployment scope note
+
+This ratchet proves that a live cluster outage surfaces as the typed AdapterError
+the failure contract promises (timeout/unavailable/rate_limited/validation/conflict
+classified from the real `elastic_transport`/`elasticsearch` exception taxonomy),
+that the version guard keeps the highest version under concurrent writers, that an
+already-exists create and a stale-version upsert are idempotent, that one
+document's failure does not lose the others, and that the index is a rebuildable
+projection after loss (search is never serving truth). These run deterministically
+against an in-memory client that models the version-guarded update contract and
+raises the real exception types. The live transport happy-path round-trip is
+CI-only: local Colima port-forwarding drops Elasticsearch keep-alive responses, so
+each operation times out then retries, making the round-trip minutes-slow and
+intermittently failing locally; the timeout classification itself was confirmed
+against a real testcontainers Elasticsearch cluster during the ratchet spike.
+Elasticsearch is an orthogonal rebuildable projection, not a storage/compute commit
+point, so it is a standalone family, not part of the S3+Iceberg+Spark composition
+stack.
 
 ## Runtime Evidence Gates And Lanes
 

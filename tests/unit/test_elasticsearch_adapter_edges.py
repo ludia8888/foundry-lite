@@ -54,6 +54,8 @@ def test_elasticsearch_lazy_client_uses_configured_auth_and_timeout(monkeypatch:
             "hosts": ["http://search:9200"],
             "basic_auth": ("search-user", "search-pass"),
             "request_timeout": 7,
+            "retry_on_timeout": True,
+            "max_retries": 3,
         }
     ]
 
