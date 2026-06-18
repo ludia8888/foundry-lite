@@ -1073,7 +1073,7 @@
 
 ### C-ELASTICSEARCH. Managed Elasticsearch deployment (5번째 인프라 ratchet, profile `elasticsearch`)
 
-ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ratchet은 live-cluster 갭을 닫는다: 실 클러스터 장애가 어댑터가 약속한 **타입화된 failure**로 표면화되고, search는 재구축 가능한 projection으로 남으며, version guard가 동시 writer에서 유지됨. 검증은 in-memory fake 클라이언트(version-guard script 의미 모델링 + 실제 `elastic_transport`/`elasticsearch` 예외 타입 발생)로 deterministic 수행 — happy-path live round-trip은 로컬 Colima 포트포워딩의 keep-alive 응답 드롭으로 검증 불가라 CI-only(infra-ratchet.md Elasticsearch scope note). 직교 projection이라 독립 family — S3/Iceberg/Spark composition stack에 들어가지 않는다.
+ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ratchet은 live-cluster 갭을 닫는다: 실 클러스터 장애가 어댑터가 약속한 **타입화된 failure**로 표면화되고, search는 재구축 가능한 projection으로 남으며, version guard가 동시 writer에서 유지됨. 검증은 ① 실 testcontainers ES 9.x(`test_elasticsearch_live_cluster.py`, ES 데이터 디렉터리를 tmpfs로 마운트 — vz virtiofs 디스크의 refresh fsync가 느려 client timeout을 넘기던 것을 우회, 로컬+CI 모두 안정)와 ② in-memory fake(version-guard script 의미 모델링 + 실제 `elastic_transport`/`elasticsearch` 예외 타입 발생, 분류 매트릭스 전체를 deterministic·고속 검증)로 한다. 직교 projection이라 독립 family — S3/Iceberg/Spark composition stack에 들어가지 않는다.
 
 - [x] ES1. adapter-contract: search failure taxonomy(configure/upsert/delete/document_ids/search, 전부 retryable) 선언. (`test_elasticsearch_adapter_contract_declares_search_failure_modes`)
 - [x] ES2. normal-path: configure_index → upsert → search/document_ids round-trip이 동작. (`test_elasticsearch_normal_path_indexes_and_searches`)
@@ -1083,7 +1083,7 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 - [x] ES6. partial-success: 한 문서 upsert 실패(timeout→AdapterError)가 이미 색인된 다른 문서를 잃게 하지 않는다. (`test_elasticsearch_one_document_failure_does_not_lose_others`)
 - [x] ES7. recovery-cleanup: 인덱스 유실(클러스터 wipe) 후 Object Store source-of-truth에서 재색인하면 projection이 재구축된다 — search는 truth가 아니다. (`test_elasticsearch_index_is_rebuildable_projection_after_loss`)
 - [x] ES8. operator-evidence: 실패가 로그 한 줄이 아니라 내구성 있는 분류 payload(adapterProfile/operation/kind/retryable/operatorMessage)로 표면화된다. (`test_elasticsearch_failure_carries_durable_operator_payload`)
-- [ ] ES9. live testcontainers happy-path round-trip(실 ES 9.x)은 로컬 Colima keep-alive 응답 드롭으로 분 단위 hang/간헐 실패 — CI-only로 deferred (infra-ratchet.md Elasticsearch scope note). timeout 분류는 실 클러스터 스파이크로 확인됨.
+- [x] ES9. live-cluster: 실 testcontainers ES에 대해 round-trip(색인/검색/full-text)·version-guard(실 painless script)·실 클러스터 정지→타입화된 retryable AdapterError가 동작한다. ES 데이터 디렉터리를 tmpfs로 올려 vz virtiofs 느린 디스크를 우회(로컬+CI 안정). (`test_elasticsearch_live_round_trip_indexes_and_searches`, `test_elasticsearch_live_version_guard_rejects_stale_writer`, `test_elasticsearch_live_cluster_outage_is_typed_adapter_error`)
 
 ## D. Ontology / Schema / SDK
 

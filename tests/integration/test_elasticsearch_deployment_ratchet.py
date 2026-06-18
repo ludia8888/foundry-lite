@@ -9,11 +9,9 @@ These proofs run against an in-memory ``FakeElasticsearchClient`` that models th
 version-guarded update contract and raises the *real* ``elastic_transport`` /
 ``elasticsearch`` exception types (constructed below), so the adapter's
 classification is exercised against the exact taxonomy a live cluster raises —
-deterministically, with no Docker. The live transport round-trip itself is
-CI-only: local Colima port-forwarding drops Elasticsearch keep-alive responses,
-so the happy path cannot be verified locally (see docs/infra-ratchet.md). The
-adapter's timeout classification was confirmed against a real testcontainers
-cluster during the ratchet spike.
+deterministically and fast, with no Docker. The real round-trip, the real
+painless version-guard script, and a real cluster outage are proven against a
+testcontainers Elasticsearch in ``test_elasticsearch_live_cluster.py``.
 
 Proof classes (docs/infra-ratchet.md):
 - adapter-contract     : declared search failure taxonomy

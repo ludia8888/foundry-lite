@@ -316,16 +316,24 @@ classified from the real `elastic_transport`/`elasticsearch` exception taxonomy)
 that the version guard keeps the highest version under concurrent writers, that an
 already-exists create and a stale-version upsert are idempotent, that one
 document's failure does not lose the others, and that the index is a rebuildable
-projection after loss (search is never serving truth). These run deterministically
-against an in-memory client that models the version-guarded update contract and
-raises the real exception types. The live transport happy-path round-trip is
-CI-only: local Colima port-forwarding drops Elasticsearch keep-alive responses, so
-each operation times out then retries, making the round-trip minutes-slow and
-intermittently failing locally; the timeout classification itself was confirmed
-against a real testcontainers Elasticsearch cluster during the ratchet spike.
-Elasticsearch is an orthogonal rebuildable projection, not a storage/compute commit
-point, so it is a standalone family, not part of the S3+Iceberg+Spark composition
-stack.
+projection after loss (search is never serving truth).
+
+Two complementary test layers: a real testcontainers Elasticsearch cluster
+(`test_elasticsearch_live_cluster.py`) proves the round-trip, the real painless
+version-guard script, and a real cluster outage → typed retryable AdapterError;
+an in-memory client (`test_elasticsearch_deployment_ratchet.py`) models the
+version-guarded update contract and raises the real `elastic_transport`/
+`elasticsearch` exception types to cover the full classification matrix
+(timeout/unavailable/5xx/429/4xx/409/unknown) deterministically and fast.
+
+vz/virtiofs note: Elasticsearch's refresh fsync on Colima's virtiofs disk is slow
+enough to exceed client timeouts, which made naive live round-trips hang for
+minutes locally (the request completes server-side, only the response is late).
+Mounting the ES data directory on tmpfs (memory) keeps index/refresh I/O fast, so
+the live round-trip is reliable both locally and on CI — no port-forward/keep-alive
+workaround is needed. Elasticsearch is an orthogonal rebuildable projection, not a
+storage/compute commit point, so it is a standalone family, not part of the
+S3+Iceberg+Spark composition stack.
 
 ## Runtime Evidence Gates And Lanes
 
