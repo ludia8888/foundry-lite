@@ -1,0 +1,92 @@
+name: Foundry-lite Release Gate
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundry-lite-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release_gate:
+    name: release-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.18.2
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Set up Java for Spark
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Go for gitleaks
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: false
+
+      - name: Install Python dependencies
+        run: uv sync --all-groups
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install gitleaks
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run release evidence gate
+        run: pnpm ci:gate:release
+
+      - name: Upload release evidence artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: foundry-lite-release-evidence
+          path: |
+            artifacts/quality/proof_matrix.json
+            artifacts/quality/proof_matrix_summary.md
+            artifacts/quality/source_of_truth_contract.json
+            artifacts/quality/source_of_truth_summary.md
+            artifacts/quality/operator_evidence.json
+            artifacts/quality/operator_evidence_summary.md
+            artifacts/quality/runtime_root_cause_summary.md
+            artifacts/diagnostics
+          retention-days: 90
+          if-no-files-found: warn

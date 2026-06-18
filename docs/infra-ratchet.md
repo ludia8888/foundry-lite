@@ -36,18 +36,18 @@ pick one infrastructure
 Every active infrastructure ratchet must have these proof classes before the
 next infrastructure can move from `next` to `active`.
 
-| Proof class         | Meaning                                                                                   | CI/document evidence                                  |
-| ------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `adapter-contract`  | The new adapter obeys the same application port contract as local/fake profiles.          | contract tests plus `check_contract_test_per_port.py` |
-| `normal-path`       | A realistic happy path works through the public API/facade, not private helpers only.     | unit/integration/smoke test                           |
-| `failure-injection` | At least one targeted failure is injected at the dangerous commit point.                  | named regression test                                 |
-| `concurrency-race`  | Parallel or repeated operations cannot silently create duplicate/losing state.            | concurrent or repeated test                           |
-| `retry-idempotency` | Retrying after an ambiguous or failed attempt does not create a second logical success.   | retry regression test                                 |
-| `partial-success`   | If external storage/system succeeds but local metadata fails, serving state remains safe. | split-brain regression test                           |
-| `recovery-cleanup`  | Cleanup is reachability-safe and never deletes committed evidence.                        | cleanup regression test                               |
-| `composition-compatibility` | The new infrastructure works with every already-active infrastructure family, not only by itself. | focused cross-infra regression test                   |
-| `operator-evidence` | Failure is visible in run/audit/transaction/error evidence, not only logs.                | runtime evidence assertion                            |
-| `docs-sync`         | Current status, risk register, tricky checklist, and sprint evidence agree.               | `check_infra_ratchet.py` + `check_doc_drift.py` + `check_checklist_evidence.py` |
+| Proof class                 | Meaning                                                                                           | CI/document evidence                                                            |
+| --------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `adapter-contract`          | The new adapter obeys the same application port contract as local/fake profiles.                  | contract tests plus `check_contract_test_per_port.py`                           |
+| `normal-path`               | A realistic happy path works through the public API/facade, not private helpers only.             | unit/integration/smoke test                                                     |
+| `failure-injection`         | At least one targeted failure is injected at the dangerous commit point.                          | named regression test                                                           |
+| `concurrency-race`          | Parallel or repeated operations cannot silently create duplicate/losing state.                    | concurrent or repeated test                                                     |
+| `retry-idempotency`         | Retrying after an ambiguous or failed attempt does not create a second logical success.           | retry regression test                                                           |
+| `partial-success`           | If external storage/system succeeds but local metadata fails, serving state remains safe.         | split-brain regression test                                                     |
+| `recovery-cleanup`          | Cleanup is reachability-safe and never deletes committed evidence.                                | cleanup regression test                                                         |
+| `composition-compatibility` | The new infrastructure works with every already-active infrastructure family, not only by itself. | focused cross-infra regression test                                             |
+| `operator-evidence`         | Failure is visible in run/audit/transaction/error evidence, not only logs.                        | runtime evidence assertion                                                      |
+| `docs-sync`                 | Current status, risk register, tricky checklist, and sprint evidence agree.                       | `check_infra_ratchet.py` + `check_doc_drift.py` + `check_checklist_evidence.py` |
 
 The static CI lane runs `scripts/quality/check_infra_ratchet.py`, which verifies
 that this document, the tricky failure checklist, commit-point risk register,
@@ -98,13 +98,13 @@ tests against the currently active stack.
 
 ## Active Ratchet Queue
 
-| Order | Infrastructure                   | Status         | Why this order                                                                                                                | Cannot advance until                                                                                                                                                         |
-| ----- | -------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | MinIO/S3 DatasetStorageAdapter   | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet.                                                         |
-| 2     | Iceberg Catalog/TableAdapter     | active-covered | Iceberg adds a table metadata/catalog commit point on top of object storage.                                                  | `quality:iceberg` stays green in CI; each dataset version pins an exact Iceberg snapshot id and the DB COMMITTED version remains the serving source of truth.                |
+| Order | Infrastructure                   | Status         | Why this order                                                                                                                | Cannot advance until                                                                                                                                                                                   |
+| ----- | -------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1     | MinIO/S3 DatasetStorageAdapter   | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet.                                                                                   |
+| 2     | Iceberg Catalog/TableAdapter     | active-covered | Iceberg adds a table metadata/catalog commit point on top of object storage.                                                  | `quality:iceberg` stays green in CI; each dataset version pins an exact Iceberg snapshot id and the DB COMMITTED version remains the serving source of truth.                                          |
 | 3     | Spark ComputeAdapter             | active-covered | Spark should consume the same Dataset API and pinned versions without knowing storage internals.                              | `quality:spark` and `quality:infra-composition` stay green in CI; Spark runs transforms on local parquet materialized from pinned versions and the composition gate proves Iceberg-on-S3 input/output. |
-| 4     | Temporal WorkflowAdapter         | active-next    | Durable workflow execution changes retry/time semantics for long-running operations.                                          | Storage/table/compute commit points and their S3+Iceberg+Spark composition gate already have recovery evidence.                                                              |
-| 5     | Managed Elasticsearch deployment | later          | The adapter/projection proof exists; deployment/operations should follow after storage commit points.                         | Search remains a rebuildable projection and live cluster failure evidence is added.                                                                                          |
+| 4     | Temporal WorkflowAdapter         | active-next    | Durable workflow execution changes retry/time semantics for long-running operations.                                          | Storage/table/compute commit points and their S3+Iceberg+Spark composition gate already have recovery evidence.                                                                                        |
+| 5     | Managed Elasticsearch deployment | later          | The adapter/projection proof exists; deployment/operations should follow after storage commit points.                         | Search remains a rebuildable projection and live cluster failure evidence is added.                                                                                                                    |
 
 ## Active Ratchet: MinIO/S3 DatasetStorageAdapter
 
@@ -295,6 +295,47 @@ test_iceberg_s3_spark_failure_aborts_without_output_version
 test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end
 test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version
 ```
+
+## Runtime Evidence Gates And Lanes
+
+CI is an automated reviewer, not just a test runner: it explains _which_ contract
+failed and _what to inspect_. Three contract gates read the single matrix
+(`docs/infra-tricky-matrix.json`) and emit actionable, root-cause-style output
+plus JSON + Markdown artifacts (and a GitHub step summary):
+
+| Gate               | Command                           | Enforces                                                                                                                                                                                     |
+| ------------------ | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Proof matrix       | `pnpm quality:proof-matrix`       | every active infra maps all proof classes to tests that exist; focused gate is in `package.json` and wired into `ci_gate.sh`; matrix agrees with `docs/infra-ratchet.md` and `package.json`. |
+| Source of truth    | `pnpm quality:source-of-truth`    | every serving-truth rule is enforced (named, existing test) or explicitly deferred (reason, risk tier, future test, owning doc).                                                             |
+| Operator evidence  | `pnpm quality:operator-evidence`  | every active infra declares the durable run/error payload paths a failure must persist, a run surface, and a proving test — logs-only evidence is not enough.                                |
+| Root-cause summary | `pnpm quality:runtime-root-cause` | aggregates the above into one step summary with suggested files.                                                                                                                             |
+
+**Source-of-truth rules** (the DB COMMITTED version is serving truth; object/snapshot
+existence and search/UI/SDK caches are not; runs pin versions and do not re-resolve
+latest; external timeouts are `outcome_unknown`) live in `sourceOfTruthRules` in the
+matrix — never only in prose. A rule that cannot be enforced yet must carry an
+explicit `deferral` block, so deferral is visible, not silent.
+
+**Operator-evidence rule:** a dangerous runtime failure must be visible in durable
+evidence (run/audit/transaction/error/outbox/trace payloads), never only in a log
+line, a stack trace, or a generic FAILED status. Each active infra's
+`operatorEvidence.requiredPayloadPaths` are asserted at runtime by its named
+integration test (injecting the failure); this gate guarantees that contract is
+declared and proven.
+
+**Runtime lane vs release lane:**
+
+- `pnpm ci:gate:runtime` (PR feedback): focused infra ratchets + composition ratchet
+  - proof-matrix / source-of-truth / operator-evidence contracts + runtime diagnostics.
+- `pnpm ci:gate:release` (push to main, tags, manual dispatch via `release.yml`): the
+  full runtime lane plus heavier 100k/1m performance smokes and the contract gates,
+  with evidence artifacts uploaded.
+
+**Debugging a failed gate:** read the step summary, then
+`artifacts/quality/<gate>.json` / `<gate>_summary.md`
+(`proof_matrix`, `source_of_truth_contract`, `operator_evidence`) and
+`artifacts/quality/runtime_root_cause_summary.md`. Each finding names the likely
+root cause and the files to inspect.
 
 ## Pull Request Exit Checklist
 

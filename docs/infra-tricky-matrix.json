@@ -135,7 +135,27 @@
             "test_s3_api_end_to_end_preview_reads_through_s3_and_surfaces_corruption"
           ]
         }
-      ]
+      ],
+      "sourceOfTruthRules": [
+        "metadata_db_committed_version_is_serving_truth",
+        "object_storage_existence_is_not_serving_truth"
+      ],
+      "operatorEvidence": {
+        "runField": "syncRuns",
+        "requiredPayloadPaths": [
+          "syncRuns[].error.type",
+          "syncRuns[].error.adapterFailure.adapterProfile",
+          "syncRuns[].error.adapterFailure.operation",
+          "syncRuns[].error.adapterFailure.retryable",
+          "syncRuns[].error.trace.run_id"
+        ],
+        "durableEvidenceCategories": [
+          "run",
+          "error",
+          "adapterFailure",
+          "trace"
+        ]
+      }
     },
     {
       "id": "iceberg",
@@ -262,7 +282,26 @@
             "test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots"
           ]
         }
-      ]
+      ],
+      "sourceOfTruthRules": [
+        "metadata_db_committed_version_is_serving_truth",
+        "iceberg_snapshot_exists_but_db_committed_is_serving_truth"
+      ],
+      "operatorEvidence": {
+        "runField": "syncRuns",
+        "requiredPayloadPaths": [
+          "syncRuns[].error.adapterFailure.adapterProfile",
+          "syncRuns[].error.adapterFailure.operation",
+          "syncRuns[].error.adapterFailure.retryable",
+          "syncRuns[].error.trace.run_id"
+        ],
+        "durableEvidenceCategories": [
+          "run",
+          "error",
+          "adapterFailure",
+          "trace"
+        ]
+      }
     },
     {
       "id": "spark",
@@ -361,7 +400,27 @@
             "test_spark_concurrent_transforms_use_isolated_temp_views"
           ]
         }
-      ]
+      ],
+      "sourceOfTruthRules": [
+        "transform_input_version_is_pinned",
+        "runs_do_not_resolve_latest_during_execution",
+        "materialized_output_not_truth_unless_pinned",
+        "external_side_effects_commit_atomically_or_via_outbox"
+      ],
+      "operatorEvidence": {
+        "runField": "transformRuns",
+        "requiredPayloadPaths": [
+          "transformRuns[].status",
+          "transformRuns[].error.adapterFailure.adapterProfile",
+          "transformRuns[].error.adapterFailure.operation",
+          "transformRuns[].error.adapterFailure.retryable"
+        ],
+        "durableEvidenceCategories": [
+          "run",
+          "error",
+          "adapterFailure"
+        ]
+      }
     }
   ],
   "crossCuttingFlowProofs": [
@@ -597,5 +656,85 @@
         }
       ]
     }
-  ]
+  ],
+  "sourceOfTruthRules": {
+    "metadata_db_committed_version_is_serving_truth": {
+      "description": "Only a metadata DB COMMITTED dataset version is served; storage objects alone are not truth.",
+      "status": "enforced",
+      "tests": [
+        "test_s3_committed_manifest_missing_marks_storage_corruption",
+        "test_iceberg_missing_table_on_read_marks_storage_corruption"
+      ]
+    },
+    "object_storage_existence_is_not_serving_truth": {
+      "description": "An object existing in S3/object storage with no COMMITTED DB row is never served; it is an orphan.",
+      "status": "enforced",
+      "tests": [
+        "test_s3_commit_storage_success_db_failure_creates_orphan_cleanup_evidence"
+      ]
+    },
+    "iceberg_snapshot_exists_but_db_committed_is_serving_truth": {
+      "description": "An Iceberg snapshot with no COMMITTED DB row is an orphan; the DB version remains serving truth.",
+      "status": "enforced",
+      "tests": [
+        "test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot"
+      ]
+    },
+    "search_index_is_projection_not_truth": {
+      "description": "Search is a rebuildable projection; reads/actions refetch from the Object Store, never trust the index as truth.",
+      "status": "enforced",
+      "tests": [
+        "test_masked_property_cannot_filter_sort_search",
+        "test_static_object_set_rechecks_object_permission"
+      ]
+    },
+    "runs_do_not_resolve_latest_during_execution": {
+      "description": "A run pins input versions at planning; it must not silently re-resolve latest mid-execution.",
+      "status": "enforced",
+      "tests": [
+        "test_transform_input_latest_is_pinned_to_version_id"
+      ]
+    },
+    "transform_input_version_is_pinned": {
+      "description": "Transform input dataset versions are pinned by version_id for the whole run.",
+      "status": "enforced",
+      "tests": [
+        "test_transform_input_latest_is_pinned_to_version_id"
+      ]
+    },
+    "materialized_output_not_truth_unless_pinned": {
+      "description": "Downstream consumes the pinned materialized version_id, not implicit latest.",
+      "status": "enforced",
+      "tests": [
+        "test_downstream_transform_consumes_materialized_version_id_not_latest"
+      ]
+    },
+    "external_side_effects_commit_atomically_or_via_outbox": {
+      "description": "Side effects (lineage/outbox) commit atomically with the domain transaction, not before it.",
+      "status": "enforced",
+      "tests": [
+        "test_transform_output_and_lineage_commit_atomically"
+      ]
+    },
+    "external_timeout_is_outcome_unknown_not_failure": {
+      "description": "A timeout from an external system means outcome_unknown, not a guaranteed failure.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "External action/connector timeout outcome-unknown handling is not yet implemented; current code treats reachable failures, not ambiguous external timeouts.",
+        "riskTier": "T0",
+        "futureTest": "test_action_external_timeout_is_outcome_unknown_not_failed",
+        "owningDoc": "docs/foundry_lite_tricky_failure_modes_checklist.md"
+      }
+    },
+    "external_failure_requires_compensation_not_silent_local_rollback": {
+      "description": "External success + local failure requires a compensation path, not a silent local-only rollback.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "External writeback compensation is future scope; no compensating-action path exists yet.",
+        "riskTier": "T0",
+        "futureTest": "test_action_external_success_local_failure_compensation_required",
+        "owningDoc": "docs/foundry_lite_tricky_failure_modes_checklist.md"
+      }
+    }
+  }
 }

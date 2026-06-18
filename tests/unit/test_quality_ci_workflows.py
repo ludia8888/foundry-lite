@@ -131,17 +131,18 @@ def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
-    for lane in ("static", "coverage", "flaky", "runtime", "e2e"):
+    for lane in ("static", "coverage", "flaky", "runtime", "e2e", "release"):
         assert f'"ci:gate:{lane}": "bash scripts/ci_gate.sh {lane}"' in package_json
         assert f"{lane})" in script
 
-    assert "Usage: bash scripts/ci_gate.sh [all|static|coverage|flaky|runtime|e2e]" in script
+    assert "Usage: bash scripts/ci_gate.sh [all|static|coverage|flaky|runtime|e2e|release]" in script
     assert "run_all_gate()" in script
     assert "run_static_gate" in script
     assert "run_coverage_gate" in script
     assert "run_flaky_gate" in script
     assert "run_runtime_gate" in script
     assert "run_e2e_gate" in script
+    assert "run_release_gate" in script
     assert "Foundry-lite CI gate passed." in script
 
 
