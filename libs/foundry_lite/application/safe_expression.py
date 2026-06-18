@@ -43,6 +43,13 @@ def validate_action_request(
     missing = [name for name in required if name not in params]
     if missing:
         return ValidationFailed("missing required action parameters", details={"missing": missing})
+    properties = schema.get("properties")
+    if properties is not None:
+        # A declared parameter schema rejects unknown parameters and enforces the
+        # declared type, so a stray or wrong-typed value never reaches the patch.
+        type_error = _validate_parameter_values(_mapping_or_empty(properties), params)
+        if type_error is not None:
+            return type_error
     definition = _mapping_or_empty(action_type.get("definition"))
     for raw_precondition in _object_sequence(definition.get("preconditions", ())):
         precondition = _mapping_or_empty(raw_precondition)
@@ -53,6 +60,33 @@ def validate_action_request(
                 details={"expression": expression},
             )
     return None
+
+
+def _validate_parameter_values(properties: Mapping[str, object], params: Mapping[str, object]) -> Exception | None:
+    unexpected = sorted(name for name in params if name not in properties)
+    if unexpected:
+        return ValidationFailed("unexpected action parameters", details={"unexpected": unexpected})
+    invalid = sorted(
+        name
+        for name, value in params.items()
+        if not _value_matches_type(value, _string_or_empty(_mapping_or_empty(properties.get(name)).get("type")))
+    )
+    if invalid:
+        return ValidationFailed("invalid action parameter types", details={"invalid": invalid})
+    return None
+
+
+def _value_matches_type(value: object, declared_type: str) -> bool:
+    if declared_type == "string":
+        return isinstance(value, str)
+    if declared_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if declared_type == "float":
+        return isinstance(value, int | float) and not isinstance(value, bool)
+    if declared_type == "boolean":
+        return isinstance(value, bool)
+    # Unknown/unspecified declared types stay permissive (e.g. future date types).
+    return True
 
 
 def _string_or_empty(value: object) -> str:

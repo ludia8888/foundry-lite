@@ -187,7 +187,8 @@ def test_permission_deny_on_dataset_write_is_audited(foundry: FoundryLite) -> No
     viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
     with pytest.raises(PermissionDenied):
         foundry.datasets.create("raw.denied", ctx=viewer)
-    assert any(event["decision"] == "deny" for event in foundry.operations.list_runs()["auditEvents"])
+    audit_events = foundry.operations.list_runs(ctx=demo_admin_context())["auditEvents"]
+    assert any(event["decision"] == "deny" for event in audit_events)
 
 
 def test_permission_deny_on_dataset_read_does_not_write_audit(foundry: FoundryLite) -> None:

@@ -160,9 +160,9 @@ class ActionMutationUnitOfWork:
             resource_type="action_run",
             resource_id=action_run_id,
             action="apply",
-            before_ref=self.policy.mask_sensitive_properties(object_type, dict(previous_values)),
+            before_ref=self.policy.mask_sensitive_properties(ctx, object_type, dict(previous_values)),
             after_ref={
-                "patch": self.policy.mask_sensitive_properties(object_type, dict(patch)),
+                "patch": self.policy.mask_sensitive_properties(ctx, object_type, dict(patch)),
                 "object_edit_id": edit_id,
             },
             correlation_id=action_run_id,

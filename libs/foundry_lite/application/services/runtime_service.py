@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 from foundry_lite.application.ports import (
     AuditEventRecord,
@@ -50,6 +51,24 @@ from foundry_lite.domain.errors import (
     PermissionDenied,
     ValidationFailed,
 )
+
+
+def _redact_sensitive(value: object, sensitive: set[str]) -> object:
+    """Recursively mask sensitive keys anywhere in an operational payload.
+
+    Operations returns raw run/writeback/outbox rows whose JSON (action
+    parameters, writeback request/response, outbox payload, object edits) can
+    carry the same values audit deliberately masks; redact them by key name so
+    the operational surface cannot leak what durable evidence already hides.
+    """
+    if isinstance(value, Mapping):
+        return {
+            key: "***MASKED***" if key in sensitive else _redact_sensitive(item, sensitive)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_sensitive(item, sensitive) for item in value]
+    return value
 
 
 def _base_error_payload(exc: Exception) -> dict[str, object]:
@@ -137,7 +156,9 @@ class RuntimeService(CoreService):
 
     def list_runs(self, *, ctx: RequestContext | None = None) -> RuntimeRunSnapshot:
         ctx = ctx or RequestContext()
-        return self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        self.policy.require(ctx, "operations:read:summary")
+        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        return cast(RuntimeRunSnapshot, _redact_sensitive(snapshot, self.policy.sensitive_column_names(ctx)))
 
     def query_runs(
         self,
@@ -151,8 +172,9 @@ class RuntimeService(CoreService):
         cursor: str | None = None,
     ) -> RuntimeRunQueryResult:
         ctx = ctx or RequestContext()
+        self.policy.require(ctx, "operations:read:summary")
         parsed_type = optional_run_type(run_type)
-        return query_runtime_run_page(
+        page = query_runtime_run_page(
             self.runtime_repository,
             tenant_id=ctx.tenant_id,
             run_type=parsed_type,
@@ -162,9 +184,11 @@ class RuntimeService(CoreService):
             limit=limit,
             cursor=cursor,
         )
+        return cast(RuntimeRunQueryResult, _redact_sensitive(page, self.policy.sensitive_column_names(ctx)))
 
     def run_detail(self, run_type: str, run_id: str, *, ctx: RequestContext | None = None) -> RuntimeRunDetail:
         ctx = ctx or RequestContext()
+        self.policy.require(ctx, "operations:read:detail")
         parsed_type = required_run_type(run_type)
         snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
         row = row_for_detail(snapshot, parsed_type, run_id)
@@ -173,7 +197,7 @@ class RuntimeService(CoreService):
         object_edits = related_object_edits(snapshot, row)
         action_writebacks = related_action_writebacks(snapshot, row)
         lineage_edges = self._lineage_edges_for_row(ctx, row)
-        return {
+        detail: RuntimeRunDetail = {
             "runType": parsed_type,
             "runId": run_id,
             "row": row,
@@ -197,6 +221,7 @@ class RuntimeService(CoreService):
             "relatedActionWritebacks": action_writebacks,
             "lineageEdges": lineage_edges,
         }
+        return cast(RuntimeRunDetail, _redact_sensitive(detail, self.policy.sensitive_column_names(ctx)))
 
     def dead_letter_event_retry_plan(
         self,

@@ -401,8 +401,12 @@ def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None
     }
 
     preview = client.get("/api/datasets/clean/orders/preview", headers=viewer_headers)
+    finance_preview = client.get("/api/datasets/clean/orders/preview", headers=finance_headers)
     assert preview.status_code == 200
     assert preview.json()[0]["order_id"] == "O-1001"
+    # the backing dataset must not leak the masked value via preview
+    assert preview.json()[0]["margin"] == "***MASKED***"
+    assert finance_preview.json()[0]["margin"] != "***MASKED***"
 
     viewer_order = client.get("/api/objects/Order/O-1001", headers=viewer_headers)
     finance_order = client.get("/api/objects/Order/O-1001", headers=finance_headers)
@@ -410,6 +414,20 @@ def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None
     assert finance_order.status_code == 200
     assert viewer_order.json()["properties"]["margin"] == "***MASKED***"
     assert finance_order.json()["properties"]["margin"] != "***MASKED***"
+
+    # ?explain=true must not bypass masking: a viewer (no object:explain) gets no
+    # explain block at all; an operator gets it but with base/edit still masked;
+    # finance/admin see the real value, consistent with the masked-properties policy.
+    admin_headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": "admin-api", "X-Roles": "admin"}
+    viewer_explain = client.get("/api/objects/Order/O-1001", headers=viewer_headers, params={"explain": "true"})
+    ops_explain = client.get("/api/objects/Order/O-1001", headers=ops_headers, params={"explain": "true"})
+    finance_explain = client.get("/api/objects/Order/O-1001", headers=finance_headers, params={"explain": "true"})
+    admin_explain = client.get("/api/objects/Order/O-1001", headers=admin_headers, params={"explain": "true"})
+    assert viewer_explain.status_code == 200
+    assert "explain" not in viewer_explain.json()
+    assert ops_explain.json()["explain"]["baseProperties"]["margin"] == "***MASKED***"
+    assert finance_explain.json()["explain"]["baseProperties"]["margin"] != "***MASKED***"
+    assert admin_explain.json()["explain"]["baseProperties"]["margin"] != "***MASKED***"
 
     other_tenant_order = client.get("/api/objects/Order/O-1001", headers=other_tenant_headers)
     assert other_tenant_order.status_code == 404
