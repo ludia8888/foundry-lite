@@ -202,7 +202,7 @@ class IcebergDatasetStorageAdapter:
     ) -> StoredDatasetCommit:
         """Commit snapshot."""
         pq = import_module("pyarrow.parquet")
-        arrow_table = pq.read_table(str(staged_file))
+        arrow_table = _iceberg_compatible_arrow_table(pq.read_table(str(staged_file)))
         self._load_or_create_table(identifier, arrow_table.schema)
         # The engine validates schema compatibility upstream; here we mirror an
         # additive (compatible) evolution into the Iceberg table so a later version's
@@ -594,6 +594,44 @@ def _expected_files(sidecar: Mapping[str, object]) -> Mapping[str, DatasetManife
         }
         expected[entry["uri"]] = entry
     return expected
+
+
+def _iceberg_compatible_arrow_table(arrow_table: Any) -> Any:
+    """Normalize Arrow types that Iceberg v2 cannot commit as-is."""
+    pa = import_module("pyarrow")
+    schema = arrow_table.schema
+    fields = [_iceberg_compatible_field(pa, field) for field in schema]
+    converted_schema = pa.schema(fields, metadata=schema.metadata)
+    if converted_schema.equals(schema, check_metadata=True):
+        return arrow_table
+    return arrow_table.cast(converted_schema, safe=False)
+
+
+def _iceberg_compatible_field(pa: Any, field: Any) -> Any:
+    """Return the field with an Iceberg-compatible type, preserving field metadata."""
+    converted_type = _iceberg_compatible_type(pa, field.type)
+    if converted_type == field.type:
+        return field
+    return field.with_type(converted_type)
+
+
+def _iceberg_compatible_type(pa: Any, data_type: Any) -> Any:
+    """Return an Iceberg-compatible Arrow type."""
+    if pa.types.is_timestamp(data_type) and data_type.unit == "ns":
+        return pa.timestamp("us", tz=data_type.tz)
+    if pa.types.is_struct(data_type):
+        return pa.struct([_iceberg_compatible_field(pa, child) for child in data_type])
+    if pa.types.is_fixed_size_list(data_type):
+        return pa.list_(_iceberg_compatible_field(pa, data_type.value_field), list_size=data_type.list_size)
+    if pa.types.is_list(data_type):
+        return pa.list_(_iceberg_compatible_field(pa, data_type.value_field))
+    if pa.types.is_large_list(data_type):
+        return pa.large_list(_iceberg_compatible_field(pa, data_type.value_field))
+    if pa.types.is_map(data_type):
+        key_field = _iceberg_compatible_field(pa, data_type.key_field)
+        item_field = _iceberg_compatible_field(pa, data_type.item_field)
+        return pa.map_(key_field.type, item_field.type, keys_sorted=data_type.keys_sorted)
+    return data_type
 
 
 def _snapshot_token(files: list[DatasetManifestFile]) -> str:

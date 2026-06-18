@@ -48,3 +48,18 @@ def test_validation_hash_changes_with_tombstone() -> None:
     # deleted object cannot validate as identical to the live baseline.
     assert baseline.object_count == tombstoned.object_count == 1
     assert baseline.object_hash != tombstoned.object_hash
+
+
+def test_shadow_reindex_validation_hash_includes_current_properties_and_tombstone() -> None:
+    baseline = object_index_stats([_record()])
+    property_drift = object_index_stats(
+        [_record(properties={"orderId": "O-1001", "status": "APPROVED", "operatorNote": "edited"})]
+    )
+    tombstone_drift = object_index_stats([_record(deleted=True, deletion_reason="source_deleted")])
+
+    # This exact evidence name is referenced by the tricky-failure checklist:
+    # shadow validation must compare the current projection and tombstone state,
+    # not just count/object_id, before an alias switch can be trusted.
+    assert baseline.object_count == property_drift.object_count == tombstone_drift.object_count == 1
+    assert baseline.object_hash != property_drift.object_hash
+    assert baseline.object_hash != tombstone_drift.object_hash

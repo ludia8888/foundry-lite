@@ -1,0 +1,740 @@
+{
+  "schemaVersion": 1,
+  "activeStack": [
+    "s3-storage",
+    "iceberg",
+    "spark"
+  ],
+  "crossCuttingFlows": [
+    "debezium-cdc"
+  ],
+  "families": [
+    {
+      "id": "s3-storage",
+      "name": "MinIO/S3 DatasetStorageAdapter",
+      "status": "active-covered",
+      "qualityScript": "quality:s3-storage",
+      "ciCommand": "pnpm --silent quality:s3-storage",
+      "testPaths": [
+        "tests/integration/test_s3_dataset_storage_adapter.py"
+      ],
+      "proofs": {
+        "adapter-contract": [
+          "test_s3_dataset_storage_adapter_contract"
+        ],
+        "normal-path": [
+          "test_s3_composition_root_selects_adapter_from_profile_and_runs_full_cycle",
+          "test_s3_api_end_to_end_preview_reads_through_s3_and_surfaces_corruption"
+        ],
+        "failure-injection": [
+          "test_s3_partial_multipart_upload_never_becomes_committed_version",
+          "test_s3_real_multipart_upload_failure_aborts_orphaned_parts"
+        ],
+        "concurrency-race": [
+          "test_s3_concurrent_dataset_commits_allocate_strictly_increasing_versions",
+          "test_s3_staging_cleanup_is_isolated_per_transaction"
+        ],
+        "retry-idempotency": [
+          "test_s3_retry_after_storage_timeout_does_not_duplicate_version",
+          "test_s3_duplicate_version_commit_is_rejected_without_destroying_existing"
+        ],
+        "partial-success": [
+          "test_s3_commit_storage_success_db_failure_creates_orphan_cleanup_evidence"
+        ],
+        "recovery-cleanup": [
+          "test_s3_abort_cleanup_never_deletes_committed_manifest",
+          "test_s3_failed_commit_cleanup_uses_known_keys_not_listing"
+        ],
+        "operator-evidence": [
+          "test_s3_storage_failure_is_visible_in_operations",
+          "test_s3_real_multipart_interrupt_during_upload_is_visible_in_operations"
+        ],
+        "docs-sync": [
+          "test_infra_tricky_matrix_gate_passes_current_docs_and_ci",
+          "test_checklist_evidence_gate_flags_checked_test_not_collected"
+        ]
+      },
+      "trickyItems": [
+        {
+          "id": "T0-009",
+          "tests": [
+            "test_s3_commit_storage_success_db_failure_creates_orphan_cleanup_evidence"
+          ]
+        },
+        {
+          "id": "T0-010",
+          "tests": [
+            "test_s3_committed_manifest_missing_marks_storage_corruption"
+          ]
+        },
+        {
+          "id": "T0-011",
+          "tests": [
+            "test_s3_partial_multipart_upload_never_becomes_committed_version",
+            "test_s3_read_path_detects_truncated_data_object"
+          ]
+        },
+        {
+          "id": "T0-012",
+          "tests": [
+            "test_s3_concurrent_dataset_commits_allocate_strictly_increasing_versions"
+          ]
+        },
+        {
+          "id": "T0-013",
+          "tests": [
+            "test_s3_abort_cleanup_never_deletes_committed_manifest"
+          ]
+        },
+        {
+          "id": "A2",
+          "tests": [
+            "test_s3_committed_manifest_row_count_matches_actual_parquet_rows"
+          ]
+        },
+        {
+          "id": "A4",
+          "tests": [
+            "test_s3_duplicate_version_commit_is_rejected_without_destroying_existing"
+          ]
+        },
+        {
+          "id": "A5",
+          "tests": [
+            "test_s3_staging_cleanup_is_isolated_per_transaction"
+          ]
+        },
+        {
+          "id": "A6",
+          "tests": [
+            "test_s3_staging_cleanup_is_isolated_per_transaction"
+          ]
+        },
+        {
+          "id": "A7",
+          "tests": [
+            "test_s3_access_expiry_on_read_is_retryable_not_corruption"
+          ]
+        },
+        {
+          "id": "A8",
+          "tests": [
+            "test_s3_failed_commit_cleanup_uses_known_keys_not_listing"
+          ]
+        },
+        {
+          "id": "A9",
+          "tests": [
+            "test_s3_concurrent_dataset_commits_allocate_strictly_increasing_versions"
+          ]
+        },
+        {
+          "id": "A16",
+          "tests": [
+            "test_s3_composition_root_selects_adapter_from_profile_and_runs_full_cycle",
+            "test_s3_api_end_to_end_preview_reads_through_s3_and_surfaces_corruption"
+          ]
+        }
+      ],
+      "sourceOfTruthRules": [
+        "metadata_db_committed_version_is_serving_truth",
+        "object_storage_existence_is_not_serving_truth"
+      ],
+      "operatorEvidence": {
+        "runField": "syncRuns",
+        "requiredPayloadPaths": [
+          "syncRuns[].error.type",
+          "syncRuns[].error.adapterFailure.adapterProfile",
+          "syncRuns[].error.adapterFailure.operation",
+          "syncRuns[].error.adapterFailure.retryable",
+          "syncRuns[].error.trace.run_id"
+        ],
+        "durableEvidenceCategories": [
+          "run",
+          "error",
+          "adapterFailure",
+          "trace"
+        ]
+      }
+    },
+    {
+      "id": "iceberg",
+      "name": "Iceberg Catalog/TableAdapter",
+      "status": "active-covered",
+      "qualityScript": "quality:iceberg",
+      "ciCommand": "pnpm --silent quality:iceberg",
+      "testPaths": [
+        "tests/integration/test_iceberg_dataset_storage_adapter.py"
+      ],
+      "proofs": {
+        "adapter-contract": [
+          "test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots"
+        ],
+        "normal-path": [
+          "test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots",
+          "test_iceberg_engine_and_s3_warehouse_end_to_end"
+        ],
+        "failure-injection": [
+          "test_iceberg_catalog_failure_is_visible_in_operations",
+          "test_iceberg_corrupt_table_metadata_is_corruption_not_retryable"
+        ],
+        "concurrency-race": [
+          "test_iceberg_repeated_commits_keep_every_version_independently_readable",
+          "test_iceberg_pinned_snapshot_survives_out_of_band_pointer_change"
+        ],
+        "retry-idempotency": [
+          "test_iceberg_retry_after_ambiguous_commit_does_not_duplicate_version",
+          "test_iceberg_duplicate_guard_transient_catalog_error_is_retryable"
+        ],
+        "partial-success": [
+          "test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot"
+        ],
+        "recovery-cleanup": [
+          "test_iceberg_missing_table_on_read_marks_storage_corruption",
+          "test_iceberg_corrupted_data_file_surfaces_through_engine_as_corruption"
+        ],
+        "operator-evidence": [
+          "test_iceberg_catalog_failure_is_visible_in_operations"
+        ],
+        "docs-sync": [
+          "test_infra_tricky_matrix_gate_passes_current_docs_and_ci",
+          "test_infra_ratchet_gate_passes_current_docs_and_ci"
+        ]
+      },
+      "trickyItems": [
+        {
+          "id": "AI1",
+          "tests": [
+            "test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot"
+          ]
+        },
+        {
+          "id": "AI2",
+          "tests": [
+            "test_iceberg_missing_table_on_read_marks_storage_corruption"
+          ]
+        },
+        {
+          "id": "AI3",
+          "tests": [
+            "test_iceberg_corrupt_table_metadata_is_corruption_not_retryable"
+          ]
+        },
+        {
+          "id": "AI4",
+          "tests": [
+            "test_iceberg_corrupted_data_file_surfaces_through_engine_as_corruption"
+          ]
+        },
+        {
+          "id": "AI5",
+          "tests": [
+            "test_iceberg_catalog_failure_is_visible_in_operations"
+          ]
+        },
+        {
+          "id": "AI6",
+          "tests": [
+            "test_iceberg_retry_after_ambiguous_commit_does_not_duplicate_version"
+          ]
+        },
+        {
+          "id": "AI7",
+          "tests": [
+            "test_iceberg_duplicate_version_commit_is_rejected",
+            "test_iceberg_duplicate_guard_transient_catalog_error_is_retryable"
+          ]
+        },
+        {
+          "id": "AI8",
+          "tests": [
+            "test_iceberg_compatible_schema_evolution_across_versions"
+          ]
+        },
+        {
+          "id": "AI9",
+          "tests": [
+            "test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots",
+            "test_iceberg_pinned_snapshot_survives_out_of_band_pointer_change"
+          ]
+        },
+        {
+          "id": "AI10",
+          "tests": [
+            "test_iceberg_engine_and_s3_warehouse_end_to_end"
+          ]
+        },
+        {
+          "id": "AI11",
+          "tests": [
+            "test_iceberg_repeated_commits_keep_every_version_independently_readable"
+          ]
+        },
+        {
+          "id": "AI12",
+          "tests": [
+            "test_iceberg_manifest_hash_is_real_object_bytes_and_catches_same_size_tamper"
+          ]
+        },
+        {
+          "id": "AI13",
+          "tests": [
+            "test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots"
+          ]
+        }
+      ],
+      "sourceOfTruthRules": [
+        "metadata_db_committed_version_is_serving_truth",
+        "iceberg_snapshot_exists_but_db_committed_is_serving_truth"
+      ],
+      "operatorEvidence": {
+        "runField": "syncRuns",
+        "requiredPayloadPaths": [
+          "syncRuns[].error.adapterFailure.adapterProfile",
+          "syncRuns[].error.adapterFailure.operation",
+          "syncRuns[].error.adapterFailure.retryable",
+          "syncRuns[].error.trace.run_id"
+        ],
+        "durableEvidenceCategories": [
+          "run",
+          "error",
+          "adapterFailure",
+          "trace"
+        ]
+      }
+    },
+    {
+      "id": "spark",
+      "name": "Spark ComputeAdapter",
+      "status": "active-covered",
+      "qualityScript": "quality:spark",
+      "ciCommand": "pnpm --silent quality:spark",
+      "testPaths": [
+        "tests/integration/test_spark_compute_adapter.py"
+      ],
+      "proofs": {
+        "adapter-contract": [
+          "test_spark_compute_adapter_contract_parity"
+        ],
+        "normal-path": [
+          "test_spark_transform_substitutes_inputs_and_writes_single_parquet_file",
+          "test_spark_engine_transform_commits_with_lineage_and_health"
+        ],
+        "failure-injection": [
+          "test_spark_invalid_csv_input_is_validation_error",
+          "test_spark_transform_failure_aborts_output_transaction"
+        ],
+        "concurrency-race": [
+          "test_spark_concurrent_transforms_use_isolated_temp_views"
+        ],
+        "retry-idempotency": [
+          "test_spark_transform_failure_aborts_output_transaction"
+        ],
+        "partial-success": [
+          "test_spark_transform_failure_aborts_output_transaction"
+        ],
+        "recovery-cleanup": [
+          "test_spark_transform_failure_aborts_output_transaction"
+        ],
+        "operator-evidence": [
+          "test_spark_transform_failure_aborts_output_transaction"
+        ],
+        "docs-sync": [
+          "test_infra_tricky_matrix_gate_passes_current_docs_and_ci",
+          "test_infra_ratchet_gate_passes_current_docs_and_ci"
+        ]
+      },
+      "trickyItems": [
+        {
+          "id": "C13",
+          "tests": [
+            "test_spark_engine_transform_commits_with_lineage_and_health"
+          ]
+        },
+        {
+          "id": "C14",
+          "tests": [
+            "test_spark_and_duckdb_produce_equivalent_transform_output"
+          ]
+        },
+        {
+          "id": "CS1",
+          "tests": [
+            "test_spark_compute_adapter_contract_parity"
+          ]
+        },
+        {
+          "id": "CS2",
+          "tests": [
+            "test_spark_transform_substitutes_inputs_and_writes_single_parquet_file"
+          ]
+        },
+        {
+          "id": "CS3",
+          "tests": [
+            "test_spark_and_duckdb_produce_equivalent_transform_output"
+          ]
+        },
+        {
+          "id": "CS4",
+          "tests": [
+            "test_spark_unsupported_plan_kind_is_validation_error",
+            "test_spark_invalid_csv_input_is_validation_error"
+          ]
+        },
+        {
+          "id": "CS5",
+          "tests": [
+            "test_spark_engine_transform_commits_with_lineage_and_health"
+          ]
+        },
+        {
+          "id": "CS6",
+          "tests": [
+            "test_spark_transform_failure_aborts_output_transaction"
+          ]
+        },
+        {
+          "id": "CS7",
+          "tests": [
+            "test_spark_concurrent_transforms_use_isolated_temp_views"
+          ]
+        }
+      ],
+      "sourceOfTruthRules": [
+        "transform_input_version_is_pinned",
+        "runs_do_not_resolve_latest_during_execution",
+        "materialized_output_not_truth_unless_pinned",
+        "external_side_effects_commit_atomically_or_via_outbox"
+      ],
+      "operatorEvidence": {
+        "runField": "transformRuns",
+        "requiredPayloadPaths": [
+          "transformRuns[].status",
+          "transformRuns[].error.adapterFailure.adapterProfile",
+          "transformRuns[].error.adapterFailure.operation",
+          "transformRuns[].error.adapterFailure.retryable"
+        ],
+        "durableEvidenceCategories": [
+          "run",
+          "error",
+          "adapterFailure"
+        ]
+      }
+    }
+  ],
+  "crossCuttingFlowProofs": [
+    {
+      "id": "debezium-cdc",
+      "name": "Debezium CDC archive and object indexing",
+      "status": "active-covered",
+      "qualityScripts": [
+        "quality:cdc-stream-archive",
+        "quality:cdc-live-debezium",
+        "quality:cdc-object-indexing"
+      ],
+      "ciCommands": [
+        "pnpm --silent quality:cdc-stream-archive",
+        "pnpm --silent quality:cdc-live-debezium",
+        "pnpm --silent quality:cdc-object-indexing"
+      ],
+      "proofs": {
+        "adapter-contract": [
+          "test_debezium_adapter_reports_publish_validation_operation"
+        ],
+        "normal-path": [
+          "test_stream_offset_not_advanced_when_append_commit_fails",
+          "test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end"
+        ],
+        "failure-injection": [
+          "test_stream_offset_not_advanced_when_append_commit_fails",
+          "test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version"
+        ],
+        "concurrency-race": [
+          "test_cdc_source_transaction_group_not_partially_committed_without_status"
+        ],
+        "retry-idempotency": [
+          "test_cdc_duplicate_event_idempotent",
+          "test_cdc_object_indexing_updates_tombstones_and_skips_stale_events"
+        ],
+        "partial-success": [
+          "test_cdc_source_transaction_group_not_partially_committed_without_status",
+          "test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version"
+        ],
+        "recovery-cleanup": [
+          "test_cdc_object_indexing_updates_tombstones_and_skips_stale_events"
+        ],
+        "operator-evidence": [
+          "test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version"
+        ],
+        "docs-sync": [
+          "test_infra_tricky_matrix_gate_passes_current_docs_and_ci",
+          "test_checklist_evidence_gate_flags_checked_test_not_collected"
+        ]
+      },
+      "trickyItems": [
+        {
+          "id": "T0-001",
+          "tests": [
+            "test_stream_offset_not_advanced_when_append_commit_fails"
+          ]
+        },
+        {
+          "id": "T0-034",
+          "tests": [
+            "test_cdc_object_indexing_updates_tombstones_and_skips_stale_events"
+          ]
+        },
+        {
+          "id": "T0-035",
+          "tests": [
+            "test_cdc_object_indexing_updates_tombstones_and_skips_stale_events"
+          ]
+        },
+        {
+          "id": "T0-036",
+          "tests": [
+            "test_cdc_pk_update_policy"
+          ]
+        },
+        {
+          "id": "T0-037",
+          "tests": [
+            "test_cdc_source_transaction_group_not_partially_committed_without_status"
+          ]
+        },
+        {
+          "id": "I18",
+          "tests": [
+            "test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end"
+          ]
+        }
+      ]
+    }
+  ],
+  "compositionProofs": [
+    {
+      "id": "s3+iceberg",
+      "members": [
+        "s3-storage",
+        "iceberg"
+      ],
+      "qualityScript": "quality:iceberg",
+      "ciCommand": "pnpm --silent quality:iceberg",
+      "proofs": {
+        "composition-compatibility": [
+          "test_iceberg_engine_and_s3_warehouse_end_to_end"
+        ],
+        "normal-path": [
+          "test_iceberg_engine_and_s3_warehouse_end_to_end"
+        ],
+        "failure-injection": [
+          "test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot"
+        ],
+        "retry-idempotency": [
+          "test_iceberg_retry_after_ambiguous_commit_does_not_duplicate_version"
+        ],
+        "partial-success": [
+          "test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot"
+        ],
+        "recovery-cleanup": [
+          "test_iceberg_missing_table_on_read_marks_storage_corruption",
+          "test_iceberg_corrupted_data_file_surfaces_through_engine_as_corruption"
+        ],
+        "operator-evidence": [
+          "test_iceberg_catalog_failure_is_visible_in_operations"
+        ]
+      },
+      "trickyItems": [
+        {
+          "id": "AI10",
+          "tests": [
+            "test_iceberg_engine_and_s3_warehouse_end_to_end"
+          ]
+        },
+        {
+          "id": "AI12",
+          "tests": [
+            "test_iceberg_manifest_hash_is_real_object_bytes_and_catches_same_size_tamper"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s3+iceberg+spark",
+      "members": [
+        "s3-storage",
+        "iceberg",
+        "spark"
+      ],
+      "qualityScript": "quality:infra-composition",
+      "ciCommand": "pnpm --silent quality:infra-composition",
+      "proofs": {
+        "composition-compatibility": [
+          "test_iceberg_s3_storage_with_spark_compute_end_to_end"
+        ],
+        "normal-path": [
+          "test_iceberg_s3_storage_with_spark_compute_end_to_end"
+        ],
+        "failure-injection": [
+          "test_iceberg_s3_spark_failure_aborts_without_output_version"
+        ],
+        "concurrency-race": [
+          "test_spark_concurrent_transforms_use_isolated_temp_views"
+        ],
+        "retry-idempotency": [
+          "test_iceberg_s3_spark_failure_aborts_without_output_version"
+        ],
+        "partial-success": [
+          "test_iceberg_s3_spark_failure_aborts_without_output_version"
+        ],
+        "recovery-cleanup": [
+          "test_iceberg_s3_spark_failure_aborts_without_output_version"
+        ],
+        "operator-evidence": [
+          "test_iceberg_s3_spark_failure_aborts_without_output_version"
+        ]
+      },
+      "trickyItems": [
+        {
+          "id": "CS8",
+          "tests": [
+            "test_iceberg_s3_storage_with_spark_compute_end_to_end"
+          ]
+        },
+        {
+          "id": "CS9",
+          "tests": [
+            "test_iceberg_s3_spark_failure_aborts_without_output_version"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "s3+iceberg+spark+debezium-cdc",
+      "members": [
+        "s3-storage",
+        "iceberg",
+        "spark",
+        "debezium-cdc"
+      ],
+      "qualityScript": "quality:infra-composition",
+      "ciCommand": "pnpm --silent quality:infra-composition",
+      "proofs": {
+        "composition-compatibility": [
+          "test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end"
+        ],
+        "normal-path": [
+          "test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end"
+        ],
+        "failure-injection": [
+          "test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version"
+        ],
+        "concurrency-race": [
+          "test_cdc_source_transaction_group_not_partially_committed_without_status"
+        ],
+        "retry-idempotency": [
+          "test_cdc_duplicate_event_idempotent",
+          "test_cdc_object_indexing_updates_tombstones_and_skips_stale_events"
+        ],
+        "partial-success": [
+          "test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version"
+        ],
+        "recovery-cleanup": [
+          "test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version"
+        ],
+        "operator-evidence": [
+          "test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version"
+        ]
+      },
+      "trickyItems": [
+        {
+          "id": "I18",
+          "tests": [
+            "test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end"
+          ]
+        }
+      ]
+    }
+  ],
+  "sourceOfTruthRules": {
+    "metadata_db_committed_version_is_serving_truth": {
+      "description": "Only a metadata DB COMMITTED dataset version is served; storage objects alone are not truth.",
+      "status": "enforced",
+      "tests": [
+        "test_s3_committed_manifest_missing_marks_storage_corruption",
+        "test_iceberg_missing_table_on_read_marks_storage_corruption"
+      ]
+    },
+    "object_storage_existence_is_not_serving_truth": {
+      "description": "An object existing in S3/object storage with no COMMITTED DB row is never served; it is an orphan.",
+      "status": "enforced",
+      "tests": [
+        "test_s3_commit_storage_success_db_failure_creates_orphan_cleanup_evidence"
+      ]
+    },
+    "iceberg_snapshot_exists_but_db_committed_is_serving_truth": {
+      "description": "An Iceberg snapshot with no COMMITTED DB row is an orphan; the DB version remains serving truth.",
+      "status": "enforced",
+      "tests": [
+        "test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot"
+      ]
+    },
+    "search_index_is_projection_not_truth": {
+      "description": "Search is a rebuildable projection; reads/actions refetch from the Object Store, never trust the index as truth.",
+      "status": "enforced",
+      "tests": [
+        "test_masked_property_cannot_filter_sort_search",
+        "test_static_object_set_rechecks_object_permission"
+      ]
+    },
+    "runs_do_not_resolve_latest_during_execution": {
+      "description": "A run pins input versions at planning; it must not silently re-resolve latest mid-execution.",
+      "status": "enforced",
+      "tests": [
+        "test_transform_input_latest_is_pinned_to_version_id"
+      ]
+    },
+    "transform_input_version_is_pinned": {
+      "description": "Transform input dataset versions are pinned by version_id for the whole run.",
+      "status": "enforced",
+      "tests": [
+        "test_transform_input_latest_is_pinned_to_version_id"
+      ]
+    },
+    "materialized_output_not_truth_unless_pinned": {
+      "description": "Downstream consumes the pinned materialized version_id, not implicit latest.",
+      "status": "enforced",
+      "tests": [
+        "test_downstream_transform_consumes_materialized_version_id_not_latest"
+      ]
+    },
+    "external_side_effects_commit_atomically_or_via_outbox": {
+      "description": "Side effects (lineage/outbox) commit atomically with the domain transaction, not before it.",
+      "status": "enforced",
+      "tests": [
+        "test_transform_output_and_lineage_commit_atomically"
+      ]
+    },
+    "external_timeout_is_outcome_unknown_not_failure": {
+      "description": "A timeout from an external system means outcome_unknown, not a guaranteed failure.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "External action/connector timeout outcome-unknown handling is not yet implemented; current code treats reachable failures, not ambiguous external timeouts.",
+        "riskTier": "T0",
+        "futureTest": "test_action_external_timeout_is_outcome_unknown_not_failed",
+        "owningDoc": "docs/foundry_lite_tricky_failure_modes_checklist.md"
+      }
+    },
+    "external_failure_requires_compensation_not_silent_local_rollback": {
+      "description": "External success + local failure requires a compensation path, not a silent local-only rollback.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "External writeback compensation is future scope; no compensating-action path exists yet.",
+        "riskTier": "T0",
+        "futureTest": "test_action_external_success_local_failure_compensation_required",
+        "owningDoc": "docs/foundry_lite_tricky_failure_modes_checklist.md"
+      }
+    }
+  }
+}

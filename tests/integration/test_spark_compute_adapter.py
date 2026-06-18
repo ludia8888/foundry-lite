@@ -55,6 +55,22 @@ def test_spark_compute_adapter_contract_parity(spark_session: Any, tmp_path: Pat
     assert adapter.failure_contract().adapter_profile == "spark"
 
 
+def test_spark_rows_to_parquet_preserves_quoted_json_strings(spark_session: Any, tmp_path: Path) -> None:
+    adapter = _adapter(spark_session)
+    target = tmp_path / "cdc.parquet"
+    payload = '{"op":"c","pk":{"order_id":"O-1001"},"source":{"lsn":20}}'
+    pk = '{"order_id":"O-1001"}'
+
+    adapter.rows_to_parquet(
+        [{"event_id": "topic:0:1", "payload_json": payload, "pk_json": pk}],
+        target,
+        ["event_id", "payload_json", "pk_json"],
+    )
+
+    rows = adapter.preview_parquet(target, limit=10)
+    assert rows == [{"event_id": "topic:0:1", "payload_json": payload, "pk_json": pk}]
+
+
 def test_spark_transform_substitutes_inputs_and_writes_single_parquet_file(spark_session: Any, tmp_path: Path) -> None:
     # The Spark write is a directory of part files; the adapter must promote exactly one
     # parquet file to the single-file target the dataset transaction protocol expects.

@@ -87,8 +87,11 @@
 | 26 | trace key boundary 유지 | `check_trace_continuity.py` | dynamic | ✅ |
 | 27 | 새 boundary에 contract test 동반 | `check_contract_test_per_port.py` | 0개 누락 | ✅ |
 | 28 | adapter 실패 의미 표준화 | `check_adapter_failure_taxonomy.py` | 19 adapter profile | ✅ |
-| 28.1 | 인프라는 한 번에 하나씩 실패/동시성/복구 증거와 함께 추가 | `check_infra_ratchet.py` | infra ratchet doc/CI/doc-sync violation 0 | ✅ |
+| 28.1 | 인프라는 한 번에 하나씩 실패/동시성/복구/조합 증거와 함께 추가 | `check_infra_ratchet.py` | infra ratchet doc/CI/doc-sync violation 0 | ✅ |
 | 28.2 | MinIO/S3 storage ratchet | `quality:s3-storage` | S3 contract/failure/concurrency/retry/cleanup/operator evidence 8 tests | ✅ |
+| 28.3 | active 인프라 조합 ratchet | `quality:infra-composition` | S3+Iceberg+Spark end-to-end + failure-abort tests | ✅ |
+| 28.4 | tricky checklist 완료 체크가 실제 테스트 증거와 일치 | `quality:checklist-evidence` | checked `test_*` references missing from pytest collection 0 | ✅ |
+| 28.5 | active 인프라가 관련 tricky 항목을 자동으로 proof/test/CI에 끌어옴 | `quality:infra-tricky-matrix` | matrix item/proof/test/CI violations 0 | ✅ |
 
 ### §5 코드 컨벤션
 

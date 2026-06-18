@@ -11,7 +11,7 @@ mkdir -p artifacts/coverage artifacts/demo artifacts/test-results artifacts/qual
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/ci_gate.sh [all|static|coverage|flaky|runtime|e2e]
+Usage: bash scripts/ci_gate.sh [all|static|coverage|flaky|runtime|e2e|release]
 
 Lane mode lets GitHub Actions run the same release evidence in parallel without
 weakening any threshold:
@@ -19,8 +19,11 @@ weakening any threshold:
   static   format, typing, architecture, security, complexity, doc drift gates
   coverage full pytest branch coverage plus layer/public API coverage gates
   flaky    three repeated random + parallel pytest runs
-  runtime  demo, lineage, audit, outbox, correctness, trace, diagnostics gates
+  runtime  demo, lineage, audit, outbox, correctness, trace, diagnostics gates,
+           plus proof-matrix / source-of-truth / operator-evidence contracts
   e2e      Playwright browser E2E
+  release  full release evidence gate with heavier production-like checks
+           (static + coverage + flaky + runtime + 100k/1m perf + contract gates)
 EOF
 }
 
@@ -112,6 +115,12 @@ run_static_gate() {
 
   echo "== Static: current-state documentation drift =="
   uv run python scripts/quality/check_doc_drift.py
+
+  echo "== Static: tricky checklist evidence =="
+  uv run python scripts/quality/check_checklist_evidence.py
+
+  echo "== Static: infra tricky matrix =="
+  uv run python scripts/quality/check_infra_tricky_matrix.py
 
   echo "== Static: generated TypeScript SDK drift =="
   uv run python scripts/generate_sdk_ts.py --check
@@ -246,6 +255,15 @@ run_flaky_gate() {
 run_runtime_gate() {
   maybe_run_testcontainers_preflight
 
+  echo "== Dynamic: CDC stream archive ratchet =="
+  pnpm --silent quality:cdc-stream-archive
+
+  echo "== Dynamic: CDC object indexing ratchet =="
+  pnpm --silent quality:cdc-object-indexing
+
+  echo "== Dynamic: Debezium live CDC ratchet =="
+  pnpm --silent quality:cdc-live-debezium
+
   echo "== Dynamic: S3 storage ratchet =="
   pnpm --silent quality:s3-storage
 
@@ -254,6 +272,21 @@ run_runtime_gate() {
 
   echo "== Dynamic: Spark compute ratchet =="
   pnpm --silent quality:spark
+
+  echo "== Dynamic: S3 + Iceberg + Spark composition ratchet =="
+  pnpm --silent quality:infra-composition
+
+  echo "== Dynamic: proof matrix contract =="
+  pnpm --silent quality:proof-matrix
+
+  echo "== Dynamic: source-of-truth contract =="
+  pnpm --silent quality:source-of-truth
+
+  echo "== Dynamic: operator evidence contract =="
+  pnpm --silent quality:operator-evidence
+
+  echo "== Dynamic: runtime root-cause summary =="
+  pnpm --silent quality:runtime-root-cause
 
   echo "== Dynamic: supply-chain demo smoke =="
   rm -rf .foundry-lite-ci-smoke
@@ -303,6 +336,29 @@ run_all_gate() {
   run_e2e_gate
 }
 
+run_release_gate() {
+  maybe_run_testcontainers_preflight
+  run_static_gate
+  run_coverage_gate
+  run_flaky_gate
+  run_runtime_gate
+
+  echo "== Release: 100k performance smoke =="
+  pnpm --silent quality:mvp-performance-release-100k
+
+  echo "== Release: 1m performance smoke =="
+  pnpm --silent quality:mvp-performance-release-1m
+
+  echo "== Release: proof matrix contract =="
+  pnpm --silent quality:proof-matrix
+
+  echo "== Release: source-of-truth contract =="
+  pnpm --silent quality:source-of-truth
+
+  echo "== Release: operator evidence contract =="
+  pnpm --silent quality:operator-evidence
+}
+
 main() {
   local lane="${1:-all}"
 
@@ -337,6 +393,10 @@ main() {
     e2e)
       run_e2e_gate
       echo "Foundry-lite E2E quality lane passed."
+      ;;
+    release)
+      run_release_gate
+      echo "Foundry-lite release evidence gate passed."
       ;;
     *)
       usage >&2
