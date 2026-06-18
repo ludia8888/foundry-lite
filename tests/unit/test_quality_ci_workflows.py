@@ -451,6 +451,30 @@ def test_doc_drift_is_release_gate_step() -> None:
     assert "pnpm quality:doc-drift" in package_json
 
 
+def test_checklist_evidence_is_release_gate_step_after_doc_drift() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    doc_drift_step = "scripts/quality/check_doc_drift.py"
+    checklist_step = "scripts/quality/check_checklist_evidence.py"
+    assert checklist_step in script
+    assert script.index(doc_drift_step) < script.index(checklist_step)
+    assert '"quality:checklist-evidence"' in package_json
+    assert "pnpm quality:checklist-evidence" in package_json
+
+
+def test_infra_tricky_matrix_is_release_gate_step_after_checklist_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    checklist_step = "scripts/quality/check_checklist_evidence.py"
+    matrix_step = "scripts/quality/check_infra_tricky_matrix.py"
+    assert matrix_step in script
+    assert script.index(checklist_step) < script.index(matrix_step)
+    assert '"quality:infra-tricky-matrix"' in package_json
+    assert "pnpm quality:infra-tricky-matrix" in package_json
+
+
 def test_generated_sdk_check_is_release_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

@@ -760,6 +760,8 @@ flowchart TB
 | `check_regression_test_per_bugfix.py` | bugfix가 회귀 테스트 없이 들어오는 문제 |
 | `check_pr_root_cause_section.py` | PR이 원인/영향/회귀 방지를 설명하지 않는 문제 |
 | `check_doc_drift.py` | 현재 구현 문서가 실제 코드 경로/심볼과 어긋나는 문제 |
+| `check_checklist_evidence.py` | tricky failure checklist의 `[x] test_*` 완료 증거가 실제 pytest 수집 결과와 어긋나는 문제 |
+| `check_infra_tricky_matrix.py` | active 인프라/조합 stack이 관련 tricky 항목, proof class, pytest, CI command를 빠뜨리는 문제 |
 | `check_schema_revision_guard.py` | schema.py 변경이 revision snapshot 없이 들어오는 문제 |
 | `check_action_idempotency.py` | action idempotency contract 회귀 |
 | `check_metrics_exposed.py` | 필수 운영 metrics 누락 |
@@ -775,7 +777,12 @@ recovery cleanup, operator evidence, docs sync를 모두 갖춘 뒤에야 다음
 넘어간다. 이 규율은 [docs/infra-ratchet.md](docs/infra-ratchet.md)에 정의되어
 있고, `check_infra_ratchet.py`가 README, implementation status, tricky failure
 checklist, commit-point risk register, `package.json`, `ci_gate.sh` 연결을 static
-lane에서 검사한다.
+lane에서 검사한다. `check_checklist_evidence.py`도 static lane에 포함되어
+체크리스트의 `[x] test_*` 증거명이 실제 pytest collection에 없으면 CI를
+실패시킨다. `check_infra_tricky_matrix.py`는
+`docs/infra-tricky-matrix.json`을 읽어 active 인프라와 조합 stack이 관련
+tricky 항목을 proof class, collectable pytest test, CI command로 끌고 왔는지
+검사한다.
 
 첫 active ratchet은 MinIO-backed `S3DatasetStorageAdapter`다. `quality:s3-storage`
 는 MinIO/Testcontainers 위에서 S3 adapter contract, partial multipart timeout,

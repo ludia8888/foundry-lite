@@ -25,6 +25,7 @@ pick one infrastructure
 -> run concurrency and retry probes
 -> prove partial-success cleanup and recovery
 -> expose operator evidence
+-> run composition tests with every already-active infrastructure family
 -> wire the proof into CI and docs
 -> merge
 -> only then pick the next infrastructure
@@ -44,13 +45,56 @@ next infrastructure can move from `next` to `active`.
 | `retry-idempotency` | Retrying after an ambiguous or failed attempt does not create a second logical success.   | retry regression test                                 |
 | `partial-success`   | If external storage/system succeeds but local metadata fails, serving state remains safe. | split-brain regression test                           |
 | `recovery-cleanup`  | Cleanup is reachability-safe and never deletes committed evidence.                        | cleanup regression test                               |
+| `composition-compatibility` | The new infrastructure works with every already-active infrastructure family, not only by itself. | focused cross-infra regression test                   |
 | `operator-evidence` | Failure is visible in run/audit/transaction/error evidence, not only logs.                | runtime evidence assertion                            |
-| `docs-sync`         | Current status, risk register, tricky checklist, and sprint evidence agree.               | `check_infra_ratchet.py` + `check_doc_drift.py`       |
+| `docs-sync`         | Current status, risk register, tricky checklist, and sprint evidence agree.               | `check_infra_ratchet.py` + `check_doc_drift.py` + `check_checklist_evidence.py` |
 
 The static CI lane runs `scripts/quality/check_infra_ratchet.py`, which verifies
 that this document, the tricky failure checklist, commit-point risk register,
 implementation status, package scripts, and `ci_gate.sh` still mention the
-ratchet discipline.
+ratchet discipline. It also requires `quality:checklist-evidence`, so checked
+tricky-failure test names cannot drift away from pytest collection while an
+infra family is being advanced.
+
+## Infra Tricky Matrix
+
+`docs/infra-tricky-matrix.json` is the machine-readable shield that makes the
+ratchet automatic. It maps every active infrastructure family and active
+composition stack to:
+
+```text
+active infra id
+-> related tricky checklist item ids
+-> required proof classes
+-> pytest test names
+-> CI quality command
+```
+
+The static CI lane runs `quality:infra-tricky-matrix`
+(`scripts/quality/check_infra_tricky_matrix.py`). If a new infrastructure family
+is marked active without a matrix entry, if a related tricky item is still
+unchecked, if the item does not cite the required test, if pytest cannot collect
+that test, or if CI does not run the relevant quality command, the gate fails.
+This keeps infra hardening from becoming a hand-maintained checklist that can
+silently drift.
+
+## Self And Composition Tests
+
+Every infrastructure ratchet has two required layers:
+
+1. **Self ratchet:** prove the new adapter/profile by itself against its own
+   dangerous commit points: normal path, failure injection, concurrency,
+   retry/idempotency, partial success, recovery cleanup, and operator evidence.
+2. **Composition ratchet:** prove the new adapter/profile while all already
+   active infrastructure families are also in the stack.
+
+For example, after S3 is active, Iceberg cannot be considered covered by a
+catalog-only test; it must prove Iceberg metadata and data files on S3/MinIO.
+After Iceberg is active, Spark cannot be considered covered only by a local
+filesystem test; it must also prove Spark transforms over Iceberg-on-S3 pinned
+dataset versions and commits output back through Iceberg-on-S3. This is the
+ratchet rule for every future infrastructure family: self tests plus composition
+tests against the currently active stack.
 
 ## Active Ratchet Queue
 
@@ -58,8 +102,8 @@ ratchet discipline.
 | ----- | -------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | MinIO/S3 DatasetStorageAdapter   | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet.                                                         |
 | 2     | Iceberg Catalog/TableAdapter     | active-covered | Iceberg adds a table metadata/catalog commit point on top of object storage.                                                  | `quality:iceberg` stays green in CI; each dataset version pins an exact Iceberg snapshot id and the DB COMMITTED version remains the serving source of truth.                |
-| 3     | Spark ComputeAdapter             | active-covered | Spark should consume the same Dataset API and pinned versions without knowing storage internals.                              | `quality:spark` stays green in CI; Spark runs transforms on local parquet (engine materializes pinned versions) and output commits through the dataset transaction protocol. |
-| 4     | Temporal WorkflowAdapter         | active-next    | Durable workflow execution changes retry/time semantics for long-running operations.                                          | Storage/table/compute commit points already have recovery evidence.                                                                                                          |
+| 3     | Spark ComputeAdapter             | active-covered | Spark should consume the same Dataset API and pinned versions without knowing storage internals.                              | `quality:spark` and `quality:infra-composition` stay green in CI; Spark runs transforms on local parquet materialized from pinned versions and the composition gate proves Iceberg-on-S3 input/output. |
+| 4     | Temporal WorkflowAdapter         | active-next    | Durable workflow execution changes retry/time semantics for long-running operations.                                          | Storage/table/compute commit points and their S3+Iceberg+Spark composition gate already have recovery evidence.                                                              |
 | 5     | Managed Elasticsearch deployment | later          | The adapter/projection proof exists; deployment/operations should follow after storage commit points.                         | Search remains a rebuildable projection and live cluster failure evidence is added.                                                                                          |
 
 ## Active Ratchet: MinIO/S3 DatasetStorageAdapter
@@ -194,6 +238,7 @@ test_spark_transform_substitutes_inputs_and_writes_single_parquet_file
 test_spark_and_duckdb_produce_equivalent_transform_output
 test_spark_unsupported_plan_kind_is_validation_error
 test_spark_invalid_csv_input_is_validation_error
+test_spark_rows_to_parquet_preserves_quoted_json_strings
 test_spark_engine_transform_commits_with_lineage_and_health
 test_spark_transform_failure_aborts_output_transaction
 test_spark_concurrent_transforms_use_isolated_temp_views
@@ -209,6 +254,48 @@ failures (C11) — are not reproducible in local mode and require a real Spark
 cluster; they are deferred (documented, not silently skipped), analogous to the
 real-AWS deferral on the S3 ratchet.
 
+### Active Composition Ratchet: S3 + Iceberg + Spark (covered)
+
+The first cross-infrastructure composition gate proves that the active storage,
+table, and compute ratchets work together in one engine process:
+
+```text
+FOUNDRY_LITE_ADAPTER_PROFILE=iceberg
+FOUNDRY_LITE_COMPUTE_PROFILE=spark
+MinIO/S3 warehouse
+```
+
+The engine uploads raw CSV data through Spark CSV ingest, commits the raw dataset
+as an Iceberg snapshot whose data and metadata live in MinIO/S3, materializes
+that pinned Iceberg version back to local parquet for Spark, executes the SQL
+transform, and commits the output dataset back through Iceberg-on-S3. The same
+composition has a failure proof: a Spark transform failure aborts the output
+transaction and leaves no committed output version.
+
+This composition gate also locks the already-shipped Debezium CDC flow against
+the active S3/Iceberg/Spark stack. A Debezium-normalized CDC stream is archived
+as an Iceberg-on-S3 raw changelog dataset through Spark row writing, replayed
+from the committed dataset rows into CDC object indexing, and materialized into
+`ops.order_current`. The regression intentionally includes a late stale update
+after a delete tombstone so the object cannot resurrect, and a writer failure
+proof so an archive batch that was read but not committed leaves no raw CDC
+dataset version.
+
+Current CI binding:
+
+```text
+pnpm --silent quality:infra-composition
+```
+
+Reserved composition ratchet tests (must stay green):
+
+```text
+test_iceberg_s3_storage_with_spark_compute_end_to_end
+test_iceberg_s3_spark_failure_aborts_without_output_version
+test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end
+test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version
+```
+
 ## Pull Request Exit Checklist
 
 Every infrastructure ratchet PR must include:
@@ -221,10 +308,12 @@ Every infrastructure ratchet PR must include:
 [ ] concurrency/race probe exists or the PR explains why no shared mutable state was introduced
 [ ] retry/idempotency proof exists
 [ ] partial-success cleanup proof exists
+[ ] composition test exists against every already-active infrastructure family
 [ ] operator evidence is asserted in run/audit/transaction/error payloads
 [ ] docs/infra-ratchet.md is updated if active/next order changed
 [ ] docs/commit-point-risk-register.md status/evidence is updated
-[ ] docs/foundry_lite_tricky_failure_modes_checklist.md test names are updated
+[ ] docs/foundry_lite_tricky_failure_modes_checklist.md test names are updated and pass quality:checklist-evidence
+[ ] docs/infra-tricky-matrix.json pulls the related tricky items into proof classes, pytest tests, and CI commands
 [ ] docs/implementation-status.md current/future wording is updated
 [ ] CI script/package script includes the new focused quality gate when the proof becomes reusable
 ```

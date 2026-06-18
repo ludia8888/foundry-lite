@@ -64,6 +64,7 @@ dev = [
   "pyiceberg>=0.8",
   "pyarrow>=17.0",
   "pyspark>=3.5",
+  "temporalio>=1.7",
 ]
 
 [project.scripts]

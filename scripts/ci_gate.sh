@@ -113,6 +113,12 @@ run_static_gate() {
   echo "== Static: current-state documentation drift =="
   uv run python scripts/quality/check_doc_drift.py
 
+  echo "== Static: tricky checklist evidence =="
+  uv run python scripts/quality/check_checklist_evidence.py
+
+  echo "== Static: infra tricky matrix =="
+  uv run python scripts/quality/check_infra_tricky_matrix.py
+
   echo "== Static: generated TypeScript SDK drift =="
   uv run python scripts/generate_sdk_ts.py --check
 
@@ -246,6 +252,15 @@ run_flaky_gate() {
 run_runtime_gate() {
   maybe_run_testcontainers_preflight
 
+  echo "== Dynamic: CDC stream archive ratchet =="
+  pnpm --silent quality:cdc-stream-archive
+
+  echo "== Dynamic: CDC object indexing ratchet =="
+  pnpm --silent quality:cdc-object-indexing
+
+  echo "== Dynamic: Debezium live CDC ratchet =="
+  pnpm --silent quality:cdc-live-debezium
+
   echo "== Dynamic: S3 storage ratchet =="
   pnpm --silent quality:s3-storage
 
@@ -254,6 +269,9 @@ run_runtime_gate() {
 
   echo "== Dynamic: Spark compute ratchet =="
   pnpm --silent quality:spark
+
+  echo "== Dynamic: S3 + Iceberg + Spark composition ratchet =="
+  pnpm --silent quality:infra-composition
 
   echo "== Dynamic: supply-chain demo smoke =="
   rm -rf .foundry-lite-ci-smoke

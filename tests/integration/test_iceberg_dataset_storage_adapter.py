@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
+from datetime import datetime
 from importlib import import_module
 from pathlib import Path
 from threading import Event
@@ -145,6 +146,45 @@ def test_iceberg_duplicate_version_commit_is_rejected(minio_server: MinioServer,
     with pytest.raises(AdapterError) as exc_info:
         _commit(adapter, _staged(adapter, tmp_path, ["O-2"], [200]), version_id="dsv_dup")
     assert exc_info.value.failure.kind == "conflict"
+
+
+def test_iceberg_downcasts_spark_style_nanosecond_timestamps(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    adapter = _adapter(tmp_path, minio_server, _make_bucket(minio_server))
+    staged = adapter.staging_file(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        transaction_id=f"dstx_{uuid4().hex}",
+        file_name="part-00000.parquet",
+    )
+    expected_ts = datetime(2026, 6, 9, 10, 0, 0, 123456)
+    pq.write_table(
+        pa.table(
+            {
+                "id": pa.array(["O-1"]),
+                "order_ts": pa.array([expected_ts], type=pa.timestamp("ns")),
+            }
+        ),
+        str(staged),
+    )
+
+    stored = adapter.commit_staged_file(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        branch="main",
+        version_id="dsv_ts_ns",
+        dataset_ref="raw.orders",
+        schema_hash="schema_hash_ts",
+        staged_file=staged,
+        row_count=1,
+        created_at="2026-06-16T00:00:00Z",
+    )
+
+    materialized = pq.read_table(adapter.first_data_file_path(stored.manifest_uri))
+    assert materialized.schema.field("order_ts").type == pa.timestamp("us")
+    assert materialized.to_pydict()["order_ts"] == [expected_ts]
 
 
 def test_iceberg_duplicate_guard_transient_catalog_error_is_retryable(

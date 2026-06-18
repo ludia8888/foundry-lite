@@ -80,7 +80,13 @@ class SparkComputeAdapter(DuckDBComputeAdapter):
     def csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
         """Convert a local CSV file into a single parquet file using Spark."""
         try:
-            frame = self._spark.read.option("header", True).option("inferSchema", True).csv(str(source_path))
+            frame = (
+                self._spark.read.option("header", True)
+                .option("inferSchema", True)
+                .option("quote", '"')
+                .option("escape", '"')
+                .csv(str(source_path))
+            )
             self._write_single_parquet(frame, target_path)
         except Exception as exc:  # noqa: BLE001 - classified below
             if _is_parse_error(exc):

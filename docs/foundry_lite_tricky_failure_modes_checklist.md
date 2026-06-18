@@ -16,6 +16,9 @@
 - [ ] 장애 주입 테스트는 정상 E2E보다 우선순위가 높다.
 - [ ] 새 production-style 인프라는 [Infra Ratchet](./infra-ratchet.md)을 따라 하나씩만 추가한다.
 - [ ] 인프라 ratchet PR은 normal path뿐 아니라 failure-injection, concurrency-race, retry-idempotency, partial-success, recovery-cleanup, operator-evidence를 모두 확인한다.
+- [ ] 인프라 ratchet PR은 자기 adapter/profile 테스트와 함께 이미 active인 인프라들과의 조합 테스트를 추가한다. 새 인프라는 단독 green만으로 active-covered가 될 수 없다.
+- [x] `[x]`가 붙은 줄의 `test_*` 증거명은 실제 pytest 수집 결과에 있어야 한다. `quality:checklist-evidence` / `check_checklist_evidence.py`가 거짓 완료 체크를 CI에서 차단한다.
+- [x] active 인프라와 조합 stack은 관련 tricky item id를 `docs/infra-tricky-matrix.json`에 등록하고 proof class, pytest test, CI command까지 연결해야 한다. `quality:infra-tricky-matrix` / `check_infra_tricky_matrix.py`가 새 인프라의 자동 pull-through shield를 강제한다.
 - [ ] 모든 write path는 아래 질문에 답해야 한다.
   - [ ] 진짜 commit point는 어디인가?
   - [ ] cursor, offset, watermark는 언제 전진하는가?
@@ -198,6 +201,7 @@
 - [ ] **Guardrail:** manifest에는 `transaction_id`, `run_id`, `attempt_no`, `dataset_id`, `content_hash`를 포함한다.
 - [x] **Guardrail:** orphan cleanup은 reachability check 후 실행한다.
 - [x] **Regression Test:** `test_dataset_commit_storage_success_db_failure_creates_orphan_cleanup_evidence`
+- [x] **Regression Test (S3 ratchet):** `test_s3_commit_storage_success_db_failure_creates_orphan_cleanup_evidence`
 
 ### T0-010 — DB에는 COMMITTED인데 manifest/file이 없음
 
@@ -209,6 +213,7 @@
 - [x] **Guardrail:** committed data object 손상(같은 길이, 다른 내용)은 매 read의 hash 검증으로 `committed_version_storage_corrupt`로 진단한다.
 - [x] **Guardrail:** 일시적 read 장애(timeout/403)는 corruption이 아니라 retryable adapter failure로 분류한다.
 - [x] **Regression Test:** `test_dataset_commit_db_success_manifest_missing_marks_storage_corruption`
+- [x] **Regression Test (S3 ratchet):** `test_s3_committed_manifest_missing_marks_storage_corruption`
 - [x] **Regression Test (엔진 경유):** `test_s3_corrupted_data_object_surfaces_through_engine_as_storage_corruption`
 - [x] **Regression Test (엔진 경유):** `test_s3_transient_read_during_inspect_surfaces_retryable_not_corruption`
 
@@ -235,6 +240,7 @@
 - [x] **Guardrail:** unique violation은 domain conflict로 변환한다.
 - [x] **Guardrail:** 실패 attempt artifact cleanup을 수행한다.
 - [x] **Regression Test:** `test_concurrent_dataset_commits_allocate_strictly_increasing_versions`
+- [x] **Regression Test (S3 ratchet):** `test_s3_concurrent_dataset_commits_allocate_strictly_increasing_versions`
 - [x] **Regression Test:** `test_dataset_finalize_cleans_orphan_artifacts_after_version_conflict`
 
 ### T0-013 — Abort cleanup이 committed artifact 삭제
@@ -245,6 +251,7 @@
 - [x] **Guardrail:** COMMITTED dataset_versions가 참조하는 manifest/file은 절대 삭제하지 않는다.
 - [ ] **Guardrail:** cleanup dry-run 모드를 제공한다.
 - [x] **Regression Test:** `test_abort_cleanup_never_deletes_committed_manifest`
+- [x] **Regression Test (S3 ratchet):** `test_s3_abort_cleanup_never_deletes_committed_manifest`
 
 ---
 
@@ -968,7 +975,7 @@
 - [x] A2. file byte_size/hash는 맞지만 row_count metadata가 잘못된 경우를 검증한다. (DuckDB가 권위 있는 count, post-commit gate가 DB 메타 대조; `test_s3_committed_manifest_row_count_matches_actual_parquet_rows`가 manifest row_count == 실제 parquet rows 불변식 고정)
 - [ ] A3. Parquet schema와 dataset*schemas schema_hash가 다른 경우를 검증한다. *(범위: schema 검증은 compute/check 레이어 — S3 storage ratchet 밖. `VERIFY-SCHEMA-COMPATIBILITY-TOCTOU` 참고)\_
 - [x] A4. manifest_uri가 같은데 content overwrite가 불가능하게 한다. (`_guard_version_not_committed`가 committed version 재사용을 non-retryable conflict로 거부; `test_s3_duplicate_version_commit_is_rejected_without_destroying_existing`)
-- [ ] A5. staging path transaction*id collision을 방지한다. *(transaction*id는 engine `_new_id("dstx")` uuid로 생성돼 충돌 불가; 경로 격리는 `test_s3_staging_cleanup_is_isolated_per_transaction`이 증명)*
+- [x] A5. staging path transaction*id collision을 방지한다. *(transaction*id는 engine `_new_id("dstx")` uuid로 생성돼 충돌 불가; 경로 격리는 `test_s3_staging_cleanup_is_isolated_per_transaction`이 증명)*
 - [x] A6. abort cleanup이 retry 중인 attempt file을 삭제하지 않는다. (commit-실패 cleanup은 version-key, staging cleanup은 transaction-key로 분리; `test_s3_staging_cleanup_is_isolated_per_transaction`)
 - [x] A7. signedUrl expired를 dataset corruption으로 오판하지 않는다. (S3 어댑터는 presigned URL이 아니라 boto3 자격증명 사용; 403/만료는 non-404 → retryable AdapterError, corruption 아님; `test_s3_access_expiry_on_read_is_retryable_not_corruption`)
 - [x] A8. object storage list incomplete 상황에서도 cleanup이 안전하다. (`test_s3_failed_commit_cleanup_uses_known_keys_not_listing` — failed-commit cleanup은 list 대신 known key로 삭제)
@@ -1046,7 +1053,9 @@
 - [x] CS5. 엔진이 Spark로 transform 실행, transform-service-core 수정 없이 version+lineage 커밋. (`test_spark_engine_transform_commits_with_lineage_and_health`)
 - [x] CS6. Spark job 실패 시 output transaction abort — 커밋된 output version 없음 + FAILED transform run. (`test_spark_transform_failure_aborts_output_transaction`)
 - [x] CS7. 같은 SparkSession에서 동시에 transform이 실행돼도 session-scoped temp view가 서로 덮어쓰지 않는다. (`test_spark_concurrent_transforms_use_isolated_temp_views`)
-- [ ] CS8. 분산 클러스터 전용 모드(speculative double-write/executor-output-missing/timeout-cancel/shuffle failure)는 local[1] 재현 불가 — 실 클러스터 필요로 deferred (C9~C12, infra-ratchet.md Spark scope note).
+- [x] CS8. S3+Iceberg+Spark 조합: `adapter_profile=iceberg` + `FOUNDRY_LITE_COMPUTE_PROFILE=spark`에서 Spark가 Iceberg-on-S3 pinned input을 읽어 transform하고 output을 Iceberg-on-S3로 커밋한다. (`test_iceberg_s3_storage_with_spark_compute_end_to_end`)
+- [x] CS9. S3+Iceberg+Spark 조합에서 Spark transform 실패가 output transaction을 abort하고 committed output version을 남기지 않는다. (`test_iceberg_s3_spark_failure_aborts_without_output_version`)
+- [ ] CS10. 분산 클러스터 전용 모드(speculative double-write/executor-output-missing/timeout-cancel/shuffle failure)는 local[1] 재현 불가 — 실 클러스터 필요로 deferred (C9~C12, infra-ratchet.md Spark scope note).
 
 ## D. Ontology / Schema / SDK
 
@@ -1153,7 +1162,7 @@
 - [ ] I15. replication slot lag/WAL alert가 있다.
 - [ ] I16. CDC lag metric은 archived committed offset 기준이다.
 - [ ] I17. high-volume CDC event coalescing/backpressure가 있다.
-- [ ] I18. CDC indexer가 materialization trigger를 누락하지 않는다.
+- [x] I18. CDC indexer가 materialization trigger를 누락하지 않는다. (`test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end`, `test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version`)
 
 ## J. Search / Reindex
 
@@ -1264,6 +1273,9 @@
 - [x] `test_cdc_pk_update_policy`
 - [x] `test_cdc_duplicate_event_idempotent`
 - [x] `test_cdc_source_transaction_group_not_partially_committed_without_status`
+- [x] `test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end`
+- [x] `test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version`
+- [x] `test_spark_rows_to_parquet_preserves_quoted_json_strings`
 - [x] `test_stream_offset_not_advanced_when_append_commit_fails`
 - [ ] `test_stream_rebalance_mid_batch_dedupes_offsets`
 - [ ] `test_stream_partial_partition_batch_abort_policy`
