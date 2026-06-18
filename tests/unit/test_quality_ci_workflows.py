@@ -138,6 +138,17 @@ def test_flaky_detector_repeats_parallel_pytest_three_times() -> None:
     assert '"quality:flaky-detector"' in package_json
 
 
+def test_github_flaky_lane_keeps_strong_detector_with_realistic_timeout() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+
+    flaky_job = workflow.split("quality_flaky:", maxsplit=1)[1].split("quality_runtime:", maxsplit=1)[0]
+    assert "timeout-minutes: 30" in flaky_job
+    assert "run: pnpm ci:gate:flaky" in flaky_job
+    assert "--iterations 3" in script
+    assert '--command "uv run pytest tests -n auto --no-header -q"' in script
+
+
 def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
