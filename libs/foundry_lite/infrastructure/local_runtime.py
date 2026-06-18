@@ -4,9 +4,11 @@ import os
 from pathlib import Path
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports.dataset_storage import DatasetStorageAdapter
+from foundry_lite.application.ports.ontology_repository import PropertyClassificationRow
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.infrastructure.adapters import (
@@ -47,7 +49,23 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyRuntimeRepository,
     SqlAlchemyTransformRepository,
 )
-from foundry_lite.security.policy import PolicyService
+from foundry_lite.security.policy import ClassificationProvider, PolicyService
+
+
+def _classification_provider(
+    engine: Engine, ontology_repository: SqlAlchemyOntologyRepository
+) -> ClassificationProvider:
+    """Read the active ontology's classified properties for a tenant.
+
+    Keeps the security policy ontology-driven (no hardcoded sensitive names) while
+    leaving the policy itself free of any database/vendor SDK dependency.
+    """
+
+    def provider(tenant_id: str) -> list[PropertyClassificationRow]:
+        with engine.begin() as conn:
+            return ontology_repository.active_property_classifications(transaction=conn, tenant_id=tenant_id)
+
+    return provider
 
 
 def create_local_core_dependencies(
@@ -71,13 +89,14 @@ def create_local_core_dependencies(
     workflow_adapter = _workflow_adapter(adapter_profile)
     database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
     engine = create_engine(database_url, future=True)
+    ontology_repository = SqlAlchemyOntologyRepository(engine)
     return CoreDependencies(
         root=root,
         storage_root=object_storage_root,
         engine=engine,
-        policy=PolicyService(),
+        policy=PolicyService(classification_provider=_classification_provider(engine, ontology_repository)),
         action_repository=SqlAlchemyActionRepository(engine),
-        ontology_repository=SqlAlchemyOntologyRepository(engine),
+        ontology_repository=ontology_repository,
         transform_repository=SqlAlchemyTransformRepository(engine),
         materialization_repository=SqlAlchemyMaterializationRepository(engine),
         dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),

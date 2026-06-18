@@ -11,7 +11,7 @@ from foundry_lite.application.ports.compute_adapter import TransformPlan
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.application.services.materialization_service import MaterializationRunPlan, MaterializationService
 from foundry_lite.application.services.transform_service import TransformService
-from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ExternalSystemError, InvariantViolation, NotFound, ValidationFailed
 from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -42,7 +42,7 @@ def test_supply_chain_closed_loop_updates_customer_risk_and_records_replay_state
         for edge in clean_order_lineage
     )
 
-    runs = foundry.operations.list_runs()
+    runs = foundry.operations.list_runs(ctx=demo_admin_context())
     assert any(run["status"] == "SUCCESS" for run in runs["transformRuns"])
     assert any(run["status"] == "succeeded" for run in runs["materializationRuns"])
     assert any(event["event_type"] == "action.run.committed" for event in runs["outboxEvents"])

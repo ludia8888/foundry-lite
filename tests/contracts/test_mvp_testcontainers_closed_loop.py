@@ -112,7 +112,7 @@ def _approve_order(foundry: FoundryLite, ctx: RequestContext) -> dict[str, objec
 def _committed_connector_runs(foundry: FoundryLite) -> list[str]:
     return [
         str(row["source_type"])
-        for row in foundry.operations.list_runs()["syncRuns"]
+        for row in foundry.operations.list_runs(ctx=demo_admin_context())["syncRuns"]
         if row["status"] == "COMMITTED" and str(row["source_type"]).startswith("connector.")
     ]
 

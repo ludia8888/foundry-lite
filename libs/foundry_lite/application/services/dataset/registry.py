@@ -194,7 +194,9 @@ class DatasetRegistryService(CoreService):
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
         version_row = self.dataset_version_service._get_version(dataset["id"], version, ctx=ctx)
         parquet_path = self.dataset_transaction_service._version_file_path(version_row)
-        return self.compute_adapter.preview_parquet(parquet_path, limit=int(limit))
+        rows = self.compute_adapter.preview_parquet(parquet_path, limit=int(limit))
+        # A backing dataset must not leak a value that Object masking hides.
+        return self.policy.mask_columns(ctx, rows)
 
     def inspect_dataset(
         self,

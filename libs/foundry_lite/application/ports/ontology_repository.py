@@ -146,6 +146,15 @@ class PropertyTypeRow(TypedDict):
     derivation: PropertyDerivation | None
 
 
+class PropertyClassificationRow(TypedDict):
+    """One classified property of the active ontology (security source of truth)."""
+
+    object_type_api_name: str
+    property_api_name: str
+    column_name: str | None
+    classification: str | None
+
+
 class LinkTypeRow(TypedDict):
     """Persisted ontology link type row."""
 
@@ -319,6 +328,17 @@ class OntologyRepository(Protocol):
 
     def actions_for_target(self, *, transaction: TransactionContext, object_type_id: str) -> list[ActionTypeRow]:
         """Return action types for one target object type."""
+        ...
+
+    def active_property_classifications(
+        self, *, transaction: TransactionContext, tenant_id: str
+    ) -> list[PropertyClassificationRow]:
+        """Return (object_type, column, classification) for the tenant's active ontology.
+
+        The single source of truth for which properties/columns are sensitive: the
+        security policy derives masking from these classifications instead of
+        hardcoding object/property/column names.
+        """
         ...
 
     def active_ontology_version(self, *, transaction: TransactionContext, tenant_id: str) -> OntologyVersionRow | None:

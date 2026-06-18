@@ -14,6 +14,7 @@ from foundry_lite.application.ports.ontology_repository import (
     ObjectTypeRow,
     OntologyVersionRecord,
     OntologyVersionRow,
+    PropertyClassificationRow,
     PropertyTypeRecord,
     PropertyTypeRow,
 )
@@ -207,6 +208,33 @@ class SqlAlchemyOntologyRepository:
             .all()
         )
         return [cast(PropertyTypeRow, dict(row)) for row in rows]
+
+    def active_property_classifications(self, *, transaction: Any, tenant_id: str) -> list[PropertyClassificationRow]:
+        rows = (
+            transaction.execute(
+                select(
+                    db.object_types.c.api_name.label("object_type_api_name"),
+                    db.property_types.c.api_name.label("property_api_name"),
+                    db.property_types.c.column_name,
+                    db.property_types.c.classification,
+                )
+                .select_from(
+                    db.property_types.join(
+                        db.object_types, db.object_types.c.id == db.property_types.c.object_type_id
+                    ).join(db.ontology_versions, db.ontology_versions.c.id == db.object_types.c.ontology_version_id)
+                )
+                .where(
+                    and_(
+                        db.property_types.c.tenant_id == tenant_id,
+                        db.ontology_versions.c.status == "active",
+                        db.property_types.c.classification.is_not(None),
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(PropertyClassificationRow, dict(row)) for row in rows]
 
     def actions_for_target(self, *, transaction: Any, object_type_id: str) -> list[ActionTypeRow]:
         rows = (

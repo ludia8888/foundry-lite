@@ -489,11 +489,48 @@ def test_action_audit_masks_sensitive_params(foundry: FoundryLite, tmp_path: Pat
     assert audit["after_ref"]["patch"]["margin"] == "***MASKED***"
 
 
+def test_operations_read_is_operator_only_and_redacts_sensitive_params(foundry: FoundryLite, tmp_path: Path) -> None:
+    admin_ctx = _prepare_demo_with_ontology(foundry, _margin_action_ontology(tmp_path))
+    order = foundry.objects.get("Order", "O-1001", ctx=admin_ctx)
+    result = foundry.actions.apply(
+        "AdjustMargin",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"margin": 9999.99},
+        idempotency_key="ops-redact-margin",
+        ctx=admin_ctx,
+    )
+    viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
+    operator = RequestContext(actor_user_id="de-1", roles=("data_engineer",))
+
+    # A viewer must not reach operations at all — summary, page, or detail.
+    with pytest.raises(PermissionDenied):
+        foundry.operations.list_runs(ctx=viewer)
+    with pytest.raises(PermissionDenied):
+        foundry.operations.query_runs(ctx=viewer)
+    with pytest.raises(PermissionDenied):
+        foundry.operations.run_detail("action", result["actionRunId"], ctx=viewer)
+
+    # An operator may read, but the sensitive action parameter that audit masks
+    # must not leak raw through the operations surface either.
+    detail = foundry.operations.run_detail("action", result["actionRunId"], ctx=operator)
+    assert detail["row"]["parameters"]["margin"] == "***MASKED***"
+    snapshot = foundry.operations.list_runs(ctx=operator)
+    margin_runs = [
+        run
+        for run in snapshot["actionRuns"]
+        if isinstance(run.get("parameters"), dict) and "margin" in run["parameters"]
+    ]
+    assert margin_runs
+    assert all(run["parameters"]["margin"] == "***MASKED***" for run in margin_runs)
+
+
 @pytest.mark.integration_scenario("permission_tenant_isolation")
 def test_viewer_sees_masked_margin_and_cannot_approve_order(
     foundry: FoundryLite,
 ) -> None:
-    prepare_indexed_demo(foundry)
+    admin_ctx = prepare_indexed_demo(foundry)
     viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
     finance = RequestContext(actor_user_id="finance-1", roles=("finance",))
     other_tenant = RequestContext(
@@ -551,7 +588,53 @@ def test_viewer_sees_masked_margin_and_cannot_approve_order(
             idempotency_key="viewer-denied",
             ctx=viewer,
         )
-    assert any(event["decision"] == "deny" for event in foundry.operations.list_runs()["auditEvents"])
+    assert any(event["decision"] == "deny" for event in foundry.operations.list_runs(ctx=admin_ctx)["auditEvents"])
+
+
+@pytest.mark.integration_scenario("permission_tenant_isolation")
+def test_dataset_preview_masks_sensitive_columns_for_unprivileged_roles(foundry: FoundryLite) -> None:
+    prepare_indexed_demo(foundry)
+    viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
+    finance = RequestContext(actor_user_id="finance-1", roles=("finance",))
+
+    # The backing dataset must not leak the same value that Object masking hides:
+    # preview applies the same role-aware column classification.
+    viewer_rows = foundry.datasets.preview("clean.orders", ctx=viewer, limit=3)
+    finance_rows = foundry.datasets.preview("clean.orders", ctx=finance, limit=3)
+
+    assert viewer_rows
+    assert all(row["margin"] == "***MASKED***" for row in viewer_rows)
+    assert any(row["margin"] != "***MASKED***" for row in finance_rows)
+    # non-sensitive columns stay visible to the viewer
+    assert viewer_rows[0]["order_id"] == "O-1001"
+
+
+@pytest.mark.integration_scenario("permission_tenant_isolation")
+def test_explain_does_not_bypass_property_masking(foundry: FoundryLite) -> None:
+    prepare_indexed_demo(foundry)
+    viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
+    ops_manager = RequestContext(actor_user_id="ops-1", roles=("ops_manager",))
+    finance = RequestContext(actor_user_id="finance-1", roles=("finance",))
+    admin = RequestContext(actor_user_id="admin-1", roles=("admin",))
+
+    # A viewer without object:explain must not receive the explain block at all
+    # (it carries base/edit properties plus operational lineage/source metadata).
+    viewer_order = foundry.objects.get("Order", "O-1001", ctx=viewer, include_explain=True)
+    assert viewer_order["properties"]["margin"] == "***MASKED***"
+    assert "explain" not in viewer_order
+
+    # An operator may explain, but the masked value must not leak via base/edit either.
+    ops_order = foundry.objects.get("Order", "O-1001", ctx=ops_manager, include_explain=True)
+    ops_explain = ops_order["explain"]
+    assert ops_explain is not None
+    assert ops_explain["baseProperties"]["margin"] == "***MASKED***"
+    assert ops_explain["editProperties"].get("margin", "***MASKED***") == "***MASKED***"
+    assert ops_explain["lineage"]
+
+    # finance/admin see the real value in explain, consistent with masked-properties policy.
+    for privileged in (finance, admin):
+        privileged_order = foundry.objects.get("Order", "O-1001", ctx=privileged, include_explain=True)
+        assert privileged_order["explain"]["baseProperties"]["margin"] != "***MASKED***"
 
 
 def test_only_ops_manager_or_admin_can_execute_approve_order(
@@ -584,7 +667,7 @@ def test_only_ops_manager_or_admin_can_execute_approve_order(
     )
 
     assert approved["status"] == "succeeded"
-    assert any(event["decision"] == "deny" for event in foundry.operations.list_runs()["auditEvents"])
+    assert any(event["decision"] == "deny" for event in foundry.operations.list_runs(ctx=ops_manager)["auditEvents"])
 
 
 def _prepare_demo_with_ontology(foundry: FoundryLite, ontology_path: Path) -> RequestContext:

@@ -20,10 +20,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Callable, Coroutine
-from contextlib import asynccontextmanager
+import tempfile
+from collections.abc import Callable, Coroutine, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback; CI/dev are POSIX.
+    fcntl = None  # type: ignore[assignment]
 
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
@@ -95,6 +102,7 @@ class FailingWorkflow:
 
 _ALL_WORKFLOWS = [FoundryWorkflow, FlakyWorkflow, SleepyWorkflow, FailingWorkflow]
 _ALL_ACTIVITIES = [run_workflow_step, flaky_step]
+_TEMPORAL_TEST_SERVER_LOCK = "foundry-lite-temporal-test-server-download.lock"
 
 
 class _UnavailableStartClient:
@@ -112,10 +120,68 @@ class _UnavailableDescribeHandle:
         raise ConnectionError("Temporal describe unavailable")
 
 
+@contextmanager
+def _temporal_test_server_download_lock(lock_path: Path | None = None) -> Iterator[None]:
+    """Serialize Temporal SDK test-server downloads across xdist workers."""
+    if fcntl is None:
+        yield
+        return
+
+    path = lock_path or Path(tempfile.gettempdir()) / _TEMPORAL_TEST_SERVER_LOCK
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _clear_stale_temporal_downloads() -> None:
+    """Remove incomplete test-server download temp files (safe under the lock).
+
+    The SDK waits 20s for an existing ``*.downloading`` file expecting another
+    downloader; a stale one left by a timed-out cold download makes every later
+    start fail. Under the cross-worker lock no real download is in flight, so any
+    such temp file is genuinely stale.
+    """
+    for stale in Path(tempfile.gettempdir()).glob("temporal-test-server-*.downloading"):
+        with contextlib.suppress(OSError):
+            stale.unlink()
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _temporal_test_server_warm() -> None:
+    """Download/cache the time-skipping server once per worker before timed tests.
+
+    A cold download can exceed the SDK's 20s window under parallel CI load; doing
+    it once here, serialized across workers and retried on a cleaned temp dir,
+    keeps the per-test starts cache-warm and stable.
+    """
+
+    async def _start_stop() -> None:
+        async with await WorkflowEnvironment.start_time_skipping():
+            return
+
+    with _temporal_test_server_download_lock():
+        last_error: Exception | None = None
+        for _ in range(6):
+            _clear_stale_temporal_downloads()
+            try:
+                asyncio.run(_start_stop())
+                return
+            except RuntimeError as exc:  # noqa: PERF203 - retry a slow cold download
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+
+
 @asynccontextmanager
 async def _harness(*, execution_timeout_seconds: int = 300):
     """Boot a time-skipping server + worker and yield (env, adapter)."""
-    async with await WorkflowEnvironment.start_time_skipping() as env:
+    with _temporal_test_server_download_lock():
+        env_context = await WorkflowEnvironment.start_time_skipping()
+    async with env_context as env:
         async with Worker(
             env.client,
             task_queue=FOUNDRY_TASK_QUEUE,

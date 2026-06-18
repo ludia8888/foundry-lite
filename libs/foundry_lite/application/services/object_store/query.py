@@ -75,23 +75,29 @@ class ObjectQueryService(CoreService):
             if record["deleted"]:
                 payload["deleted"] = True
                 payload["deletionReason"] = record["deletion_reason"]
-            if include_explain:
+            # explain carries the base/edit property layers and operational
+            # lineage/source metadata, so it is withheld unless the caller holds
+            # object:explain — otherwise ?explain=true would bypass masking.
+            if include_explain and self.policy.decide(ctx, "object:explain").allowed:
                 payload["explain"] = self._object_explain(ctx, record)
             return payload
 
     def _object_explain(self, ctx: RequestContext, record: ObjectRecordRow) -> ObjectExplain:
+        object_type_api_name = record["object_type_api_name"]
         lineage_rows: list[LineageEdgeRow] = []
         source_run_chain = []
         if record["source_dataset_version_id"]:
             lineage_rows = self.runtime_service.lineage_for_resource(record["source_dataset_version_id"], ctx=ctx)
             source_run_chain = self.runtime_service.source_run_chain(
                 record["source_dataset_version_id"],
-                object_type_api_name=record["object_type_api_name"],
+                object_type_api_name=object_type_api_name,
                 ctx=ctx,
             )
+        # The base/edit layers must honour the same masking as `properties`; a
+        # caller who cannot see `properties.margin` must not read it here either.
         return {
-            "baseProperties": record["base_properties"],
-            "editProperties": record["edit_properties"],
+            "baseProperties": self.policy.mask_properties(ctx, object_type_api_name, dict(record["base_properties"])),
+            "editProperties": self.policy.mask_properties(ctx, object_type_api_name, dict(record["edit_properties"])),
             "lineage": _lineage_payload(lineage_rows),
             "sourceRunChain": source_run_chain,
         }

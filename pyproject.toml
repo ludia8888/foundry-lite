@@ -36,6 +36,12 @@ iceberg = [
 temporal = [
   "temporalio>=1.7",
 ]
+spark = [
+  "pyspark>=3.5",
+]
+postgres = [
+  "psycopg[binary]>=3.1",
+]
 
 [dependency-groups]
 dev = [

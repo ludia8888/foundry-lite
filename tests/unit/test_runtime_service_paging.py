@@ -6,6 +6,9 @@ from foundry_lite.application.services.runtime_run_cursors import encode_runtime
 from foundry_lite.application.services.runtime_service import RuntimeService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.security.policy import PolicyService
+
+_OPERATOR = RequestContext(roles=("ops_manager",))
 
 
 class _PagedRuntimeRepository:
@@ -68,17 +71,13 @@ class _AllRunTypesRepository:
         ][:limit]
 
 
-class _UnusedPolicy:
-    pass
-
-
 class _UnusedEngine:
     pass
 
 
 def test_runtime_service_query_runs_uses_db_keyset_page_and_opaque_cursor() -> None:
     repository = _PagedRuntimeRepository()
-    service = RuntimeService(engine=_UnusedEngine(), policy=_UnusedPolicy(), runtime_repository=repository)
+    service = RuntimeService(engine=_UnusedEngine(), policy=PolicyService(), runtime_repository=repository)
 
     first = service.query_runs(
         ctx=RequestContext(roles=("ops_manager",)),
@@ -102,7 +101,7 @@ def test_runtime_service_query_runs_uses_db_keyset_page_and_opaque_cursor() -> N
 
 def test_runtime_service_query_runs_builds_group_next_cursors() -> None:
     repository = _AllRunTypesRepository()
-    service = RuntimeService(engine=_UnusedEngine(), policy=_UnusedPolicy(), runtime_repository=repository)
+    service = RuntimeService(engine=_UnusedEngine(), policy=PolicyService(), runtime_repository=repository)
 
     result = service.query_runs(ctx=RequestContext(roles=("ops_manager",)), limit=1)
 
@@ -121,20 +120,20 @@ def test_runtime_service_query_runs_builds_group_next_cursors() -> None:
 def test_runtime_service_query_runs_rejects_bad_cursor_and_large_limit() -> None:
     service = RuntimeService(
         engine=_UnusedEngine(),
-        policy=_UnusedPolicy(),
+        policy=PolicyService(),
         runtime_repository=_PagedRuntimeRepository(),
     )
 
     with pytest.raises(ValidationFailed):
-        service.query_runs(run_type="action", cursor="orc1.not-valid-base64")
+        service.query_runs(ctx=_OPERATOR, run_type="action", cursor="orc1.not-valid-base64")
     with pytest.raises(ValidationFailed):
-        service.query_runs(run_type="action", cursor="not-prefixed")
+        service.query_runs(ctx=_OPERATOR, run_type="action", cursor="not-prefixed")
     with pytest.raises(ValidationFailed):
-        service.query_runs(limit=501)
+        service.query_runs(ctx=_OPERATOR, limit=501)
     with pytest.raises(ValidationFailed):
-        service.query_runs(limit=0)
+        service.query_runs(ctx=_OPERATOR, limit=0)
     with pytest.raises(ValidationFailed):
-        service.query_runs(cursor="orc1.not-valid-base64")
+        service.query_runs(ctx=_OPERATOR, cursor="orc1.not-valid-base64")
 
 
 def test_runtime_service_query_runs_rejects_cursor_shape_mismatch() -> None:
@@ -147,14 +146,14 @@ def test_runtime_service_query_runs_rejects_cursor_shape_mismatch() -> None:
     )
     service = RuntimeService(
         engine=_UnusedEngine(),
-        policy=_UnusedPolicy(),
+        policy=PolicyService(),
         runtime_repository=_PagedRuntimeRepository(),
     )
 
     with pytest.raises(ValidationFailed):
-        service.query_runs(run_type="transform", status="succeeded", cursor=cursor)
+        service.query_runs(ctx=_OPERATOR, run_type="transform", status="succeeded", cursor=cursor)
     with pytest.raises(ValidationFailed):
-        service.query_runs(run_type="action", status="failed", cursor=cursor)
+        service.query_runs(ctx=_OPERATOR, run_type="action", status="failed", cursor=cursor)
     with pytest.raises(ValidationFailed):
         encode_runtime_run_cursor(
             {"id": "run_without_timestamp"},

@@ -707,8 +707,14 @@ iceberg = [
 kafka = [
     { name = "confluent-kafka" },
 ]
+postgres = [
+    { name = "psycopg", extra = ["binary"] },
+]
 s3 = [
     { name = "boto3" },
+]
+spark = [
+    { name = "pyspark" },
 ]
 temporal = [
     { name = "temporalio" },
@@ -761,16 +767,18 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-sqlalchemy", specifier = ">=0.46b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.25" },
     { name = "prometheus-client", specifier = ">=0.20" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.1" },
     { name = "pyarrow", marker = "extra == 'iceberg'", specifier = ">=17.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyiceberg", marker = "extra == 'iceberg'", specifier = ">=0.8" },
+    { name = "pyspark", marker = "extra == 'spark'", specifier = ">=3.5" },
     { name = "pytz", specifier = ">=2026.2" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "temporalio", marker = "extra == 'temporal'", specifier = ">=1.7" },
     { name = "uvicorn", specifier = ">=0.29" },
 ]
-provides-extras = ["kafka", "elasticsearch", "s3", "iceberg", "temporal"]
+provides-extras = ["kafka", "elasticsearch", "s3", "iceberg", "temporal", "spark", "postgres"]
 
 [package.metadata.requires-dev]
 dev = [

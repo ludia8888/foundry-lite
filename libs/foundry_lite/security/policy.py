@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied
+
+#: Resolves the active ontology's classified properties for a tenant. The
+#: composition root wires this to the ontology repository so the policy never
+#: imports a database/vendor SDK. Each row carries ``object_type_api_name``,
+#: ``property_api_name``, ``column_name`` and ``classification``.
+ClassificationProvider = Callable[[str], Sequence[Mapping[str, object]]]
+
+#: Classifications that make a property/column sensitive. This is the only
+#: place sensitivity is *defined*; which properties carry it comes from the
+#: ontology, so a new finance/PII property in YAML is protected automatically.
+SENSITIVE_CLASSIFICATIONS = frozenset({"finance", "pii"})
+
+_MASKED = "***MASKED***"
 
 
 @dataclass(frozen=True)
@@ -22,10 +36,22 @@ class PolicyService:
         "ontology:validate": {"admin", "data_engineer"},
         "ontology:activate": {"admin", "data_engineer"},
         "object:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
+        # explain exposes base/edit property layers plus operational lineage and
+        # source-run metadata, so it is gated above plain read (viewers are excluded).
+        "object:explain": {"admin", "data_engineer", "ops_manager", "finance"},
         "action:execute:ApproveOrder": {"admin", "ops_manager"},
         "materialization:run": {"admin", "data_engineer", "ops_manager"},
+        # Operations exposes raw run/writeback/outbox/audit rows, so reads are
+        # operator-only (viewers and finance are excluded) and split from retry.
+        "operations:read:summary": {"admin", "data_engineer", "ops_manager"},
+        "operations:read:detail": {"admin", "data_engineer", "ops_manager"},
         "operations:retry": {"admin", "ops_manager"},
     }
+
+    def __init__(self, classification_provider: ClassificationProvider | None = None) -> None:
+        # When unwired (bare construction in narrow unit tests) the policy masks
+        # nothing; the composition root always wires the ontology-backed provider.
+        self._classification_provider = classification_provider
 
     def decide(self, ctx: RequestContext, permission: str) -> PolicyDecision:
         allowed_roles = self.permission_roles.get(permission, {"admin"})
@@ -47,29 +73,69 @@ class PolicyService:
         object_type: str,
         properties: dict[str, object],
     ) -> dict[str, object]:
-        masked = dict(properties)
-        for property_name in self.masked_property_names(ctx, object_type):
-            if property_name in masked:
-                masked[property_name] = "***MASKED***"
-        return masked
+        return _mask(properties, self.masked_property_names(ctx, object_type))
 
-    def mask_sensitive_properties(self, object_type: str, properties: dict[str, object]) -> dict[str, object]:
+    def mask_sensitive_properties(
+        self, ctx: RequestContext, object_type: str, properties: dict[str, object]
+    ) -> dict[str, object]:
         """Mask values that should never be copied into durable audit evidence."""
-        masked = dict(properties)
-        for property_name in self.sensitive_property_names(object_type):
-            if property_name in masked:
-                masked[property_name] = "***MASKED***"
-        return masked
+        return _mask(properties, self.sensitive_property_names(ctx, object_type))
 
     def masked_property_names(self, ctx: RequestContext, object_type: str) -> set[str]:
         """Return properties that must not be displayed or used for inference."""
+        if _can_read_sensitive(ctx):
+            return set()
+        return self.sensitive_property_names(ctx, object_type)
 
-        if not (ctx.has_role("finance") or ctx.has_role("admin")):
-            return self.sensitive_property_names(object_type)
-        return set()
+    def sensitive_property_names(self, ctx: RequestContext, object_type: str) -> set[str]:
+        """Properties classified sensitive in the tenant's active ontology."""
+        return self._sensitive_sets(ctx)[0].get(object_type, set())
 
-    def sensitive_property_names(self, object_type: str) -> set[str]:
-        """Return properties that remain sensitive even for audit storage."""
-        if object_type == "Order":
-            return {"margin"}
-        return set()
+    def mask_columns(self, ctx: RequestContext, rows: list[dict[str, object]]) -> list[dict[str, object]]:
+        """Apply the same sensitive classification to raw dataset rows (preview)."""
+        masked_columns = self.masked_column_names(ctx)
+        return [_mask(row, masked_columns) for row in rows]
+
+    def masked_column_names(self, ctx: RequestContext) -> set[str]:
+        """Dataset columns to mask for the caller (empty for finance/admin)."""
+        if _can_read_sensitive(ctx):
+            return set()
+        return self.sensitive_column_names(ctx)
+
+    def sensitive_column_names(self, ctx: RequestContext) -> set[str]:
+        """Dataset columns backing properties classified sensitive in the active ontology."""
+        return self._sensitive_sets(ctx)[1]
+
+    def _sensitive_sets(self, ctx: RequestContext) -> tuple[dict[str, set[str]], set[str]]:
+        """Resolve (sensitive properties by object type, sensitive columns) from the ontology."""
+        if self._classification_provider is None:
+            return {}, set()
+        properties_by_type: dict[str, set[str]] = {}
+        columns: set[str] = set()
+        for row in self._classification_provider(ctx.tenant_id):
+            if not _is_sensitive(row.get("classification")):
+                continue
+            object_type = row.get("object_type_api_name")
+            property_name = row.get("property_api_name")
+            if isinstance(object_type, str) and isinstance(property_name, str):
+                properties_by_type.setdefault(object_type, set()).add(property_name)
+            column_name = row.get("column_name")
+            if isinstance(column_name, str):
+                columns.add(column_name)
+        return properties_by_type, columns
+
+
+def _can_read_sensitive(ctx: RequestContext) -> bool:
+    return ctx.has_role("finance") or ctx.has_role("admin")
+
+
+def _is_sensitive(classification: object) -> bool:
+    return isinstance(classification, str) and classification in SENSITIVE_CLASSIFICATIONS
+
+
+def _mask(values: dict[str, object], names: set[str]) -> dict[str, object]:
+    masked = dict(values)
+    for name in names:
+        if name in masked:
+            masked[name] = _MASKED
+    return masked

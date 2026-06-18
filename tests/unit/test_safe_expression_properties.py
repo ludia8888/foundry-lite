@@ -139,3 +139,34 @@ def test_validate_action_request_returns_validation_failed_on_missing(required, 
         assert isinstance(result, ValidationFailed)
     else:
         assert result is None
+
+
+def _typed_action(properties: dict[str, object], required: list[str] | None = None) -> dict[str, object]:
+    return {
+        "parameter_schema": {"type": "object", "required": required or [], "properties": properties},
+        "definition": {"preconditions": []},
+    }
+
+
+def test_validate_action_request_rejects_wrong_parameter_type() -> None:
+    action_type = _typed_action({"reason": {"type": "string"}}, required=["reason"])
+    record = {"properties": {}}
+    assert isinstance(validate_action_request(action_type, record, {"reason": 123}), ValidationFailed)
+    assert validate_action_request(action_type, record, {"reason": "inventory confirmed"}) is None
+
+
+def test_validate_action_request_rejects_unknown_parameter() -> None:
+    action_type = _typed_action({"reason": {"type": "string"}})
+    record = {"properties": {}}
+    assert isinstance(validate_action_request(action_type, record, {"bogus": 1}), ValidationFailed)
+    assert validate_action_request(action_type, record, {"reason": "ok"}) is None
+
+
+def test_validate_action_request_enforces_numeric_and_boolean_types() -> None:
+    action_type = _typed_action({"margin": {"type": "float"}, "qty": {"type": "integer"}, "flag": {"type": "boolean"}})
+    record = {"properties": {}}
+    assert validate_action_request(action_type, record, {"margin": 9.9, "qty": 3, "flag": True}) is None
+    assert validate_action_request(action_type, record, {"margin": 5}) is None  # int widens to float
+    assert isinstance(validate_action_request(action_type, record, {"qty": 1.5}), ValidationFailed)
+    assert isinstance(validate_action_request(action_type, record, {"margin": True}), ValidationFailed)
+    assert isinstance(validate_action_request(action_type, record, {"qty": True}), ValidationFailed)
