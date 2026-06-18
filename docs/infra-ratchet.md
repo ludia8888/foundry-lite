@@ -389,6 +389,31 @@ that pytest cannot collect.
 `artifacts/quality/runtime_root_cause_summary.md`. Each finding names the likely
 root cause and the files to inspect.
 
+## S46+ Expansion Handoff
+
+[Data Platform Expansion Roadmap](./data-platform-expansion-roadmap.md) extends
+this same ratchet discipline beyond vendor infrastructure. Semantic SSOT,
+record-level DLQ, late-data watermarks, continuous CDC workers, Temporal product
+workflow integration, external saga/reconciliation, data quality contracts,
+schema migration, privacy lifecycle, backup/restore, and product UI work must
+all follow the same rule:
+
+```text
+new capability self proof
++ composition proof against already-active infra/platform families
++ source-of-truth proof
++ operator-evidence proof
++ docs/matrix/checklist/evidence-ledger sync
+```
+
+In other words, adding S47 Record DLQ after S46 does not only prove "DLQ works."
+It must prove DLQ with the active S3/Iceberg/Spark/CDC/search/Temporal adapter
+surface where relevant. S51 continuous CDC must retest CDC plus the active object
+indexing, Iceberg-on-S3 archive, Spark materialization, and operator evidence
+contracts. S52 Temporal product workflow integration must retest the workflow
+against active data writes, idempotency, retries, and compensation evidence.
+No roadmap PR may graduate by testing only its own happy path.
+
 ## Pull Request Exit Checklist
 
 Every infrastructure ratchet PR must include:

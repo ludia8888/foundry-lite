@@ -338,14 +338,14 @@ flowchart TB
     P6 --> L6
     P7 --> L7
     P8 --> L8
-    P1 -. future .-> S1
-    P2 -. future .-> S2
-    P3 -. future .-> S3
-    P4 -. future .-> S4
+    P1 -. future managed storage .-> S1
+    P2 -. future catalog operations .-> S2
+    P3 -. future cluster operations .-> S3
+    P4 -. future orchestration service .-> S4
     P5 -. optional .-> S5
-    P6 -. future .-> S6
-    P7 -. future .-> S7
-    P8 -. future .-> S8
+    P6 -. future product workflow .-> S6
+    P7 -. future connector operations .-> S7
+    P8 -. future product UI .-> S8
 ```
 
 ### 4. 모든 변경은 추적 가능해야 합니다
@@ -762,6 +762,8 @@ flowchart TB
 | `check_doc_drift.py` | 현재 구현 문서가 실제 코드 경로/심볼과 어긋나는 문제 |
 | `check_checklist_evidence.py` | tricky failure checklist의 `[x] test_*` 완료 증거가 실제 pytest 수집 결과와 어긋나는 문제 |
 | `check_infra_tricky_matrix.py` | active 인프라/조합 stack이 관련 tricky 항목, proof class, pytest, CI command를 빠뜨리는 문제 |
+| `check_semantic_doc_consistency.py` | active-covered 인프라를 범위 설명 없이 future로 되돌려 쓰는 문서 drift |
+| `check_data_pattern_matrix.py` | 데이터 엔지니어링 패턴 gap이 owner/reason/future test 없이 사라지는 문제 |
 | `check_schema_revision_guard.py` | schema.py 변경이 revision snapshot 없이 들어오는 문제 |
 | `check_action_idempotency.py` | action idempotency contract 회귀 |
 | `check_metrics_exposed.py` | 필수 운영 metrics 누락 |
@@ -852,7 +854,7 @@ sequenceDiagram
 
 ## 로드맵
 
-Sprint 00-36은 MVP core, Sprint 02A는 scale-ready foundation, Sprint 36A는 MVP 운영 안정성 보강입니다. Sprint 37-42는 현재 checkout에 MVP 이후 확장 proof가 들어와 있고, Sprint 43-45의 Iceberg/Spark/Kubernetes 운영 패키지는 아직 future scope입니다.
+Sprint 00-36은 MVP core, Sprint 02A는 scale-ready foundation, Sprint 36A는 MVP 운영 안정성 보강입니다. Sprint 37-42는 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, shadow reindex, Elasticsearch-compatible search projection proof입니다. 이후 infra ratchet은 S3/MinIO, Iceberg-on-S3, Spark compute, Temporal workflow adapter, Elasticsearch live proof, 그리고 S3+Iceberg+Spark+CDC 조합까지 active-covered입니다. Sprint 45의 Kubernetes/backup-restore 운영 패키지와 S46 이후 데이터 플랫폼 확장 로드맵은 아직 post-MVP 계획입니다.
 
 ```mermaid
 gantt
@@ -871,7 +873,10 @@ gantt
     Operational hardening                :done, s36a, 2026-06-13, 1d
     section v1.5 Expansion
     REST webhook stream CDC search       :done, s37, 2026-06-14, 5d
-    Iceberg Spark deployment hardening   :s43, 2026-06-19, 5d
+    Infra composition ratchets           :done, s43, 2026-06-16, 3d
+    Security masking and action typing   :done, s43b, 2026-06-18, 1d
+    K8s backup restore hardening         :s45, 2026-06-22, 2d
+    Semantic SSOT data pattern matrix    :s46, 2026-06-24, 2d
 ```
 
 > 위 Gantt는 이해를 돕기 위한 roadmap shape입니다. 실제 완료 증거는 [docs/sprint-evidence-ledger.md](docs/sprint-evidence-ledger.md), 현재 구현 상태는 [docs/implementation-status.md](docs/implementation-status.md)를 따릅니다.
@@ -881,14 +886,18 @@ gantt
 | 목표 | 상태 |
 |---|---|
 | PostgreSQL JSONB production object store | 목표, 현재 local SQLite/SQLAlchemy 중심 |
-| Alembic migration history | 목표, 현재 schema revision guard로 drift 차단 |
+| Alembic migration operations | baseline migration + metadata parity test는 존재, multi-step upgrade/rollback 운영은 목표 |
 | Managed Temporal worker operations | adapter/time-skipping ratchet은 active-covered, 운영 배포는 목표 |
 | Real CEL/JSON Logic evaluator | 목표, 현재 safeExpression subset |
 | Real external ERP/webhook writeback | 목표, 현재 mock/local proof |
 | Production connector registry/retry workers | 목표 |
 | Managed Elasticsearch deployment | live Testcontainers ratchet은 active-covered, managed cloud packaging은 목표 |
 | Continuously running CDC/search workers | 목표 |
-| Iceberg/Spark/Kubernetes production package | 목표, Sprint 43-45 future scope |
+| Record DLQ replay | 목표, S47 future scope |
+| Late data and watermark policy | 목표, S48 future scope |
+| Iceberg/Spark active-stack hardening | adapter/profile/composition ratchet은 active-covered, production cluster/catalog operations은 목표 |
+| Kubernetes and backup/restore package | 목표, S45/S57 future scope |
+| Data platform expansion S46-S64 | S46 semantic/data-pattern guardrails는 active, S47+ product/data 기능은 목표 |
 | Broader Operations UI | 목표, 기본 panel/detail/retry/replay는 존재 |
 
 ## 문서 지도
@@ -898,6 +907,9 @@ gantt
 | [docs/implementation-status.md](docs/implementation-status.md) | 현재 커밋이 실제로 보장하는 것과 아직 목표인 것의 경계 |
 | [docs/mvp-scope.md](docs/mvp-scope.md) | v1 core에 포함되는 것과 명시적으로 제외되는 것 |
 | [docs/infra-ratchet.md](docs/infra-ratchet.md) | 인프라를 하나씩 추가하고 실패/동시성/재시도/부분 성공/복구/운영 증거를 CI에 고정하는 규칙 |
+| [docs/data-engineering-pattern-matrix.json](docs/data-engineering-pattern-matrix.json) | S46 데이터 엔지니어링 패턴별 current/partial/deferred 상태와 증거·미래 테스트 |
+| [docs/data-platform-expansion-roadmap.md](docs/data-platform-expansion-roadmap.md) | 다운로드 확장 계획을 현재 코드/문서와 대조해 정리한 S46 이후 실행 로드맵 |
+| [docs/data-platform-expansion-sprint-plan-ko.md](docs/data-platform-expansion-sprint-plan-ko.md) | 다운로드 원본을 repo 안에 보존한 상세 proposed sprint plan |
 | [foundry_lite_development_plan_ko_sprintified.md](foundry_lite_development_plan_ko_sprintified.md) | 제품 목표와 설계 원본 |
 | [foundry_lite_sprint_breakdown_ko.md](foundry_lite_sprint_breakdown_ko.md) | 스프린트 순서와 Must-Win Goal 원본 |
 | [foundry_lite_python_engineering_guidelines_ko.md](foundry_lite_python_engineering_guidelines_ko.md) | Python 백엔드 구현 표준 |

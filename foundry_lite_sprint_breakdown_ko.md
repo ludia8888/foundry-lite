@@ -4,7 +4,7 @@
 
 이 문서는 Foundry-lite 문서 체계의 **스프린트 실행 계획 원본**이다. [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 실제 구현 가능한 작은 스프린트 단위로 나누고, 각 스프린트가 반드시 통과해야 하는 제품/기술 Goal을 정의한다.
 
-> 현재 구현 상태 주의: 2026-06-16 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 따른다. 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
+> 현재 구현 상태 주의: 2026-06-18 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 따른다. 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
 
 ## 문서 지도
 
@@ -28,19 +28,21 @@
 - 모든 write는 audit 가능하다.
 - 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능하다.
 - 기능이 동작해도 cursor, offset, watermark, manifest, lineage, outbox, action state가 durable commit point보다 앞서가면 완료로 보지 않는다.
-- Sprint 00~36은 MVP core, Sprint 02A는 scale-ready foundation 보강, Sprint 36A는 MVP 운영 안정성 보강, Sprint 37~45는 MVP 이후 확장으로 구분된다.
+- Sprint 00~36은 MVP core, Sprint 02A는 scale-ready foundation 보강, Sprint 36A는 MVP 운영 안정성 보강, Sprint 37 이후는 MVP 이후 확장으로 구분된다.
 - Python 백엔드 코드는 `ruff`, `mypy` 또는 `pyright`, `pytest` 품질 게이트를 통과한다.
 - 안티패턴 금지 기준을 위반한 단순 패치는 완료로 보지 않는다.
 - 에러 발생 시 request/run/dataset/object/action 단위로 원인을 추적할 수 있다.
 - Python 백엔드 테스트 커버리지는 line, branch, function 기준 모두 95% 이상이어야 한다.
 - 필수 통합 테스트와 필수 스모크 테스트는 100% 실행되고 100% 통과해야 한다.
 
-### 2026-06-16 상세 체크박스 동기화 기준
+### 2026-06-18 상세 체크박스 동기화 기준
 
 - Sprint 00~36, Sprint 02A, Sprint 36A의 상세 체크박스는 현재 구현, [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md), [Implementation Status](./docs/implementation-status.md), 최신 `main` CI 결과를 기준으로 다시 동기화했다.
 - `[x]`는 둘 중 하나를 뜻한다: 현재 MVP 구현과 테스트 증거로 완료되었거나, 현 MVP scope에서 명시적으로 future/deferred로 재분류되어 더 이상 Sprint 00~36 완료 조건으로 요구하지 않는다는 결정이 끝났다는 뜻이다.
 - future/deferred로 재분류된 항목은 문장 안에 그 사실을 명시한다. 구현 완료와 scope 제외를 섞어 말하지 않는다.
-- Sprint 43~45의 Iceberg, Spark, Kubernetes/backup-restore 항목은 아직 구현 증거가 없으므로 `[ ]`로 남긴다. 이 미체크 상태 자체가 최신 구현 상태와 동기화된 것이다.
+- Sprint 43 Iceberg와 Sprint 44 Spark 항목은 현재 `docs/infra-ratchet.md`, `docs/infra-tricky-matrix.json`, `quality:iceberg`, `quality:spark`, `quality:infra-composition` 증거 기준으로 다시 동기화한다. 단, production cluster 운영과 분산 장애/운영 runbook은 별도 future scope다.
+- Sprint 45 Kubernetes/backup-restore 항목은 아직 구현 증거가 없으므로 `[ ]`로 남긴다. 이 미체크 상태 자체가 최신 구현 상태와 동기화된 것이다.
+- Sprint 46 이후 post-MVP 확장 순서는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 따른다. 첫 실행 단위는 S46 Semantic SSOT + Data Engineering Pattern Matrix다.
 
 모든 스프린트는 다음 원칙을 따른다.
 
@@ -49,7 +51,7 @@
 3. 성공은 코드 완료가 아니라 CLI/API/UI/테스트 중 하나로 증명해야 한다.
 4. 모든 write는 audit 가능해야 한다.
 5. 모든 state transition은 dataset transaction, stream offset/checkpoint, action edit/event log 중 하나로 replay 가능해야 한다.
-6. MVP core에서는 CSV/local snapshot 또는 PostgreSQL-backed repository proof, SQL/DuckDB transform, Ontology/Object, Action, Materialization 폐루프에 집중한다. CDC, Kafka streaming, Elasticsearch, Iceberg, Spark, Kubernetes production hardening은 MVP 이후 스프린트로 둔다. 단, 이것들을 나중에 쉽게 붙이기 위한 port/adapter boundary는 Sprint 02A에서 먼저 고정하고, Sprint 37~42의 post-MVP proof는 현재 증거가 있는 항목으로 따로 기록한다.
+6. MVP core에서는 CSV/local snapshot 또는 PostgreSQL-backed repository proof, SQL/DuckDB transform, Ontology/Object, Action, Materialization 폐루프에 집중한다. CDC, Kafka streaming, Elasticsearch, Iceberg, Spark, Kubernetes production hardening은 MVP 이후 스프린트로 둔다. 단, 이것들을 나중에 쉽게 붙이기 위한 port/adapter boundary는 Sprint 02A에서 먼저 고정하고, Sprint 37~44의 post-MVP proof 중 현재 증거가 있는 항목은 active-covered로 따로 기록한다.
 7. 장애나 버그는 간단한 증상 제거 패치로 끝내지 않고, 원인 분석, 추적 가능성, regression test까지 포함해 해결한다.
 
 ---
@@ -59,7 +61,7 @@
 한 스프린트는 아래 조건을 모두 만족해야 완료로 본다.
 
 - API/Worker/Web/CLI 중 해당 스프린트에 관련된 public surface가 동작한다.
-- DB schema bootstrap과 schema revision guard가 빈 DB에서 재현 가능해야 한다. Alembic migration history/rollback은 future/deferred 범위다.
+- DB schema bootstrap, schema revision guard, and Alembic baseline migration parity가 빈 DB에서 재현 가능해야 한다. Multi-step Alembic upgrade/rollback 운영은 future/deferred 범위다.
 - 핵심 state transition은 DB에 durable하게 기록된다.
 - 실패 상태가 성공 상태와 구분되어 저장된다.
 - unit test 또는 integration test가 핵심 성공/실패 경로를 검증한다.
@@ -157,7 +159,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] `examples/supply-chain-demo/data/*.csv` seed 파일이 있다. (`examples/supply-chain-demo/data/orders.csv`, `customers.csv`)
 - [x] `examples/supply-chain-demo/ontology/order-customer.yaml` 초안이 있다. (`examples/supply-chain-demo/ontology/order-customer.yaml`)
 - [x] `docs/mvp-scope.md`에 v1 포함/제외 범위가 있다. ([docs/mvp-scope.md](./docs/mvp-scope.md))
-- [x] 팀원이 새 기능을 제안해도 `docs/mvp-scope.md`, `docs/implementation-status.md`, 이 문서의 Sprint 00~36/Sprint 37~45 경계로 v1/v1.5/v2를 판정할 수 있다.
+- [x] 팀원이 새 기능을 제안해도 `docs/mvp-scope.md`, `docs/implementation-status.md`, 이 문서의 Sprint 00~36/Sprint 37 이후 경계로 v1/v1.5/v2를 판정할 수 있다.
 
 **Demo / Proof**
 
@@ -224,7 +226,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 
 **반드시 완성해야 하는 것**
 
-- Alembic migration을 선택하고 API/Worker에서 같은 migration을 사용한다.
+- Alembic baseline migration을 선택하고 API/Worker가 같은 schema source-of-truth를 사용한다.
 - `tenants`, `users`, `teams`, `roles`, `user_roles` 최소 테이블을 만든다.
 - 개발용 auth stub을 만들어 `x-user-id`, `x-tenant-id`로 context를 주입한다.
 - API request middleware에서 request id/correlation id를 생성한다.
@@ -233,7 +235,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 
 **Acceptance Gate**
 
-- [x] Alembic migration history/rollback은 MVP core에서 future/deferred로 재분류했고, 현재는 SQLAlchemy schema bootstrap + schema revision guard로 DB shape drift를 차단한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static))
+- [x] Alembic baseline migration parity는 현재 증거가 있고, multi-step migration history/rollback operations는 MVP core에서 future/deferred로 재분류했다. 현재는 SQLAlchemy schema bootstrap + schema revision guard + Alembic fresh-DB parity guard로 DB shape drift를 차단한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static))
 - [x] 개발용 seed tenant/user가 생성된다. (`SupplyChainDemo`, demo admin context, [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
 - [x] 인증 없는 local/demo 요청은 명시적 local/demo auth profile 또는 header-trust context로 tenant/user에 귀속되며, production profile에서는 header-trust/demo auth가 startup에서 거부된다. ([VERIFY-PRODUCTION-AUTH-GUARD](./docs/sprint-evidence-ledger.md#verify-production-auth-guard))
 - [x] mutation 테스트/API 호출은 audit row를 남긴다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
@@ -814,7 +816,7 @@ Python 사용자가 Dataset Registry의 input/output abstraction을 통해 trans
 
 **무조건 성공시켜야 하는 Goal**
 
-Dataset을 사용자에게 직접 노출하지 않고 `Order`, `Customer` 같은 object type으로 끌어올릴 수 있는 최소 ontology metadata를 만든다. 아직 indexing은 하지 않아도, object/property/backing mapping을 draft로 저장할 수 있어야 한다.
+Dataset을 사용자에게 직접 노출하지 않고 `Order`, `Customer` 같은 object type으로 끌어올릴 수 있는 최소 ontology metadata를 만든다. 이 Sprint 11 단계에서는 indexing 전 단계로, object/property/backing mapping을 draft로 저장할 수 있어야 한다.
 
 **반드시 완성해야 하는 것**
 
@@ -1786,7 +1788,7 @@ mock SaaS REST source와 webhook source를 만들어 raw datasets로 유입한�
 
 **무조건 성공시켜야 하는 Goal**
 
-Kafka-compatible stream event를 raw archive dataset으로 남겨 replay 가능한 stream ingestion 기반을 만든다. 아직 object CDC indexing까지는 하지 않고, stream offset/checkpoint를 안정적으로 저장하는 것이 핵심이다.
+Kafka-compatible stream event를 raw archive dataset으로 남겨 replay 가능한 stream ingestion 기반을 만든다. 이 Sprint 38 단계에서는 object CDC indexing 전 단계로 stream offset/checkpoint를 안정적으로 저장하는 것이 핵심이며, 현재 checkout에는 Sprint 40 CDC object-indexing proof가 따로 존재한다.
 
 **반드시 완성해야 하는 것**
 
@@ -2001,15 +2003,15 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 
 **Acceptance Gate**
 
-- [ ] 새 iceberg dataset을 만들고 append/snapshot commit할 수 있다.
-- [ ] 기존 transform runner가 storage_kind 차이를 몰라도 input을 읽는다.
-- [ ] dataset_versions가 Iceberg metadata location을 참조한다.
-- [ ] schema evolution compatible/breaking 판정이 기존 policy와 일치한다.
-- [ ] Parquet manifest dataset과 Iceberg dataset이 같은 Dataset API로 조회된다.
+- [x] 새 iceberg dataset을 만들고 append/snapshot commit할 수 있다. ([VERIFY-ICEBERG-RATCHET](./docs/sprint-evidence-ledger.md#verify-iceberg-ratchet))
+- [x] 기존 transform runner가 storage_kind 차이를 몰라도 input을 읽는다. ([VERIFY-INFRA-COMPOSITION-RATCHET](./docs/sprint-evidence-ledger.md#verify-infra-composition-ratchet))
+- [x] dataset_versions가 Iceberg metadata location/snapshot id를 참조한다. ([VERIFY-ICEBERG-RATCHET](./docs/sprint-evidence-ledger.md#verify-iceberg-ratchet))
+- [x] schema evolution compatible/breaking 판정이 기존 policy와 일치한다. ([VERIFY-ICEBERG-RATCHET](./docs/sprint-evidence-ledger.md#verify-iceberg-ratchet))
+- [x] Parquet manifest dataset과 Iceberg dataset이 같은 Dataset API로 조회된다. ([VERIFY-ICEBERG-RATCHET](./docs/sprint-evidence-ledger.md#verify-iceberg-ratchet))
 
 **Demo / Proof**
 
-`raw.erp_orders_iceberg` sync → transform input으로 사용 → preview/lineage 확인.
+`raw.erp_orders_iceberg` sync → transform input으로 사용 → preview/lineage 확인. 현재 evidence는 `quality:iceberg`와 `quality:infra-composition`이며, production Iceberg catalog operations와 managed maintenance는 post-MVP future scope다.
 
 **이러면 성공으로 치지 않는다**
 
@@ -2040,15 +2042,15 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 
 **Acceptance Gate**
 
-- [ ] 같은 `clean_orders.sql`을 DuckDB와 Spark runner 중 하나로 실행할 수 있다.
-- [ ] Spark 실패 시 output transaction이 abort된다.
-- [ ] Spark run도 lineage와 health checks를 남긴다.
-- [ ] ComputeAdapter 교체로 transform service core를 수정하지 않는다.
-- [ ] 작은 fixture data로 Spark runner integration test가 통과한다.
+- [x] 같은 `clean_orders.sql`을 DuckDB와 Spark runner 중 하나로 실행할 수 있다. ([VERIFY-SPARK-RATCHET](./docs/sprint-evidence-ledger.md#verify-spark-ratchet))
+- [x] Spark 실패 시 output transaction이 abort된다. ([VERIFY-SPARK-RATCHET](./docs/sprint-evidence-ledger.md#verify-spark-ratchet))
+- [x] Spark run도 lineage와 health checks를 남긴다. ([VERIFY-SPARK-RATCHET](./docs/sprint-evidence-ledger.md#verify-spark-ratchet))
+- [x] ComputeAdapter 교체로 transform service core를 수정하지 않는다. ([VERIFY-SPARK-RATCHET](./docs/sprint-evidence-ledger.md#verify-spark-ratchet))
+- [x] 작은 fixture data로 Spark runner integration test가 통과한다. ([VERIFY-SPARK-RATCHET](./docs/sprint-evidence-ledger.md#verify-spark-ratchet))
 
 **Demo / Proof**
 
-`flite transform run clean_orders --engine spark`로 같은 output contract를 확인한다.
+`quality:spark`와 `quality:infra-composition`으로 DuckDB/Spark parity, Spark output commit/abort, lineage/health, S3+Iceberg+Spark composition을 확인한다. Spark cluster deployment, speculative execution, executor-output-missing 같은 분산 클러스터 전용 failure는 future scope다.
 
 **이러면 성공으로 치지 않는다**
 
@@ -2095,6 +2097,38 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 - 운영 배포가 개발자 로컬 `.env`에 의존한다.
 - migration이 앱 시작 시 임의로 실행되어 race condition이 생긴다.
 - DB backup만 있고 object storage manifest/file 복구 검증이 없다.
+
+---
+
+## Post-MVP Data Platform Expansion Roadmap
+
+Sprint 46 이후의 상세 순서와 공통 Exit Checklist는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 원본으로 본다. 이 섹션은 기존 Sprint Breakdown이 S45에서 끊겨 보이지 않도록 연결하는 요약이다. 각 항목은 proposed 상태이며, 체크박스는 실제 코드/테스트/CI/docs 증거가 생길 때만 `[x]`로 바꾼다.
+
+| Sprint | 우선순위 | 핵심 결과 | 의존성 | 상태 |
+|---|---:|---|---|---|
+| S46 | P0 | Semantic SSOT + Data Pattern Matrix | 현재 CI 하네스 | [ ] Proposed |
+| S47 | P0 | Record DLQ + Replay | S46 | [ ] Proposed |
+| S48 | P1 | Late Data + Watermark | S47 | [ ] Proposed |
+| S49 | P1 | Multi-file Dataset + Partitioning | S46 | [ ] Proposed |
+| S50 | P1 | Iceberg Maintenance | S49 | [ ] Proposed |
+| S51 | P0 | Continuous CDC Worker + Rebalance Safety | S47 | [ ] Proposed |
+| S52 | P0 | Temporal Engine Integration | S51 | [ ] Proposed |
+| S53 | P0 | External Writeback + Saga/Reconciliation | S52 | [ ] Proposed |
+| S54 | P1 | Data Quality Contracts | S47, S48 | [ ] Proposed |
+| S55 | P1 | DB/Dataset/Ontology Schema Migration | S54 | [ ] Proposed |
+| S56 | P1 | Proactive Observability + SLO | S48, S51, S52 | [ ] Proposed |
+| S57 | P0 | Backup/Restore Commit-point Ratchet | S50, S52, S53 | [ ] Proposed |
+| S58A | P1 | OIDC/JWT + Secret Provider | 독립 가능 | [ ] Proposed |
+| S58B | P1 | Anonymization/Pseudonymization | S58A | [ ] Proposed |
+| S58C | P1 | Right-to-Erasure Lifecycle | S50, S57, S58B | [ ] Proposed |
+| S59 | P2 | Real Cluster/Cloud/Chaos Proofs | 관련 sprint | [ ] Proposed |
+| S60 | P1 | Fine-grained Lineage + AI Evidence | S54, S55 | [ ] Proposed |
+| S61 | Product | Frontend Foundation + Generated SDK | 현재 API | [ ] Proposed |
+| S62 | Product | Object/Dataset Explorer | S61 | [ ] Proposed |
+| S63 | Product | Insight/Action Workspace | S61, S53, S60 | [ ] Proposed |
+| S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [ ] Proposed |
+
+첫 실행 순서는 `S46 -> S47 -> S48 -> S51 -> S52 -> S53`이다. Scale path는 `S49 -> S50 -> S57`, Product surface path는 `S61 -> S62 -> S63 -> S64`로 병렬 진행한다.
 
 ---
 

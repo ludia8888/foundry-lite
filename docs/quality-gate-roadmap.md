@@ -443,10 +443,12 @@ fingerprint를 만들고, 최신 `infra/schema_revisions/*.json` snapshot과 비
 비개발자 관점으로 말하면, DB 설계도를 바꿨는데 변경 이력 도장을 찍지 않는 일을
 release gate에서 막는 장치다.
 
-현재 구현은 Alembic runtime이 아니라 SQLite/SQLAlchemy local bootstrap이다. 그래서 이
-게이트는 Alembic 완료를 주장하지 않는다. 대신 Alembic migration history가 도입되기
-전까지 DB 테이블/컬럼/unique constraint 모양이 code-only assumption으로 바뀌는 것을
-차단한다.
+현재 구현은 SQLite/SQLAlchemy local bootstrap을 유지하면서 Alembic baseline
+migration도 갖는다. `tests/integration/test_migrations.py`는 `alembic upgrade head`로
+fresh DB를 만들고 SQLAlchemy metadata와 table/column shape가 같은지 확인한다. 이
+게이트는 여전히 DB 테이블/컬럼/unique constraint 모양이 code-only assumption으로
+바뀌는 것을 차단한다. 다만 multi-step upgrade/rollback, 운영 runbook, 배포 중 rollback
+테스트는 별도 future scope다.
 
 검사 기준:
 - 최신 schema revision JSON이 존재해야 한다.
@@ -1154,6 +1156,19 @@ tests 실패, bugfix commit with tests 허용, non-bugfix commit 제외, JSON re
 CodeQL, Semgrep, AST-grep, Tach, import-linter, vulture, interrogate,
 Pyright strict, pytest-randomly, pytest-xdist, gitleaks는 위 Tier 섹션으로
 승격했다.
+
+### S46 — Semantic SSOT / Data Pattern Matrix
+
+[Data Platform Expansion Roadmap](./data-platform-expansion-roadmap.md)의 첫 번째
+post-MVP 작업은 문서와 machine-readable matrix가 서로 다른 현재 상태를 주장하지 못하게
+하는 것이다. 2026-06-18 현재 S46 정적 게이트가 구현되어 static lane에 연결되었다.
+S47 이후 product/data 기능은 이 matrix와 semantic-doc consistency gate를 먼저
+통과해야 한다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Semantic documentation consistency | `quality:semantic-doc-consistency` | active-covered infra를 future라고 쓰거나 deferred 기능을 current로 쓰는 문서 drift 차단 |
+| Data engineering pattern matrix | `quality:data-pattern-matrix` | 데이터 엔지니어링 패턴 gap이 owner/reason/future test 없이 사라지는 것 차단 |
 
 | 도구 | 분류 | 효과 |
 |---|---|---|

@@ -5,9 +5,9 @@
 **목표:** Palantir Foundry 전체를 복제하는 것이 아니라, 핵심 철학인 “데이터 유입 → 변환 → 온톨로지 인덱싱 → 운영 객체 조회 → 액션 실행 → 데이터셋으로 환류”가 실제로 반복 실행되는 **재현 가능한 운영 폐루프 MVP**를 단일 모노레포 안에 구현한다.  
 **개정 원칙:** v1은 기능 나열식 MVP가 아니라, replay 가능한 최소 폐루프를 안정적으로 구현하는 vertical slice로 제한한다. Kafka/CDC/Elasticsearch/Spark/복잡한 보안 모델은 MVP core 완료 조건에서 제외하되, 나중에 쉽게 갈아끼울 수 있는 port/interface, adapter contract, trace key, composition root 경계는 Sprint 02A Scale Foundation에서 먼저 고정한다.
 
-> 현재 구현 상태 주의: 2026-06-16 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. 완료 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
+> 현재 구현 상태 주의: 2026-06-18 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. 완료 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
 >
-> 구현 동기화 메모: 현재 checkout은 Sprint 00~36, Sprint 02A, Sprint 36A의 MVP core/운영 안정성 체크를 완료한 상태다. Sprint 37~42의 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다. Sprint 43~45의 Iceberg, Spark, Kubernetes/backup-restore 운영 패키지는 아직 future scope다. PostgreSQL snapshot connector production implementation, Alembic migration history, Temporal workflow execution, executable Python transform runner는 MVP core 완료 조건에서 제외되며 현재 status 문서의 future/deferred 경계를 따른다.
+> 구현 동기화 메모: 현재 checkout은 Sprint 00~36, Sprint 02A, Sprint 36A의 MVP core/운영 안정성 체크를 완료한 상태다. Sprint 37~42의 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다. Sprint 43 Iceberg ratchet과 Sprint 44 Spark ratchet은 `docs/infra-ratchet.md`와 `docs/infra-tricky-matrix.json` 기준 active-covered proof가 있으며, Sprint 45 Kubernetes/backup-restore 운영 패키지는 아직 future scope다. S46 이후 확장 순서는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 따르되, 현재 구현 완료 여부는 항상 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. PostgreSQL snapshot connector production implementation, multi-step Alembic upgrade/rollback operations, Temporal product workflow execution, executable Python transform runner는 MVP core 완료 조건에서 제외되며 현재 status 문서의 future/deferred 경계를 따른다.
 
 ---
 
@@ -24,6 +24,7 @@
 ### 함께 읽을 문서
 
 - [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md): 이 설계를 어떤 순서로 구현하고, 각 단계가 무엇을 통과해야 완료인지 확인한다.
+- [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md): S46 이후 post-MVP 데이터 플랫폼 확장 순서와 공통 Exit Checklist를 확인한다.
 - [Palantir Foundry 심층 분석](./deep-research-report.md): Ontology, Dataset, Action, Materialization 같은 설계 결정이 어떤 공개 근거에서 왔는지 확인한다.
 - [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md): 백엔드를 Python으로 구현할 때 지켜야 할 Clean Code, SRP, 테스트, 트랜잭션, 운영 로그 기준을 확인한다.
 
@@ -334,9 +335,9 @@ managed infrastructure, 광범위한 SaaS 일반화까지 v1 core 성공 조건�
 | Webhook push ingest | timestamp-bound HMAC signed append ingest proof 존재 | durable inbox, retry workers, SaaS event 일반화 |
 | Kafka/Redpanda ingest | local/fake stream archive, Kafka-compatible adapter, one-shot worker, live broker proof 존재 | continuously running worker, rebalance/commit-unknown hardening, deployment packaging |
 | Debezium CDC | Debezium-shaped archive, live Debezium/PostgreSQL topic, CDC object indexing proof 존재 | production CDC deployment, always-on CDC object-indexing worker |
-| Elasticsearch | Elasticsearch-compatible adapter, projection, rebuild, orphan drift proof 존재 | live cluster deployment, managed operations |
-| Spark runner | future | `ComputeAdapter` boundary |
-| Iceberg production catalog | future | `DatasetStorageAdapter` abstraction |
+| Elasticsearch | Elasticsearch-compatible adapter, projection, rebuild, orphan drift proof와 live Testcontainers proof 존재 | managed cloud packaging, deployment operations |
+| Spark runner | `SparkComputeAdapter` ratchet와 S3+Iceberg+Spark composition proof 존재 | real cluster deployment, distributed Spark failure modes |
+| Iceberg storage/catalog ratchet | Iceberg snapshot/version pinning proof와 MinIO/S3-backed composition proof 존재 | maintenance, retention, managed catalog operations |
 | Generated TS SDK | package/browser generated SDK surface 존재 | richer generated hooks/client ergonomics |
 | React hooks | future | SDK package boundary |
 | Functions on Objects | future | derived property expression only |
@@ -387,20 +388,20 @@ v1은 선택지를 줄여 구현 속도와 디버깅 가능성을 우선한다.
 |---|---|---|
 | Monorepo | pnpm workspace + Turborepo + uv workspace | Web/SDK와 Python 백엔드를 한 저장소에서 관리 |
 | API | **Python 3.12 + FastAPI + Pydantic v2** | Python 백엔드 기준을 고정하고 request/response validation을 명확히 함 |
-| Backend persistence | SQLAlchemy 2.x + schema revision guard | 현재는 SQLAlchemy metadata bootstrap과 frozen schema revision으로 drift를 막고, Alembic migration history는 future scope |
-| Worker | local/direct workflow adapter + stream archive worker entrypoint | Temporal workflow execution은 future scope이고, 현재는 port/adapter contract와 one-shot stream worker proof를 사용 |
+| Backend persistence | SQLAlchemy 2.x + schema revision guard + Alembic baseline migration | 현재는 SQLAlchemy metadata bootstrap, frozen schema revision, and Alembic fresh-DB metadata parity test로 drift를 막고, multi-step upgrade/rollback 운영은 future scope |
+| Worker | local/direct workflow adapter + stream archive worker entrypoint + Temporal adapter ratchet | Temporal product workflow execution은 future scope이고, 현재는 port/adapter contract, one-shot stream worker proof, Temporal adapter proof를 사용 |
 | CLI | Typer | 운영자와 개발자가 같은 Python service를 명령어로 실행 |
 | Web | Next.js + TanStack Query + shadcn/ui | 운영 UI 빠르게 개발 |
 | Metadata DB | SQLite/local SQLAlchemy + PostgreSQL contract coverage | schema, transaction, object store, audit 의미를 repository port 뒤에 고정 |
-| Object Storage | local filesystem + fake storage URI | lake 파일 저장 contract를 고정하고 S3/MinIO/Iceberg production path는 future scope |
-| Lake format | Parquet manifest first, Iceberg-ready | v1 commit protocol 단순화, 이후 Iceberg 전환 가능 |
+| Object Storage | local filesystem + fake storage URI + S3/MinIO adapter + Iceberg storage ratchet | lake 파일 저장 contract를 유지하고 managed catalog/maintenance 운영은 future scope |
+| Lake format | Parquet manifest first + Iceberg snapshot/version pinning proof | v1 commit protocol은 유지하고 managed Iceberg operations는 이후 확장 |
 | Event | SQLAlchemy outbox first | Kafka 없이도 MVP core 폐루프와 replay를 구현 |
 | Stream | local/fake stream + Kafka-compatible adapter/one-shot worker proof | v1 core 필수는 아니지만 Sprint 38 proof는 존재, continuously running production worker는 future scope |
 | CDC | Debezium-shaped archive + live Debezium/PostgreSQL topic proof | v1 core 필수는 아니지만 Sprint 39~40 proof는 존재, production CDC worker packaging은 future scope |
 | Batch compute | DuckDB canonical runner | local/small production에서 transaction/lineage 단순화 |
 | Python compute | transforms SDK skeleton + fail-closed registration | executable Python runner와 sandboxed SDK IO abstraction은 future scope |
-| Spark | future adapter | v1 구현 제외 |
-| Workflow | local/fake WorkflowAdapter contract | Temporal workflow/action/writeback/retry/replay는 future scope |
+| Spark | Spark ComputeAdapter ratchet | v1 core 필수는 아니지만 post-MVP proof는 존재, real cluster 운영은 future scope |
+| Workflow | local/fake WorkflowAdapter contract + Temporal adapter ratchet | Temporal이 product workflow/action/writeback/retry/replay를 실제 구동하는 것은 future scope |
 | Search index | local/fake + Elasticsearch-compatible adapter/projection proof | object store가 source of truth이고 managed Elasticsearch deployment는 future scope |
 | Auth | `AuthProvider` local/demo/header-trust profile + production unsafe-profile guard | 로컬 개발은 단순하게 유지하되, production에서 demo/header-trust 인증이 켜지는 실수를 startup에서 차단 |
 | Observability | Structured logs + OpenTelemetry interface | Prometheus/Grafana/Loki는 docker-compose full profile |
@@ -408,11 +409,11 @@ v1은 선택지를 줄여 구현 속도와 디버깅 가능성을 우선한다.
 | Python quality gate | ruff + mypy 또는 pyright + pytest | Clean Code, 타입 안정성, 회귀 방지를 CI에서 확인 |
 | Test coverage gate | line/branch/function coverage 95%+, integration/smoke 100% pass | 코드가 작동하는지뿐 아니라 안전하게 바꿀 수 있는지 확인 |
 
-### 3.3 왜 Temporal을 future orchestration target으로 두는가
+### 3.3 왜 Temporal product workflow orchestration을 S52 target으로 두는가
 
 Foundry-lite에는 ETL schedule뿐 아니라 action writeback, side effect, index replay, materialization retry가 필요하다. 단순 queue는 실패 복구와 장기 workflow 추적이 약하다. Temporal은 워크플로우를 코드로 정의하면서 event history 기반으로 재시작/복구할 수 있으므로 action runtime과 pipeline runner 양쪽에 적합하다.
 
-다만 데이터 asset catalog UI가 필요해지면 나중에 Dagster를 transform authoring layer로 붙일 수 있다. 현재 MVP core는 자체 Dataset Registry + local/direct workflow boundary로 닫고, Temporal worker execution은 future scope로 둔다.
+다만 데이터 asset catalog UI가 필요해지면 나중에 Dagster를 transform authoring layer로 붙일 수 있다. 현재 MVP core는 자체 Dataset Registry + local/direct workflow boundary로 닫고, Temporal은 adapter ratchet 증거까지만 current로 본다. 실제 product workflow/action/writeback/retry/replay를 Temporal worker가 구동하는 범위는 S52 future scope다.
 
 ### 3.4 Scale path
 
@@ -429,7 +430,7 @@ Current local checkout
 Target local / small production profile
 - PostgreSQL
 - MinIO or S3-compatible object storage
-- Temporal worker execution
+- Temporal adapter/profile proof, with product workflow execution deferred to S52
 - Redpanda/Kafka stream profile
 - Elasticsearch live cluster profile
 - API/Web/Worker containers
@@ -459,12 +460,12 @@ v1에서 반드시 지켜야 할 boundary는 다음이다.
 
 ```text
 DatasetStorageAdapter
-- 현재 local filesystem/fake-storage parquet manifest 구현
-- MinIO/S3/Iceberg production path는 future scope
+- 현재 local filesystem/fake-storage parquet manifest, S3/MinIO adapter, Iceberg storage ratchet 구현
+- managed Iceberg catalog operations와 maintenance는 future scope
 
 ComputeAdapter
-- 현재 DuckDB SQL runner 구현
-- Spark runner는 future scope
+- 현재 DuckDB SQL runner와 Spark ComputeAdapter ratchet 구현
+- real Spark cluster operations와 분산 장애 proof는 future scope
 
 SearchAdapter
 - 현재 local/fake + Elasticsearch-compatible adapter/projection proof 구현
@@ -493,7 +494,7 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
 |---|---|---|---|---|
 | MetadataRepository | SQLite 또는 local SQLAlchemy | PostgreSQL primary/replica, partitioned tables | tenant, dataset, ontology, action, audit metadata 의미 불변 | `tenant_id`, `request_id`, `resource_id` |
 | DatasetStorageAdapter | local filesystem / fake storage manifest | MinIO/S3/GCS/Azure Blob + Iceberg catalog | staging → manifest → committed version protocol 불변 | `dataset_id`, `transaction_id`, `version_id` |
-| DatasetTransactionRepository | SQLAlchemy transaction + schema revision guard | PostgreSQL transaction + Alembic migration history | OPEN → COMMITTED/ABORTED 상태 전이 불변 | `transaction_id`, `run_id` |
+| DatasetTransactionRepository | SQLAlchemy transaction + schema revision guard + Alembic baseline parity | PostgreSQL transaction + multi-step migration/rollback operations | OPEN → COMMITTED/ABORTED 상태 전이 불변 | `transaction_id`, `run_id` |
 | DatasetVersionRepository | SQLAlchemy version/schema reads | PostgreSQL indexed version/schema reads | 최신 버전, 특정 버전, schema version 조회 의미 불변 | `dataset_id`, `version_id`, `schema_version` |
 | RuntimeRepository | SQLAlchemy audit/outbox/lineage/run table | PostgreSQL partitioned audit/outbox, future publisher state | audit, outbox, lineage, run state의 key 의미 불변 | `tenant_id`, `request_id`, `run_id`, `correlation_id` |
 | ComputeAdapter | DuckDB SQL runner | Spark batch, later Flink bounded job | input version binding, output staging, health gate, lineage 불변 | `transform_run_id`, `input_version_id`, `output_version_id` |
@@ -623,7 +624,7 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
 **Data plane**은 실제 데이터를 저장·처리한다.
 
 - object storage files
-- Parquet manifest / future Iceberg tables
+- Parquet manifest / Iceberg table ratchet / future managed catalog operations
 - object store tables
 - Elasticsearch-compatible search projection proof / future managed cluster
 - external systems
@@ -1133,7 +1134,7 @@ v1 constraints:
 
 ```text
 - streaming transform 금지
-- Spark runner 구현 금지
+- v1 core 완료 조건으로 Spark runner를 요구하지 않음
 - transform output은 Dataset transaction으로만 commit
 - runner가 직접 dataset_files를 수정하면 안 됨
 ```
@@ -2890,19 +2891,19 @@ Actions:
 
 ## 21. 개발 로드맵 현재 동기화
 
-상세 실행 순서와 체크박스의 원본은 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)이다. 이 섹션은 오래된 Phase 할 일 목록이 아니라, 2026-06-16 현재 checkout 기준으로 “무엇이 완료되었고 무엇이 proof/future인지”를 요약한다.
+상세 실행 순서와 체크박스의 원본은 [스프린트 실행 계획](./foundry_lite_sprint_breakdown_ko.md)이다. 이 섹션은 오래된 Phase 할 일 목록이 아니라, 2026-06-18 현재 checkout 기준으로 “무엇이 완료되었고 무엇이 proof/future인지”를 요약한다.
 
 | 범위 | 현재 상태 | 남은 것 |
 |---|---|---|
 | Scaffold / API / Web / CLI / Worker skeleton | 완료. 모노레포, FastAPI, Web, CLI, worker entrypoint, shared config/logging/error boundary가 있다. | production packaging polish |
-| Dataset transaction vertical slice | 완료. CSV/local snapshot, immutable dataset version, staging/manifest commit, schema/health guard, preview, sync run tracking이 있다. | PostgreSQL snapshot connector production implementation, MinIO/S3 production adapter hardening |
+| Dataset transaction vertical slice | 완료. CSV/local snapshot, immutable dataset version, staging/manifest commit, schema/health guard, preview, sync run tracking이 있다. S3/Iceberg storage ratchet은 post-MVP proof로 active-covered다. | PostgreSQL snapshot connector production implementation, future Iceberg maintenance/catalog operations, managed retention/compaction |
 | Transform vertical slice | 완료. DuckDB SQL transform, input/output version binding, lineage, health gate, failed-run cleanup이 있다. | executable Python runner, sandboxed SDK IO, Temporal scheduling |
 | Ontology / Object vertical slice | 완료. YAML import/validate/activate, object/link/action definitions, object indexing, query, links, object explorer, shadow reindex proof가 있다. | very large object-type serving optimization |
-| Action vertical slice | 완료. `ApproveOrder`, safeExpression subset, permission/precondition, expectedObjectVersion, idempotency, action log, outbox, audit, UI action form이 있다. | real external ERP/webhook writeback and compensation worker |
+| Action vertical slice | 완료. `ApproveOrder`, safeExpression subset, permission/precondition, expectedObjectVersion, idempotency, action log, outbox, audit, UI action form이 있다. | future real external ERP/webhook writeback and compensation worker |
 | Materialization / closed loop | 완료. `object_snapshot`, `action_log`, watermark/source version proof, downstream transform, lineage/audit/operations tracing이 있다. | additional materialization types and external export |
 | Streaming / CDC post-MVP proof | 부분 완료. REST/Webhook, Kafka-compatible stream archive, live broker proof, Debezium archive/live topic, CDC object indexing proof가 있다. | continuously running workers, rebalance/commit-unknown failure injection, production deployment packaging |
 | Search post-MVP proof | 부분 완료. Elasticsearch-compatible adapter/projection/rebuild/orphan drift proof가 있다. | managed live Elasticsearch cluster deployment |
-| Scale hardening | 일부 proof. active index pointer, shadow swap, PostgreSQL contract coverage, RLS contract proof가 있다. | Iceberg, Spark, Kubernetes/Helm, backup/restore production evidence |
+| Scale hardening | 일부 proof. active index pointer, shadow swap, PostgreSQL contract coverage, RLS contract proof, S3/Iceberg/Spark/infra-composition ratchet이 있다. | Kubernetes/Helm, backup/restore, managed operations, real cluster/cloud/chaos evidence |
 
 ## 22. Performance targets
 
@@ -3042,7 +3043,7 @@ Playwright:
 완화:
 
 - v1 scope guardrail을 문서에 고정
-- Kafka/CDC/Elasticsearch/REST/Webhook은 MVP core 밖 post-MVP proof로 기록하고, Spark/Iceberg/Kubernetes는 future scope로 분리
+- Kafka/CDC/Elasticsearch/REST/Webhook과 Spark/Iceberg는 MVP core 밖 post-MVP proof로 기록하고, Kubernetes/backup-restore와 managed production operations는 future scope로 분리
 - 각 sprint는 하나의 수직 slice exit criteria로 종료
 - demo에 필요 없는 connector/visual builder 개발 금지
 
@@ -3100,7 +3101,7 @@ Playwright:
 
 완화:
 
-- 현재 MVP core는 local/direct workflow boundary를 사용하고, Temporal execution은 future scope로 둔다.
+- 현재 MVP core는 local/direct workflow boundary를 사용하고, Temporal adapter proof만 current로 본다. Product workflow execution through Temporal은 S52 future scope로 둔다.
 - DuckDB-first runner로 commit/lineage/check contract 고정
 - 복잡한 asset orchestration은 Dagster integration optional
 - transform SDK interface는 외부 orchestrator로도 호출 가능하게 설계
@@ -3127,9 +3128,9 @@ Playwright:
 
 - [x] Monorepo scaffold. ([S01-A1](./docs/sprint-evidence-ledger.md#s01-a1))
 - [x] FastAPI API skeleton. ([S01-A2](./docs/sprint-evidence-ledger.md#s01-a2))
-- [x] SQLAlchemy schema bootstrap과 schema revision guard. Alembic/Postgres migration history는 future/deferred다. ([VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static))
+- [x] SQLAlchemy schema bootstrap, schema revision guard, and Alembic baseline fresh-DB parity guard. PostgreSQL production migration operations and multi-step upgrade/rollback은 future/deferred다. ([VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static))
 - [x] Tables: datasets, dataset_schemas, dataset_transactions, dataset_versions, dataset_files. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
-- [x] Local filesystem storage adapter와 fake storage swap proof. MinIO/S3 production adapter hardening은 future scope다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
+- [x] Local filesystem storage adapter와 fake storage swap proof. 이후 S3-compatible storage와 Iceberg ratchet proof는 post-MVP 증거로 active-covered이며, managed retention/catalog 운영은 future scope다. ([S02A-P1](./docs/sprint-evidence-ledger.md#s02a-p1))
 - [x] Dataset transaction state machine. ([VERIFY-FAILED-MUTATION-STATE](./docs/sprint-evidence-ledger.md#verify-failed-mutation-state))
 - [x] CSV upload endpoint/path. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
 - [x] staging path writer. ([VERIFY-DATASET-STORAGE-SPLIT-BRAIN](./docs/sprint-evidence-ledger.md#verify-dataset-storage-split-brain))
@@ -3164,7 +3165,7 @@ flite lineage dataset clean.orders
 
 ## 27. 구현 전 P0 체크리스트
 
-이 체크리스트는 구현 전 P0였고, 2026-06-16 현재는 아래 상태로 동기화한다.
+이 체크리스트는 구현 전 P0였고, 2026-06-18 현재는 아래 상태로 동기화한다.
 
 - [x] v1 MVP core 필수 connector는 CSV/local snapshot path로 제한하고, PostgreSQL-backed repository proof는 테스트 증거로 분리한다. PostgreSQL snapshot production connector는 future/deferred다.
 - [x] `COMMITTED` dataset version immutability가 repository method와 release gate에서 강제된다. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset))
@@ -3186,7 +3187,7 @@ flite lineage dataset clean.orders
 | 항목 | 변경 내용 |
 |---|---|
 | v1 범위 | Kafka/CDC/Elasticsearch/Spark/복잡 보안을 MVP core 완료 조건에서 제외하고 CSV/local snapshot 또는 PostgreSQL-backed repository proof → DuckDB transform → Ontology/Object → Action → Materialization 폐루프로 축소 |
-| 스택 | Python 3.12 + FastAPI + Pydantic v2 + SQLAlchemy schema revision guard, DuckDB canonical, SQLAlchemy outbox first로 확정. Alembic migration history와 production PostgreSQL outbox 운영은 future scope |
+| 스택 | Python 3.12 + FastAPI + Pydantic v2 + SQLAlchemy schema revision guard + Alembic baseline parity, DuckDB canonical, SQLAlchemy outbox first로 확정. Multi-step migration operations와 production PostgreSQL outbox 운영은 future scope |
 | Architecture | Control/Data/Event plane 분리, module dependency rule 추가 |
 | Dataset | immutable version, staging + manifest commit protocol, schema compatibility, dev→main promotion 추가 |
 | Transform | SQL/DuckDB-first, output commit protocol, append-only incremental constraint 추가 |
@@ -3236,14 +3237,16 @@ flite lineage dataset clean.orders
 - Sprint 24~32: Action Runtime, side effect, materialization으로 운영 변경이 다시 dataset으로 돌아오는 폐루프를 완성한다.
 - Sprint 33~36: Operations, Security, SDK, E2E release gate로 v1 MVP를 검증한다.
 - Sprint 37~42: REST/Webhook, Kafka-compatible stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다.
-- Sprint 43~45: Iceberg, Spark, Kubernetes/backup-restore 운영 패키지는 아직 future scope로 둔다.
+- Sprint 43~44: Iceberg와 Spark ratchet은 active-covered proof가 있다. Production cluster 운영, Spark 분산 장애, catalog 운영 runbook 같은 범위는 별도 future scope다.
+- Sprint 45: Kubernetes/backup-restore 운영 패키지는 아직 future scope로 둔다.
+- Sprint 46~64: post-MVP 데이터 플랫폼 확장 순서는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 원본으로 본다. 첫 실행은 S46 Semantic SSOT + Data Engineering Pattern Matrix다.
 - 모든 Python 백엔드 스프린트는 Clean Code, SRP, 타입 검사, 테스트 기준을 [Python 백엔드 엔지니어링 가이드](./foundry_lite_python_engineering_guidelines_ko.md)에 맞춘다.
 - 모든 Python 백엔드 스프린트는 [안티패턴 방지와 강제 대응 원칙](./foundry_lite_python_engineering_guidelines_ko.md#18-안티패턴-방지와-강제-대응-원칙)을 통과해야 한다.
 - 모든 Python 백엔드 스프린트는 line/branch/function coverage 95% 이상과 필수 integration/smoke 100% 통과 기준을 만족해야 한다.
 
 ### MVP Core Completion Gate
 
-Sprint 00~36, Sprint 02A, Sprint 36A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 상세 acceptance는 [스프린트 실행 계획의 MVP Core Completion Gate](./foundry_lite_sprint_breakdown_ko.md#mvp-core-completion-gate)를 원본으로 보고, 항목별 증거는 [Sprint Evidence Ledger의 MVP Core Completion Gate Evidence Map](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map)에 둔다. real ERP writeback, production backup/restore, Iceberg/Spark/Kubernetes 같은 확장은 future backlog로 남긴다. Sprint 37~42는 MVP 이후 확장 proof로 구현 증거가 있지만, MVP core 완료 조건을 넓히지는 않는다.
+Sprint 00~36, Sprint 02A, Sprint 36A가 끝났을 때 아래가 모두 가능해야 MVP core 완료다. 상세 acceptance는 [스프린트 실행 계획의 MVP Core Completion Gate](./foundry_lite_sprint_breakdown_ko.md#mvp-core-completion-gate)를 원본으로 보고, 항목별 증거는 [Sprint Evidence Ledger의 MVP Core Completion Gate Evidence Map](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map)에 둔다. real ERP writeback, production backup/restore, Kubernetes, managed Iceberg/Spark operations 같은 확장은 future backlog로 남긴다. Sprint 37~44는 MVP 이후 확장 proof로 구현 증거가 있지만, MVP core 완료 조건을 넓히지는 않는다.
 
 - [x] CSV/local snapshot 또는 PostgreSQL-backed repository closed-loop path로 raw dataset을 commit한다.
 - [x] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다.

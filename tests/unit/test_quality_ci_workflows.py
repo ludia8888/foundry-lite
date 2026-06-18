@@ -149,6 +149,15 @@ def test_github_flaky_lane_keeps_strong_detector_with_realistic_timeout() -> Non
     assert '--command "uv run pytest tests -n auto --no-header -q"' in script
 
 
+def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    e2e_job = workflow.split("quality_e2e:", maxsplit=1)[1].split("quality_gate:", maxsplit=1)[0]
+    assert "timeout-minutes: 20" in e2e_job
+    assert "run: pnpm exec playwright install --with-deps chromium" in e2e_job
+    assert "run: pnpm ci:gate:e2e" in e2e_job
+
+
 def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
