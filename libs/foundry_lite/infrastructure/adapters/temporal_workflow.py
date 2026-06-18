@@ -33,6 +33,7 @@ from importlib import import_module
 from typing import Any
 
 from foundry_lite.application.ports.adapter_failure import (
+    AdapterError,
     AdapterFailure,
     AdapterFailureContract,
     AdapterFailureKind,
@@ -94,6 +95,12 @@ class TemporalWorkflowAdapter:
                     has_required_idempotency_key=True,
                 ),
                 AdapterFailureMode("workflow_run", "not_found", False, "Workflow run was not found."),
+                AdapterFailureMode(
+                    "workflow_run",
+                    "unavailable",
+                    True,
+                    "Temporal service was unavailable during lookup.",
+                ),
             ),
         )
 
@@ -111,7 +118,10 @@ class TemporalWorkflowAdapter:
 
     async def start_workflow_async(self, request: WorkflowStartRequest) -> WorkflowRun:
         """Idempotent start-and-wait against Temporal."""
-        client = await self._client_handle()
+        try:
+            client = await self._client_handle()
+        except Exception as exc:  # noqa: BLE001 - normalized into durable adapter evidence
+            return self._start_failure_run(request, exc)
         common = import_module("temporalio.common")
         exceptions = import_module("temporalio.exceptions")
         try:
@@ -127,11 +137,16 @@ class TemporalWorkflowAdapter:
             # Idempotent: a run with this key already exists. Attach to it and
             # return its outcome instead of starting a duplicate run.
             handle = client.get_workflow_handle(request.idempotency_key)
+        except Exception as exc:  # noqa: BLE001 - normalized into durable adapter evidence
+            return self._start_failure_run(request, exc)
         return await self._resolve_run(handle, request)
 
     async def workflow_run_async(self, run_id: str) -> WorkflowRun | None:
         """Describe a known run by workflow id; None when Temporal has no record."""
-        client = await self._client_handle()
+        try:
+            client = await self._client_handle()
+        except Exception as exc:  # noqa: BLE001 - normalized into typed adapter evidence
+            raise _workflow_run_adapter_error(self.profile_name, run_id, exc) from exc
         service = import_module("temporalio.service")
         handle = client.get_workflow_handle(run_id)
         try:
@@ -139,16 +154,25 @@ class TemporalWorkflowAdapter:
         except service.RPCError as exc:
             if getattr(exc, "status", None) == service.RPCStatusCode.NOT_FOUND:
                 return None
-            raise
+            raise _workflow_run_adapter_error(self.profile_name, run_id, exc) from exc
+        except Exception as exc:  # noqa: BLE001 - normalized into typed adapter evidence
+            raise _workflow_run_adapter_error(self.profile_name, run_id, exc) from exc
         status = _map_describe_status(description.status)
         output: Mapping[str, object] = {}
+        error: Mapping[str, object] | None = None
         if status == "succeeded":
-            output = _as_mapping(await handle.result())
+            try:
+                output = _as_mapping(await handle.result())
+            except Exception as exc:  # noqa: BLE001 - lookup result fetch failed
+                raise _workflow_run_adapter_error(self.profile_name, run_id, exc) from exc
+        elif status in {"failed", "cancelled"}:
+            error = await self._terminal_run_error(handle, run_id, description)
         return WorkflowRun(
             run_id=run_id,
             workflow_name=description.workflow_type,
             status=status,
             output=output,
+            error=error,
         )
 
     # -- internals --------------------------------------------------------
@@ -167,6 +191,8 @@ class TemporalWorkflowAdapter:
             # Failure, timeout, and cancellation all surface as WorkflowFailureError;
             # _classify_failure walks the cause chain to pick the run status.
             return await self._settled_failure(handle, request, exc)
+        except Exception as exc:  # noqa: BLE001 - service/transport failure is durable evidence
+            return self._start_failure_run(request, exc)
         return WorkflowRun(
             run_id=request.idempotency_key,
             workflow_name=request.workflow_name,
@@ -200,6 +226,41 @@ class TemporalWorkflowAdapter:
             error=failure.to_payload(),
         )
 
+    def _start_failure_run(self, request: WorkflowStartRequest, exc: Exception) -> WorkflowRun:
+        failure = _temporal_adapter_failure(
+            self.profile_name,
+            "start_workflow",
+            exc,
+            idempotency_key=request.idempotency_key,
+            workflow_id=request.idempotency_key,
+            workflow_name=request.workflow_name,
+            timeout_seconds=self._config.execution_timeout_seconds,
+        )
+        return WorkflowRun(
+            run_id=request.idempotency_key,
+            workflow_name=request.workflow_name,
+            status="failed",
+            output={},
+            error=failure.to_payload(),
+        )
+
+    async def _terminal_run_error(self, handle: Any, run_id: str, description: Any) -> Mapping[str, object] | None:
+        client_mod = import_module("temporalio.client")
+        try:
+            await handle.result()
+        except client_mod.WorkflowFailureError as exc:
+            kind, _status = _classify_failure(exc)
+            return _settled_failure_payload(self.profile_name, run_id, description, kind, _root_message(exc))
+        except Exception as exc:  # noqa: BLE001 - preserve lookup evidence, not a raw exception
+            return _temporal_adapter_failure(
+                self.profile_name,
+                "workflow_run",
+                exc,
+                workflow_id=run_id,
+                workflow_name=description.workflow_type,
+            ).to_payload()
+        return None
+
 
 def _run_blocking(make_coro: Callable[[], Any]) -> Any:
     """Run an async core coroutine to completion from synchronous code.
@@ -216,6 +277,79 @@ def _as_mapping(value: object) -> Mapping[str, object]:
     if isinstance(value, Mapping):
         return dict(value)
     return {"result": value}
+
+
+def _workflow_run_adapter_error(profile: str, run_id: str, exc: Exception) -> AdapterError:
+    return AdapterError(_temporal_adapter_failure(profile, "workflow_run", exc, workflow_id=run_id))
+
+
+def _temporal_adapter_failure(
+    profile: str,
+    operation: str,
+    exc: Exception,
+    *,
+    idempotency_key: str | None = None,
+    workflow_id: str | None = None,
+    workflow_name: str | None = None,
+    timeout_seconds: int | None = None,
+) -> AdapterFailure:
+    kind = _temporal_failure_kind(exc)
+    return AdapterFailure(
+        adapter_profile=profile,
+        operation=operation,
+        kind=kind,
+        is_retryable=kind in {"timeout", "unavailable"},
+        operator_message=f"Temporal {operation} failed ({kind}): {_root_message(exc)}",
+        timeout_seconds=timeout_seconds if kind == "timeout" else None,
+        idempotency_key=idempotency_key,
+        details=_temporal_failure_details(exc, workflow_id, workflow_name),
+    )
+
+
+def _temporal_failure_details(
+    exc: Exception,
+    workflow_id: str | None,
+    workflow_name: str | None,
+) -> Mapping[str, object]:
+    details: dict[str, object] = {"exceptionType": type(exc).__name__}
+    if workflow_id is not None:
+        details["workflowId"] = workflow_id
+    if workflow_name is not None:
+        details["workflowName"] = workflow_name
+    return details
+
+
+def _temporal_failure_kind(exc: Exception) -> AdapterFailureKind:
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, ConnectionError):
+        return "unavailable"
+    service = import_module("temporalio.service")
+    if isinstance(exc, service.RPCError):
+        return "unavailable"
+    return "unknown"
+
+
+def _settled_failure_payload(
+    profile: str,
+    workflow_id: str,
+    description: Any,
+    kind: AdapterFailureKind,
+    message: str,
+) -> Mapping[str, object]:
+    failure = AdapterFailure(
+        adapter_profile=profile,
+        operation="workflow_run",
+        kind=kind,
+        is_retryable=kind in {"timeout", "unavailable"},
+        operator_message=f"Workflow '{description.workflow_type}' {kind}: {message}",
+        details={
+            "workflowId": workflow_id,
+            "temporalRunId": description.run_id,
+            "workflowName": description.workflow_type,
+        },
+    )
+    return failure.to_payload()
 
 
 def _classify_failure(exc: BaseException) -> tuple[AdapterFailureKind, WorkflowStatus]:

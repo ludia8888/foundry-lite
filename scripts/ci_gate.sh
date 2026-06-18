@@ -44,6 +44,42 @@ maybe_run_testcontainers_preflight() {
   FOUNDRY_LITE_TESTCONTAINERS_PREFLIGHT_DONE=1
 }
 
+RUNTIME_GATE_STEP=""
+
+run_runtime_step() {
+  RUNTIME_GATE_STEP="$1"
+  shift
+  echo "== Dynamic: ${RUNTIME_GATE_STEP} =="
+  "$@"
+}
+
+run_runtime_root_cause_summary() {
+  echo "== Dynamic: runtime root-cause summary =="
+  pnpm --silent quality:runtime-root-cause || true
+}
+
+runtime_gate_failed() {
+  local exit_code="$1"
+  mkdir -p artifacts/quality
+  cat > artifacts/quality/runtime_lane_failure.json <<EOF
+{"gate":"runtime","status":"FAIL","failedStep":"${RUNTIME_GATE_STEP:-unknown}","exitCode":${exit_code}}
+EOF
+  run_runtime_root_cause_summary
+  exit "${exit_code}"
+}
+
+run_runtime_contract_gates() {
+  local exit_code=0
+  run_runtime_step "proof matrix contract" pnpm --silent quality:proof-matrix || exit_code=$?
+  run_runtime_step "source-of-truth contract" pnpm --silent quality:source-of-truth || exit_code=$?
+  run_runtime_step "operator evidence contract" pnpm --silent quality:operator-evidence || exit_code=$?
+  if [[ "${exit_code}" -ne 0 ]]; then
+    RUNTIME_GATE_STEP="runtime evidence contracts"
+    run_runtime_root_cause_summary
+    exit "${exit_code}"
+  fi
+}
+
 run_static_gate() {
   echo "== Static: Ruff lint =="
   uv run ruff check .
@@ -254,78 +290,56 @@ run_flaky_gate() {
 
 run_runtime_gate() {
   maybe_run_testcontainers_preflight
+  rm -f artifacts/quality/runtime_lane_failure.json
+  run_runtime_contract_gates
+  trap 'runtime_gate_failed "$?"' ERR
 
-  echo "== Dynamic: CDC stream archive ratchet =="
-  pnpm --silent quality:cdc-stream-archive
+  run_runtime_step "CDC stream archive ratchet" pnpm --silent quality:cdc-stream-archive
 
-  echo "== Dynamic: CDC object indexing ratchet =="
-  pnpm --silent quality:cdc-object-indexing
+  run_runtime_step "CDC object indexing ratchet" pnpm --silent quality:cdc-object-indexing
 
-  echo "== Dynamic: Debezium live CDC ratchet =="
-  pnpm --silent quality:cdc-live-debezium
+  run_runtime_step "Debezium live CDC ratchet" pnpm --silent quality:cdc-live-debezium
 
-  echo "== Dynamic: S3 storage ratchet =="
-  pnpm --silent quality:s3-storage
+  run_runtime_step "S3 storage ratchet" pnpm --silent quality:s3-storage
 
-  echo "== Dynamic: Iceberg storage ratchet =="
-  pnpm --silent quality:iceberg
+  run_runtime_step "Iceberg storage ratchet" pnpm --silent quality:iceberg
 
-  echo "== Dynamic: Spark compute ratchet =="
-  pnpm --silent quality:spark
+  run_runtime_step "Spark compute ratchet" pnpm --silent quality:spark
 
-  echo "== Dynamic: Temporal workflow ratchet =="
-  pnpm --silent quality:temporal
+  run_runtime_step "Temporal workflow ratchet" pnpm --silent quality:temporal
 
-  echo "== Dynamic: Elasticsearch deployment ratchet =="
-  pnpm --silent quality:elasticsearch
+  run_runtime_step "Elasticsearch deployment ratchet" pnpm --silent quality:elasticsearch
 
-  echo "== Dynamic: S3 + Iceberg + Spark composition ratchet =="
-  pnpm --silent quality:infra-composition
+  run_runtime_step "S3 + Iceberg + Spark composition ratchet" pnpm --silent quality:infra-composition
+  run_runtime_root_cause_summary
 
-  echo "== Dynamic: proof matrix contract =="
-  pnpm --silent quality:proof-matrix
-
-  echo "== Dynamic: source-of-truth contract =="
-  pnpm --silent quality:source-of-truth
-
-  echo "== Dynamic: operator evidence contract =="
-  pnpm --silent quality:operator-evidence
-
-  echo "== Dynamic: runtime root-cause summary =="
-  pnpm --silent quality:runtime-root-cause
-
-  echo "== Dynamic: supply-chain demo smoke =="
+  RUNTIME_GATE_STEP="supply-chain demo smoke"
+  echo "== Dynamic: ${RUNTIME_GATE_STEP} =="
   rm -rf .foundry-lite-ci-smoke
   FOUNDRY_LITE_HOME=.foundry-lite-ci-smoke pnpm --silent demo:supply-chain --fresh > artifacts/demo/supply-chain.json
   uv run python -m json.tool artifacts/demo/supply-chain.json > /dev/null
 
-  echo "== Dynamic: OpenLineage lineage consistency =="
-  uv run python scripts/quality/check_openlineage_dynamic_lineage.py --storage-root .foundry-lite-ci-smoke
+  run_runtime_step "OpenLineage lineage consistency" uv run python scripts/quality/check_openlineage_dynamic_lineage.py --storage-root .foundry-lite-ci-smoke
 
-  echo "== Dynamic: runtime audit count consistency =="
-  uv run python scripts/quality/check_audit_count_runtime.py --storage-root .foundry-lite-ci-smoke
+  run_runtime_step "runtime audit count consistency" uv run python scripts/quality/check_audit_count_runtime.py --storage-root .foundry-lite-ci-smoke
 
-  echo "== Dynamic: outbox consistency =="
-  uv run python scripts/quality/check_outbox_consistency.py --storage-root .foundry-lite-ci-smoke
+  run_runtime_step "outbox consistency" uv run python scripts/quality/check_outbox_consistency.py --storage-root .foundry-lite-ci-smoke
 
-  echo "== Dynamic: MVP data correctness =="
-  uv run python scripts/quality/check_mvp_data_correctness.py --storage-root .foundry-lite-ci-smoke
+  run_runtime_step "MVP data correctness" uv run python scripts/quality/check_mvp_data_correctness.py --storage-root .foundry-lite-ci-smoke
 
-  echo "== Dynamic: MVP performance smoke =="
-  uv run python scripts/quality/check_mvp_performance_smoke.py --profile ci
+  run_runtime_step "MVP performance smoke" uv run python scripts/quality/check_mvp_performance_smoke.py --profile ci
 
-  echo "== Dynamic: trace continuity consistency =="
-  uv run python scripts/quality/check_trace_continuity.py --storage-root .foundry-lite-trace-gate
+  run_runtime_step "trace continuity consistency" uv run python scripts/quality/check_trace_continuity.py --storage-root .foundry-lite-trace-gate
 
-  echo "== Dynamic: adapter error trace keys =="
-  uv run python scripts/quality/check_adapter_error_trace_keys.py --storage-root .foundry-lite-adapter-error-gate
+  run_runtime_step "adapter error trace keys" uv run python scripts/quality/check_adapter_error_trace_keys.py --storage-root .foundry-lite-adapter-error-gate
 
-  echo "== Dynamic: failed mutation state consistency =="
-  uv run python scripts/quality/check_failed_mutation_state_runtime.py --storage-root .foundry-lite-failure-state-gate
+  run_runtime_step "failed mutation state consistency" uv run python scripts/quality/check_failed_mutation_state_runtime.py --storage-root .foundry-lite-failure-state-gate
 
-  echo "== Dynamic: runtime diagnostics =="
+  RUNTIME_GATE_STEP="runtime diagnostics"
+  echo "== Dynamic: ${RUNTIME_GATE_STEP} =="
   rm -rf .foundry-lite-diagnostics
   uv run python scripts/diagnostics/run_runtime_diagnostics.py
+  trap - ERR
 }
 
 run_e2e_gate() {

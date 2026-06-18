@@ -1069,7 +1069,8 @@
 - [x] WF6. failure-injection + operator-evidence: 비즈니스 실패(non-retryable ApplicationError)는 silent success가 아니라 status=failed + 내구성 있는 error payload(adapterProfile/operation/kind/retryable/operatorMessage/workflowId/temporalRunId)로 표면화된다. (`test_business_failure_returns_durable_error_payload`)
 - [x] WF7. failure-injection(timeout): execution timeout을 초과한 run은 status=failed + kind=timeout + retryable=true + timeoutSeconds로 보고된다. (`test_execution_timeout_is_reported_as_retryable_timeout`)
 - [x] WF8. failure-injection(cancel): 취소된 run은 status=cancelled로 분류되고(workflow_run describe 매핑 + start 경로 재접속 분류 모두), 다른 terminal 상태와 구분된다. (`test_cancelled_workflow_is_reported_as_cancelled`)
-- [ ] WF9. 분산 worker crash mid-activity / signal·query / continue-as-new / 실 Temporal 클러스터 failover는 time-skipping 단일 worker로 재현 불가 — 실 클러스터 필요로 deferred (infra-ratchet.md Temporal scope note).
+- [x] WF9. service-unavailable: Temporal start/lookup transport 장애는 raw Temporal 예외가 아니라 retryable unavailable payload/AdapterError로 표면화된다. (`test_start_workflow_temporal_unavailable_returns_retryable_error_payload`, `test_workflow_run_temporal_unavailable_raises_retryable_adapter_error`)
+- [ ] WF10. 분산 worker crash mid-activity / signal·query / continue-as-new / 실 Temporal 클러스터 failover는 time-skipping 단일 worker로 재현 불가 — 실 클러스터 필요로 deferred (infra-ratchet.md Temporal scope note).
 
 ### C-ELASTICSEARCH. Managed Elasticsearch deployment (5번째 인프라 ratchet, profile `elasticsearch`)
 
@@ -1078,11 +1079,11 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 - [x] ES1. adapter-contract: search failure taxonomy(configure/upsert/delete/document_ids/search, 전부 retryable) 선언. (`test_elasticsearch_adapter_contract_declares_search_failure_modes`)
 - [x] ES2. normal-path: configure_index → upsert → search/document_ids round-trip이 동작. (`test_elasticsearch_normal_path_indexes_and_searches`)
 - [x] ES3. failure-injection: 클러스터 timeout→timeout(retryable)/connection→unavailable(retryable)/5xx→unavailable/429→rate_limited/4xx→validation(non-retryable)/409→conflict가 raw 누수 아니라 타입화된 AdapterError로 분류. (`test_elasticsearch_cluster_failures_map_to_typed_adapter_error`)
-- [x] ES4. concurrency-race: version-guarded update가 동시 writer에서 더 높은 version만 반영(stale writer가 fresher projection을 덮어쓰지 않음). (`test_elasticsearch_version_guard_keeps_highest_version_under_concurrent_upserts`)
+- [x] ES4. concurrency-race: version-guarded update가 동시 writer에서 더 높은 version만 반영(stale writer가 fresher projection을 덮어쓰지 않음). (`test_elasticsearch_version_guard_keeps_highest_version_under_concurrent_upserts`, `test_elasticsearch_live_version_guard_keeps_highest_version_under_concurrent_writers`)
 - [x] ES5. retry-idempotency: 응답 드롭 후 재시도된 create가 already_exists여도 멱등 성공(retry_on_timeout + 멱등 create). (`test_elasticsearch_configure_index_is_idempotent_on_already_exists`)
 - [x] ES6. partial-success: 한 문서 upsert 실패(timeout→AdapterError)가 이미 색인된 다른 문서를 잃게 하지 않는다. (`test_elasticsearch_one_document_failure_does_not_lose_others`)
 - [x] ES7. recovery-cleanup: 인덱스 유실(클러스터 wipe) 후 Object Store source-of-truth에서 재색인하면 projection이 재구축된다 — search는 truth가 아니다. (`test_elasticsearch_index_is_rebuildable_projection_after_loss`)
-- [x] ES8. operator-evidence: 실패가 로그 한 줄이 아니라 내구성 있는 분류 payload(adapterProfile/operation/kind/retryable/operatorMessage)로 표면화된다. (`test_elasticsearch_failure_carries_durable_operator_payload`)
+- [x] ES8. operator-evidence: 실패가 로그 한 줄이나 adapter exception에만 남지 않고 operations의 failed indexRuns + related audit에 내구성 있는 분류 payload(adapterProfile/operation/kind/retryable/trace)로 표면화된다. (`test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations`, `test_elasticsearch_object_change_failure_is_visible_in_index_run_operations`, `test_elasticsearch_consistency_failure_is_visible_in_index_run_operations`)
 - [x] ES9. live-cluster: 실 testcontainers ES에 대해 round-trip(색인/검색/full-text)·version-guard(실 painless script)·실 클러스터 정지→타입화된 retryable AdapterError가 동작한다. ES 데이터 디렉터리를 tmpfs로 올려 vz virtiofs 느린 디스크를 우회(로컬+CI 안정). (`test_elasticsearch_live_round_trip_indexes_and_searches`, `test_elasticsearch_live_version_guard_rejects_stale_writer`, `test_elasticsearch_live_cluster_outage_is_typed_adapter_error`)
 
 ## D. Ontology / Schema / SDK

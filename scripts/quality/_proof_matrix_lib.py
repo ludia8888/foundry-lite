@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess  # nosec B404
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +37,7 @@ REQUIRED_PROOF_CLASSES = (
 )
 
 _TEST_DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+(test_[A-Za-z0-9_]+)\s*\(", re.MULTILINE)
+_TEST_NAME_RE = re.compile(r"test_[A-Za-z0-9_]+")
 
 
 @dataclass(frozen=True)
@@ -87,7 +90,28 @@ def infra_ratchet_text() -> str:
 
 
 def all_test_names(root: Path = ROOT) -> set[str]:
-    """Collect every `def test_*` name under tests/ (cheap, import-free existence check)."""
+    """Collect pytest-visible test names, falling back to static defs if collection fails."""
+
+    command = [sys.executable, "-m", "pytest", "--collect-only", "-q", "-p", "no:tach", str(root / "tests")]
+    completed = subprocess.run(command, cwd=root, check=False, capture_output=True, text=True)  # nosec B603
+    if completed.returncode == 0:
+        return _parse_collected_test_names(f"{completed.stdout}\n{completed.stderr}")
+    return _static_test_names(root)
+
+
+def _parse_collected_test_names(output: str) -> set[str]:
+    names: set[str] = set()
+    for line in output.splitlines():
+        for segment in line.strip().split("::"):
+            base_name = segment.split("[", maxsplit=1)[0].strip()
+            if _TEST_NAME_RE.fullmatch(base_name):
+                names.add(base_name)
+    return names
+
+
+def _static_test_names(root: Path = ROOT) -> set[str]:
+    """Collect every `def test_*` name under tests/ without importing tests."""
+
     names: set[str] = set()
     tests_dir = root / "tests"
     for path in tests_dir.rglob("*.py"):

@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 from pathlib import Path
+from types import ModuleType
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_python_module(path: Path, name: str) -> ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_ci_gate_does_not_run_heavy_codeql_locally() -> None:
@@ -125,6 +136,17 @@ def test_flaky_detector_repeats_parallel_pytest_three_times() -> None:
     assert '--command "uv run pytest tests -n auto --no-header -q"' in script
     assert script.index(coverage_step) < script.index(flaky_step)
     assert '"quality:flaky-detector"' in package_json
+
+
+def test_github_flaky_lane_keeps_strong_detector_with_realistic_timeout() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+
+    flaky_job = workflow.split("quality_flaky:", maxsplit=1)[1].split("quality_runtime:", maxsplit=1)[0]
+    assert "timeout-minutes: 30" in flaky_job
+    assert "run: pnpm ci:gate:flaky" in flaky_job
+    assert "--iterations 3" in script
+    assert '--command "uv run pytest tests -n auto --no-header -q"' in script
 
 
 def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None:
@@ -360,6 +382,64 @@ def test_root_cause_meta_gates_are_release_gate_steps() -> None:
     assert '"quality:pr-root-cause"' in package_json
     assert "pnpm quality:regression-bugfix" in package_json
     assert "pnpm quality:pr-root-cause" in package_json
+
+
+def test_runtime_lane_writes_root_cause_summary_from_failure_trap() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    summary_script = (ROOT / "scripts" / "quality" / "write_runtime_root_cause_summary.py").read_text(encoding="utf-8")
+
+    assert "trap 'runtime_gate_failed \"$?\"' ERR" in script
+    assert "runtime_lane_failure.json" in script
+    assert "run_runtime_contract_gates" in script
+    assert script.index("run_runtime_contract_gates") < script.index("quality:cdc-stream-archive")
+    assert "runtime_lane_failure.json" in summary_script
+    assert "failed step:" in summary_script
+
+
+def test_runtime_root_cause_summary_preserves_runtime_failure_evidence(tmp_path, monkeypatch) -> None:
+    module = _load_python_module(
+        ROOT / "scripts" / "quality" / "write_runtime_root_cause_summary.py",
+        "write_runtime_root_cause_summary_test",
+    )
+    artifacts = tmp_path / "quality"
+    artifacts.mkdir()
+    (artifacts / "runtime_lane_failure.json").write_text(
+        json.dumps({"failedStep": "Temporal workflow ratchet", "exitCode": 17}),
+        encoding="utf-8",
+    )
+    for gate in ("source_of_truth_contract", "operator_evidence"):
+        (artifacts / f"{gate}.json").write_text(json.dumps({"status": "PASS"}), encoding="utf-8")
+    (artifacts / "proof_matrix.json").write_text(
+        json.dumps(
+            {
+                "status": "FAIL",
+                "findings": [
+                    {
+                        "problem": "missing operator evidence proof",
+                        "why": "failure must remain inspectable after the log line is gone",
+                        "suggestedFiles": ["docs/infra-tricky-matrix.json"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "ARTIFACTS", artifacts)
+    summary, any_fail = module.build_summary()
+
+    assert any_fail
+    assert "failed step: Temporal workflow ratchet (exit 17)" in summary
+    assert "missing operator evidence proof" in summary
+    assert "failure must remain inspectable after the log line is gone" in summary
+    assert "`docs/infra-tricky-matrix.json`" in summary
+
+
+def test_proof_matrix_pytest_collection_subprocess_import_is_bandit_justified() -> None:
+    helper = (ROOT / "scripts" / "quality" / "_proof_matrix_lib.py").read_text(encoding="utf-8")
+
+    assert "import subprocess  # nosec B404" in helper
+    assert "subprocess.run(command" in helper
 
 
 def test_github_ci_fetches_history_and_checks_pr_root_cause() -> None:

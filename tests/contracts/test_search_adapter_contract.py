@@ -35,7 +35,8 @@ class FakeElasticsearchClient:
         self.documents[(index, id)] = dict(body)
         return {"result": "updated", "refresh": refresh}
 
-    def update(self, *, index: str, id: str, body: dict[str, object], refresh: bool = False) -> object:
+    def update(self, *, index: str, id: str, body: dict[str, object], **options: object) -> object:
+        refresh = bool(options.get("refresh", False))
         current = self.documents.get((index, id))
         upsert = body.get("upsert")
         script = body.get("script")
@@ -64,13 +65,15 @@ class FakeElasticsearchClient:
         self.documents.pop((index, id), None)
         return {"result": "deleted", "ignore_status": ignore_status, "refresh": refresh}
 
-    def search(self, *, index: str, body: dict[str, object], size: int) -> dict[str, object]:
+    def search(self, *, index: str, body: dict[str, object]) -> dict[str, object]:
         hits = [
             {"_id": document_id, "_score": 1.0, "_source": document}
             for (doc_index, document_id), document in sorted(self.documents.items())
             if doc_index == index and _fake_query_matches(document, body)
         ]
-        return {"hits": {"hits": hits[:size]}}
+        size = body.get("size", 10)
+        limit = size if isinstance(size, int) and not isinstance(size, bool) else 10
+        return {"hits": {"hits": hits[:limit]}}
 
 
 @pytest.fixture(params=["local", "fake", "elasticsearch"])

@@ -21,6 +21,12 @@ from foundry_lite.application.ports.search_adapter import (
     SearchQuery,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.search_runs import (
+    fail_search_index_run,
+    start_search_index_run,
+    succeed_search_object_change,
+    succeed_search_rebuild,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.security.policy import PolicyService
@@ -43,6 +49,16 @@ class ObjectSearchRuntimeBoundary(Protocol):
 
     def _require_or_audit(self, ctx: RequestContext, permission: str, resource_type: str, resource_id: str) -> None: ...
 
+    def _error_payload(
+        self,
+        exc: Exception,
+        ctx: RequestContext | None = None,
+        *,
+        run_id: str | None = None,
+        correlation_id: str | None = None,
+        adapter: str | None = None,
+    ) -> Mapping[str, object]: ...
+
     def _audit(
         self,
         conn: TransactionContext,
@@ -63,7 +79,7 @@ class ObjectSearchRuntimeBoundary(Protocol):
 class ObjectSearchService(CoreService):
     """Keep object search as a rebuildable projection, not the source of truth."""
 
-    required_dependencies = ("engine", "policy", "object_read_repository", "search_adapter")
+    required_dependencies = ("engine", "policy", "object_index_repository", "object_read_repository", "search_adapter")
     required_collaborators = ("ontology_service", "runtime_service")
     ontology_service: ObjectSearchOntologyLookup
     runtime_service: ObjectSearchRuntimeBoundary
@@ -97,13 +113,27 @@ class ObjectSearchService(CoreService):
 
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "operations:retry", "search_index", object_type_api_name)
-        rows = self._active_rows(ctx, object_type_api_name)
-        mapping = self._search_mapping(ctx, object_type_api_name)
-        self.search_adapter.configure_index(mapping)
-        for row in rows:
-            self.search_adapter.upsert_document(_search_document(ctx, object_type_api_name, row, mapping))
-        result = self._consistency_result(ctx, object_type_api_name, rows)
-        self._audit_search_index(ctx, object_type_api_name, "object.search.rebuilt", "rebuild_search_index", result)
+        object_type, mapping = self._search_object_type_and_mapping(ctx, object_type_api_name)
+        run_id = self._start_search_run(ctx, object_type, object_type_api_name, "search_rebuild")
+        try:
+            rows = self._active_rows(ctx, object_type_api_name)
+            self.search_adapter.configure_index(mapping)
+            for row in rows:
+                self.search_adapter.upsert_document(_search_document(ctx, object_type_api_name, row, mapping))
+            result = self._consistency_result(ctx, object_type_api_name, rows)
+        except Exception as exc:
+            self._fail_search_run(ctx, run_id, object_type_api_name, "rebuild_search_index", exc)
+            raise
+        succeed_search_rebuild(self.engine, self.object_index_repository, ctx, run_id, result)
+        result = {**result, "indexRunId": run_id}
+        self._audit_search_index(
+            ctx,
+            object_type_api_name,
+            "object.search.rebuilt",
+            "rebuild_search_index",
+            result,
+            run_id,
+        )
         return result
 
     def index_search_object_changed(
@@ -118,12 +148,71 @@ class ObjectSearchService(CoreService):
         ctx = ctx or RequestContext()
         resource_id = f"{object_type_api_name}/{object_id}"
         self.runtime_service._require_or_audit(ctx, "operations:retry", "search_index", resource_id)
-        record = self._object_record(ctx, object_type_api_name, object_id)
-        mapping = self._search_mapping(ctx, object_type_api_name)
-        self.search_adapter.configure_index(mapping)
-        result = self._sync_changed_record(ctx, object_type_api_name, object_id, record, mapping)
-        self._audit_search_index(ctx, resource_id, "object.search.updated", "consume_object_changed", result)
+        object_type, mapping = self._search_object_type_and_mapping(ctx, object_type_api_name)
+        run_id = self._start_search_run(ctx, object_type, object_type_api_name, "search_object_changed", object_id)
+        try:
+            record = self._object_record(ctx, object_type_api_name, object_id)
+            self.search_adapter.configure_index(mapping)
+            result = self._sync_changed_record(ctx, object_type_api_name, object_id, record, mapping)
+        except Exception as exc:
+            self._fail_search_run(ctx, run_id, resource_id, "consume_object_changed", exc)
+            raise
+        succeed_search_object_change(self.engine, self.object_index_repository, ctx, run_id, result)
+        result = {**result, "indexRunId": run_id}
+        self._audit_search_index(ctx, resource_id, "object.search.updated", "consume_object_changed", result, run_id)
         return result
+
+    def _search_object_type_and_mapping(
+        self,
+        ctx: RequestContext,
+        object_type_api_name: str,
+    ) -> tuple[ObjectTypeRow, SearchIndexMapping]:
+        """Build search mapping while keeping the object type id for run evidence."""
+
+        with self.engine.begin() as conn:
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
+            properties = self.ontology_service._properties_for_object_type(conn, object_type["id"])
+        mapping = _search_mapping(ctx, object_type_api_name, properties, self.policy.masked_property_names)
+        return object_type, mapping
+
+    def _start_search_run(
+        self,
+        ctx: RequestContext,
+        object_type: ObjectTypeRow,
+        object_type_api_name: str,
+        trigger_type: str,
+        object_id: str | None = None,
+    ) -> str:
+        return start_search_index_run(
+            self.engine,
+            self.object_index_repository,
+            self.search_adapter.profile_name,
+            ctx,
+            object_type,
+            object_type_api_name,
+            trigger_type,
+            object_id,
+        )
+
+    def _fail_search_run(
+        self,
+        ctx: RequestContext,
+        run_id: str,
+        resource_id: str,
+        action: str,
+        exc: Exception,
+    ) -> None:
+        fail_search_index_run(
+            self.engine,
+            self.object_index_repository,
+            self.runtime_service,
+            self.search_adapter.profile_name,
+            ctx,
+            run_id,
+            resource_id,
+            action,
+            exc,
+        )
 
     def _items_for_hits(
         self,
@@ -188,10 +277,7 @@ class ObjectSearchService(CoreService):
     def _search_mapping(self, ctx: RequestContext, object_type_api_name: str) -> SearchIndexMapping:
         """Build the adapter mapping from active ontology property metadata."""
 
-        with self.engine.begin() as conn:
-            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
-            properties = self.ontology_service._properties_for_object_type(conn, object_type["id"])
-        return _search_mapping(ctx, object_type_api_name, properties, self.policy.masked_property_names)
+        return self._search_object_type_and_mapping(ctx, object_type_api_name)[1]
 
     def _sync_changed_record(
         self,
@@ -241,6 +327,7 @@ class ObjectSearchService(CoreService):
         event_type: str,
         action: str,
         result: Mapping[str, object],
+        run_id: str | None = None,
     ) -> None:
         """Persist audit evidence for rebuild and object-change projection work."""
 
@@ -253,6 +340,7 @@ class ObjectSearchService(CoreService):
                 resource_id=resource_id,
                 action=action,
                 after_ref=result,
+                correlation_id=run_id,
             )
 
 

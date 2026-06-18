@@ -300,31 +300,39 @@ test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_versio
 
 This ratchet proves idempotent start-and-wait (workflow id = idempotency_key,
 re-start/concurrent-start re-attaches with no duplicate run), activity retry,
-execution-timeout → retryable timeout, business failure and cancellation →
-durable classified run error payload, on Temporal's time-skipping test server.
-Distributed worker crash mid-activity, signals/queries, continue-as-new, and real
-Temporal cluster failover are not reproducible on a single time-skipping worker
-and are deferred (documented, not silently skipped). Temporal is an orthogonal
-Scale-Foundation boundary the engine does not yet drive, so it is a standalone
-family, not part of the S3+Iceberg+Spark composition stack.
+execution-timeout → retryable timeout, service-unavailable → typed retryable
+payload/AdapterError, business failure and cancellation → durable classified run
+error payload, on Temporal's time-skipping test server plus fast fake-client
+transport-failure tests. Distributed worker crash mid-activity, signals/queries,
+continue-as-new, and real Temporal cluster failover are not reproducible on a
+single time-skipping worker and are deferred (documented, not silently skipped).
+Temporal is an orthogonal Scale-Foundation boundary the engine does not yet
+drive, so it is a standalone family, not part of the S3+Iceberg+Spark composition
+stack.
 
 ### Managed Elasticsearch deployment scope note
 
 This ratchet proves that a live cluster outage surfaces as the typed AdapterError
 the failure contract promises (timeout/unavailable/rate_limited/validation/conflict
 classified from the real `elastic_transport`/`elasticsearch` exception taxonomy),
-that the version guard keeps the highest version under concurrent writers, that an
-already-exists create and a stale-version upsert are idempotent, that one
-document's failure does not lose the others, and that the index is a rebuildable
-projection after loss (search is never serving truth).
+that the version guard keeps the highest version under real concurrent writers,
+that an already-exists create and a stale-version upsert are idempotent, that one
+document's failure does not lose the others, that the index is a rebuildable
+projection after loss (search is never serving truth), and that failed search
+projection rebuild/object-change work persists durable operator evidence in
+Operations `indexRuns` plus related audit events.
 
-Two complementary test layers: a real testcontainers Elasticsearch cluster
+Three complementary test layers: a real testcontainers Elasticsearch cluster
 (`test_elasticsearch_live_cluster.py`) proves the round-trip, the real painless
-version-guard script, and a real cluster outage → typed retryable AdapterError;
+version-guard script, concurrent writers, and a real cluster outage → typed
+retryable AdapterError;
 an in-memory client (`test_elasticsearch_deployment_ratchet.py`) models the
 version-guarded update contract and raises the real `elastic_transport`/
 `elasticsearch` exception types to cover the full classification matrix
-(timeout/unavailable/5xx/429/4xx/409/unknown) deterministically and fast.
+(timeout/unavailable/5xx/429/4xx/409/unknown) deterministically and fast; the
+application-level search indexing tests (`test_search_indexing.py`) prove
+Elasticsearch adapter failures are visible later through failed `indexRuns`
+instead of only as adapter exceptions or log lines.
 
 vz/virtiofs note: Elasticsearch's refresh fsync on Colima's virtiofs disk is slow
 enough to exceed client timeouts, which made naive live round-trips hang for
@@ -346,8 +354,8 @@ plus JSON + Markdown artifacts (and a GitHub step summary):
 | ------------------ | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Proof matrix       | `pnpm quality:proof-matrix`       | every active infra maps all proof classes to tests that exist; focused gate is in `package.json` and wired into `ci_gate.sh`; matrix agrees with `docs/infra-ratchet.md` and `package.json`. |
 | Source of truth    | `pnpm quality:source-of-truth`    | every serving-truth rule is enforced (named, existing test) or explicitly deferred (reason, risk tier, future test, owning doc).                                                             |
-| Operator evidence  | `pnpm quality:operator-evidence`  | every active infra declares the durable run/error payload paths a failure must persist, a run surface, and a proving test — logs-only evidence is not enough.                                |
-| Root-cause summary | `pnpm quality:runtime-root-cause` | aggregates the above into one step summary with suggested files.                                                                                                                             |
+| Operator evidence  | `pnpm quality:operator-evidence`  | every active infra declares durable payload paths, a run surface, and `testAssertions` mapping each path to collected operator-evidence tests — logs-only evidence is not enough.             |
+| Root-cause summary | `pnpm quality:runtime-root-cause` | aggregates the above plus the failed runtime lane step marker into one step summary with suggested files.                                                                                    |
 
 **Source-of-truth rules** (the DB COMMITTED version is serving truth; object/snapshot
 existence and search/UI/SDK caches are not; runs pin versions and do not re-resolve
@@ -358,14 +366,19 @@ explicit `deferral` block, so deferral is visible, not silent.
 **Operator-evidence rule:** a dangerous runtime failure must be visible in durable
 evidence (run/audit/transaction/error/outbox/trace payloads), never only in a log
 line, a stack trace, or a generic FAILED status. Each active infra's
-`operatorEvidence.requiredPayloadPaths` are asserted at runtime by its named
-integration test (injecting the failure); this gate guarantees that contract is
-declared and proven.
+`operatorEvidence.requiredPayloadPaths` are asserted at runtime by named
+integration tests (injecting the failure). `operatorEvidence.testAssertions`
+maps each required path to the proving test, and the gate rejects paths without a
+mapping, mappings to tests outside the operator-evidence proof class, or tests
+that pytest cannot collect.
 
 **Runtime lane vs release lane:**
 
-- `pnpm ci:gate:runtime` (PR feedback): focused infra ratchets + composition ratchet
-  - proof-matrix / source-of-truth / operator-evidence contracts + runtime diagnostics.
+- `pnpm ci:gate:runtime` (PR feedback): proof-matrix / source-of-truth /
+  operator-evidence contracts run first; then focused infra ratchets +
+  composition ratchet + runtime diagnostics. A failure trap always writes
+  `artifacts/quality/runtime_lane_failure.json` and refreshes
+  `runtime_root_cause_summary.md`.
 - `pnpm ci:gate:release` (push to main, tags, manual dispatch via `release.yml`): the
   full runtime lane plus heavier 100k/1m performance smokes and the contract gates,
   with evidence artifacts uploaded.

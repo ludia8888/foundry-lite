@@ -70,6 +70,32 @@ def test_operator_evidence_fails_when_required_payload_paths_empty(monkeypatch: 
     assert any("requiredPayloadPaths is empty" in f.problem for f in findings)
 
 
+def test_operator_evidence_requires_assertion_mapping_for_each_payload_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    matrix = _matrix()
+    s3 = next(f for f in matrix["families"] if f["id"] == "s3-storage")
+    s3["operatorEvidence"]["testAssertions"].pop("syncRuns[].error.adapterFailure.operation")
+    monkeypatch.setattr(operator_gate, "load_matrix", lambda: matrix)
+
+    findings = operator_gate.collect_findings()
+    assert any("has no assertion mapping" in f.problem for f in findings)
+
+
+def test_operator_evidence_rejects_assertion_test_outside_operator_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    matrix = _matrix()
+    s3 = next(f for f in matrix["families"] if f["id"] == "s3-storage")
+    s3["operatorEvidence"]["testAssertions"]["syncRuns[].error.type"] = [
+        "test_search_rebuild_full_text_and_orphan_detection"
+    ]
+    monkeypatch.setattr(operator_gate, "load_matrix", lambda: matrix)
+
+    findings = operator_gate.collect_findings()
+    assert any("not listed under proofs.operator-evidence" in f.problem for f in findings)
+
+
 def test_source_of_truth_fails_when_deferred_rule_missing_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     matrix = _matrix()
     matrix["sourceOfTruthRules"]["external_timeout_is_outcome_unknown_not_failure"]["deferral"].pop("reason", None)

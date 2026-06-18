@@ -154,7 +154,24 @@
           "error",
           "adapterFailure",
           "trace"
-        ]
+        ],
+        "testAssertions": {
+          "syncRuns[].error.type": [
+            "test_s3_storage_failure_is_visible_in_operations"
+          ],
+          "syncRuns[].error.adapterFailure.adapterProfile": [
+            "test_s3_storage_failure_is_visible_in_operations"
+          ],
+          "syncRuns[].error.adapterFailure.operation": [
+            "test_s3_storage_failure_is_visible_in_operations"
+          ],
+          "syncRuns[].error.adapterFailure.retryable": [
+            "test_s3_storage_failure_is_visible_in_operations"
+          ],
+          "syncRuns[].error.trace.run_id": [
+            "test_s3_storage_failure_is_visible_in_operations"
+          ]
+        }
       }
     },
     {
@@ -300,7 +317,21 @@
           "error",
           "adapterFailure",
           "trace"
-        ]
+        ],
+        "testAssertions": {
+          "syncRuns[].error.adapterFailure.adapterProfile": [
+            "test_iceberg_catalog_failure_is_visible_in_operations"
+          ],
+          "syncRuns[].error.adapterFailure.operation": [
+            "test_iceberg_catalog_failure_is_visible_in_operations"
+          ],
+          "syncRuns[].error.adapterFailure.retryable": [
+            "test_iceberg_catalog_failure_is_visible_in_operations"
+          ],
+          "syncRuns[].error.trace.run_id": [
+            "test_iceberg_catalog_failure_is_visible_in_operations"
+          ]
+        }
       }
     },
     {
@@ -419,7 +450,21 @@
           "run",
           "error",
           "adapterFailure"
-        ]
+        ],
+        "testAssertions": {
+          "transformRuns[].status": [
+            "test_spark_transform_failure_aborts_output_transaction"
+          ],
+          "transformRuns[].error.adapterFailure.adapterProfile": [
+            "test_spark_transform_failure_aborts_output_transaction"
+          ],
+          "transformRuns[].error.adapterFailure.operation": [
+            "test_spark_transform_failure_aborts_output_transaction"
+          ],
+          "transformRuns[].error.adapterFailure.retryable": [
+            "test_spark_transform_failure_aborts_output_transaction"
+          ]
+        }
       }
     },
     {
@@ -441,7 +486,9 @@
         "failure-injection": [
           "test_business_failure_returns_durable_error_payload",
           "test_execution_timeout_is_reported_as_retryable_timeout",
-          "test_cancelled_workflow_is_reported_as_cancelled"
+          "test_cancelled_workflow_is_reported_as_cancelled",
+          "test_start_workflow_temporal_unavailable_returns_retryable_error_payload",
+          "test_workflow_run_temporal_unavailable_raises_retryable_adapter_error"
         ],
         "concurrency-race": [
           "test_concurrent_starts_on_one_key_produce_one_run"
@@ -457,7 +504,8 @@
           "test_same_idempotency_key_returns_existing_run_without_duplicate"
         ],
         "operator-evidence": [
-          "test_business_failure_returns_durable_error_payload"
+          "test_business_failure_returns_durable_error_payload",
+          "test_start_workflow_temporal_unavailable_returns_retryable_error_payload"
         ],
         "docs-sync": [
           "test_infra_tricky_matrix_gate_passes_current_docs_and_ci",
@@ -512,6 +560,13 @@
           "tests": [
             "test_cancelled_workflow_is_reported_as_cancelled"
           ]
+        },
+        {
+          "id": "WF9",
+          "tests": [
+            "test_start_workflow_temporal_unavailable_returns_retryable_error_payload",
+            "test_workflow_run_temporal_unavailable_raises_retryable_adapter_error"
+          ]
         }
       ],
       "sourceOfTruthRules": [
@@ -532,7 +587,24 @@
           "run",
           "error",
           "adapterFailure"
-        ]
+        ],
+        "testAssertions": {
+          "workflowRuns[].status": [
+            "test_start_workflow_temporal_unavailable_returns_retryable_error_payload"
+          ],
+          "workflowRuns[].error.adapterProfile": [
+            "test_start_workflow_temporal_unavailable_returns_retryable_error_payload"
+          ],
+          "workflowRuns[].error.operation": [
+            "test_start_workflow_temporal_unavailable_returns_retryable_error_payload"
+          ],
+          "workflowRuns[].error.kind": [
+            "test_start_workflow_temporal_unavailable_returns_retryable_error_payload"
+          ],
+          "workflowRuns[].error.retryable": [
+            "test_start_workflow_temporal_unavailable_returns_retryable_error_payload"
+          ]
+        }
       }
     },
     {
@@ -543,7 +615,8 @@
       "ciCommand": "pnpm --silent quality:elasticsearch",
       "testPaths": [
         "tests/integration/test_elasticsearch_deployment_ratchet.py",
-        "tests/integration/test_elasticsearch_live_cluster.py"
+        "tests/integration/test_elasticsearch_live_cluster.py",
+        "tests/integration/test_search_indexing.py"
       ],
       "proofs": {
         "adapter-contract": [
@@ -560,7 +633,8 @@
         ],
         "concurrency-race": [
           "test_elasticsearch_version_guard_keeps_highest_version_under_concurrent_upserts",
-          "test_elasticsearch_live_version_guard_rejects_stale_writer"
+          "test_elasticsearch_live_version_guard_rejects_stale_writer",
+          "test_elasticsearch_live_version_guard_keeps_highest_version_under_concurrent_writers"
         ],
         "retry-idempotency": [
           "test_elasticsearch_configure_index_is_idempotent_on_already_exists",
@@ -573,7 +647,9 @@
           "test_elasticsearch_index_is_rebuildable_projection_after_loss"
         ],
         "operator-evidence": [
-          "test_elasticsearch_failure_carries_durable_operator_payload"
+          "test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations",
+          "test_elasticsearch_object_change_failure_is_visible_in_index_run_operations",
+          "test_elasticsearch_consistency_failure_is_visible_in_index_run_operations"
         ],
         "docs-sync": [
           "test_infra_tricky_matrix_gate_passes_current_docs_and_ci",
@@ -602,7 +678,8 @@
         {
           "id": "ES4",
           "tests": [
-            "test_elasticsearch_version_guard_keeps_highest_version_under_concurrent_upserts"
+            "test_elasticsearch_version_guard_keeps_highest_version_under_concurrent_upserts",
+            "test_elasticsearch_live_version_guard_keeps_highest_version_under_concurrent_writers"
           ]
         },
         {
@@ -626,7 +703,9 @@
         {
           "id": "ES8",
           "tests": [
-            "test_elasticsearch_failure_carries_durable_operator_payload"
+            "test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations",
+            "test_elasticsearch_object_change_failure_is_visible_in_index_run_operations",
+            "test_elasticsearch_consistency_failure_is_visible_in_index_run_operations"
           ]
         },
         {
@@ -640,17 +719,48 @@
         "search_index_is_projection_not_truth"
       ],
       "operatorEvidence": {
-        "runField": "syncRuns",
+        "runField": "indexRuns",
         "requiredPayloadPaths": [
-          "error.adapterFailure.adapterProfile",
-          "error.adapterFailure.operation",
-          "error.adapterFailure.kind",
-          "error.adapterFailure.retryable"
+          "indexRuns[].error.adapterFailure.adapterProfile",
+          "indexRuns[].error.adapterFailure.operation",
+          "indexRuns[].error.adapterFailure.kind",
+          "indexRuns[].error.adapterFailure.retryable",
+          "indexRuns[].error.trace.run_id",
+          "indexRuns[].error.trace.request_id",
+          "indexRuns[].error.trace.tenant_id"
         ],
         "durableEvidenceCategories": [
+          "run",
           "error",
-          "adapterFailure"
-        ]
+          "adapterFailure",
+          "trace",
+          "audit"
+        ],
+        "testAssertions": {
+          "indexRuns[].error.adapterFailure.adapterProfile": [
+            "test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations"
+          ],
+          "indexRuns[].error.adapterFailure.operation": [
+            "test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations",
+            "test_elasticsearch_object_change_failure_is_visible_in_index_run_operations",
+            "test_elasticsearch_consistency_failure_is_visible_in_index_run_operations"
+          ],
+          "indexRuns[].error.adapterFailure.kind": [
+            "test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations"
+          ],
+          "indexRuns[].error.adapterFailure.retryable": [
+            "test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations"
+          ],
+          "indexRuns[].error.trace.run_id": [
+            "test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations"
+          ],
+          "indexRuns[].error.trace.request_id": [
+            "test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations"
+          ],
+          "indexRuns[].error.trace.tenant_id": [
+            "test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations"
+          ]
+        }
       }
     }
   ],
