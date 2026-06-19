@@ -53,6 +53,8 @@ class _FailingActionRepository:
         self.delegate.insert_action_writeback(transaction=transaction, record=record)
 
     def update_object_target(self, *, transaction: Any, record: ObjectTargetUpdate) -> bool:
+        if self.enabled and self.fail_method == "update_object_target_conflict":
+            return False
         return self.delegate.update_object_target(transaction=transaction, record=record)
 
     def insert_object_edit(self, *, transaction: Any, record: ObjectEditRecord) -> None:
@@ -788,6 +790,35 @@ def test_action_commit_object_edit_audit_outbox_atomic(tmp_path: Path, fail_poin
         ctx=ctx,
     )
     assert retry["status"] == "succeeded"
+
+
+def test_action_commit_concurrency_conflict_leaves_failed_run_evidence(tmp_path: Path) -> None:
+    foundry, _failing_repository = _core_with_action_failure(tmp_path, "action:update_object_target_conflict")
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+
+    with pytest.raises(ConflictDetected):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "Concurrent writer lost"},
+            idempotency_key="commit-conflict-evidence",
+            ctx=ctx,
+        )
+
+    runs = foundry.operations.list_runs(ctx=ctx)
+    conflict_runs = _rows_for_key(runs, "actionRuns", "commit-conflict-evidence")
+    assert len(conflict_runs) == 1
+    assert conflict_runs[0]["status"] == "conflict"
+    assert conflict_runs[0]["error"]["type"] == "CONFLICT"
+    assert _rows_for_key(runs, "actionWritebacks", "commit-conflict-evidence") == []
+    assert _rows_for_key(runs, "objectEdits", "commit-conflict-evidence") == []
+    assert any(
+        event["event_type"] == "action.run.failed" and event["resource_id"] == conflict_runs[0]["id"]
+        for event in runs["auditEvents"]
+    )
 
 
 def test_outbox_event_not_published_before_domain_commit(tmp_path: Path) -> None:

@@ -6,7 +6,9 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from foundry_lite.application.action_types import ActionApplyResponse, ActionWritebackReconciliationResult
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
@@ -68,6 +70,7 @@ instrument_fastapi_app(app)
 instrument_sqlalchemy_engine(foundry.engine)
 
 JsonObject = dict[str, object]
+ValidationErrorPayload = dict[str, object]
 
 
 class ObservabilityDetectRequest(BaseModel):
@@ -184,6 +187,34 @@ async def telemetry_middleware(request: Request, call_next: Callable[[Request], 
             status_code,
             time.perf_counter() - started_at,
         )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    request_id = _request_id(request, f"api-{time.time_ns()}")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": {
+                "code": "VALIDATION_FAILED",
+                "message": "request validation failed",
+                "details": {"validation_errors": _validation_errors(exc)},
+                "request_id": request_id,
+            }
+        },
+        headers={"X-Request-ID": request_id},
+    )
+
+
+def _validation_errors(exc: RequestValidationError) -> list[ValidationErrorPayload]:
+    return [
+        {
+            "type": str(error.get("type", "validation_error")),
+            "loc": [str(item) for item in error.get("loc", ())],
+            "msg": str(error.get("msg", "request validation failed")),
+        }
+        for error in exc.errors()
+    ]
 
 
 def _ctx(
@@ -679,6 +710,7 @@ async def ingest_webhook(
 ):
     try:
         raw_body = await request.body()
+        ctx = _ctx(request)
         return foundry.datasets.ingest_webhook_event(
             dataset_ref,
             connector_name=connector_name,
@@ -687,9 +719,9 @@ async def ingest_webhook(
             raw_body=raw_body,
             signature=signature,
             signature_timestamp=signature_timestamp,
-            secret=_webhook_signing_key(),
+            secret=_webhook_signing_key(ctx, dataset_ref, connector_name, resource_name),
             event_id=event_id,
-            ctx=_ctx(request),
+            ctx=ctx,
         )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
@@ -720,8 +752,38 @@ def _webhook_payload(value: WebhookPayloadRequest) -> JsonObject:
     return {str(key): item for key, item in (value.model_extra or {}).items()}
 
 
-def _webhook_signing_key() -> str:
-    return foundry.secret_provider.get_secret(WEBHOOK_SIGNING_KEY_NAME).value
+def _webhook_signing_key(
+    ctx: RequestContext,
+    dataset_ref: str,
+    connector_name: str,
+    resource_name: str,
+) -> str:
+    try:
+        return foundry.secret_provider.get_secret(WEBHOOK_SIGNING_KEY_NAME).value
+    except FoundryLiteError as exc:
+        _audit_webhook_secret_failure(ctx, dataset_ref, connector_name, resource_name, exc)
+        raise
+
+
+def _audit_webhook_secret_failure(
+    ctx: RequestContext,
+    dataset_ref: str,
+    connector_name: str,
+    resource_name: str,
+    exc: FoundryLiteError,
+) -> None:
+    foundry.operations.record_failure_audit(
+        ctx=ctx,
+        event_type="webhook.secret_resolution_failed",
+        resource_type="webhook",
+        resource_id=f"{connector_name}:{resource_name}",
+        action="webhook:ingest",
+        exc=exc,
+        decision="deny",
+        before_ref={"dataset_ref": dataset_ref},
+        after_ref={"secret_name": WEBHOOK_SIGNING_KEY_NAME, "env_var": WEBHOOK_SIGNING_KEY_ENV},
+        adapter="secret_provider.get_secret",
+    )
 
 
 if __name__ == "__main__":

@@ -63,6 +63,9 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "retry(id: string, options: { idempotencyKey: string }):" in generated
     assert "bulkRetry(ids: string[], options: { idempotencyKey: string }):" in generated
     assert "discard(id: string): Promise<DeadLetterRecordDiscardResult>;" in generated
+    assert "export type DeadLetterRecordBulkRetryFailure = {" in generated
+    assert 'status: "SUCCEEDED" | "PARTIAL_SUCCESS" | "FAILED";' in generated
+    assert "failedItems: DeadLetterRecordBulkRetryFailure[];" in generated
     assert "replayDatasetVersionId: string | null;" in generated
     assert "rowCount: number | null;" in generated
     assert "reason: string;" in approve_params

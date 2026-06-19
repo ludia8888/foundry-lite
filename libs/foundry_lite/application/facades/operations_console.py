@@ -107,6 +107,36 @@ class OperationsConsole:
     def list_runs(self, *, ctx: RequestContext | None = None) -> RuntimeRunSnapshot:
         return self._runtime.list_runs(ctx=ctx)
 
+    def record_failure_audit(
+        self,
+        *,
+        ctx: RequestContext | None = None,
+        event_type: str,
+        resource_type: str,
+        resource_id: str | None,
+        action: str,
+        exc: Exception,
+        decision: str = "deny",
+        before_ref: Mapping[str, object] | None = None,
+        after_ref: Mapping[str, object] | None = None,
+        adapter: str | None = None,
+    ) -> None:
+        resolved_ctx = ctx or RequestContext()
+        failure_after_ref = dict(after_ref or {})
+        failure_after_ref["error"] = self._runtime._error_payload(exc, resolved_ctx, adapter=adapter)
+        with self._runtime.engine.begin() as conn:
+            self._runtime._audit(
+                conn,
+                resolved_ctx,
+                event_type=event_type,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                action=action,
+                decision=decision,
+                before_ref=before_ref,
+                after_ref=failure_after_ref,
+            )
+
     def query_runs(
         self,
         *,

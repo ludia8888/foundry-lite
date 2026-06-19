@@ -83,6 +83,31 @@ def test_action_expected_object_version_required(monkeypatch) -> None:
     assert response.headers["X-Request-ID"]
 
 
+def test_api_validation_errors_preserve_request_id_without_raw_input(monkeypatch) -> None:
+    class FailingCore:
+        def apply_action(self, *_args, **_kwargs):
+            raise AssertionError("invalid request should not reach foundry")
+
+    monkeypatch.setattr(api_main, "foundry", FailingCore())
+    response = TestClient(app).post(
+        "/api/actions/ApproveOrder/apply",
+        headers={"Idempotency-Key": "invalid-params-shape"},
+        json={
+            "target": {"objectType": "Order", "objectId": "O-1001"},
+            "expectedObjectVersion": 1,
+            "params": "raw-secret-token",
+        },
+    )
+
+    body = response.json()
+    assert response.status_code == 422
+    assert body["detail"]["code"] == "VALIDATION_FAILED"
+    assert body["detail"]["request_id"] == response.headers["X-Request-ID"]
+    assert body["detail"]["details"]["validation_errors"][0]["loc"] == ["body", "params"]
+    assert "input" not in body["detail"]["details"]["validation_errors"][0]
+    assert "raw-secret-token" not in response.text
+
+
 def test_cli_demo_seed_smoke(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_HOME", str(tmp_path / "cli"))
     main(["demo", "seed"])
@@ -350,6 +375,43 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monk
     assert rejected_shape.status_code == 422
     deny_events = foundry.operations.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
     assert deny_events[0]["action"] == "webhook:ingest"
+
+
+def test_api_webhook_missing_secret_leaves_operator_evidence(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    body = b'{"order_id":"O-9001","status":"PENDING"}'
+    timestamp = _webhook_timestamp()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Foundry-Lite-Signature": _webhook_signature(body, "missing-secret", timestamp),
+        "X-Foundry-Lite-Timestamp": timestamp,
+        "X-Foundry-Lite-Event-ID": "evt-order-missing-secret",
+        "X-Request-ID": ctx.request_id,
+        "X-User-ID": ctx.actor_user_id,
+        "X-Roles": ",".join(ctx.roles),
+    }
+    foundry.datasets.ensure("raw.webhook_missing_secret_orders", ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.delenv(api_main.WEBHOOK_SIGNING_KEY_ENV, raising=False)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_missing_secret_orders"},
+        headers=headers,
+        content=body,
+    )
+
+    audit_events = foundry.operations.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
+    failure_events = [event for event in audit_events if event["event_type"] == "webhook.secret_resolution_failed"]
+    error = failure_events[0]["after_ref"]["error"]
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "VALIDATION_FAILED"
+    assert foundry.datasets.list_versions("raw.webhook_missing_secret_orders", ctx=ctx) == []
+    assert failure_events[0]["request_id"] == ctx.request_id
+    assert error["type"] == "VALIDATION_FAILED"
+    assert error["trace"]["adapter"] == "secret_provider.get_secret"
+    assert error["details"]["secret_value"] == "***REDACTED***"
 
 
 def test_webhook_same_event_id_different_payload_is_deduped(foundry, monkeypatch) -> None:
@@ -889,6 +951,14 @@ def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundr
         source_event_id="shipment_cdc_events:0:3",
         payload_hash="payload-hash-discard",
     )
+    _seed_dead_letter_record(
+        foundry.engine,
+        tenant_id=ctx.tenant_id,
+        record_id="dlqr_api_contract",
+        source_event_id="shipment_cdc_events:0:4",
+        payload_hash="payload-hash-contract",
+        metadata_overrides={"recordDlqKind": "data_quality_contract"},
+    )
     monkeypatch.setattr(api_main, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
@@ -907,14 +977,19 @@ def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundr
     bulk = client.post(
         "/api/operations/dead-letter-records/bulk-retry",
         headers={**headers, "Idempotency-Key": "bulk-record-replay-key"},
-        json={"ids": ["dlqr_api_bulk"]},
+        json={"ids": ["dlqr_api_bulk", "dlqr_api_contract", "dlqr_api_missing"]},
     )
     discard = client.post("/api/operations/dead-letter-records/dlqr_api_discard/discard", headers=headers)
     audits = client.get("/api/operations/runs?runType=audit", headers=headers).json()["auditEvents"]
     preview = client.get("/api/datasets/raw/shipment_cdc/preview", headers=headers).json()
 
     assert listing.status_code == 200
-    assert {row["id"] for row in listing.json()} == {"dlqr_api_retry", "dlqr_api_bulk", "dlqr_api_discard"}
+    assert {row["id"] for row in listing.json()} == {
+        "dlqr_api_retry",
+        "dlqr_api_bulk",
+        "dlqr_api_discard",
+        "dlqr_api_contract",
+    }
     assert detail.json()["source_event_id"] == "shipment_cdc_events:0:1"
     assert retry.status_code == 200
     assert retry.json()["replayStatus"] == "SUCCEEDED"
@@ -922,13 +997,21 @@ def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundr
     assert duplicate.json()["is_idempotent_replay"] is True
     assert duplicate.json()["replayRunId"] == retry.json()["replayRunId"]
     assert duplicate.json()["replayDatasetVersionId"] == retry.json()["replayDatasetVersionId"]
+    assert bulk.json()["status"] == "PARTIAL_SUCCESS"
+    assert bulk.json()["succeededCount"] == 1
+    assert bulk.json()["failedCount"] == 2
     assert bulk.json()["items"][0]["deadLetterRecordId"] == "dlqr_api_bulk"
     assert bulk.json()["items"][0]["replayStatus"] == "SUCCEEDED"
+    assert {item["deadLetterRecordId"] for item in bulk.json()["failedItems"]} == {
+        "dlqr_api_contract",
+        "dlqr_api_missing",
+    }
     assert discard.json()["status"] == "DISCARDED"
     assert first_preview[0]["event_id"] == "shipment_cdc_events:0:1"
     assert preview[0]["event_id"] == "shipment_cdc_events:0:2"
     assert any(row["event_type"] == "dead_letter_record.replay_requested" for row in audits)
     assert any(row["event_type"] == "dead_letter_record.replayed" for row in audits)
+    assert any(row["event_type"] == "dead_letter_record.bulk_replay_item_failed" for row in audits)
     assert any(row["event_type"] == "dead_letter_record.discarded" for row in audits)
 
 
@@ -1539,8 +1622,23 @@ def _seed_dead_letter_record(
     record_id: str,
     source_event_id: str = "shipment_cdc_events:0:1",
     payload_hash: str = "payload-hash-api",
+    metadata_overrides: Mapping[str, object] | None = None,
 ) -> None:
     offset = int(source_event_id.rsplit(":", maxsplit=1)[-1])
+    metadata = {
+        "dataset_id": "ds_shipment_cdc",
+        "dataset_ref": "raw.shipment_cdc",
+        "schema_strategy": "cdc_envelope_json",
+        "stream": "shipment_cdc",
+        "topic": "shipment_cdc_events",
+        "consumer_group": "foundry-lite-archive",
+        "partition": 0,
+        "offset": offset,
+        "event_type": "shipment.changed",
+        "event_key": record_id,
+        "request_id": "api-seed",
+    }
+    metadata.update(dict(metadata_overrides or {}))
     with engine.begin() as conn:
         conn.execute(
             insert(db.dead_letter_records).values(
@@ -1573,19 +1671,7 @@ def _seed_dead_letter_record(
                 discarded_at=None,
                 backfill_plan=None,
                 is_closed_partition_affected=False,
-                metadata={
-                    "dataset_id": "ds_shipment_cdc",
-                    "dataset_ref": "raw.shipment_cdc",
-                    "schema_strategy": "cdc_envelope_json",
-                    "stream": "shipment_cdc",
-                    "topic": "shipment_cdc_events",
-                    "consumer_group": "foundry-lite-archive",
-                    "partition": 0,
-                    "offset": offset,
-                    "event_type": "shipment.changed",
-                    "event_key": record_id,
-                    "request_id": "api-seed",
-                },
+                metadata=metadata,
             )
         )
 

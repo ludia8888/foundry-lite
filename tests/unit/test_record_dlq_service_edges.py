@@ -5,6 +5,8 @@ from typing import cast
 import pytest
 from foundry_lite.application.ports import DeadLetterRecordRow
 from foundry_lite.application.services.record_dlq_service import (
+    _bulk_retry_failure,
+    _bulk_retry_result,
     _discard_result,
     _ensure_retryable,
     _optional_status,
@@ -61,6 +63,25 @@ def test_record_dlq_result_payloads_preserve_replay_and_discard_evidence() -> No
         _retry_result(_row(replay_run_id=None), is_idempotent_replay=False)
     with pytest.raises(ValidationFailed, match="discard timestamp is missing"):
         _discard_result(_row(discarded_at=None))
+
+
+def test_record_dlq_bulk_retry_result_reports_partial_success() -> None:
+    retry = _retry_result(_row(replay_run_id="sync_run_bulk"), is_idempotent_replay=False)
+    failure = _bulk_retry_failure("dlq_missing", ValidationFailed("record is not retryable", details={"field": "id"}))
+
+    result = _bulk_retry_result([retry], [failure])
+
+    assert result["status"] == "PARTIAL_SUCCESS"
+    assert result["succeededCount"] == 1
+    assert result["failedCount"] == 1
+    assert result["failedItems"] == [
+        {
+            "deadLetterRecordId": "dlq_missing",
+            "code": "VALIDATION_FAILED",
+            "message": "record is not retryable",
+            "details": {"field": "id"},
+        }
+    ]
 
 
 def test_record_dlq_redacts_nested_sensitive_values() -> None:

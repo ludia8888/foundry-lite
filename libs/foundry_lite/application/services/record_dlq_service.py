@@ -6,6 +6,7 @@ from typing import Protocol, cast
 from foundry_lite.application.ports import (
     AuditEventRecord,
     DeadLetterRecordBackfillPlan,
+    DeadLetterRecordBulkRetryFailure,
     DeadLetterRecordBulkRetryResult,
     DeadLetterRecordDiscardResult,
     DeadLetterRecordRetryResult,
@@ -16,7 +17,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, PermissionDenied, ValidationFailed
 
 
 class RecordDlqReplayExecutor(Protocol):
@@ -88,11 +89,14 @@ class RecordDlqService(CoreService):
             raise ValidationFailed("record ids are required for bulk replay")
         key = _required_idempotency_key(idempotency_key)
         self._require_or_audit(ctx, "operations:retry", "dead_letter_record_bulk", "bulk")
-        items = [
-            self.retry_dead_letter_record(record_id, idempotency_key=f"{key}:{record_id}", ctx=ctx)
-            for record_id in record_ids
-        ]
-        return {"items": items}
+        items: list[DeadLetterRecordRetryResult] = []
+        failed_items: list[DeadLetterRecordBulkRetryFailure] = []
+        for record_id in record_ids:
+            try:
+                items.append(self.retry_dead_letter_record(record_id, idempotency_key=f"{key}:{record_id}", ctx=ctx))
+            except FoundryLiteError as exc:
+                failed_items.append(self._record_bulk_retry_item_failure(ctx, record_id, exc))
+        return _bulk_retry_result(items, failed_items)
 
     def discard_dead_letter_record(
         self,
@@ -281,6 +285,25 @@ class RecordDlqService(CoreService):
             ),
         )
 
+    def _record_bulk_retry_item_failure(
+        self,
+        ctx: RequestContext,
+        record_id: str,
+        exc: FoundryLiteError,
+    ) -> DeadLetterRecordBulkRetryFailure:
+        failure = _bulk_retry_failure(record_id, exc)
+        with self.engine.begin() as conn:
+            self._audit(
+                conn,
+                ctx,
+                event_type="dead_letter_record.bulk_replay_item_failed",
+                resource_type="dead_letter_record",
+                resource_id=record_id,
+                action="operations:retry",
+                after_ref=failure,
+            )
+        return failure
+
 
 def _optional_status(status: str | None) -> DeadLetterRecordStatus | None:
     if status is None:
@@ -412,6 +435,37 @@ def _discard_result(row: DeadLetterRecordRow) -> DeadLetterRecordDiscardResult:
         "status": row["status"],
         "replayStatus": row["replay_status"],
         "discardedAt": discarded_at,
+    }
+
+
+def _bulk_retry_result(
+    items: list[DeadLetterRecordRetryResult],
+    failed_items: list[DeadLetterRecordBulkRetryFailure],
+) -> DeadLetterRecordBulkRetryResult:
+    return {
+        "status": _bulk_retry_status(items, failed_items),
+        "items": items,
+        "failedItems": failed_items,
+        "succeededCount": len(items),
+        "failedCount": len(failed_items),
+    }
+
+
+def _bulk_retry_status(
+    items: list[DeadLetterRecordRetryResult],
+    failed_items: list[DeadLetterRecordBulkRetryFailure],
+) -> str:
+    if failed_items and items:
+        return "PARTIAL_SUCCESS"
+    return "FAILED" if failed_items else "SUCCEEDED"
+
+
+def _bulk_retry_failure(record_id: str, exc: FoundryLiteError) -> DeadLetterRecordBulkRetryFailure:
+    return {
+        "deadLetterRecordId": record_id,
+        "code": exc.code,
+        "message": exc.message,
+        "details": dict(exc.details),
     }
 
 

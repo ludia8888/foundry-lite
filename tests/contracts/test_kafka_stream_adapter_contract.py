@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -456,6 +457,42 @@ def test_stream_archive_worker_main_prints_adapter_error(
 
     assert exit_code == 1
     assert '"adapterProfile": "kafka-stream"' in capsys.readouterr().out
+
+
+def test_stream_archive_worker_main_prints_env_configuration_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_STREAM_SCHEMA_STRATEGY", "raw")
+
+    exit_code = worker_module.main(["--storage-root", str(tmp_path)])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert payload["type"] == "CONFIGURATION_ERROR"
+    assert payload["message"] == "unsupported stream schema strategy: raw"
+    assert payload["trace"]["adapter"] == "stream_archive_worker"
+
+
+def test_stream_archive_worker_main_prints_context_configuration_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def validate_context(config: StreamArchiveWorkerConfig) -> None:
+        config.request_context()
+
+    monkeypatch.setenv("FOUNDRY_LITE_TENANT_ID", " ")
+    monkeypatch.setattr(worker_module, "run_stream_archive_once", validate_context)
+
+    exit_code = worker_module.main(["--storage-root", str(tmp_path)])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert payload["type"] == "CONFIGURATION_ERROR"
+    assert payload["message"] == "stream archive worker requires tenant_id"
+    assert payload["trace"]["adapter"] == "stream_archive_worker"
 
 
 def test_stream_archive_worker_main_prints_continuous_result(

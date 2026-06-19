@@ -150,12 +150,63 @@ def _handle_error_findings(path: Path, tree: ast.Module) -> list[ErrorResponseFi
     return findings
 
 
+def _module_defines_fastapi_app(tree: ast.Module) -> bool:
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call)
+            and _call_name(node.value.func) == "FastAPI"
+        ):
+            return True
+    return False
+
+
+def _is_validation_exception_handler(decorator: ast.expr) -> bool:
+    if not isinstance(decorator, ast.Call):
+        return False
+    decorator_name = _call_name(decorator.func)
+    if decorator_name is None or not decorator_name.endswith("exception_handler"):
+        return False
+    return any(_call_name(arg) == "RequestValidationError" for arg in decorator.args)
+
+
+def _validation_handler_findings(path: Path, tree: ast.Module) -> list[ErrorResponseFinding]:
+    if not _module_defines_fastapi_app(tree):
+        return []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not any(_is_validation_exception_handler(decorator) for decorator in node.decorator_list):
+            continue
+        if _node_mentions_request_id(node):
+            return []
+        return [
+            ErrorResponseFinding(
+                code="validation_handler_missing_request_id",
+                path=_repo_relative(path),
+                line=node.lineno,
+                column=node.col_offset + 1,
+                message="RequestValidationError handler must include request_id in validation error detail",
+            )
+        ]
+    return [
+        ErrorResponseFinding(
+            code="validation_handler_missing",
+            path=_repo_relative(path),
+            line=1,
+            column=1,
+            message="FastAPI apps must register a RequestValidationError handler that preserves request_id",
+        )
+    ]
+
+
 def collect_findings(paths: tuple[Path, ...] = DEFAULT_PATHS) -> list[ErrorResponseFinding]:
     findings: list[ErrorResponseFinding] = []
     for path in _python_files(paths):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         findings.extend(_http_exception_findings(path, tree))
         findings.extend(_handle_error_findings(path, tree))
+        findings.extend(_validation_handler_findings(path, tree))
     return findings
 
 

@@ -212,7 +212,10 @@ quality:data-pattern-matrix
 
 > 현재 부분 구현 메모 (2026-06-18): stream CDC archive 경로에는 S47 quarantine slice가
 > 들어갔고, Operations API/typed generated SDK에는 record DLQ 조회, 상세, retry request,
-> bulk retry request, discard가 추가됐다. `dead_letter_records` table과 `DeadLetterRecord`
+> bulk retry request, discard가 추가됐다. bulk retry는 item-level 실패를 전체 요청 실패로
+> 숨기지 않고 `status`, `failedItems`, `succeededCount`, `failedCount`를 반환하며
+> `dead_letter_record.bulk_replay_item_failed` audit evidence를 남긴다. `dead_letter_records`
+> table과 `DeadLetterRecord`
 > port model은 replay request idempotency key, replay run id, discard timestamp, downstream
 > backfill plan을 저장한다. 잘못된 CDC envelope record는 tenant-scoped DLQ로 격리되며 정상
 > record commit은 계속된다. DLQ 저장이 실패하면 main pipeline을 성공 처리하지 않고 FAILED
@@ -580,11 +583,11 @@ quality:iceberg-maintenance
 
 현재 one-shot proof를 실제 지속 실행 worker로 확장하고, rebalance/commit-unknown에서 데이터 유실과 중복 logical commit을 막는다.
 
-> S51 현재 구현 범위: bounded continuous stream archive loop가 추가되어 기존 `archive_stream_events` transaction/checkpoint 경계를 여러 batch에 반복 적용하고, configured empty poll 또는 stop callback에서 멈추며 loop summary를 반환한다. Lease/fencing, rebalance revoke, commit-unknown reconciliation, CDC object-indexer continuous worker는 아직 future scope다.
+> S51 현재 구현 범위: bounded continuous stream archive loop가 추가되어 기존 `archive_stream_events` transaction/checkpoint 경계를 여러 batch에 반복 적용하고, configured empty poll 또는 stop callback에서 멈추며 loop summary를 반환한다. worker CLI는 env/schema/tenant 설정 실패를 stacktrace가 아닌 `CONFIGURATION_ERROR` JSON payload로 반환한다. Lease/fencing, rebalance revoke, commit-unknown reconciliation, CDC object-indexer continuous worker는 아직 future scope다.
 
 ## Worker 기능
 
-- [~] continuously running stream archive worker: bounded loop와 CLI/env option은 active, production daemon packaging은 future.
+- [~] continuously running stream archive worker: bounded loop, CLI/env option, configuration-error JSON payload는 active, production daemon packaging은 future.
 - [ ] continuously running CDC object-index worker
 - [~] graceful shutdown: stop callback boundary는 active, OS signal/SIGTERM finish-or-abort proof는 future.
 - [ ] heartbeat/lease

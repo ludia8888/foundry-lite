@@ -64,6 +64,35 @@ def handler(exc, request):
     assert gate.collect_findings((api_file,)) == []
 
 
+def test_error_response_gate_flags_fastapi_validation_handler_missing(tmp_path: Path) -> None:
+    api_file = _write_api_file(
+        tmp_path,
+        """
+app = FastAPI()
+""",
+    )
+
+    findings = gate.collect_findings((api_file,))
+
+    assert [finding.code for finding in findings] == ["validation_handler_missing"]
+
+
+def test_error_response_gate_accepts_validation_handler_with_request_id(tmp_path: Path) -> None:
+    api_file = _write_api_file(
+        tmp_path,
+        """
+app = FastAPI()
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    request_id = request.state.request_id
+    return JSONResponse(detail={"request_id": request_id})
+""",
+    )
+
+    assert gate.collect_findings((api_file,)) == []
+
+
 def test_error_response_gate_writes_json_report(tmp_path: Path) -> None:
     api_file = _write_api_file(
         tmp_path,

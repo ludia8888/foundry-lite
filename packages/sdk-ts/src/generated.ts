@@ -277,7 +277,19 @@ export type DeadLetterRecordRetryResult = {
   error: Record<string, unknown> | null;
   downstreamBackfillPlan: Record<string, unknown>;
 };
-export type DeadLetterRecordBulkRetryResult = { items: DeadLetterRecordRetryResult[] };
+export type DeadLetterRecordBulkRetryFailure = {
+  deadLetterRecordId: string;
+  code: string;
+  message: string;
+  details: Record<string, unknown>;
+};
+export type DeadLetterRecordBulkRetryResult = {
+  status: "SUCCEEDED" | "PARTIAL_SUCCESS" | "FAILED";
+  items: DeadLetterRecordRetryResult[];
+  failedItems: DeadLetterRecordBulkRetryFailure[];
+  succeededCount: number;
+  failedCount: number;
+};
 export type DeadLetterRecordDiscardResult = {
   deadLetterRecordId: string;
   status: DeadLetterRecordStatus;
