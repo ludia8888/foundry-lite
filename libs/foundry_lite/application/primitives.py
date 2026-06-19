@@ -93,6 +93,23 @@ def _file_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _candidate_manifest_hash(
+    *,
+    row_count: int,
+    byte_size: int,
+    content_hash: str,
+    schema_hash: str,
+) -> str:
+    return _json_hash(
+        {
+            "byte_size": byte_size,
+            "content_hash": content_hash,
+            "row_count": row_count,
+            "schema_hash": schema_hash,
+        }
+    )
+
+
 def _dataset_ref_parts(dataset_ref: str) -> tuple[str, str]:
     if "." not in dataset_ref:
         raise ValidationFailed(

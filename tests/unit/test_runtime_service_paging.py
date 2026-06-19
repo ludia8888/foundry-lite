@@ -75,9 +75,32 @@ class _UnusedEngine:
     pass
 
 
+class _UnusedDatasetTransactionRepository:
+    def transaction_by_id(self, **_kwargs: object) -> object:
+        raise AssertionError("query_runs must not read dataset transactions")
+
+    def committed_transaction_by_version(self, **_kwargs: object) -> object:
+        raise AssertionError("query_runs must not read dataset transactions")
+
+
+class _UnusedDatasetQualityRepository:
+    def check_results_for_transaction(self, **_kwargs: object) -> object:
+        raise AssertionError("query_runs must not read dataset quality results")
+
+
+def _runtime_service(repository: object) -> RuntimeService:
+    return RuntimeService(
+        engine=_UnusedEngine(),
+        policy=PolicyService(),
+        runtime_repository=repository,
+        dataset_transaction_repository=_UnusedDatasetTransactionRepository(),
+        dataset_quality_repository=_UnusedDatasetQualityRepository(),
+    )
+
+
 def test_runtime_service_query_runs_uses_db_keyset_page_and_opaque_cursor() -> None:
     repository = _PagedRuntimeRepository()
-    service = RuntimeService(engine=_UnusedEngine(), policy=PolicyService(), runtime_repository=repository)
+    service = _runtime_service(repository)
 
     first = service.query_runs(
         ctx=RequestContext(roles=("ops_manager",)),
@@ -101,7 +124,7 @@ def test_runtime_service_query_runs_uses_db_keyset_page_and_opaque_cursor() -> N
 
 def test_runtime_service_query_runs_builds_group_next_cursors() -> None:
     repository = _AllRunTypesRepository()
-    service = RuntimeService(engine=_UnusedEngine(), policy=PolicyService(), runtime_repository=repository)
+    service = _runtime_service(repository)
 
     result = service.query_runs(ctx=RequestContext(roles=("ops_manager",)), limit=1)
 
@@ -118,11 +141,7 @@ def test_runtime_service_query_runs_builds_group_next_cursors() -> None:
 
 
 def test_runtime_service_query_runs_rejects_bad_cursor_and_large_limit() -> None:
-    service = RuntimeService(
-        engine=_UnusedEngine(),
-        policy=PolicyService(),
-        runtime_repository=_PagedRuntimeRepository(),
-    )
+    service = _runtime_service(_PagedRuntimeRepository())
 
     with pytest.raises(ValidationFailed):
         service.query_runs(ctx=_OPERATOR, run_type="action", cursor="orc1.not-valid-base64")
@@ -144,11 +163,7 @@ def test_runtime_service_query_runs_rejects_cursor_shape_mismatch() -> None:
         since=None,
         until=None,
     )
-    service = RuntimeService(
-        engine=_UnusedEngine(),
-        policy=PolicyService(),
-        runtime_repository=_PagedRuntimeRepository(),
-    )
+    service = _runtime_service(_PagedRuntimeRepository())
 
     with pytest.raises(ValidationFailed):
         service.query_runs(ctx=_OPERATOR, run_type="transform", status="succeeded", cursor=cursor)

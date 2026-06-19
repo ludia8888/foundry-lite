@@ -20,6 +20,12 @@ class DatasetSchemaRow(TypedDict):
     created_at: str
 
 
+@dataclass(frozen=True)
+class DatasetSchemaReference:
+    schema_id: str
+    version: int
+
+
 class DatasetCheckRow(TypedDict):
     id: str
     tenant_id: str
@@ -29,6 +35,20 @@ class DatasetCheckRow(TypedDict):
     config: DatasetCheckConfig
     severity: str
     enabled: bool
+
+
+class DatasetCheckResultRow(TypedDict):
+    id: str
+    tenant_id: str
+    check_id: str
+    run_id: str
+    transaction_id: str
+    checked_manifest_hash: str
+    validated_against_schema_version_id: str
+    validated_against_schema_version: int
+    status: str
+    details: DatasetCheckResult
+    created_at: str
 
 
 @dataclass(frozen=True)
@@ -60,6 +80,9 @@ class DatasetCheckResultRecord:
     check_id: str
     run_id: str
     transaction_id: str
+    checked_manifest_hash: str
+    validated_against_schema_version_id: str
+    validated_against_schema_version: int
     status: str
     details: DatasetCheckResult
     created_at: str
@@ -103,4 +126,14 @@ class DatasetQualityRepository(Protocol):
 
     def insert_check_result(self, *, transaction: TransactionContext, record: DatasetCheckResultRecord) -> None:
         """Persist one dataset check result inside the caller transaction."""
+        ...
+
+    def check_results_for_transaction(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        transaction_id: str,
+    ) -> list[DatasetCheckResultRow]:
+        """Return tenant-scoped quality results for one dataset transaction."""
         ...

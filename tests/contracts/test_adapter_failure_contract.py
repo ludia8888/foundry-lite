@@ -28,7 +28,13 @@ from foundry_lite.infrastructure.adapters import (
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
 )
-from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthProvider
+from foundry_lite.infrastructure.auth import (
+    DemoAuthProvider,
+    HeaderTrustAuthProvider,
+    JwtOidcAuthConfig,
+    JwtOidcAuthProvider,
+)
+from foundry_lite.infrastructure.secrets import EnvSecretProvider
 
 
 @pytest.fixture(
@@ -52,6 +58,8 @@ from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthPr
         "rest-pull-connector",
         "header-trust-auth",
         "demo-auth",
+        "jwt-oidc-auth",
+        "env-secret",
     ]
 )
 def failure_contract(request: pytest.FixtureRequest, tmp_path: Path) -> AdapterFailureContract:
@@ -116,5 +124,9 @@ def _adapter_failure_contract(profile: str, tmp_path: Path) -> AdapterFailureCon
         "rest-pull-connector": RestPullConnectorAdapter(),
         "header-trust-auth": HeaderTrustAuthProvider(),
         "demo-auth": DemoAuthProvider(),
+        "jwt-oidc-auth": JwtOidcAuthProvider(
+            JwtOidcAuthConfig(issuer="https://issuer.example.test", audience="foundry-lite", jwks={"keys": []})
+        ),
+        "env-secret": EnvSecretProvider(environ={}),
     }
     return adapters[profile].failure_contract()

@@ -29,6 +29,8 @@ class DemoActionApplier(Protocol):
         idempotency_key: str,
         ctx: RequestContext | None = None,
         simulate_writeback_failure: bool = False,
+        simulate_writeback_outcome_unknown: bool = False,
+        simulate_writeback_compensation_required: bool = False,
     ) -> ActionApplyResponse: ...
 
 

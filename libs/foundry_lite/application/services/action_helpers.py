@@ -52,6 +52,8 @@ def action_command(
     params: Mapping[str, object],
     idempotency_key: str,
     simulate_writeback_failure: bool,
+    simulate_writeback_outcome_unknown: bool,
+    simulate_writeback_compensation_required: bool,
 ) -> ActionApplyCommand:
     if not idempotency_key:
         raise ValidationFailed("idempotency key is required")
@@ -71,6 +73,8 @@ def action_command(
             params=normalized_params,
         ),
         simulate_writeback_failure=simulate_writeback_failure,
+        simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
+        simulate_writeback_compensation_required=simulate_writeback_compensation_required,
     )
 
 

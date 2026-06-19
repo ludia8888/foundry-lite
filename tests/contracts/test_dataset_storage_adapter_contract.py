@@ -81,6 +81,51 @@ def test_dataset_storage_adapter_contract(factory: StorageFactory, tmp_path: Pat
     )
 
 
+@pytest.mark.parametrize(
+    "factory",
+    [
+        pytest.param(lambda root: LocalDatasetStorageAdapter(root), id="local"),
+        pytest.param(lambda root: FakeDatasetStorageAdapter(root), id="fake-storage"),
+    ],
+)
+def test_dataset_storage_adapter_resolves_manifest_files_with_partition_filter_without_listing(
+    factory: StorageFactory,
+    tmp_path: Path,
+) -> None:
+    adapter = factory(tmp_path / "object-storage")
+    version_dir = adapter.root / "tenant_demo" / "datasets" / "ds_orders" / "branch=main" / "version=dsv_multi"
+    version_dir.mkdir(parents=True)
+    first = version_dir / "part-00000.parquet"
+    second = version_dir / "part-00001.parquet"
+    orphan = version_dir / "part-orphan.parquet"
+    first.write_bytes(b"first part")
+    second.write_bytes(b"second part")
+    orphan.write_bytes(b"must not be discovered by listing")
+    manifest = {
+        "version_id": "dsv_multi",
+        "dataset": "raw.orders",
+        "branch": "main",
+        "schema_hash": "schema_hash_demo",
+        "files": [
+            _manifest_file(first, file_uri=adapter._uri_for(first), partition_values={"bucket": "a"}),
+            _manifest_file(second, file_uri=adapter._uri_for(second), partition_values={"bucket": "b"}),
+        ],
+        "created_at": "2026-06-18T00:00:00Z",
+        "storage_profile": adapter.profile_name,
+    }
+    manifest_path = version_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    manifest_uri = adapter._uri_for(manifest_path)
+    paths = adapter.data_file_paths(manifest_uri)
+    filtered_paths = adapter.data_file_paths(manifest_uri, partition_filter={"bucket": "b"})
+    empty_paths = adapter.data_file_paths(manifest_uri, partition_filter={"bucket": "missing"})
+
+    assert [path.read_bytes() for path in paths] == [b"first part", b"second part"]
+    assert [path.read_bytes() for path in filtered_paths] == [b"second part"]
+    assert empty_paths == []
+
+
 def test_fake_storage_adapter_uses_logical_non_file_uris(tmp_path: Path) -> None:
     adapter = FakeDatasetStorageAdapter(tmp_path / "object-storage")
     staged = adapter.staging_file(
@@ -164,12 +209,20 @@ def _manifest_fixture(
     return manifest_path, data_path, manifest_file
 
 
-def _manifest_file(data_path: Path, *, file_uri: str | None = None) -> DatasetManifestFile:
+def _manifest_file(
+    data_path: Path,
+    *,
+    file_uri: str | None = None,
+    partition_values: dict[str, object] | None = None,
+) -> DatasetManifestFile:
     payload = data_path.read_bytes()
-    return {
+    manifest_file: DatasetManifestFile = {
         "uri": file_uri or str(data_path),
         "format": "parquet",
         "row_count": 1,
         "byte_size": len(payload),
         "content_hash": hashlib.sha256(payload).hexdigest(),
     }
+    if partition_values is not None:
+        manifest_file["partition_values"] = partition_values
+    return manifest_file

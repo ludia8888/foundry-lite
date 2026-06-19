@@ -2102,28 +2102,28 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 
 ## Post-MVP Data Platform Expansion Roadmap
 
-Sprint 46 이후의 상세 순서와 공통 Exit Checklist는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 원본으로 본다. 이 섹션은 기존 Sprint Breakdown이 S45에서 끊겨 보이지 않도록 연결하는 요약이다. 각 항목은 proposed 상태이며, 체크박스는 실제 코드/테스트/CI/docs 증거가 생길 때만 `[x]`로 바꾼다.
+Sprint 46 이후의 상세 순서와 공통 Exit Checklist는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 원본으로 본다. 이 섹션은 기존 Sprint Breakdown이 S45에서 끊겨 보이지 않도록 연결하는 요약이다. `[x]`는 sprint evidence ledger와 CI/테스트 증거가 연결된 완료 범위이고, `[~]`는 일부 path만 active-covered인 부분 구현이며, `[ ]`는 아직 future/proposed 범위다.
 
 | Sprint | 우선순위 | 핵심 결과 | 의존성 | 상태 |
 |---|---:|---|---|---|
-| S46 | P0 | Semantic SSOT + Data Pattern Matrix | 현재 CI 하네스 | [ ] Proposed |
-| S47 | P0 | Record DLQ + Replay | S46 | [ ] Proposed |
-| S48 | P1 | Late Data + Watermark | S47 | [ ] Proposed |
-| S49 | P1 | Multi-file Dataset + Partitioning | S46 | [ ] Proposed |
-| S50 | P1 | Iceberg Maintenance | S49 | [ ] Proposed |
-| S51 | P0 | Continuous CDC Worker + Rebalance Safety | S47 | [ ] Proposed |
-| S52 | P0 | Temporal Engine Integration | S51 | [ ] Proposed |
-| S53 | P0 | External Writeback + Saga/Reconciliation | S52 | [ ] Proposed |
-| S54 | P1 | Data Quality Contracts | S47, S48 | [ ] Proposed |
-| S55 | P1 | DB/Dataset/Ontology Schema Migration | S54 | [ ] Proposed |
-| S56 | P1 | Proactive Observability + SLO | S48, S51, S52 | [ ] Proposed |
-| S57 | P0 | Backup/Restore Commit-point Ratchet | S50, S52, S53 | [ ] Proposed |
-| S58A | P1 | OIDC/JWT + Secret Provider | 독립 가능 | [ ] Proposed |
-| S58B | P1 | Anonymization/Pseudonymization | S58A | [ ] Proposed |
-| S58C | P1 | Right-to-Erasure Lifecycle | S50, S57, S58B | [ ] Proposed |
+| S46 | P0 | Semantic SSOT + Data Pattern Matrix | 현재 CI 하네스 | [x] Complete |
+| S47 | P0 | Record DLQ + Replay | S46 | [~] Partial |
+| S48 | P1 | Late Data + Watermark | S47 | [~] Partial |
+| S49 | P1 | Multi-file Dataset + Partitioning | S46 | [~] Partial |
+| S50 | P1 | Iceberg Maintenance | S49 | [~] Partial |
+| S51 | P0 | Continuous CDC Worker + Rebalance Safety | S47 | [~] Partial |
+| S52 | P0 | Temporal Engine Integration | S51 | [~] Partial |
+| S53 | P0 | External Writeback + Saga/Reconciliation | S52 | [~] Partial |
+| S54 | P1 | Data Quality Contracts | S47, S48 | [~] Partial |
+| S55 | P1 | DB/Dataset/Ontology Schema Migration | S54 | [~] Partial |
+| S56 | P1 | Proactive Observability + SLO | S48, S51, S52 | [~] Partial |
+| S57 | P0 | Backup/Restore Commit-point Ratchet | S50, S52, S53 | [~] Partial |
+| S58A | P1 | OIDC/JWT + Secret Provider | 독립 가능 | [~] Partial |
+| S58B | P1 | Anonymization/Pseudonymization | S58A | [~] Partial |
+| S58C | P1 | Right-to-Erasure Lifecycle | S50, S57, S58B | [~] Partial |
 | S59 | P2 | Real Cluster/Cloud/Chaos Proofs | 관련 sprint | [ ] Proposed |
-| S60 | P1 | Fine-grained Lineage + AI Evidence | S54, S55 | [ ] Proposed |
-| S61 | Product | Frontend Foundation + Generated SDK | 현재 API | [ ] Proposed |
+| S60 | P1 | Fine-grained Lineage + AI Evidence | S54, S55 | [~] Partial |
+| S61 | Product | Frontend Foundation + Generated SDK | 현재 API | [~] Partial |
 | S62 | Product | Object/Dataset Explorer | S61 | [ ] Proposed |
 | S63 | Product | Insight/Action Workspace | S61, S53, S60 | [ ] Proposed |
 | S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [ ] Proposed |

@@ -15,6 +15,17 @@ class ActionApplyResponse(TypedDict):
     idempotentReplay: NotRequired[bool]
 
 
+class ActionWritebackReconciliationResult(TypedDict):
+    actionRunId: str
+    writebackId: str
+    status: str
+    remoteStatus: str
+    remoteResourceId: str
+    objectEditId: NotRequired[str]
+    newObjectVersion: NotRequired[int]
+    alreadyReconciled: NotRequired[bool]
+
+
 @dataclass(frozen=True)
 class ActionApplyCommand:
     action_api_name: str
@@ -25,6 +36,8 @@ class ActionApplyCommand:
     idempotency_key: str
     request_fingerprint: str
     simulate_writeback_failure: bool
+    simulate_writeback_outcome_unknown: bool
+    simulate_writeback_compensation_required: bool
 
 
 @dataclass(frozen=True)

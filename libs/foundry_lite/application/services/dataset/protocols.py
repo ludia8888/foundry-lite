@@ -11,12 +11,14 @@ from foundry_lite.application.ports import (
     DatasetRow,
     DatasetRunKind,
     DatasetSchemaJson,
+    DatasetSchemaReference,
     DatasetSchemaRow,
     DatasetTransactionMetadata,
     DatasetVersionRow,
     TransactionContext,
 )
 from foundry_lite.application.primitives import CommitResult, StagedFileStats
+from foundry_lite.application.services.dataset.schema_evolution import DatasetSchemaEvolutionResult
 from foundry_lite.domain.context import RequestContext
 
 DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
@@ -113,12 +115,28 @@ class DatasetQualityBoundary(Protocol):
         schema_hash: str,
     ) -> int: ...
 
+    def _ensure_schema_reference(
+        self,
+        conn: TransactionContext,
+        dataset: DatasetRow,
+        schema_json: DatasetSchemaJson,
+        schema_hash: str,
+    ) -> DatasetSchemaReference: ...
+
     def _schema_compatibility_error(
         self,
         conn: TransactionContext,
         dataset: DatasetRow,
         next_schema: DatasetSchemaJson,
     ) -> DatasetCheckResult | None: ...
+
+    def _schema_evolution_result(
+        self,
+        conn: TransactionContext,
+        dataset: DatasetRow,
+        next_schema: DatasetSchemaJson,
+        target_schema: DatasetSchemaReference,
+    ) -> DatasetSchemaEvolutionResult: ...
 
     def _run_dataset_checks(
         self,
@@ -131,6 +149,9 @@ class DatasetQualityBoundary(Protocol):
         transaction_id: str,
         *,
         extra_checks: Sequence[DatasetCheckConfig],
+        checked_manifest_hash: str,
+        validated_against_schema_version_id: str,
+        validated_against_schema_version: int,
     ) -> list[DatasetCheckResult]: ...
 
 

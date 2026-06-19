@@ -67,6 +67,14 @@ pnpm dev
 curl http://127.0.0.1:8000/healthz
 ```
 
+FastAPI interactive docs and OpenAPI schema are available while the API server is
+running:
+
+```bash
+open http://127.0.0.1:8000/docs
+curl http://127.0.0.1:8000/openapi.json
+```
+
 정적 Web Object Explorer:
 
 ```bash
@@ -133,7 +141,7 @@ Foundry-lite는 Python 기반 modular monolith 안에서 dataset transaction, tr
 | Materialization | `ops.action_log`, `ops.order_current`, watermark/source version proof | 더 많은 materialization type은 v1.5 이후 영역입니다. |
 | Search | local/fake search adapter, optional Elasticsearch adapter, rebuild/orphan proof, live Testcontainers Elasticsearch ratchet | managed cloud Elasticsearch packaging/ops runbook은 아직 미래 과제입니다. |
 | Stream/CDC | local/fake stream adapter, Kafka-compatible worker proof, Debezium-shaped CDC proof | 계속 도는 production worker와 운영 패키징은 아직 미래 과제입니다. |
-| Security | tenant context, RBAC, property masking, deny audit, Postgres RLS contract proof | real JWT/OIDC adapter는 아직 미래 과제입니다. |
+| Security | tenant context, RBAC, property masking, deny audit, Postgres RLS contract proof, S58A local JWT/OIDC human/service-account verification, revoked-JWT denylist, `SecretProvider` local-env/redaction proof, and REST connector secretRef refresh proof | live OIDC discovery/JWKS polling, IdP introspection/refresh-token revocation, service-account registry, cloud/Vault secret manager, full connector workflow credential refresh는 아직 미래 과제입니다. |
 | Observability | structured trace keys, OpenTelemetry, Prometheus metrics, Grafana compose profile | 운영 환경 전체 배포 runbook은 아직 확장 과제입니다. |
 | Quality | `pnpm ci:gate`, static gates, contract tests, integration markers, Playwright E2E | CodeQL은 GitHub Actions 전용입니다. |
 
@@ -343,7 +351,7 @@ flowchart TB
     P3 -. future cluster operations .-> S3
     P4 -. future orchestration service .-> S4
     P5 -. optional .-> S5
-    P6 -. future product workflow .-> S6
+    P6 -. partial product workflow .-> S6
     P7 -. future connector operations .-> S7
     P8 -. future product UI .-> S8
 ```
@@ -553,7 +561,8 @@ Scale Foundation의 핵심은 "지금은 작은 구현으로 돌리되, 제품 �
 | `SearchAdapter` | local/fake, optional Elasticsearch adapter with live-cluster ratchet | managed cloud Elasticsearch operations | `tests/contracts/test_search_adapter_contract.py` |
 | `WorkflowAdapter` | local/fake workflow | Temporal | `tests/contracts/test_workflow_adapter_contract.py` |
 | `ConnectorAdapter` | local/fake, REST adapter, Debezium wrapper proof | SaaS connectors, durable registry, retry workers | `tests/contracts/test_connector_adapter_contract.py` |
-| `AuthProvider` | header trust/demo profiles | OIDC/SSO/JWT | `tests/contracts/test_auth_provider_contract.py` |
+| `AuthProvider` | header trust/demo profiles, local JWT/OIDC discovery/JWKS human and M2M service-account verification, local revoked-JWT denylist | live OIDC discovery, SSO policy, IdP introspection/refresh-token revocation, service-account registry | `tests/contracts/test_auth_provider_contract.py` |
+| `SecretProvider` | local env adapter, webhook signing key lookup, REST connector secretRef re-resolution, redacted evidence | cloud/Vault secret manager, previous/current dual-read, full rotation lifecycle | `tests/contracts/test_secret_provider_contract.py`; `tests/contracts/test_rest_connector_adapter_contract.py` |
 | `RuntimeRepository` | SQLAlchemy audit/outbox/lineage/run rows | partitioned audit/outbox, event publisher state | `tests/contracts/test_runtime_repository_contract.py` |
 | `ObjectReadRepository` | SQLAlchemy object query/link reads | Postgres JSONB/read indexes | `tests/contracts/test_object_read_repository_contract.py` |
 | `ObjectIndexRepository` | SQLAlchemy index writes/shadow pointer | large index build/promotion path | `tests/contracts/test_object_index_repository_contract.py` |
@@ -854,7 +863,7 @@ sequenceDiagram
 
 ## 로드맵
 
-Sprint 00-36은 MVP core, Sprint 02A는 scale-ready foundation, Sprint 36A는 MVP 운영 안정성 보강입니다. Sprint 37-42는 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, shadow reindex, Elasticsearch-compatible search projection proof입니다. 이후 infra ratchet은 S3/MinIO, Iceberg-on-S3, Spark compute, Temporal workflow adapter, Elasticsearch live proof, 그리고 S3+Iceberg+Spark+CDC 조합까지 active-covered입니다. Sprint 45의 Kubernetes/backup-restore 운영 패키지와 S46 이후 데이터 플랫폼 확장 로드맵은 아직 post-MVP 계획입니다.
+Sprint 00-36은 MVP core, Sprint 02A는 scale-ready foundation, Sprint 36A는 MVP 운영 안정성 보강입니다. Sprint 37-42는 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, shadow reindex, Elasticsearch-compatible search projection proof입니다. 이후 infra ratchet은 S3/MinIO, Iceberg-on-S3, Spark compute, Temporal workflow adapter, Elasticsearch live proof, 그리고 S3+Iceberg+Spark+CDC 조합까지 active-covered입니다. S46-S61 데이터 플랫폼 확장 로드맵은 현재 브랜치에서 부분 구현 중이며, S52는 `ConnectorSyncWorkflow`의 Operations/API/SDK 시작·조회와 Temporal profile audit-link proof, S53은 simulated writeback `outcome_unknown`/`compensation_required`/idempotent replay proof, operator-provided remote-success reconciliation resolve proof, sensitive writeback audit masking proof, S54는 dataset quality check result의 schema-version reference, historical run pinning, checked candidate fingerprint, `PASS`/`WARN`/commit-time `BLOCK_COMMIT`, row-level `QUARANTINE` Record DLQ proof, Operations run detail의 transaction-scoped quality report와 failed-row sample evidence, S55는 Alembic migration single-head/forward-fix safety gate, singleton migration runner gate, expand-contract phase guard, failed-migration operator evidence, Dataset schema evolution impact/backfill-skeleton evidence, Ontology migration activation guard/object reindex plan/generated SDK compatibility evidence, S56은 read-only observability detector report, missing-data/lag/skew/SLO evidence, API/SDK detect surface, runtime gate wiring, S57은 backup/restore preflight report, committed manifest/data-file validation, DB/storage mismatch `blocked` issue, active index pointer/high-watermark/search rebuild marker evidence, restore-mode start/status, idempotent same-restore replay, serving traffic closed status, outbox retry/reprocess lockout, and post-restore closed-loop evidence 후 `resume_approved` approval path를 포함합니다. S58A의 현재 slice는 `JwtOidcAuthProvider`와 `SecretProvider`/`EnvSecretProvider`, `quality:auth-secrets`로 local discovery/JWKS 기반 human/M2M bearer-token 검증, tenant-scoped service-account mapping, local revoked-JWT denylist, JWKS refresh-on-unknown-`kid`, 웹훅 서명키 provider lookup, REST connector secretRef 재조회, secret evidence/error redaction을 증명하는 범위입니다. S58B의 현재 slice는 `PrivacyTransformPlan`, `PrivacyFieldRule`, `PrivacyReplicationPolicy`, `PrivacyDatasetRef`, `InMemoryProtectedPrivacyMappingStore`, `transform_privacy_rows`, `build_privacy_openlineage_event`, `quality:privacy`로 tenant-scoped pseudonym, basic anonymization, local text PII redaction, protected in-memory reversible mapping proof, production-to-nonprod replication policy proof, replayable privacy lineage, raw-value-free OpenLineage-compatible privacy event artifact를 증명하는 범위입니다. S58C의 현재 slice는 `ErasureRequest`, `ErasureRetentionPolicy`, `resolve_erasure_subject`, `ErasureManifest`, `is_erased_resource`, `quality:erasure`로 raw subject-free deletion request evidence, tenant-scoped subject resolution, idempotent erasure manifest, backup-retention pending state, audit-minimization action, search rebuild exclusion proof를 증명하는 범위입니다. S60의 현재 slice는 object explain `propertyLineage`, `EvidenceReference`, `EvidenceSourceSpan`, `build_insight_claim_payload`, `build_llm_extraction_evidence`, `revise_evidence_reference`, `quality:ai-evidence`로 property-level source coordinates, evidence-object-required insight claim, model/prompt/extractor version-pinned LLM evidence, immutable evidence revision, masked source-span redaction을 증명하는 범위입니다. S61의 현재 slice는 generated SDK의 `FoundryLiteApiError`, `createRequestId`, `requestContextHeaders`, 공통 SDK `request` wrapper, Web Operations의 request id/error/retryability 표시, `quality:frontend-foundation`을 증명하는 범위입니다. Sprint 45의 Kubernetes 운영 패키지, full backup artifact creation, platform-wide restore-mode traffic gate, real publisher pause/resume executor, automatic restore smoke execution, live OIDC discovery/JWKS polling, IdP introspection/refresh-token revocation, service-account registry, cloud/Vault secret manager, full connector workflow credential refresh, durable environment replication workflow, production protected-mapping backend, runtime DB/outbox/OpenLineage transport integration, durable erasure request API/workflow/executors, durable AI evidence table, real LLM extraction executor, insight evidence viewer, model diff UI, S61 full login/session UI, automatic retry/backoff, cursor helper, duplicate-click lock, stale-version conflict UI, permission-denied masking UX, 나머지 데이터 플랫폼 확장 로드맵은 아직 post-MVP 계획입니다.
 
 ```mermaid
 gantt
@@ -886,18 +895,21 @@ gantt
 | 목표 | 상태 |
 |---|---|
 | PostgreSQL JSONB production object store | 목표, 현재 local SQLite/SQLAlchemy 중심 |
-| Alembic migration operations | baseline migration + metadata parity test는 존재, multi-step upgrade/rollback 운영은 목표 |
-| Managed Temporal worker operations | adapter/time-skipping ratchet은 active-covered, 운영 배포는 목표 |
+| Alembic migration operations | 부분 구현, baseline migration + metadata parity test와 S55 `quality:schema-migrations` single-head/forward-fix downgrade safety gate는 active. 같은 gate는 `migration_phase`와 `release_compatibility`를 요구하고 expand 단계의 destructive operation, 기본값 없는 NOT NULL 컬럼, phase/window mismatch, 준비 안 된 contract cleanup을 차단한다. `db:migrate` 전용 runner와 `quality:schema-migration-runner`는 DB-level singleton lock으로 동시 migration job 중 하나만 실행되게 막고, 실패 migration은 password-masked operator evidence JSON을 남긴다. Live PostgreSQL contention proof, full old/new app compatibility window, multi-step upgrade/rollback 운영 runbook은 목표 |
+| Managed Temporal worker operations | adapter/time-skipping ratchet과 S52 connector-sync control-plane proof는 active, managed worker 운영 배포와 full workflow data-plane은 목표 |
 | Real CEL/JSON Logic evaluator | 목표, 현재 safeExpression subset |
-| Real external ERP/webhook writeback | 목표, 현재 mock/local proof |
+| Real external ERP/webhook writeback | 목표, 현재 mock/local proof와 S53 outcome-unknown/compensation-required idempotent replay, operator-provided reconciliation resolve, sensitive writeback masking proof가 active |
 | Production connector registry/retry workers | 목표 |
 | Managed Elasticsearch deployment | live Testcontainers ratchet은 active-covered, managed cloud packaging은 목표 |
-| Continuously running CDC/search workers | 목표 |
-| Record DLQ replay | 목표, S47 future scope |
-| Late data and watermark policy | 목표, S48 future scope |
+| Continuously running CDC/search workers | 부분 구현, S51 bounded stream archive loop와 stop callback proof는 active, CDC object-indexer daemon/rebalance fencing/search worker 운영화는 목표 |
+| Record DLQ replay | 부분 구현, S47 stream CDC quarantine, Operations API/typed SDK, 유효 payload 실제 replay executor/result, Web Operations UI, source-side threshold, identity/ordering fail-closed, concurrent replay proof는 active, transform-level DLQ policy는 목표 |
+| Late data and watermark policy | 부분 구현, S48 stream/source archive 시간 모델, named timezone override, too-late Record DLQ, partition/source-safe monotonic watermark metadata, committed late-event duplicate delivery idempotency, run-detail lateData reprocessing evidence, materialization watermark/reopen detail, object/materialization late-data badge, downstream impact graph, stale late-delete guard는 active, transform-level DLQ policy는 목표 |
+| Multi-file dataset manifests | 부분 구현, S49 read/preview path가 manifest-listed data files를 순서대로 읽고 directory/bucket listing을 하지 않으며 local/fake/S3 `partition_filter`가 실제 read file 수를 줄이는 증거는 active, multi-part atomic commit과 Iceberg file-level pruning은 목표 |
+| Iceberg maintenance | 부분 구현, S50 planning path가 compaction candidate/orphan/protected/retained snapshot preview와 audit evidence를 남기며 DB committed version snapshot을 삭제 후보에서 제외하는 증거는 active, 실제 compaction rewrite/snapshot expiration/orphan cleanup 실행은 목표 |
+| Data quality contracts | 부분 구현, S54가 commit-time quality check result에 `checked_manifest_hash`/`validated_against_schema_version_id`/`validated_against_schema_version`을 저장하고, 이후 새 schema version이 생겨도 historical run evidence가 당시 schema reference에 pinned되는 증거는 active. 성공 row를 `PASS`, warning failure를 non-blocking `WARN`으로 남기며 검사 후 candidate tamper와 hard failure를 commit 전에 `BLOCK_COMMIT`으로 거부하는 증거도 active. Row-level `not_null`/`unique` quarantine check는 실패 record를 Record DLQ에 `DATA_QUALITY_CONTRACT`로 격리하고 정상 record만 재검증해 commit하는 증거가 active. Operations run detail은 transaction별 quality summary/schema reference/result와 data-quality quarantine failed-row sample을 보여준다. Full DataContract CRUD, owner notification, dedicated failed-row sample UI, quality history/trend, production DB schema race proof는 목표 |
 | Iceberg/Spark active-stack hardening | adapter/profile/composition ratchet은 active-covered, production cluster/catalog operations은 목표 |
 | Kubernetes and backup/restore package | 목표, S45/S57 future scope |
-| Data platform expansion S46-S64 | S46 semantic/data-pattern guardrails는 active, S47+ product/data 기능은 목표 |
+| Data platform expansion S46-S64 | S46 semantic/data-pattern guardrails는 active, S47 Record DLQ, S48 stream/source late-data watermark, S49 multi-file manifest reader와 read/preview partition pruning, S50 Iceberg maintenance planning, S51 bounded stream archive loop, S55 schema migration safety/runner/expand-contract/operator-evidence gates, Dataset schema evolution/backfill-skeleton evidence, Ontology migration activation guard/object reindex plan/generated SDK compatibility evidence, S56 read-only observability detector/SLO evidence, S57 backup/restore preflight, restore-mode outbox retry lockout, post-restore approval evidence, S58A local JWT/OIDC human/M2M/revoked-JWT plus SecretProvider/local-env/redaction/REST connector secretRef refresh proof, S58B tenant-scoped pseudonym/basic anonymization/local PII redaction/protected reversible mapping/replication policy/versioned privacy lineage/OpenLineage artifact proof, S58C erasure request/resolution/manifest/backup-retention/audit-minimization/search-exclusion proof, S60 property-level object explain/AI evidence reference proof, and S61 generated SDK request/error/request-id frontend foundation proof는 부분 구현, 이후 product/data/auth/privacy/AI evidence 기능은 목표 |
 | Broader Operations UI | 목표, 기본 panel/detail/retry/replay는 존재 |
 
 ## 문서 지도

@@ -20,7 +20,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "libs"))
 
-from foundry_lite.infrastructure import schema as db  # noqa: E402
+import foundry_lite.infrastructure.schema as db  # noqa: E402
 from sqlalchemy import MetaData, UniqueConstraint  # noqa: E402
 
 DEFAULT_REVISION_DIR = ROOT / "infra" / "schema_revisions"

@@ -70,6 +70,7 @@ class MaterializationDatasetTransactions(Protocol):
         audit_action: str,
         outbox_event_type: str,
         extra_checks: Sequence[DatasetCheckConfig] | None = None,
+        transaction_metadata: Mapping[str, object] | None = None,
         after_persist: DatasetCommitMetadataHook | None = None,
     ) -> CommitResult:
         """Validate and commit the staged materialized output atomically."""

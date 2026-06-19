@@ -5,10 +5,14 @@ from __future__ import annotations
 import pytest
 from foundry_lite.infrastructure.auth import (
     AUTH_PROFILE_ENV,
+    OIDC_AUDIENCE_ENV,
+    OIDC_ISSUER_ENV,
+    OIDC_JWKS_JSON_ENV,
     RUNTIME_PROFILE_ENV,
     AuthProfileConfigurationError,
     DemoAuthProvider,
     HeaderTrustAuthProvider,
+    JwtOidcAuthProvider,
     auth_provider_for_profile,
     auth_provider_from_env,
 )
@@ -60,9 +64,24 @@ def test_production_demo_profile_fails_fast() -> None:
 
 
 @pytest.mark.parametrize("auth_profile", ["jwt", "oidc"])
-def test_strict_auth_profile_requires_real_adapter(auth_profile: str) -> None:
-    with pytest.raises(AuthProfileConfigurationError, match="is not implemented yet"):
+def test_strict_auth_profile_requires_oidc_configuration(auth_profile: str) -> None:
+    with pytest.raises(AuthProfileConfigurationError, match="JWT/OIDC auth"):
         auth_provider_for_profile(auth_profile, runtime_profile="local")
+
+
+@pytest.mark.parametrize("auth_profile", ["jwt", "oidc"])
+def test_production_strict_auth_profile_builds_jwt_oidc_provider(auth_profile: str) -> None:
+    provider = auth_provider_from_env(
+        {
+            AUTH_PROFILE_ENV: auth_profile,
+            RUNTIME_PROFILE_ENV: "production",
+            OIDC_ISSUER_ENV: "https://issuer.example.test",
+            OIDC_AUDIENCE_ENV: "foundry-lite",
+            OIDC_JWKS_JSON_ENV: '{"keys":[]}',
+        }
+    )
+
+    assert isinstance(provider, JwtOidcAuthProvider)
 
 
 def test_unknown_auth_profile_fails_fast() -> None:

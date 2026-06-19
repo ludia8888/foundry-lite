@@ -9,6 +9,7 @@ from foundry_lite.application.ports import (
     ObjectRecordRow,
     ObjectTypeRow,
     PropertyTypeRow,
+    RuntimeJsonObject,
     RuntimeRunLink,
     TransactionContext,
 )
@@ -40,6 +41,14 @@ class ObjectLineageReader(Protocol):
         object_type_api_name: str,
         ctx: RequestContext | None = None,
     ) -> list[RuntimeRunLink]: ...
+
+    def late_data_badge_for_source(
+        self,
+        source_dataset_version_id: str,
+        *,
+        object_type_api_name: str,
+        ctx: RequestContext | None = None,
+    ) -> RuntimeJsonObject | None: ...
 
 
 class ObjectQueryOntologyLookup(Protocol):

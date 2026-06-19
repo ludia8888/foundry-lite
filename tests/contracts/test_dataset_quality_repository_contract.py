@@ -10,6 +10,7 @@ import pytest
 from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckRecord,
     DatasetCheckResultRecord,
+    DatasetCheckResultRow,
     DatasetCheckRow,
     DatasetQualityRepository,
     DatasetSchemaRecord,
@@ -109,11 +110,28 @@ class FakeDatasetQualityRepository:
                 "check_id": record.check_id,
                 "run_id": record.run_id,
                 "transaction_id": record.transaction_id,
+                "checked_manifest_hash": record.checked_manifest_hash,
+                "validated_against_schema_version_id": record.validated_against_schema_version_id,
+                "validated_against_schema_version": record.validated_against_schema_version,
                 "status": record.status,
                 "details": dict(record.details),
                 "created_at": record.created_at,
             }
         )
+
+    def check_results_for_transaction(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transaction_id: str,
+    ) -> list[DatasetCheckResultRow]:
+        del transaction
+        return [
+            cast(DatasetCheckResultRow, dict(row))
+            for row in sorted(self.check_results, key=lambda item: (item["created_at"], item["id"]))
+            if row["tenant_id"] == tenant_id and row["transaction_id"] == transaction_id
+        ]
 
 
 @dataclass
@@ -218,8 +236,11 @@ def _check_result_record(check_id: str = "check_a") -> DatasetCheckResultRecord:
         check_id=check_id,
         run_id="run_test",
         transaction_id="dstx_test",
-        status="passed",
-        details={"status": "passed"},
+        checked_manifest_hash="candidate_hash_v1",
+        validated_against_schema_version_id="schema_v1",
+        validated_against_schema_version=1,
+        status="PASS",
+        details={"status": "passed", "contract_status": "PASS"},
         created_at="2026-06-10T00:00:00Z",
     )
 
@@ -329,8 +350,53 @@ def test_insert_check_result_persists(harness: QualityHarness) -> None:
     with harness.transaction() as txn:
         harness.repository.insert_check(transaction=txn, record=_check_record())
         harness.repository.insert_check_result(transaction=txn, record=_check_result_record())
+        found = harness.repository.check_results_for_transaction(
+            transaction=txn,
+            tenant_id="tenant-test",
+            transaction_id="dstx_test",
+        )
     rows = harness.check_result_rows()
     assert len(rows) == 1
-    assert rows[0]["status"] == "passed"
+    assert rows[0]["status"] == "PASS"
     assert rows[0]["check_id"] == "check_a"
-    assert rows[0]["details"] == {"status": "passed"}
+    assert rows[0]["checked_manifest_hash"] == "candidate_hash_v1"
+    assert rows[0]["validated_against_schema_version_id"] == "schema_v1"
+    assert rows[0]["validated_against_schema_version"] == 1
+    assert rows[0]["details"] == {"status": "passed", "contract_status": "PASS"}
+    assert len(found) == 1
+    assert found[0]["id"] == "cr_a"
+
+
+def test_check_results_for_transaction_is_tenant_scoped(harness: QualityHarness) -> None:
+    if isinstance(harness, SqlAlchemyDatasetQualityHarness):
+        with harness.engine.begin() as conn:
+            conn.execute(
+                db.tenants.insert().values(
+                    id="tenant-other",
+                    name="Other",
+                    created_at="2026-06-10T00:00:00Z",
+                )
+            )
+    other_result = DatasetCheckResultRecord(
+        check_result_id="cr_other",
+        tenant_id="tenant-other",
+        check_id="check_other",
+        run_id="run_other",
+        transaction_id="dstx_test",
+        checked_manifest_hash="candidate_hash_other",
+        validated_against_schema_version_id="schema_v1",
+        validated_against_schema_version=1,
+        status="WARN",
+        details={"status": "failed", "contract_status": "WARN"},
+        created_at="2026-06-10T00:00:01Z",
+    )
+    with harness.transaction() as txn:
+        harness.repository.insert_check(transaction=txn, record=_check_record())
+        harness.repository.insert_check_result(transaction=txn, record=_check_result_record())
+        harness.repository.insert_check_result(transaction=txn, record=other_result)
+        found = harness.repository.check_results_for_transaction(
+            transaction=txn,
+            tenant_id="tenant-test",
+            transaction_id="dstx_test",
+        )
+    assert [row["id"] for row in found] == ["cr_a"]

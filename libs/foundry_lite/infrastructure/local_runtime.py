@@ -49,6 +49,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyRuntimeRepository,
     SqlAlchemyTransformRepository,
 )
+from foundry_lite.infrastructure.secrets import secret_provider_from_env
 from foundry_lite.security.policy import ClassificationProvider, PolicyService
 
 
@@ -112,6 +113,7 @@ def create_local_core_dependencies(
         runtime_repository=SqlAlchemyRuntimeRepository(engine),
         dataset_storage=storage_adapter,
         search_adapter=search_adapter,
+        secret_provider=secret_provider_from_env(),
         stream_adapter=stream_adapter,
         workflow_adapter=workflow_adapter,
     )

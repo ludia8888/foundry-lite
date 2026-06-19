@@ -34,6 +34,9 @@ FOUNDRY_TASK_QUEUE = "foundry-lite"
 #: Registered workflow type name the adapter starts by string (vendor-neutral).
 FOUNDRY_WORKFLOW_NAME = "FoundryWorkflow"
 
+#: First product workflow type used by S52 Temporal engine integration.
+CONNECTOR_SYNC_WORKFLOW_NAME = "ConnectorSyncWorkflow"
+
 #: Bounded activity retry so a permanent failure surfaces instead of looping
 #: forever (a timeout with unbounded retries never completes the workflow).
 _ACTIVITY_RETRY = RetryPolicy(
@@ -68,6 +71,21 @@ class FoundryWorkflow:
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Execute the processing activity with a bounded timeout and retry."""
+        return await workflow.execute_activity(
+            run_workflow_step,
+            payload,
+            start_to_close_timeout=timedelta(seconds=60),
+            retry_policy=_ACTIVITY_RETRY,
+        )
+
+
+@workflow.defn(name=CONNECTOR_SYNC_WORKFLOW_NAME)
+class ConnectorSyncWorkflow:
+    """Product workflow entrypoint for connector sync orchestration."""
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Run the first connector-sync workflow step through Temporal."""
         return await workflow.execute_activity(
             run_workflow_step,
             payload,

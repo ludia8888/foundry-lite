@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
 from typing import Final
 
 from foundry_lite.application.ports.auth_provider import AuthProvider
 from foundry_lite.infrastructure.auth.local import DemoAuthProvider, HeaderTrustAuthProvider
+from foundry_lite.infrastructure.auth.oidc import JwtOidcAuthProvider, jwt_oidc_auth_provider_from_env
 
 __all__ = [
     "AUTH_PROFILE_ENV",
@@ -41,10 +43,15 @@ def auth_provider_from_env(environ: Mapping[str, str] | None = None) -> AuthProv
     return auth_provider_for_profile(
         auth_profile=source.get(AUTH_PROFILE_ENV),
         runtime_profile=source.get(RUNTIME_PROFILE_ENV),
+        environ=source,
     )
 
 
-def auth_provider_for_profile(auth_profile: str | None, runtime_profile: str | None) -> AuthProvider:
+def auth_provider_for_profile(
+    auth_profile: str | None,
+    runtime_profile: str | None,
+    environ: Mapping[str, str] | None = None,
+) -> AuthProvider:
     """Build an AuthProvider, failing before startup for unsafe production choices."""
 
     resolved_auth_profile = _normalise_profile(auth_profile, DEFAULT_AUTH_PROFILE)
@@ -55,11 +62,15 @@ def auth_provider_for_profile(auth_profile: str | None, runtime_profile: str | N
     if resolved_auth_profile in _DEMO_AUTH_PROFILES:
         return DemoAuthProvider()
     if resolved_auth_profile in _STRICT_AUTH_PROFILES:
-        raise AuthProfileConfigurationError(
-            f"{AUTH_PROFILE_ENV}={resolved_auth_profile} is not implemented yet; "
-            "configure a real JWT/OIDC adapter before using this profile"
-        )
+        return _strict_auth_provider_from_env(environ)
     raise AuthProfileConfigurationError(f"unknown auth profile: {resolved_auth_profile}")
+
+
+def _strict_auth_provider_from_env(environ: Mapping[str, str] | None) -> JwtOidcAuthProvider:
+    try:
+        return jwt_oidc_auth_provider_from_env(environ)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise AuthProfileConfigurationError(f"JWT/OIDC auth configuration error: {exc}") from exc
 
 
 def _normalise_profile(value: str | None, default: str) -> str:

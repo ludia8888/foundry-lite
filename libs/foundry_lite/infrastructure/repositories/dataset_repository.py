@@ -30,6 +30,9 @@ class SqlAlchemyDatasetRepository:
         owner_team: str | None,
         classification: str | None,
         primary_key: list[str],
+        partition_spec: list[str],
+        sort_order: list[str],
+        target_file_size_bytes: int | None,
         created_at: str,
         updated_at: str,
     ) -> None:
@@ -47,6 +50,9 @@ class SqlAlchemyDatasetRepository:
                     classification=classification,
                     status="active",
                     primary_key=primary_key,
+                    partition_spec=partition_spec,
+                    sort_order=sort_order,
+                    target_file_size_bytes=target_file_size_bytes,
                     created_at=created_at,
                     updated_at=updated_at,
                 )
@@ -71,3 +77,21 @@ class SqlAlchemyDatasetRepository:
                 .first()
             )
             return cast(DatasetRow, dict(row)) if row else None
+
+    def list_active_datasets(self, *, tenant_id: str) -> list[DatasetRow]:
+        with self.engine.begin() as conn:
+            rows = (
+                conn.execute(
+                    select(db.datasets)
+                    .where(
+                        and_(
+                            db.datasets.c.tenant_id == tenant_id,
+                            db.datasets.c.status == "active",
+                        )
+                    )
+                    .order_by(db.datasets.c.namespace, db.datasets.c.name)
+                )
+                .mappings()
+                .all()
+            )
+            return [cast(DatasetRow, dict(row)) for row in rows]

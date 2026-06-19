@@ -135,6 +135,111 @@ def test_cdc_duplicate_event_idempotent(tmp_path: Path) -> None:
     assert after_duplicate["properties"] == after_first["properties"]
 
 
+def test_late_event_reopens_expected_materialization(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    _seed_order_snapshot(foundry, tmp_path, ctx)
+    foundry.ontology.apply(str(_order_ontology(tmp_path)), ctx=ctx)
+    foundry.objects.reindex("Order", ctx=ctx)
+    foundry.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
+    first = foundry.materialization.run("order_current", ctx=ctx)
+    late_update = _cdc_event(
+        "topic:0:40",
+        "u",
+        40,
+        after={"order_id": "O-1001", "status": "APPROVED_LATE", "amount": 760},
+    )
+    late_update["late_data_status"] = "LATE_REQUIRES_REPROCESS"
+    late_update["event_time_lag_seconds"] = 7200
+
+    index_result = foundry.objects.index_cdc_events("Order", [late_update], ctx=ctx)
+    second = foundry.materialization.run("order_current", ctx=ctx)
+    second_run = _materialization_run_for_version(foundry, ctx, second.version_id)
+    detail = foundry.operations.run_detail("materialization", str(second_run["id"]), ctx=ctx)
+    rows = _materialization_rows_for_version(foundry, ctx, second.version_id)
+    materialization = detail["materialization"]
+    reopen = materialization["reopen"]
+
+    assert index_result["objects_upserted"] == 1
+    assert rows[0]["status"] == "APPROVED_LATE"
+    assert reopen["isReopened"] is True
+    assert reopen["reason"] == "late_data_reprocess"
+    assert reopen["previousDatasetVersionId"] == first.version_id
+    assert reopen["sourceIndexRunId"] == index_result["index_run_id"]
+    assert reopen["lateEventIds"] == ["topic:0:40"]
+    assert materialization["watermark"]["lateDataReopen"] == reopen
+    assert detail["datasetTransaction"]["committed_version_id"] == second.version_id
+
+
+def test_late_data_badge_marks_impacted_insight(tmp_path: Path) -> None:
+    foundry, ctx, index_result, detail = _late_order_current_context(tmp_path)
+
+    object_detail = foundry.objects.get("Order", "O-1001", ctx=ctx, include_explain=True)
+    object_badge = object_detail["explain"]["lateDataBadge"]
+    materialization_badge = detail["materialization"]["lateDataBadge"]
+    source_links = object_detail["explain"]["sourceRunChain"]
+
+    assert object_badge["isImpacted"] is True
+    assert object_badge["sourceEventId"] == "topic:0:40"
+    assert object_badge["sourceRun"]["runId"] == index_result["index_run_id"]
+    assert materialization_badge["isImpacted"] is True
+    assert materialization_badge["apiName"] == "order_current"
+    assert materialization_badge["sourceIndexRunId"] == index_result["index_run_id"]
+    assert any(link["relation"] == "cdc_event_indexed_from" for link in source_links)
+
+
+def test_late_data_downstream_impact_graph_lists_materializations(tmp_path: Path) -> None:
+    _, _, index_result, detail = _late_order_current_context(tmp_path)
+
+    impact = detail["downstreamImpact"]
+    roots = {(row["resourceType"], row["resourceId"]) for row in impact["rootResources"]}
+    affected_runs = {(row["runType"], row["runId"], row["relation"]) for row in impact["affectedRuns"]}
+    badges = impact["lateDataBadges"]
+
+    assert impact["status"] == "IMPACTED"
+    assert ("index_run", index_result["index_run_id"]) in roots
+    assert ("materialization", detail["runId"], "late_data_reprocessed") in affected_runs
+    assert badges[0]["resourceType"] == "materialization"
+    assert badges[0]["lateEventIds"] == ["topic:0:40"]
+
+
+def test_late_delete_does_not_resurrect_stale_object(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    _seed_order_snapshot(foundry, tmp_path, ctx)
+    foundry.ontology.apply(str(_order_ontology(tmp_path)), ctx=ctx)
+    foundry.objects.reindex("Order", ctx=ctx)
+    update = _cdc_event(
+        "topic:0:51",
+        "u",
+        51,
+        after={"order_id": "O-1001", "status": "APPROVED_CURRENT", "amount": 780},
+    )
+    foundry.objects.index_cdc_events("Order", [update], ctx=ctx)
+    late_delete = _cdc_event(
+        "topic:0:50-late-delete",
+        "d",
+        50,
+        before={"order_id": "O-1001", "status": "PENDING", "amount": 700},
+    )
+    late_delete["late_data_status"] = "LATE_REQUIRES_REPROCESS"
+    late_delete["event_time_lag_seconds"] = 5400
+
+    result = foundry.objects.index_cdc_events("Order", [late_delete], ctx=ctx)
+    current = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    active_ids = {item["objectId"] for item in foundry.objects.query("Order", ctx=ctx)["items"]}
+    foundry.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
+    order_current = foundry.materialization.run("order_current", ctx=ctx)
+    rows = _materialization_rows_for_version(foundry, ctx, order_current.version_id)
+
+    assert result["events_skipped"] == 1
+    assert result["objects_deleted"] == 0
+    assert current.get("deleted") is not True
+    assert current["properties"]["status"] == "APPROVED_CURRENT"
+    assert active_ids == {"O-1001"}
+    assert rows[0]["status"] == "APPROVED_CURRENT"
+
+
 def test_cdc_source_transaction_group_not_partially_committed_without_status(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -204,6 +309,36 @@ def _seed_order_snapshot(foundry: FoundryLite, tmp_path: Path, ctx: RequestConte
     csv_path = tmp_path / "orders.csv"
     csv_path.write_text("order_id,status,amount\nO-1001,PENDING,700\n", encoding="utf-8")
     foundry.datasets.upload_csv("clean.orders", csv_path, ctx=ctx)
+
+
+def _late_order_current_context(
+    tmp_path: Path,
+) -> tuple[FoundryLite, RequestContext, dict[str, object], dict[str, object]]:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    _seed_order_snapshot(foundry, tmp_path, ctx)
+    foundry.ontology.apply(str(_order_ontology(tmp_path)), ctx=ctx)
+    foundry.objects.reindex("Order", ctx=ctx)
+    foundry.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
+    foundry.materialization.run("order_current", ctx=ctx)
+    late_update = _late_update_event()
+    index_result = foundry.objects.index_cdc_events("Order", [late_update], ctx=ctx)
+    second = foundry.materialization.run("order_current", ctx=ctx)
+    second_run = _materialization_run_for_version(foundry, ctx, second.version_id)
+    detail = foundry.operations.run_detail("materialization", str(second_run["id"]), ctx=ctx)
+    return foundry, ctx, dict(index_result), dict(detail)
+
+
+def _late_update_event() -> dict[str, object]:
+    late_update = _cdc_event(
+        "topic:0:40",
+        "u",
+        40,
+        after={"order_id": "O-1001", "status": "APPROVED_LATE", "amount": 760},
+    )
+    late_update["late_data_status"] = "LATE_REQUIRES_REPROCESS"
+    late_update["event_time_lag_seconds"] = 7200
+    return late_update
 
 
 def _order_ontology(tmp_path: Path) -> Path:
@@ -282,12 +417,22 @@ def _materialization_rows_for_version(
     ctx: RequestContext,
     version_id: str,
 ) -> list[dict[str, object]]:
-    run = next(
-        row
-        for row in foundry.operations.query_runs(ctx=ctx, run_type="materialization")["materializationRuns"]
-        if row["target_dataset_version_id"] == version_id
-    )
+    run = _materialization_run_for_version(foundry, ctx, version_id)
     return [dict(row) for row in foundry.materialization.replay_rows(str(run["id"]), ctx=ctx).rows]
+
+
+def _materialization_run_for_version(
+    foundry: FoundryLite,
+    ctx: RequestContext,
+    version_id: str,
+) -> dict[str, object]:
+    return dict(
+        next(
+            row
+            for row in foundry.operations.query_runs(ctx=ctx, run_type="materialization")["materializationRuns"]
+            if row["target_dataset_version_id"] == version_id
+        )
+    )
 
 
 def _object_index_version(foundry: FoundryLite, ctx: RequestContext, object_id: str) -> str:

@@ -40,7 +40,14 @@ class FoundryLite:
     """
 
     def __init__(self, *, dependencies: CoreDependencies) -> None:
-        # CoreDependencies is assembled by composition roots, not this facade.
+        self._attach_dependencies(dependencies)
+        services = CoreServices.create(dependencies)
+        self._services = services
+        self._attach_facades(services)
+        self.metadata_repository.initialize_schema()
+        self.bootstrap()
+
+    def _attach_dependencies(self, dependencies: CoreDependencies) -> None:
         self.root = dependencies.root
         self.storage_root = dependencies.storage_root
         self.engine = dependencies.engine
@@ -60,19 +67,25 @@ class FoundryLite:
         self.object_set_repository = dependencies.object_set_repository
         self.runtime_repository = dependencies.runtime_repository
         self.dataset_storage = dependencies.dataset_storage
-        services = CoreServices.create(dependencies)
-        self._services = services
-        # One facade per bounded context.
+        self.secret_provider = dependencies.secret_provider
+
+    def _attach_facades(self, services: CoreServices) -> None:
         self.datasets = DatasetWorkspace(services.dataset)
         self.transforms = TransformPipeline(services.transform)
         self.ontology = OntologyRegistry(services.ontology)
         self.objects = ObjectStore(services.object_store)
         self.actions = ActionGateway(services.action)
         self.materialization = MaterializationRunner(services.materialization)
-        self.operations = OperationsConsole(services.runtime, services.materialization)
+        self.operations = OperationsConsole(
+            services.action,
+            services.runtime,
+            services.materialization,
+            services.record_dlq,
+            services.backup_restore,
+            services.iceberg_maintenance,
+            services.workflow,
+        )
         self.demo = SupplyChainDemo(services.demo, reset_fresh=lambda: self.reset(confirm_dev=True))
-        self.metadata_repository.initialize_schema()
-        self.bootstrap()
 
     def reset(self, *, confirm_dev: bool = False) -> None:
         if not confirm_dev:

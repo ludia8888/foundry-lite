@@ -36,6 +36,9 @@ class IndexRunCursor(TypedDict, total=False):
     last_event_id: str | None
     last_ordering: Mapping[str, object]
     events_skipped: int
+    lateDataStatusCounts: Mapping[str, int]
+    lateEventIds: list[str]
+    maxEventTimeLagSeconds: int | None
 
 
 class IndexRunError(TypedDict, total=False):

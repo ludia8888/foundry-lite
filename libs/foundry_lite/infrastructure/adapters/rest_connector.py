@@ -20,6 +20,7 @@ from foundry_lite.application.ports.connector_adapter import (
     RestPaginationConfig,
     RestSourceConfig,
 )
+from foundry_lite.application.ports.secret_provider import REDACTED_VALUE, SecretProvider
 from foundry_lite.domain.errors import ValidationFailed
 
 REST_CONNECTOR_PROFILE = "rest-pull-connector"
@@ -29,6 +30,9 @@ class RestPullConnectorAdapter:
     """HTTP JSON REST connector that returns one cursor page as a snapshot."""
 
     profile_name = REST_CONNECTOR_PROFILE
+
+    def __init__(self, *, secret_provider: SecretProvider | None = None) -> None:
+        self._secret_provider = secret_provider
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -56,7 +60,7 @@ class RestPullConnectorAdapter:
         payload = _load_json(
             _http_get(
                 _request_url(config, request.cursor),
-                _auth_headers(config.auth),
+                _auth_headers(config.auth, self._secret_provider),
                 allow_private_network=config.allow_private_network,
             )
         )
@@ -113,14 +117,47 @@ def _cursor_value(cursor: Mapping[str, object] | None, pagination: RestPaginatio
     return str(value)
 
 
-def _auth_headers(auth: RestAuthConfig) -> dict[str, str]:
+def _auth_headers(auth: RestAuthConfig, secret_provider: SecretProvider | None) -> dict[str, str]:
     if auth.mode == "none":
         return {}
-    if auth.mode == "bearer" and auth.token:
-        return {"Authorization": f"Bearer {auth.token}"}
-    if auth.mode == "header" and auth.header_name and auth.header_value:
-        return {auth.header_name: auth.header_value}
+    if auth.mode == "bearer":
+        token = _secret_ref_or_value(auth.token, auth.token_secret_ref, secret_provider)
+        if token:
+            return {"Authorization": f"Bearer {token}"}
+    if auth.mode == "header" and auth.header_name:
+        header_value = _secret_ref_or_value(auth.header_value, auth.header_value_secret_ref, secret_provider)
+        if header_value:
+            return {auth.header_name: header_value}
     raise ValidationFailed("REST connector auth config is incomplete")
+
+
+def _secret_ref_or_value(
+    value: str | None,
+    secret_ref: str | None,
+    secret_provider: SecretProvider | None,
+) -> str | None:
+    configured_value = _configured_string(value)
+    configured_secret_ref = _configured_string(secret_ref)
+    if configured_value and configured_secret_ref:
+        raise ValidationFailed(
+            "REST connector auth config cannot mix direct secret value and secretRef",
+            details={"secret_ref": configured_secret_ref, "secret_value": REDACTED_VALUE},
+        )
+    if configured_secret_ref is None:
+        return configured_value
+    if secret_provider is None:
+        raise ValidationFailed(
+            "REST connector auth secretRef requires SecretProvider",
+            details={"secret_ref": configured_secret_ref, "secret_value": REDACTED_VALUE},
+        )
+    return secret_provider.get_secret(configured_secret_ref).value
+
+
+def _configured_string(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _http_get(url: str, headers: Mapping[str, str], *, allow_private_network: bool = False) -> bytes:

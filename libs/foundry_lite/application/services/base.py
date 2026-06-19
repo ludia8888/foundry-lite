@@ -6,24 +6,26 @@ from typing import ClassVar
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports import (
+    ActionRepository,
     ComputeAdapter,
+    ConnectorAdapter,
+    DatasetQualityRepository,
     DatasetRepository,
     DatasetStorageAdapter,
     DatasetTransactionRepository,
     DatasetVersionRepository,
+    MaterializationRepository,
     ObjectIndexRepository,
     ObjectReadRepository,
     ObjectSetRepository,
+    OntologyRepository,
     RuntimeRepository,
     StreamAdapter,
     TransactionManager,
+    TransformRepository,
+    WorkflowAdapter,
 )
-from foundry_lite.application.ports.action_repository import ActionRepository
-from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
-from foundry_lite.application.ports.dataset_quality_repository import DatasetQualityRepository
-from foundry_lite.application.ports.materialization_repository import MaterializationRepository
-from foundry_lite.application.ports.ontology_repository import OntologyRepository
-from foundry_lite.application.ports.transform_repository import TransformRepository
+from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
 from foundry_lite.security.policy import PolicyService
 
@@ -31,12 +33,14 @@ CollaboratorMap = Mapping[str, object]
 
 SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_service": "ActionService",
+    "backup_restore_service": "BackupRestoreService",
     "dataset_ingest_service": "DatasetIngestService",
     "dataset_quality_service": "DatasetQualityService",
     "dataset_registry_service": "DatasetRegistryService",
     "dataset_transaction_service": "DatasetTransactionService",
     "dataset_version_service": "DatasetVersionService",
     "demo_service": "DemoService",
+    "iceberg_maintenance_service": "IcebergMaintenanceService",
     "materialization_service": "MaterializationService",
     "object_indexing_service": "ObjectIndexingService",
     "object_links_service": "ObjectLinksService",
@@ -45,8 +49,10 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "object_search_service": "ObjectSearchService",
     "object_sets_service": "ObjectSetsService",
     "ontology_service": "OntologyService",
+    "record_dlq_service": "RecordDlqService",
     "runtime_service": "RuntimeService",
     "transform_service": "TransformService",
+    "workflow_orchestration_service": "WorkflowOrchestrationService",
 }
 
 
@@ -75,7 +81,9 @@ class CoreService:
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository
     runtime_repository: RuntimeRepository
+    search_adapter: SearchAdapter
     stream_adapter: StreamAdapter
+    workflow_adapter: WorkflowAdapter
     dataset_storage: DatasetStorageAdapter
     engine: TransactionManager
     policy: PolicyService

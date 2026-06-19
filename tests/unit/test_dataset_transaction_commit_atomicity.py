@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from foundry_lite.application.ports import DatasetVersionConflictError
-from foundry_lite.application.primitives import StagedFileStats
+from foundry_lite.application.ports import DatasetSchemaReference, DatasetVersionConflictError
+from foundry_lite.application.primitives import StagedFileStats, _file_hash
+from foundry_lite.application.services.dataset.schema_evolution import DatasetSchemaEvolutionResult
 from foundry_lite.application.services.dataset.transactions import DatasetTransactionService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, ValidationFailed
@@ -83,7 +84,7 @@ class _Quality:
             parquet_path=parquet_path,
             row_count=1,
             byte_size=parquet_path.stat().st_size,
-            content_hash="content-hash-demo",
+            content_hash=_file_hash(parquet_path),
             schema_json={"fields": [{"name": "order_id", "type": "string"}]},
             schema_hash="schema-hash-demo",
         )
@@ -94,8 +95,14 @@ class _Quality:
     def _schema_compatibility_error(self, *_args: object, **_kwargs: object) -> None:
         return None
 
+    def _schema_evolution_result(self, *_args: object, **_kwargs: object) -> DatasetSchemaEvolutionResult:
+        return DatasetSchemaEvolutionResult(failure=None, metadata=None)
+
     def _ensure_schema(self, *_args: object, **_kwargs: object) -> int:
         return 1
+
+    def _ensure_schema_reference(self, *_args: object, **_kwargs: object) -> DatasetSchemaReference:
+        return DatasetSchemaReference(schema_id="schema_v1", version=1)
 
 
 class _SchemaRaceQuality(_Quality):
@@ -104,9 +111,12 @@ class _SchemaRaceQuality(_Quality):
         self.repository = repository
         self.saw_lock_before_compatibility_check = False
 
-    def _schema_compatibility_error(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+    def _schema_evolution_result(self, *_args: object, **_kwargs: object) -> DatasetSchemaEvolutionResult:
         self.saw_lock_before_compatibility_check = bool(self.repository.lock_calls)
-        return {"check": "schema_compatibility", "status": "failed", "reason": "latest_schema_changed"}
+        return DatasetSchemaEvolutionResult(
+            failure={"check": "schema_compatibility", "status": "failed", "reason": "latest_schema_changed"},
+            metadata=None,
+        )
 
 
 class _VersionLookup:
@@ -174,7 +184,14 @@ def test_schema_compatibility_revalidates_if_latest_schema_changes(tmp_path: Pat
     assert repository.abort_called is True
     assert repository.insert_file_called is False
     assert repository.commit_transaction_called is False
-    assert failures == [{"check": "schema_compatibility", "status": "failed", "reason": "latest_schema_changed"}]
+    assert failures == [
+        {
+            "check": "schema_compatibility",
+            "status": "failed",
+            "reason": "latest_schema_changed",
+            "contract_status": "BLOCK_COMMIT",
+        }
+    ]
 
 
 def _service(

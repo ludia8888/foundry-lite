@@ -7,6 +7,7 @@ from typing import Literal, Protocol
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 
 StreamSchemaStrategy = Literal["envelope_json", "cdc_envelope_json"]
+LateDataStatus = Literal["ON_TIME", "LATE_ACCEPTED", "LATE_REQUIRES_REPROCESS", "TOO_LATE"]
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,14 @@ class StreamArchiveConfig:
     partition: int = 0
     limit: int = 100
     schema_strategy: StreamSchemaStrategy = "envelope_json"
+    max_record_error_ratio: float = 1.0
+    fail_closed_error_kinds: tuple[str, ...] = ("IDENTITY_ERROR", "ORDERING_ERROR")
+    event_time_field: str = "event_time"
+    source_time_field: str = "source_time"
+    time_zone: str | None = None
+    allowed_lateness_seconds: int = 172800
+    too_late_after_seconds: int = 2592000
+    clock_skew_seconds: int = 300
 
 
 class StreamAdapter(Protocol):

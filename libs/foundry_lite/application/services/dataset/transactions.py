@@ -6,10 +6,10 @@ from pathlib import Path
 from foundry_lite.application.ports import (
     DatasetCheckConfig,
     DatasetCheckResult,
-    DatasetFileRecord,
     DatasetManifest,
     DatasetRow,
     DatasetRunKind,
+    DatasetSchemaReference,
     DatasetTransactionMetadata,
     DatasetTransactionRecord,
     DatasetTransactionRow,
@@ -20,6 +20,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import (
     CommitResult,
+    StagedFileStats,
     _new_id,
     _now,
 )
@@ -29,6 +30,7 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetRuntimeBoundary,
     DatasetVersionLookup,
 )
+from foundry_lite.application.services.dataset.schema_evolution import DatasetSchemaEvolutionResult
 from foundry_lite.application.services.dataset.storage_consistency import (
     cleanup_staging_transaction,
     committed_manifest,
@@ -40,13 +42,19 @@ from foundry_lite.application.services.dataset.transaction_models import (
     DatasetFinalizationCheck,
     DatasetFinalizationRequest,
 )
-from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import (
-    ConflictDetected,
-    InvariantViolation,
-    NotFound,
-    ValidationFailed,
+from foundry_lite.application.services.dataset.transaction_payloads import (
+    block_commit_failure,
+    build_commit_result,
+    build_dataset_file_record,
+    checked_manifest_hash,
+    current_candidate_manifest_hash,
+    dataset_commit_after_ref,
+    dataset_commit_persistence_error,
+    dataset_version_conflict_error,
+    finalized_transaction_metadata,
 )
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
 DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
 
@@ -141,7 +149,7 @@ class DatasetTransactionService(CoreService):
         )
         validation = self._validate_finalization_request(conn, ctx, request)
         commit = self._store_finalized_dataset_commit(conn, ctx, request, validation)
-        result = self._commit_result(request, validation, commit)
+        result = build_commit_result(request, validation, commit)
         self._persist_commit_metadata(conn, ctx, request, validation, commit, result, after_persist)
         return result
 
@@ -152,10 +160,58 @@ class DatasetTransactionService(CoreService):
         request: DatasetFinalizationRequest,
     ) -> DatasetFinalizationCheck:
         tx = self._require_open_transaction(conn, request.transaction_id)
-        stats = self.dataset_quality_service._inspect_parquet(
-            request.staged_parquet,
-            request.target.primary_key,
+        validation = self._validate_candidate_once(conn, ctx, request, branch=str(tx["branch"]))
+        if current_candidate_manifest_hash(request.staged_parquet, validation) == validation.checked_manifest_hash:
+            return validation
+        validation = self._validate_candidate_once(conn, ctx, request, branch=str(tx["branch"]))
+        if current_candidate_manifest_hash(request.staged_parquet, validation) == validation.checked_manifest_hash:
+            return validation
+        self._abort_finalization_with_failures(
+            conn,
+            ctx,
+            request.transaction_id,
+            [{"check": "candidate_manifest_hash", "status": "failed", "reason": "changed during validation"}],
         )
+        raise AssertionError("unreachable")
+
+    def _validate_candidate_once(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        request: DatasetFinalizationRequest,
+        *,
+        branch: str,
+    ) -> DatasetFinalizationCheck:
+        stats = self.dataset_quality_service._inspect_parquet(request.staged_parquet, request.target.primary_key)
+        checked_candidate_hash = checked_manifest_hash(stats)
+        schema_ref = self.dataset_quality_service._ensure_schema_reference(
+            conn, request.target.row, stats.schema_json, stats.schema_hash
+        )
+        evolution = self.dataset_quality_service._schema_evolution_result(
+            conn, request.target.row, stats.schema_json, schema_ref
+        )
+        failures = self._finalization_failures(conn, ctx, request, stats, schema_ref, checked_candidate_hash, evolution)
+        if failures:
+            self._abort_finalization_with_failures(conn, ctx, request.transaction_id, failures)
+        return DatasetFinalizationCheck(
+            branch=branch,
+            stats=stats,
+            checked_manifest_hash=checked_candidate_hash,
+            schema_version_id=schema_ref.schema_id,
+            schema_version=schema_ref.version,
+            schema_evolution_metadata=evolution.metadata,
+        )
+
+    def _finalization_failures(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        request: DatasetFinalizationRequest,
+        stats: StagedFileStats,
+        schema_ref: DatasetSchemaReference,
+        checked_manifest_hash: str,
+        evolution: DatasetSchemaEvolutionResult,
+    ) -> list[DatasetCheckResult]:
         failures = self.dataset_quality_service._run_dataset_checks(
             conn,
             ctx,
@@ -165,17 +221,13 @@ class DatasetTransactionService(CoreService):
             request.run_id,
             request.transaction_id,
             extra_checks=request.extra_checks,
+            checked_manifest_hash=checked_manifest_hash,
+            validated_against_schema_version_id=schema_ref.schema_id,
+            validated_against_schema_version=schema_ref.version,
         )
-        compatibility_error = self.dataset_quality_service._schema_compatibility_error(
-            conn,
-            request.target.row,
-            stats.schema_json,
-        )
-        if compatibility_error:
-            failures.append(compatibility_error)
-        if failures:
-            self._abort_finalization_with_failures(conn, ctx, request.transaction_id, failures)
-        return DatasetFinalizationCheck(branch=str(tx["branch"]), stats=stats)
+        if evolution.failure:
+            failures.append(evolution.failure)
+        return failures
 
     def _store_finalized_dataset_commit(
         self,
@@ -184,12 +236,7 @@ class DatasetTransactionService(CoreService):
         request: DatasetFinalizationRequest,
         validation: DatasetFinalizationCheck,
     ) -> DatasetCommitArtifacts:
-        schema_version = self.dataset_quality_service._ensure_schema(
-            conn,
-            request.target.row,
-            validation.stats.schema_json,
-            validation.stats.schema_hash,
-        )
+        self._ensure_checked_candidate_unchanged(conn, ctx, request, validation)
         version_number = self.dataset_version_service._next_dataset_version_number(
             conn,
             request.target.dataset_id,
@@ -209,8 +256,32 @@ class DatasetTransactionService(CoreService):
         return DatasetCommitArtifacts(
             version_id=version_id,
             version_number=version_number,
-            schema_version=schema_version,
+            schema_version=validation.schema_version,
             stored_commit=stored_commit,
+        )
+
+    def _ensure_checked_candidate_unchanged(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        request: DatasetFinalizationRequest,
+        validation: DatasetFinalizationCheck,
+    ) -> None:
+        actual_hash = current_candidate_manifest_hash(request.staged_parquet, validation)
+        if actual_hash == validation.checked_manifest_hash:
+            return
+        self._abort_finalization_with_failures(
+            conn,
+            ctx,
+            request.transaction_id,
+            [
+                {
+                    "check": "candidate_manifest_hash",
+                    "status": "failed",
+                    "expected": validation.checked_manifest_hash,
+                    "actual": actual_hash,
+                }
+            ],
         )
 
     def _persist_commit_metadata(
@@ -230,10 +301,10 @@ class DatasetTransactionService(CoreService):
                 after_persist(conn, result)
         except DatasetVersionConflictError as exc:
             cleanup = self._cleanup_committed_version_artifacts(ctx, request, validation, commit)
-            raise self._version_conflict_error(request, validation, commit, cleanup) from exc
+            raise dataset_version_conflict_error(request, validation, commit, cleanup) from exc
         except Exception as exc:
             cleanup = self._cleanup_committed_version_artifacts(ctx, request, validation, commit)
-            raise self._commit_persistence_error(request, validation, commit, cleanup) from exc
+            raise dataset_commit_persistence_error(request, validation, commit, cleanup) from exc
 
     def _persist_finalized_dataset_version(
         self,
@@ -263,7 +334,7 @@ class DatasetTransactionService(CoreService):
         )
         self.dataset_transaction_repository.insert_file(
             transaction=conn,
-            record=self._dataset_file_record(ctx, validation, commit),
+            record=build_dataset_file_record(ctx, validation, commit),
         )
         self._commit_transaction_row(
             conn,
@@ -271,7 +342,7 @@ class DatasetTransactionService(CoreService):
             request.transaction_id,
             commit.version_id,
             commit.schema_version,
-            request.transaction_metadata,
+            finalized_transaction_metadata(request, validation),
         )
 
     def _cleanup_committed_version_artifacts(
@@ -292,60 +363,6 @@ class DatasetTransactionService(CoreService):
             "manifest_uri": commit.stored_commit.manifest_uri,
             "removed": removed,
         }
-
-    def _version_conflict_error(
-        self,
-        request: DatasetFinalizationRequest,
-        validation: DatasetFinalizationCheck,
-        commit: DatasetCommitArtifacts,
-        cleanup: dict[str, object],
-    ) -> ConflictDetected:
-        return ConflictDetected(
-            "dataset version allocation conflict",
-            details={
-                "dataset_id": request.target.dataset_id,
-                "transaction_id": request.transaction_id,
-                "branch": validation.branch,
-                "version_number": commit.version_number,
-                "orphan_cleanup": cleanup,
-            },
-        )
-
-    def _commit_persistence_error(
-        self,
-        request: DatasetFinalizationRequest,
-        validation: DatasetFinalizationCheck,
-        commit: DatasetCommitArtifacts,
-        cleanup: dict[str, object],
-    ) -> InvariantViolation:
-        return InvariantViolation(
-            "dataset commit metadata persistence failed",
-            details={
-                "dataset_id": request.target.dataset_id,
-                "transaction_id": request.transaction_id,
-                "branch": validation.branch,
-                "version_number": commit.version_number,
-                "orphan_cleanup": cleanup,
-            },
-        )
-
-    def _dataset_file_record(
-        self,
-        ctx: RequestContext,
-        validation: DatasetFinalizationCheck,
-        commit: DatasetCommitArtifacts,
-    ) -> DatasetFileRecord:
-        return DatasetFileRecord(
-            file_id=_new_id("dsf"),
-            tenant_id=ctx.tenant_id,
-            dataset_version_id=commit.version_id,
-            uri=commit.stored_commit.data_file_uri,
-            file_format="parquet",
-            row_count=validation.stats.row_count,
-            byte_size=commit.stored_commit.byte_size,
-            content_hash=commit.stored_commit.content_hash,
-            partition_values={},
-        )
 
     def _emit_dataset_commit_events(
         self,
@@ -377,28 +394,8 @@ class DatasetTransactionService(CoreService):
             resource_type="dataset_version",
             resource_id=commit.version_id,
             action=request.audit_action,
-            after_ref={
-                "dataset_ref": request.target.dataset_ref,
-                "version_number": commit.version_number,
-            },
+            after_ref=dataset_commit_after_ref(request, validation, commit),
             correlation_id=request.run_id,
-        )
-
-    def _commit_result(
-        self,
-        request: DatasetFinalizationRequest,
-        validation: DatasetFinalizationCheck,
-        commit: DatasetCommitArtifacts,
-    ) -> CommitResult:
-        return CommitResult(
-            dataset_id=request.target.dataset_id,
-            dataset_ref=request.target.dataset_ref,
-            transaction_id=request.transaction_id,
-            version_id=commit.version_id,
-            version_number=commit.version_number,
-            row_count=validation.stats.row_count,
-            manifest_uri=commit.stored_commit.manifest_uri,
-            schema_hash=validation.stats.schema_hash,
         )
 
     def _abort_finalization_with_failures(
@@ -409,7 +406,7 @@ class DatasetTransactionService(CoreService):
         failures: Sequence[DatasetCheckResult],
     ) -> None:
         """Abort an open transaction and record validation failures for audit."""
-        failure_list = [dict(failure) for failure in failures]
+        failure_list = [block_commit_failure(failure) for failure in failures]
         self.dataset_transaction_repository.abort_transaction(
             transaction=conn,
             tenant_id=ctx.tenant_id,

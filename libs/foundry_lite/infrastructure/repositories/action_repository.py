@@ -12,6 +12,7 @@ from sqlalchemy.engine import Engine
 from foundry_lite.application.ports.action_repository import (
     ActionRunRecord,
     ActionRunRow,
+    ActionWritebackReconciliation,
     ActionWritebackRecord,
     ObjectEditRecord,
     ObjectTargetUpdate,
@@ -44,6 +45,24 @@ class SqlAlchemyActionRepository:
                         db.action_runs.c.actor_user_id == actor_user_id,
                         db.action_runs.c.idempotency_key == idempotency_key,
                     )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(ActionRunRow, dict(row)) if row else None
+
+    def action_run_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_run_id: str,
+    ) -> ActionRunRow | None:
+        row = (
+            transaction.execute(
+                select(db.action_runs).where(
+                    and_(db.action_runs.c.tenant_id == tenant_id, db.action_runs.c.id == action_run_id)
                 )
             )
             .mappings()
@@ -122,6 +141,39 @@ class SqlAlchemyActionRepository:
             )
         )
 
+    def action_writeback_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        writeback_id: str,
+    ) -> ActionWritebackRecord | None:
+        row = (
+            transaction.execute(
+                select(db.action_writebacks).where(
+                    and_(db.action_writebacks.c.tenant_id == tenant_id, db.action_writebacks.c.id == writeback_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return _writeback_record_from_row(dict(row)) if row else None
+
+    def reconcile_action_writeback(self, *, transaction: Any, record: ActionWritebackReconciliation) -> bool:
+        result = transaction.execute(
+            update(db.action_writebacks)
+            .where(
+                and_(
+                    db.action_writebacks.c.tenant_id == record.tenant_id,
+                    db.action_writebacks.c.id == record.writeback_id,
+                    db.action_writebacks.c.action_run_id == record.action_run_id,
+                    db.action_writebacks.c.status == "outcome_unknown",
+                )
+            )
+            .values(status="reconciled", response=dict(record.response), completed_at=record.completed_at)
+        )
+        return result.rowcount == 1
+
     def update_object_target(self, *, transaction: Any, record: ObjectTargetUpdate) -> bool:
         object_change_sequence = next_object_change_sequence(transaction, record.tenant_id)
         result = transaction.execute(
@@ -184,6 +236,25 @@ def _action_run_values(record: ActionRunRecord) -> dict[str, object]:
         "created_at": record.created_at,
         "completed_at": record.completed_at,
     }
+
+
+def _writeback_record_from_row(row: dict[str, object]) -> ActionWritebackRecord:
+    request = row.get("request")
+    response = row.get("response")
+    return ActionWritebackRecord(
+        writeback_id=str(row["id"]),
+        tenant_id=str(row["tenant_id"]),
+        action_run_id=str(row["action_run_id"]),
+        mode=str(row["mode"]),
+        connector_id=str(row["connector_id"]),
+        request=cast(Mapping[str, object], request),
+        response=cast(Mapping[str, object], response) if response is not None else None,
+        status=str(row["status"]),
+        idempotency_key=str(row["idempotency_key"]),
+        attempts=cast(int, row["attempts"]),
+        created_at=str(row["created_at"]),
+        completed_at=cast(str | None, row["completed_at"]),
+    )
 
 
 def _action_run_insert_or_ignore(transaction: Any, record: ActionRunRecord) -> Any:

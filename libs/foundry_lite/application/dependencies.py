@@ -23,6 +23,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.search_adapter import SearchAdapter
+from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.security.policy import PolicyService
@@ -53,5 +54,6 @@ class CoreDependencies:
     runtime_repository: RuntimeRepository
     dataset_storage: DatasetStorageAdapter
     search_adapter: SearchAdapter
+    secret_provider: SecretProvider
     stream_adapter: StreamAdapter
     workflow_adapter: WorkflowAdapter

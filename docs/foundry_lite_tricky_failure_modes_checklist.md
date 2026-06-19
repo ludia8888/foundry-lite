@@ -96,7 +96,7 @@
 - [ ] **Invariant 4 — run 내부에서 `latest`를 암묵적으로 다시 resolve하지 않는다.**
 - [ ] **Invariant 5 — run 시작 시 `dataset_version_id`, `ontology_version_id`, `object_store_watermark`를 pin 한다.**
 - [ ] **Invariant 6 — external side effect는 local DB transaction과 같은 원자성을 갖지 않는다.**
-- [ ] **Invariant 7 — external timeout은 failure가 아니라 `outcome_unknown`일 수 있다.**
+- [~] **Invariant 7 — external timeout은 failure가 아니라 `outcome_unknown`일 수 있다.**
 - [ ] **Invariant 8 — fallback은 성능만 바꾸어야 하며, 의미가 바뀌면 `degraded=true` 또는 hard failure로 표시한다.**
 - [ ] **Invariant 9 — 모든 실패는 `request_id`, `run_id`, `dataset_id`, `transaction_id`, `object_id`, `action_run_id` 중 필요한 키로 추적 가능해야 한다.**
 - [ ] **Invariant 10 — audit, lineage, action log, outbox, materialization cursor 중 하나라도 누락되면 성공으로 보지 않는다.**
@@ -262,18 +262,23 @@
 - [x] **Trigger:** upload candidate에는 duplicate key가 있지만, check runner가 latest committed version을 읽는다.
 - [x] **Failure:** invalid dataset이 committed 된다.
 - [x] **Guardrail:** check input은 `transaction_id` 또는 `candidate_manifest_uri`만 허용한다.
-- [ ] **Guardrail:** check_result에 `checked_manifest_hash`를 저장한다.
-- [ ] **Guardrail:** commit 직전 candidate hash와 check hash 일치를 검증한다.
+- [x] **Guardrail:** check_result에 `checked_manifest_hash`를 저장한다.
+- [x] **Guardrail:** commit 직전 candidate hash와 check hash 일치를 검증한다.
+- [x] **Guardrail:** commit-time hard failure는 `BLOCK_COMMIT`으로 표면화한다.
 - [x] **Regression Test:** `test_dataset_health_check_reads_candidate_not_latest`
+- [x] **Regression Test:** `test_quality_check_pins_candidate_manifest_hash`
+- [x] **Regression Test:** `test_candidate_tamper_between_check_and_commit_is_rejected`
+- [x] **Regression Test:** `test_commit_dataset_version_aborts_when_primary_key_check_fails`
 
 ### T0-015 — Schema compatibility TOCTOU
 
 - [x] **Trigger:** upload A가 schema v3 기준으로 compatibility check를 통과한 뒤, upload B가 v4를 먼저 commit한다.
 - [x] **Failure:** schema chain이 논리적으로 깨진다.
-- [ ] **Guardrail:** `validated_against_schema_version_id`를 저장한다.
+- [x] **Guardrail:** `validated_against_schema_version_id`를 저장한다.
 - [x] **Guardrail:** commit 직전 latest schema가 그대로인지 재확인한다.
 - [ ] **Guardrail:** latest가 바뀌었으면 compatibility check를 재실행한다.
 - [x] **Regression Test:** `test_schema_compatibility_revalidates_if_latest_schema_changes`
+- [x] **Regression Test:** `test_schema_validation_records_reference_version`
 
 ### T0-016 — CSV primary key string coercion
 
@@ -351,17 +356,24 @@
 
 - [ ] **Trigger:** ERP/API writeback 200 OK 후 local DB commit이 deadlock/timeout으로 실패한다.
 - [ ] **Failure:** external system은 APPROVED, local object는 PENDING.
-- [ ] **Guardrail:** 이 상태는 `FAILED`가 아니라 `COMPENSATION_REQUIRED`로 기록한다.
-- [ ] **Guardrail:** `action_writebacks`에 external_ref/request/response/status를 저장한다.
+- [~] **Guardrail:** 이 상태는 `FAILED`가 아니라 `COMPENSATION_REQUIRED`로 기록한다.
+- [~] **Guardrail:** `action_writebacks`에 external_ref/request/response/status를 저장한다.
+- [~] **Guardrail:** operator-provided remote success resolve는 원래 local mutation을 따라잡고 action/writeback을 `reconciled`로 닫는다.
 - [ ] **Guardrail:** reconciliation worker와 manual review flow를 둔다.
-- [ ] **Regression Test:** `test_action_external_success_local_failure_compensation_required`
+- [~] **Regression Test:** `test_external_success_local_failure_requires_compensation`
+- [~] **Regression Test:** `test_reconciliation_resolves_remote_success`
+- [~] **Regression Test:** `test_concurrent_reconciliation_has_one_winner`
+- [~] **Regression Test:** `test_sensitive_writeback_payload_is_masked_in_audit`
 
 ### T0-025 — External timeout treated as failure
 
 - [ ] **Trigger:** 외부 writeback call timeout. 실제 외부 시스템은 성공했을 수도 있다.
 - [ ] **Failure:** retry가 duplicate side effect를 만든다.
-- [ ] **Guardrail:** write attempt 이후 timeout은 `outcome_unknown`으로 분류한다.
-- [ ] **Guardrail:** external idempotency key를 반드시 propagate한다.
+- [~] **Guardrail:** write attempt 이후 timeout은 `outcome_unknown`으로 분류한다.
+- [~] **Guardrail:** external idempotency key를 반드시 propagate한다.
+- [~] **Regression Test:** `test_external_success_response_lost_becomes_outcome_unknown`
+- [~] **Regression Test:** `test_outcome_unknown_is_not_blindly_retried`
+- [~] **Regression Test:** `test_action_repository_contract_reconciles_outcome_unknown_writeback_once`
 - [ ] **Regression Test:** `test_action_external_timeout_is_outcome_unknown_not_failed`
 - [ ] **Regression Test:** `test_action_retry_reuses_external_idempotency_key`
 
@@ -562,11 +574,12 @@
 
 ### T0-048 — Migration job race
 
-- [ ] **Trigger:** API pod 여러 개와 worker가 동시에 migration 실행.
-- [ ] **Failure:** schema lock, partial migration, app/schema mismatch.
-- [ ] **Guardrail:** dedicated migration job만 migration을 수행한다.
-- [ ] **Guardrail:** migration lock을 사용한다.
-- [ ] **Regression Test:** `test_migration_job_singleton_no_app_start_race`
+- [x] **Trigger:** API pod 여러 개와 worker가 동시에 migration 실행.
+- [x] **Failure:** schema lock, partial migration, app/schema mismatch.
+- [x] **Guardrail:** `db:migrate` dedicated migration runner만 Alembic migration을 수행하고, app/worker startup은 Alembic을 직접 호출하지 않는다.
+- [x] **Guardrail:** migration runner는 PostgreSQL advisory lock 또는 SQLite `BEGIN IMMEDIATE` DB lock으로 concurrent migration job 중 하나만 실행되게 한다.
+- [x] **Regression Test:** `test_migration_job_singleton_no_app_start_race`
+- [x] **Regression Test:** `test_migration_is_singleton_for_concurrent_sqlite_jobs`
 
 ---
 
@@ -1009,7 +1022,11 @@
 ## B. Source / Sync / Connector
 
 - [ ] B1. testConnection 성공과 actual query 권한 차이를 검증한다.
-- [ ] B2. secretRef rotation 중 old credential retry를 처리한다.
+- [~] B2. secretRef rotation 중 old credential retry를 처리한다. 현재는 REST
+  connector가 bearer/header credential secretRef를 snapshot 호출마다
+  `SecretProvider`에서 다시 조회해 local rotation 후 다음 호출이 새 secret을 쓰는지
+  검증한다(`test_connector_refreshes_rotated_secret`). Previous/current dual-read와
+  provider별 old credential retry window는 future다.
 - [ ] B3. REST 429 Retry-After를 준수한다.
 - [ ] B4. REST retry가 non-idempotent endpoint를 다시 호출하지 않는다.
 - [x] B5. REST redirect private IP SSRF를 막는다.
@@ -1146,16 +1163,16 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 - [x] G8. precondition stale read는 commit conflict로 막는다.
 - [x] G9. expectedObjectVersion은 optional이 아니다.
 - [x] G10. object_version은 base/edit 모두에서 증가한다.
-- [ ] G11. external timeout은 outcome_unknown이다.
-- [ ] G12. external idempotency key를 propagate한다.
+- [~] G11. external timeout은 outcome_unknown이다.
+- [~] G12. external idempotency key를 propagate한다.
 - [ ] G13. compensation worker는 자동 rollback보다 manual review를 기본으로 한다.
 - [ ] G14. after-commit side effect duplicate publish를 막는다.
 - [ ] G15. poison outbox event가 queue head를 영구 block하지 않는다.
 - [ ] G16. DLQ stale event retry는 no-op 가능하다.
 - [x] G17. audit에 raw sensitive params를 저장하지 않는다.
 - [ ] G18. action log에는 previous_values가 있다.
-- [ ] G19. action status enum은 conflict/failed/unknown/compensation을 구분한다.
-- [ ] G20. side effect failure를 local action failure와 구분한다.
+- [~] G19. action status enum은 conflict/failed/unknown/compensation을 구분한다.
+- [~] G20. side effect failure를 local action failure와 구분한다.
 
 ## H. Materialization / Closed Loop
 
@@ -1286,7 +1303,14 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 - [x] `test_action_commit_object_edit_audit_outbox_atomic`
 - [x] `test_action_expected_object_version_required`
 - [x] `test_action_precondition_stale_read_conflicts_on_commit`
-- [ ] `test_action_external_success_local_failure_compensation_required`
+- [~] `test_external_success_local_failure_requires_compensation`
+- [~] `test_compensation_is_idempotent`
+- [~] `test_external_success_response_lost_becomes_outcome_unknown`
+- [~] `test_outcome_unknown_is_not_blindly_retried`
+- [~] `test_reconciliation_resolves_remote_success`
+- [~] `test_concurrent_reconciliation_has_one_winner`
+- [~] `test_sensitive_writeback_payload_is_masked_in_audit`
+- [~] `test_action_repository_contract_reconciles_outcome_unknown_writeback_once`
 - [ ] `test_action_external_timeout_is_outcome_unknown_not_failed`
 - [ ] `test_action_retry_reuses_external_idempotency_key`
 - [x] `test_outbox_event_not_published_before_domain_commit`
@@ -1417,8 +1441,9 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 - [x] same idempotency key race
 - [x] same key different body
 - [x] expectedObjectVersion
-- [ ] external timeout unknown
-- [ ] compensation_required
+- [~] external timeout unknown
+- [~] compensation_required
+- [~] sensitive writeback audit masking
 - [ ] outbox duplicate publish
 
 **완료 기준:** 네트워크 timeout/retry/concurrent request에도 object/action/external side effect가 중복 성공하지 않아야 한다.

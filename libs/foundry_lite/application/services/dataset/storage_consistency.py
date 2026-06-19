@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from foundry_lite.application.ports import (
@@ -32,8 +33,17 @@ def committed_version_file_path(
     storage: DatasetStorageAdapter,
     version: DatasetVersionRow,
 ) -> Path:
+    return committed_version_file_paths(storage, version)[0]
+
+
+def committed_version_file_paths(
+    storage: DatasetStorageAdapter,
+    version: DatasetVersionRow,
+    *,
+    partition_filter: Mapping[str, object] | None = None,
+) -> list[Path]:
     try:
-        return storage.first_data_file_path(version["manifest_uri"])
+        return storage.data_file_paths(version["manifest_uri"], partition_filter=partition_filter)
     except FileNotFoundError as exc:
         raise version_storage_error(storage, version, "committed_version_storage_missing", str(exc)) from exc
     except (IndexError, KeyError, ValueError) as exc:

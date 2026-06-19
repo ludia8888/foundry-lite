@@ -26,6 +26,10 @@ from foundry_lite.application.primitives import (
     _now,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.ontology_migration import (
+    OntologyMigrationPlan,
+    plan_ontology_migration,
+)
 from foundry_lite.application.services.ontology_protocols import (
     OntologyDatasetRegistry,
     OntologyDatasetVersions,
@@ -79,6 +83,8 @@ class OntologyService(CoreService):
         self.runtime_service._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
         definition = self._load_ontology_definition(yaml_path)
         with self.engine.begin() as conn:
+            migration_plan = self._candidate_migration_plan(conn, ctx, definition)
+            migration_plan.raise_if_blocked()
             version_number = self._next_ontology_version(conn, ctx)
             ontology_version_id = _new_id("ont")
             self._insert_draft_ontology_version(conn, ctx, ontology_version_id, version_number)
@@ -87,7 +93,7 @@ class OntologyService(CoreService):
             self._import_action_types(conn, ctx, ontology_version_id, definition, object_map)
             self._validate_ontology(conn, ctx, ontology_version_id)
             self._activate_ontology_version(conn, ctx, ontology_version_id)
-            self._record_ontology_activation(conn, ctx, ontology_version_id, version_number)
+            self._record_ontology_activation(conn, ctx, ontology_version_id, version_number, migration_plan)
             return {"ontology_version_id": ontology_version_id, "version_number": version_number}
 
     def validate_yaml_text(
@@ -139,15 +145,22 @@ class OntologyService(CoreService):
         ctx: RequestContext,
         ontology_version_id: str,
         version_number: int,
+        migration_plan: OntologyMigrationPlan,
     ) -> None:
         """Write the durable activation outbox event and audit record."""
+        outbox_payload: dict[str, object] = {"ontologyVersionId": ontology_version_id}
+        audit_after_ref: dict[str, object] = {"version_number": version_number}
+        if migration_plan.has_changes:
+            migration_payload = migration_plan.to_payload()
+            outbox_payload["ontologyMigration"] = migration_payload
+            audit_after_ref["ontologyMigration"] = migration_payload
         self.runtime_service._outbox(
             conn,
             ctx,
             "ontology.version.activated",
             "ontology_version",
             ontology_version_id,
-            {"ontologyVersionId": ontology_version_id},
+            outbox_payload,
             idempotency_key=ontology_version_id,
             correlation_id=ctx.request_id,
         )
@@ -158,7 +171,23 @@ class OntologyService(CoreService):
             resource_type="ontology_version",
             resource_id=ontology_version_id,
             action="activate",
-            after_ref={"version_number": version_number},
+            after_ref=audit_after_ref,
+        )
+
+    def _candidate_migration_plan(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        definition: YamlObject,
+    ) -> OntologyMigrationPlan:
+        active = self.ontology_repository.active_ontology_version(transaction=conn, tenant_id=ctx.tenant_id)
+        active_id = active["id"] if active is not None else None
+        return plan_ontology_migration(
+            repository=self.ontology_repository,
+            transaction=conn,
+            ctx=ctx,
+            active_ontology_version_id=active_id,
+            definition=definition,
         )
 
     def _activate_ontology_version(

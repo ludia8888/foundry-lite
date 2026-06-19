@@ -1061,7 +1061,7 @@
       "description": "A timeout from an external system means outcome_unknown, not a guaranteed failure.",
       "status": "deferred",
       "deferral": {
-        "reason": "External action/connector timeout outcome-unknown handling is not yet implemented; current code treats reachable failures, not ambiguous external timeouts.",
+        "reason": "S53 now covers simulated before-commit response loss as outcome_unknown with idempotent replay proof, but real action/connector timeout outcome-unknown handling against a vendor system is not yet implemented.",
         "riskTier": "T0",
         "futureTest": "test_action_external_timeout_is_outcome_unknown_not_failed",
         "owningDoc": "docs/foundry_lite_tricky_failure_modes_checklist.md"
@@ -1071,9 +1071,9 @@
       "description": "External success + local failure requires a compensation path, not a silent local-only rollback.",
       "status": "deferred",
       "deferral": {
-        "reason": "External writeback compensation is future scope; no compensating-action path exists yet.",
+        "reason": "S53 now covers simulated external-success/local-mutation-failure as compensation_required with idempotent replay proof, operator-provided remote-success reconciliation, and sensitive writeback audit masking, but real external writeback compensation, vendor remote lookup, and manual review queue are future scope.",
         "riskTier": "T0",
-        "futureTest": "test_action_external_success_local_failure_compensation_required",
+        "futureTest": "test_reconciliation_uses_real_remote_lookup_before_resolve",
         "owningDoc": "docs/foundry_lite_tricky_failure_modes_checklist.md"
       }
     },

@@ -39,7 +39,13 @@ from foundry_lite.infrastructure.adapters import (  # noqa: E402
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
 )
-from foundry_lite.infrastructure.auth import DemoAuthProvider, HeaderTrustAuthProvider  # noqa: E402
+from foundry_lite.infrastructure.auth import (  # noqa: E402
+    DemoAuthProvider,
+    HeaderTrustAuthProvider,
+    JwtOidcAuthConfig,
+    JwtOidcAuthProvider,
+)
+from foundry_lite.infrastructure.secrets import EnvSecretProvider  # noqa: E402
 
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "adapter_failure_taxonomy.json"
 REQUIRED_PROFILES = frozenset(
@@ -63,6 +69,8 @@ REQUIRED_PROFILES = frozenset(
         "rest-pull-connector",
         "header-trust-auth",
         "demo-auth",
+        "jwt-oidc-auth",
+        "env-secret",
     }
 )
 
@@ -113,6 +121,10 @@ def load_contracts() -> tuple[AdapterFailureContract, ...]:
             RestPullConnectorAdapter(),
             HeaderTrustAuthProvider(),
             DemoAuthProvider(),
+            JwtOidcAuthProvider(
+                JwtOidcAuthConfig(issuer="https://issuer.example.test", audience="foundry-lite", jwks={"keys": []})
+            ),
+            EnvSecretProvider(environ={}),
         )
         return tuple(adapter.failure_contract() for adapter in adapters)
 

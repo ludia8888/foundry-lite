@@ -154,11 +154,23 @@ class S3DatasetStorageAdapter:
         return cast(DatasetManifest, json.loads(body.decode("utf-8")))
 
     def first_data_file_path(self, manifest_uri: str) -> Path:
+        return self.data_file_paths(manifest_uri)[0]
+
+    def data_file_paths(
+        self,
+        manifest_uri: str,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]:
         manifest = self.load_manifest(manifest_uri)
         files = manifest.get("files") or []
         if not files:
             raise ValueError(f"dataset manifest has no files: {manifest_uri}")
-        return self._download_manifest_file(files[0])
+        return [
+            self._download_manifest_file(file)
+            for file in files
+            if partition_filter is None or _matches_partition_filter(file, partition_filter)
+        ]
 
     def _commit_objects(
         self,
@@ -403,6 +415,14 @@ def _is_not_found_error(exc: Exception) -> bool:
         if code in _NOT_FOUND_ERROR_CODES or status == 404:
             return True
     return False
+
+
+def _matches_partition_filter(
+    manifest_file: DatasetManifestFile,
+    partition_filter: Mapping[str, object],
+) -> bool:
+    partition_values = manifest_file.get("partition_values") or {}
+    return all(partition_values.get(key) == value for key, value in partition_filter.items())
 
 
 def _join_key(*parts: str) -> str:

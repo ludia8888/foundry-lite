@@ -13,6 +13,7 @@ from foundry_lite.application.ports.action_repository import (
     ActionRepository,
     ActionRunRecord,
     ActionRunRow,
+    ActionWritebackReconciliation,
     ActionWritebackRecord,
     ObjectEditRecord,
     ObjectTargetUpdate,
@@ -66,6 +67,19 @@ class FakeActionRepository:
                 return row.copy()
         return None
 
+    def action_run_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_run_id: str,
+    ) -> ActionRunRow | None:
+        del transaction
+        for row in self.action_runs:
+            if row["tenant_id"] == tenant_id and row["id"] == action_run_id:
+                return row.copy()
+        return None
+
     def insert_action_run(self, *, transaction: Any, record: ActionRunRecord) -> None:
         del transaction
         self.action_runs.append(_action_run_row(record))
@@ -102,6 +116,32 @@ class FakeActionRepository:
     def insert_action_writeback(self, *, transaction: Any, record: ActionWritebackRecord) -> None:
         del transaction
         self.action_writebacks.append(_writeback_row(record))
+
+    def action_writeback_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        writeback_id: str,
+    ) -> ActionWritebackRecord | None:
+        del transaction
+        for row in self.action_writebacks:
+            if row["tenant_id"] == tenant_id and row["id"] == writeback_id:
+                return _writeback_record_from_row(row)
+        return None
+
+    def reconcile_action_writeback(self, *, transaction: Any, record: ActionWritebackReconciliation) -> bool:
+        del transaction
+        for row in self.action_writebacks:
+            if (
+                row["tenant_id"] == record.tenant_id
+                and row["id"] == record.writeback_id
+                and row["action_run_id"] == record.action_run_id
+                and row["status"] == "outcome_unknown"
+            ):
+                row.update(status="reconciled", response=record.response, completed_at=record.completed_at)
+                return True
+        return False
 
     def update_object_target(self, *, transaction: Any, record: ObjectTargetUpdate) -> bool:
         del transaction
@@ -241,15 +281,21 @@ def _action_run_row(record: ActionRunRecord) -> ActionRunRow:
     }
 
 
-def _writeback_record(writeback_id: str = "wb_1", *, status: str = "succeeded") -> ActionWritebackRecord:
+def _writeback_record(
+    writeback_id: str = "wb_1",
+    *,
+    status: str = "succeeded",
+    request: dict[str, Any] | None = None,
+    response: dict[str, Any] | None = None,
+) -> ActionWritebackRecord:
     return ActionWritebackRecord(
         writeback_id=writeback_id,
         tenant_id="tenant-demo",
         action_run_id="arun_1",
         mode="before_commit",
         connector_id="mock_erp",
-        request={"connector": "mock_erp", "simulated": True},
-        response={"status_code": 200, "simulated": True},
+        request=request or {"connector": "mock_erp", "simulated": True},
+        response=response or {"status_code": 200, "simulated": True},
         status=status,
         idempotency_key="idem-1",
         attempts=1,
@@ -273,6 +319,23 @@ def _writeback_row(record: ActionWritebackRecord) -> dict[str, Any]:
         "created_at": record.created_at,
         "completed_at": record.completed_at,
     }
+
+
+def _writeback_record_from_row(row: Mapping[str, Any]) -> ActionWritebackRecord:
+    return ActionWritebackRecord(
+        writeback_id=row["id"],
+        tenant_id=row["tenant_id"],
+        action_run_id=row["action_run_id"],
+        mode=row["mode"],
+        connector_id=row["connector_id"],
+        request=row["request"],
+        response=row["response"],
+        status=row["status"],
+        idempotency_key=row["idempotency_key"],
+        attempts=row["attempts"],
+        created_at=row["created_at"],
+        completed_at=row["completed_at"],
+    )
 
 
 def _object_record_row(
@@ -374,6 +437,11 @@ def test_action_repository_contract_inserts_and_replays_idempotent_runs(harness:
             actor_user_id="actor-demo",
             idempotency_key="idem-1",
         )
+        found_by_id = harness.repository.action_run_by_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+        )
         missing_actor = harness.repository.action_run_by_idempotency(
             transaction=transaction,
             tenant_id="tenant-demo",
@@ -384,6 +452,8 @@ def test_action_repository_contract_inserts_and_replays_idempotent_runs(harness:
 
     assert found is not None
     assert found["id"] == "arun_1"
+    assert found_by_id is not None
+    assert found_by_id["id"] == "arun_1"
     assert found["parameters"] == {"status": "APPROVED"}
     assert found["request_fingerprint"] == "fingerprint-1"
     assert missing_actor is None
@@ -472,6 +542,144 @@ def test_action_repository_contract_updates_terminal_state_and_writebacks(harnes
     assert action_runs[0]["error"] == {"type": "ExternalSystemError"}
     assert writebacks[0]["status"] == "failed"
     assert writebacks[0]["connector_id"] == "mock_erp"
+
+
+def test_action_repository_contract_persists_outcome_unknown_writeback_fields(harness: ActionHarness) -> None:
+    request = {
+        "connector": "mock_erp",
+        "simulated": True,
+        "networkCall": False,
+        "idempotency_key": "idem-1",
+        "request_hash": "request-hash-1",
+    }
+    response = {
+        "status_code": None,
+        "outcome_unknown": True,
+        "external_operation_id": "mock-op-idem-1",
+        "remote_resource_id": None,
+        "last_observed_status": "unknown",
+        "reconciliation_deadline": "2026-06-10T00:00:02Z",
+    }
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
+        harness.repository.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            status="outcome_unknown",
+            error={"type": "EXTERNAL_OUTCOME_UNKNOWN"},
+            completed_at="2026-06-10T00:00:05Z",
+        )
+        harness.repository.insert_action_writeback(
+            transaction=transaction,
+            record=_writeback_record(status="outcome_unknown", request=request, response=response),
+        )
+
+    action_runs = harness.action_run_rows()
+    writebacks = harness.writeback_rows()
+    assert action_runs[0]["status"] == "outcome_unknown"
+    assert writebacks[0]["status"] == "outcome_unknown"
+    assert writebacks[0]["request"] == request
+    assert writebacks[0]["response"] == response
+
+
+def test_action_repository_contract_reconciles_outcome_unknown_writeback_once(harness: ActionHarness) -> None:
+    original_response = {
+        "status_code": None,
+        "outcome_unknown": True,
+        "external_operation_id": "mock-op-idem-1",
+        "remote_resource_id": None,
+        "last_observed_status": "unknown",
+        "reconciliation_deadline": "2026-06-10T00:00:02Z",
+    }
+    reconciled_response = {
+        **original_response,
+        "status_code": 200,
+        "outcome_unknown": False,
+        "reconciled": True,
+        "remote_resource_id": "mock-resource-idem-1",
+        "last_observed_status": "succeeded",
+        "reconciled_at": "2026-06-10T00:00:10Z",
+    }
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
+        harness.repository.insert_action_writeback(
+            transaction=transaction,
+            record=_writeback_record(status="outcome_unknown", response=original_response),
+        )
+        found = harness.repository.action_writeback_by_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            writeback_id="wb_1",
+        )
+        first = harness.repository.reconcile_action_writeback(
+            transaction=transaction,
+            record=ActionWritebackReconciliation(
+                writeback_id="wb_1",
+                tenant_id="tenant-demo",
+                action_run_id="arun_1",
+                response=reconciled_response,
+                completed_at="2026-06-10T00:00:10Z",
+            ),
+        )
+        second = harness.repository.reconcile_action_writeback(
+            transaction=transaction,
+            record=ActionWritebackReconciliation(
+                writeback_id="wb_1",
+                tenant_id="tenant-demo",
+                action_run_id="arun_1",
+                response=reconciled_response,
+                completed_at="2026-06-10T00:00:11Z",
+            ),
+        )
+
+    assert found is not None
+    assert found.status == "outcome_unknown"
+    writebacks = harness.writeback_rows()
+    assert first is True
+    assert second is False
+    assert writebacks[0]["status"] == "reconciled"
+    assert writebacks[0]["response"] == reconciled_response
+
+
+def test_action_repository_contract_persists_compensation_required_writeback_fields(harness: ActionHarness) -> None:
+    request = {
+        "connector": "mock_erp",
+        "simulated": True,
+        "networkCall": False,
+        "idempotency_key": "idem-1",
+        "request_hash": "request-hash-1",
+    }
+    response = {
+        "status_code": 200,
+        "compensation_required": True,
+        "external_operation_id": "mock-op-idem-1",
+        "remote_resource_id": "mock-resource-idem-1",
+        "last_observed_status": "succeeded",
+        "compensation_action_type": "mock_reverse_writeback",
+        "reconciliation_deadline": "2026-06-10T00:00:02Z",
+    }
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
+        harness.repository.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            status="compensation_required",
+            error={"type": "EXTERNAL_COMPENSATION_REQUIRED"},
+            completed_at="2026-06-10T00:00:05Z",
+        )
+        harness.repository.insert_action_writeback(
+            transaction=transaction,
+            record=_writeback_record(status="compensation_required", request=request, response=response),
+        )
+
+    action_runs = harness.action_run_rows()
+    writebacks = harness.writeback_rows()
+    assert action_runs[0]["status"] == "compensation_required"
+    assert writebacks[0]["status"] == "compensation_required"
+    assert writebacks[0]["request"] == request
+    assert writebacks[0]["response"] == response
 
 
 def test_action_repository_contract_updates_object_target_and_records_edit(harness: ActionHarness) -> None:

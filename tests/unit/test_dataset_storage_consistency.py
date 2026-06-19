@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -95,6 +98,48 @@ def test_abort_cleanup_never_deletes_committed_manifest(tmp_path: Path) -> None:
     assert [(row["id"], row["amount"]) for row in preview] == [("O-1", 100)]
 
 
+def test_partition_pruning_reads_only_required_manifest_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "multi-file-preview"))
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    committed = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+    manifest_path = Path(committed.manifest_uri)
+    manifest = foundry.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)["manifest"]
+    second_part = manifest_path.parent / "part-00001.parquet"
+    unlisted_part = manifest_path.parent / "part-unlisted.parquet"
+    foundry.compute_adapter.rows_to_parquet([{"id": "O-2", "amount": 200}], second_part, ["id", "amount"])
+    foundry.compute_adapter.rows_to_parquet([{"id": "O-X", "amount": 999}], unlisted_part, ["id", "amount"])
+    manifest["files"][0]["partition_values"] = {"bucket": "a"}
+    manifest["files"].append(_manifest_file(second_part, partition_values={"bucket": "b"}))
+    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    original_preview: Callable[..., list[dict[str, object]]] = foundry.compute_adapter.preview_parquet
+    read_paths: list[Path] = []
+
+    def preview_spy(parquet_path: Path, *, limit: int) -> list[dict[str, object]]:
+        read_paths.append(parquet_path)
+        return original_preview(parquet_path, limit=limit)
+
+    monkeypatch.setattr(foundry.compute_adapter, "preview_parquet", preview_spy)
+
+    preview = foundry.datasets.preview("raw.orders", ctx=ctx, version=committed.version_id, limit=10)
+    partition_preview = foundry.datasets.preview(
+        "raw.orders",
+        ctx=ctx,
+        version=committed.version_id,
+        limit=10,
+        partition_filter={"bucket": "b"},
+    )
+    inspected = foundry.datasets.inspect("raw.orders", ctx=ctx, version=committed.version_id)
+
+    assert [(row["id"], row["amount"]) for row in preview] == [("O-1", 100), ("O-2", 200)]
+    assert [(row["id"], row["amount"]) for row in partition_preview] == [("O-2", 200)]
+    assert read_paths == [Path(manifest["files"][0]["uri"]), second_part, second_part]
+    assert inspected["manifest"]["files"][1]["partition_values"] == {"bucket": "b"}
+
+
 def _csv_file(tmp_path: Path) -> Path:
     path = tmp_path / "orders.csv"
     path.write_text("id,amount\nO-1,100\n", encoding="utf-8")
@@ -105,3 +150,15 @@ def _duplicate_csv_file(tmp_path: Path) -> Path:
     path = tmp_path / "duplicate_orders.csv"
     path.write_text("id,amount\nO-2,200\nO-2,201\n", encoding="utf-8")
     return path
+
+
+def _manifest_file(data_path: Path, *, partition_values: dict[str, object]) -> dict[str, object]:
+    payload = data_path.read_bytes()
+    return {
+        "uri": str(data_path),
+        "format": "parquet",
+        "row_count": 1,
+        "byte_size": len(payload),
+        "content_hash": hashlib.sha256(payload).hexdigest(),
+        "partition_values": partition_values,
+    }

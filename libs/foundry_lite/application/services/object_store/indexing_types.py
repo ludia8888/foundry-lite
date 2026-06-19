@@ -50,6 +50,8 @@ class ObjectCdcEvent:
     object_id: str
     base_patch: ObjectPropertyMap
     ordering: ObjectPropertyMap
+    late_data_status: str | None = None
+    event_time_lag_seconds: int | None = None
 
 
 @dataclass(frozen=True)

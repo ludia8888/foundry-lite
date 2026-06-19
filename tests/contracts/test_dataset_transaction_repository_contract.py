@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import Barrier, Event
 from typing import Any, Protocol
 
@@ -10,9 +10,9 @@ from foundry_lite.application.ports import (
     DatasetFileRecord,
     DatasetRunKind,
     DatasetTransactionRecord,
-    DatasetTransactionRepository,
     DatasetVersionConflictError,
     DatasetVersionRecord,
+    DeadLetterRecord,
     SyncRunRecord,
 )
 from foundry_lite.infrastructure import schema as db
@@ -25,7 +25,7 @@ from sqlalchemy.engine import Engine
 
 
 class TransactionHarness(Protocol):
-    repository: DatasetTransactionRepository
+    repository: Any
 
     def call_in_transaction(self, fn: Any) -> Any: ...
 
@@ -41,12 +41,15 @@ class TransactionHarness(Protocol):
 
     def sync_run_row(self, *, sync_run_id: str) -> dict[str, Any] | None: ...
 
+    def dead_letter_records(self) -> list[dict[str, Any]]: ...
+
 
 @dataclass
 class FakeDatasetTransactionRepository:
     transactions: dict[str, dict[str, Any]] = field(default_factory=dict)
     versions_store: list[dict[str, Any]] = field(default_factory=list)
     files_store: list[dict[str, Any]] = field(default_factory=list)
+    dead_letters_store: list[dict[str, Any]] = field(default_factory=list)
     runs: dict[tuple[DatasetRunKind, str], dict[str, Any]] = field(default_factory=dict)
     sync_runs_store: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -145,6 +148,23 @@ class FakeDatasetTransactionRepository:
         latest = sorted(rows, key=lambda row: (row["committed_at"] or "", row["created_at"]))[-1:]
         return dict(latest[0]) if latest else None
 
+    def committed_transaction_by_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        committed_version_id: str,
+    ) -> dict[str, Any] | None:
+        del transaction
+        for row in self.transactions.values():
+            if (
+                row["tenant_id"] == tenant_id
+                and row["committed_version_id"] == committed_version_id
+                and row["status"] == "COMMITTED"
+            ):
+                return dict(row)
+        return None
+
     def committed_webhook_transaction_by_event(
         self,
         *,
@@ -204,6 +224,143 @@ class FakeDatasetTransactionRepository:
             "completed_at": record.completed_at,
         }
 
+    def insert_dead_letter_record(self, *, transaction: Any, record: DeadLetterRecord) -> bool:
+        del transaction
+        if any(
+            row["tenant_id"] == record.tenant_id
+            and row["source_event_id"] == record.source_event_id
+            and row["payload_hash"] == record.payload_hash
+            for row in self.dead_letters_store
+        ):
+            return False
+        self.dead_letters_store.append(_dead_letter_values(record))
+        return True
+
+    def list_dead_letter_records(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        del transaction
+        rows = [
+            dict(row)
+            for row in self.dead_letters_store
+            if row["tenant_id"] == tenant_id and (status is None or row["status"] == status)
+        ]
+        return sorted(rows, key=lambda row: (row["first_failed_at"], row["id"]))
+
+    def dead_letter_record_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+    ) -> dict[str, Any] | None:
+        del transaction
+        for row in self.dead_letters_store:
+            if row["tenant_id"] == tenant_id and row["id"] == record_id:
+                return dict(row)
+        return None
+
+    def update_dead_letter_record_replay_requested(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        replay_idempotency_key: str,
+        replay_requested_at: str,
+        metadata: dict[str, Any],
+        backfill_plan: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        del transaction
+        row = self._mutable_dead_letter(tenant_id, record_id)
+        if row is None or row["status"] != "QUARANTINED":
+            return None
+        row.update(
+            status="REPLAY_REQUESTED",
+            replay_status="REQUESTED",
+            replay_run_id=replay_run_id,
+            replay_idempotency_key=replay_idempotency_key,
+            replay_requested_at=replay_requested_at,
+            metadata=dict(metadata),
+            backfill_plan=dict(backfill_plan),
+        )
+        return dict(row)
+
+    def update_dead_letter_record_replay_succeeded(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        del transaction
+        row = self._mutable_dead_letter(tenant_id, record_id)
+        if row is None:
+            return None
+        row.update(
+            status="RESOLVED",
+            replay_status="SUCCEEDED",
+            replay_run_id=replay_run_id,
+            metadata=dict(metadata),
+        )
+        return dict(row)
+
+    def update_dead_letter_record_replay_failed(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        del transaction
+        row = self._mutable_dead_letter(tenant_id, record_id)
+        if row is None:
+            return None
+        row.update(
+            status="QUARANTINED",
+            replay_status="FAILED",
+            replay_run_id=replay_run_id,
+            attempts=row["attempts"] + 1,
+            metadata=dict(metadata),
+        )
+        return dict(row)
+
+    def discard_dead_letter_record(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        discarded_at: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        del transaction
+        row = self._mutable_dead_letter(tenant_id, record_id)
+        if row is None:
+            return None
+        row.update(
+            status="DISCARDED",
+            replay_status="DISCARDED",
+            discarded_at=discarded_at,
+            metadata=dict(metadata),
+        )
+        return dict(row)
+
+    def _mutable_dead_letter(self, tenant_id: str, record_id: str) -> dict[str, Any] | None:
+        for row in self.dead_letters_store:
+            if row["tenant_id"] == tenant_id and row["id"] == record_id:
+                return row
+        return None
+
     def update_sync_run_terminal(
         self,
         *,
@@ -257,6 +414,9 @@ class FakeTransactionHarness:
         row = self.repository.sync_runs_store.get(sync_run_id)
         return dict(row) if row else None
 
+    def dead_letter_records(self) -> list[dict[str, Any]]:
+        return list(self.repository.dead_letters_store)
+
 
 @dataclass
 class SqlAlchemyTransactionHarness:
@@ -295,6 +455,13 @@ class SqlAlchemyTransactionHarness:
         with self.engine.begin() as transaction:
             row = transaction.execute(select(db.sync_runs).where(db.sync_runs.c.id == sync_run_id)).mappings().first()
             return dict(row) if row else None
+
+    def dead_letter_records(self) -> list[dict[str, Any]]:
+        with self.engine.begin() as transaction:
+            rows = transaction.execute(
+                select(db.dead_letter_records).order_by(db.dead_letter_records.c.first_failed_at)
+            )
+            return [dict(row) for row in rows.mappings().all()]
 
 
 def _transaction_record(
@@ -361,6 +528,60 @@ def _file_record_for(version_number: int, content_hash: str = "hash-demo") -> Da
         content_hash=content_hash,
         partition_values={},
     )
+
+
+def _dead_letter_record(record_id: str = "dlqr_orders_bad_1") -> DeadLetterRecord:
+    return DeadLetterRecord(
+        dead_letter_record_id=record_id,
+        tenant_id="tenant-demo",
+        source_event_id="shipment_events:0:1",
+        source_dataset_version_id=None,
+        source_run_id="sync_stream_1",
+        payload={"op": "u", "pk": "bad"},
+        payload_hash="payload-hash-1",
+        schema_version=1,
+        transform_version=None,
+        error_kind="VALIDATION_FAILED",
+        error_message="cdc envelope field must be an object",
+        event_time=None,
+        ingested_at="2026-06-10T00:03:00Z",
+        first_failed_at="2026-06-10T00:03:00Z",
+        attempts=1,
+        status="QUARANTINED",
+        replay_status="NOT_REQUESTED",
+        replay_run_id=None,
+        is_closed_partition_affected=False,
+        metadata={"stream": "shipments", "offset": 1},
+    )
+
+
+def _dead_letter_values(record: DeadLetterRecord) -> dict[str, Any]:
+    return {
+        "id": record.dead_letter_record_id,
+        "tenant_id": record.tenant_id,
+        "source_event_id": record.source_event_id,
+        "source_dataset_version_id": record.source_dataset_version_id,
+        "source_run_id": record.source_run_id,
+        "payload": dict(record.payload),
+        "payload_hash": record.payload_hash,
+        "schema_version": record.schema_version,
+        "transform_version": record.transform_version,
+        "error_kind": record.error_kind,
+        "error_message": record.error_message,
+        "event_time": record.event_time,
+        "ingested_at": record.ingested_at,
+        "first_failed_at": record.first_failed_at,
+        "attempts": record.attempts,
+        "status": record.status,
+        "replay_status": record.replay_status,
+        "replay_run_id": record.replay_run_id,
+        "replay_idempotency_key": record.replay_idempotency_key,
+        "replay_requested_at": record.replay_requested_at,
+        "discarded_at": record.discarded_at,
+        "backfill_plan": dict(record.backfill_plan) if record.backfill_plan is not None else None,
+        "is_closed_partition_affected": record.is_closed_partition_affected,
+        "metadata": dict(record.metadata),
+    }
 
 
 def _version_row_id(row: dict[str, Any]) -> str:
@@ -436,6 +657,9 @@ def _dataset_values() -> dict[str, Any]:
         "classification": "internal",
         "status": "active",
         "primary_key": ["order_id"],
+        "partition_spec": [],
+        "sort_order": [],
+        "target_file_size_bytes": None,
         "created_at": "2026-06-10T00:00:00Z",
         "updated_at": "2026-06-10T00:00:00Z",
     }
@@ -627,6 +851,35 @@ def test_dataset_transaction_repository_contract_latest_committed_metadata(
     assert latest is not None
     assert latest["id"] == "dstx_second"
     assert latest["metadata"] == {"streamCursor": {"offset": 2}}
+
+
+def test_dataset_transaction_repository_contract_finds_committed_transaction_by_version(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def commit_and_lookup(transaction: Any) -> dict[str, Any] | None:
+        repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_version_lookup"))
+        repository.commit_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_version_lookup",
+            committed_version_id="dsv_lookup",
+            schema_version=1,
+            committed_at="2026-06-10T00:02:00Z",
+            metadata={"materializationDetail": {"apiName": "order_current"}},
+        )
+        return repository.committed_transaction_by_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            committed_version_id="dsv_lookup",
+        )
+
+    row = harness.call_in_transaction(commit_and_lookup)
+
+    assert row is not None
+    assert row["id"] == "dstx_version_lookup"
+    assert row["metadata"] == {"materializationDetail": {"apiName": "order_current"}}
 
 
 def test_dataset_transaction_repository_contract_finds_committed_webhook_event(
@@ -822,6 +1075,171 @@ def test_dataset_transaction_repository_contract_abort_open_transaction_and_fail
     assert failed_tx is not None
     assert failed_tx["status"] == "ABORTED"
     assert failed_tx["metadata"] == {"error": {"code": "VALIDATION_FAILED"}}
+
+
+def test_dataset_transaction_repository_contract_dead_letter_record_is_tenant_scoped(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def insert_records(transaction: Any) -> list[dict[str, Any]]:
+        inserted = repository.insert_dead_letter_record(transaction=transaction, record=_dead_letter_record())
+        duplicate = repository.insert_dead_letter_record(
+            transaction=transaction, record=_dead_letter_record("dlqr_dup")
+        )
+        repository.insert_dead_letter_record(
+            transaction=transaction,
+            record=replace(
+                _dead_letter_record("dlqr_other"), tenant_id="tenant-other", payload_hash="payload-hash-other"
+            ),
+        )
+        rows = repository.list_dead_letter_records(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            status="QUARANTINED",
+        )
+        return [{"inserted": inserted, "duplicate": duplicate}, *rows]
+
+    rows = harness.call_in_transaction(insert_records)
+
+    assert rows[0] == {"inserted": True, "duplicate": False}
+    assert [row["id"] for row in rows[1:]] == ["dlqr_orders_bad_1"]
+    assert rows[1]["payload"] == {"op": "u", "pk": "bad"}
+    assert rows[1]["replay_status"] == "NOT_REQUESTED"
+    assert harness.dead_letter_records()[0]["metadata"] == {"stream": "shipments", "offset": 1}
+
+
+def test_dataset_transaction_repository_contract_dead_letter_record_replay_and_discard(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def replay_flow(transaction: Any) -> dict[str, Any]:
+        repository.insert_dead_letter_record(transaction=transaction, record=_dead_letter_record())
+        repository.insert_dead_letter_record(
+            transaction=transaction,
+            record=replace(
+                _dead_letter_record("dlqr_orders_bad_2"),
+                source_event_id="shipment_events:0:2",
+                payload_hash="payload-hash-2",
+            ),
+        )
+        updated = repository.update_dead_letter_record_replay_requested(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_idempotency_key="retry-key-1",
+            replay_requested_at="2026-06-10T00:04:00Z",
+            metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
+            backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
+        )
+        duplicate_request = repository.update_dead_letter_record_replay_requested(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_duplicate",
+            replay_idempotency_key="retry-key-duplicate",
+            replay_requested_at="2026-06-10T00:04:01Z",
+            metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
+            backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
+        )
+        assert updated is not None
+        assert duplicate_request is None
+        succeeded = repository.update_dead_letter_record_replay_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            metadata={
+                "stream": "shipments",
+                "replayResult": {"datasetVersionId": "dsv_replay_1", "rowCount": 1},
+            },
+        )
+        failed = repository.update_dead_letter_record_replay_failed(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            metadata={"stream": "shipments", "lastReplayError": {"type": "ValidationFailed"}},
+        )
+        assert succeeded is not None
+        assert failed is not None
+        return {"requested": updated, "succeeded": succeeded, "failed": failed}
+
+    replay_result = harness.call_in_transaction(replay_flow)
+    missing = harness.call_in_transaction(
+        lambda transaction: repository.dead_letter_record_by_id(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            record_id="dlqr_orders_bad_1",
+        )
+    )
+    discarded = harness.call_in_transaction(
+        lambda transaction: repository.discard_dead_letter_record(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            discarded_at="2026-06-10T00:05:00Z",
+            metadata={"stream": "shipments", "lastOperation": {"operation": "discard"}},
+        )
+    )
+
+    replayed = replay_result["requested"]
+    succeeded = replay_result["succeeded"]
+    failed = replay_result["failed"]
+    assert replayed["status"] == "REPLAY_REQUESTED"
+    assert replayed["replay_status"] == "REQUESTED"
+    assert replayed["replay_idempotency_key"] == "retry-key-1"
+    assert replayed["backfill_plan"] == {"nextStep": "Replay worker must re-ingest this record."}
+    assert succeeded["status"] == "RESOLVED"
+    assert succeeded["replay_status"] == "SUCCEEDED"
+    assert succeeded["metadata"]["replayResult"] == {"datasetVersionId": "dsv_replay_1", "rowCount": 1}
+    assert failed["status"] == "QUARANTINED"
+    assert failed["replay_status"] == "FAILED"
+    assert failed["attempts"] == 2
+    assert missing is None
+    assert discarded is not None
+    assert discarded["status"] == "DISCARDED"
+    assert discarded["discarded_at"] == "2026-06-10T00:05:00Z"
+
+
+def test_concurrent_replay_requests_create_one_replay_run(postgres_fixture: Any) -> None:
+    engine = postgres_fixture.engine
+    repository = SqlAlchemyDatasetTransactionRepository(engine)
+    start = Barrier(2, timeout=5)
+
+    with engine.begin() as transaction:
+        repository.insert_dead_letter_record(transaction=transaction, record=_dead_letter_record())
+
+    def request_replay(replay_run_id: str) -> dict[str, Any] | None:
+        with engine.begin() as transaction:
+            start.wait()
+            return repository.update_dead_letter_record_replay_requested(
+                transaction=transaction,
+                tenant_id="tenant-demo",
+                record_id="dlqr_orders_bad_1",
+                replay_run_id=replay_run_id,
+                replay_idempotency_key="retry-key-1",
+                replay_requested_at="2026-06-10T00:04:00Z",
+                metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
+                backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [
+            executor.submit(request_replay, "record_replay_1"),
+            executor.submit(request_replay, "record_replay_2"),
+        ]
+        rows = [future.result() for future in results]
+
+    stored = SqlAlchemyTransactionHarness(repository, engine).dead_letter_records()[0]
+    winners = [row for row in rows if row is not None]
+    assert len(winners) == 1
+    assert stored["status"] == "REPLAY_REQUESTED"
+    assert stored["replay_idempotency_key"] == "retry-key-1"
+    assert stored["replay_run_id"] == winners[0]["replay_run_id"]
+    assert stored["replay_run_id"] in {"record_replay_1", "record_replay_2"}
 
 
 def _sync_run_record(

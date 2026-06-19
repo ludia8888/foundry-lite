@@ -167,8 +167,17 @@ run_static_gate() {
   echo "== Static: generated TypeScript SDK drift =="
   uv run python scripts/generate_sdk_ts.py --check
 
+  echo "== Static: frontend foundation SDK contract =="
+  pnpm --silent quality:frontend-foundation
+
   echo "== Static: DB schema revision guard =="
   uv run python scripts/quality/check_schema_revision_guard.py
+
+  echo "== Static: Alembic migration safety =="
+  uv run python scripts/quality/check_schema_migrations.py
+
+  echo "== Static: DB migration singleton runner =="
+  uv run pytest tests/unit/test_migration_runner.py -q -ra
 
   echo "== Static: audit on public service mutations =="
   uv run python scripts/quality/check_audit_on_mutation.py
@@ -227,10 +236,9 @@ run_static_gate() {
   fi
 
   echo "== Static: pip-audit dependency vulnerability scan =="
-  # pyjwt PYSEC-2026-175/177/178/179 are pinned <2.13 by semgrep 1.165 (dev-only
-  # transitive). We do not import pyjwt directly; we ignore these CVEs at the
-  # audit boundary and re-evaluate when semgrep lifts the pin or we ship a
-  # dedicated JwtAuthProvider that brings pyjwt in via the application layer.
+  # PyJWT is now a direct S58A runtime auth dependency. These ignores remain
+  # for the current lock/audit boundary and must be re-evaluated when PyJWT or
+  # semgrep changes; JwtOidcAuthProvider coverage lives in quality:auth-secrets.
   uv run pip-audit --progress-spinner off \
     --ignore-vuln PYSEC-2026-175 \
     --ignore-vuln PYSEC-2026-177 \
@@ -300,9 +308,21 @@ run_runtime_gate() {
   run_runtime_contract_gates
   trap 'runtime_gate_failed "$?"' ERR
 
+  run_runtime_step "Record DLQ replay ratchet" pnpm --silent quality:record-dlq-replay
+
+  run_runtime_step "Late-data ratchet" pnpm --silent quality:late-data
+
+  run_runtime_step "Watermark ratchet" pnpm --silent quality:watermark
+
+  run_runtime_step "Multi-file dataset manifest ratchet" pnpm --silent quality:multi-file-dataset
+
+  run_runtime_step "Partition pruning ratchet" pnpm --silent quality:partition-pruning
+
   run_runtime_step "CDC stream archive ratchet" pnpm --silent quality:cdc-stream-archive
 
   run_runtime_step "CDC object indexing ratchet" pnpm --silent quality:cdc-object-indexing
+
+  run_runtime_step "CDC continuous worker ratchet" pnpm --silent quality:cdc-continuous-worker
 
   run_runtime_step "Debezium live CDC ratchet" pnpm --silent quality:cdc-live-debezium
 
@@ -310,9 +330,37 @@ run_runtime_gate() {
 
   run_runtime_step "Iceberg storage ratchet" pnpm --silent quality:iceberg
 
+  run_runtime_step "Iceberg maintenance ratchet" pnpm --silent quality:iceberg-maintenance
+
   run_runtime_step "Spark compute ratchet" pnpm --silent quality:spark
 
   run_runtime_step "Temporal workflow ratchet" pnpm --silent quality:temporal
+
+  run_runtime_step "Temporal engine integration ratchet" pnpm --silent quality:temporal-engine-integration
+
+  run_runtime_step "External writeback outcome ratchet" pnpm --silent quality:external-writeback
+
+  run_runtime_step "Saga reconciliation ratchet" pnpm --silent quality:saga-reconciliation
+
+  run_runtime_step "Data quality contract ratchet" pnpm --silent quality:data-contracts
+
+  run_runtime_step "Dataset schema evolution ratchet" pnpm --silent quality:schema-evolution
+
+  run_runtime_step "Ontology migration ratchet" pnpm --silent quality:ontology-migrations
+
+  run_runtime_step "Observability detector ratchet" pnpm --silent quality:observability-detectors
+
+  run_runtime_step "SLO contract ratchet" pnpm --silent quality:slo-contracts
+
+  run_runtime_step "Backup/restore preflight ratchet" pnpm --silent quality:backup-restore
+
+  run_runtime_step "Auth and secret provider ratchet" pnpm --silent quality:auth-secrets
+
+  run_runtime_step "Privacy transform ratchet" pnpm --silent quality:privacy
+
+  run_runtime_step "Right-to-erasure manifest ratchet" pnpm --silent quality:erasure
+
+  run_runtime_step "AI evidence lineage ratchet" pnpm --silent quality:ai-evidence
 
   run_runtime_step "Elasticsearch deployment ratchet" pnpm --silent quality:elasticsearch
 

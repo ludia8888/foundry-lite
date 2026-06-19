@@ -8,11 +8,20 @@ from foundry_lite.application.ports import StreamPublishRequest
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.domain.context import demo_admin_context
-from foundry_lite.infrastructure.adapters import KafkaStreamAdapter, KafkaStreamAdapterConfig, KafkaStreamSubscription
+from foundry_lite.infrastructure.adapters import (
+    KafkaStreamAdapter,
+    KafkaStreamAdapterConfig,
+    KafkaStreamSubscription,
+    LocalStreamAdapter,
+)
 from foundry_lite.infrastructure.adapters import kafka_stream as kafka_module
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite_worker import stream_archive as worker_module
-from foundry_lite_worker.stream_archive import StreamArchiveWorkerConfig, run_stream_archive_once
+from foundry_lite_worker.stream_archive import (
+    StreamArchiveWorkerConfig,
+    run_stream_archive_continuously,
+    run_stream_archive_once,
+)
 
 
 def test_kafka_stream_adapter_reads_assigned_offsets() -> None:
@@ -223,6 +232,115 @@ def test_kafka_stream_worker_archives_broker_event(tmp_path: Path) -> None:
     assert preview[0]["payload_json"] == '{"shipment_id":"S-100","status":"IN_TRANSIT"}'
 
 
+def test_stream_archive_worker_continuous_loop_archives_until_empty_poll(tmp_path: Path) -> None:
+    storage_root = tmp_path / "continuous"
+    adapter = LocalStreamAdapter()
+    _publish_local_event(adapter, "shipments", "S-201")
+    _publish_local_event(adapter, "shipments", "S-202")
+    config = StreamArchiveWorkerConfig(
+        dataset_ref="raw.shipment_events",
+        stream_name="shipments",
+        topic="shipment_events",
+        bootstrap_servers="redpanda:9092",
+        storage_root=storage_root,
+        limit=1,
+        is_continuous=True,
+        continuous_max_empty_polls=1,
+    )
+
+    result = run_stream_archive_continuously(config, stream_adapter=adapter)
+
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    ctx = demo_admin_context()
+    archived_rows = [
+        row
+        for version in foundry.datasets.list_versions("raw.shipment_events", ctx=ctx)
+        for row in foundry.datasets.preview("raw.shipment_events", ctx=ctx, version=version["id"])
+    ]
+    assert result.stop_reason == "empty_polls"
+    assert result.iterations == 3
+    assert result.archived_batches == 2
+    assert result.rows_archived == 2
+    assert [row["event_id"] for row in archived_rows] == ["shipment_events:0:0", "shipment_events:0:1"]
+
+
+def test_stream_archive_worker_continuous_loop_honors_stop_callback(tmp_path: Path) -> None:
+    adapter = LocalStreamAdapter()
+    _publish_local_event(adapter, "shipments", "S-301")
+    _publish_local_event(adapter, "shipments", "S-302")
+    checks = 0
+
+    def stop_after_first_iteration() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks > 1
+
+    result = run_stream_archive_continuously(
+        StreamArchiveWorkerConfig(
+            dataset_ref="raw.shipment_events",
+            stream_name="shipments",
+            topic="shipment_events",
+            bootstrap_servers="redpanda:9092",
+            storage_root=tmp_path / "stoppable",
+            limit=10,
+            is_continuous=True,
+        ),
+        stream_adapter=adapter,
+        should_stop=stop_after_first_iteration,
+    )
+
+    assert result.stop_reason == "stop_requested"
+    assert result.iterations == 1
+    assert result.archived_batches == 1
+    assert result.rows_archived == 2
+
+
+def test_stream_archive_worker_continuous_loop_stops_after_max_batches(tmp_path: Path) -> None:
+    adapter = LocalStreamAdapter()
+    _publish_local_event(adapter, "shipments", "S-401")
+    _publish_local_event(adapter, "shipments", "S-402")
+
+    result = run_stream_archive_continuously(
+        StreamArchiveWorkerConfig(
+            dataset_ref="raw.shipment_events",
+            stream_name="shipments",
+            topic="shipment_events",
+            bootstrap_servers="redpanda:9092",
+            storage_root=tmp_path / "max-batches",
+            limit=1,
+            is_continuous=True,
+            continuous_max_batches=1,
+        ),
+        stream_adapter=adapter,
+    )
+
+    assert result.stop_reason == "max_batches"
+    assert result.iterations == 1
+    assert result.archived_batches == 1
+    assert result.rows_archived == 1
+
+
+def test_stream_archive_worker_continuous_loop_counts_empty_polls_before_stop(tmp_path: Path) -> None:
+    result = run_stream_archive_continuously(
+        StreamArchiveWorkerConfig(
+            dataset_ref="raw.empty_stream",
+            stream_name="empty",
+            topic="empty_topic",
+            bootstrap_servers="redpanda:9092",
+            storage_root=tmp_path / "empty-polls",
+            limit=1,
+            is_continuous=True,
+            continuous_max_empty_polls=2,
+        ),
+        stream_adapter=LocalStreamAdapter(),
+    )
+
+    assert result.stop_reason == "empty_polls"
+    assert result.iterations == 2
+    assert result.empty_polls == 2
+    assert result.archived_batches == 0
+
+
 def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
     config = worker_module.config_from_env(
         {
@@ -240,6 +358,9 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
             "FOUNDRY_LITE_CDC_PRIMARY_KEY": "order_id, line_id",
             "FOUNDRY_LITE_TENANT_ID": "tenant-custom",
             "FOUNDRY_LITE_STREAM_SYNC_NAME": "custom-sync",
+            "FOUNDRY_LITE_STREAM_CONTINUOUS": "true",
+            "FOUNDRY_LITE_STREAM_CONTINUOUS_MAX_BATCHES": "3",
+            "FOUNDRY_LITE_STREAM_CONTINUOUS_MAX_EMPTY_POLLS": "2",
         }
     )
 
@@ -251,6 +372,9 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
     assert config.cdc_primary_key == ("order_id", "line_id")
     assert config.request_context().tenant_id == "tenant-custom"
     assert config.sync_name == "custom-sync"
+    assert config.is_continuous is True
+    assert config.continuous_max_batches == 3
+    assert config.continuous_max_empty_polls == 2
 
 
 def test_worker_requires_tenant_context_for_background_jobs(tmp_path: Path) -> None:
@@ -334,8 +458,48 @@ def test_stream_archive_worker_main_prints_adapter_error(
     assert '"adapterProfile": "kafka-stream"' in capsys.readouterr().out
 
 
+def test_stream_archive_worker_main_prints_continuous_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        worker_module,
+        "run_stream_archive_continuously",
+        lambda _config: worker_module.ContinuousStreamArchiveResult(
+            iterations=2,
+            archived_batches=1,
+            empty_polls=1,
+            rows_archived=3,
+            last_version_id="ver_continuous",
+            stop_reason="empty_polls",
+        ),
+    )
+
+    exit_code = worker_module.main(["--storage-root", str(tmp_path), "--continuous", "--max-batches", "1"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert '"status": "STOPPED"' in output
+    assert '"stopReason": "empty_polls"' in output
+    assert '"lastVersionId": "ver_continuous"' in output
+
+
 def test_stream_archive_worker_result_json_for_no_events() -> None:
     assert worker_module._result_json(None) == '{"status": "NO_EVENTS"}'
+
+
+def _publish_local_event(adapter: LocalStreamAdapter, stream_name: str, key: str) -> None:
+    adapter.publish_event(
+        StreamPublishRequest(
+            stream_name=stream_name,
+            event_type="shipment.updated",
+            tenant_id="tenant-demo",
+            request_id=f"req-{key}",
+            key=key,
+            payload={"shipment_id": key, "status": "IN_TRANSIT"},
+        )
+    )
 
 
 def _adapter(consumer: _FakeConsumer) -> KafkaStreamAdapter:
