@@ -235,25 +235,19 @@ class DatasetIngestService(CoreService):
         source_type: str | None = None,
         run_id: str | None = None,
     ) -> UploadSyncPlan:
-        transaction_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, dataset, tx_type)
-        run_id = run_id or _new_id("sync_run")
-        self.dataset_transaction_repository.insert_sync_run(
-            transaction=conn,
-            record=SyncRunRecord(
-                sync_run_id=run_id,
-                tenant_id=ctx.tenant_id,
-                sync_name=sync_name or f"connector:{connector_name}:{resource_name}",
-                source_type=source_type or f"connector.{connector_name}",
-                output_dataset_id=str(dataset["id"]),
-                transaction_id=transaction_id,
-                committed_version_id=None,
-                status="EXTRACTING",
-                error=None,
-                created_at=_now(),
-                completed_at=None,
-            ),
+        return connector_snapshot_ingest.start_connector_sync_run(
+            self.dataset_transaction_service,
+            self.dataset_transaction_repository,
+            conn,
+            ctx,
+            dataset,
+            connector_name,
+            resource_name,
+            sync_name,
+            tx_type=tx_type,
+            source_type=source_type,
+            run_id=run_id,
         )
-        return UploadSyncPlan(transaction_id=transaction_id, run_id=run_id)
 
     def _committed_stream_transaction(
         self,

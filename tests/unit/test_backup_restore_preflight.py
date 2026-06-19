@@ -131,6 +131,26 @@ def test_post_restore_closed_loop_smoke(foundry: FoundryLite) -> None:
     assert foundry.operations.restore_mode_status("restore-resume", ctx=ctx) == approved
 
 
+def test_outbox_retry_stays_blocked_when_any_restore_mode_remains_active(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    _apply_action_and_materialize(foundry, ctx)
+    _seed_dead_letter_event(foundry, outbox_id="outbox_restore_overlap", dlq_id="dlq_restore_overlap")
+    restore_a = foundry.operations.start_restore_mode(ctx=ctx, backup_id="backup-a", restore_id="restore-a")
+    foundry.operations.start_restore_mode(ctx=ctx, backup_id="backup-b", restore_id="restore-b")
+    approved_b = foundry.operations.approve_restore_resume(
+        "restore-b",
+        ctx=ctx,
+        validation_id="closed-loop-restore-b",
+    )
+
+    with pytest.raises(ConflictDetected) as exc:
+        foundry.operations.retry_dead_letter_event("dlq_restore_overlap", ctx=ctx)
+
+    assert restore_a["status"] == "paused"
+    assert approved_b["status"] == "resume_approved"
+    assert exc.value.details["restore_id"] == "restore-a"
+
+
 def test_restore_retry_is_idempotent(foundry: FoundryLite, tmp_path: Path) -> None:
     ctx = demo_admin_context()
     foundry.datasets.ensure("raw.restore_retry", ctx=ctx, primary_key=["order_id"])

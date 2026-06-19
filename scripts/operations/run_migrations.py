@@ -65,47 +65,67 @@ def run_migrations_with_singleton_lock(
     upgrade: UpgradeFn | None = None,
     evidence_output: Path | None = None,
 ) -> MigrationRunResult:
-    engine = create_engine_for_lock(database_url, lock_timeout_seconds=lock_timeout_seconds)
-    with engine.connect() as connection:
-        if not try_acquire_migration_lock(connection):
-            result = MigrationRunResult(
-                database_url=database_url,
-                revision=revision,
-                has_acquired_lock=False,
-                has_run_migration=False,
-                is_lock_busy=True,
-            )
-            write_migration_evidence(evidence_output, result=result)
-            return result
-        has_migration_succeeded = False
-        try:
-            migration_upgrade = upgrade or _alembic_upgrade
-            migration_upgrade(alembic_config(database_url, connection), revision)
-            has_migration_succeeded = True
-            result = MigrationRunResult(
-                database_url=database_url,
-                revision=revision,
-                has_acquired_lock=True,
-                has_run_migration=True,
-                is_lock_busy=False,
-            )
-            write_migration_evidence(evidence_output, result=result)
-            return result
-        except Exception as exc:
-            write_migration_evidence(
-                evidence_output,
-                result=MigrationRunResult(
+    has_acquired_lock = False
+    try:
+        engine = create_engine_for_lock(database_url, lock_timeout_seconds=lock_timeout_seconds)
+        with engine.connect() as connection:
+            if not try_acquire_migration_lock(connection):
+                result = MigrationRunResult(
                     database_url=database_url,
                     revision=revision,
-                    has_acquired_lock=True,
+                    has_acquired_lock=False,
                     has_run_migration=False,
-                    is_lock_busy=False,
-                ),
-                error=exc,
+                    is_lock_busy=True,
+                )
+                write_migration_evidence(evidence_output, result=result)
+                return result
+            has_acquired_lock = True
+            return _run_locked_migration(
+                connection,
+                database_url=database_url,
+                revision=revision,
+                upgrade=upgrade,
+                evidence_output=evidence_output,
             )
-            raise
-        finally:
-            release_migration_lock(connection, has_migration_succeeded=has_migration_succeeded)
+    except Exception as exc:
+        write_migration_evidence(
+            evidence_output,
+            result=MigrationRunResult(
+                database_url=database_url,
+                revision=revision,
+                has_acquired_lock=has_acquired_lock,
+                has_run_migration=False,
+                is_lock_busy=False,
+            ),
+            error=exc,
+        )
+        raise
+
+
+def _run_locked_migration(
+    connection: Connection,
+    *,
+    database_url: str,
+    revision: str,
+    upgrade: UpgradeFn | None,
+    evidence_output: Path | None,
+) -> MigrationRunResult:
+    has_migration_succeeded = False
+    try:
+        migration_upgrade = upgrade or _alembic_upgrade
+        migration_upgrade(alembic_config(database_url, connection), revision)
+        has_migration_succeeded = True
+        result = MigrationRunResult(
+            database_url=database_url,
+            revision=revision,
+            has_acquired_lock=True,
+            has_run_migration=True,
+            is_lock_busy=False,
+        )
+        write_migration_evidence(evidence_output, result=result)
+        return result
+    finally:
+        release_migration_lock(connection, has_migration_succeeded=has_migration_succeeded)
 
 
 def write_migration_evidence(
@@ -125,7 +145,7 @@ def write_migration_evidence(
         has_completed_migration=result.has_run_migration,
         is_lock_busy=result.is_lock_busy,
         error_type=type(error).__name__ if error is not None else None,
-        error_message=str(error) if error is not None else None,
+        error_message=_safe_error_message(error, result.database_url) if error is not None else None,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(asdict(evidence), indent=2, sort_keys=True), encoding="utf-8")
@@ -144,6 +164,28 @@ def _safe_database_url(database_url: str) -> str:
         return make_url(database_url).render_as_string(hide_password=True)
     except Exception:
         return "<unparseable>"
+
+
+def _safe_error_message(error: BaseException, database_url: str) -> str:
+    message = str(error)
+    replacements = _sensitive_database_fragments(database_url)
+    for fragment in replacements:
+        message = message.replace(fragment, "***")
+    return message
+
+
+def _sensitive_database_fragments(database_url: str) -> set[str]:
+    fragments = {database_url}
+    try:
+        url = make_url(database_url)
+    except Exception:
+        return {fragment for fragment in fragments if fragment}
+    if isinstance(url.password, str) and url.password:
+        fragments.add(url.password)
+    rendered = url.render_as_string(hide_password=False)
+    if rendered:
+        fragments.add(rendered)
+    return {fragment for fragment in fragments if fragment}
 
 
 def create_engine_for_lock(database_url: str, *, lock_timeout_seconds: float) -> Engine:

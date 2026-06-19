@@ -46,7 +46,14 @@ class WorkflowOrchestrationService(CoreService):
             input=_connector_sync_input(dataset_ref, connector_name, resource_name, sync_name),
         )
         run = self.workflow_adapter.start_workflow(request)
-        audit_id = self._audit_workflow_start(ctx, run, dataset_id=str(dataset["id"]), idempotency_key=idempotency_key)
+        audit_id = self._audit_event_id_for_workflow(ctx, run.run_id)
+        if audit_id is None:
+            audit_id = self._audit_workflow_start(
+                ctx,
+                run,
+                dataset_id=str(dataset["id"]),
+                idempotency_key=idempotency_key,
+            )
         return _product_workflow_run(run, self.workflow_adapter.profile_name, idempotency_key, audit_id)
 
     def product_workflow_run(self, workflow_run_id: str, *, ctx: RequestContext | None = None) -> ProductWorkflowRun:

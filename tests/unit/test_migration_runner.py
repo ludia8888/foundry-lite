@@ -70,6 +70,35 @@ def test_migration_runner_evidence_masks_database_password(tmp_path: Path) -> No
     assert "***" in evidence["database_url"]
 
 
+def test_migration_connection_failure_leaves_redacted_operator_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = "postgresql+psycopg://foundry:super-secret@example.test/foundry"
+    evidence_output = tmp_path / "migration_run.json"
+
+    def fail_before_connect(url: str, *, lock_timeout_seconds: float):  # noqa: ANN202 - pytest monkeypatch stub
+        del lock_timeout_seconds
+        raise RuntimeError(f"could not connect to {url}; password=super-secret")
+
+    monkeypatch.setattr(run_migrations, "create_engine_for_lock", fail_before_connect)
+
+    with pytest.raises(RuntimeError, match="could not connect"):
+        run_migrations.run_migrations_with_singleton_lock(
+            database_url=database_url,
+            evidence_output=evidence_output,
+        )
+
+    evidence = json.loads(evidence_output.read_text(encoding="utf-8"))
+    assert evidence["status"] == "failed"
+    assert evidence["has_acquired_lock"] is False
+    assert evidence["has_completed_migration"] is False
+    assert evidence["error_type"] == "RuntimeError"
+    assert "super-secret" not in evidence["database_url"]
+    assert "super-secret" not in evidence["error_message"]
+    assert database_url not in evidence["error_message"]
+
+
 def test_migration_is_singleton_for_concurrent_sqlite_jobs(tmp_path: Path) -> None:
     database_url = f"sqlite:///{tmp_path / 'migrated.db'}"
     first_started = threading.Event()

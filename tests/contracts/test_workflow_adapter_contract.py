@@ -83,6 +83,10 @@ def test_product_workflow_operations_contract_starts_connector_sync_and_audits(
     assert run["status"] == "succeeded"
     assert run["output"]["datasetRef"] == "raw.workflow_orders"
     assert run["foundryRunId"] is not None
+    assert duplicate["foundryRunId"] == run["foundryRunId"]
     detail = foundry.operations.run_detail("audit", str(run["foundryRunId"]), ctx=ctx)
+    audits = foundry.operations.query_runs(ctx=ctx, run_type="audit")["auditEvents"]
+    workflow_audits = [event for event in audits if event["resource_id"] == run["workflowRunId"]]
     assert detail["row"]["resource_id"] == run["workflowRunId"]
     assert detail["row"]["after_ref"]["workflowName"] == CONNECTOR_SYNC_WORKFLOW_NAME
+    assert len(workflow_audits) == 1
