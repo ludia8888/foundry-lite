@@ -77,6 +77,20 @@ class SyncRunRecord:
     completed_at: str | None
 
 
+class SyncRunRow(TypedDict):
+    id: str
+    tenant_id: str
+    sync_name: str
+    source_type: str
+    output_dataset_id: str
+    transaction_id: str | None
+    committed_version_id: str | None
+    status: str
+    error: DatasetRunError | None
+    created_at: str
+    completed_at: str | None
+
+
 @dataclass(frozen=True)
 class DeadLetterRecord:
     dead_letter_record_id: str
@@ -297,6 +311,16 @@ class DatasetTransactionRepository(Protocol):
 
     def insert_sync_run(self, *, transaction: TransactionContext, record: SyncRunRecord) -> None:
         """Persist a newly received sync run inside the caller transaction."""
+        ...
+
+    def sync_run_by_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        sync_run_id: str,
+    ) -> SyncRunRow | None:
+        """Return one tenant-scoped sync run for replay/idempotency recovery."""
         ...
 
     def insert_dead_letter_record(self, *, transaction: TransactionContext, record: DeadLetterRecord) -> bool:

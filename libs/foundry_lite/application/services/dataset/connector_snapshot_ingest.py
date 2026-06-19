@@ -11,10 +11,12 @@ from foundry_lite.application.ports import (
     DatasetRow,
     DatasetTransactionRepository,
     RestSourceConfig,
+    SyncRunRecord,
+    SyncRunRow,
     TransactionContext,
     TransactionManager,
 )
-from foundry_lite.application.primitives import CommitResult
+from foundry_lite.application.primitives import CommitResult, _new_id, _now
 from foundry_lite.application.services.dataset.ingest_models import ConnectorSnapshotSync, UploadSyncPlan
 from foundry_lite.application.services.dataset.protocols import (
     DatasetRegistryLookup,
@@ -22,7 +24,7 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetTransactionManager,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
 
 class ConnectorSnapshotIngestRuntime(Protocol):
@@ -83,6 +85,57 @@ def sync_connector_snapshot(
     return _commit_connector_snapshot(runtime, connector_adapter, ctx, sync, connector_name, resource_name, rest)
 
 
+def start_connector_sync_run(
+    transaction_service: DatasetTransactionManager,
+    repository: DatasetTransactionRepository,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    dataset: DatasetRow,
+    connector_name: str,
+    resource_name: str,
+    sync_name: str | None,
+    *,
+    tx_type: str,
+    source_type: str | None,
+    run_id: str | None,
+) -> UploadSyncPlan:
+    if existing := resumable_sync_plan(repository, conn, ctx.tenant_id, run_id):
+        return existing
+    transaction_id = transaction_service._open_dataset_transaction(conn, ctx, dataset, tx_type)
+    resolved_run_id = run_id or _new_id("sync_run")
+    repository.insert_sync_run(
+        transaction=conn,
+        record=SyncRunRecord(
+            sync_run_id=resolved_run_id,
+            tenant_id=ctx.tenant_id,
+            sync_name=sync_name or f"connector:{connector_name}:{resource_name}",
+            source_type=source_type or f"connector.{connector_name}",
+            output_dataset_id=str(dataset["id"]),
+            transaction_id=transaction_id,
+            committed_version_id=None,
+            status="EXTRACTING",
+            error=None,
+            created_at=_now(),
+            completed_at=None,
+        ),
+    )
+    return UploadSyncPlan(transaction_id=transaction_id, run_id=resolved_run_id)
+
+
+def resumable_sync_plan(
+    repository: DatasetTransactionRepository,
+    conn: TransactionContext,
+    tenant_id: str,
+    run_id: str | None,
+) -> UploadSyncPlan | None:
+    if run_id is None:
+        return None
+    row = repository.sync_run_by_id(transaction=conn, tenant_id=tenant_id, sync_run_id=run_id)
+    if row is None:
+        return None
+    return _resumable_sync_plan(row, run_id)
+
+
 def _prepare_connector_snapshot_sync(
     runtime: ConnectorSnapshotIngestRuntime,
     ctx: RequestContext,
@@ -99,6 +152,20 @@ def _prepare_connector_snapshot_sync(
         plan = runtime._start_connector_sync_run(conn, ctx, dataset, connector_name, resource_name, sync_name)
     staged = runtime.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
     return ConnectorSnapshotSync(dataset=dataset, plan=plan, staged=staged, resume_cursor=resume_cursor)
+
+
+def _resumable_sync_plan(row: SyncRunRow, run_id: str) -> UploadSyncPlan:
+    transaction_id = row.get("transaction_id")
+    if row.get("status") != "EXTRACTING" or not isinstance(transaction_id, str) or not transaction_id:
+        raise ConflictDetected(
+            "sync run is not resumable",
+            details={
+                "sync_run_id": run_id,
+                "status": row.get("status"),
+                "transaction_id": transaction_id,
+            },
+        )
+    return UploadSyncPlan(transaction_id=transaction_id, run_id=run_id)
 
 
 def _commit_connector_snapshot(

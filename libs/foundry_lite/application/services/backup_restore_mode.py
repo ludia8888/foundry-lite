@@ -58,12 +58,34 @@ def latest_restore_mode_report(
 
 def active_restore_mode_report(audit_events: Sequence[RuntimeRow]) -> BackupRestoreModeReport | None:
     """Return an active restore-mode lockout report, if one is still blocking."""
-    report = latest_restore_mode_report(audit_events)
-    if report is None or report["status"] == "resume_approved":
+    active = [
+        report
+        for report in _latest_restore_mode_reports_by_id(audit_events).values()
+        if _is_active_restore_mode_report(report)
+    ]
+    if not active:
         return None
-    if report["is_outbox_publisher_paused"] or not report["is_serving_traffic_open"]:
-        return report
-    return None
+    return max(active, key=lambda report: report["generatedAt"])
+
+
+def _latest_restore_mode_reports_by_id(audit_events: Sequence[RuntimeRow]) -> dict[str, BackupRestoreModeReport]:
+    latest_rows: dict[str, RuntimeRow] = {}
+    for row in audit_events:
+        if row.get("event_type") not in RESTORE_MODE_EVENTS:
+            continue
+        restore_id = row.get("resource_id")
+        if not isinstance(restore_id, str) or restore_id == "":
+            continue
+        current = latest_rows.get(restore_id)
+        if current is None or _created_at(row) > _created_at(current):
+            latest_rows[restore_id] = row
+    return {restore_id: _report_from_audit_row(row) for restore_id, row in latest_rows.items()}
+
+
+def _is_active_restore_mode_report(report: BackupRestoreModeReport) -> bool:
+    if report["status"] == "resume_approved":
+        return False
+    return report["is_outbox_publisher_paused"] or not report["is_serving_traffic_open"]
 
 
 def _matches_restore_id(row: RuntimeRow, restore_id: str | None) -> bool:

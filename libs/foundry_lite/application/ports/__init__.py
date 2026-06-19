@@ -78,6 +78,7 @@ from foundry_lite.application.ports.dataset_transaction_repository import (
     DeadLetterRecordRow,
     DeadLetterRecordStatus,
     SyncRunRecord,
+    SyncRunRow,
 )
 from foundry_lite.application.ports.dataset_version_repository import (
     DatasetVersionRepository,
@@ -394,6 +395,7 @@ __all__ = [
     "StreamPublishRequest",
     "StreamSchemaStrategy",
     "SyncRunRecord",
+    "SyncRunRow",
     "TabularRow",
     "TransactionContext",
     "TransactionManager",

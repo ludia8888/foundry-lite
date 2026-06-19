@@ -117,12 +117,16 @@ class RecordDlqService(CoreService):
         replay_run_id = row.get("replay_run_id")
         if _is_idempotent_replay(row, idempotency_key, replay_run_id):
             return row, True
+        if _is_resumable_replay(row, idempotency_key, replay_run_id):
+            return row, False
         _ensure_retryable(row, idempotency_key)
         updated = self._request_replay(conn, ctx, row, idempotency_key)
         if updated is None:
             current = self._require_row(conn, ctx, record_id)
             if _is_idempotent_replay(current, idempotency_key, current.get("replay_run_id")):
                 return current, True
+            if _is_resumable_replay(current, idempotency_key, current.get("replay_run_id")):
+                return current, False
             _ensure_retryable(current, idempotency_key)
             raise ConflictDetected("dead-letter record replay changed concurrently", details={"record_id": record_id})
         self._audit_retry(conn, ctx, row, updated)
@@ -294,7 +298,19 @@ def _required_idempotency_key(idempotency_key: str) -> str:
 
 
 def _is_idempotent_replay(row: DeadLetterRecordRow, idempotency_key: str, replay_run_id: str | None) -> bool:
-    return row.get("replay_idempotency_key") == idempotency_key and replay_run_id is not None
+    return (
+        row.get("replay_idempotency_key") == idempotency_key
+        and replay_run_id is not None
+        and row["replay_status"] in {"SUCCEEDED", "FAILED"}
+    )
+
+
+def _is_resumable_replay(row: DeadLetterRecordRow, idempotency_key: str, replay_run_id: str | None) -> bool:
+    return (
+        row.get("replay_idempotency_key") == idempotency_key
+        and replay_run_id is not None
+        and row["replay_status"] in {"REQUESTED", "REPLAYING"}
+    )
 
 
 def _ensure_retryable(row: DeadLetterRecordRow, idempotency_key: str) -> None:

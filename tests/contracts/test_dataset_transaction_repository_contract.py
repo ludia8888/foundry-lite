@@ -224,6 +224,13 @@ class FakeDatasetTransactionRepository:
             "completed_at": record.completed_at,
         }
 
+    def sync_run_by_id(self, *, transaction: Any, tenant_id: str, sync_run_id: str) -> dict[str, Any] | None:
+        del transaction
+        row = self.sync_runs_store.get(sync_run_id)
+        if row is None or row["tenant_id"] != tenant_id:
+            return None
+        return dict(row)
+
     def insert_dead_letter_record(self, *, transaction: Any, record: DeadLetterRecord) -> bool:
         del transaction
         if any(
@@ -1298,6 +1305,25 @@ def test_dataset_transaction_repository_contract_sync_run_insert(harness: Transa
     assert row["output_dataset_id"] == "ds_orders"
     assert row["committed_version_id"] is None
     assert row["completed_at"] is None
+
+
+def test_dataset_transaction_repository_contract_sync_run_lookup_is_tenant_scoped(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def insert_and_lookup(transaction: Any) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        repository.insert_sync_run(transaction=transaction, record=_sync_run_record())
+        found = repository.sync_run_by_id(transaction=transaction, tenant_id="tenant-demo", sync_run_id="sync_run_1")
+        hidden = repository.sync_run_by_id(transaction=transaction, tenant_id="tenant-other", sync_run_id="sync_run_1")
+        return found, hidden
+
+    found, hidden = harness.call_in_transaction(insert_and_lookup)
+
+    assert found is not None
+    assert found["id"] == "sync_run_1"
+    assert found["transaction_id"] == "dstx_sync"
+    assert hidden is None
 
 
 def test_dataset_transaction_repository_contract_sync_run_terminal_committed(

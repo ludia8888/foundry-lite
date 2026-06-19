@@ -551,6 +551,50 @@ def test_same_replay_idempotency_key_returns_existing_result(tmp_path: Path) -> 
     assert second["replayDatasetVersionId"] == first["replayDatasetVersionId"]
 
 
+def test_same_replay_idempotency_key_resumes_after_requested_state_crash(tmp_path: Path) -> None:
+    foundry, dependencies = _core_with_stream(tmp_path)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.shipment_cdc", ctx=ctx, primary_key=["event_id"])
+    _insert_dead_letter_record(
+        dependencies,
+        ctx,
+        record_id="dlqr_resume_key",
+        source_event_id="shipment_cdc_events:0:13",
+    )
+    replay_key = "resume-replay-key"
+    with dependencies.engine.begin() as transaction:
+        row = dependencies.dataset_transaction_repository.dead_letter_record_by_id(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            record_id="dlqr_resume_key",
+        )
+        assert row is not None
+        dependencies.dataset_transaction_repository.update_dead_letter_record_replay_requested(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            record_id="dlqr_resume_key",
+            replay_run_id="sync_run_resume_dlq",
+            replay_idempotency_key=replay_key,
+            replay_requested_at="2026-06-10T00:04:00Z",
+            metadata={**dict(row["metadata"]), "lastOperation": {"operation": "retry"}},
+            backfill_plan={
+                "affectedDatasetVersionId": None,
+                "is_closed_partition_affected": False,
+                "nextStep": "resume",
+            },
+        )
+
+    resumed = foundry.operations.retry_dead_letter_record("dlqr_resume_key", idempotency_key=replay_key, ctx=ctx)
+    duplicate = foundry.operations.retry_dead_letter_record("dlqr_resume_key", idempotency_key=replay_key, ctx=ctx)
+    preview = foundry.datasets.preview("raw.shipment_cdc", ctx=ctx)
+
+    assert resumed["replayStatus"] == "SUCCEEDED"
+    assert resumed["is_idempotent_replay"] is False
+    assert resumed["replayRunId"] == "sync_run_resume_dlq"
+    assert duplicate["is_idempotent_replay"] is True
+    assert preview[0]["event_id"] == "shipment_cdc_events:0:13"
+
+
 def test_dead_letter_payload_is_replayable(tmp_path: Path) -> None:
     foundry, dependencies = _core_with_stream(tmp_path)
     ctx = demo_admin_context()
