@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import pytest
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRow,
     LinkTypeRow,
@@ -13,6 +14,25 @@ from foundry_lite.application.services.ontology_migration import (
     OntologyMigrationPlan,
     build_ontology_migration_plan,
 )
+from foundry_lite.application.services.ontology_migration_changes import (
+    blocked_action_removed,
+    blocked_action_target_changed,
+    blocked_link_backing_changed,
+    blocked_link_cardinality_changed,
+    blocked_link_removed,
+    blocked_object_removed,
+    blocked_parameter_became_required,
+    blocked_parameter_removed,
+    blocked_parameter_type_changed,
+    blocked_primary_key_changed,
+    blocked_property_removed,
+    blocked_property_type_change,
+    warning_object_reindex,
+    warning_optional_parameter_added,
+    warning_parameter_became_optional,
+)
+from foundry_lite.application.services.ontology_migration_types import reindex_operation
+from foundry_lite.domain.errors import ValidationFailed
 
 
 def test_ontology_migration_blocks_property_rename_without_consumer_mapping() -> None:
@@ -84,6 +104,134 @@ def test_ontology_migration_blocks_link_endpoint_change() -> None:
 
     assert plan.status == "blocked"
     assert _change_kinds(plan.blocking_changes) == ["link_endpoint_changed"]
+
+
+def test_ontology_migration_direct_change_constructors_keep_operator_evidence() -> None:
+    property_row = _property_row("status", "source_status")
+    link_row = _link_type_row()
+    changes = [
+        blocked_object_removed("LegacyObject"),
+        blocked_primary_key_changed("Order", "orderId", {"primaryKey": "newOrderId"}),
+        warning_object_reindex("Order", "backing"),
+        blocked_property_removed("Order", "legacyStatus"),
+        blocked_property_type_change("Order", "status", property_row, {"type": "integer"}),
+        blocked_link_removed("LegacyLink"),
+        blocked_link_cardinality_changed("OrderCustomer"),
+        blocked_link_backing_changed(
+            "OrderCustomer",
+            link_row["backing"],
+            {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "account_id"},
+        ),
+        blocked_action_removed("LegacyAction"),
+        blocked_action_target_changed("ApproveOrder", "Order", "Customer"),
+        blocked_parameter_removed("ApproveOrder", "reason"),
+        blocked_parameter_type_changed(
+            "ApproveOrder",
+            "reason",
+            {"apiName": "reason", "type": "string", "required": True},
+            {"apiName": "reason", "type": "integer", "required": True},
+        ),
+        blocked_parameter_became_required("ApproveOrder", "reason"),
+        warning_parameter_became_optional("ApproveOrder", "reason"),
+        warning_optional_parameter_added("ApproveOrder", "comment"),
+    ]
+    payloads = [change.to_payload() for change in changes]
+
+    assert payloads[0]["kind"] == "object_removed"
+    assert payloads[1]["details"] == {"previous": "orderId", "next": "newOrderId"}
+    assert payloads[2]["requiresObjectReindex"] is True
+    assert payloads[4]["details"] == {"previous": "string", "next": "integer"}
+    assert payloads[7]["details"] == {
+        "previous": {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "customer_id"},
+        "next": {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "account_id"},
+    }
+    assert payloads[11]["requiresSdkMajorVersion"] is True
+    assert payloads[-1]["status"] == "warning"
+
+
+def test_ontology_migration_plan_compatible_and_blocked_raise_paths() -> None:
+    compatible = OntologyMigrationPlan(None, (), ())
+    operation = reindex_operation("Order", ["properties.status", "properties.status", "backing"])
+    blocked = OntologyMigrationPlan("ont_1", (blocked_action_removed("ApproveOrder"),), ())
+    warning = OntologyMigrationPlan("ont_1", (), (operation,))
+
+    assert compatible.has_changes is False
+    assert compatible.status == "compatible"
+    assert compatible.sdk_compatibility == "compatible"
+    assert "sourceOntologyVersionId" not in compatible.to_payload()
+    assert warning.status == "compatible_with_warning"
+    assert warning.to_payload()["objectReindexPlan"] == [operation.to_payload()]
+    with pytest.raises(ValidationFailed, match="ontology migration requires explicit migration plan"):
+        blocked.raise_if_blocked()
+
+
+def test_ontology_migration_blocks_shape_link_and_action_contract_changes() -> None:
+    definition = _definition(
+        order_properties=[
+            _yaml_property("orderId", "order_id", nullable=False),
+            {**_yaml_property("status", "normalized_status"), "type": "integer"},
+        ],
+        action_parameters=[
+            {"apiName": "reason", "type": "integer", "required": False},
+            _yaml_parameter("comment", required=False),
+        ],
+    )
+    order = _single_yaml_row(definition, "objectTypes", "Order")
+    order["primaryKey"] = "newOrderId"
+    order["backing"] = {"dataset": "clean.orders_v2", "mode": "snapshot", "primaryKeyColumns": ["order_id"]}
+    link = _single_yaml_row(definition, "linkTypes", "OrderCustomer")
+    link["cardinality"] = "one_to_many"
+    link["backing"] = {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "account_id"}
+    action = _single_yaml_row(definition, "actionTypes", "ApproveOrder")
+    action["target"] = "Customer"
+
+    plan = _plan(definition)
+
+    assert plan.status == "blocked"
+    assert set(_change_kinds(plan.blocking_changes)) >= {
+        "object_primary_key_changed",
+        "property_type_changed",
+        "link_cardinality_changed",
+        "link_backing_changed",
+        "action_target_changed",
+        "action_parameter_type_changed",
+    }
+    assert set(_change_kinds(plan.warning_changes)) >= {
+        "object_reindex_required",
+        "property_mapping_changed",
+        "action_parameter_became_optional",
+        "optional_action_parameter_added",
+    }
+    assert plan.reindex_operations[0].changed_fields == ("backing", "properties.status")
+
+
+def test_ontology_migration_blocks_removed_action_and_duplicate_rows() -> None:
+    definition = _definition(action_parameters=[])
+    action = _single_yaml_row(definition, "actionTypes", "ApproveOrder")
+    action["parameters"] = []
+
+    plan = _plan(definition)
+
+    assert "action_parameter_removed" in _change_kinds(plan.blocking_changes)
+    duplicate_object = _object_type_row()
+    with pytest.raises(ValidationFailed, match="duplicate persisted ontology apiName"):
+        build_ontology_migration_plan(
+            source_ontology_version_id="ont_1",
+            current_objects={"Order": _object_type_row()},
+            current_properties={"Order": (_property_row("orderId", "order_id", nullable=False),)},
+            current_links=(_link_type_row(), _link_type_row()),
+            current_actions=(_action_row(),),
+            definition=_definition(),
+        )
+    with pytest.raises(ValidationFailed, match="duplicate persisted action apiName"):
+        build_ontology_migration_plan(
+            source_ontology_version_id="ont_1",
+            current_objects={"Order": duplicate_object},
+            current_properties={"Order": (_property_row("orderId", "order_id", nullable=False),)},
+            current_links=(_link_type_row(),),
+            current_actions=(_action_row(), _action_row()),
+            definition=_definition(),
+        )
 
 
 def _plan(definition: dict[str, object]) -> OntologyMigrationPlan:
@@ -248,3 +396,13 @@ def _action_row() -> ActionTypeRow:
 
 def _change_kinds(changes: Sequence[OntologyMigrationChange]) -> list[str]:
     return [change.kind for change in changes]
+
+
+def _single_yaml_row(definition: dict[str, object], key: str, api_name: str) -> dict[str, object]:
+    rows = definition[key]
+    assert isinstance(rows, list)
+    for row in rows:
+        assert isinstance(row, dict)
+        if row.get("apiName") == api_name:
+            return row
+    raise AssertionError(f"missing {key}.{api_name}")

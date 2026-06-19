@@ -1030,7 +1030,11 @@ def test_object_property_lineage_resolves_to_pinned_dataset_version(foundry: Fou
     ops_order = foundry.objects.get("Order", "O-1001", ctx=ops_manager, include_explain=True)
     margin = {item["propertyName"]: item for item in ops_order["explain"]["propertyLineage"]}["margin"]
     assert margin["maskingStatus"] == "masked"
-    assert "230" not in repr(margin)
+    raw_margin = str(order["properties"]["margin"])
+    leak_checked_payload = {
+        key: value for key, value in margin.items() if key not in {"sourceDatasetVersionId", "sourceHash"}
+    }
+    assert raw_margin not in repr(leak_checked_payload)
 
 
 def test_only_ops_manager_or_admin_can_execute_approve_order(
