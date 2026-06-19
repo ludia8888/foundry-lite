@@ -16,6 +16,9 @@ from foundry_lite.application.ports import (
     DatasetTransactionRow,
     DatasetVersionConflictError,
     DatasetVersionRecord,
+    DeadLetterRecord,
+    DeadLetterRecordRow,
+    DeadLetterRecordStatus,
     SyncRunRecord,
 )
 from foundry_lite.infrastructure import schema as db
@@ -184,6 +187,28 @@ class SqlAlchemyDatasetTransactionRepository:
         )
         return cast(DatasetTransactionRow, dict(row)) if row else None
 
+    def committed_transaction_by_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        committed_version_id: str,
+    ) -> DatasetTransactionRow | None:
+        row = (
+            transaction.execute(
+                select(db.dataset_transactions).where(
+                    and_(
+                        db.dataset_transactions.c.tenant_id == tenant_id,
+                        db.dataset_transactions.c.committed_version_id == committed_version_id,
+                        db.dataset_transactions.c.status == "COMMITTED",
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(DatasetTransactionRow, dict(row)) if row else None
+
     def committed_webhook_transaction_by_event(
         self,
         *,
@@ -261,6 +286,181 @@ class SqlAlchemyDatasetTransactionRepository:
                 completed_at=record.completed_at,
             )
         )
+
+    def insert_dead_letter_record(self, *, transaction: Any, record: DeadLetterRecord) -> bool:
+        savepoint = transaction.begin_nested()
+        try:
+            transaction.execute(
+                insert(db.dead_letter_records).values(
+                    id=record.dead_letter_record_id,
+                    tenant_id=record.tenant_id,
+                    source_event_id=record.source_event_id,
+                    source_dataset_version_id=record.source_dataset_version_id,
+                    source_run_id=record.source_run_id,
+                    payload=dict(record.payload),
+                    payload_hash=record.payload_hash,
+                    schema_version=record.schema_version,
+                    transform_version=record.transform_version,
+                    error_kind=record.error_kind,
+                    error_message=record.error_message,
+                    event_time=record.event_time,
+                    ingested_at=record.ingested_at,
+                    first_failed_at=record.first_failed_at,
+                    attempts=record.attempts,
+                    status=record.status,
+                    replay_status=record.replay_status,
+                    replay_run_id=record.replay_run_id,
+                    replay_idempotency_key=record.replay_idempotency_key,
+                    replay_requested_at=record.replay_requested_at,
+                    discarded_at=record.discarded_at,
+                    backfill_plan=dict(record.backfill_plan) if record.backfill_plan is not None else None,
+                    is_closed_partition_affected=record.is_closed_partition_affected,
+                    metadata=dict(record.metadata),
+                )
+            )
+            savepoint.commit()
+            return True
+        except IntegrityError:
+            savepoint.rollback()
+            return False
+
+    def list_dead_letter_records(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        status: DeadLetterRecordStatus | None = None,
+    ) -> list[DeadLetterRecordRow]:
+        conditions = [db.dead_letter_records.c.tenant_id == tenant_id]
+        if status is not None:
+            conditions.append(db.dead_letter_records.c.status == status)
+        rows = (
+            transaction.execute(
+                select(db.dead_letter_records)
+                .where(and_(*conditions))
+                .order_by(db.dead_letter_records.c.first_failed_at, db.dead_letter_records.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(DeadLetterRecordRow, dict(row)) for row in rows]
+
+    def dead_letter_record_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+    ) -> DeadLetterRecordRow | None:
+        row = (
+            transaction.execute(
+                select(db.dead_letter_records).where(
+                    and_(db.dead_letter_records.c.tenant_id == tenant_id, db.dead_letter_records.c.id == record_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(DeadLetterRecordRow, dict(row)) if row else None
+
+    def update_dead_letter_record_replay_requested(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        replay_idempotency_key: str,
+        replay_requested_at: str,
+        metadata: DatasetTransactionMetadata,
+        backfill_plan: DatasetTransactionMetadata,
+    ) -> DeadLetterRecordRow | None:
+        result = transaction.execute(
+            update(db.dead_letter_records)
+            .where(
+                and_(
+                    db.dead_letter_records.c.tenant_id == tenant_id,
+                    db.dead_letter_records.c.id == record_id,
+                    db.dead_letter_records.c.status == "QUARANTINED",
+                )
+            )
+            .values(
+                status="REPLAY_REQUESTED",
+                replay_status="REQUESTED",
+                replay_run_id=replay_run_id,
+                replay_idempotency_key=replay_idempotency_key,
+                replay_requested_at=replay_requested_at,
+                backfill_plan=dict(backfill_plan),
+                metadata=dict(metadata),
+            )
+        )
+        if result.rowcount != 1:
+            return None
+        return self.dead_letter_record_by_id(transaction=transaction, tenant_id=tenant_id, record_id=record_id)
+
+    def discard_dead_letter_record(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        discarded_at: str,
+        metadata: DatasetTransactionMetadata,
+    ) -> DeadLetterRecordRow | None:
+        transaction.execute(
+            update(db.dead_letter_records)
+            .where(and_(db.dead_letter_records.c.tenant_id == tenant_id, db.dead_letter_records.c.id == record_id))
+            .values(
+                status="DISCARDED",
+                replay_status="DISCARDED",
+                discarded_at=discarded_at,
+                metadata=dict(metadata),
+            )
+        )
+        return self.dead_letter_record_by_id(transaction=transaction, tenant_id=tenant_id, record_id=record_id)
+
+    def update_dead_letter_record_replay_succeeded(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        metadata: DatasetTransactionMetadata,
+    ) -> DeadLetterRecordRow | None:
+        transaction.execute(
+            update(db.dead_letter_records)
+            .where(and_(db.dead_letter_records.c.tenant_id == tenant_id, db.dead_letter_records.c.id == record_id))
+            .values(
+                status="RESOLVED",
+                replay_status="SUCCEEDED",
+                replay_run_id=replay_run_id,
+                metadata=dict(metadata),
+            )
+        )
+        return self.dead_letter_record_by_id(transaction=transaction, tenant_id=tenant_id, record_id=record_id)
+
+    def update_dead_letter_record_replay_failed(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        metadata: DatasetTransactionMetadata,
+    ) -> DeadLetterRecordRow | None:
+        transaction.execute(
+            update(db.dead_letter_records)
+            .where(and_(db.dead_letter_records.c.tenant_id == tenant_id, db.dead_letter_records.c.id == record_id))
+            .values(
+                status="QUARANTINED",
+                replay_status="FAILED",
+                replay_run_id=replay_run_id,
+                attempts=db.dead_letter_records.c.attempts + 1,
+                metadata=dict(metadata),
+            )
+        )
+        return self.dead_letter_record_by_id(transaction=transaction, tenant_id=tenant_id, record_id=record_id)
 
     def update_sync_run_terminal(
         self,

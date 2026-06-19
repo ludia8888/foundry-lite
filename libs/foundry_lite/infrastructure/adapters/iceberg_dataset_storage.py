@@ -5,19 +5,29 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
-from foundry_lite.application.ports import DatasetManifest, DatasetManifestFile, StoredDatasetCommit
+from foundry_lite.application.ports import (
+    DatasetManifest,
+    DatasetManifestFile,
+    DatasetVersionRow,
+    StoredDatasetCommit,
+)
 from foundry_lite.application.ports.adapter_failure import (
     AdapterError,
     AdapterFailure,
     AdapterFailureContract,
     AdapterFailureKind,
     AdapterFailureMode,
+)
+from foundry_lite.application.ports.iceberg_maintenance import (
+    IcebergMaintenancePlan,
+    IcebergMaintenancePolicy,
+    IcebergMaintenanceSnapshot,
 )
 
 _VERSION_PROP = "foundry.version_id"
@@ -158,6 +168,34 @@ class IcebergDatasetStorageAdapter:
         shutil.rmtree(staging_dir)
         return True
 
+    def plan_iceberg_maintenance(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        dataset_ref: str,
+        branch: str,
+        committed_versions: list[DatasetVersionRow],
+        policy: IcebergMaintenancePolicy,
+    ) -> IcebergMaintenancePlan:
+        """Build a dry-run table maintenance plan without mutating Iceberg state."""
+        identifier = self._identifier(tenant_id, dataset_id, branch)
+        try:
+            table = self._load_table(identifier)
+        except FileNotFoundError:
+            return _empty_maintenance_plan(self.profile_name, dataset_ref, dataset_id, branch, identifier, policy)
+        snapshots = self._maintenance_snapshots(table, identifier, committed_versions, policy)
+        return _maintenance_plan(
+            self.profile_name,
+            dataset_ref,
+            dataset_id,
+            branch,
+            identifier,
+            policy,
+            snapshots,
+            table.current_snapshot(),
+        )
+
     def load_manifest(self, manifest_uri: str) -> DatasetManifest:
         """Load manifest."""
         identifier, snapshot_id = self._parse_manifest_uri(manifest_uri)
@@ -180,13 +218,28 @@ class IcebergDatasetStorageAdapter:
 
     def first_data_file_path(self, manifest_uri: str) -> Path:
         """First data file path."""
+        return self.data_file_paths(manifest_uri)[0]
+
+    def data_file_paths(
+        self,
+        manifest_uri: str,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]:
+        """Readable data paths for the snapshot represented by a Foundry manifest."""
+        manifest = self.load_manifest(manifest_uri)
+        files = manifest.get("files") or []
+        if partition_filter is not None and not any(
+            _matches_partition_filter(file, partition_filter) for file in files
+        ):
+            return []
         identifier, snapshot_id = self._parse_manifest_uri(manifest_uri)
         table = self._load_table(identifier)
         if table.snapshot_by_id(snapshot_id) is None:
             raise FileNotFoundError(manifest_uri)
         sidecar = self._load_sidecar_manifest(table, snapshot_id)
         self._verify_snapshot_files(table, snapshot_id, manifest_uri, expected_files=_expected_files(sidecar))
-        return self._materialize_snapshot(table, snapshot_id, identifier)
+        return [self._materialize_snapshot(table, snapshot_id, identifier)]
 
     # -- commit helpers ---------------------------------------------------
 
@@ -319,15 +372,16 @@ class IcebergDatasetStorageAdapter:
             if expected is not None:
                 self._verify_manifest_file(uri, data, content_hash, expected)
             actual_uris.add(uri)
-            files.append(
-                {
-                    "uri": uri,
-                    "format": "parquet",
-                    "row_count": int(data.record_count),
-                    "byte_size": int(data.file_size_in_bytes),
-                    "content_hash": content_hash,
-                }
-            )
+            entry: DatasetManifestFile = {
+                "uri": uri,
+                "format": "parquet",
+                "row_count": int(data.record_count),
+                "byte_size": int(data.file_size_in_bytes),
+                "content_hash": content_hash,
+            }
+            if expected is not None and "partition_values" in expected:
+                entry["partition_values"] = expected["partition_values"]
+            files.append(entry)
         if expected_files is not None and set(expected_files) != actual_uris:
             raise ValueError("Iceberg snapshot file list differs from the committed Foundry manifest")
         return files
@@ -370,6 +424,31 @@ class IcebergDatasetStorageAdapter:
             raise ValueError(f"Iceberg data file row count differs from committed manifest: {uri}")
         if content_hash != expected["content_hash"]:
             raise ValueError(f"Iceberg data file content hash differs from committed manifest: {uri}")
+
+    def _maintenance_snapshots(
+        self,
+        table: Any,
+        identifier: str,
+        committed_versions: list[DatasetVersionRow],
+        policy: IcebergMaintenancePolicy,
+    ) -> list[IcebergMaintenanceSnapshot]:
+        current = table.current_snapshot()
+        committed = _committed_snapshot_versions(committed_versions, self._parse_manifest_uri)
+        retained = _retained_snapshot_ids(table.snapshots(), current, committed, policy)
+        snapshots: list[IcebergMaintenanceSnapshot] = []
+        for snapshot in table.snapshots():
+            snapshots.append(
+                _maintenance_snapshot(
+                    snapshot,
+                    self._manifest_uri(identifier, int(snapshot.snapshot_id)),
+                    self._manifest_files(table, int(snapshot.snapshot_id)),
+                    current_snapshot_id=int(current.snapshot_id) if current is not None else None,
+                    committed_version_id=committed.get(int(snapshot.snapshot_id)),
+                    retained_snapshot_ids=retained,
+                    policy=policy,
+                )
+            )
+        return snapshots
 
     def _hash_iceberg_file(self, table: Any, uri: str) -> str:
         """Hash iceberg file."""
@@ -592,8 +671,213 @@ def _expected_files(sidecar: Mapping[str, object]) -> Mapping[str, DatasetManife
             "byte_size": int(str(raw_file["byte_size"])),
             "content_hash": str(raw_file["content_hash"]),
         }
+        partition_values = raw_file.get("partition_values")
+        if isinstance(partition_values, dict):
+            entry["partition_values"] = dict(partition_values)
         expected[entry["uri"]] = entry
     return expected
+
+
+def _matches_partition_filter(
+    manifest_file: DatasetManifestFile,
+    partition_filter: Mapping[str, object],
+) -> bool:
+    partition_values = manifest_file.get("partition_values") or {}
+    return all(partition_values.get(key) == value for key, value in partition_filter.items())
+
+
+def _empty_maintenance_plan(
+    profile_name: str,
+    dataset_ref: str,
+    dataset_id: str,
+    branch: str,
+    identifier: str,
+    policy: IcebergMaintenancePolicy,
+) -> IcebergMaintenancePlan:
+    return {
+        "dataset_ref": dataset_ref,
+        "dataset_id": dataset_id,
+        "branch": branch,
+        "storage_profile": profile_name,
+        "table_identifier": identifier,
+        "current_snapshot_id": None,
+        "policy": policy,
+        "snapshots": [],
+        "compaction_candidates": [],
+        "orphan_snapshots": [],
+        "protected_snapshot_ids": [],
+        "retained_snapshot_ids": [],
+        "deletable_snapshot_ids": [],
+        "status": "no_table",
+    }
+
+
+def _maintenance_plan(
+    profile_name: str,
+    dataset_ref: str,
+    dataset_id: str,
+    branch: str,
+    identifier: str,
+    policy: IcebergMaintenancePolicy,
+    snapshots: list[IcebergMaintenanceSnapshot],
+    current: Any | None,
+) -> IcebergMaintenancePlan:
+    candidates = _snapshots_with_reasons(snapshots)
+    orphans = _orphan_snapshots(snapshots)
+    return {
+        "dataset_ref": dataset_ref,
+        "dataset_id": dataset_id,
+        "branch": branch,
+        "storage_profile": profile_name,
+        "table_identifier": identifier,
+        "current_snapshot_id": _current_snapshot_id(current),
+        "policy": policy,
+        "snapshots": snapshots,
+        "compaction_candidates": candidates,
+        "orphan_snapshots": orphans,
+        "protected_snapshot_ids": _protected_snapshot_ids(snapshots),
+        "retained_snapshot_ids": _plan_retained_snapshot_ids(snapshots),
+        "deletable_snapshot_ids": _deletable_snapshot_ids(orphans),
+        "status": _maintenance_plan_status(candidates, orphans),
+    }
+
+
+def _snapshots_with_reasons(snapshots: list[IcebergMaintenanceSnapshot]) -> list[IcebergMaintenanceSnapshot]:
+    return [snapshot for snapshot in snapshots if snapshot["reason_codes"]]
+
+
+def _orphan_snapshots(snapshots: list[IcebergMaintenanceSnapshot]) -> list[IcebergMaintenanceSnapshot]:
+    return [snapshot for snapshot in snapshots if "orphan_snapshot" in snapshot["reason_codes"]]
+
+
+def _protected_snapshot_ids(snapshots: list[IcebergMaintenanceSnapshot]) -> list[int]:
+    return sorted(snapshot["snapshot_id"] for snapshot in snapshots if snapshot["is_protected"])
+
+
+def _plan_retained_snapshot_ids(snapshots: list[IcebergMaintenanceSnapshot]) -> list[int]:
+    retained = (
+        snapshot["snapshot_id"] for snapshot in snapshots if "retention_min_snapshot" in snapshot["protected_by"]
+    )
+    return sorted(set(retained))
+
+
+def _deletable_snapshot_ids(orphans: list[IcebergMaintenanceSnapshot]) -> list[int]:
+    return sorted(snapshot["snapshot_id"] for snapshot in orphans if not snapshot["is_protected"])
+
+
+def _current_snapshot_id(current: Any | None) -> int | None:
+    if current is None:
+        return None
+    return int(current.snapshot_id)
+
+
+def _maintenance_plan_status(
+    candidates: list[IcebergMaintenanceSnapshot],
+    orphans: list[IcebergMaintenanceSnapshot],
+) -> str:
+    if candidates or orphans:
+        return "maintenance_needed"
+    return "healthy"
+
+
+def _maintenance_snapshot(
+    snapshot: Any,
+    manifest_uri: str,
+    files: list[DatasetManifestFile],
+    *,
+    current_snapshot_id: int | None,
+    committed_version_id: str | None,
+    retained_snapshot_ids: set[int],
+    policy: IcebergMaintenancePolicy,
+) -> IcebergMaintenanceSnapshot:
+    snapshot_id = int(snapshot.snapshot_id)
+    file_count = len(files)
+    total_bytes = sum(file["byte_size"] for file in files)
+    row_count = sum(file["row_count"] for file in files)
+    average = int(total_bytes / file_count) if file_count else 0
+    protected_by = _protected_reasons(snapshot_id, current_snapshot_id, committed_version_id, retained_snapshot_ids)
+    return {
+        "snapshot_id": snapshot_id,
+        "version_id": _snapshot_version_id(snapshot, committed_version_id),
+        "manifest_uri": manifest_uri,
+        "file_count": file_count,
+        "row_count": row_count,
+        "total_bytes": total_bytes,
+        "average_file_size_bytes": average,
+        "read_amplification": float(file_count),
+        "is_current": snapshot_id == current_snapshot_id,
+        "is_protected": bool(protected_by),
+        "protected_by": protected_by,
+        "reason_codes": _maintenance_reason_codes(file_count, average, committed_version_id, policy),
+    }
+
+
+def _protected_reasons(
+    snapshot_id: int,
+    current_snapshot_id: int | None,
+    committed_version_id: str | None,
+    retained_snapshot_ids: set[int],
+) -> list[str]:
+    reasons: list[str] = []
+    if snapshot_id == current_snapshot_id:
+        reasons.append("current_snapshot")
+    if committed_version_id is not None:
+        reasons.append(f"committed_db_version:{committed_version_id}")
+    if snapshot_id in retained_snapshot_ids:
+        reasons.append("retention_min_snapshot")
+    return reasons
+
+
+def _maintenance_reason_codes(
+    file_count: int,
+    average_file_size_bytes: int,
+    committed_version_id: str | None,
+    policy: IcebergMaintenancePolicy,
+) -> list[str]:
+    reasons: list[str] = []
+    if committed_version_id is None:
+        reasons.append("orphan_snapshot")
+    if file_count > policy["file_count_threshold"]:
+        reasons.append("too_many_files")
+    if file_count and average_file_size_bytes < policy["small_file_threshold_bytes"]:
+        reasons.append("small_files")
+    if float(file_count) > policy["read_amplification_threshold"]:
+        reasons.append("read_amplification")
+    return reasons
+
+
+def _snapshot_version_id(snapshot: Any, committed_version_id: str | None) -> str | None:
+    value = snapshot.summary.additional_properties.get(_VERSION_PROP)
+    return value if isinstance(value, str) and value else committed_version_id
+
+
+def _committed_snapshot_versions(
+    committed_versions: list[DatasetVersionRow],
+    parse_manifest_uri: object,
+) -> dict[int, str]:
+    parser = cast(Callable[[str], tuple[str, int]], parse_manifest_uri)
+    committed: dict[int, str] = {}
+    for version in committed_versions:
+        try:
+            _, snapshot_id = parser(version["manifest_uri"])
+        except ValueError:
+            continue
+        committed[snapshot_id] = version["id"]
+    return committed
+
+
+def _retained_snapshot_ids(
+    snapshots: Sequence[Any],
+    current: Any | None,
+    committed: Mapping[int, str],
+    policy: IcebergMaintenancePolicy,
+) -> set[int]:
+    retained = set(committed)
+    if current is not None:
+        retained.add(int(current.snapshot_id))
+    minimum = policy["retention_min_snapshots"]
+    retained.update(int(snapshot.snapshot_id) for snapshot in snapshots[-minimum:])
+    return retained
 
 
 def _iceberg_compatible_arrow_table(arrow_table: Any) -> Any:

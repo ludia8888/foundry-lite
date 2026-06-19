@@ -2,9 +2,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from foundry_lite.application.action_types import ActionApplyCommand, ActionApplyOutcome, ActionApplyResponse
-from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, TransactionContext
-from foundry_lite.application.ports.action_repository import ActionRunRecord, ActionRunRow
+from foundry_lite.application.action_types import (
+    ActionApplyCommand,
+    ActionApplyOutcome,
+    ActionApplyResponse,
+    ActionWritebackReconciliationResult,
+)
+from foundry_lite.application.ports import (
+    ActionRunRecord,
+    ActionRunRow,
+    ActionTypeRow,
+    ObjectRecordRow,
+    TransactionContext,
+)
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.safe_expression import validate_action_request
 from foundry_lite.application.services.action_helpers import (
@@ -12,6 +22,7 @@ from foundry_lite.application.services.action_helpers import (
     action_replay_response,
     audit_idempotency_conflict,
 )
+from foundry_lite.application.services.action_reconciliation import ActionWritebackReconciliationWorkflow
 from foundry_lite.application.services.action_workflow import (
     ActionMutationUnitOfWork,
     ActionObjectIndexer,
@@ -55,6 +66,8 @@ class ActionService(CoreService):
         idempotency_key: str,
         ctx: RequestContext | None = None,
         simulate_writeback_failure: bool = False,
+        simulate_writeback_outcome_unknown: bool = False,
+        simulate_writeback_compensation_required: bool = False,
     ) -> ActionApplyResponse:
         ctx = ctx or RequestContext()
         command = action_command(
@@ -65,6 +78,8 @@ class ActionService(CoreService):
             params,
             idempotency_key,
             simulate_writeback_failure,
+            simulate_writeback_outcome_unknown,
+            simulate_writeback_compensation_required,
         )
         self._require_action_permission(ctx, command.action_api_name)
         action_run_id = _new_id("action_run")
@@ -74,6 +89,22 @@ class ActionService(CoreService):
         if outcome.response is None:
             raise InvariantViolation("action did not produce a response")
         return outcome.response
+
+    def reconcile_action_writeback(
+        self,
+        writeback_id: str,
+        *,
+        remote_status: str,
+        remote_resource_id: str,
+        ctx: RequestContext | None = None,
+    ) -> ActionWritebackReconciliationResult:
+        ctx = ctx or RequestContext()
+        return self._writeback_reconciliation_workflow().reconcile(
+            writeback_id,
+            remote_status=remote_status,
+            remote_resource_id=remote_resource_id,
+            ctx=ctx,
+        )
 
     def _run_action_command(
         self,
@@ -120,8 +151,8 @@ class ActionService(CoreService):
         if deferred_error is not None:
             self._fail_action_run(conn, ctx, action_run_id, deferred_error)
             return ActionApplyOutcome(deferred_error=deferred_error)
-        if command.simulate_writeback_failure:
-            error = self._fail_before_commit_writeback(conn, ctx, action_run_id, command.idempotency_key)
+        error = self._before_commit_writeback_error(conn, ctx, action_run_id, command)
+        if error is not None:
             return ActionApplyOutcome(deferred_error=error)
         if record is None:
             raise InvariantViolation("action target record disappeared before commit")
@@ -131,6 +162,7 @@ class ActionService(CoreService):
             action_run_id,
             status="succeeded",
             idempotency_key=command.idempotency_key,
+            request_hash=command.request_fingerprint,
             response={"status_code": 200},
         )
         response = self._commit_action_mutations(
@@ -278,14 +310,86 @@ class ActionService(CoreService):
             correlation_id=action_run_id,
         )
 
+    def _before_commit_writeback_error(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        command: ActionApplyCommand,
+    ) -> ExternalSystemError | None:
+        if command.simulate_writeback_failure:
+            return self._fail_before_commit_writeback(
+                conn,
+                ctx,
+                action_run_id,
+                command.idempotency_key,
+                command.request_fingerprint,
+            )
+        if command.simulate_writeback_outcome_unknown:
+            return self._outcome_unknown_before_commit_writeback(
+                conn,
+                ctx,
+                action_run_id,
+                command.idempotency_key,
+                command.request_fingerprint,
+            )
+        if command.simulate_writeback_compensation_required:
+            return self._compensation_required_before_commit_writeback(
+                conn,
+                ctx,
+                action_run_id,
+                command.idempotency_key,
+                command.request_fingerprint,
+            )
+        return None
+
     def _fail_before_commit_writeback(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
         action_run_id: str,
         idempotency_key: str,
+        request_hash: str,
     ) -> ExternalSystemError:
-        return self._writeback_recorder().fail_before_commit(conn, ctx, action_run_id, idempotency_key)
+        return self._writeback_recorder().fail_before_commit(
+            conn,
+            ctx,
+            action_run_id,
+            idempotency_key,
+            request_hash,
+        )
+
+    def _outcome_unknown_before_commit_writeback(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> ExternalSystemError:
+        return self._writeback_recorder().outcome_unknown_before_commit(
+            conn,
+            ctx,
+            action_run_id,
+            idempotency_key,
+            request_hash,
+        )
+
+    def _compensation_required_before_commit_writeback(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> ExternalSystemError:
+        return self._writeback_recorder().compensation_required_before_commit(
+            conn,
+            ctx,
+            action_run_id,
+            idempotency_key,
+            request_hash,
+        )
 
     def _commit_action_mutations(
         self,
@@ -320,4 +424,15 @@ class ActionService(CoreService):
             object_indexing_service=self.object_indexing_service,
             runtime_service=self.runtime_service,
             policy=self.policy,
+        )
+
+    def _writeback_reconciliation_workflow(self) -> ActionWritebackReconciliationWorkflow:
+        return ActionWritebackReconciliationWorkflow(
+            engine=self.engine,
+            policy=self.policy,
+            action_repository=self.action_repository,
+            object_indexing_service=self.object_indexing_service,
+            object_records_service=self.object_records_service,
+            ontology_service=self.ontology_service,
+            runtime_service=self.runtime_service,
         )

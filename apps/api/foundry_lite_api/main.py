@@ -3,20 +3,30 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Awaitable, Callable
+from typing import cast
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from foundry_lite.application.action_types import ActionApplyResponse
+from foundry_lite.application.action_types import ActionApplyResponse, ActionWritebackReconciliationResult
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
+    BackupRestoreModeReport,
+    BackupRestorePreflightReport,
     DatasetVersionRow,
+    DeadLetterRecordBulkRetryResult,
+    DeadLetterRecordDiscardResult,
+    DeadLetterRecordRetryResult,
+    DeadLetterRecordRow,
     ObjectIndexRebuildResult,
     ObjectLinkPayload,
     ObjectPayload,
     ObjectQueryResult,
     ObjectSetPayload,
     ObjectSetQueryResult,
+    ObservabilityDetectorConfig,
+    ObservabilityReport,
     OntologyValidationResult,
+    ProductWorkflowRun,
     RuntimeRetryResult,
     RuntimeRunDetail,
     RuntimeRunQueryResult,
@@ -26,7 +36,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.ports.auth_provider import AuthProvider
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError
-from foundry_lite.infrastructure.auth import auth_provider_from_env
+from foundry_lite.infrastructure.auth import AUTHORIZATION_HEADER, auth_provider_from_env
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.observability.metrics import prometheus_payload, record_http_request
 from foundry_lite.observability.tracing import (
@@ -58,6 +68,33 @@ instrument_fastapi_app(app)
 instrument_sqlalchemy_engine(foundry.engine)
 
 JsonObject = dict[str, object]
+
+
+class ObservabilityDetectRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    configs: list[JsonObject] = Field(default_factory=list)
+    previous_incidents: list[JsonObject] = Field(default_factory=list, alias="previousIncidents")
+    observed_at: str | None = Field(default=None, alias="observedAt")
+
+
+class BackupRestorePreflightRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    backup_id: str | None = Field(default=None, alias="backupId")
+
+
+class BackupRestoreModeStartRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    backup_id: str | None = Field(default=None, alias="backupId")
+    restore_id: str | None = Field(default=None, alias="restoreId")
+
+
+class BackupRestoreResumeApprovalRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    validation_id: str | None = Field(default=None, alias="validationId")
 
 
 class ActionTargetRequest(BaseModel):
@@ -105,7 +142,28 @@ class OntologyValidateRequest(BaseModel):
     yaml_text: str = Field(alias="yaml")
 
 
+class DeadLetterBulkRetryRequest(BaseModel):
+    ids: list[str]
+
+
+class ConnectorSyncWorkflowStartRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    dataset_ref: str = Field(alias="datasetRef")
+    connector_name: str = Field(alias="connectorName")
+    resource_name: str = Field(alias="resourceName")
+    sync_name: str | None = Field(default=None, alias="syncName")
+
+
+class ActionWritebackReconciliationRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    remote_status: str = Field(alias="remoteStatus")
+    remote_resource_id: str = Field(alias="remoteResourceId")
+
+
 WEBHOOK_SIGNING_KEY_ENV = "FOUNDRY_LITE_WEBHOOK_SIGNING_KEY"
+WEBHOOK_SIGNING_KEY_NAME = "webhook_signing_key"
 
 
 @app.middleware("http")
@@ -130,6 +188,7 @@ async def telemetry_middleware(request: Request, call_next: Callable[[Request], 
 
 def _ctx(
     request: Request | None = None,
+    authorization: str | None = Header(default=None),
     x_tenant_id: str | None = Header(default=None),
     x_user_id: str | None = Header(default=None),
     x_roles: str | None = Header(default=None),
@@ -137,6 +196,7 @@ def _ctx(
     defaults = RequestContext()
     credentials = _collect_credentials(
         request,
+        authorization=authorization,
         x_tenant_id=x_tenant_id,
         x_user_id=x_user_id,
         x_roles=x_roles,
@@ -153,11 +213,13 @@ def _ctx(
 def _collect_credentials(
     request: Request | None,
     *,
+    authorization: str | None,
     x_tenant_id: str | None,
     x_user_id: str | None,
     x_roles: str | None,
 ) -> dict[str, str]:
     pairs = (
+        ("Authorization", _header_or_request(authorization, request, AUTHORIZATION_HEADER)),
         ("X-Tenant-ID", _header_or_request(x_tenant_id, request, "X-Tenant-ID")),
         ("X-User-ID", _header_or_request(x_user_id, request, "X-User-ID")),
         ("X-Roles", _header_or_request(x_roles, request, "X-Roles")),
@@ -323,10 +385,233 @@ def list_operation_runs(
         raise _handle_error(exc, request) from exc
 
 
+@app.post("/api/operations/observability/detect")
+def detect_observability_incidents(request: Request, payload: ObservabilityDetectRequest) -> ObservabilityReport:
+    try:
+        return foundry.operations.observability_report(
+            ctx=_ctx(request),
+            configs=cast(list[ObservabilityDetectorConfig], payload.configs),
+            previous_incidents=payload.previous_incidents,
+            observed_at=payload.observed_at,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/backup-restore/preflight")
+def backup_restore_preflight(
+    request: Request,
+    payload: BackupRestorePreflightRequest,
+) -> BackupRestorePreflightReport:
+    try:
+        return foundry.operations.restore_preflight_report(ctx=_ctx(request), backup_id=payload.backup_id)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/backup-restore/restore-mode/start")
+def start_backup_restore_mode(
+    request: Request,
+    payload: BackupRestoreModeStartRequest,
+) -> BackupRestoreModeReport:
+    try:
+        return foundry.operations.start_restore_mode(
+            ctx=_ctx(request),
+            backup_id=payload.backup_id,
+            restore_id=payload.restore_id,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/backup-restore/restore-mode/{restore_id}")
+def get_backup_restore_mode_status(request: Request, restore_id: str) -> BackupRestoreModeReport:
+    try:
+        return foundry.operations.restore_mode_status(restore_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume")
+def approve_backup_restore_resume(
+    request: Request,
+    restore_id: str,
+    payload: BackupRestoreResumeApprovalRequest,
+) -> BackupRestoreModeReport:
+    try:
+        return foundry.operations.approve_restore_resume(
+            restore_id,
+            ctx=_ctx(request),
+            validation_id=payload.validation_id,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.get("/api/operations/runs/{run_type}/{run_id}")
 def get_operation_run_detail(request: Request, run_type: str, run_id: str) -> RuntimeRunDetail:
     try:
         return foundry.operations.run_detail(run_type, run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/workflows/connector-sync/start")
+def start_connector_sync_workflow(
+    request: Request,
+    payload: ConnectorSyncWorkflowStartRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> ProductWorkflowRun:
+    try:
+        return foundry.operations.start_connector_sync_workflow(
+            payload.dataset_ref,
+            connector_name=payload.connector_name,
+            resource_name=payload.resource_name,
+            sync_name=payload.sync_name,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/workflows/{workflow_run_id}")
+def get_product_workflow_run(request: Request, workflow_run_id: str) -> ProductWorkflowRun:
+    try:
+        return foundry.operations.product_workflow_run(workflow_run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/reconciliation/{writeback_id}/resolve")
+def resolve_action_writeback_reconciliation(
+    request: Request,
+    writeback_id: str,
+    payload: ActionWritebackReconciliationRequest,
+) -> ActionWritebackReconciliationResult:
+    try:
+        return cast(
+            ActionWritebackReconciliationResult,
+            foundry.operations.reconcile_action_writeback(
+                writeback_id,
+                remote_status=payload.remote_status,
+                remote_resource_id=payload.remote_resource_id,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/maintenance/iceberg")
+def get_iceberg_maintenance_plan(
+    request: Request,
+    dataset_ref: str = Query(alias="datasetRef"),
+    branch: str = Query(default="main"),
+    small_file_threshold_bytes: int | None = Query(default=None, alias="smallFileThresholdBytes"),
+    file_count_threshold: int | None = Query(default=None, alias="fileCountThreshold"),
+    read_amplification_threshold: float | None = Query(default=None, alias="readAmplificationThreshold"),
+    retention_min_snapshots: int | None = Query(default=None, alias="retentionMinSnapshots"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.operations.plan_iceberg_maintenance(
+                dataset_ref,
+                ctx=_ctx(request),
+                branch=branch,
+                small_file_threshold_bytes=small_file_threshold_bytes,
+                file_count_threshold=file_count_threshold,
+                read_amplification_threshold=read_amplification_threshold,
+                retention_min_snapshots=retention_min_snapshots,
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/maintenance/iceberg/{dataset_ref}/plan")
+def plan_iceberg_maintenance(
+    request: Request,
+    dataset_ref: str,
+    branch: str = Query(default="main"),
+    small_file_threshold_bytes: int | None = Query(default=None, alias="smallFileThresholdBytes"),
+    file_count_threshold: int | None = Query(default=None, alias="fileCountThreshold"),
+    read_amplification_threshold: float | None = Query(default=None, alias="readAmplificationThreshold"),
+    retention_min_snapshots: int | None = Query(default=None, alias="retentionMinSnapshots"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.operations.plan_iceberg_maintenance(
+                dataset_ref,
+                ctx=_ctx(request),
+                branch=branch,
+                small_file_threshold_bytes=small_file_threshold_bytes,
+                file_count_threshold=file_count_threshold,
+                read_amplification_threshold=read_amplification_threshold,
+                retention_min_snapshots=retention_min_snapshots,
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/dead-letter-records")
+def list_dead_letter_records(
+    request: Request,
+    status: str | None = Query(default=None),
+) -> list[DeadLetterRecordRow]:
+    try:
+        return foundry.operations.list_dead_letter_records(ctx=_ctx(request), status=status)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/dead-letter-records/bulk-retry")
+def bulk_retry_dead_letter_records(
+    request: Request,
+    payload: DeadLetterBulkRetryRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> DeadLetterRecordBulkRetryResult:
+    try:
+        return foundry.operations.bulk_retry_dead_letter_records(
+            payload.ids,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/dead-letter-records/{record_id}")
+def get_dead_letter_record(request: Request, record_id: str) -> DeadLetterRecordRow:
+    try:
+        return foundry.operations.dead_letter_record(record_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/dead-letter-records/{record_id}/retry")
+def retry_dead_letter_record(
+    request: Request,
+    record_id: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> DeadLetterRecordRetryResult:
+    try:
+        return foundry.operations.retry_dead_letter_record(
+            record_id,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/dead-letter-records/{record_id}/discard")
+def discard_dead_letter_record(request: Request, record_id: str) -> DeadLetterRecordDiscardResult:
+    try:
+        return foundry.operations.discard_dead_letter_record(record_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -436,7 +721,7 @@ def _webhook_payload(value: WebhookPayloadRequest) -> JsonObject:
 
 
 def _webhook_signing_key() -> str:
-    return os.getenv(WEBHOOK_SIGNING_KEY_ENV, "")
+    return foundry.secret_provider.get_secret(WEBHOOK_SIGNING_KEY_NAME).value
 
 
 if __name__ == "__main__":

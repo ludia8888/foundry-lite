@@ -23,6 +23,7 @@ import contextlib
 import tempfile
 from collections.abc import Callable, Coroutine, Iterator
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -33,8 +34,11 @@ except ImportError:  # pragma: no cover - Windows fallback; CI/dev are POSIX.
     fcntl = None  # type: ignore[assignment]
 
 import pytest
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.workflow_adapter import WorkflowStartRequest
+from foundry_lite.application.services.workflow_orchestration_service import CONNECTOR_SYNC_WORKFLOW_NAME
+from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.adapters.temporal_workflow import (
     TemporalWorkflowAdapter,
     TemporalWorkflowAdapterConfig,
@@ -42,10 +46,12 @@ from foundry_lite.infrastructure.adapters.temporal_workflow import (
 from foundry_lite.infrastructure.adapters.temporal_workflows import (
     FOUNDRY_TASK_QUEUE,
     FOUNDRY_WORKFLOW_NAME,
+    ConnectorSyncWorkflow,
     FoundryWorkflow,
     foundry_sandbox_runner,
     run_workflow_step,
 )
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from temporalio import activity, workflow
 from temporalio.client import WorkflowFailureError
 from temporalio.common import RetryPolicy
@@ -100,7 +106,7 @@ class FailingWorkflow:
         raise ApplicationError("permanent business failure", non_retryable=True)
 
 
-_ALL_WORKFLOWS = [FoundryWorkflow, FlakyWorkflow, SleepyWorkflow, FailingWorkflow]
+_ALL_WORKFLOWS = [FoundryWorkflow, ConnectorSyncWorkflow, FlakyWorkflow, SleepyWorkflow, FailingWorkflow]
 _ALL_ACTIVITIES = [run_workflow_step, flaky_step]
 _TEMPORAL_TEST_SERVER_LOCK = "foundry-lite-temporal-test-server-download.lock"
 
@@ -441,5 +447,47 @@ def test_sync_start_workflow_bridges_to_async_core() -> None:
             run = await asyncio.to_thread(sync_adapter.start_workflow, _request(FOUNDRY_WORKFLOW_NAME, "wf-sync", v=9))
             assert run.status == "succeeded"
             assert run.output["v"] == 9
+
+    _run(body)
+
+
+def test_product_connector_sync_workflow_runs_through_temporal_and_audits(tmp_path: Path) -> None:
+    async def body() -> None:
+        async with _harness() as (env, _adapter):
+            address = env.client.service_client.config.target_host
+            temporal_adapter = TemporalWorkflowAdapter(
+                TemporalWorkflowAdapterConfig(address=address, task_queue=FOUNDRY_TASK_QUEUE)
+            )
+            dependencies = create_local_core_dependencies(storage_root=tmp_path / "temporal-product")
+            foundry = FoundryLite(dependencies=replace(dependencies, workflow_adapter=temporal_adapter))
+            ctx = demo_admin_context()
+            foundry.datasets.ensure("raw.workflow_orders", ctx=ctx, primary_key=["order_id"])
+
+            run = await asyncio.to_thread(
+                foundry.operations.start_connector_sync_workflow,
+                "raw.workflow_orders",
+                connector_name="rest",
+                resource_name="orders",
+                idempotency_key="temporal-connector-sync-orders",
+                ctx=ctx,
+            )
+            lookup = await asyncio.to_thread(
+                foundry.operations.product_workflow_run,
+                run["workflowRunId"],
+                ctx=ctx,
+            )
+
+            assert run["workflowRunId"] == "temporal-connector-sync-orders"
+            assert run["workflowName"] == CONNECTOR_SYNC_WORKFLOW_NAME
+            assert run["workflowProfile"] == "temporal"
+            assert run["status"] == "succeeded"
+            assert run["output"]["workflowKind"] == "connector_sync"
+            assert run["output"]["datasetRef"] == "raw.workflow_orders"
+            assert lookup["workflowRunId"] == run["workflowRunId"]
+            assert run["foundryRunId"] is not None
+            detail = foundry.operations.run_detail("audit", str(run["foundryRunId"]), ctx=ctx)
+            assert detail["row"]["resource_id"] == run["workflowRunId"]
+            assert detail["row"]["after_ref"]["workflowRunId"] == run["workflowRunId"]
+            assert detail["row"]["after_ref"]["foundryRunId"] == run["foundryRunId"]
 
     _run(body)

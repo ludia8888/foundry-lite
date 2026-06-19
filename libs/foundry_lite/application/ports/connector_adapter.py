@@ -20,8 +20,10 @@ class RestAuthConfig:
 
     mode: RestAuthMode = "none"
     token: str | None = None
+    token_secret_ref: str | None = None
     header_name: str | None = None
     header_value: str | None = None
+    header_value_secret_ref: str | None = None
 
 
 @dataclass(frozen=True)

@@ -49,10 +49,15 @@ class LocalWorkflowAdapter:
         if existing is not None:
             return existing
         run = WorkflowRun(
-            run_id=f"workflow_run_{len(self._runs_by_id) + 1}",
+            run_id=request.idempotency_key,
             workflow_name=request.workflow_name,
             status="succeeded",
-            output={"workflow_name": request.workflow_name, "request_id": request.request_id},
+            output={
+                "processed": True,
+                **dict(request.input),
+                "workflow_name": request.workflow_name,
+                "request_id": request.request_id,
+            },
         )
         self._runs_by_id[run.run_id] = run
         self._runs_by_idempotency[request.idempotency_key] = run

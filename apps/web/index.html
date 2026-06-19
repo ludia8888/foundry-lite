@@ -79,6 +79,7 @@
         align-items: center;
         display: flex;
         gap: 9px;
+        flex-wrap: wrap;
       }
 
       .dot {
@@ -247,6 +248,33 @@
         margin-top: 8px;
       }
 
+      .toolbar {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-bottom: 12px;
+      }
+
+      .summary-pill {
+        background: var(--field);
+        border: 1px solid var(--line);
+        min-height: 58px;
+        padding: 10px;
+      }
+
+      .summary-pill span {
+        color: var(--muted);
+        display: block;
+        font-size: 11px;
+      }
+
+      .summary-pill strong {
+        display: block;
+        font-size: 16px;
+        margin-top: 6px;
+        overflow-wrap: anywhere;
+      }
+
       @media (max-width: 860px) {
         .shell {
           padding: 16px;
@@ -255,6 +283,7 @@
         .topbar,
         .grid,
         .row,
+        .toolbar,
         .metric-strip {
           grid-template-columns: 1fr;
         }
@@ -276,6 +305,9 @@
         <div class="status-line">
           <span id="statusDot" class="dot"></span>
           <span id="statusText">API unknown</span>
+          <span id="requestIdText">request -</span>
+          <span id="errorKindText">error -</span>
+          <span id="retryableText">retry -</span>
         </div>
       </section>
 
@@ -363,6 +395,23 @@
               Run ID
               <input id="operationRunId" />
             </label>
+            <div class="row">
+              <label>
+                Record DLQ Status
+                <select id="recordDlqStatus">
+                  <option value="">All</option>
+                  <option value="QUARANTINED">Quarantined</option>
+                  <option value="REPLAY_REQUESTED">Replay Requested</option>
+                  <option value="REPLAYING">Replaying</option>
+                  <option value="RESOLVED">Resolved</option>
+                  <option value="DISCARDED">Discarded</option>
+                </select>
+              </label>
+              <label>
+                Record DLQ ID
+                <input id="recordDlqId" />
+              </label>
+            </div>
             <div class="actions">
               <button id="healthBtn" type="button">Check</button>
               <button id="datasetBtn" type="button" class="secondary">Load Dataset</button>
@@ -380,7 +429,12 @@
               <button id="retryTransformBtn" type="button" class="secondary">Retry Failed Transform</button>
               <button id="replayIndexBtn" type="button" class="secondary">Replay Index</button>
               <button id="replayFailedIndexBtn" type="button" class="secondary">Replay Failed Index</button>
-              <button id="retryDlqBtn" type="button" class="secondary">Retry DLQ</button>
+              <button id="retryDlqBtn" type="button" class="secondary">Retry Outbox DLQ</button>
+              <button id="loadRecordDlqBtn" type="button" class="secondary">Load Record DLQ</button>
+              <button id="recordDlqDetailBtn" type="button" class="secondary">Record Detail</button>
+              <button id="replayRecordDlqBtn" type="button" class="secondary">Replay Record</button>
+              <button id="bulkReplayRecordDlqBtn" type="button" class="secondary">Bulk Replay Records</button>
+              <button id="discardRecordDlqBtn" type="button" class="secondary">Discard Record</button>
             </div>
           </div>
         </aside>
@@ -403,6 +457,21 @@
 
           <div class="metric-strip">
             <div class="metric">
+              <span>Late Data</span>
+              <strong id="metricLateData">-</strong>
+            </div>
+            <div class="metric">
+              <span>Impact Runs</span>
+              <strong id="metricImpactRuns">-</strong>
+            </div>
+            <div class="metric">
+              <span>Impact Roots</span>
+              <strong id="metricImpactRoots">-</strong>
+            </div>
+          </div>
+
+          <div class="metric-strip">
+            <div class="metric">
               <span>Failed Runs</span>
               <strong id="metricFailedRuns">-</strong>
             </div>
@@ -413,6 +482,21 @@
             <div class="metric">
               <span>DLQ</span>
               <strong id="metricDlq">-</strong>
+            </div>
+          </div>
+
+          <div class="metric-strip">
+            <div class="metric">
+              <span>Record DLQ Open</span>
+              <strong id="metricRecordDlqOpen">-</strong>
+            </div>
+            <div class="metric">
+              <span>Record DLQ Closed</span>
+              <strong id="metricRecordDlqClosed">-</strong>
+            </div>
+            <div class="metric">
+              <span>Top Error Kind</span>
+              <strong id="metricRecordDlqTopError">-</strong>
             </div>
           </div>
 
@@ -480,16 +564,49 @@
               <pre id="runResult" class="result compact">{}</pre>
             </div>
           </div>
+
+          <div class="panel">
+            <header>
+              <h2>Record DLQ</h2>
+            </header>
+            <div class="panel-body">
+              <div class="toolbar">
+                <div class="summary-pill">
+                  <span>Open</span>
+                  <strong id="recordDlqOpen">-</strong>
+                </div>
+                <div class="summary-pill">
+                  <span>Closed</span>
+                  <strong id="recordDlqClosed">-</strong>
+                </div>
+                <div class="summary-pill">
+                  <span>Top Error</span>
+                  <strong id="recordDlqTopError">-</strong>
+                </div>
+              </div>
+              <pre id="recordDlqResult" class="result compact">{}</pre>
+            </div>
+          </div>
         </section>
       </section>
     </main>
 
     <script type="module">
-      import { createFoundryLiteClient, expectedObjectVersion, idempotencyKey } from "./generated-sdk.js";
+      import {
+        createFoundryLiteClient,
+        createRequestId,
+        expectedObjectVersion,
+        idempotencyKey,
+        isRetryableFoundryLiteError,
+        normalizeFoundryLiteError,
+      } from "./generated-sdk.js";
 
       const apiBase = document.querySelector("#apiBase");
       const statusDot = document.querySelector("#statusDot");
       const statusText = document.querySelector("#statusText");
+      const requestIdText = document.querySelector("#requestIdText");
+      const errorKindText = document.querySelector("#errorKindText");
+      const retryableText = document.querySelector("#retryableText");
       const datasetRef = document.querySelector("#datasetRef");
       const ontologyYaml = document.querySelector("#ontologyYaml");
       const objectType = document.querySelector("#objectType");
@@ -502,6 +619,8 @@
       const operationSince = document.querySelector("#operationSince");
       const operationUntil = document.querySelector("#operationUntil");
       const operationRunId = document.querySelector("#operationRunId");
+      const recordDlqStatus = document.querySelector("#recordDlqStatus");
+      const recordDlqId = document.querySelector("#recordDlqId");
       const datasetResult = document.querySelector("#datasetResult");
       const queryResult = document.querySelector("#queryResult");
       const ontologyResult = document.querySelector("#ontologyResult");
@@ -509,15 +628,26 @@
       const setResult = document.querySelector("#setResult");
       const linkResult = document.querySelector("#linkResult");
       const runResult = document.querySelector("#runResult");
+      const recordDlqResult = document.querySelector("#recordDlqResult");
       const metricObject = document.querySelector("#metricObject");
       const metricVersion = document.querySelector("#metricVersion");
       const metricStatus = document.querySelector("#metricStatus");
+      const metricLateData = document.querySelector("#metricLateData");
+      const metricImpactRuns = document.querySelector("#metricImpactRuns");
+      const metricImpactRoots = document.querySelector("#metricImpactRoots");
       const metricFailedRuns = document.querySelector("#metricFailedRuns");
       const metricOutbox = document.querySelector("#metricOutbox");
       const metricDlq = document.querySelector("#metricDlq");
+      const metricRecordDlqOpen = document.querySelector("#metricRecordDlqOpen");
+      const metricRecordDlqClosed = document.querySelector("#metricRecordDlqClosed");
+      const metricRecordDlqTopError = document.querySelector("#metricRecordDlqTopError");
+      const recordDlqOpen = document.querySelector("#recordDlqOpen");
+      const recordDlqClosed = document.querySelector("#recordDlqClosed");
+      const recordDlqTopError = document.querySelector("#recordDlqTopError");
 
       let currentObject = null;
       let currentRuns = null;
+      let currentRecordDlqRows = [];
       const runGroupByType = {
         sync: "syncRuns",
         transform: "transformRuns",
@@ -529,48 +659,90 @@
         dead_letter: "deadLetterEvents",
         audit: "auditEvents",
       };
-      const demoHeaders = {
-        "X-User-ID": "web-demo-operator",
-        "X-Roles": "ops_manager,data_engineer,finance",
+      const demoContext = {
+        tenantId: "tenant-demo",
+        userId: "web-demo-operator",
+        roles: ["ops_manager", "data_engineer", "finance"],
       };
 
       function sdkClient() {
         return createFoundryLiteClient({
           baseUrl: apiBase.value,
-          headers: demoHeaders,
+          context: demoContext,
+          requestIdFactory: () => createRequestId("web"),
+          onResponse: updateRequestTelemetry,
         });
       }
 
+      function updateRequestTelemetry(metadata) {
+        requestIdText.textContent = metadata.requestId ? `request ${metadata.requestId}` : "request -";
+        errorKindText.textContent = metadata.errorCode ? `error ${metadata.errorCode}` : "error -";
+        retryableText.textContent =
+          metadata.retryable === undefined ? "retry -" : `retry ${metadata.retryable ? "yes" : "no"}`;
+      }
+
+      function displayValue(value) {
+        if (value instanceof Error || value?.name === "FoundryLiteApiError") {
+          const error = normalizeFoundryLiteError(value);
+          updateRequestTelemetry({
+            path: "",
+            status: error.status,
+            ok: false,
+            requestId: error.requestId,
+            errorCode: error.code,
+            retryable: isRetryableFoundryLiteError(error),
+          });
+          return {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            requestId: error.requestId,
+            request_id: error.requestId,
+            retryable: error.retryable,
+            status: error.status,
+          };
+        }
+        return value;
+      }
+
       function show(value) {
+        value = displayValue(value);
         objectResult.textContent = JSON.stringify(value, null, 2);
         if (value.objectId) {
           metricObject.textContent = value.objectId;
           metricVersion.textContent = value.objectVersion ?? "-";
           metricStatus.textContent = value.properties?.status ?? "-";
+          metricLateData.textContent = value.explain?.lateDataBadge?.status ?? "-";
         }
       }
 
       function showDataset(value) {
+        value = displayValue(value);
         datasetResult.textContent = JSON.stringify(value, null, 2);
       }
 
       function showQuery(value) {
+        value = displayValue(value);
         queryResult.textContent = JSON.stringify(value, null, 2);
       }
 
       function showOntology(value) {
+        value = displayValue(value);
         ontologyResult.textContent = JSON.stringify(value, null, 2);
       }
 
       function showSet(value) {
+        value = displayValue(value);
         setResult.textContent = JSON.stringify(value, null, 2);
       }
 
       function showLinks(value) {
+        value = displayValue(value);
         linkResult.textContent = JSON.stringify(value, null, 2);
       }
 
       function showRuns(value) {
+        value = displayValue(value);
         currentRuns = value;
         runResult.textContent = JSON.stringify(value, null, 2);
         const runGroups = [
@@ -587,6 +759,39 @@
         metricFailedRuns.textContent = failedRuns.length;
         metricOutbox.textContent = (value.outboxEvents ?? []).length;
         metricDlq.textContent = (value.deadLetterEvents ?? []).length;
+        const impact = value.runDetail?.downstreamImpact;
+        const runBadge = value.runDetail?.materialization?.lateDataBadge;
+        metricImpactRuns.textContent = impact ? (impact.affectedRuns ?? []).length : "-";
+        metricImpactRoots.textContent = impact ? (impact.rootResources ?? []).length : "-";
+        if (runBadge?.status) {
+          metricLateData.textContent = runBadge.status;
+        }
+      }
+
+      function recordDlqSummary(rows) {
+        const openRows = rows.filter((row) => ["QUARANTINED", "REPLAY_REQUESTED", "REPLAYING"].includes(row.status));
+        const closedRows = rows.filter((row) => ["RESOLVED", "DISCARDED"].includes(row.status));
+        const errorCounts = rows.reduce((counts, row) => {
+          const key = row.error_kind ?? "UNKNOWN";
+          counts[key] = (counts[key] ?? 0) + 1;
+          return counts;
+        }, {});
+        const topError = Object.entries(errorCounts).sort((left, right) => right[1] - left[1])[0]?.[0] ?? "-";
+        return { open: openRows.length, closed: closedRows.length, total: rows.length, topError };
+      }
+
+      function showRecordDlq(value) {
+        value = displayValue(value);
+        const rows = Array.isArray(value) ? value : (value.items ?? currentRecordDlqRows);
+        currentRecordDlqRows = rows;
+        const summary = recordDlqSummary(rows);
+        recordDlqResult.textContent = JSON.stringify({ ...value, summary }, null, 2);
+        metricRecordDlqOpen.textContent = summary.open;
+        metricRecordDlqClosed.textContent = summary.closed;
+        metricRecordDlqTopError.textContent = summary.topError;
+        recordDlqOpen.textContent = summary.open;
+        recordDlqClosed.textContent = summary.closed;
+        recordDlqTopError.textContent = summary.topError;
       }
 
       function operationQuery() {
@@ -608,13 +813,7 @@
       }
 
       async function request(path, options = {}) {
-        const headers = { ...demoHeaders, ...(options.headers ?? {}) };
-        const response = await fetch(`${apiBase.value}${path}`, { ...options, headers });
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw body;
-        }
-        return body;
+        return sdkClient().request(path, options);
       }
 
       async function checkHealth() {
@@ -729,6 +928,79 @@
       async function loadRuns() {
         const runs = await request(`/api/operations/runs${operationQuery()}`);
         showRuns(runs);
+      }
+
+      async function loadRecordDlqRecords() {
+        const items = await sdkClient().operations.deadLetterRecords.list({ status: recordDlqStatus.value || undefined });
+        if (!recordDlqId.value && items[0]?.id) {
+          recordDlqId.value = items[0].id;
+        }
+        showRecordDlq({ filters: { status: recordDlqStatus.value || "All" }, items });
+        return items;
+      }
+
+      function selectedRecordDlqId() {
+        return recordDlqId.value || currentRecordDlqRows[0]?.id || "";
+      }
+
+      function recordDlqImpactPreview(row) {
+        return {
+          sourceEventId: row.source_event_id,
+          sourceRunId: row.source_run_id,
+          sourceDatasetVersionId: row.source_dataset_version_id,
+          affectedDatasetVersionId: row.backfill_plan?.affectedDatasetVersionId ?? null,
+          isClosedPartitionAffected: row.is_closed_partition_affected,
+          nextStep: row.backfill_plan?.nextStep ?? "Replay will re-ingest this record before downstream backfill.",
+        };
+      }
+
+      async function loadRecordDlqDetail() {
+        const id = selectedRecordDlqId();
+        if (!id) {
+          showRecordDlq({ items: currentRecordDlqRows, detail: { status: "skipped", reason: "no record DLQ row" } });
+          return;
+        }
+        recordDlqId.value = id;
+        const detail = await sdkClient().operations.deadLetterRecords.get(id);
+        showRecordDlq({ items: currentRecordDlqRows, detail, impactPreview: recordDlqImpactPreview(detail) });
+      }
+
+      async function replayRecordDlq() {
+        const id = selectedRecordDlqId();
+        if (!id) {
+          showRecordDlq({ items: currentRecordDlqRows, lastRecordReplay: { status: "skipped", reason: "no record DLQ row" } });
+          return;
+        }
+        const replay = await sdkClient().operations.deadLetterRecords.retry(id, {
+          idempotencyKey: idempotencyKey("RecordDLQ", id),
+        });
+        const items = await loadRecordDlqRecords();
+        showRecordDlq({ items, lastRecordReplay: replay });
+      }
+
+      async function bulkReplayRecordDlq() {
+        const rows = currentRecordDlqRows.length ? currentRecordDlqRows : await loadRecordDlqRecords();
+        const ids = rows.filter((row) => row.status === "QUARANTINED").map((row) => row.id);
+        if (!ids.length) {
+          showRecordDlq({ items: rows, lastBulkRecordReplay: { status: "skipped", reason: "no quarantined records" } });
+          return;
+        }
+        const replay = await sdkClient().operations.deadLetterRecords.bulkRetry(ids, {
+          idempotencyKey: idempotencyKey("RecordDLQBulk", ids.join("-")),
+        });
+        const items = await loadRecordDlqRecords();
+        showRecordDlq({ items, lastBulkRecordReplay: replay });
+      }
+
+      async function discardRecordDlq() {
+        const id = selectedRecordDlqId();
+        if (!id) {
+          showRecordDlq({ items: currentRecordDlqRows, lastRecordDiscard: { status: "skipped", reason: "no record DLQ row" } });
+          return;
+        }
+        const discard = await sdkClient().operations.deadLetterRecords.discard(id);
+        const items = await loadRecordDlqRecords();
+        showRecordDlq({ items, lastRecordDiscard: discard });
       }
 
       async function loadRunDetail() {
@@ -850,6 +1122,7 @@
           loadObjectList().catch(showQuery),
           loadObject().catch(show),
           loadLinks().catch(showLinks),
+          loadRecordDlqRecords().catch(showRecordDlq),
         ]);
       }
 
@@ -876,6 +1149,13 @@
         .querySelector("#replayFailedIndexBtn")
         .addEventListener("click", () => replayFailedIndexRun().catch(showRuns));
       document.querySelector("#retryDlqBtn").addEventListener("click", () => retryFirstDlq().catch(showRuns));
+      document.querySelector("#loadRecordDlqBtn").addEventListener("click", () => loadRecordDlqRecords().catch(showRecordDlq));
+      document.querySelector("#recordDlqDetailBtn").addEventListener("click", () => loadRecordDlqDetail().catch(showRecordDlq));
+      document.querySelector("#replayRecordDlqBtn").addEventListener("click", () => replayRecordDlq().catch(showRecordDlq));
+      document
+        .querySelector("#bulkReplayRecordDlqBtn")
+        .addEventListener("click", () => bulkReplayRecordDlq().catch(showRecordDlq));
+      document.querySelector("#discardRecordDlqBtn").addEventListener("click", () => discardRecordDlq().catch(showRecordDlq));
       restoreFromServer();
     </script>
   </body>

@@ -18,8 +18,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.ports import DatasetFileRecord
+from foundry_lite.application.ports import DatasetFileRecord, DatasetVersionRow
 from foundry_lite.application.ports.adapter_failure import AdapterError
+from foundry_lite.application.ports.iceberg_maintenance import IcebergMaintenancePolicy
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 from foundry_lite.infrastructure.adapters import (
@@ -137,6 +138,26 @@ def test_iceberg_adapter_normal_path_commits_loads_and_isolates_snapshots(
 
     # Data really lives in the MinIO warehouse bucket.
     assert _bucket_object_count(minio_server, bucket) > 0
+
+
+def test_iceberg_data_file_paths_skip_snapshot_when_partition_filter_has_no_match(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    adapter = _adapter(tmp_path, minio_server, _make_bucket(minio_server))
+    stored = _commit(adapter, _staged(adapter, tmp_path, ["O-1"], [100]), version_id="dsv_partitioned")
+    identifier, snapshot_id = adapter._parse_manifest_uri(stored.manifest_uri)
+    table = adapter._load_table(identifier)
+    manifest = adapter.load_manifest(stored.manifest_uri)
+    manifest["files"][0]["partition_values"] = {"bucket": "a"}
+    adapter._write_sidecar_manifest(table, snapshot_id, manifest, stored.content_hash)
+
+    assert adapter.data_file_paths(stored.manifest_uri, partition_filter={"bucket": "b"}) == []
+    matched_paths = adapter.data_file_paths(stored.manifest_uri, partition_filter={"bucket": "a"})
+    reloaded = adapter.load_manifest(stored.manifest_uri)
+
+    assert pq.read_table(matched_paths[0]).to_pydict()["id"] == ["O-1"]
+    assert reloaded["files"][0]["partition_values"] == {"bucket": "a"}
 
 
 def test_iceberg_duplicate_version_commit_is_rejected(minio_server: MinioServer, tmp_path: Path) -> None:
@@ -463,6 +484,92 @@ def test_iceberg_repeated_commits_keep_every_version_independently_readable(
         assert pq.read_table(adapter.first_data_file_path(stored.manifest_uri)).to_pydict()["id"] == [vid]
 
 
+def test_iceberg_maintenance_plan_protects_committed_snapshots_and_audits(
+    minio_server: MinioServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bucket = _make_bucket(minio_server)
+    _set_iceberg_env(monkeypatch, minio_server, bucket, tmp_path)
+    deps = create_local_core_dependencies(
+        adapter_profile="iceberg",
+        storage_root=tmp_path / "runtime-maintenance",
+        db_url=f"sqlite:///{tmp_path / 'maintenance.db'}",
+    )
+    foundry = FoundryLite(dependencies=deps)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    first = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+    second = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+
+    plan = foundry.operations.plan_iceberg_maintenance(
+        "raw.orders",
+        ctx=ctx,
+        file_count_threshold=1,
+        retention_min_snapshots=2,
+    )
+    audits = foundry.operations.query_runs(ctx=ctx, run_type="audit")["auditEvents"]
+
+    assert plan["status"] == "maintenance_needed"
+    assert plan["current_snapshot_id"] is not None
+    committed_reasons = {f"committed_db_version:{first.version_id}", f"committed_db_version:{second.version_id}"}
+    committed_snapshots = [item for item in plan["snapshots"] if committed_reasons & set(item["protected_by"])]
+    assert committed_reasons <= {reason for item in committed_snapshots for reason in item["protected_by"]}
+    assert not set(plan["deletable_snapshot_ids"]) & {item["snapshot_id"] for item in committed_snapshots}
+    assert all(snapshot["is_protected"] for snapshot in committed_snapshots)
+    assert any("small_files" in snapshot["reason_codes"] for snapshot in plan["compaction_candidates"])
+    assert any(event["event_type"] == "iceberg_maintenance.plan_created" for event in audits)
+
+
+def test_iceberg_maintenance_plan_reports_no_table_when_dataset_has_no_iceberg_table(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    adapter = _adapter(tmp_path, minio_server, _make_bucket(minio_server))
+
+    plan = adapter.plan_iceberg_maintenance(
+        tenant_id="tenant_demo",
+        dataset_id="ds_missing",
+        dataset_ref="raw.missing",
+        branch="main",
+        committed_versions=[],
+        policy=_maintenance_policy(),
+    )
+
+    assert plan["status"] == "no_table"
+    assert plan["current_snapshot_id"] is None
+    assert plan["snapshots"] == []
+    assert plan["deletable_snapshot_ids"] == []
+
+
+def test_iceberg_maintenance_plan_reports_healthy_when_no_policy_trigger_matches(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    adapter = _adapter(tmp_path, minio_server, _make_bucket(minio_server))
+    stored = _commit(adapter, _staged(adapter, tmp_path, ["O-1"], [100]), version_id="dsv_healthy")
+
+    plan = adapter.plan_iceberg_maintenance(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        dataset_ref="raw.orders",
+        branch="main",
+        committed_versions=[_dataset_version_row("dsv_healthy", stored.manifest_uri)],
+        policy={
+            "small_file_threshold_bytes": 1,
+            "file_count_threshold": 100,
+            "read_amplification_threshold": 100.0,
+            "retention_min_snapshots": 1,
+        },
+    )
+
+    assert plan["status"] == "healthy"
+    assert plan["compaction_candidates"] == []
+    assert plan["orphan_snapshots"] == []
+    assert plan["deletable_snapshot_ids"] == []
+    assert plan["current_snapshot_id"] in plan["retained_snapshot_ids"]
+
+
 def _foundry_with_storage(
     tmp_path: Path,
     adapter: IcebergDatasetStorageAdapter,
@@ -507,6 +614,33 @@ def _commit(adapter: IcebergDatasetStorageAdapter, staged: Path, version_id: str
         row_count=2,
         created_at="2026-06-16T00:00:00Z",
     )
+
+
+def _maintenance_policy() -> IcebergMaintenancePolicy:
+    return {
+        "small_file_threshold_bytes": 32,
+        "file_count_threshold": 4,
+        "read_amplification_threshold": 2.0,
+        "retention_min_snapshots": 1,
+    }
+
+
+def _dataset_version_row(version_id: str, manifest_uri: str) -> DatasetVersionRow:
+    return {
+        "id": version_id,
+        "tenant_id": "tenant_demo",
+        "dataset_id": "ds_orders",
+        "branch": "main",
+        "version_number": 1,
+        "transaction_id": f"dstx_{uuid4().hex}",
+        "schema_version": 1,
+        "manifest_uri": manifest_uri,
+        "row_count": 2,
+        "byte_size": 10,
+        "status": "COMMITTED",
+        "superseded_by_version_id": None,
+        "created_at": "2026-06-16T00:00:00Z",
+    }
 
 
 def _staged(adapter: IcebergDatasetStorageAdapter, tmp_path: Path, ids: list[str], amounts: list[int]) -> Path:

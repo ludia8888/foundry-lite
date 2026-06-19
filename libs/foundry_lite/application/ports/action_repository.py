@@ -71,6 +71,15 @@ class ActionWritebackRecord:
 
 
 @dataclass(frozen=True)
+class ActionWritebackReconciliation:
+    writeback_id: str
+    tenant_id: str
+    action_run_id: str
+    response: ActionWritebackPayload
+    completed_at: str
+
+
+@dataclass(frozen=True)
 class ObjectTargetUpdate:
     object_record_id: str
     tenant_id: str
@@ -112,6 +121,16 @@ class ActionRepository(Protocol):
         """Return an existing action run for an idempotency key."""
         ...
 
+    def action_run_by_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        action_run_id: str,
+    ) -> ActionRunRow | None:
+        """Return one tenant-scoped action run."""
+        ...
+
     def insert_action_run(self, *, transaction: TransactionContext, record: ActionRunRecord) -> None:
         """Persist a newly received action run."""
         ...
@@ -137,6 +156,25 @@ class ActionRepository(Protocol):
 
     def insert_action_writeback(self, *, transaction: TransactionContext, record: ActionWritebackRecord) -> None:
         """Persist one before-commit writeback attempt."""
+        ...
+
+    def action_writeback_by_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        writeback_id: str,
+    ) -> ActionWritebackRecord | None:
+        """Return one action writeback row for tenant-scoped Operations actions."""
+        ...
+
+    def reconcile_action_writeback(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: ActionWritebackReconciliation,
+    ) -> bool:
+        """Mark one unresolved writeback reconciled, returning whether this call won."""
         ...
 
     def update_object_target(self, *, transaction: TransactionContext, record: ObjectTargetUpdate) -> bool:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, NotRequired, Protocol, TypedDict
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 
@@ -29,6 +29,21 @@ class WorkflowRun:
     status: WorkflowStatus
     output: Mapping[str, object]
     error: Mapping[str, object] | None = None
+
+
+class ProductWorkflowRun(TypedDict):
+    """Operations-facing workflow run payload for product workflow orchestration."""
+
+    workflowRunId: str
+    workflowName: str
+    workflowProfile: str
+    status: WorkflowStatus
+    idempotencyKey: str
+    foundryRunId: str | None
+    operationPath: str | None
+    output: Mapping[str, object]
+    error: Mapping[str, object] | None
+    auditEventId: NotRequired[str | None]
 
 
 class WorkflowAdapter(Protocol):

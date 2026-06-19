@@ -11,7 +11,19 @@ from foundry_lite.application.ports import (
     RuntimeRunSnapshot,
     RuntimeRunType,
 )
+from foundry_lite.application.services.runtime_late_data_impact import (
+    downstream_impact_graph as _downstream_impact_graph,
+)
+from foundry_lite.application.services.runtime_late_data_impact import (
+    materialization_late_data_badge,
+)
+from foundry_lite.application.services.runtime_late_data_impact import (
+    object_late_data_badge as _object_late_data_badge,
+)
 from foundry_lite.domain.errors import NotFound, ValidationFailed
+
+downstream_impact_graph = _downstream_impact_graph
+object_late_data_badge = _object_late_data_badge
 
 RUN_GROUPS: Mapping[RuntimeRunType, str] = {
     "sync": "syncRuns",
@@ -87,6 +99,52 @@ def correlation_id(row: RuntimeRow) -> str | None:
         if isinstance(value, str) and value:
             return value
     return None
+
+
+def late_data_detail(dataset_transaction: RuntimeRow | None) -> dict[str, object] | None:
+    if dataset_transaction is None:
+        return None
+    metadata = dataset_transaction.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+    summary = metadata.get("lateDataSummary")
+    watermark = metadata.get("lateDataWatermark")
+    reprocessing_plan = metadata.get("lateDataReprocessingPlan")
+    if summary is None and watermark is None and reprocessing_plan is None:
+        return None
+    return {"summary": summary, "watermark": watermark, "reprocessingPlan": reprocessing_plan}
+
+
+def materialization_detail(row: RuntimeRow, dataset_transaction: RuntimeRow | None) -> dict[str, object] | None:
+    metadata = _transaction_metadata(dataset_transaction)
+    detail = metadata.get("materializationDetail") if metadata is not None else None
+    if isinstance(detail, Mapping):
+        return _materialization_detail_with_badge(detail)
+    watermark = row.get("object_store_watermark") or row.get("source_cursor")
+    if not isinstance(watermark, Mapping):
+        return None
+    return _materialization_detail_with_badge(
+        {
+            "apiName": row.get("api_name"),
+            "watermark": dict(watermark),
+            "reopen": {"isReopened": False},
+        }
+    )
+
+
+def _materialization_detail_with_badge(detail: Mapping[str, object]) -> dict[str, object]:
+    payload = dict(detail)
+    badge = materialization_late_data_badge(payload)
+    if badge is not None:
+        payload["lateDataBadge"] = badge
+    return payload
+
+
+def _transaction_metadata(dataset_transaction: RuntimeRow | None) -> Mapping[str, object] | None:
+    if dataset_transaction is None:
+        return None
+    metadata = dataset_transaction.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else None
 
 
 def error_message(error: object) -> str | None:
@@ -181,7 +239,8 @@ def source_run_chain(
     object_type_api_name: str,
     lineage_rows: list[LineageEdgeRow],
 ) -> list[RuntimeRunLink]:
-    links = _index_run_links(snapshot, source_dataset_version_id, object_type_api_name)
+    links = _cdc_index_run_links(snapshot, source_dataset_version_id, object_type_api_name)
+    links.extend(_index_run_links(snapshot, source_dataset_version_id, object_type_api_name))
     resource_ids = _lineage_resource_ids(source_dataset_version_id, lineage_rows)
     for resource_id in resource_ids:
         relation = "source_producer" if resource_id == source_dataset_version_id else "upstream_producer"
@@ -294,6 +353,36 @@ def _index_run_links(
         if source_ref.get("dataset_version_id") == source_dataset_version_id:
             links.append(_run_link("index", row, "indexed_from", "dataset_version", source_dataset_version_id))
     return links
+
+
+def _cdc_index_run_links(
+    snapshot: RuntimeRunSnapshot,
+    source_dataset_version_id: str,
+    object_type_api_name: str,
+) -> list[RuntimeRunLink]:
+    event_id = _cdc_event_id(source_dataset_version_id)
+    if event_id is None:
+        return []
+    return [
+        _run_link("index", row, "cdc_event_indexed_from", "cdc_event", event_id)
+        for row in snapshot["indexRuns"]
+        if row.get("object_type_api_name") == object_type_api_name and _index_row_mentions_cdc_event(row, event_id)
+    ]
+
+
+def _index_row_mentions_cdc_event(row: RuntimeRow, event_id: str) -> bool:
+    cursor = row.get("cursor")
+    if not isinstance(cursor, Mapping):
+        return False
+    late_event_ids = cursor.get("lateEventIds")
+    if isinstance(late_event_ids, list) and event_id in late_event_ids:
+        return True
+    return cursor.get("last_event_id") == event_id
+
+
+def _cdc_event_id(source_dataset_version_id: str) -> str | None:
+    event_id = source_dataset_version_id.removeprefix("cdc:")
+    return event_id if event_id != source_dataset_version_id and event_id else None
 
 
 def _lineage_resource_ids(source_dataset_version_id: str, lineage_rows: list[LineageEdgeRow]) -> list[str]:

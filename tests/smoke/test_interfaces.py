@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import demo_admin_context
-from foundry_lite.domain.errors import NotFound, ValidationFailed
+from foundry_lite.domain.errors import ExternalOutcomeUnknown, NotFound, ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -139,6 +139,156 @@ def test_api_object_set_create_and_query(foundry, monkeypatch) -> None:
     )
     assert fetched.status_code == 200
     assert fetched.json()["name"] == "Pending Orders"
+
+
+def test_api_observability_detect_returns_active_incident_report(monkeypatch) -> None:
+    class FakeOperations:
+        def observability_report(self, *, ctx, configs, previous_incidents, observed_at):
+            assert ctx.actor_user_id == "ops-user"
+            assert configs[0]["detectorId"] == "raw-orders-flow"
+            assert previous_incidents == []
+            assert observed_at == "2026-06-19T00:15:00Z"
+            return {
+                "generatedAt": observed_at,
+                "configurationVersion": "s56-v1",
+                "activeIncidents": [
+                    {
+                        "id": "incident:raw-orders-flow",
+                        "detectorId": "raw-orders-flow",
+                        "detectorType": "flow_interruption",
+                        "configVersion": "s56-v1",
+                        "status": "active",
+                        "severity": "warning",
+                        "owner": "data-platform",
+                        "message": "missing data beyond expected cadence",
+                        "dedupeKey": "raw-orders-flow:flow_interruption:dataset:raw.orders",
+                        "firstObservedAt": observed_at,
+                        "lastObservedAt": observed_at,
+                        "evidence": {"failedRunCount": 0},
+                        "evidenceLinks": [],
+                        "threshold": {"expectedCadenceSeconds": 300},
+                    }
+                ],
+                "suppressedIncidents": [],
+                "summary": {"active": 1, "suppressed": 0, "evaluatedDetectors": 1},
+            }
+
+    class FakeFoundry:
+        operations = FakeOperations()
+
+    monkeypatch.setattr(api_main, "foundry", FakeFoundry())
+    response = TestClient(app).post(
+        "/api/operations/observability/detect",
+        headers={"X-User-ID": "ops-user", "X-Roles": "ops_manager"},
+        json={
+            "observedAt": "2026-06-19T00:15:00Z",
+            "configs": [
+                {
+                    "detectorId": "raw-orders-flow",
+                    "detectorType": "flow_interruption",
+                    "configVersion": "s56-v1",
+                    "owner": "data-platform",
+                    "severity": "warning",
+                    "runType": "sync",
+                    "resourceType": "dataset",
+                    "resourceId": "raw.orders",
+                    "expectedCadenceSeconds": 300,
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["activeIncidents"][0]["detectorId"] == "raw-orders-flow"
+
+
+def test_api_backup_restore_preflight_returns_commit_point_report(monkeypatch) -> None:
+    class FakeOperations:
+        def restore_preflight_report(self, *, ctx, backup_id):
+            assert ctx.actor_user_id == "ops-user"
+            assert backup_id == "backup-api"
+            return {
+                "generatedAt": "2026-06-19T01:00:00Z",
+                "tenantId": ctx.tenant_id,
+                "backupId": backup_id,
+                "status": "blocked",
+                "datasetVersions": [],
+                "issues": [
+                    {
+                        "code": "committed_manifest_missing",
+                        "datasetRef": "raw.orders",
+                        "datasetId": "ds_orders",
+                        "versionId": "dsv_orders",
+                        "manifestUri": "/missing/manifest.json",
+                        "message": "manifest is missing",
+                        "details": {"servingTruth": "metadata_db_committed_dataset_version"},
+                    }
+                ],
+                "activeIndexPointers": [],
+                "highWatermarks": {},
+                "temporalStrategy": {"workflowProfile": "local-workflow"},
+                "searchRebuild": {"rebuildRequiredAfterRestore": True},
+                "restoreTrafficGate": {"writeTrafficMustBePausedBeforeRestore": True},
+                "summary": {"issueCount": 1},
+            }
+
+    class FakeFoundry:
+        operations = FakeOperations()
+
+    monkeypatch.setattr(api_main, "foundry", FakeFoundry())
+    response = TestClient(app).post(
+        "/api/operations/backup-restore/preflight",
+        headers={"X-User-ID": "ops-user", "X-Roles": "ops_manager"},
+        json={"backupId": "backup-api"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "blocked"
+    assert response.json()["issues"][0]["code"] == "committed_manifest_missing"
+
+
+def test_api_backup_restore_mode_start_and_status_return_pause_gate(monkeypatch) -> None:
+    class FakeOperations:
+        def start_restore_mode(self, *, ctx, backup_id, restore_id):
+            assert ctx.actor_user_id == "ops-user"
+            assert backup_id == "backup-api"
+            assert restore_id == "restore-api"
+            return _restore_mode_payload(ctx.tenant_id)
+
+        def restore_mode_status(self, restore_id, *, ctx):
+            assert restore_id == "restore-api"
+            return _restore_mode_payload(ctx.tenant_id)
+
+        def approve_restore_resume(self, restore_id, *, ctx, validation_id):
+            assert restore_id == "restore-api"
+            assert validation_id == "closed-loop-api"
+            return _restore_mode_payload(ctx.tenant_id, status="resume_approved")
+
+    class FakeFoundry:
+        operations = FakeOperations()
+
+    monkeypatch.setattr(api_main, "foundry", FakeFoundry())
+    client = TestClient(app)
+    headers = {"X-User-ID": "ops-user", "X-Roles": "ops_manager"}
+    started = client.post(
+        "/api/operations/backup-restore/restore-mode/start",
+        headers=headers,
+        json={"backupId": "backup-api", "restoreId": "restore-api"},
+    )
+    status = client.get("/api/operations/backup-restore/restore-mode/restore-api", headers=headers)
+    approved = client.post(
+        "/api/operations/backup-restore/restore-mode/restore-api/approve-resume",
+        headers=headers,
+        json={"validationId": "closed-loop-api"},
+    )
+
+    assert started.status_code == 200
+    assert status.status_code == 200
+    assert approved.status_code == 200
+    assert started.json()["is_outbox_publisher_paused"] is True
+    assert status.json()["is_serving_traffic_open"] is False
+    assert approved.json()["status"] == "resume_approved"
+    assert approved.json()["is_outbox_publisher_paused"] is False
 
 
 def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monkeypatch) -> None:
@@ -721,7 +871,140 @@ def test_api_operations_retry_dead_letter_event_keeps_dlq_when_reprocess_fails(f
     assert outbox["attempts"] == 3
 
 
+def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.shipment_cdc", ctx=ctx, primary_key=["event_id"])
+    _seed_dead_letter_record(foundry.engine, tenant_id=ctx.tenant_id, record_id="dlqr_api_retry")
+    _seed_dead_letter_record(
+        foundry.engine,
+        tenant_id=ctx.tenant_id,
+        record_id="dlqr_api_bulk",
+        source_event_id="shipment_cdc_events:0:2",
+        payload_hash="payload-hash-bulk",
+    )
+    _seed_dead_letter_record(
+        foundry.engine,
+        tenant_id=ctx.tenant_id,
+        record_id="dlqr_api_discard",
+        source_event_id="shipment_cdc_events:0:3",
+        payload_hash="payload-hash-discard",
+    )
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    client = TestClient(app)
+    headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
+
+    listing = client.get("/api/operations/dead-letter-records", headers=headers)
+    detail = client.get("/api/operations/dead-letter-records/dlqr_api_retry", headers=headers)
+    retry = client.post(
+        "/api/operations/dead-letter-records/dlqr_api_retry/retry",
+        headers={**headers, "Idempotency-Key": "record-replay-key"},
+    )
+    duplicate = client.post(
+        "/api/operations/dead-letter-records/dlqr_api_retry/retry",
+        headers={**headers, "Idempotency-Key": "record-replay-key"},
+    )
+    first_preview = client.get("/api/datasets/raw/shipment_cdc/preview", headers=headers).json()
+    bulk = client.post(
+        "/api/operations/dead-letter-records/bulk-retry",
+        headers={**headers, "Idempotency-Key": "bulk-record-replay-key"},
+        json={"ids": ["dlqr_api_bulk"]},
+    )
+    discard = client.post("/api/operations/dead-letter-records/dlqr_api_discard/discard", headers=headers)
+    audits = client.get("/api/operations/runs?runType=audit", headers=headers).json()["auditEvents"]
+    preview = client.get("/api/datasets/raw/shipment_cdc/preview", headers=headers).json()
+
+    assert listing.status_code == 200
+    assert {row["id"] for row in listing.json()} == {"dlqr_api_retry", "dlqr_api_bulk", "dlqr_api_discard"}
+    assert detail.json()["source_event_id"] == "shipment_cdc_events:0:1"
+    assert retry.status_code == 200
+    assert retry.json()["replayStatus"] == "SUCCEEDED"
+    assert retry.json()["replayDatasetVersionId"] is not None
+    assert duplicate.json()["is_idempotent_replay"] is True
+    assert duplicate.json()["replayRunId"] == retry.json()["replayRunId"]
+    assert duplicate.json()["replayDatasetVersionId"] == retry.json()["replayDatasetVersionId"]
+    assert bulk.json()["items"][0]["deadLetterRecordId"] == "dlqr_api_bulk"
+    assert bulk.json()["items"][0]["replayStatus"] == "SUCCEEDED"
+    assert discard.json()["status"] == "DISCARDED"
+    assert first_preview[0]["event_id"] == "shipment_cdc_events:0:1"
+    assert preview[0]["event_id"] == "shipment_cdc_events:0:2"
+    assert any(row["event_type"] == "dead_letter_record.replay_requested" for row in audits)
+    assert any(row["event_type"] == "dead_letter_record.replayed" for row in audits)
+    assert any(row["event_type"] == "dead_letter_record.discarded" for row in audits)
+
+
+def test_api_operations_workflow_start_status_and_audit(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
+    foundry.datasets.ensure("raw.workflow_orders", ctx=ctx, primary_key=["order_id"])
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    client = TestClient(app)
+
+    started = client.post(
+        "/api/operations/workflows/connector-sync/start",
+        headers={**headers, "Idempotency-Key": "api-workflow-start"},
+        json={
+            "datasetRef": "raw.workflow_orders",
+            "connectorName": "rest",
+            "resourceName": "orders",
+        },
+    )
+    fetched = client.get(f"/api/operations/workflows/{started.json()['workflowRunId']}", headers=headers)
+    detail = client.get(f"/api/operations/runs/audit/{started.json()['foundryRunId']}", headers=headers)
+
+    assert started.status_code == 200
+    assert started.json()["workflowRunId"] == "api-workflow-start"
+    assert started.json()["workflowName"] == "ConnectorSyncWorkflow"
+    assert started.json()["workflowProfile"] == "local-workflow"
+    assert started.json()["output"]["datasetRef"] == "raw.workflow_orders"
+    assert fetched.status_code == 200
+    assert fetched.json()["workflowRunId"] == started.json()["workflowRunId"]
+    assert detail.status_code == 200
+    assert detail.json()["row"]["after_ref"]["workflowRunId"] == started.json()["workflowRunId"]
+
+
+def test_api_operations_reconciliation_resolves_action_writeback(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "api-reconcile-writeback"
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "API remote success"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_outcome_unknown=True,
+            ctx=ctx,
+        )
+    writeback = [
+        row
+        for row in foundry.operations.list_runs(ctx=ctx)["actionWritebacks"]
+        if row["idempotency_key"] == idempotency_key
+    ][0]
+    monkeypatch.setattr(api_main, "foundry", foundry)
+
+    response = TestClient(app).post(
+        f"/api/operations/reconciliation/{writeback['id']}/resolve",
+        headers=headers,
+        json={
+            "remoteStatus": "succeeded",
+            "remoteResourceId": f"mock-resource-{idempotency_key}",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "reconciled"
+    assert response.json()["writebackId"] == writeback["id"]
+    assert foundry.objects.get("Order", "O-1001", ctx=ctx)["properties"]["status"] == "APPROVED"
+
+
 def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
+    class _Datasets:
+        def list_versions(self, *_args, **_kwargs):
+            raise NotFound("dataset not found")
+
     class _Operations:
         def query_runs(self, **_kwargs):
             raise ValidationFailed("invalid run filter")
@@ -729,8 +1012,44 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
         def run_detail(self, *_args, **_kwargs):
             raise NotFound("operations run not found")
 
+        def list_dead_letter_records(self, **_kwargs):
+            raise ValidationFailed("invalid record DLQ filter")
+
+        def dead_letter_record(self, *_args, **_kwargs):
+            raise NotFound("dead-letter record not found")
+
+        def retry_dead_letter_record(self, *_args, **_kwargs):
+            raise ValidationFailed("dead-letter record is not retryable")
+
+        def bulk_retry_dead_letter_records(self, *_args, **_kwargs):
+            raise ValidationFailed("record ids are required for bulk replay")
+
+        def discard_dead_letter_record(self, *_args, **_kwargs):
+            raise ValidationFailed("dead-letter record replay is already requested")
+
         def retry_dead_letter_event(self, *_args, **_kwargs):
             raise ValidationFailed("dead-letter event is not retryable")
+
+        def plan_iceberg_maintenance(self, *_args, **_kwargs):
+            raise ValidationFailed("Iceberg maintenance is unavailable")
+
+        def restore_preflight_report(self, *_args, **_kwargs):
+            raise ValidationFailed("restore preflight is unavailable")
+
+        def start_restore_mode(self, *_args, **_kwargs):
+            raise ValidationFailed("restore mode is unavailable")
+
+        def restore_mode_status(self, *_args, **_kwargs):
+            raise ValidationFailed("restore mode status is unavailable")
+
+        def approve_restore_resume(self, *_args, **_kwargs):
+            raise ValidationFailed("restore resume approval is unavailable")
+
+        def start_connector_sync_workflow(self, *_args, **_kwargs):
+            raise ValidationFailed("workflow start is unavailable")
+
+        def product_workflow_run(self, *_args, **_kwargs):
+            raise NotFound("workflow run not found")
 
     class _Objects:
         def reindex(self, *_args, **_kwargs):
@@ -739,11 +1058,18 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
         def replay_index_run(self, *_args, **_kwargs):
             raise ValidationFailed("index run is not failed")
 
+        def links(self, *_args, **_kwargs):
+            raise NotFound("object link type not found")
+
+        def query(self, *_args, **_kwargs):
+            raise ValidationFailed("invalid object query")
+
     class _Transforms:
         def retry_run(self, *_args, **_kwargs):
             raise ValidationFailed("transform run is not failed")
 
     class FailingCore:
+        datasets = _Datasets()
         operations = _Operations()
         objects = _Objects()
         transforms = _Transforms()
@@ -758,6 +1084,45 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     detail = client.get("/api/operations/runs/action/missing")
     assert detail.status_code == 404
     assert "request_id" in detail.json()["detail"]
+
+    dataset_versions = client.get("/api/datasets/missing/orders/versions")
+    assert dataset_versions.status_code == 404
+    assert "request_id" in dataset_versions.json()["detail"]
+
+    links = client.get("/api/objects/Order/O-missing/links/MissingLink")
+    assert links.status_code == 404
+    assert "request_id" in links.json()["detail"]
+
+    object_query = client.post("/api/objects/Order/query", json={"filter": {"bad": "shape"}})
+    assert object_query.status_code == 400
+    assert "request_id" in object_query.json()["detail"]
+
+    record_list = client.get("/api/operations/dead-letter-records")
+    assert record_list.status_code == 400
+    assert "request_id" in record_list.json()["detail"]
+
+    record_detail = client.get("/api/operations/dead-letter-records/missing")
+    assert record_detail.status_code == 404
+    assert "request_id" in record_detail.json()["detail"]
+
+    record_retry = client.post(
+        "/api/operations/dead-letter-records/missing/retry",
+        headers={"Idempotency-Key": "record-error-key"},
+    )
+    assert record_retry.status_code == 400
+    assert "request_id" in record_retry.json()["detail"]
+
+    record_bulk_retry = client.post(
+        "/api/operations/dead-letter-records/bulk-retry",
+        headers={"Idempotency-Key": "record-error-bulk-key"},
+        json={"ids": ["missing"]},
+    )
+    assert record_bulk_retry.status_code == 400
+    assert "request_id" in record_bulk_retry.json()["detail"]
+
+    record_discard = client.post("/api/operations/dead-letter-records/missing/discard")
+    assert record_discard.status_code == 400
+    assert "request_id" in record_discard.json()["detail"]
 
     retry = client.post("/api/operations/dead-letter-events/missing/retry")
     assert retry.status_code == 400
@@ -774,6 +1139,44 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     transform_retry = client.post("/api/operations/runs/transform/not-failed/retry")
     assert transform_retry.status_code == 400
     assert "request_id" in transform_retry.json()["detail"]
+
+    maintenance = client.post("/api/operations/maintenance/iceberg/raw.orders/plan")
+    assert maintenance.status_code == 400
+    assert "request_id" in maintenance.json()["detail"]
+
+    restore_preflight = client.post("/api/operations/backup-restore/preflight", json={"backupId": "backup-error"})
+    assert restore_preflight.status_code == 400
+    assert "request_id" in restore_preflight.json()["detail"]
+
+    restore_start = client.post(
+        "/api/operations/backup-restore/restore-mode/start",
+        json={"backupId": "backup-error", "restoreId": "restore-error"},
+    )
+    assert restore_start.status_code == 400
+    assert "request_id" in restore_start.json()["detail"]
+
+    restore_status = client.get("/api/operations/backup-restore/restore-mode/restore-error")
+    assert restore_status.status_code == 400
+    assert "request_id" in restore_status.json()["detail"]
+
+    restore_approval = client.post(
+        "/api/operations/backup-restore/restore-mode/restore-error/approve-resume",
+        json={"validationId": "restore-error-validation"},
+    )
+    assert restore_approval.status_code == 400
+    assert "request_id" in restore_approval.json()["detail"]
+
+    workflow_start = client.post(
+        "/api/operations/workflows/connector-sync/start",
+        headers={"Idempotency-Key": "workflow-error-key"},
+        json={"datasetRef": "raw.orders", "connectorName": "rest", "resourceName": "orders"},
+    )
+    assert workflow_start.status_code == 400
+    assert "request_id" in workflow_start.json()["detail"]
+
+    workflow_detail = client.get("/api/operations/workflows/missing")
+    assert workflow_detail.status_code == 404
+    assert "request_id" in workflow_detail.json()["detail"]
 
 
 def test_api_object_set_errors_preserve_request_id(monkeypatch) -> None:
@@ -1104,6 +1507,85 @@ def _seed_dead_letter_event(
                 error={"message": "publisher failed"},
                 failed_at="2026-06-10T00:00:02Z",
                 retry_after=None,
+            )
+        )
+
+
+def _restore_mode_payload(tenant_id: str, *, status: str = "paused") -> dict[str, object]:
+    is_resumed = status == "resume_approved"
+    return {
+        "generatedAt": "2026-06-19T01:00:00Z",
+        "tenantId": tenant_id,
+        "restoreId": "restore-api",
+        "backupId": "backup-api",
+        "status": status,
+        "preflightStatus": "ready",
+        "is_write_traffic_paused": not is_resumed,
+        "is_outbox_publisher_paused": not is_resumed,
+        "is_serving_traffic_open": is_resumed,
+        "is_post_restore_validation_required": not is_resumed,
+        "is_operator_approval_required": not is_resumed,
+        "blockingIssueCount": 0,
+        "reason": "restore mode started with write traffic and outbox publisher paused",
+        "highWatermarks": {},
+        "summary": {"activeRestoreMode": not is_resumed},
+    }
+
+
+def _seed_dead_letter_record(
+    engine,
+    *,
+    tenant_id: str,
+    record_id: str,
+    source_event_id: str = "shipment_cdc_events:0:1",
+    payload_hash: str = "payload-hash-api",
+) -> None:
+    offset = int(source_event_id.rsplit(":", maxsplit=1)[-1])
+    with engine.begin() as conn:
+        conn.execute(
+            insert(db.dead_letter_records).values(
+                id=record_id,
+                tenant_id=tenant_id,
+                source_event_id=source_event_id,
+                source_dataset_version_id=None,
+                source_run_id="sync_stream_api",
+                payload={
+                    "op": "u",
+                    "pk": {"shipment_id": record_id},
+                    "before": None,
+                    "after": {"shipment_id": record_id, "status": "IN_TRANSIT"},
+                    "ordering": {"lsn": record_id},
+                },
+                payload_hash=payload_hash,
+                schema_version=1,
+                transform_version=None,
+                error_kind="VALIDATION_FAILED",
+                error_message="cdc envelope field must be an object",
+                event_time=None,
+                ingested_at="2026-06-10T00:03:00Z",
+                first_failed_at="2026-06-10T00:03:00Z",
+                attempts=1,
+                status="QUARANTINED",
+                replay_status="NOT_REQUESTED",
+                replay_run_id=None,
+                replay_idempotency_key=None,
+                replay_requested_at=None,
+                discarded_at=None,
+                backfill_plan=None,
+                is_closed_partition_affected=False,
+                metadata={
+                    "dataset_id": "ds_shipment_cdc",
+                    "dataset_ref": "raw.shipment_cdc",
+                    "schema_strategy": "cdc_envelope_json",
+                    "stream": "shipment_cdc",
+                    "topic": "shipment_cdc_events",
+                    "consumer_group": "foundry-lite-archive",
+                    "partition": 0,
+                    "offset": offset,
+                    "event_type": "shipment.changed",
+                    "event_key": record_id,
+                    "request_id": "api-seed",
+                },
             )
         )
 

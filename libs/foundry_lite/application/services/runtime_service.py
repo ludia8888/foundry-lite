@@ -5,12 +5,15 @@ from typing import cast
 
 from foundry_lite.application.ports import (
     AuditEventRecord,
+    DatasetCheckResultRow,
+    DatasetTransactionRepository,
     LineageEdgeRecord,
     LineageEdgeRow,
+    ObservabilityDetectorConfig,
+    ObservabilityReport,
     OutboxEventRecord,
     RuntimeJsonObject,
     RuntimeLookupTable,
-    RuntimeRepository,
     RuntimeRetryPlan,
     RuntimeRetryResult,
     RuntimeRow,
@@ -21,16 +24,19 @@ from foundry_lite.application.ports import (
     RuntimeRunSnapshot,
     TransactionContext,
 )
-from foundry_lite.application.ports.adapter_failure import AdapterError, adapter_failure_payload
-from foundry_lite.application.primitives import (
-    _new_id,
-    _now,
-)
+from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.observability_detectors import build_observability_report
+from foundry_lite.application.services.runtime_detail_payload import runtime_run_detail_payload
+from foundry_lite.application.services.runtime_error_payloads import (
+    active_restore_mode_report,
+    dead_letter_retry_plan,
+    runtime_error_payload,
+)
 from foundry_lite.application.services.runtime_run_paging import OPERATIONS_RUN_DEFAULT_LIMIT, query_runtime_run_page
 from foundry_lite.application.services.runtime_run_queries import (
-    correlation_id,
-    error_message,
+    downstream_impact_graph,
+    object_late_data_badge,
     optional_run_type,
     related_action_writebacks,
     related_audit,
@@ -39,28 +45,17 @@ from foundry_lite.application.services.runtime_run_queries import (
     required_run_type,
     resource_ids_for_lineage,
     row_for_detail,
-    row_references,
-    row_status,
-    run_investigation,
     source_run_chain,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
-    FoundryLiteError,
+    ConflictDetected,
     NotFound,
     PermissionDenied,
-    ValidationFailed,
 )
 
 
 def _redact_sensitive(value: object, sensitive: set[str]) -> object:
-    """Recursively mask sensitive keys anywhere in an operational payload.
-
-    Operations returns raw run/writeback/outbox rows whose JSON (action
-    parameters, writeback request/response, outbox payload, object edits) can
-    carry the same values audit deliberately masks; redact them by key name so
-    the operational surface cannot leak what durable evidence already hides.
-    """
     if isinstance(value, Mapping):
         return {
             key: "***MASKED***" if key in sensitive else _redact_sensitive(item, sensitive)
@@ -71,59 +66,16 @@ def _redact_sensitive(value: object, sensitive: set[str]) -> object:
     return value
 
 
-def _base_error_payload(exc: Exception) -> dict[str, object]:
-    if isinstance(exc, AdapterError):
-        return adapter_failure_payload(exc)
-    if isinstance(exc, FoundryLiteError):
-        return {
-            "type": exc.code,
-            "message": str(exc),
-            "details": exc.details,
-        }
-    return {"type": exc.__class__.__name__, "message": str(exc), "details": {}}
-
-
-def _trace_correlation_id(
-    ctx: RequestContext | None,
-    run_id: str | None,
-    correlation_id: str | None,
-) -> str | None:
-    if correlation_id is not None:
-        return correlation_id
-    if run_id is not None:
-        return run_id
-    if ctx is not None:
-        return ctx.request_id
-    return None
-
-
-def _error_trace(
-    ctx: RequestContext | None,
-    *,
-    run_id: str | None,
-    correlation_id: str | None,
-    adapter: str | None,
-) -> dict[str, str]:
-    trace: dict[str, str] = {}
-    if ctx is not None:
-        trace.update(
-            tenant_id=ctx.tenant_id,
-            actor_user_id=ctx.actor_user_id,
-            request_id=ctx.request_id,
-        )
-    if run_id is not None:
-        trace["run_id"] = run_id
-    resolved_correlation_id = _trace_correlation_id(ctx, run_id, correlation_id)
-    if resolved_correlation_id is not None:
-        trace["correlation_id"] = resolved_correlation_id
-    if adapter is not None:
-        trace["adapter"] = adapter
-    return trace
-
-
 class RuntimeService(CoreService):
-    required_dependencies = ("engine", "policy", "runtime_repository")
+    required_dependencies = (
+        "engine",
+        "policy",
+        "runtime_repository",
+        "dataset_transaction_repository",
+        "dataset_quality_repository",
+    )
     required_collaborators = ()
+    dataset_transaction_repository: DatasetTransactionRepository
 
     def lineage_for_resource(
         self,
@@ -152,6 +104,21 @@ class RuntimeService(CoreService):
             source_dataset_version_id=source_dataset_version_id,
             object_type_api_name=object_type_api_name,
             lineage_rows=lineage_rows,
+        )
+
+    def late_data_badge_for_source(
+        self,
+        source_dataset_version_id: str,
+        *,
+        object_type_api_name: str,
+        ctx: RequestContext | None = None,
+    ) -> RuntimeJsonObject | None:
+        ctx = ctx or RequestContext()
+        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        return object_late_data_badge(
+            snapshot,
+            source_dataset_version_id=source_dataset_version_id,
+            object_type_api_name=object_type_api_name,
         )
 
     def list_runs(self, *, ctx: RequestContext | None = None) -> RuntimeRunSnapshot:
@@ -186,6 +153,25 @@ class RuntimeService(CoreService):
         )
         return cast(RuntimeRunQueryResult, _redact_sensitive(page, self.policy.sensitive_column_names(ctx)))
 
+    def observability_report(
+        self,
+        *,
+        ctx: RequestContext | None = None,
+        configs: Sequence[ObservabilityDetectorConfig] = (),
+        previous_incidents: Sequence[Mapping[str, object]] = (),
+        observed_at: str | None = None,
+    ) -> ObservabilityReport:
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "operations:read:summary")
+        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        report = build_observability_report(
+            snapshot,
+            configs=configs,
+            previous_incidents=previous_incidents,
+            observed_at=observed_at or _now(),
+        )
+        return cast(ObservabilityReport, _redact_sensitive(report, self.policy.sensitive_column_names(ctx)))
+
     def run_detail(self, run_type: str, run_id: str, *, ctx: RequestContext | None = None) -> RuntimeRunDetail:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "operations:read:detail")
@@ -197,30 +183,24 @@ class RuntimeService(CoreService):
         object_edits = related_object_edits(snapshot, row)
         action_writebacks = related_action_writebacks(snapshot, row)
         lineage_edges = self._lineage_edges_for_row(ctx, row)
-        detail: RuntimeRunDetail = {
-            "runType": parsed_type,
-            "runId": run_id,
-            "row": row,
-            "status": row_status(row),
-            "errorMessage": error_message(row.get("error")),
-            "error": row.get("error"),
-            "correlationId": correlation_id(row),
-            "references": row_references(row),
-            "investigation": run_investigation(
-                row,
-                parsed_type,
-                related_outbox_count=len(outbox_events),
-                related_audit_count=len(audit_events),
-                related_object_edit_count=len(object_edits),
-                related_action_writeback_count=len(action_writebacks),
-                lineage_edge_count=len(lineage_edges),
-            ),
-            "relatedOutboxEvents": outbox_events,
-            "relatedAuditEvents": audit_events,
-            "relatedObjectEdits": object_edits,
-            "relatedActionWritebacks": action_writebacks,
-            "lineageEdges": lineage_edges,
-        }
+        dataset_transaction = self._dataset_transaction_for_row(ctx, row)
+        quality_check_results, quality_failed_row_samples = self._quality_evidence_for_transaction(
+            ctx, dataset_transaction
+        )
+        detail = runtime_run_detail_payload(
+            parsed_type=parsed_type,
+            run_id=run_id,
+            row=row,
+            outbox_events=outbox_events,
+            audit_events=audit_events,
+            object_edits=object_edits,
+            action_writebacks=action_writebacks,
+            lineage_edges=lineage_edges,
+            dataset_transaction=dataset_transaction,
+            downstream_impact=self._downstream_impact(ctx, row, dataset_transaction, snapshot),
+            quality_check_results=quality_check_results,
+            quality_failed_row_samples=quality_failed_row_samples,
+        )
         return cast(RuntimeRunDetail, _redact_sensitive(detail, self.policy.sensitive_column_names(ctx)))
 
     def dead_letter_event_retry_plan(
@@ -231,13 +211,61 @@ class RuntimeService(CoreService):
     ) -> RuntimeRetryPlan:
         ctx = ctx or RequestContext()
         with self.engine.begin() as conn:
-            return _dead_letter_retry_plan(self.runtime_repository, conn, ctx, event_id)
+            self._require_outbox_retry_open(conn, ctx)
+            return dead_letter_retry_plan(self.runtime_repository, conn, ctx, event_id)
+
+    def _dataset_transaction_for_row(self, ctx: RequestContext, row: RuntimeRow) -> RuntimeRow | None:
+        transaction_id = row.get("transaction_id")
+        version_id = row.get("target_dataset_version_id") or row.get("committed_version_id")
+        with self.engine.begin() as conn:
+            if isinstance(transaction_id, str) and transaction_id:
+                transaction = self.dataset_transaction_repository.transaction_by_id(
+                    transaction=conn,
+                    transaction_id=transaction_id,
+                )
+            elif isinstance(version_id, str) and version_id:
+                transaction = self.dataset_transaction_repository.committed_transaction_by_version(
+                    transaction=conn,
+                    tenant_id=ctx.tenant_id,
+                    committed_version_id=version_id,
+                )
+            else:
+                transaction = None
+        if transaction is None or transaction["tenant_id"] != ctx.tenant_id:
+            return None
+        return transaction
+
+    def _quality_evidence_for_transaction(
+        self,
+        ctx: RequestContext,
+        dataset_transaction: RuntimeRow | None,
+    ) -> tuple[list[DatasetCheckResultRow], list[RuntimeRow]]:
+        if dataset_transaction is None:
+            return [], []
+        transaction_id = dataset_transaction.get("id")
+        if not isinstance(transaction_id, str) or not transaction_id:
+            return [], []
+        with self.engine.begin() as conn:
+            check_results = self.dataset_quality_repository.check_results_for_transaction(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                transaction_id=transaction_id,
+            )
+            rows = self.dataset_transaction_repository.list_dead_letter_records(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+            )
+        samples = cast(
+            list[RuntimeRow], [row for row in rows if _is_quality_sample_for_transaction(row, transaction_id)]
+        )
+        return check_results, samples
 
     def retry_dead_letter_event(self, event_id: str, *, ctx: RequestContext | None = None) -> RuntimeRetryResult:
         ctx = ctx or RequestContext()
         self._require_or_audit(ctx, "operations:retry", "dead_letter_event", event_id)
         with self.engine.begin() as conn:
-            plan = _dead_letter_retry_plan(self.runtime_repository, conn, ctx, event_id)
+            self._require_outbox_retry_open(conn, ctx)
+            plan = dead_letter_retry_plan(self.runtime_repository, conn, ctx, event_id)
             outbox_event_id = plan["outboxEventId"]
             outbox = self.runtime_repository.update_outbox_event_for_retry(
                 transaction=conn, tenant_id=ctx.tenant_id, event_id=outbox_event_id
@@ -257,6 +285,23 @@ class RuntimeService(CoreService):
                 event_type=plan["eventType"],
             )
         return {**plan, "status": "pending"}
+
+    def _require_outbox_retry_open(self, conn: TransactionContext, ctx: RequestContext) -> None:
+        audit_events = self.runtime_repository.rows_for_tenant(
+            transaction=conn,
+            table="audit_events",
+            tenant_id=ctx.tenant_id,
+        )
+        restore_mode = active_restore_mode_report(audit_events)
+        if restore_mode is not None:
+            raise ConflictDetected(
+                "restore mode keeps outbox publisher paused",
+                details={
+                    "restore_id": restore_mode["restoreId"],
+                    "status": restore_mode["status"],
+                    "is_outbox_publisher_paused": restore_mode["is_outbox_publisher_paused"],
+                },
+            )
 
     def _require_or_audit(
         self,
@@ -298,6 +343,23 @@ class RuntimeService(CoreService):
                     seen.add(edge_id)
                     edges.append(edge)
         return edges
+
+    def _downstream_impact(
+        self,
+        ctx: RequestContext,
+        row: RuntimeRow,
+        dataset_transaction: RuntimeRow | None,
+        snapshot: RuntimeRunSnapshot,
+    ) -> RuntimeJsonObject | None:
+        return downstream_impact_graph(
+            row,
+            dataset_transaction,
+            snapshot,
+            lambda resource_id: self.runtime_repository.lineage_for_resource(
+                tenant_id=ctx.tenant_id,
+                resource_id=resource_id,
+            ),
+        )
 
     def _audit(
         self,
@@ -400,11 +462,7 @@ class RuntimeService(CoreService):
         correlation_id: str | None = None,
         adapter: str | None = None,
     ) -> Mapping[str, object]:
-        payload = _base_error_payload(exc)
-        trace = _error_trace(ctx, run_id=run_id, correlation_id=correlation_id, adapter=adapter)
-        if trace:
-            payload["trace"] = trace
-        return payload
+        return runtime_error_payload(exc, ctx, run_id=run_id, correlation_id=correlation_id, adapter=adapter)
 
     def _audit_dlq_retry(
         self,
@@ -428,49 +486,10 @@ class RuntimeService(CoreService):
         )
 
 
-def _required_string(row: RuntimeRow, key: str, event_id: str) -> str:
-    value = row.get(key)
-    if isinstance(value, str) and value:
-        return value
-    raise ValidationFailed("dead-letter event is not retryable", details={"event_id": event_id, "field": key})
-
-
-def _dead_letter_retry_plan(
-    runtime_repository: RuntimeRepository,
-    conn: TransactionContext,
-    ctx: RequestContext,
-    event_id: str,
-) -> RuntimeRetryPlan:
-    dead_letter = runtime_repository.dead_letter_event_by_id(
-        transaction=conn,
-        tenant_id=ctx.tenant_id,
-        event_id=event_id,
+def _is_quality_sample_for_transaction(row: RuntimeRow, transaction_id: str) -> bool:
+    metadata = row.get("metadata")
+    return (
+        row.get("error_kind") == "DATA_QUALITY_CONTRACT"
+        and isinstance(metadata, Mapping)
+        and metadata.get("transactionId") == transaction_id
     )
-    if dead_letter is None:
-        raise NotFound("dead-letter event not found", details={"event_id": event_id})
-    outbox_event_id = _required_string(dead_letter, "source_event_id", event_id)
-    _require_source_outbox(runtime_repository, conn, ctx, outbox_event_id)
-    return {
-        "deadLetterEventId": event_id,
-        "outboxEventId": outbox_event_id,
-        "eventType": _required_string(dead_letter, "event_type", event_id),
-        "payload": _required_payload(dead_letter, event_id),
-    }
-
-
-def _require_source_outbox(
-    runtime_repository: RuntimeRepository,
-    conn: TransactionContext,
-    ctx: RequestContext,
-    event_id: str,
-) -> None:
-    outbox_rows = runtime_repository.rows_for_tenant(transaction=conn, table="outbox_events", tenant_id=ctx.tenant_id)
-    if not any(row.get("id") == event_id for row in outbox_rows):
-        raise NotFound("source outbox event not found", details={"event_id": event_id})
-
-
-def _required_payload(row: RuntimeRow, event_id: str) -> RuntimeJsonObject:
-    value = row.get("payload")
-    if isinstance(value, Mapping):
-        return {str(key): item for key, item in value.items()}
-    raise ValidationFailed("dead-letter event is not retryable", details={"event_id": event_id, "field": "payload"})

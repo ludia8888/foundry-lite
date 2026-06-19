@@ -26,6 +26,8 @@ class ActionGateway:
         idempotency_key: str,
         ctx: RequestContext | None = None,
         simulate_writeback_failure: bool = False,
+        simulate_writeback_outcome_unknown: bool = False,
+        simulate_writeback_compensation_required: bool = False,
     ) -> ActionApplyResponse:
         return self._action.apply_action(
             action_api_name,
@@ -36,4 +38,6 @@ class ActionGateway:
             idempotency_key=idempotency_key,
             ctx=ctx,
             simulate_writeback_failure=simulate_writeback_failure,
+            simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
+            simulate_writeback_compensation_required=simulate_writeback_compensation_required,
         )

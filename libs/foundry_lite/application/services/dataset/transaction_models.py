@@ -45,6 +45,10 @@ class DatasetFinalizationRequest:
 class DatasetFinalizationCheck:
     branch: str
     stats: StagedFileStats
+    checked_manifest_hash: str
+    schema_version_id: str
+    schema_version: int
+    schema_evolution_metadata: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)

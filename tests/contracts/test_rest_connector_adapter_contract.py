@@ -6,7 +6,7 @@ import threading
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import ClassVar, Protocol
+from typing import ClassVar, Protocol, cast
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request
 
@@ -21,6 +21,7 @@ from foundry_lite.application.ports.connector_adapter import (
 )
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.adapters import RestPullConnectorAdapter
+from foundry_lite.infrastructure.secrets import EnvSecretProvider
 
 
 class _RedirectHandler(Protocol):
@@ -35,16 +36,20 @@ class _RedirectHandler(Protocol):
     ) -> Request | None: ...
 
 
+class _RequestRecordingHandler(Protocol):
+    requests: ClassVar[list[dict[str, str | None]]]
+
+
 class MockRestServer(AbstractContextManager["MockRestServer"]):
     def __init__(self) -> None:
         handler = _handler_class()
-        self.requests = handler.requests
+        self.requests = cast(type[_RequestRecordingHandler], handler).requests
         self._server = HTTPServer(("127.0.0.1", 0), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
     @property
     def base_url(self) -> str:
-        host, port = self._server.server_address
+        host, port = cast(tuple[str, int], self._server.server_address)
         return f"http://{host}:{port}"
 
     def __enter__(self) -> MockRestServer:
@@ -136,6 +141,57 @@ def test_rest_connector_supports_custom_header_auth() -> None:
         )
 
     assert server.requests[0]["api_key"] == "key-1"
+
+
+def test_connector_refreshes_rotated_secret() -> None:
+    environ = {"FOUNDRY_LITE_SECRET_CONNECTOR_TOKEN": "token-v1"}
+    adapter = RestPullConnectorAdapter(secret_provider=EnvSecretProvider(environ=environ))
+    source = RestSourceConfig(
+        base_url="",
+        resource_path="/orders",
+        auth=RestAuthConfig(mode="bearer", token_secret_ref="connector-token"),
+        allow_private_network=True,
+    )
+
+    with MockRestServer() as server:
+        source = RestSourceConfig(
+            base_url=server.base_url,
+            resource_path=source.resource_path,
+            auth=source.auth,
+            allow_private_network=source.allow_private_network,
+        )
+        adapter.snapshot(ConnectorSnapshotRequest("rest", "orders", "tenant-demo", "req-rest-secret-v1", rest=source))
+        environ["FOUNDRY_LITE_SECRET_CONNECTOR_TOKEN"] = "token-v2"
+        adapter.snapshot(ConnectorSnapshotRequest("rest", "orders", "tenant-demo", "req-rest-secret-v2", rest=source))
+
+    assert [request["authorization"] for request in server.requests] == [
+        "Bearer token-v1",
+        "Bearer token-v2",
+    ]
+
+
+def test_rest_connector_secret_ref_requires_provider_without_leaking_value() -> None:
+    with MockRestServer() as server:
+        with pytest.raises(ValidationFailed, match="requires SecretProvider") as exc_info:
+            RestPullConnectorAdapter().snapshot(
+                ConnectorSnapshotRequest(
+                    connector_name="rest",
+                    resource_name="orders",
+                    tenant_id="tenant-demo",
+                    request_id="req-rest-secret-provider-missing",
+                    rest=RestSourceConfig(
+                        base_url=server.base_url,
+                        resource_path="/orders",
+                        auth=RestAuthConfig(mode="bearer", token_secret_ref="connector-token"),
+                        allow_private_network=True,
+                    ),
+                )
+            )
+
+    assert exc_info.value.details == {
+        "secret_ref": "connector-token",
+        "secret_value": "***REDACTED***",
+    }
 
 
 def test_rest_connector_raises_rate_limit_error() -> None:

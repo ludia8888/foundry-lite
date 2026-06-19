@@ -7,6 +7,9 @@ from typing import NoReturn
 from foundry_lite.application.ports import (
     ConnectorAdapter,
     DatasetRow,
+    DatasetTransactionRow,
+    DeadLetterRecord,
+    DeadLetterRecordRow,
     RestSourceConfig,
     StreamAdapter,
     StreamArchiveConfig,
@@ -16,7 +19,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import CommitResult, _new_id, _now
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.dataset import connector_snapshot_ingest, webhook_ingest
+from foundry_lite.application.services.dataset import connector_snapshot_ingest, record_dlq_replay, webhook_ingest
 from foundry_lite.application.services.dataset.ingest_models import UploadSyncPlan
 from foundry_lite.application.services.dataset.protocols import (
     DatasetRegistryLookup,
@@ -24,12 +27,15 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetTransactionManager,
     DatasetVersionLookup,
 )
-from foundry_lite.application.services.dataset.stream_archive import (
+from foundry_lite.application.services.dataset.stream_archive_commit import (
+    StreamArchiveDeadLetter,
+    ensure_stream_archive_batch_writable,
+    prepare_stream_archive_batch,
     read_stream_archive_events,
     stream_archive_fields,
+    stream_commit_metadata,
     stream_cursor_offset,
-    stream_event_row,
-    stream_transaction_metadata,
+    stream_dead_letter_record,
 )
 from foundry_lite.application.upload_limits import require_csv_size_limit
 from foundry_lite.domain.context import RequestContext
@@ -165,9 +171,9 @@ class DatasetIngestService(CoreService):
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
-        resume_offset = (
-            after_offset if after_offset is not None else self._committed_stream_offset(ctx, dataset, stream)
-        )
+        committed_transaction = self._committed_stream_transaction(ctx, dataset)
+        committed_metadata = committed_transaction["metadata"] if committed_transaction is not None else {}
+        resume_offset = after_offset if after_offset is not None else stream_cursor_offset(committed_metadata, stream)
         try:
             events = read_stream_archive_events(self.stream_adapter, stream, resume_offset)
         except Exception as exc:
@@ -177,7 +183,15 @@ class DatasetIngestService(CoreService):
             raise ValidationFailed("stream archive read failed", details={"error": str(exc)}) from exc
         if not events:
             return None
-        return self._commit_stream_archive(ctx, dataset, stream, events, sync_name)
+        return self._commit_stream_archive(ctx, dataset, stream, events, sync_name, committed_transaction)
+
+    def replay_dead_letter_record(
+        self,
+        record_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> DeadLetterRecordRow:
+        return record_dlq_replay.replay_dead_letter_record(self, record_id, ctx=ctx or RequestContext())
 
     def _start_upload_sync_run(
         self,
@@ -219,9 +233,10 @@ class DatasetIngestService(CoreService):
         *,
         tx_type: str = "SNAPSHOT",
         source_type: str | None = None,
+        run_id: str | None = None,
     ) -> UploadSyncPlan:
         transaction_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, dataset, tx_type)
-        run_id = _new_id("sync_run")
+        run_id = run_id or _new_id("sync_run")
         self.dataset_transaction_repository.insert_sync_run(
             transaction=conn,
             record=SyncRunRecord(
@@ -240,19 +255,17 @@ class DatasetIngestService(CoreService):
         )
         return UploadSyncPlan(transaction_id=transaction_id, run_id=run_id)
 
-    def _committed_stream_offset(
+    def _committed_stream_transaction(
         self,
         ctx: RequestContext,
         dataset: DatasetRow,
-        stream: StreamArchiveConfig,
-    ) -> int | None:
+    ) -> DatasetTransactionRow | None:
         with self.engine.begin() as conn:
-            tx = self.dataset_transaction_repository.latest_committed_transaction(
+            return self.dataset_transaction_repository.latest_committed_transaction(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
                 dataset_id=dataset["id"],
             )
-        return stream_cursor_offset(tx["metadata"], stream) if tx else None
 
     def _record_stream_read_failure(
         self,
@@ -350,6 +363,7 @@ class DatasetIngestService(CoreService):
         stream: StreamArchiveConfig,
         events: Sequence[StreamEvent],
         sync_name: str | None,
+        committed_transaction: DatasetTransactionRow | None,
     ) -> CommitResult:
         with self.engine.begin() as conn:
             plan = self._start_connector_sync_run(
@@ -363,7 +377,7 @@ class DatasetIngestService(CoreService):
                 source_type=f"stream.{stream.stream_name}",
             )
         staged = self.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
-        return self._write_stream_archive_batch(ctx, dataset, stream, plan, staged, events)
+        return self._write_stream_archive_batch(ctx, dataset, stream, plan, staged, events, committed_transaction)
 
     def _write_stream_archive_batch(
         self,
@@ -373,26 +387,97 @@ class DatasetIngestService(CoreService):
         plan: UploadSyncPlan,
         staged: Path,
         events: Sequence[StreamEvent],
+        committed_transaction: DatasetTransactionRow | None,
     ) -> CommitResult:
         try:
-            rows = [stream_event_row(event, stream) for event in events]
-            self._rows_to_parquet(rows, staged, stream_archive_fields(stream))
-            with self.engine.begin() as conn:
-                result = self.dataset_transaction_service._finalize_open_transaction(
-                    conn,
-                    ctx,
-                    dataset=dataset,
-                    transaction_id=plan.transaction_id,
-                    staged_parquet=staged,
-                    run_id=plan.run_id,
-                    audit_action="stream_archive_append_commit",
-                    outbox_event_type="dataset.version.committed",
-                    transaction_metadata=stream_transaction_metadata(stream, events),
-                )
-                self._mark_sync_run_committed(conn, ctx, plan.run_id, result)
-                return result
+            committed_metadata = committed_transaction["metadata"] if committed_transaction is not None else {}
+            batch = prepare_stream_archive_batch(events, stream, committed_metadata)
+            try:
+                ensure_stream_archive_batch_writable(batch, stream, len(events))
+            except ValidationFailed:
+                self._persist_stream_dead_letters(ctx, dataset, stream, plan, batch.dead_letters)
+                raise
+            self._rows_to_parquet(batch.rows, staged, stream_archive_fields(stream))
+            metadata = stream_commit_metadata(dataset, stream, events, committed_transaction, batch.rows)
+            return self._finalize_stream_archive_commit(
+                ctx, dataset, stream, plan, staged, batch.dead_letters, metadata
+            )
         except Exception as exc:
             self._abort_stream_after_error(ctx, plan.transaction_id, plan.run_id, exc)
+
+    def _finalize_stream_archive_commit(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        stream: StreamArchiveConfig,
+        plan: UploadSyncPlan,
+        staged: Path,
+        dead_letters: Sequence[StreamArchiveDeadLetter],
+        metadata: Mapping[str, object],
+    ) -> CommitResult:
+        with self.engine.begin() as conn:
+            self._insert_stream_dead_letters(conn, ctx, dataset, stream, plan, dead_letters)
+            result = self.dataset_transaction_service._finalize_open_transaction(
+                conn,
+                ctx,
+                dataset=dataset,
+                transaction_id=plan.transaction_id,
+                staged_parquet=staged,
+                run_id=plan.run_id,
+                audit_action="stream_archive_append_commit",
+                outbox_event_type="dataset.version.committed",
+                transaction_metadata=metadata,
+            )
+            self._mark_sync_run_committed(conn, ctx, plan.run_id, result)
+            return result
+
+    def _persist_stream_dead_letters(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        stream: StreamArchiveConfig,
+        plan: UploadSyncPlan,
+        dead_letters: Sequence[StreamArchiveDeadLetter],
+    ) -> None:
+        with self.engine.begin() as conn:
+            self._insert_stream_dead_letters(conn, ctx, dataset, stream, plan, dead_letters)
+
+    def _insert_stream_dead_letters(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        stream: StreamArchiveConfig,
+        plan: UploadSyncPlan,
+        dead_letters: Sequence[StreamArchiveDeadLetter],
+    ) -> None:
+        failed_at = _now()
+        for dead_letter in dead_letters:
+            record = stream_dead_letter_record(ctx, dataset, stream, plan, dead_letter, failed_at)
+            inserted = self.dataset_transaction_repository.insert_dead_letter_record(transaction=conn, record=record)
+            if inserted:
+                self._audit_stream_dead_letter(conn, ctx, record)
+
+    def _audit_stream_dead_letter(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        record: DeadLetterRecord,
+    ) -> None:
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="dead_letter_record.quarantined",
+            resource_type="dead_letter_record",
+            resource_id=record.dead_letter_record_id,
+            action="record_dlq_quarantine",
+            after_ref={
+                "source_event_id": record.source_event_id,
+                "source_run_id": record.source_run_id,
+                "status": record.status,
+            },
+            correlation_id=ctx.request_id,
+        )
 
     def _mark_sync_run_committed(
         self,

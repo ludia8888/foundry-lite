@@ -21,6 +21,7 @@ from foundry_lite.application.primitives import (
     _now,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.materialization_late_data import object_snapshot_watermark
 from foundry_lite.application.services.materialization_protocols import (
     MaterializationDatasetIngest,
     MaterializationDatasetRegistry,
@@ -96,7 +97,7 @@ class MaterializationService(CoreService):
         run_id = _new_id("mat_run")
         with self.engine.begin() as conn:
             tx_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, target_dataset, "SNAPSHOT")
-            watermark = self._materialization_watermark(conn, ctx, materialization["materialization_type"])
+            watermark = self._materialization_watermark(conn, ctx, materialization)
             rows, fieldnames = self._materialization_rows(
                 conn,
                 materialization["materialization_type"],
@@ -211,6 +212,7 @@ class MaterializationService(CoreService):
                 audit_action="materialization_commit",
                 outbox_event_type="materialization.completed",
                 extra_checks=({"type": "allow_empty"},),
+                transaction_metadata=_materialization_transaction_metadata(plan),
                 after_persist=after_persist,
             )
 
@@ -323,8 +325,9 @@ class MaterializationService(CoreService):
         self,
         conn: TransactionContext,
         ctx: RequestContext,
-        materialization_type: str,
+        materialization: MaterializationRow,
     ) -> Mapping[str, object]:
+        materialization_type = materialization["materialization_type"]
         if materialization_type == "action_log":
             watermark = self.materialization_repository.latest_action_run_watermark(
                 transaction=conn,
@@ -334,18 +337,9 @@ class MaterializationService(CoreService):
                 "action_run_completed_at_lte": watermark["completed_at"],
                 "action_run_id_lte": watermark["action_run_id"],
             }
-        active_version = self.materialization_repository.active_object_index_version(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            object_type_api_name="Order",
+        return object_snapshot_watermark(
+            self.materialization_repository, self.runtime_service, conn, ctx, materialization
         )
-        max_sequence = self.materialization_repository.latest_object_record_watermark(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            object_type_api_name="Order",
-            index_version=active_version,
-        )
-        return {"object_change_sequence_lte": max_sequence, "active_index_version": active_version}
 
     def _materialization_rows(
         self,
@@ -453,6 +447,18 @@ class MaterializationService(CoreService):
             index_version=index_version,
             max_object_change_sequence=max_sequence,
         )
+
+
+def _materialization_transaction_metadata(plan: MaterializationRunPlan) -> dict[str, object]:
+    reopen = plan.watermark.get("lateDataReopen")
+    return {
+        "materializationDetail": {
+            "apiName": plan.api_name,
+            "materializationType": plan.materialization_type,
+            "watermark": dict(plan.watermark),
+            "reopen": reopen if isinstance(reopen, Mapping) else {"isReopened": False},
+        }
+    }
 
 
 def _action_within_watermark(row: RuntimeRow, watermark: Mapping[str, object]) -> bool:

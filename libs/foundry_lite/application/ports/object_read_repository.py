@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Literal, NotRequired, Protocol, TypedDict
 
-from foundry_lite.application.ports.runtime_repository import RuntimeRunLink
+from foundry_lite.application.ports.runtime_repository import RuntimeJsonObject, RuntimeRunLink
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
 ObjectSortDirection = Literal["asc", "desc"]
@@ -63,11 +63,27 @@ class ObjectLinkRow(TypedDict):
     updated_at: str
 
 
+class ObjectPropertyLineageItem(TypedDict):
+    """Property-level source evidence shown in object explain payloads."""
+
+    propertyName: str
+    valueSource: str
+    sourceDatasetVersionId: str | None
+    sourceObjectVersion: int
+    sourceColumn: str | None
+    propertyVersion: object
+    sourceHash: str | None
+    maskingStatus: str
+    derivationExpression: NotRequired[str]
+
+
 class ObjectExplain(TypedDict):
     baseProperties: dict[str, object]
     editProperties: dict[str, object]
     lineage: list[dict[str, object]]
+    propertyLineage: list[ObjectPropertyLineageItem]
     sourceRunChain: list[RuntimeRunLink]
+    lateDataBadge: NotRequired[RuntimeJsonObject | None]
 
 
 class ObjectPayload(TypedDict):

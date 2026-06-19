@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, TypedDict
+from typing import NotRequired, Protocol, TypedDict
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 from foundry_lite.application.ports.dataset_quality_repository import DatasetSchemaJson
@@ -15,6 +16,7 @@ class DatasetManifestFile(TypedDict):
     row_count: int
     byte_size: int
     content_hash: str
+    partition_values: NotRequired[dict[str, object]]
 
 
 class DatasetManifest(TypedDict):
@@ -108,4 +110,13 @@ class DatasetStorageAdapter(Protocol):
 
     def first_data_file_path(self, manifest_uri: str) -> Path:
         """Resolve the first data file in a manifest to a readable local path."""
+        ...
+
+    def data_file_paths(
+        self,
+        manifest_uri: str,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]:
+        """Resolve all manifest data files to readable local paths in manifest order."""
         ...

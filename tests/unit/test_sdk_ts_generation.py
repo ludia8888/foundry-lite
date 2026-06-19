@@ -29,8 +29,42 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     approve_params = _type_block(generated, "ApproveOrderParams")
     assert 'export type Order = FoundryLiteObject<"Order", OrderProperties>;' in generated
     assert "get(id: string, options?: { explain?: boolean }): Promise<Order>;" in generated
+    assert "propertyLineage?: Array<Record<string, unknown>>" in generated
+    assert "lateDataBadge?: Record<string, unknown> | null" in generated
     assert "query(payload?: ObjectQueryRequest): Promise<ObjectQueryResult<Order>>;" in generated
     assert "apply(payload: ApproveOrderApplyRequest): Promise<ActionApplyResponse>;" in generated
+    assert "export type DeadLetterRecord = {" in generated
+    assert "operations: {" in generated
+    assert "export type BackupRestorePreflightReport = {" in generated
+    assert "export type BackupRestoreModeReport = {" in generated
+    assert "backupRestore: {" in generated
+    assert "export class FoundryLiteApiError extends Error" in generated
+    assert "request<T = unknown>(path: string, init?: FoundryLiteRequestInit): Promise<T>;" in generated
+    assert "export function requestContextHeaders(" in generated
+    assert "context: FoundryLiteRequestContext = {}" in generated
+    assert 'createRequestId(scope: string = "sdk"): string' in generated
+    assert "normalizeFoundryLiteError(error: unknown): FoundryLiteApiError" in generated
+    assert "isRetryableFoundryLiteError(error: unknown): boolean" in generated
+    assert '"X-Request-ID": requestId' in generated
+    assert "clientOptions.onResponse?.({" in generated
+    assert "preflight(payload?: BackupRestorePreflightRequest): Promise<BackupRestorePreflightReport>;" in generated
+    assert "startRestoreMode(payload?: BackupRestoreModeStartRequest): Promise<BackupRestoreModeReport>;" in generated
+    assert "restoreModeStatus(restoreId: string): Promise<BackupRestoreModeReport>;" in generated
+    assert "approveResume(restoreId: string, payload?: BackupRestoreResumeApprovalRequest):" in generated
+    assert "export type ObservabilityDetectorConfig = {" in generated
+    assert "detect(payload: ObservabilityDetectRequest): Promise<ObservabilityReport>;" in generated
+    assert "deadLetterRecords: {" in generated
+    assert "reconciliation: {" in generated
+    assert "resolve(writebackId: string, payload: ActionWritebackReconciliationRequest):" in generated
+    assert "workflows: {" in generated
+    assert "startConnectorSync(payload: ConnectorSyncWorkflowStartRequest" in generated
+    assert "get(workflowRunId: string): Promise<ProductWorkflowRun>;" in generated
+    assert "list(filters?: { status?: DeadLetterRecordStatus }): Promise<DeadLetterRecord[]>;" in generated
+    assert "retry(id: string, options: { idempotencyKey: string }):" in generated
+    assert "bulkRetry(ids: string[], options: { idempotencyKey: string }):" in generated
+    assert "discard(id: string): Promise<DeadLetterRecordDiscardResult>;" in generated
+    assert "replayDatasetVersionId: string | null;" in generated
+    assert "rowCount: number | null;" in generated
     assert "reason: string;" in approve_params
     assert "any" not in approve_params
     assert "expectedObjectVersion(object: { objectVersion: number }): number" in generated
@@ -47,6 +81,47 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface == expected_surface
     assert browser_surface == expected_surface
     assert ts_surface == browser_surface
+    assert ts_surface["operations"] == {
+        "backupRestore": ["preflight", "startRestoreMode", "restoreModeStatus", "approveResume"],
+        "deadLetterRecords": ["list", "get", "retry", "bulkRetry", "discard"],
+        "icebergMaintenance": ["plan"],
+        "observability": ["detect"],
+        "reconciliation": ["resolve"],
+        "workflows": ["startConnectorSync", "get"],
+    }
+    assert ts_surface["helpers"] == [
+        "createFoundryLiteClient",
+        "createRequestId",
+        "expectedObjectVersion",
+        "idempotencyKey",
+        "isRetryableFoundryLiteError",
+        "normalizeFoundryLiteError",
+        "requestContextHeaders",
+    ]
+
+
+def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    browser_sdk = sdk.render_web_javascript(ontology)
+
+    expected_fragments = [
+        "export class FoundryLiteApiError extends Error",
+        'export function createRequestId(scope = "sdk")',
+        "export function requestContextHeaders(context = {})",
+        "export function normalizeFoundryLiteError(error)",
+        "export function isRetryableFoundryLiteError(error)",
+        "requestIdFactory",
+        "onResponse",
+        '"X-Request-ID": requestId',
+        "options.onResponse?.({",
+        "ok: false",
+        "errorCode: error.code",
+        "return {",
+        "    request,",
+    ]
+
+    for fragment in expected_fragments:
+        assert fragment in browser_sdk
 
 
 def test_sdk_generator_check_detects_api_name_drift(tmp_path: Path) -> None:

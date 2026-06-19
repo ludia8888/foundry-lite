@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from threading import Barrier
 from typing import Any, cast
 
 import pytest
@@ -19,6 +21,8 @@ from foundry_lite.application.ports.action_repository import (
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import (
     ConflictDetected,
+    ExternalCompensationRequired,
+    ExternalOutcomeUnknown,
     ExternalSystemError,
     NotFound,
     PermissionDenied,
@@ -123,6 +127,14 @@ def _action_row_count(runs: Mapping[str, list[Mapping[str, object]]], idempotenc
     return sum(row.get("idempotency_key") == idempotency_key for row in runs["actionRuns"])
 
 
+def _rows_for_key(
+    runs: Mapping[str, list[Mapping[str, object]]],
+    collection: str,
+    idempotency_key: str,
+) -> list[Mapping[str, object]]:
+    return [row for row in runs[collection] if row.get("idempotency_key") == idempotency_key]
+
+
 def _action_commit_evidence_counts(runs: Mapping[str, list[Mapping[str, object]]]) -> dict[str, int]:
     return {
         "writebacks": len(runs["actionWritebacks"]),
@@ -188,6 +200,34 @@ objectTypes:
 
     with pytest.raises(ValidationFailed):
         foundry.ontology.apply(bad_yaml, ctx=ctx)
+
+
+def test_ontology_migration_apply_blocks_required_action_parameter(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    candidate = tmp_path / "breaking-ontology.yaml"
+    parameter_block = "      - apiName: reason\n        type: string\n        required: true"
+    candidate.write_text(
+        (DEMO_ROOT / "ontology" / "order-customer.yaml")
+        .read_text(encoding="utf-8")
+        .replace(
+            parameter_block,
+            f"{parameter_block}\n      - apiName: approvalCode\n        type: string\n        required: true",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationFailed, match="ontology migration requires explicit migration plan") as exc_info:
+        foundry.ontology.apply(candidate, ctx=ctx)
+
+    plan = cast(dict[str, object], exc_info.value.details["ontologyMigration"])
+    blocked = cast(list[dict[str, object]], plan["blockedChanges"])
+    assert plan["status"] == "blocked"
+    assert plan["sdkCompatibility"] == "major_version_required"
+    assert {change["kind"] for change in blocked} == {"required_action_parameter_added"}
 
 
 @pytest.mark.integration_scenario("object_action_audit")
@@ -369,6 +409,339 @@ def test_before_commit_writeback_failure_does_not_edit_object(
     assert writeback_response["simulated"] is True
     audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
     assert any(event["event_type"] == "action.run.failed" for event in audit_events)
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_external_success_response_lost_becomes_outcome_unknown(
+    foundry: FoundryLite,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-response-lost"
+
+    with pytest.raises(ExternalOutcomeUnknown) as raised:
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "Inventory confirmed"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_outcome_unknown=True,
+            ctx=ctx,
+        )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    unknown_runs = _rows_for_key(snapshot, "actionRuns", idempotency_key)
+    writebacks = _rows_for_key(snapshot, "actionWritebacks", idempotency_key)
+    writeback_request = cast(Mapping[str, object], writebacks[0]["request"])
+    writeback_response = cast(Mapping[str, object], writebacks[0]["response"])
+    error = cast(Mapping[str, object], unknown_runs[0]["error"])
+    error_details = cast(Mapping[str, object], error["details"])
+
+    assert after["objectVersion"] == order["objectVersion"]
+    assert after["properties"]["status"] == "PENDING"
+    assert raised.value.details["state"] == "OUTCOME_UNKNOWN"
+    assert len(unknown_runs) == 1
+    assert unknown_runs[0]["status"] == "outcome_unknown"
+    assert error["type"] == "EXTERNAL_OUTCOME_UNKNOWN"
+    assert error_details["last_observed_status"] == "unknown"
+    assert len(writebacks) == 1
+    assert writebacks[0]["status"] == "outcome_unknown"
+    assert writebacks[0]["attempts"] == 1
+    assert writeback_request["idempotency_key"] == idempotency_key
+    assert writeback_request["request_hash"] == unknown_runs[0]["request_fingerprint"]
+    assert writeback_request["networkCall"] is False
+    assert writeback_response["outcome_unknown"] is True
+    assert writeback_response["external_operation_id"] == f"mock-op-{idempotency_key}"
+    assert writeback_response["last_observed_status"] == "unknown"
+    assert writeback_response["remote_resource_id"] is None
+    assert "reconciliation_deadline" in writeback_response
+    assert any(event["event_type"] == "action.run.outcome_unknown" for event in snapshot["auditEvents"])
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_outcome_unknown_is_not_blindly_retried(
+    foundry: FoundryLite,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-outcome-unknown-replay"
+
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "Inventory confirmed"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_outcome_unknown=True,
+            ctx=ctx,
+        )
+    first_snapshot = foundry.operations.list_runs(ctx=ctx)
+    first_run = _rows_for_key(first_snapshot, "actionRuns", idempotency_key)[0]
+
+    replay = foundry.actions.apply(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "Inventory confirmed"},
+        idempotency_key=idempotency_key,
+        ctx=ctx,
+    )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    replay_snapshot = foundry.operations.list_runs(ctx=ctx)
+    replay_runs = _rows_for_key(replay_snapshot, "actionRuns", idempotency_key)
+    replay_writebacks = _rows_for_key(replay_snapshot, "actionWritebacks", idempotency_key)
+    assert after["objectVersion"] == order["objectVersion"]
+    assert after["properties"]["status"] == "PENDING"
+    assert replay["idempotentReplay"] is True
+    assert replay["status"] == "outcome_unknown"
+    assert replay["actionRunId"] == first_run["id"]
+    assert [run["id"] for run in replay_runs] == [first_run["id"]]
+    assert len(replay_writebacks) == 1
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_reconciliation_resolves_remote_success(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-reconcile-success"
+
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "ERP success confirmed later"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_outcome_unknown=True,
+            ctx=ctx,
+        )
+    writeback_id = _rows_for_key(foundry.operations.list_runs(ctx=ctx), "actionWritebacks", idempotency_key)[0]["id"]
+
+    result = foundry.operations.reconcile_action_writeback(
+        cast(str, writeback_id),
+        remote_status="succeeded",
+        remote_resource_id=f"mock-resource-{idempotency_key}",
+        ctx=ctx,
+    )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    reconciled_runs = _rows_for_key(snapshot, "actionRuns", idempotency_key)
+    writebacks = _rows_for_key(snapshot, "actionWritebacks", idempotency_key)
+    response = cast(Mapping[str, object], writebacks[0]["response"])
+    assert result["status"] == "reconciled"
+    assert result["remoteStatus"] == "succeeded"
+    assert after["objectVersion"] == order["objectVersion"] + 1
+    assert after["properties"]["status"] == "APPROVED"
+    assert reconciled_runs[0]["status"] == "reconciled"
+    assert reconciled_runs[0]["error"] is None
+    assert writebacks[0]["status"] == "reconciled"
+    assert response["reconciled"] is True
+    assert response["remote_resource_id"] == f"mock-resource-{idempotency_key}"
+    assert response["last_observed_status"] == "succeeded"
+    assert _event_count(snapshot["auditEvents"], "action.run.reconciled") == 1
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_concurrent_reconciliation_has_one_winner(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-reconcile-race"
+
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "ERP race confirmation"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_outcome_unknown=True,
+            ctx=ctx,
+        )
+    writeback_id = cast(
+        str, _rows_for_key(foundry.operations.list_runs(ctx=ctx), "actionWritebacks", idempotency_key)[0]["id"]
+    )
+    start = Barrier(2)
+
+    def reconcile() -> Mapping[str, object]:
+        start.wait()
+        return foundry.operations.reconcile_action_writeback(
+            writeback_id,
+            remote_status="succeeded",
+            remote_resource_id=f"mock-resource-{idempotency_key}",
+            ctx=ctx,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: reconcile(), range(2)))
+
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    assert sum("objectEditId" in result for result in results) == 1
+    assert sum(result.get("alreadyReconciled") is True for result in results) == 1
+    assert _event_count(snapshot["auditEvents"], "action.run.reconciled") == 1
+    assert len(_rows_for_key(snapshot, "objectEdits", idempotency_key)) == 1
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_sensitive_writeback_payload_is_masked_in_audit(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = _prepare_demo_with_ontology(foundry, _margin_action_ontology(tmp_path))
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-sensitive-reconcile"
+    sensitive_margin = 9999.99
+
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "AdjustMargin",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"margin": sensitive_margin},
+            idempotency_key=idempotency_key,
+            simulate_writeback_outcome_unknown=True,
+            ctx=ctx,
+        )
+    pending_snapshot = foundry.operations.list_runs(ctx=ctx)
+    writeback_id = cast(str, _rows_for_key(pending_snapshot, "actionWritebacks", idempotency_key)[0]["id"])
+    pending_run = _rows_for_key(pending_snapshot, "actionRuns", idempotency_key)[0]
+    pending_audit = next(
+        event for event in pending_snapshot["auditEvents"] if event["event_type"] == "action.run.outcome_unknown"
+    )
+
+    assert cast(Mapping[str, object], pending_run["parameters"])["margin"] == "***MASKED***"
+    assert str(sensitive_margin) not in repr(pending_audit)
+    assert str(sensitive_margin) not in repr(_rows_for_key(pending_snapshot, "actionWritebacks", idempotency_key)[0])
+
+    result = foundry.operations.reconcile_action_writeback(
+        writeback_id,
+        remote_status="succeeded",
+        remote_resource_id=f"mock-resource-{idempotency_key}",
+        ctx=ctx,
+    )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    action_run_id = result["actionRunId"]
+    reconciled_run = _rows_for_key(snapshot, "actionRuns", idempotency_key)[0]
+    committed_audit = next(
+        event
+        for event in snapshot["auditEvents"]
+        if event["event_type"] == "action.run.committed" and event["resource_id"] == action_run_id
+    )
+    reconciled_audit = next(
+        event
+        for event in snapshot["auditEvents"]
+        if event["event_type"] == "action.run.reconciled" and event["resource_id"] == action_run_id
+    )
+
+    assert after["properties"]["margin"] == sensitive_margin
+    assert reconciled_run["status"] == "reconciled"
+    assert cast(Mapping[str, object], reconciled_run["parameters"])["margin"] == "***MASKED***"
+    assert committed_audit["before_ref"]["margin"] == "***MASKED***"
+    assert committed_audit["after_ref"]["patch"]["margin"] == "***MASKED***"
+    assert str(sensitive_margin) not in repr(reconciled_audit)
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_external_success_local_failure_requires_compensation(
+    foundry: FoundryLite,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-local-commit-fails"
+
+    with pytest.raises(ExternalCompensationRequired) as raised:
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "ERP accepted before local commit"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_compensation_required=True,
+            ctx=ctx,
+        )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    compensation_runs = _rows_for_key(snapshot, "actionRuns", idempotency_key)
+    writebacks = _rows_for_key(snapshot, "actionWritebacks", idempotency_key)
+    writeback_request = cast(Mapping[str, object], writebacks[0]["request"])
+    writeback_response = cast(Mapping[str, object], writebacks[0]["response"])
+    error = cast(Mapping[str, object], compensation_runs[0]["error"])
+    error_details = cast(Mapping[str, object], error["details"])
+
+    assert after["objectVersion"] == order["objectVersion"]
+    assert after["properties"]["status"] == "PENDING"
+    assert raised.value.details["state"] == "COMPENSATION_REQUIRED"
+    assert compensation_runs[0]["status"] == "compensation_required"
+    assert error["type"] == "EXTERNAL_COMPENSATION_REQUIRED"
+    assert error_details["last_observed_status"] == "succeeded"
+    assert error_details["compensation_action_type"] == "mock_reverse_writeback"
+    assert len(writebacks) == 1
+    assert writebacks[0]["status"] == "compensation_required"
+    assert writebacks[0]["attempts"] == 1
+    assert writeback_request["idempotency_key"] == idempotency_key
+    assert writeback_request["request_hash"] == compensation_runs[0]["request_fingerprint"]
+    assert writeback_response["compensation_required"] is True
+    assert writeback_response["external_operation_id"] == f"mock-op-{idempotency_key}"
+    assert writeback_response["remote_resource_id"] == f"mock-resource-{idempotency_key}"
+    assert writeback_response["last_observed_status"] == "succeeded"
+    assert writeback_response["compensation_action_type"] == "mock_reverse_writeback"
+    assert any(event["event_type"] == "action.run.compensation_required" for event in snapshot["auditEvents"])
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_compensation_is_idempotent(
+    foundry: FoundryLite,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-compensation-replay"
+
+    with pytest.raises(ExternalCompensationRequired):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "ERP accepted before local commit"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_compensation_required=True,
+            ctx=ctx,
+        )
+    first_snapshot = foundry.operations.list_runs(ctx=ctx)
+    first_run = _rows_for_key(first_snapshot, "actionRuns", idempotency_key)[0]
+
+    replay = foundry.actions.apply(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "ERP accepted before local commit"},
+        idempotency_key=idempotency_key,
+        ctx=ctx,
+    )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    replay_snapshot = foundry.operations.list_runs(ctx=ctx)
+    replay_runs = _rows_for_key(replay_snapshot, "actionRuns", idempotency_key)
+    replay_writebacks = _rows_for_key(replay_snapshot, "actionWritebacks", idempotency_key)
+    assert after["objectVersion"] == order["objectVersion"]
+    assert after["properties"]["status"] == "PENDING"
+    assert replay["idempotentReplay"] is True
+    assert replay["status"] == "compensation_required"
+    assert replay["actionRunId"] == first_run["id"]
+    assert [run["id"] for run in replay_runs] == [first_run["id"]]
+    assert len(replay_writebacks) == 1
 
 
 @pytest.mark.parametrize(
@@ -635,6 +1008,33 @@ def test_explain_does_not_bypass_property_masking(foundry: FoundryLite) -> None:
     for privileged in (finance, admin):
         privileged_order = foundry.objects.get("Order", "O-1001", ctx=privileged, include_explain=True)
         assert privileged_order["explain"]["baseProperties"]["margin"] != "***MASKED***"
+
+
+@pytest.mark.integration_scenario("permission_tenant_isolation")
+def test_object_property_lineage_resolves_to_pinned_dataset_version(foundry: FoundryLite) -> None:
+    prepare_indexed_demo(foundry)
+    finance = RequestContext(actor_user_id="finance-1", roles=("finance",))
+    ops_manager = RequestContext(actor_user_id="ops-1", roles=("ops_manager",))
+
+    order = foundry.objects.get("Order", "O-1001", ctx=finance, include_explain=True)
+    explain = order["explain"]
+    property_lineage = {item["propertyName"]: item for item in explain["propertyLineage"]}
+
+    status = property_lineage["status"]
+    assert status["sourceDatasetVersionId"] == order["sourceDatasetVersionId"]
+    assert status["sourceObjectVersion"] == order["objectVersion"]
+    assert status["sourceColumn"] == "source_status"
+    assert status["valueSource"] == "dataset_column"
+    assert status["propertyVersion"] == 1
+
+    ops_order = foundry.objects.get("Order", "O-1001", ctx=ops_manager, include_explain=True)
+    margin = {item["propertyName"]: item for item in ops_order["explain"]["propertyLineage"]}["margin"]
+    assert margin["maskingStatus"] == "masked"
+    raw_margin = str(order["properties"]["margin"])
+    leak_checked_payload = {
+        key: value for key, value in margin.items() if key not in {"sourceDatasetVersionId", "sourceHash"}
+    }
+    assert raw_margin not in repr(leak_checked_payload)
 
 
 def test_only_ops_manager_or_admin_can_execute_approve_order(

@@ -47,6 +47,8 @@ def parse_object_cdc_event(
         object_id=object_id,
         base_patch=_base_patch(data, properties),
         ordering=_json_mapping(raw, "ordering", "ordering_json"),
+        late_data_status=_optional_string(raw.get("late_data_status")),
+        event_time_lag_seconds=_optional_int(raw.get("event_time_lag_seconds")),
     )
 
 
@@ -83,7 +85,34 @@ def cdc_source_hash(event: ObjectCdcEvent, base_patch: ObjectPropertyMap) -> str
 def cdc_cursor(events: Sequence[ObjectCdcEvent], skipped: int) -> IndexRunCursor:
     if not events:
         return {"last_event_id": None, "events_skipped": skipped}
-    return {"last_event_id": events[-1].event_id, "last_ordering": dict(events[-1].ordering), "events_skipped": skipped}
+    cursor: IndexRunCursor = {
+        "last_event_id": events[-1].event_id,
+        "last_ordering": dict(events[-1].ordering),
+        "events_skipped": skipped,
+    }
+    cursor.update(_late_data_cursor(events))
+    return cursor
+
+
+def _late_data_cursor(events: Sequence[ObjectCdcEvent]) -> IndexRunCursor:
+    counts: dict[str, int] = {}
+    late_event_ids: list[str] = []
+    max_lag: int | None = None
+    for event in events:
+        if event.late_data_status is None:
+            continue
+        counts[event.late_data_status] = counts.get(event.late_data_status, 0) + 1
+        if event.late_data_status == "LATE_REQUIRES_REPROCESS":
+            late_event_ids.append(event.event_id)
+        if event.event_time_lag_seconds is not None:
+            max_lag = max(event.event_time_lag_seconds, max_lag or event.event_time_lag_seconds)
+    if not counts:
+        return {}
+    return {
+        "lateDataStatusCounts": counts,
+        "lateEventIds": late_event_ids,
+        "maxEventTimeLagSeconds": max_lag,
+    }
 
 
 def _event_id(raw: Mapping[str, object]) -> str:
@@ -201,6 +230,14 @@ def _ordering_key(ordering: Mapping[str, object]) -> tuple[int, int, str]:
 
 def _int_value(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _optional_string(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _next_property_version(value: object) -> int:

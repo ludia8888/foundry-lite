@@ -9,6 +9,10 @@ class DatasetAlreadyExistsError(Exception):
     """Raised when the metadata store rejects a duplicate active dataset."""
 
 
+DatasetPartitionSpec = list[str]
+DatasetSortOrder = list[str]
+
+
 class DatasetRow(TypedDict):
     id: str
     tenant_id: str
@@ -21,6 +25,9 @@ class DatasetRow(TypedDict):
     classification: str | None
     status: str
     primary_key: list[str]
+    partition_spec: DatasetPartitionSpec
+    sort_order: DatasetSortOrder
+    target_file_size_bytes: int | None
     created_at: str
     updated_at: str
 
@@ -42,6 +49,9 @@ class DatasetRepository(Protocol):
         owner_team: str | None,
         classification: str | None,
         primary_key: list[str],
+        partition_spec: DatasetPartitionSpec,
+        sort_order: DatasetSortOrder,
+        target_file_size_bytes: int | None,
         created_at: str,
         updated_at: str,
     ) -> None:
@@ -50,4 +60,8 @@ class DatasetRepository(Protocol):
 
     def find_active_dataset(self, *, tenant_id: str, namespace: str, name: str) -> DatasetRow | None:
         """Return the active dataset row for a tenant/ref pair."""
+        ...
+
+    def list_active_datasets(self, *, tenant_id: str) -> list[DatasetRow]:
+        """Return all active dataset rows for one tenant in stable order."""
         ...

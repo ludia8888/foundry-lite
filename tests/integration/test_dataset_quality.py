@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.services.dataset.transactions import DatasetTransactionService
 from foundry_lite.domain.context import demo_admin_context
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
+from foundry_lite.infrastructure import schema as db
+from sqlalchemy import select
 
 
 def test_commit_dataset_version_aborts_when_primary_key_check_fails(
@@ -20,12 +26,14 @@ def test_commit_dataset_version_aborts_when_primary_key_check_fails(
         encoding="utf-8",
     )
 
-    with pytest.raises(ValidationFailed):
+    with pytest.raises(ValidationFailed) as exc_info:
         foundry.datasets.upload_csv("raw.erp_orders", csv_path, ctx=ctx)
 
     runs = foundry.operations.list_runs(ctx=ctx)
     assert runs["syncRuns"][0]["status"] == "FAILED"
     assert foundry.datasets.list_versions("raw.erp_orders", ctx=ctx) == []
+    failures = exc_info.value.details["failures"]
+    assert any(failure["contract_status"] == "BLOCK_COMMIT" for failure in failures)
 
 
 def test_dataset_health_check_reads_candidate_not_latest(
@@ -50,3 +58,407 @@ def test_dataset_health_check_reads_candidate_not_latest(
     assert [version["id"] for version in versions] == [committed.version_id]
     assert [(row["order_id"], row["amount"]) for row in preview] == [("O-1", 100)]
     assert any(failure["check"] == "unique" and failure["status"] == "failed" for failure in failures)
+
+
+def test_schema_validation_records_reference_version(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.contract_orders", ctx=ctx, primary_key=["order_id"])
+    csv_path = tmp_path / "contract_orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,100\n", encoding="utf-8")
+
+    committed = foundry.datasets.upload_csv("raw.contract_orders", csv_path, ctx=ctx)
+
+    with foundry.engine.begin() as conn:
+        schema_row = (
+            conn.execute(select(db.dataset_schemas).where(db.dataset_schemas.c.dataset_id == committed.dataset_id))
+            .mappings()
+            .one()
+        )
+        version_row = (
+            conn.execute(select(db.dataset_versions).where(db.dataset_versions.c.id == committed.version_id))
+            .mappings()
+            .one()
+        )
+        check_results = (
+            conn.execute(
+                select(db.dataset_check_results).where(
+                    db.dataset_check_results.c.transaction_id == committed.transaction_id
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    assert check_results
+    assert version_row["schema_version"] == schema_row["version"]
+    assert {row["validated_against_schema_version_id"] for row in check_results} == {schema_row["id"]}
+    assert {row["validated_against_schema_version"] for row in check_results} == {schema_row["version"]}
+
+
+def test_contract_version_is_pinned_to_run(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.pinned_contract_orders", ctx=ctx, primary_key=["order_id"])
+    first_csv = tmp_path / "pinned_contract_orders_v1.csv"
+    first_csv.write_text("order_id,amount\nO-1,100\n", encoding="utf-8")
+    second_csv = tmp_path / "pinned_contract_orders_v2.csv"
+    second_csv.write_text("order_id,amount,region\nO-2,200,APAC\n", encoding="utf-8")
+
+    first = foundry.datasets.upload_csv("raw.pinned_contract_orders", first_csv, ctx=ctx)
+    second = foundry.datasets.upload_csv("raw.pinned_contract_orders", second_csv, ctx=ctx)
+
+    with foundry.engine.begin() as conn:
+        schema_rows = (
+            conn.execute(
+                select(db.dataset_schemas)
+                .where(db.dataset_schemas.c.dataset_id == first.dataset_id)
+                .order_by(db.dataset_schemas.c.version)
+            )
+            .mappings()
+            .all()
+        )
+        first_results = _check_results_for_transaction(conn, first.transaction_id)
+        second_results = _check_results_for_transaction(conn, second.transaction_id)
+
+    assert [row["version"] for row in schema_rows] == [1, 2]
+    assert {row["validated_against_schema_version"] for row in first_results} == {1}
+    assert {row["validated_against_schema_version_id"] for row in first_results} == {schema_rows[0]["id"]}
+    assert {row["validated_against_schema_version"] for row in second_results} == {2}
+    assert {row["validated_against_schema_version_id"] for row in second_results} == {schema_rows[1]["id"]}
+
+
+def test_schema_evolution_widening_is_visible_in_transaction_metadata(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.schema_evolution_orders", ctx=ctx, primary_key=["order_id"])
+    first_csv = tmp_path / "schema_evolution_orders_v1.csv"
+    first_csv.write_text("order_id,amount\nO-1,100\n", encoding="utf-8")
+    second_csv = tmp_path / "schema_evolution_orders_v2.csv"
+    second_csv.write_text("order_id,amount\nO-2,100.5\n", encoding="utf-8")
+
+    foundry.datasets.upload_csv("raw.schema_evolution_orders", first_csv, ctx=ctx)
+    second = foundry.datasets.upload_csv("raw.schema_evolution_orders", second_csv, ctx=ctx)
+
+    with foundry.engine.begin() as conn:
+        tx_row = (
+            conn.execute(select(db.dataset_transactions).where(db.dataset_transactions.c.id == second.transaction_id))
+            .mappings()
+            .one()
+        )
+
+    evolution = tx_row["metadata"]["schemaEvolution"]
+    assert evolution["status"] == "compatible_with_warning"
+    assert evolution["consumerCompatibility"] == "review_recommended"
+    assert evolution["sourceSchemaVersion"] == 1
+    assert evolution["targetSchemaVersion"] == 2
+    assert evolution["changes"] == [
+        {
+            "kind": "type_widening",
+            "column": "amount",
+            "status": "warning",
+            "reason": "numeric widening is compatible but downstream schema hashes should refresh",
+            "previousType": "integer",
+            "nextType": "float",
+        }
+    ]
+
+
+def test_operations_run_detail_exposes_candidate_quality_report(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.quality_report_orders", ctx=ctx, primary_key=["order_id"])
+    csv_path = tmp_path / "quality_report_orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,100\n", encoding="utf-8")
+
+    committed = foundry.datasets.upload_csv("raw.quality_report_orders", csv_path, ctx=ctx)
+
+    sync_run = next(
+        run
+        for run in foundry.operations.list_runs(ctx=ctx)["syncRuns"]
+        if run["committed_version_id"] == committed.version_id
+    )
+    detail = foundry.operations.run_detail("sync", str(sync_run["id"]), ctx=ctx)
+    quality = detail["quality"]
+    assert quality is not None
+    with foundry.engine.begin() as conn:
+        schema_row = (
+            conn.execute(select(db.dataset_schemas).where(db.dataset_schemas.c.dataset_id == committed.dataset_id))
+            .mappings()
+            .one()
+        )
+        check_results = _check_results_for_transaction(conn, committed.transaction_id)
+
+    assert quality["transactionId"] == committed.transaction_id
+    assert quality["summary"]["total"] == len(check_results)
+    assert quality["summary"]["pass"] == len(check_results)
+    assert quality["summary"]["warn"] == 0
+    assert quality["summary"]["quarantine"] == 0
+    assert quality["summary"]["blockCommit"] == 0
+    assert quality["schemaReferences"] == [{"id": schema_row["id"], "version": schema_row["version"]}]
+    assert quality["checkedManifestHashes"] == sorted({row["checked_manifest_hash"] for row in check_results})
+    assert {
+        (row["status"], row["validatedAgainstSchemaVersion"], row["validatedAgainstSchemaVersionId"])
+        for row in quality["results"]
+    } == {("PASS", schema_row["version"], schema_row["id"])}
+
+
+def test_quality_check_pins_candidate_manifest_hash(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.hash_orders", ctx=ctx, primary_key=["order_id"])
+    csv_path = tmp_path / "hash_orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,100\n", encoding="utf-8")
+
+    committed = foundry.datasets.upload_csv("raw.hash_orders", csv_path, ctx=ctx)
+
+    with foundry.engine.begin() as conn:
+        schema_row = (
+            conn.execute(select(db.dataset_schemas).where(db.dataset_schemas.c.dataset_id == committed.dataset_id))
+            .mappings()
+            .one()
+        )
+        file_row = (
+            conn.execute(select(db.dataset_files).where(db.dataset_files.c.dataset_version_id == committed.version_id))
+            .mappings()
+            .one()
+        )
+        check_results = (
+            conn.execute(
+                select(db.dataset_check_results).where(
+                    db.dataset_check_results.c.transaction_id == committed.transaction_id
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    expected_hash = _candidate_manifest_fingerprint(
+        row_count=committed.row_count,
+        byte_size=file_row["byte_size"],
+        content_hash=file_row["content_hash"],
+        schema_hash=schema_row["schema_hash"],
+    )
+    assert check_results
+    assert {row["status"] for row in check_results} == {"PASS"}
+    assert {row["checked_manifest_hash"] for row in check_results} == {expected_hash}
+    assert {row["details"]["contract_status"] for row in check_results} == {"PASS"}
+    assert {row["details"]["status"] for row in check_results} == {"passed"}
+
+
+def test_candidate_tamper_between_check_and_commit_is_rejected(
+    foundry: FoundryLite,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.tamper_orders", ctx=ctx, primary_key=["order_id"])
+    csv_path = tmp_path / "tamper_orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,100\n", encoding="utf-8")
+    original_store = DatasetTransactionService._store_finalized_dataset_commit
+
+    def tamper_then_store(
+        self: DatasetTransactionService,
+        *args: Any,
+        **kwargs: Any,
+    ) -> object:
+        request = args[2]
+        request.staged_parquet.write_bytes(b"tampered after quality checks")
+        return original_store(self, *args, **kwargs)
+
+    monkeypatch.setattr(DatasetTransactionService, "_store_finalized_dataset_commit", tamper_then_store)
+
+    with pytest.raises(ValidationFailed, match="dataset checks failed") as exc_info:
+        foundry.datasets.upload_csv("raw.tamper_orders", csv_path, ctx=ctx)
+
+    failures = exc_info.value.details["failures"]
+    assert any(
+        failure["check"] == "candidate_manifest_hash" and failure["contract_status"] == "BLOCK_COMMIT"
+        for failure in failures
+    )
+    assert foundry.datasets.list_versions("raw.tamper_orders", ctx=ctx) == []
+
+
+def test_warn_does_not_block_commit_but_is_visible(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.warn_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.warn_orders", ctx=ctx, primary_key=["order_id"])
+    csv_path = tmp_path / "warn_orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,100\n", encoding="utf-8")
+    foundry.datasets.upload_csv("raw.warn_orders", csv_path, ctx=ctx)
+    sql_path = tmp_path / "warn_orders.sql"
+    sql_path.write_text("select order_id, amount from {{ input('raw.warn_orders') }}", encoding="utf-8")
+    foundry.transforms.register(
+        "warn_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.warn_orders"},
+        output_dataset_ref="clean.warn_orders",
+        checks=[{"type": "row_count_min", "min": 2, "severity": "warning"}],
+        ctx=ctx,
+    )
+
+    committed = foundry.transforms.run("warn_orders", ctx=ctx)
+
+    with foundry.engine.begin() as conn:
+        check_results = (
+            conn.execute(
+                select(db.dataset_check_results).where(
+                    db.dataset_check_results.c.transaction_id == committed.transaction_id
+                )
+            )
+            .mappings()
+            .all()
+        )
+
+    assert [version["id"] for version in foundry.datasets.list_versions("clean.warn_orders", ctx=ctx)] == [
+        committed.version_id
+    ]
+    warning_rows = [row for row in check_results if row["status"] == "WARN"]
+    assert warning_rows
+    assert warning_rows[0]["details"]["status"] == "failed"
+    assert warning_rows[0]["details"]["contract_status"] == "WARN"
+
+
+def test_quarantine_routes_bad_records_to_record_dlq(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.quarantine_orders", ctx=ctx, primary_key=["line_id"])
+    foundry.datasets.ensure("clean.quarantine_orders", ctx=ctx, primary_key=["line_id"])
+    csv_path = tmp_path / "quarantine_orders.csv"
+    csv_path.write_text("line_id,order_id,amount\nL-1,O-1,100\nL-2,,200\n", encoding="utf-8")
+    foundry.datasets.upload_csv("raw.quarantine_orders", csv_path, ctx=ctx)
+    sql_path = tmp_path / "quarantine_orders.sql"
+    sql_path.write_text(
+        "select line_id, nullif(order_id, '') as order_id, amount from {{ input('raw.quarantine_orders') }}",
+        encoding="utf-8",
+    )
+    foundry.transforms.register(
+        "quarantine_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.quarantine_orders"},
+        output_dataset_ref="clean.quarantine_orders",
+        checks=[{"type": "not_null", "columns": ["order_id"], "severity": "quarantine"}],
+        ctx=ctx,
+    )
+
+    committed = foundry.transforms.run("quarantine_orders", ctx=ctx)
+
+    preview = foundry.datasets.preview("clean.quarantine_orders", ctx=ctx, version=committed.version_id)
+    transform_run = next(
+        run
+        for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"]
+        if run["output_version_id"] == committed.version_id
+    )
+    with foundry.engine.begin() as conn:
+        check_results = (
+            conn.execute(
+                select(db.dataset_check_results).where(
+                    db.dataset_check_results.c.transaction_id == committed.transaction_id
+                )
+            )
+            .mappings()
+            .all()
+        )
+        dead_letters = (
+            conn.execute(
+                select(db.dead_letter_records).where(db.dead_letter_records.c.source_run_id == transform_run["id"])
+            )
+            .mappings()
+            .all()
+        )
+
+    quarantine_rows = [row for row in check_results if row["status"] == "QUARANTINE"]
+    assert [(row["line_id"], row["order_id"]) for row in preview] == [("L-1", "O-1")]
+    assert committed.row_count == 1
+    assert quarantine_rows
+    assert quarantine_rows[0]["details"]["status"] == "failed"
+    assert quarantine_rows[0]["details"]["quarantined_rows"] == 1
+    assert quarantine_rows[0]["details"]["contract_status"] == "QUARANTINE"
+    assert len(dead_letters) == 1
+    assert dead_letters[0]["status"] == "QUARANTINED"
+    assert dead_letters[0]["error_kind"] == "DATA_QUALITY_CONTRACT"
+    assert dead_letters[0]["payload"]["line_id"] == "L-2"
+    assert dead_letters[0]["metadata"]["recordDlqKind"] == "data_quality_contract"
+    assert dead_letters[0]["metadata"]["checkedManifestHash"]
+    audit_types = {event["event_type"] for event in foundry.operations.list_runs(ctx=ctx)["auditEvents"]}
+    assert "dead_letter_record.quarantined" in audit_types
+    with pytest.raises(ConflictDetected, match="contract-specific remediation"):
+        foundry.operations.retry_dead_letter_record(
+            dead_letters[0]["id"],
+            idempotency_key="retry-quality-contract",
+            ctx=ctx,
+        )
+
+
+def test_operations_run_detail_includes_failed_row_sample_for_quarantine(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.quality_sample_orders", ctx=ctx, primary_key=["line_id"])
+    foundry.datasets.ensure("clean.quality_sample_orders", ctx=ctx, primary_key=["line_id"])
+    csv_path = tmp_path / "quality_sample_orders.csv"
+    csv_path.write_text("line_id,order_id,amount\nL-1,O-1,100\nL-2,,200\n", encoding="utf-8")
+    foundry.datasets.upload_csv("raw.quality_sample_orders", csv_path, ctx=ctx)
+    sql_path = tmp_path / "quality_sample_orders.sql"
+    sql_path.write_text(
+        "select line_id, nullif(order_id, '') as order_id, amount from {{ input('raw.quality_sample_orders') }}",
+        encoding="utf-8",
+    )
+    foundry.transforms.register(
+        "quality_sample_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.quality_sample_orders"},
+        output_dataset_ref="clean.quality_sample_orders",
+        checks=[{"type": "not_null", "columns": ["order_id"], "severity": "quarantine"}],
+        ctx=ctx,
+    )
+
+    committed = foundry.transforms.run("quality_sample_orders", ctx=ctx)
+
+    transform_run = next(
+        run
+        for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"]
+        if run["output_version_id"] == committed.version_id
+    )
+    detail = foundry.operations.run_detail("transform", str(transform_run["id"]), ctx=ctx)
+    quality = detail["quality"]
+    assert quality is not None
+    sample = quality["failedRowSamples"][0]
+    assert quality["failedRowSampleCount"] == 1
+    assert sample["status"] == "QUARANTINED"
+    assert sample["errorKind"] == "DATA_QUALITY_CONTRACT"
+    assert sample["rowIndex"] == 1
+    assert sample["payload"] == {"line_id": "L-2", "order_id": None, "amount": 200}
+    assert sample["checkedManifestHash"] in quality["checkedManifestHashes"]
+    assert sample["check"] == {"type": "not_null", "columns": ["order_id"], "severity": "quarantine"}
+
+
+def _candidate_manifest_fingerprint(
+    *,
+    row_count: int,
+    byte_size: int,
+    content_hash: str,
+    schema_hash: str,
+) -> str:
+    payload = json.dumps(
+        {
+            "byte_size": byte_size,
+            "content_hash": content_hash,
+            "row_count": row_count,
+            "schema_hash": schema_hash,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _check_results_for_transaction(conn: object, transaction_id: str) -> list[dict[str, Any]]:
+    return list(
+        conn.execute(
+            select(db.dataset_check_results).where(db.dataset_check_results.c.transaction_id == transaction_id)
+        )
+        .mappings()
+        .all()
+    )

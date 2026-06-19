@@ -92,6 +92,9 @@ def _dataset_row(dataset_id: str, tenant_id: str) -> dict[str, object]:
         "classification": None,
         "status": "active",
         "primary_key": ["order_id"],
+        "partition_spec": [],
+        "sort_order": [],
+        "target_file_size_bytes": None,
         "created_at": "2026-06-12T00:00:00Z",
         "updated_at": "2026-06-12T00:00:00Z",
     }

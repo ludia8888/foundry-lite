@@ -1,10 +1,28 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 
-from foundry_lite.application.ports import StreamAdapter, StreamArchiveConfig, StreamEvent
-from foundry_lite.application.primitives import _now
+from foundry_lite.application.ports import (
+    DatasetRow,
+    DeadLetterRecord,
+    StreamAdapter,
+    StreamArchiveConfig,
+    StreamEvent,
+)
+from foundry_lite.application.primitives import _json_hash, _now
+from foundry_lite.application.services.dataset.ingest_models import UploadSyncPlan
+from foundry_lite.application.services.dataset.stream_archive_time import (
+    event_time_lag_seconds,
+    late_data_status,
+    late_data_watermark_metadata,
+    next_late_data_watermark,
+    payload_named_time,
+    validate_late_data_policy,
+)
+from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.observability.metrics import set_stream_archive_lag
 
@@ -20,16 +38,30 @@ STREAM_ARCHIVE_FIELDS = [
     "tenant_id",
     "request_id",
     "payload_json",
+    "event_time",
+    "source_time",
     "ingested_at",
+    "processed_at",
+    "late_data_status",
+    "event_time_lag_seconds",
 ]
-CDC_STREAM_ARCHIVE_FIELDS = [
-    *STREAM_ARCHIVE_FIELDS,
-    "op",
-    "pk_json",
-    "before_json",
-    "after_json",
-    "ordering_json",
-]
+CDC_STREAM_ARCHIVE_FIELDS = [*STREAM_ARCHIVE_FIELDS, "op", "pk_json", "before_json", "after_json", "ordering_json"]
+
+
+@dataclass(frozen=True)
+class StreamArchiveDeadLetter:
+    event: StreamEvent
+    source_event_id: str
+    payload_hash: str
+    error_kind: str
+    error_message: str
+    event_time: str | None
+
+
+@dataclass(frozen=True)
+class StreamArchivePreparedBatch:
+    rows: list[Mapping[str, object]]
+    dead_letters: list[StreamArchiveDeadLetter]
 
 
 def read_stream_archive_events(
@@ -44,6 +76,82 @@ def read_stream_archive_events(
     return events
 
 
+def prepare_stream_archive_batch(
+    events: Sequence[StreamEvent],
+    stream: StreamArchiveConfig,
+    previous_metadata: Mapping[str, object] | None = None,
+) -> StreamArchivePreparedBatch:
+    _validate_error_threshold(stream.max_record_error_ratio)
+    validate_late_data_policy(stream)
+    rows: list[Mapping[str, object]] = []
+    dead_letters: list[StreamArchiveDeadLetter] = []
+    for event in events:
+        source_event_id = stream_event_id(event, stream)
+        try:
+            rows.append(stream_event_row(event, stream, previous_metadata))
+        except ValidationFailed as exc:
+            dead_letters.append(_dead_letter_stream_event(event, source_event_id, stream, exc))
+    return StreamArchivePreparedBatch(rows=rows, dead_letters=dead_letters)
+
+
+def stream_dead_letter_record(
+    ctx: RequestContext,
+    dataset: DatasetRow,
+    stream: StreamArchiveConfig,
+    plan: UploadSyncPlan,
+    dead_letter: StreamArchiveDeadLetter,
+    failed_at: str,
+) -> DeadLetterRecord:
+    return DeadLetterRecord(
+        dead_letter_record_id=_dead_letter_record_id(ctx, dead_letter),
+        tenant_id=ctx.tenant_id,
+        source_event_id=dead_letter.source_event_id,
+        source_dataset_version_id=None,
+        source_run_id=plan.run_id,
+        payload=dict(dead_letter.event.payload),
+        payload_hash=dead_letter.payload_hash,
+        schema_version=1,
+        transform_version=None,
+        error_kind=dead_letter.error_kind,
+        error_message=dead_letter.error_message,
+        event_time=dead_letter.event_time,
+        ingested_at=failed_at,
+        first_failed_at=failed_at,
+        attempts=1,
+        status="QUARANTINED",
+        replay_status="NOT_REQUESTED",
+        replay_run_id=None,
+        is_closed_partition_affected=False,
+        metadata=_dead_letter_metadata(dataset, stream, dead_letter),
+    )
+
+
+def _dead_letter_metadata(
+    dataset: DatasetRow,
+    stream: StreamArchiveConfig,
+    dead_letter: StreamArchiveDeadLetter,
+) -> Mapping[str, object]:
+    return {
+        "dataset_id": dataset["id"],
+        "dataset_ref": f"{dataset['namespace']}.{dataset['name']}",
+        "schema_strategy": stream.schema_strategy,
+        "stream": stream.stream_name,
+        "topic": stream.topic,
+        "consumer_group": stream.consumer_group,
+        "partition": stream.partition,
+        "offset": dead_letter.event.offset,
+        "event_type": dead_letter.event.event_type,
+        "event_key": dead_letter.event.key,
+        "request_id": dead_letter.event.request_id,
+        "event_time_field": stream.event_time_field,
+        "source_time_field": stream.source_time_field,
+        "time_zone": stream.time_zone,
+        "allowed_lateness_seconds": stream.allowed_lateness_seconds,
+        "too_late_after_seconds": stream.too_late_after_seconds,
+        "clock_skew_seconds": stream.clock_skew_seconds,
+    }
+
+
 def stream_archive_limit(limit: int) -> int:
     if limit < 1:
         raise ValidationFailed("stream archive limit must be positive", details={"limit": limit})
@@ -55,7 +163,55 @@ def stream_archive_limit(limit: int) -> int:
     return limit
 
 
-def stream_event_row(event: StreamEvent, stream: StreamArchiveConfig) -> Mapping[str, object]:
+def ensure_stream_archive_error_policy(
+    batch: StreamArchivePreparedBatch,
+    stream: StreamArchiveConfig,
+    total_events: int,
+) -> None:
+    fatal = [row.error_kind for row in batch.dead_letters if row.error_kind in stream.fail_closed_error_kinds]
+    if fatal:
+        raise ValidationFailed(
+            "stream archive record error kind is fail-closed",
+            details={"error_kinds": sorted(set(fatal)), "dead_letter_records": len(batch.dead_letters)},
+        )
+    if _record_error_ratio(batch.dead_letters, total_events) > stream.max_record_error_ratio:
+        raise ValidationFailed(
+            "stream archive record error ratio exceeds threshold",
+            details={
+                "dead_letter_records": len(batch.dead_letters),
+                "total_records": total_events,
+                "max_record_error_ratio": stream.max_record_error_ratio,
+            },
+        )
+
+
+def ensure_stream_archive_batch_writable(
+    batch: StreamArchivePreparedBatch,
+    stream: StreamArchiveConfig,
+    total_events: int,
+) -> None:
+    ensure_stream_archive_error_policy(batch, stream, total_events)
+    if not batch.rows:
+        raise ValidationFailed(
+            "stream archive batch has no valid records",
+            details={"dead_letter_records": len(batch.dead_letters)},
+        )
+
+
+def stream_event_row(
+    event: StreamEvent,
+    stream: StreamArchiveConfig,
+    previous_metadata: Mapping[str, object] | None = None,
+) -> Mapping[str, object]:
+    processed_at = _now()
+    event_time = payload_named_time(event.payload, stream.event_time_field, stream)
+    source_time = payload_named_time(event.payload, stream.source_time_field, stream)
+    late_status = late_data_status(event_time, processed_at, previous_metadata, stream)
+    if late_status == "TOO_LATE":
+        raise ValidationFailed(
+            "stream archive event is too late for source policy",
+            details={"field": stream.event_time_field, "late_data_status": late_status},
+        )
     row = {
         "event_id": stream_event_id(event, stream),
         "stream": event.stream_name,
@@ -67,7 +223,12 @@ def stream_event_row(event: StreamEvent, stream: StreamArchiveConfig) -> Mapping
         "tenant_id": event.tenant_id,
         "request_id": event.request_id,
         "payload_json": json.dumps(dict(event.payload), sort_keys=True, separators=(",", ":"), default=str),
-        "ingested_at": f"ts:{_now()}",
+        "event_time": event_time,
+        "source_time": source_time,
+        "ingested_at": processed_at,
+        "processed_at": processed_at,
+        "late_data_status": late_status,
+        "event_time_lag_seconds": event_time_lag_seconds(event_time, processed_at),
     }
     if stream.schema_strategy == "cdc_envelope_json":
         return {**row, **_cdc_envelope_fields(event.payload)}
@@ -80,8 +241,13 @@ def stream_archive_fields(stream: StreamArchiveConfig) -> list[str]:
     return list(STREAM_ARCHIVE_FIELDS)
 
 
-def stream_transaction_metadata(stream: StreamArchiveConfig, events: Sequence[StreamEvent]) -> Mapping[str, object]:
-    return {
+def stream_transaction_metadata(
+    stream: StreamArchiveConfig,
+    events: Sequence[StreamEvent],
+    previous_metadata: Mapping[str, object] | None = None,
+    rows: Sequence[Mapping[str, object]] | None = None,
+) -> Mapping[str, object]:
+    metadata: dict[str, object] = {
         "streamCursor": {
             "streamName": stream.stream_name,
             "topic": stream.topic,
@@ -92,6 +258,10 @@ def stream_transaction_metadata(stream: StreamArchiveConfig, events: Sequence[St
             "schemaStrategy": stream.schema_strategy,
         }
     }
+    watermark = next_late_data_watermark(previous_metadata, rows or (), stream)
+    if watermark is not None:
+        metadata["lateDataWatermark"] = late_data_watermark_metadata(stream, watermark, rows or ())
+    return metadata
 
 
 def stream_cursor_offset(metadata: Mapping[str, object], stream: StreamArchiveConfig) -> int | None:
@@ -116,8 +286,60 @@ def stream_event_id(event: StreamEvent, stream: StreamArchiveConfig) -> str:
     return f"{stream.topic}:{stream.partition}:{event.offset}"
 
 
+def _dead_letter_stream_event(
+    event: StreamEvent,
+    source_event_id: str,
+    stream: StreamArchiveConfig,
+    exc: ValidationFailed,
+) -> StreamArchiveDeadLetter:
+    return StreamArchiveDeadLetter(
+        event=event,
+        source_event_id=source_event_id,
+        payload_hash=_json_hash(dict(event.payload)),
+        error_kind=_dead_letter_error_kind(exc),
+        error_message=exc.message,
+        event_time=_payload_event_time(event.payload, stream),
+    )
+
+
+def _dead_letter_record_id(ctx: RequestContext, dead_letter: StreamArchiveDeadLetter) -> str:
+    identity = f"{ctx.tenant_id}:{dead_letter.source_event_id}:{dead_letter.payload_hash}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    return f"dlqr_{digest[:24]}"
+
+
+def _payload_event_time(payload: Mapping[str, object], stream: StreamArchiveConfig) -> str | None:
+    value = payload.get(stream.event_time_field)
+    return value if isinstance(value, str) and value else None
+
+
 def _cursor_schema_strategy(cursor: Mapping[str, object]) -> object:
     return cursor.get("schemaStrategy", "envelope_json")
+
+
+def _record_error_ratio(dead_letters: Sequence[StreamArchiveDeadLetter], total_events: int) -> float:
+    if total_events <= 0:
+        return 0.0
+    return len(dead_letters) / total_events
+
+
+def _validate_error_threshold(value: float) -> None:
+    if value < 0 or value > 1:
+        raise ValidationFailed(
+            "stream archive error threshold must be between 0 and 1",
+            details={"max_record_error_ratio": value},
+        )
+
+
+def _dead_letter_error_kind(exc: ValidationFailed) -> str:
+    if exc.details.get("late_data_status") == "TOO_LATE":
+        return "TOO_LATE"
+    field = exc.details.get("field")
+    if field == "pk":
+        return "IDENTITY_ERROR"
+    if field == "ordering":
+        return "ORDERING_ERROR"
+    return exc.code
 
 
 def _cdc_envelope_fields(payload: Mapping[str, object]) -> Mapping[str, object]:

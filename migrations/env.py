@@ -63,6 +63,21 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    existing_connection = config.attributes.get("connection")
+    if existing_connection is not None:
+        context.configure(
+            connection=existing_connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            render_as_batch=True,
+        )
+        if existing_connection.in_transaction():
+            context.run_migrations()
+            return
+        with context.begin_transaction():
+            context.run_migrations()
+            return
+
     section = config.get_section(config.config_ini_section, {})
     section["sqlalchemy.url"] = _database_url()
     connectable = engine_from_config(section, prefix="sqlalchemy.", poolclass=pool.NullPool)

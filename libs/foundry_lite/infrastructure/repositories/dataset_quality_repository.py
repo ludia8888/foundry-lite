@@ -8,6 +8,7 @@ from sqlalchemy.engine import Engine
 from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckRecord,
     DatasetCheckResultRecord,
+    DatasetCheckResultRow,
     DatasetCheckRow,
     DatasetSchemaRecord,
     DatasetSchemaRow,
@@ -105,8 +106,34 @@ class SqlAlchemyDatasetQualityRepository:
                 check_id=record.check_id,
                 run_id=record.run_id,
                 transaction_id=record.transaction_id,
+                checked_manifest_hash=record.checked_manifest_hash,
+                validated_against_schema_version_id=record.validated_against_schema_version_id,
+                validated_against_schema_version=record.validated_against_schema_version,
                 status=record.status,
                 details=record.details,
                 created_at=record.created_at,
             )
         )
+
+    def check_results_for_transaction(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transaction_id: str,
+    ) -> list[DatasetCheckResultRow]:
+        rows = (
+            transaction.execute(
+                select(db.dataset_check_results)
+                .where(
+                    and_(
+                        db.dataset_check_results.c.tenant_id == tenant_id,
+                        db.dataset_check_results.c.transaction_id == transaction_id,
+                    )
+                )
+                .order_by(db.dataset_check_results.c.created_at, db.dataset_check_results.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(DatasetCheckResultRow, dict(row)) for row in rows]

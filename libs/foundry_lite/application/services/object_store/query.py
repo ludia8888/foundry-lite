@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.ports.object_read_repository import ObjectExplain
 from foundry_lite.application.query_filters import validate_filter_ast
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.evidence import object_property_lineage
 from foundry_lite.application.services.object_store.query_cursor import (
     decode_object_query_cursor,
     encode_object_query_cursor,
@@ -79,13 +80,20 @@ class ObjectQueryService(CoreService):
             # lineage/source metadata, so it is withheld unless the caller holds
             # object:explain — otherwise ?explain=true would bypass masking.
             if include_explain and self.policy.decide(ctx, "object:explain").allowed:
-                payload["explain"] = self._object_explain(ctx, record)
+                payload["explain"] = self._object_explain(conn, ctx, record)
             return payload
 
-    def _object_explain(self, ctx: RequestContext, record: ObjectRecordRow) -> ObjectExplain:
+    def _object_explain(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        record: ObjectRecordRow,
+    ) -> ObjectExplain:
         object_type_api_name = record["object_type_api_name"]
         lineage_rows: list[LineageEdgeRow] = []
         source_run_chain = []
+        late_data_badge = None
+        properties = self.ontology_service._properties_for_object_type(conn, record["object_type_id"])
         if record["source_dataset_version_id"]:
             lineage_rows = self.runtime_service.lineage_for_resource(record["source_dataset_version_id"], ctx=ctx)
             source_run_chain = self.runtime_service.source_run_chain(
@@ -93,14 +101,27 @@ class ObjectQueryService(CoreService):
                 object_type_api_name=object_type_api_name,
                 ctx=ctx,
             )
+            late_data_badge = self.runtime_service.late_data_badge_for_source(
+                record["source_dataset_version_id"],
+                object_type_api_name=object_type_api_name,
+                ctx=ctx,
+            )
         # The base/edit layers must honour the same masking as `properties`; a
         # caller who cannot see `properties.margin` must not read it here either.
-        return {
+        explain: ObjectExplain = {
             "baseProperties": self.policy.mask_properties(ctx, object_type_api_name, dict(record["base_properties"])),
             "editProperties": self.policy.mask_properties(ctx, object_type_api_name, dict(record["edit_properties"])),
             "lineage": _lineage_payload(lineage_rows),
+            "propertyLineage": object_property_lineage(
+                record,
+                properties,
+                masked_property_names=self.policy.masked_property_names(ctx, object_type_api_name),
+            ),
             "sourceRunChain": source_run_chain,
         }
+        if late_data_badge is not None:
+            explain["lateDataBadge"] = late_data_badge
+        return explain
 
     def query_objects(
         self,

@@ -318,6 +318,78 @@ def test_stream_archive_worker_script_is_exposed() -> None:
     assert "tests/integration/test_search_indexing.py" in package_json
 
 
+def test_temporal_engine_integration_ratchet_is_runtime_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"quality:temporal-engine-integration"' in package_json
+    assert "test_product_connector_sync_workflow_runs_through_temporal_and_audits" in package_json
+    assert "test_api_operations_workflow_start_status_and_audit" in package_json
+    assert "pnpm --silent quality:temporal-engine-integration" in script
+    assert script.index("pnpm --silent quality:temporal") < script.index(
+        "pnpm --silent quality:temporal-engine-integration"
+    )
+
+
+def test_external_writeback_ratchet_is_runtime_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"quality:external-writeback"' in package_json
+    assert "test_external_success_response_lost_becomes_outcome_unknown" in package_json
+    assert "test_outcome_unknown_is_not_blindly_retried" in package_json
+    assert "pnpm --silent quality:external-writeback" in script
+    assert script.index("pnpm --silent quality:temporal-engine-integration") < script.index(
+        "pnpm --silent quality:external-writeback"
+    )
+    assert script.index("pnpm --silent quality:external-writeback") < script.index(
+        "pnpm --silent quality:elasticsearch"
+    )
+
+
+def test_saga_reconciliation_ratchet_is_runtime_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"quality:saga-reconciliation"' in package_json
+    assert "test_external_success_local_failure_requires_compensation" in package_json
+    assert "test_compensation_is_idempotent" in package_json
+    assert "test_reconciliation_resolves_remote_success" in package_json
+    assert "test_concurrent_reconciliation_has_one_winner" in package_json
+    assert "test_sensitive_writeback_payload_is_masked_in_audit" in package_json
+    assert "test_api_operations_reconciliation_resolves_action_writeback" in package_json
+    assert "pnpm --silent quality:saga-reconciliation" in script
+    assert script.index("pnpm --silent quality:external-writeback") < script.index(
+        "pnpm --silent quality:saga-reconciliation"
+    )
+    assert script.index("pnpm --silent quality:saga-reconciliation") < script.index(
+        "pnpm --silent quality:elasticsearch"
+    )
+
+
+def test_data_contracts_ratchet_is_runtime_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"quality:data-contracts"' in package_json
+    assert "test_commit_dataset_version_aborts_when_primary_key_check_fails" in package_json
+    assert "test_schema_validation_records_reference_version" in package_json
+    assert "test_contract_version_is_pinned_to_run" in package_json
+    assert "test_operations_run_detail_exposes_candidate_quality_report" in package_json
+    assert "test_operations_run_detail_includes_failed_row_sample_for_quarantine" in package_json
+    assert "test_quality_check_pins_candidate_manifest_hash" in package_json
+    assert "test_candidate_tamper_between_check_and_commit_is_rejected" in package_json
+    assert "test_warn_does_not_block_commit_but_is_visible" in package_json
+    assert "test_quarantine_routes_bad_records_to_record_dlq" in package_json
+    assert "test_insert_check_result_persists" in package_json
+    assert "test_check_results_for_transaction_is_tenant_scoped" in package_json
+    assert "pnpm --silent quality:data-contracts" in script
+    assert script.index("pnpm --silent quality:saga-reconciliation") < script.index(
+        "pnpm --silent quality:data-contracts"
+    )
+    assert script.index("pnpm --silent quality:data-contracts") < script.index("pnpm --silent quality:elasticsearch")
+
+
 def test_router_layer_purity_is_release_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
@@ -575,6 +647,20 @@ def test_generated_sdk_check_is_release_gate_step() -> None:
     assert "pnpm quality:sdk-generated" in package_json
 
 
+def test_frontend_foundation_gate_runs_after_sdk_generation() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    sdk_step = "scripts/generate_sdk_ts.py --check"
+    frontend_step = "pnpm --silent quality:frontend-foundation"
+    schema_step = "scripts/quality/check_schema_revision_guard.py"
+    assert frontend_step in script
+    assert script.index(sdk_step) < script.index(frontend_step) < script.index(schema_step)
+    assert '"quality:frontend-foundation"' in package_json
+    assert "tests/unit/test_sdk_ts_generation.py" in package_json
+    assert "tests/unit/test_web_operations_ui.py" in package_json
+
+
 def test_schema_revision_guard_is_release_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
@@ -582,6 +668,149 @@ def test_schema_revision_guard_is_release_gate_step() -> None:
     assert "scripts/quality/check_schema_revision_guard.py" in script
     assert '"quality:schema-revision"' in package_json
     assert "pnpm quality:schema-revision" in package_json
+
+
+def test_schema_migration_guard_runs_after_schema_revision_guard() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    revision_step = "scripts/quality/check_schema_revision_guard.py"
+    migration_step = "scripts/quality/check_schema_migrations.py"
+    assert migration_step in script
+    assert script.index(revision_step) < script.index(migration_step)
+    assert '"quality:schema-migrations"' in package_json
+    assert "pnpm quality:schema-migrations" in package_json
+
+
+def test_schema_migration_singleton_runner_is_release_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    safety_step = "scripts/quality/check_schema_migrations.py"
+    runner_step = "tests/unit/test_migration_runner.py"
+    assert runner_step in script
+    assert script.index(safety_step) < script.index(runner_step)
+    assert '"db:migrate"' in package_json
+    assert "scripts/operations/run_migrations.py" in package_json
+    assert '"quality:schema-migration-runner"' in package_json
+    assert "pnpm quality:schema-migration-runner" in package_json
+
+
+def test_schema_evolution_gate_runs_after_data_contracts() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    data_contracts_step = "pnpm --silent quality:data-contracts"
+    schema_evolution_step = "pnpm --silent quality:schema-evolution"
+    assert schema_evolution_step in script
+    assert script.index(data_contracts_step) < script.index(schema_evolution_step)
+    assert '"quality:schema-evolution"' in package_json
+    assert "tests/unit/test_dataset_schema_evolution.py" in package_json
+    assert "tests/integration/test_dataset_quality.py" in package_json
+
+
+def test_ontology_migration_gate_runs_after_schema_evolution() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    schema_evolution_step = "pnpm --silent quality:schema-evolution"
+    ontology_migration_step = "pnpm --silent quality:ontology-migrations"
+    assert ontology_migration_step in script
+    assert script.index(schema_evolution_step) < script.index(ontology_migration_step)
+    assert '"quality:ontology-migrations"' in package_json
+    assert "tests/unit/test_ontology_migration.py" in package_json
+    assert "tests/integration/test_ontology_action_security.py" in package_json
+    assert "tests/unit/test_sdk_ts_generation.py" in package_json
+
+
+def test_observability_detector_gate_runs_after_ontology_migrations() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    ontology_step = "pnpm --silent quality:ontology-migrations"
+    detector_step = "pnpm --silent quality:observability-detectors"
+    slo_step = "pnpm --silent quality:slo-contracts"
+    assert detector_step in script
+    assert slo_step in script
+    assert script.index(ontology_step) < script.index(detector_step) < script.index(slo_step)
+    assert '"quality:observability-detectors"' in package_json
+    assert '"quality:slo-contracts"' in package_json
+    assert "tests/unit/test_observability_detectors.py" in package_json
+    assert "tests/smoke/test_interfaces.py" in package_json
+
+
+def test_backup_restore_preflight_gate_runs_after_slo_contracts() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    slo_step = "pnpm --silent quality:slo-contracts"
+    backup_restore_step = "pnpm --silent quality:backup-restore"
+    elasticsearch_step = "pnpm --silent quality:elasticsearch"
+    assert backup_restore_step in script
+    assert script.index(slo_step) < script.index(backup_restore_step) < script.index(elasticsearch_step)
+    assert '"quality:backup-restore"' in package_json
+    assert "tests/unit/test_backup_restore_preflight.py" in package_json
+    assert "tests/smoke/test_interfaces.py" in package_json
+    assert "tests/unit/test_sdk_ts_generation.py" in package_json
+
+
+def test_auth_secret_gate_follows_restore_gate() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    backup_restore_step = "pnpm --silent quality:backup-restore"
+    auth_secret_step = "pnpm --silent quality:auth-secrets"
+    privacy_step = "pnpm --silent quality:privacy"
+    assert auth_secret_step in script
+    assert script.index(backup_restore_step) < script.index(auth_secret_step) < script.index(privacy_step)
+    assert '"quality:auth-secrets"' in package_json
+    assert "tests/contracts/test_secret_provider_contract.py" in package_json
+    assert "tests/contracts/test_rest_connector_adapter_contract.py" in package_json
+    assert "tests/contracts/test_auth_provider_contract.py" in package_json
+    assert "tests/smoke/test_interfaces.py" in package_json
+
+
+def test_privacy_gate_runs_after_auth_secret_gate() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    auth_secret_step = "pnpm --silent quality:auth-secrets"
+    privacy_step = "pnpm --silent quality:privacy"
+    erasure_step = "pnpm --silent quality:erasure"
+    assert privacy_step in script
+    assert script.index(auth_secret_step) < script.index(privacy_step) < script.index(erasure_step)
+    assert '"quality:privacy"' in package_json
+    assert "replication_policy" in package_json
+    assert "reversible_mapping" in package_json
+    assert "openlineage" in package_json
+    assert "tests/unit/test_privacy_transform.py" in package_json
+
+
+def test_erasure_gate_runs_after_privacy_gate() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    privacy_step = "pnpm --silent quality:privacy"
+    erasure_step = "pnpm --silent quality:erasure"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert erasure_step in script
+    assert script.index(privacy_step) < script.index(erasure_step) < script.index(ai_evidence_step)
+    assert '"quality:erasure"' in package_json
+    assert "tests/unit/test_erasure_lifecycle.py" in package_json
+
+
+def test_ai_evidence_gate_runs_after_erasure_gate() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    erasure_step = "pnpm --silent quality:erasure"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    elasticsearch_step = "pnpm --silent quality:elasticsearch"
+    assert ai_evidence_step in script
+    assert script.index(erasure_step) < script.index(ai_evidence_step) < script.index(elasticsearch_step)
+    assert '"quality:ai-evidence"' in package_json
+    assert "tests/unit/test_ai_evidence.py" in package_json
+    assert "object_property_lineage" in package_json
 
 
 def test_tier_coverage_gate_includes_app_layers() -> None:

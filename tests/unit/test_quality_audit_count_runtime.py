@@ -60,6 +60,9 @@ def _seed_runtime_mutations(engine: Engine, *, include_version_audit: bool = Tru
                 classification=None,
                 status="ACTIVE",
                 primary_key=["order_id"],
+                partition_spec=[],
+                sort_order=[],
+                target_file_size_bytes=None,
                 created_at=NOW,
                 updated_at=NOW,
             )

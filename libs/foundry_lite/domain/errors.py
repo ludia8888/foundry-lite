@@ -32,3 +32,11 @@ class InvariantViolation(FoundryLiteError):
 
 class ExternalSystemError(FoundryLiteError):
     code = "EXTERNAL_SYSTEM_ERROR"
+
+
+class ExternalOutcomeUnknown(ExternalSystemError):
+    code = "EXTERNAL_OUTCOME_UNKNOWN"
+
+
+class ExternalCompensationRequired(ExternalSystemError):
+    code = "EXTERNAL_COMPENSATION_REQUIRED"

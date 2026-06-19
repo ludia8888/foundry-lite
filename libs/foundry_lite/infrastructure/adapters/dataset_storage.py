@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -137,11 +138,22 @@ class LocalDatasetStorageAdapter:
         return cast(DatasetManifest, json.loads(self._path_for(manifest_uri).read_text(encoding="utf-8")))
 
     def first_data_file_path(self, manifest_uri: str) -> Path:
+        return self.data_file_paths(manifest_uri)[0]
+
+    def data_file_paths(
+        self,
+        manifest_uri: str,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]:
         manifest = self.load_manifest(manifest_uri)
         files = manifest.get("files") or []
         if not files:
             raise ValueError(f"dataset manifest has no files: {manifest_uri}")
-        path = self._path_for(files[0]["uri"])
+        return [self._data_file_path(file) for file in _matching_manifest_files(manifest, partition_filter)]
+
+    def _data_file_path(self, manifest_file: DatasetManifestFile) -> Path:
+        path = self._path_for(manifest_file["uri"])
         if not path.exists():
             raise FileNotFoundError(str(path))
         return path
@@ -188,3 +200,21 @@ class FakeDatasetStorageAdapter(LocalDatasetStorageAdapter):
 
     profile_name = "fake-storage"
     uri_scheme = "fake-storage"
+
+
+def _matching_manifest_files(
+    manifest: DatasetManifest,
+    partition_filter: Mapping[str, object] | None,
+) -> list[DatasetManifestFile]:
+    files = manifest.get("files") or []
+    if partition_filter is None:
+        return files
+    return [file for file in files if _matches_partition_filter(file, partition_filter)]
+
+
+def _matches_partition_filter(
+    manifest_file: DatasetManifestFile,
+    partition_filter: Mapping[str, object],
+) -> bool:
+    partition_values = manifest_file.get("partition_values") or {}
+    return all(partition_values.get(key) == value for key, value in partition_filter.items())

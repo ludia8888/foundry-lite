@@ -14,6 +14,8 @@ ${imports if imports else ""}
 # revision identifiers, used by Alembic.
 revision: str = ${repr(up_revision)}
 down_revision: Union[str, Sequence[str], None] = ${repr(down_revision)}
+migration_phase: str = "expand"
+release_compatibility: str = "old_and_new_app"
 branch_labels: Union[str, Sequence[str], None] = ${repr(branch_labels)}
 depends_on: Union[str, Sequence[str], None] = ${repr(depends_on)}
 
@@ -25,4 +27,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
-    ${downgrades if downgrades else "pass"}
+    raise NotImplementedError("S55 forward-fix policy blocks destructive production downgrades.")

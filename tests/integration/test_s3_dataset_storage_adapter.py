@@ -257,6 +257,28 @@ def test_s3_dataset_storage_adapter_contract(minio_server: MinioServer, tmp_path
     assert not _object_keys(_s3_client(minio_server), adapter.config.bucket, "version=dsv_demo")
 
 
+def test_s3_data_file_paths_apply_partition_filter_before_download(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    adapter = _adapter(tmp_path, minio_server)
+    client = _s3_client(minio_server)
+    stored = _commit(adapter, _staged_bytes(adapter, b"partitioned bytes"), version_id="dsv_partitioned")
+    manifest = adapter.load_manifest(stored.manifest_uri)
+    manifest["files"][0]["partition_values"] = {"bucket": "a"}
+    client.put_object(
+        Bucket=adapter.config.bucket,
+        Key=_key_from_uri(adapter, stored.manifest_uri),
+        Body=json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8"),
+    )
+
+    matched_paths = adapter.data_file_paths(stored.manifest_uri, partition_filter={"bucket": "a"})
+    missing_paths = adapter.data_file_paths(stored.manifest_uri, partition_filter={"bucket": "b"})
+
+    assert [path.read_bytes() for path in matched_paths] == [b"partitioned bytes"]
+    assert missing_paths == []
+
+
 def test_s3_partial_multipart_upload_never_becomes_committed_version(
     minio_server: MinioServer,
     tmp_path: Path,

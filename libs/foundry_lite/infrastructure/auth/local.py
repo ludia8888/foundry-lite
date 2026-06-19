@@ -13,10 +13,9 @@ so future scale work can swap them out cleanly.
     Returns a fixed admin Principal regardless of credentials. Used by the CLI
     and demo flows that need to bypass header parsing entirely.
 
-A real JWT/OIDC adapter will land in the next Sprint 02A round. The boundary
-is what matters now: every entry point will authenticate through an explicit
-``AuthProvider`` instance, so the application layer stops trusting raw HTTP
-headers.
+The JWT/OIDC adapter now lives in ``foundry_lite.infrastructure.auth.oidc``.
+These local adapters remain useful for demo/dev execution, but production
+startup refuses them unless a strict profile is configured explicitly.
 """
 
 from __future__ import annotations

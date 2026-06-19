@@ -43,6 +43,10 @@ class FakeDatasetRepository:
                 return dict(dataset)
         return None
 
+    def list_active_datasets(self, *, tenant_id: str) -> list[dict[str, Any]]:
+        rows = [dict(dataset) for dataset in self.datasets if dataset["tenant_id"] == tenant_id]
+        return sorted(rows, key=lambda row: (row["namespace"], row["name"]))
+
 
 @dataclass
 class FakeDatasetRepositoryHarness:
@@ -74,6 +78,9 @@ def _dataset_payload(dataset_id: str, *, tenant_id: str = "tenant-demo") -> dict
         "owner_team": "ops",
         "classification": "internal",
         "primary_key": ["order_id"],
+        "partition_spec": ["region"],
+        "sort_order": ["order_id"],
+        "target_file_size_bytes": 134217728,
         "created_at": "2026-06-10T00:00:00Z",
         "updated_at": "2026-06-10T00:00:00Z",
     }
@@ -102,6 +109,9 @@ def test_dataset_repository_contract_create_find_and_duplicate(harness: DatasetR
     assert found is not None
     assert found["id"] == "ds_orders"
     assert found["primary_key"] == ["order_id"]
+    assert found["partition_spec"] == ["region"]
+    assert found["sort_order"] == ["order_id"]
+    assert found["target_file_size_bytes"] == 134217728
 
     with pytest.raises(DatasetAlreadyExistsError):
         harness.create_dataset(**_dataset_payload("ds_duplicate"))
@@ -109,3 +119,21 @@ def test_dataset_repository_contract_create_find_and_duplicate(harness: DatasetR
     other_tenant_payload = _dataset_payload("ds_other_tenant", tenant_id="tenant-other")
     harness.create_dataset(**other_tenant_payload)
     assert harness.repository.find_active_dataset(tenant_id="tenant-other", namespace="raw", name="orders") is not None
+
+
+def test_dataset_repository_contract_lists_active_datasets_by_tenant(
+    harness: DatasetRepositoryHarness,
+) -> None:
+    orders = _dataset_payload("ds_orders")
+    customers = {**_dataset_payload("ds_customers"), "namespace": "clean", "name": "customers"}
+    other = _dataset_payload("ds_other", tenant_id="tenant-other")
+    harness.create_dataset(**orders)
+    harness.create_dataset(**customers)
+    harness.create_dataset(**other)
+
+    rows = harness.repository.list_active_datasets(tenant_id="tenant-demo")
+
+    assert [(row["namespace"], row["name"], row["id"]) for row in rows] == [
+        ("clean", "customers", "ds_customers"),
+        ("raw", "orders", "ds_orders"),
+    ]

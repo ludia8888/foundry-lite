@@ -34,6 +34,9 @@ class DatasetWorkspace:
         description: str | None = None,
         owner_team: str | None = None,
         classification: str | None = None,
+        partition_spec: list[str] | None = None,
+        sort_order: list[str] | None = None,
+        target_file_size_bytes: int | None = None,
     ) -> DatasetRow:
         return self._datasets.registry.create_dataset(
             dataset_ref,
@@ -43,6 +46,9 @@ class DatasetWorkspace:
             description=description,
             owner_team=owner_team,
             classification=classification,
+            partition_spec=partition_spec,
+            sort_order=sort_order,
+            target_file_size_bytes=target_file_size_bytes,
         )
 
     def ensure(
@@ -52,12 +58,18 @@ class DatasetWorkspace:
         ctx: RequestContext | None = None,
         primary_key: list[str] | None = None,
         storage_kind: str = "parquet_manifest",
+        partition_spec: list[str] | None = None,
+        sort_order: list[str] | None = None,
+        target_file_size_bytes: int | None = None,
     ) -> DatasetRow:
         return self._datasets.registry.ensure_dataset(
             dataset_ref,
             ctx=ctx,
             primary_key=primary_key,
             storage_kind=storage_kind,
+            partition_spec=partition_spec,
+            sort_order=sort_order,
+            target_file_size_bytes=target_file_size_bytes,
         )
 
     def find(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> DatasetRow | None:
@@ -79,8 +91,15 @@ class DatasetWorkspace:
         ctx: RequestContext | None = None,
         limit: int = 100,
         version: str = "latest",
+        partition_filter: Mapping[str, object] | None = None,
     ) -> list[TabularRow]:
-        return self._datasets.registry.preview_dataset(dataset_ref, ctx=ctx, limit=limit, version=version)
+        return self._datasets.registry.preview_dataset(
+            dataset_ref,
+            ctx=ctx,
+            limit=limit,
+            version=version,
+            partition_filter=partition_filter,
+        )
 
     def inspect(
         self, dataset_ref: str, *, ctx: RequestContext | None = None, version: str = "latest"

@@ -94,3 +94,45 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await expect(page.locator("#runResult")).toContainText('"lastRetry"');
   await expect(page.locator("#runResult")).toContainText('"status": "skipped"');
 });
+
+test("record dlq operations list detail replay and discard", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page.locator("#statusText")).toHaveText("ok");
+  await expect(page.locator("#recordDlqResult")).toContainText('"id": "dlqr_web_retry"');
+  await expect(page.locator("#recordDlqResult")).toContainText('"id": "dlqr_web_discard"');
+  await expect(page.locator("#metricRecordDlqOpen")).toHaveText("2");
+  await expect(page.locator("#metricRecordDlqClosed")).toHaveText("0");
+  await expect(page.locator("#metricRecordDlqTopError")).toHaveText("VALIDATION_FAILED");
+
+  await page.locator("#recordDlqStatus").selectOption("QUARANTINED");
+  await page.locator("#loadRecordDlqBtn").click();
+  await expect(page.locator("#recordDlqResult")).toContainText('"filters"');
+  await expect(page.locator("#recordDlqResult")).toContainText('"status": "QUARANTINED"');
+
+  await page.locator("#recordDlqId").fill("dlqr_web_retry");
+  await page.locator("#recordDlqDetailBtn").click();
+  await expect(page.locator("#recordDlqResult")).toContainText('"impactPreview"');
+  await expect(page.locator("#recordDlqResult")).toContainText('"sourceEventId": "shipment_cdc_events:0:31"');
+  await expect(page.locator("#recordDlqResult")).toContainText('"payload"');
+  await expect(page.locator("#recordDlqResult")).toContainText('"error_message": "cdc envelope field must be an object"');
+
+  await page.locator("#recordDlqStatus").selectOption("");
+  await page.locator("#replayRecordDlqBtn").click();
+  await expect(page.locator("#recordDlqResult")).toContainText('"lastRecordReplay"');
+  await expect(page.locator("#recordDlqResult")).toContainText('"replayStatus": "SUCCEEDED"');
+  await expect(page.locator("#recordDlqResult")).toContainText('"replayDatasetVersionId"');
+  await expect(page.locator("#metricRecordDlqOpen")).toHaveText("1");
+  await expect(page.locator("#metricRecordDlqClosed")).toHaveText("1");
+
+  await page.locator("#recordDlqId").fill("dlqr_web_discard");
+  await page.locator("#discardRecordDlqBtn").click();
+  await expect(page.locator("#recordDlqResult")).toContainText('"lastRecordDiscard"');
+  await expect(page.locator("#recordDlqResult")).toContainText('"status": "DISCARDED"');
+  await expect(page.locator("#metricRecordDlqOpen")).toHaveText("0");
+  await expect(page.locator("#metricRecordDlqClosed")).toHaveText("2");
+
+  await page.locator("#bulkReplayRecordDlqBtn").click();
+  await expect(page.locator("#recordDlqResult")).toContainText('"lastBulkRecordReplay"');
+  await expect(page.locator("#recordDlqResult")).toContainText('"reason": "no quarantined records"');
+});
