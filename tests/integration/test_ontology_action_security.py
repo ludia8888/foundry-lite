@@ -18,6 +18,7 @@ from foundry_lite.application.ports.action_repository import (
     ObjectEditRecord,
     ObjectTargetUpdate,
 )
+from foundry_lite.application.ports.transaction_context import StatusTransition
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -71,17 +72,17 @@ class _FailingActionRepository:
         transaction: Any,
         tenant_id: str,
         action_run_id: str,
-        status: str,
+        transition: StatusTransition,
         error: Mapping[str, object] | None,
         completed_at: str,
-    ) -> None:
-        if self.enabled and self.fail_method == "update_action_run_terminal" and status == "succeeded":
+    ) -> bool:
+        if self.enabled and self.fail_method == "update_action_run_terminal" and transition.to_status == "succeeded":
             raise _InjectedActionCommitFailure("injected action terminal failure")
-        self.delegate.update_action_run_terminal(
+        return self.delegate.update_action_run_terminal(
             transaction=transaction,
             tenant_id=tenant_id,
             action_run_id=action_run_id,
-            status=status,
+            transition=transition,
             error=error,
             completed_at=completed_at,
         )

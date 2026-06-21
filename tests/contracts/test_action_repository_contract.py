@@ -18,6 +18,14 @@ from foundry_lite.application.ports.action_repository import (
     ObjectEditRecord,
     ObjectTargetUpdate,
 )
+from foundry_lite.application.ports.transaction_context import (
+    ACTION_RUN_COMPENSATION_REQUIRED,
+    ACTION_RUN_FAILED,
+    ACTION_RUN_OUTCOME_UNKNOWN,
+    ACTION_RUN_RECONCILED,
+    ACTION_RUN_SUCCEEDED,
+    StatusTransition,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyActionRepository
 from sqlalchemy import create_engine, insert, select
@@ -103,15 +111,20 @@ class FakeActionRepository:
         transaction: Any,
         tenant_id: str,
         action_run_id: str,
-        status: str,
+        transition: StatusTransition,
         error: Mapping[str, object] | None,
         completed_at: str,
-    ) -> None:
+    ) -> bool:
         del transaction
         for row in self.action_runs:
-            if row["tenant_id"] == tenant_id and row["id"] == action_run_id:
-                row.update(status=status, error=error, completed_at=completed_at)
-                return
+            if (
+                row["tenant_id"] == tenant_id
+                and row["id"] == action_run_id
+                and row["status"] in transition.from_statuses
+            ):
+                row.update(status=transition.to_status, error=error, completed_at=completed_at)
+                return True
+        return False
 
     def insert_action_writeback(self, *, transaction: Any, record: ActionWritebackRecord) -> None:
         del transaction
@@ -526,18 +539,28 @@ def test_sqlalchemy_action_run_insert_or_get_existing_rolls_back_with_outer_tran
 def test_action_repository_contract_updates_terminal_state_and_writebacks(harness: ActionHarness) -> None:
     with harness.transaction() as transaction:
         harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
-        harness.repository.update_action_run_terminal(
+        updated = harness.repository.update_action_run_terminal(
             transaction=transaction,
             tenant_id="tenant-demo",
             action_run_id="arun_1",
-            status="failed",
+            transition=ACTION_RUN_FAILED,
             error={"type": "ExternalSystemError"},
             completed_at="2026-06-10T00:00:05Z",
+        )
+        stale = harness.repository.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            transition=ACTION_RUN_SUCCEEDED,
+            error=None,
+            completed_at="2026-06-10T00:00:06Z",
         )
         harness.repository.insert_action_writeback(transaction=transaction, record=_writeback_record(status="failed"))
 
     action_runs = harness.action_run_rows()
     writebacks = harness.writeback_rows()
+    assert updated is True
+    assert stale is False
     assert action_runs[0]["status"] == "failed"
     assert action_runs[0]["error"] == {"type": "ExternalSystemError"}
     assert writebacks[0]["status"] == "failed"
@@ -562,11 +585,11 @@ def test_action_repository_contract_persists_outcome_unknown_writeback_fields(ha
     }
     with harness.transaction() as transaction:
         harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
-        harness.repository.update_action_run_terminal(
+        updated = harness.repository.update_action_run_terminal(
             transaction=transaction,
             tenant_id="tenant-demo",
             action_run_id="arun_1",
-            status="outcome_unknown",
+            transition=ACTION_RUN_OUTCOME_UNKNOWN,
             error={"type": "EXTERNAL_OUTCOME_UNKNOWN"},
             completed_at="2026-06-10T00:00:05Z",
         )
@@ -577,6 +600,7 @@ def test_action_repository_contract_persists_outcome_unknown_writeback_fields(ha
 
     action_runs = harness.action_run_rows()
     writebacks = harness.writeback_rows()
+    assert updated is True
     assert action_runs[0]["status"] == "outcome_unknown"
     assert writebacks[0]["status"] == "outcome_unknown"
     assert writebacks[0]["request"] == request
@@ -642,6 +666,41 @@ def test_action_repository_contract_reconciles_outcome_unknown_writeback_once(ha
     assert writebacks[0]["response"] == reconciled_response
 
 
+def test_action_repository_contract_action_run_reconciles_once(harness: ActionHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
+        updated = harness.repository.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            transition=ACTION_RUN_OUTCOME_UNKNOWN,
+            error={"type": "EXTERNAL_OUTCOME_UNKNOWN"},
+            completed_at="2026-06-10T00:00:05Z",
+        )
+        reconciled_action = harness.repository.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            transition=ACTION_RUN_RECONCILED,
+            error=None,
+            completed_at="2026-06-10T00:00:10Z",
+        )
+        stale_action = harness.repository.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            transition=ACTION_RUN_FAILED,
+            error={"type": "ExternalSystemError"},
+            completed_at="2026-06-10T00:00:11Z",
+        )
+
+    action_runs = harness.action_run_rows()
+    assert updated is True
+    assert reconciled_action is True
+    assert stale_action is False
+    assert action_runs[0]["status"] == "reconciled"
+
+
 def test_action_repository_contract_persists_compensation_required_writeback_fields(harness: ActionHarness) -> None:
     request = {
         "connector": "mock_erp",
@@ -661,11 +720,11 @@ def test_action_repository_contract_persists_compensation_required_writeback_fie
     }
     with harness.transaction() as transaction:
         harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
-        harness.repository.update_action_run_terminal(
+        updated = harness.repository.update_action_run_terminal(
             transaction=transaction,
             tenant_id="tenant-demo",
             action_run_id="arun_1",
-            status="compensation_required",
+            transition=ACTION_RUN_COMPENSATION_REQUIRED,
             error={"type": "EXTERNAL_COMPENSATION_REQUIRED"},
             completed_at="2026-06-10T00:00:05Z",
         )
@@ -676,6 +735,7 @@ def test_action_repository_contract_persists_compensation_required_writeback_fie
 
     action_runs = harness.action_run_rows()
     writebacks = harness.writeback_rows()
+    assert updated is True
     assert action_runs[0]["status"] == "compensation_required"
     assert writebacks[0]["status"] == "compensation_required"
     assert writebacks[0]["request"] == request

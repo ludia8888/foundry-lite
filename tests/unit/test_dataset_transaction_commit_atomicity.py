@@ -50,9 +50,10 @@ class _ConflictTransactionRepository:
         tenant_id: str,
         transaction_id: str,
         metadata: dict[str, object],
-    ) -> None:
+    ) -> bool:
         del transaction, tenant_id, transaction_id, metadata
         self.abort_called = True
+        return True
 
     def insert_version(self, *, transaction: object, record: object) -> None:
         del transaction, record

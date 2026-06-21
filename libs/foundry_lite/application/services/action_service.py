@@ -19,8 +19,11 @@ from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.safe_expression import validate_action_request
 from foundry_lite.application.services.action_helpers import (
     action_command,
+    action_failure_transition,
     action_replay_response,
+    action_target_record_error,
     audit_idempotency_conflict,
+    require_action_target_api_name,
     require_action_write_open,
 )
 from foundry_lite.application.services.action_reconciliation import ActionWritebackReconciliationWorkflow
@@ -40,7 +43,6 @@ from foundry_lite.domain.errors import (
     InvariantViolation,
     NotFound,
     PermissionDenied,
-    ValidationFailed,
 )
 
 
@@ -120,9 +122,9 @@ class ActionService(CoreService):
             with self.engine.begin() as conn:
                 action_type = self.ontology_service._active_action_type(conn, ctx, command.action_api_name)
                 action_type_for_failure = action_type
-                _require_action_target_api_name(action_type, command.object_type)
+                require_action_target_api_name(action_type, command.object_type)
                 record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
-                if record is not None and (error := _action_target_record_error(action_type, record)) is not None:
+                if record is not None and (error := action_target_record_error(action_type, record)) is not None:
                     raise error
                 existing = self._existing_action_run(conn, ctx, action_type, command.idempotency_key)
                 if existing is not None:
@@ -326,15 +328,17 @@ class ActionService(CoreService):
         action_run_id: str,
         error: Exception,
     ) -> None:
-        status = "conflict" if isinstance(error, ConflictDetected) else "failed"
-        self.action_repository.update_action_run_terminal(
+        transition = action_failure_transition(error)
+        updated = self.action_repository.update_action_run_terminal(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             action_run_id=action_run_id,
-            status=status,
+            transition=transition,
             error=self.runtime_service._error_payload(error, ctx, run_id=action_run_id, correlation_id=action_run_id),
             completed_at=_now(),
         )
+        if not updated:
+            raise ConflictDetected("action run terminal state changed concurrently", details={"run_id": action_run_id})
         self.runtime_service._audit(
             conn,
             ctx,
@@ -475,26 +479,3 @@ class ActionService(CoreService):
             ontology_service=self.ontology_service,
             runtime_service=self.runtime_service,
         )
-
-
-def _require_action_target_api_name(action_type: ActionTypeRow, requested_object_type: str) -> None:
-    expected_object_type = str(action_type["target_api_name"])
-    if requested_object_type == expected_object_type:
-        return
-    raise ValidationFailed(
-        "action target object type mismatch",
-        details={"expectedObjectType": expected_object_type, "requestedObjectType": requested_object_type},
-    )
-
-
-def _action_target_record_error(action_type: ActionTypeRow, record: ObjectRecordRow) -> InvariantViolation | None:
-    expected_object_type_id = str(action_type["target_object_type_id"])
-    if str(record["object_type_id"]) == expected_object_type_id:
-        return None
-    return InvariantViolation(
-        "action target record object type invariant violated",
-        details={
-            "expectedObjectTypeId": expected_object_type_id,
-            "recordObjectTypeId": str(record["object_type_id"]),
-        },
-    )

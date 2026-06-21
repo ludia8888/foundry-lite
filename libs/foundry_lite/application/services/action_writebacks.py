@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from foundry_lite.application.ports import TransactionContext
+from foundry_lite.application.ports import (
+    ACTION_RUN_COMPENSATION_REQUIRED,
+    ACTION_RUN_FAILED,
+    ACTION_RUN_OUTCOME_UNKNOWN,
+    TransactionContext,
+)
 from foundry_lite.application.ports.action_repository import (
     ActionRepository,
     ActionWritebackPayload,
@@ -12,7 +17,12 @@ from foundry_lite.application.primitives import MOCK_WRITEBACK_CONNECTOR, _new_i
 from foundry_lite.application.services.action_helpers import writeback_error_payload
 from foundry_lite.application.services.action_protocols import ActionRuntimeBoundary
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ExternalCompensationRequired, ExternalOutcomeUnknown, ExternalSystemError
+from foundry_lite.domain.errors import (
+    ConflictDetected,
+    ExternalCompensationRequired,
+    ExternalOutcomeUnknown,
+    ExternalSystemError,
+)
 
 
 @dataclass(frozen=True)
@@ -83,14 +93,16 @@ class ActionWritebackRecorder:
         error: ExternalSystemError,
     ) -> None:
         error_payload = dict(writeback_error_payload(self.runtime_service, error, ctx, action_run_id))
-        self.action_repository.update_action_run_terminal(
+        updated = self.action_repository.update_action_run_terminal(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             action_run_id=action_run_id,
-            status="failed",
+            transition=ACTION_RUN_FAILED,
             error=error_payload,
             completed_at=_now(),
         )
+        if not updated:
+            raise ConflictDetected("action run terminal state changed concurrently")
         self.runtime_service._audit(
             conn,
             ctx,
@@ -201,14 +213,16 @@ class ActionWritebackRecorder:
         error: ExternalOutcomeUnknown,
     ) -> None:
         error_payload = dict(writeback_error_payload(self.runtime_service, error, ctx, action_run_id))
-        self.action_repository.update_action_run_terminal(
+        updated = self.action_repository.update_action_run_terminal(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             action_run_id=action_run_id,
-            status="outcome_unknown",
+            transition=ACTION_RUN_OUTCOME_UNKNOWN,
             error=error_payload,
             completed_at=_now(),
         )
+        if not updated:
+            raise ConflictDetected("action run terminal state changed concurrently")
         self.runtime_service._audit(
             conn,
             ctx,
@@ -228,14 +242,16 @@ class ActionWritebackRecorder:
         error: ExternalCompensationRequired,
     ) -> None:
         error_payload = dict(writeback_error_payload(self.runtime_service, error, ctx, action_run_id))
-        self.action_repository.update_action_run_terminal(
+        updated = self.action_repository.update_action_run_terminal(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             action_run_id=action_run_id,
-            status="compensation_required",
+            transition=ACTION_RUN_COMPENSATION_REQUIRED,
             error=error_payload,
             completed_at=_now(),
         )
+        if not updated:
+            raise ConflictDetected("action run terminal state changed concurrently")
         self.runtime_service._audit(
             conn,
             ctx,

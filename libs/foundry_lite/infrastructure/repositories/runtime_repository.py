@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, delete, desc, false, func, insert, or_, select, update
+from sqlalchemy import and_, delete, desc, false, func, insert, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -18,7 +18,9 @@ from foundry_lite.application.ports import (
     RuntimeRunSnapshot,
     RuntimeRunType,
 )
+from foundry_lite.application.ports.transaction_context import StatusTransition
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
 
 class SqlAlchemyRuntimeRepository:
@@ -126,12 +128,24 @@ class SqlAlchemyRuntimeRepository:
         rows = transaction.execute(select(runtime_table).where(runtime_table.c.tenant_id == tenant_id)).mappings().all()
         return [cast(RuntimeRow, dict(row)) for row in rows]
 
-    def update_outbox_event_for_retry(self, *, transaction: Any, tenant_id: str, event_id: str) -> RuntimeRow | None:
-        transaction.execute(
-            update(db.outbox_events)
-            .where(and_(db.outbox_events.c.tenant_id == tenant_id, db.outbox_events.c.id == event_id))
-            .values(status="pending", attempts=0, published_at=None)
+    def update_outbox_event_for_retry(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        event_id: str,
+        transition: StatusTransition,
+    ) -> RuntimeRow | None:
+        updated = cas_status_update(
+            transaction,
+            db.outbox_events,
+            tenant_id=tenant_id,
+            row_id=event_id,
+            transition=transition,
+            values={"attempts": 0, "published_at": None},
         )
+        if not updated:
+            return None
         row = (
             transaction.execute(
                 select(db.outbox_events).where(

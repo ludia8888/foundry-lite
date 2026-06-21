@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, NotRequired, Protocol, TypedDict
 
-from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 RuntimeLookupTable = Literal["transforms", "materializations"]
 RuntimeRowsTable = Literal[
@@ -390,9 +390,14 @@ class RuntimeRepository(Protocol):
         ...
 
     def update_outbox_event_for_retry(
-        self, *, transaction: TransactionContext, tenant_id: str, event_id: str
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        event_id: str,
+        transition: StatusTransition,
     ) -> RuntimeRow | None:
-        """Move an existing outbox event back to pending for retry."""
+        """CAS an outbox event back to pending for retry."""
         ...
 
     def delete_dead_letter_event(self, *, transaction: TransactionContext, tenant_id: str, event_id: str) -> bool:

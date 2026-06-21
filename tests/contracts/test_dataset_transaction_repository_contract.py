@@ -15,6 +15,11 @@ from foundry_lite.application.ports import (
     DeadLetterRecord,
     SyncRunRecord,
 )
+from foundry_lite.application.ports.transaction_context import (
+    SYNC_RUN_COMMITTED,
+    StatusTransition,
+    dataset_run_failed_transition,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyDatasetTransactionRepository,
@@ -87,10 +92,13 @@ class FakeDatasetTransactionRepository:
 
     def abort_transaction(
         self, *, transaction: Any, tenant_id: str, transaction_id: str, metadata: dict[str, Any]
-    ) -> None:
+    ) -> bool:
         del transaction
-        if self.transactions[transaction_id]["tenant_id"] == tenant_id:
-            self.transactions[transaction_id].update(status="ABORTED", metadata=metadata)
+        row = self.transactions[transaction_id]
+        if row["tenant_id"] == tenant_id and row["status"] == "OPEN":
+            row.update(status="ABORTED", metadata=metadata)
+            return True
+        return False
 
     def lock_dataset_for_version_allocation(self, *, transaction: Any, tenant_id: str, dataset_id: str) -> None:
         del transaction, tenant_id, dataset_id
@@ -205,11 +213,15 @@ class FakeDatasetTransactionRepository:
         tx = self.transactions[transaction_id]
         if tx["tenant_id"] != tenant_id:
             return False
-        aborted = tx["status"] == "OPEN"
+        if tx["status"] not in {"OPEN", "ABORTED"}:
+            return False
         if tx["status"] == "OPEN":
             tx.update(status="ABORTED", metadata={"error": error})
-        self.runs[(run_kind, run_id)].update(status="FAILED", error=error, completed_at=completed_at)
-        return aborted
+        run = self.runs[(run_kind, run_id)]
+        if run["status"] not in _failed_run_from_statuses(run_kind):
+            return False
+        run.update(status="FAILED", error=error, completed_at=completed_at)
+        return True
 
     def insert_sync_run(self, *, transaction: Any, record: SyncRunRecord) -> None:
         del transaction
@@ -312,7 +324,7 @@ class FakeDatasetTransactionRepository:
     ) -> dict[str, Any] | None:
         del transaction
         row = self._mutable_dead_letter(tenant_id, record_id)
-        if row is None:
+        if not _is_matching_replay(row, replay_run_id):
             return None
         row.update(
             status="RESOLVED",
@@ -333,7 +345,7 @@ class FakeDatasetTransactionRepository:
     ) -> dict[str, Any] | None:
         del transaction
         row = self._mutable_dead_letter(tenant_id, record_id)
-        if row is None:
+        if not _is_matching_replay(row, replay_run_id):
             return None
         row.update(
             status="QUARANTINED",
@@ -355,7 +367,7 @@ class FakeDatasetTransactionRepository:
     ) -> dict[str, Any] | None:
         del transaction
         row = self._mutable_dead_letter(tenant_id, record_id)
-        if row is None:
+        if row is None or row["status"] != "QUARANTINED":
             return None
         row.update(
             status="DISCARDED",
@@ -377,18 +389,21 @@ class FakeDatasetTransactionRepository:
         transaction: Any,
         tenant_id: str,
         sync_run_id: str,
-        status: str,
+        transition: StatusTransition,
         committed_version_id: str | None,
         completed_at: str,
-    ) -> None:
+    ) -> bool:
         del transaction
         if self.sync_runs_store[sync_run_id]["tenant_id"] != tenant_id:
-            return
+            return False
+        if self.sync_runs_store[sync_run_id]["status"] not in transition.from_statuses:
+            return False
         self.sync_runs_store[sync_run_id].update(
-            status=status,
+            status=transition.to_status,
             committed_version_id=committed_version_id,
             completed_at=completed_at,
         )
+        return True
 
 
 @dataclass
@@ -402,7 +417,7 @@ class FakeTransactionHarness:
         self.repository.runs[(run_kind, run_id)] = {
             "id": run_id,
             "transaction_id": transaction_id,
-            "status": "RUNNING",
+            "status": _initial_run_status(run_kind),
             "error": None,
             "completed_at": None,
         }
@@ -687,7 +702,7 @@ def _run_values(run_kind: DatasetRunKind, run_id: str, transaction_id: str) -> d
     base = {
         "id": run_id,
         "tenant_id": "tenant-demo",
-        "status": "RUNNING",
+        "status": _initial_run_status(run_kind),
         "error": None,
         "created_at": "2026-06-10T00:00:00Z",
         "completed_at": None,
@@ -719,6 +734,24 @@ def _run_values(run_kind: DatasetRunKind, run_id: str, transaction_id: str) -> d
         "target_dataset_version_id": None,
         "row_count": None,
     }
+
+
+def _initial_run_status(run_kind: DatasetRunKind) -> str:
+    if run_kind == "sync":
+        return "EXTRACTING"
+    if run_kind == "transform":
+        return "RUNNING"
+    return "running"
+
+
+def _failed_run_from_statuses(run_kind: DatasetRunKind) -> tuple[str, ...]:
+    return dataset_run_failed_transition(run_kind).from_statuses
+
+
+def _is_matching_replay(row: dict[str, Any] | None, replay_run_id: str) -> bool:
+    if row is None:
+        return False
+    return row["status"] in {"REPLAY_REQUESTED", "REPLAYING"} and row["replay_run_id"] == replay_run_id
 
 
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
@@ -1122,6 +1155,55 @@ def test_dataset_transaction_repository_contract_abort_open_transaction_and_fail
     assert failed_tx["metadata"] == {"error": {"code": "VALIDATION_FAILED"}}
 
 
+@pytest.mark.parametrize("run_kind", ["sync", "transform", "materialization"])
+def test_dataset_transaction_repository_contract_fails_run_when_transaction_already_aborted(
+    harness: TransactionHarness,
+    run_kind: DatasetRunKind,
+) -> None:
+    repository = harness.repository
+
+    harness.call_in_transaction(
+        lambda transaction: repository.create_open_transaction(
+            transaction=transaction,
+            record=_transaction_record("dstx_quality_blocked"),
+        )
+    )
+    harness.call_in_transaction(
+        lambda transaction: repository.abort_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_quality_blocked",
+            metadata={"validationFailures": [{"check": "unique"}]},
+        )
+    )
+    harness.add_run(run_kind=run_kind, run_id="run_quality_blocked", transaction_id="dstx_quality_blocked")
+
+    updated = harness.call_in_transaction(
+        lambda transaction: repository.abort_open_transaction_and_fail_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_quality_blocked",
+            run_id="run_quality_blocked",
+            run_kind=run_kind,
+            error={"code": "VALIDATION_FAILED"},
+            completed_at="2026-06-10T00:04:00Z",
+        )
+    )
+    failed_run = harness.run_status(run_kind=run_kind, run_id="run_quality_blocked")
+    failed_tx = harness.call_in_transaction(
+        lambda transaction: repository.transaction_by_id(
+            transaction=transaction,
+            transaction_id="dstx_quality_blocked",
+        )
+    )
+
+    assert updated is True
+    assert failed_run is not None
+    assert failed_run["status"] == "FAILED"
+    assert failed_tx is not None
+    assert failed_tx["metadata"] == {"validationFailures": [{"check": "unique"}]}
+
+
 def test_dataset_transaction_repository_contract_dead_letter_record_is_tenant_scoped(
     harness: TransactionHarness,
 ) -> None:
@@ -1189,8 +1271,19 @@ def test_dataset_transaction_repository_contract_dead_letter_record_replay_and_d
             metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
             backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
         )
+        failed_request = repository.update_dead_letter_record_replay_requested(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_idempotency_key="retry-key-2",
+            replay_requested_at="2026-06-10T00:04:02Z",
+            metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
+            backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
+        )
         assert updated is not None
         assert duplicate_request is None
+        assert failed_request is not None
         succeeded = repository.update_dead_letter_record_replay_succeeded(
             transaction=transaction,
             tenant_id="tenant-demo",
@@ -1369,21 +1462,32 @@ def test_dataset_transaction_repository_contract_sync_run_terminal_committed(
 ) -> None:
     repository = harness.repository
 
-    def insert_then_commit(transaction: Any) -> None:
+    def insert_then_commit(transaction: Any) -> tuple[bool, bool]:
         repository.insert_sync_run(transaction=transaction, record=_sync_run_record())
-        repository.update_sync_run_terminal(
+        updated = repository.update_sync_run_terminal(
             transaction=transaction,
             tenant_id="tenant-demo",
             sync_run_id="sync_run_1",
-            status="COMMITTED",
+            transition=SYNC_RUN_COMMITTED,
             committed_version_id="dsv_orders_1",
             completed_at="2026-06-10T00:05:00Z",
         )
+        stale = repository.update_sync_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            sync_run_id="sync_run_1",
+            transition=SYNC_RUN_COMMITTED,
+            committed_version_id="dsv_orders_2",
+            completed_at="2026-06-10T00:06:00Z",
+        )
+        return updated, stale
 
-    harness.call_in_transaction(insert_then_commit)
+    updated, stale = harness.call_in_transaction(insert_then_commit)
 
     row = harness.sync_run_row(sync_run_id="sync_run_1")
     assert row is not None
+    assert updated is True
+    assert stale is False
     assert row["status"] == "COMMITTED"
     assert row["committed_version_id"] == "dsv_orders_1"
     assert row["completed_at"] == "2026-06-10T00:05:00Z"

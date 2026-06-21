@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from sqlalchemy import and_, func, insert, select, update
+from sqlalchemy import and_, func, insert, select
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.materialization_repository import (
@@ -13,7 +13,9 @@ from foundry_lite.application.ports.materialization_repository import (
     MaterializationRunRecord,
     ObjectRecordVersionRow,
 )
+from foundry_lite.application.ports.transaction_context import StatusTransition
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
 
 class SqlAlchemyMaterializationRepository:
@@ -90,27 +92,24 @@ class SqlAlchemyMaterializationRepository:
         transaction: Any,
         tenant_id: str,
         materialization_run_id: str,
-        status: str,
+        transition: StatusTransition,
         target_dataset_version_id: str | None,
         row_count: int | None,
         error: Mapping[str, object] | None,
         completed_at: str,
-    ) -> None:
-        transaction.execute(
-            update(db.materialization_runs)
-            .where(
-                and_(
-                    db.materialization_runs.c.tenant_id == tenant_id,
-                    db.materialization_runs.c.id == materialization_run_id,
-                )
-            )
-            .values(
-                status=status,
-                target_dataset_version_id=target_dataset_version_id,
-                row_count=row_count,
-                error=error,
-                completed_at=completed_at,
-            )
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.materialization_runs,
+            tenant_id=tenant_id,
+            row_id=materialization_run_id,
+            transition=transition,
+            values={
+                "target_dataset_version_id": target_dataset_version_id,
+                "row_count": row_count,
+                "error": error,
+                "completed_at": completed_at,
+            },
         )
 
     def latest_action_run_watermark(self, *, transaction: Any, tenant_id: str) -> ActionRunWatermark:

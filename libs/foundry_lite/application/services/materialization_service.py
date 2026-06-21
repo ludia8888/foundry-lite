@@ -23,6 +23,7 @@ from foundry_lite.application.services.materialization_protocols import (
     MaterializationDatasetRegistry,
     MaterializationDatasetTransactions,
     MaterializationRuntimeBoundary,
+    mark_materialization_run_succeeded,
 )
 from foundry_lite.application.services.materialization_types import (
     supported_materialization_type,
@@ -203,7 +204,7 @@ class MaterializationService(CoreService):
         with self.engine.begin() as conn:
 
             def after_persist(conn: TransactionContext, result: CommitResult) -> None:
-                self._mark_materialization_run_succeeded(conn, ctx, plan.run_id, result)
+                mark_materialization_run_succeeded(self.materialization_repository, conn, ctx, plan.run_id, result)
                 self._record_materialization_lineage(conn, ctx, plan, result)
 
             try:
@@ -271,25 +272,6 @@ class MaterializationService(CoreService):
             exc,
             "materialization",
             adapter="compute_adapter.rows_to_parquet",
-        )
-
-    def _mark_materialization_run_succeeded(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run_id: str,
-        result: CommitResult,
-    ) -> None:
-        """Close a materialization run with the produced dataset version."""
-        self.materialization_repository.update_materialization_run_terminal(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            materialization_run_id=run_id,
-            status="succeeded",
-            target_dataset_version_id=result.version_id,
-            row_count=result.row_count,
-            error=None,
-            completed_at=_now(),
         )
 
     def _ensure_materialization(

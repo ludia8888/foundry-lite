@@ -4,7 +4,15 @@ from collections.abc import Mapping
 from typing import Protocol
 
 from foundry_lite.application.action_types import ActionApplyCommand, ActionApplyResponse
-from foundry_lite.application.ports import ActionMutationDefinition, ActionTypeRow, ObjectRecordRow, TransactionContext
+from foundry_lite.application.ports import (
+    ACTION_RUN_CONFLICT,
+    ACTION_RUN_FAILED,
+    ActionMutationDefinition,
+    ActionTypeRow,
+    ObjectRecordRow,
+    StatusTransition,
+    TransactionContext,
+)
 from foundry_lite.application.ports.action_repository import (
     ActionErrorPayload,
     ActionRunRow,
@@ -13,7 +21,7 @@ from foundry_lite.application.ports.action_repository import (
 )
 from foundry_lite.application.primitives import MOCK_WRITEBACK_CONNECTOR, _json_hash
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ExternalSystemError, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, ExternalSystemError, InvariantViolation, ValidationFailed
 
 
 class SupportsErrorPayload(Protocol):
@@ -204,6 +212,35 @@ def mutation_value(mutation: ActionMutationDefinition, params: Mapping[str, obje
     if "valueFrom" in mutation:
         return resolve_value_from(mutation["valueFrom"], params)
     return mutation.get("value")
+
+
+def action_failure_transition(error: Exception) -> StatusTransition:
+    if isinstance(error, ConflictDetected):
+        return ACTION_RUN_CONFLICT
+    return ACTION_RUN_FAILED
+
+
+def require_action_target_api_name(action_type: ActionTypeRow, requested_object_type: str) -> None:
+    expected_object_type = str(action_type["target_api_name"])
+    if requested_object_type == expected_object_type:
+        return
+    raise ValidationFailed(
+        "action target object type mismatch",
+        details={"expectedObjectType": expected_object_type, "requestedObjectType": requested_object_type},
+    )
+
+
+def action_target_record_error(action_type: ActionTypeRow, record: ObjectRecordRow) -> InvariantViolation | None:
+    expected_object_type_id = str(action_type["target_object_type_id"])
+    if str(record["object_type_id"]) == expected_object_type_id:
+        return None
+    return InvariantViolation(
+        "action target record object type invariant violated",
+        details={
+            "expectedObjectTypeId": expected_object_type_id,
+            "recordObjectTypeId": str(record["object_type_id"]),
+        },
+    )
 
 
 def previous_action_values(record: ObjectRecordRow, patch: ObjectPatch) -> ObjectProperties:

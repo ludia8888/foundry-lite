@@ -34,9 +34,14 @@ class DatasetRecoveryService(CoreService):
                 tenant_id=ctx.tenant_id,
                 created_before=created_before,
             )
-        return [self._abort_stale_open_transaction(ctx, tx) for tx in stale]
+        aborted_ids: list[str] = []
+        for tx in stale:
+            aborted_id = self._abort_stale_open_transaction(ctx, tx)
+            if aborted_id is not None:
+                aborted_ids.append(aborted_id)
+        return aborted_ids
 
-    def _abort_stale_open_transaction(self, ctx: RequestContext, tx: DatasetTransactionRow) -> str:
+    def _abort_stale_open_transaction(self, ctx: RequestContext, tx: DatasetTransactionRow) -> str | None:
         transaction_id = str(tx["id"])
         staging_cleanup = cleanup_staging_transaction(self.dataset_storage, ctx, tx, transaction_id)
         metadata = {
@@ -45,12 +50,14 @@ class DatasetRecoveryService(CoreService):
             "abortReason": "stale_open_transaction",
         }
         with self.engine.begin() as conn:
-            self.dataset_transaction_repository.abort_transaction(
+            aborted = self.dataset_transaction_repository.abort_transaction(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
                 transaction_id=transaction_id,
                 metadata=metadata,
             )
+            if not aborted:
+                return None
             self.runtime_service._audit(
                 conn,
                 ctx,

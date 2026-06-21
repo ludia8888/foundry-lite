@@ -26,6 +26,7 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetRuntimeBoundary,
     DatasetTransactionManager,
     DatasetVersionLookup,
+    mark_sync_run_committed,
     require_dataset_write_open,
 )
 from foundry_lite.application.services.dataset.stream_archive_commit import (
@@ -121,8 +122,8 @@ class DatasetIngestService(CoreService):
                     run_id=plan.run_id,
                     audit_action="csv_upload_commit",
                     outbox_event_type="dataset.version.committed",
-                    after_persist=lambda commit_conn, result: self._mark_sync_run_committed(
-                        commit_conn, ctx, plan.run_id, result
+                    after_persist=lambda commit_conn, result: mark_sync_run_committed(
+                        self.dataset_transaction_repository, commit_conn, ctx, plan.run_id, result
                     ),
                 )
             except DatasetCommitBlocked as exc:
@@ -422,8 +423,8 @@ class DatasetIngestService(CoreService):
                     audit_action="stream_archive_append_commit",
                     outbox_event_type="dataset.version.committed",
                     transaction_metadata=metadata,
-                    after_persist=lambda commit_conn, result: self._mark_sync_run_committed(
-                        commit_conn, ctx, plan.run_id, result
+                    after_persist=lambda commit_conn, result: mark_sync_run_committed(
+                        self.dataset_transaction_repository, commit_conn, ctx, plan.run_id, result
                     ),
                 )
             except DatasetCommitBlocked as exc:
@@ -487,14 +488,7 @@ class DatasetIngestService(CoreService):
         run_id: str,
         result: CommitResult,
     ) -> None:
-        self.dataset_transaction_repository.update_sync_run_terminal(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            sync_run_id=run_id,
-            status="COMMITTED",
-            committed_version_id=result.version_id,
-            completed_at=_now(),
-        )
+        mark_sync_run_committed(self.dataset_transaction_repository, conn, ctx, run_id, result)
 
     def _rows_to_parquet(self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]) -> None:
         self.compute_adapter.rows_to_parquet(rows, target_path, fieldnames)

@@ -411,12 +411,17 @@ class DatasetTransactionService(CoreService):
     ) -> None:
         """Abort an open transaction and record validation failures for audit."""
         failure_list = [block_commit_failure(failure) for failure in failures]
-        self.dataset_transaction_repository.abort_transaction(
+        aborted = self.dataset_transaction_repository.abort_transaction(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             transaction_id=transaction_id,
             metadata={"validationFailures": failure_list},
         )
+        if not aborted:
+            raise ConflictDetected(
+                "dataset transaction abort lost its OPEN state",
+                details={"transaction_id": transaction_id},
+            )
         self.runtime_service._audit(
             conn,
             ctx,
@@ -467,14 +472,23 @@ class DatasetTransactionService(CoreService):
                 error=error_payload,
                 completed_at=_now(),
             )
-            if aborted:
-                self.runtime_service._audit(
-                    conn,
-                    ctx,
-                    event_type="dataset.transaction.aborted",
-                    resource_type="dataset_transaction",
-                    resource_id=transaction_id,
-                    action="abort",
-                    after_ref={"error": error_payload, "staging_cleanup": staging_cleanup},
-                    correlation_id=run_id,
-                )
+            _require_abort_won(is_aborted=aborted, transaction_id=transaction_id, run_id=run_id)
+            self.runtime_service._audit(
+                conn,
+                ctx,
+                event_type="dataset.transaction.aborted",
+                resource_type="dataset_transaction",
+                resource_id=transaction_id,
+                action="abort",
+                after_ref={"error": error_payload, "staging_cleanup": staging_cleanup},
+                correlation_id=run_id,
+            )
+
+
+def _require_abort_won(is_aborted: bool, transaction_id: str, run_id: str) -> None:
+    if is_aborted:
+        return
+    raise ConflictDetected(
+        "dataset transaction abort lost its current state",
+        details={"transaction_id": transaction_id, "run_id": run_id},
+    )

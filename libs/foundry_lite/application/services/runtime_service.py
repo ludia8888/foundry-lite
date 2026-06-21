@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 from foundry_lite.application.ports import (
+    OUTBOX_RETRY_PENDING,
     AuditEventRecord,
     DatasetCheckResultRow,
     DatasetTransactionRepository,
@@ -266,7 +267,10 @@ class RuntimeService(CoreService):
             plan = dead_letter_retry_plan(self.runtime_repository, conn, ctx, event_id)
             outbox_event_id = plan["outboxEventId"]
             outbox = self.runtime_repository.update_outbox_event_for_retry(
-                transaction=conn, tenant_id=ctx.tenant_id, event_id=outbox_event_id
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                event_id=outbox_event_id,
+                transition=OUTBOX_RETRY_PENDING,
             )
             if outbox is None:
                 raise NotFound("source outbox event not found", details={"event_id": outbox_event_id})

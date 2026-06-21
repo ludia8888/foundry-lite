@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
-from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 ActionParameters = Mapping[str, object]
 ActionErrorPayload = Mapping[str, object]
@@ -147,11 +147,11 @@ class ActionRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         action_run_id: str,
-        status: str,
+        transition: StatusTransition,
         error: ActionErrorPayload | None,
         completed_at: str,
-    ) -> None:
-        """Mark an action run as failed, conflicted, or succeeded."""
+    ) -> bool:
+        """CAS an action run from an allowed state into a terminal state."""
         ...
 
     def insert_action_writeback(self, *, transaction: TransactionContext, record: ActionWritebackRecord) -> None:

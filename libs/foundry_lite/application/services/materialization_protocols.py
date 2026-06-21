@@ -5,17 +5,41 @@ from pathlib import Path
 from typing import Protocol
 
 from foundry_lite.application.ports import (
+    MATERIALIZATION_RUN_SUCCEEDED,
     DatasetCheckConfig,
     DatasetRow,
     DatasetRunKind,
+    MaterializationRepository,
     RuntimeRow,
     RuntimeRowsTable,
     TransactionContext,
 )
-from foundry_lite.application.primitives import CommitResult
+from foundry_lite.application.primitives import CommitResult, _now
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected
 
 DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
+
+
+def mark_materialization_run_succeeded(
+    repository: MaterializationRepository,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    run_id: str,
+    result: CommitResult,
+) -> None:
+    updated = repository.update_materialization_run_terminal(
+        transaction=conn,
+        tenant_id=ctx.tenant_id,
+        materialization_run_id=run_id,
+        transition=MATERIALIZATION_RUN_SUCCEEDED,
+        target_dataset_version_id=result.version_id,
+        row_count=result.row_count,
+        error=None,
+        completed_at=_now(),
+    )
+    if not updated:
+        raise ConflictDetected("materialization run state changed concurrently", details={"run_id": run_id})
 
 
 class MaterializationDatasetIngest(Protocol):

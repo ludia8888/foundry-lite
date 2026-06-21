@@ -6,7 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import cast
 
-from foundry_lite.application.ports import TransactionContext
+from foundry_lite.application.ports import TRANSFORM_RUN_SUCCEEDED, TransactionContext
 from foundry_lite.application.ports.dataset_repository import DatasetRow
 from foundry_lite.application.ports.transform_repository import (
     TransformRepository,
@@ -14,14 +14,14 @@ from foundry_lite.application.ports.transform_repository import (
     TransformRunRecord,
     TransformRunRow,
 )
-from foundry_lite.application.primitives import INPUT_PATTERN, _new_id, _now
+from foundry_lite.application.primitives import INPUT_PATTERN, CommitResult, _new_id, _now
 from foundry_lite.application.services.transform_protocols import (
     TransformDatasetRegistry,
     TransformDatasetTransactions,
     TransformDatasetVersions,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import NotFound, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
 
 @dataclass(frozen=True)
@@ -169,6 +169,26 @@ def _insert_transform_run(
             completed_at=None,
         ),
     )
+
+
+def mark_transform_run_succeeded(
+    repository: TransformRepository,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    run_id: str,
+    result: CommitResult,
+) -> None:
+    updated = repository.update_transform_run_terminal(
+        transaction=conn,
+        tenant_id=ctx.tenant_id,
+        transform_run_id=run_id,
+        transition=TRANSFORM_RUN_SUCCEEDED,
+        output_version_id=result.version_id,
+        error=None,
+        completed_at=_now(),
+    )
+    if not updated:
+        raise ConflictDetected("transform run terminal state changed concurrently", details={"run_id": run_id})
 
 
 def _get_transform(

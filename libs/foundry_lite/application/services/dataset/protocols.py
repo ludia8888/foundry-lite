@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Literal, Protocol, overload
 
 from foundry_lite.application.ports import (
+    SYNC_RUN_COMMITTED,
     DatasetCheckConfig,
     DatasetCheckResult,
     DatasetManifest,
@@ -14,14 +15,35 @@ from foundry_lite.application.ports import (
     DatasetSchemaReference,
     DatasetSchemaRow,
     DatasetTransactionMetadata,
+    DatasetTransactionRepository,
     DatasetVersionRow,
     TransactionContext,
 )
-from foundry_lite.application.primitives import CommitResult, StagedFileStats
+from foundry_lite.application.primitives import CommitResult, StagedFileStats, _now
 from foundry_lite.application.services.dataset.schema_evolution import DatasetSchemaEvolutionResult
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected
 
 DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
+
+
+def mark_sync_run_committed(
+    repository: DatasetTransactionRepository,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    run_id: str,
+    result: CommitResult,
+) -> None:
+    updated = repository.update_sync_run_terminal(
+        transaction=conn,
+        tenant_id=ctx.tenant_id,
+        sync_run_id=run_id,
+        transition=SYNC_RUN_COMMITTED,
+        committed_version_id=result.version_id,
+        completed_at=_now(),
+    )
+    if not updated:
+        raise ConflictDetected("sync run terminal state changed concurrently", details={"run_id": run_id})
 
 
 class DatasetRegistryLookup(Protocol):

@@ -11,7 +11,7 @@ from foundry_lite.application.ports.transform_repository import (
     TransformRetryResult,
     TransformRow,
 )
-from foundry_lite.application.primitives import CommitResult, _new_id, _now
+from foundry_lite.application.primitives import CommitResult, _new_id
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.transform_protocols import (
     TransformDatasetRegistry,
@@ -24,6 +24,7 @@ from foundry_lite.application.services.transform_protocols import (
 )
 from foundry_lite.application.services.transform_runs import (
     TransformRunPlan,
+    mark_transform_run_succeeded,
     start_failed_transform_retry,
     start_transform_run,
 )
@@ -213,7 +214,7 @@ class TransformService(CoreService):
     ) -> CommitResult:
         def after_persist(conn: TransactionContext, result: CommitResult) -> None:
             self._record_transform_lineage(conn, ctx, plan, result)
-            self._mark_transform_run_succeeded(conn, ctx, plan.run_id, result)
+            mark_transform_run_succeeded(self.transform_repository, conn, ctx, plan.run_id, result)
             if should_audit_retry:
                 self._audit_transform_retry(conn, ctx, plan, result)
 
@@ -412,24 +413,6 @@ class TransformService(CoreService):
 
     def _normalized_checks(self, checks: Sequence[TransformCheck] | None) -> list[dict[str, object]]:
         return [dict(check) for check in checks or ()]
-
-    def _mark_transform_run_succeeded(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run_id: str,
-        result: CommitResult,
-    ) -> None:
-        """Close a transform run with the output dataset version."""
-        self.transform_repository.update_transform_run_terminal(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            transform_run_id=run_id,
-            status="SUCCESS",
-            output_version_id=result.version_id,
-            error=None,
-            completed_at=_now(),
-        )
 
     def _audit_transform_retry(
         self,

@@ -21,6 +21,7 @@ from foundry_lite.application.ports import (
     RuntimeRunSnapshot,
     RuntimeRunType,
 )
+from foundry_lite.application.ports.transaction_context import OUTBOX_RETRY_PENDING, StatusTransition
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyRuntimeRepository
 from sqlalchemy import create_engine, insert
@@ -121,11 +122,18 @@ class FakeRuntimeRepository:
         del transaction
         return [cast(RuntimeRow, dict(row)) for row in self.tables[table] if row["tenant_id"] == tenant_id]
 
-    def update_outbox_event_for_retry(self, *, transaction: Any, tenant_id: str, event_id: str) -> RuntimeRow | None:
+    def update_outbox_event_for_retry(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        event_id: str,
+        transition: StatusTransition,
+    ) -> RuntimeRow | None:
         del transaction
         for row in self.tables["outbox_events"]:
-            if row["tenant_id"] == tenant_id and row["id"] == event_id:
-                row.update(status="pending", attempts=0, published_at=None)
+            if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
+                row.update(status=transition.to_status, attempts=0, published_at=None)
                 return cast(RuntimeRow, dict(row))
         return None
 
@@ -603,6 +611,13 @@ def test_runtime_repository_contract_requeues_dead_letter_event(
             transaction=transaction,
             tenant_id="tenant-demo",
             event_id=str(dead_letter["source_event_id"]),
+            transition=OUTBOX_RETRY_PENDING,
+        )
+        stale = harness.repository.update_outbox_event_for_retry(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id=str(dead_letter["source_event_id"]),
+            transition=OUTBOX_RETRY_PENDING,
         )
         deleted = harness.repository.delete_dead_letter_event(
             transaction=transaction,
@@ -613,6 +628,7 @@ def test_runtime_repository_contract_requeues_dead_letter_event(
     runs = harness.repository.list_runs(tenant_id="tenant-demo")
 
     assert outbox is not None
+    assert stale is None
     assert outbox["status"] == "pending"
     assert outbox["attempts"] == 0
     assert outbox["published_at"] is None

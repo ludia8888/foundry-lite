@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypedDict
 
-from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 DatasetRunKind = Literal["sync", "transform", "materialization"]
 DeadLetterRecordStatus = Literal["QUARANTINED", "REPLAY_REQUESTED", "REPLAYING", "RESOLVED", "DISCARDED"]
@@ -237,8 +237,8 @@ class DatasetTransactionRepository(Protocol):
         tenant_id: str,
         transaction_id: str,
         metadata: DatasetTransactionMetadata,
-    ) -> None:
-        """Mark a dataset transaction aborted inside the caller transaction."""
+    ) -> bool:
+        """CAS an OPEN dataset transaction into ABORTED inside the caller transaction."""
         ...
 
     def lock_dataset_for_version_allocation(
@@ -415,9 +415,9 @@ class DatasetTransactionRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         sync_run_id: str,
-        status: str,
+        transition: StatusTransition,
         committed_version_id: str | None,
         completed_at: str,
-    ) -> None:
-        """Mark a sync run terminal inside the caller transaction."""
+    ) -> bool:
+        """CAS a sync run from an allowed state into a terminal state."""
         ...

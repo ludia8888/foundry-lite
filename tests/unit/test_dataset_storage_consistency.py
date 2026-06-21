@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import DatasetFileRecord
+from foundry_lite.application.ports.transaction_context import StatusTransition
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 from foundry_lite.infrastructure import schema as db
@@ -42,17 +43,17 @@ class _FailingSyncRunCommitRepository:
         transaction: object,
         tenant_id: str,
         sync_run_id: str,
-        status: str,
+        transition: StatusTransition,
         committed_version_id: str | None,
         completed_at: str,
-    ) -> None:
-        if status == "COMMITTED":
+    ) -> bool:
+        if transition.to_status == "COMMITTED":
             raise RuntimeError("sync run terminal update exploded after storage promotion")
-        self._wrapped.update_sync_run_terminal(
+        return self._wrapped.update_sync_run_terminal(
             transaction=transaction,
             tenant_id=tenant_id,
             sync_run_id=sync_run_id,
-            status=status,
+            transition=transition,
             committed_version_id=committed_version_id,
             completed_at=completed_at,
         )

@@ -17,8 +17,10 @@ from foundry_lite.application.ports.action_repository import (
     ObjectEditRecord,
     ObjectTargetUpdate,
 )
+from foundry_lite.application.ports.transaction_context import StatusTransition
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
 
 class SqlAlchemyActionRepository:
@@ -113,14 +115,17 @@ class SqlAlchemyActionRepository:
         transaction: Any,
         tenant_id: str,
         action_run_id: str,
-        status: str,
+        transition: StatusTransition,
         error: Mapping[str, object] | None,
         completed_at: str,
-    ) -> None:
-        transaction.execute(
-            update(db.action_runs)
-            .where(and_(db.action_runs.c.tenant_id == tenant_id, db.action_runs.c.id == action_run_id))
-            .values(status=status, error=dict(error) if error is not None else None, completed_at=completed_at)
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.action_runs,
+            tenant_id=tenant_id,
+            row_id=action_run_id,
+            transition=transition,
+            values={"error": dict(error) if error is not None else None, "completed_at": completed_at},
         )
 
     def insert_action_writeback(self, *, transaction: Any, record: ActionWritebackRecord) -> None:

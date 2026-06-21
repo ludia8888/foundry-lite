@@ -4,7 +4,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from foundry_lite.application.action_types import ActionApplyResponse, ActionWritebackReconciliationResult
-from foundry_lite.application.ports import ActionRepository, TransactionContext, TransactionManager
+from foundry_lite.application.ports import (
+    ACTION_RUN_RECONCILED,
+    ActionRepository,
+    TransactionContext,
+    TransactionManager,
+)
 from foundry_lite.application.ports.action_repository import (
     ActionRunRow,
     ActionWritebackReconciliation,
@@ -130,7 +135,6 @@ class ActionWritebackReconciliationWorkflow:
         if not self._try_mark_writeback_reconciled(conn, writeback, response, now):
             return _already_reconciled_result(writeback, remote_status, remote_resource_id)
         mutation = self._commit_reconciled_action(conn, ctx, action_run)
-        self._mark_action_reconciled(conn, ctx, action_run["id"])
         self._audit_action_reconciled(conn, ctx, action_run["id"], writeback, response, mutation)
         return _reconciled_result(action_run["id"], writeback.writeback_id, remote_status, remote_resource_id, mutation)
 
@@ -177,16 +181,7 @@ class ActionWritebackReconciliationWorkflow:
             record=record,
             params=action_run["parameters"],
             idempotency_key=action_run["idempotency_key"],
-        )
-
-    def _mark_action_reconciled(self, conn: TransactionContext, ctx: RequestContext, action_run_id: str) -> None:
-        self.action_repository.update_action_run_terminal(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            action_run_id=action_run_id,
-            status="reconciled",
-            error=None,
-            completed_at=_now(),
+            transition=ACTION_RUN_RECONCILED,
         )
 
     def _audit_action_reconciled(
