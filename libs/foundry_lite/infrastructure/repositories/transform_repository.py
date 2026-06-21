@@ -114,6 +114,7 @@ class SqlAlchemyTransformRepository:
                 transform_id=record.transform_id,
                 status=record.status,
                 input_versions=record.input_versions,
+                definition_snapshot=record.definition_snapshot,
                 output_version_id=record.output_version_id,
                 transaction_id=record.transaction_id,
                 error=record.error,

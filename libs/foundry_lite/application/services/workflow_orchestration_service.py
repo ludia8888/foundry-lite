@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from foundry_lite.application.ports import AuditEventRecord, ProductWorkflowRun, RuntimeRepository
+from foundry_lite.application.ports import AuditEventRecord, ProductWorkflowRun, RuntimeRepository, RuntimeRow
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter, WorkflowRun, WorkflowStartRequest
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
@@ -37,6 +37,12 @@ class WorkflowOrchestrationService(CoreService):
     ) -> ProductWorkflowRun:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="start_connector_sync_workflow",
+            resource_type="dataset",
+            resource_id=dataset_ref,
+        )
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
         request = WorkflowStartRequest(
             workflow_name=CONNECTOR_SYNC_WORKFLOW_NAME,
@@ -62,8 +68,10 @@ class WorkflowOrchestrationService(CoreService):
         run = self.workflow_adapter.workflow_run(workflow_run_id)
         if run is None:
             raise NotFound("workflow run not found", details={"workflow_run_id": workflow_run_id})
-        audit_id = self._audit_event_id_for_workflow(ctx, workflow_run_id)
-        return _product_workflow_run(run, self.workflow_adapter.profile_name, workflow_run_id, audit_id)
+        audit = self._audit_event_for_workflow(ctx, workflow_run_id)
+        audit_id = str(audit["id"]) if audit is not None else None
+        idempotency_key = _workflow_idempotency_key(workflow_run_id, audit)
+        return _product_workflow_run(run, self.workflow_adapter.profile_name, idempotency_key, audit_id)
 
     def _audit_workflow_start(
         self,
@@ -89,10 +97,14 @@ class WorkflowOrchestrationService(CoreService):
         return audit_id
 
     def _audit_event_id_for_workflow(self, ctx: RequestContext, workflow_run_id: str) -> str | None:
+        audit = self._audit_event_for_workflow(ctx, workflow_run_id)
+        return str(audit["id"]) if audit is not None else None
+
+    def _audit_event_for_workflow(self, ctx: RequestContext, workflow_run_id: str) -> RuntimeRow | None:
         audit_rows = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)["auditEvents"]
         for row in audit_rows:
             if row.get("resource_id") == workflow_run_id:
-                return str(row["id"])
+                return row
         return None
 
 
@@ -130,6 +142,18 @@ def _product_workflow_run(
         "error": dict(run.error) if run.error is not None else None,
         "auditEventId": audit_event_id,
     }
+
+
+def _workflow_idempotency_key(workflow_run_id: str, audit: RuntimeRow | None) -> str:
+    if audit is None:
+        return workflow_run_id
+    after_ref = audit.get("after_ref")
+    if not isinstance(after_ref, Mapping):
+        return workflow_run_id
+    idempotency_key = after_ref.get("idempotencyKey")
+    if isinstance(idempotency_key, str) and idempotency_key:
+        return idempotency_key
+    return workflow_run_id
 
 
 def _workflow_audit_record(

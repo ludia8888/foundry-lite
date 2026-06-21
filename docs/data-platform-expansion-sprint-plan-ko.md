@@ -40,7 +40,7 @@ cross-check summary, PR exit checklist는 이 문서가 소유하고, 실제 cur
 | External writeback / saga | S53 simulated `outcome_unknown`, `compensation_required`, reconciliation resolve, masking, and replay proofs exist. | Treat safety semantics as partial; keep real vendor APIs, vendor lookup, compensation workers, persistent queue, and approval UI future. |
 | Elasticsearch | Adapter/projection/live Testcontainers proof exists. | Keep search as rebuildable projection; managed cloud packaging and ops remain future. |
 | CDC | Archive, live Debezium proof, CDC object indexing, bounded stream loop, and active-stack composition proof exist. | Treat bounded/archive/indexing slices as active-covered; keep production daemon lease/fencing/rebalance/commit-unknown edges future. |
-| Backup/restore | S57 preflight, restore-mode status, DB/storage mismatch detection, retry lockout, and approval evidence exist. | Treat current retry/reprocess entrypoint protection as partial; keep real backup artifact creation and platform-wide traffic gate future. |
+| Backup/restore | S57 preflight, restore-mode status, DB/storage mismatch detection, retry lockout, approval evidence, and core platform write-traffic lockout exist. | Treat current lockout as service-boundary proof; keep real backup artifact creation, publisher daemon control, and restore executor packaging future. |
 | Auth/privacy/erasure | S58A/S58B/S58C local JWT/OIDC, secret provider, privacy transform, replication policy, and erasure manifest proofs exist. | Treat local proof as partial; keep cloud/Vault, durable workflows, encrypted durable stores, and full executors future. |
 | Frontend | S61/S62/S63 backend/API/SDK surfaces, request/helper contracts, named SDK-only Web Operations, and Insight Review queue proofs exist. | Treat backend/API/SDK foundation as partial; keep full visual workspace UX, evidence panels, and action orchestration future. |
 
@@ -761,7 +761,10 @@ AI Agent와 Action Type이 CRM/ERP/Slack/캠페인 시스템을 안전하게 움
 > success를 확인한 뒤 action/writeback을 `reconciled`로 닫고, 원래 action parameters로
 > local object mutation을 따라잡는 API/SDK 경로도 검증한다. 또한 민감 action
 > parameter가 reconcile 처리에는 쓰이더라도 action run, writeback, audit의 운영 노출에
-> raw 값으로 새지 않는지 검증한다. 실제 vendor connector 호출,
+> raw 값으로 새지 않는지 검증한다. Action apply는 요청 object type이 action definition의
+> target과 다르면 idempotency key를 선점하거나 action/writeback/object edit/outbox를
+> 남기기 전에 거부하고, 같은 property 이름을 가진 다른 object type도 거부하며, 손상된
+> object record type id도 action run insert 전에 막는다. 실제 vendor connector 호출,
 > background compensation worker 실행, persistent reconciliation queue UI, operator
 > approval UI는 아직 future scope다.
 
@@ -800,6 +803,9 @@ AI Agent와 Action Type이 CRM/ERP/Slack/캠페인 시스템을 안전하게 움
 - [~] compensation action은 idempotent하다:
   현재는 compensation-required action replay가 같은 idempotency key에서 두 번째
   writeback을 만들지 않는 것을 검증한다. 실제 compensation worker idempotency는 future다.
+- [~] action은 선언된 target object type 밖으로 실행되지 않는다:
+  현재는 target object type mismatch, 같은 property 이름을 가진 다른 object type 요청,
+  그리고 손상된 object record type id를 action run 생성 전 거부한다.
 - [ ] high-risk action에는 human approval을 요구한다.
 - [ ] AI Agent가 직접 vendor API를 호출하지 못하게 한다.
 
@@ -832,6 +838,9 @@ remote lookup, persistent queue, approval UI는 아직 future scope다.
 - [x] `test_reconciliation_resolves_remote_success`
 - [x] `test_concurrent_reconciliation_has_one_winner`
 - [x] `test_sensitive_writeback_payload_is_masked_in_audit`
+- [x] `test_action_rejects_target_object_type_mismatch_before_side_effects`
+- [x] `test_action_rejects_same_property_target_type_mismatch`
+- [x] `test_action_rejects_corrupt_target_record_type_before_action_run`
 
 ## 완료 기준
 
@@ -840,6 +849,9 @@ remote lookup, persistent queue, approval UI는 아직 future scope다.
   evidence로 보인다.
 - [~] operator가 추측 없이 reconcile/compensate할 수 있다:
   remote success reconciliation resolve는 가능하다. 실제 compensation worker와 approval UI는 future다.
+- [~] action이 잘못된 aggregate에 적용되지 않는다:
+  target object type invariant와 corrupt record type-id guard는 증명됐다. DB-level FK/constraint
+  강화와 실제 vendor policy approval은 future다.
 - [ ] AI Agent 권한은 Action Type과 approval policy로 제한된다.
 
 ---
@@ -1191,8 +1203,11 @@ PostgreSQL, S3/Iceberg, Object Store, outbox/action 상태를 일관된 시점�
 
 - [~] write traffic 차단: preflight report의 `restoreTrafficGate`가 restore 전에
   write traffic pause가 필요함을 fail-closed 조건으로 남기고, `start_restore_mode`
-  status가 `is_serving_traffic_open=false`를 감사 증거로 남긴다. 모든 write path를
-  막는 platform-wide traffic gate는 future다.
+  status가 `is_serving_traffic_open=false`를 감사 증거로 남긴다. `runtime_restore_gates.py`와
+  `write_traffic_gate.py`가 dataset create/upload, action apply, transform, ontology,
+  object indexing/search/set, materialization, workflow start, Record DLQ, insight review
+  같은 core service write path를 restore mode 중 차단한다. 별도 reverse proxy/Kubernetes
+  traffic fencing은 future다.
 - [~] outbox publisher 일시 중지: report가 outbox publisher를 reconcile 전까지
   resume하면 안 된다는 조건을 남기고, restore mode 중 outbox dead-letter retry와
   materialization reprocess 진입을 차단한다. 별도 publisher daemon pause executor는 future다.
@@ -1229,12 +1244,14 @@ quality:backup-restore
 - [x] `test_post_restore_closed_loop_smoke`
 - [x] `test_restore_retry_is_idempotent`
 - [x] `test_restore_failure_never_opens_serving_traffic`
+- [x] `test_restore_mode_blocks_platform_write_traffic`
 
 ## 완료 기준
 
 - [~] DB만 또는 storage만 복구한 상태를 serving하지 않는다: 현재는 preflight가
   DB/storage mismatch를 `blocked`로 보고하고, restore mode status가 serving traffic을
-  열지 않는 상태를 남긴다. 모든 serving/write endpoint를 가로막는 platform-wide gate는 future다.
+  열지 않는 상태를 남기며 core service write path를 restore mode 중 차단한다. 별도
+  edge traffic fencing과 Kubernetes packaging은 future다.
 - [~] 외부 side effect 중복 전송을 방지한다: 현재는 outbox/action high-watermark와
   publisher pause 조건을 report에 남기고, restore mode 중 outbox retry/reprocess 진입을
   차단하며, post-restore 폐루프 검증 후 운영자 승인 상태에서만 현재 retry/reprocess

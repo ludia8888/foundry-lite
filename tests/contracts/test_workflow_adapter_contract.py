@@ -52,6 +52,36 @@ def test_workflow_adapter_contract_is_idempotent(adapter: WorkflowAdapter) -> No
     assert adapter.workflow_run("missing") is None
 
 
+def test_workflow_adapter_contract_namespaces_idempotency_by_tenant_and_workflow(adapter: WorkflowAdapter) -> None:
+    base = WorkflowStartRequest(
+        workflow_name="sync_orders",
+        tenant_id="tenant-a",
+        request_id="req-workflow-a",
+        idempotency_key="daily-sync",
+        input={"dataset": "raw.orders"},
+    )
+    other_tenant = WorkflowStartRequest(
+        workflow_name="sync_orders",
+        tenant_id="tenant-b",
+        request_id="req-workflow-b",
+        idempotency_key="daily-sync",
+        input={"dataset": "raw.orders"},
+    )
+    other_workflow = WorkflowStartRequest(
+        workflow_name="sync_customers",
+        tenant_id="tenant-a",
+        request_id="req-workflow-c",
+        idempotency_key="daily-sync",
+        input={"dataset": "raw.customers"},
+    )
+
+    runs = [adapter.start_workflow(request) for request in (base, other_tenant, other_workflow)]
+
+    assert len({run.run_id for run in runs}) == 3
+    assert all(run.run_id.startswith("flite:") for run in runs)
+    assert all("daily-sync" not in run.run_id for run in runs)
+
+
 def test_product_workflow_operations_contract_starts_connector_sync_and_audits(
     adapter: WorkflowAdapter,
     tmp_path: Path,
@@ -76,8 +106,11 @@ def test_product_workflow_operations_contract_starts_connector_sync_and_audits(
         ctx=ctx,
     )
 
-    assert run["workflowRunId"] == "connector-sync-orders"
+    assert str(run["workflowRunId"]).startswith("flite:")
+    assert run["workflowRunId"] != "connector-sync-orders"
     assert duplicate["workflowRunId"] == run["workflowRunId"]
+    assert run["idempotencyKey"] == "connector-sync-orders"
+    assert duplicate["idempotencyKey"] == "connector-sync-orders"
     assert run["workflowName"] == CONNECTOR_SYNC_WORKFLOW_NAME
     assert run["workflowProfile"] == adapter.profile_name
     assert run["status"] == "succeeded"

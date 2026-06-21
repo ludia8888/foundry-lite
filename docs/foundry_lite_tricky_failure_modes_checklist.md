@@ -1081,7 +1081,7 @@
 - [x] WF1. adapter-contract: profile/failure taxonomy(timeout·unavailable·unknown·not_found, idempotency-key required) 선언. (`test_temporal_adapter_declares_failure_taxonomy`)
 - [x] WF2. normal-path: start-and-wait가 입력을 처리한 output을 반환하고 run_id=workflow id. (`test_start_workflow_returns_processed_output`)
 - [x] WF3. retry-idempotency: activity가 두 번 실패 후 성공할 때까지 재시도(backoff는 time-skipping이 건너뜀), partial-success로 run 성공. (`test_flaky_activity_is_retried_until_success`)
-- [x] WF4. recovery-cleanup: 같은 idempotency_key로 재시작하면 중복 run을 만들지 않고 기존 완료 run에 재접속해 동일 결과 반환(REJECT_DUPLICATE→AlreadyStarted→handle.result). (`test_same_idempotency_key_returns_existing_run_without_duplicate`)
+- [x] WF4. recovery-cleanup: workflow id는 tenant/workflow/idempotency-key namespace로 만들어져 교차 tenant·교차 workflow 같은 key가 충돌하지 않고, 같은 namespace/key로 재시작하면 중복 run을 만들지 않고 기존 완료 run에 재접속해 동일 결과 반환(REJECT_DUPLICATE→AlreadyStarted→handle.result). (`test_temporal_workflow_id_namespaces_tenant_and_workflow`, `test_same_idempotency_key_returns_existing_run_without_duplicate`)
 - [x] WF5. concurrency-race: 같은 key로 동시에 두 번 start해도 하나의 run만 생기고 둘 다 같은 결과를 받는다. (`test_concurrent_starts_on_one_key_produce_one_run`)
 - [x] WF6. failure-injection + operator-evidence: 비즈니스 실패(non-retryable ApplicationError)는 silent success가 아니라 status=failed + 내구성 있는 error payload(adapterProfile/operation/kind/retryable/operatorMessage/workflowId/temporalRunId)로 표면화된다. (`test_business_failure_returns_durable_error_payload`)
 - [x] WF7. failure-injection(timeout): execution timeout을 초과한 run은 status=failed + kind=timeout + retryable=true + timeoutSeconds로 보고된다. (`test_execution_timeout_is_reported_as_retryable_timeout`)

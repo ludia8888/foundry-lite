@@ -21,6 +21,7 @@ from foundry_lite.application.services.action_helpers import (
     action_command,
     action_replay_response,
     audit_idempotency_conflict,
+    require_action_write_open,
 )
 from foundry_lite.application.services.action_reconciliation import ActionWritebackReconciliationWorkflow
 from foundry_lite.application.services.action_workflow import (
@@ -83,6 +84,7 @@ class ActionService(CoreService):
             simulate_writeback_compensation_required,
         )
         self._require_action_permission(ctx, command.action_api_name)
+        require_action_write_open(self.runtime_service, ctx, "apply", "action_type", command.action_api_name)
         action_run_id = _new_id("action_run")
         outcome = self._run_action_command(ctx, command, action_run_id)
         if outcome.deferred_error is not None:
@@ -119,6 +121,9 @@ class ActionService(CoreService):
                 action_type = self.ontology_service._active_action_type(conn, ctx, command.action_api_name)
                 action_type_for_failure = action_type
                 _require_action_target_api_name(action_type, command.object_type)
+                record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
+                if record is not None and (error := _action_target_record_error(action_type, record)) is not None:
+                    raise error
                 existing = self._existing_action_run(conn, ctx, action_type, command.idempotency_key)
                 if existing is not None:
                     return self._replay_existing_action_run(conn, ctx, existing, command.request_fingerprint)
@@ -137,6 +142,7 @@ class ActionService(CoreService):
                     action_type=action_type,
                     action_run_id=action_run_id,
                     command=command,
+                    record=record,
                 )
         except ConflictDetected as exc:
             if action_type_for_failure is None:
@@ -176,8 +182,8 @@ class ActionService(CoreService):
         action_type: ActionTypeRow,
         action_run_id: str,
         command: ActionApplyCommand,
+        record: ObjectRecordRow | None,
     ) -> ActionApplyOutcome:
-        record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
         deferred_error = self._action_request_error(
             action_type, record, command.expected_object_version, command.params
         )
@@ -260,7 +266,7 @@ class ActionService(CoreService):
                 action_type_api_name=command.action_api_name,
                 actor_user_id=ctx.actor_user_id,
                 target_object_type_id=action_type["target_object_type_id"],
-                target_object_type_api_name=command.object_type,
+                target_object_type_api_name=action_type["target_api_name"],
                 target_object_id=command.object_id,
                 expected_object_version=command.expected_object_version,
                 parameters=command.params,
@@ -303,9 +309,6 @@ class ActionService(CoreService):
     ) -> Exception | None:
         if record is None:
             return NotFound("target object not found")
-        invariant_error = _action_target_record_error(action_type, record)
-        if invariant_error is not None:
-            return invariant_error
         if record["object_version"] != expected_object_version:
             return ConflictDetected(
                 "object version conflict",

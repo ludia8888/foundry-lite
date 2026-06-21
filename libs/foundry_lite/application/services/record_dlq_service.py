@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.runtime_restore_gates import require_write_traffic_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, PermissionDenied, ValidationFailed
 
@@ -70,6 +71,7 @@ class RecordDlqService(CoreService):
         ctx = ctx or RequestContext()
         key = _required_idempotency_key(idempotency_key)
         self._require_or_audit(ctx, "operations:retry", "dead_letter_record", record_id)
+        self._require_write_open(ctx, operation="retry_dead_letter_record", record_id=record_id)
         with self.engine.begin() as conn:
             row, is_idempotent = self._retry_in_transaction(conn, ctx, record_id, key)
         if is_idempotent:
@@ -106,6 +108,7 @@ class RecordDlqService(CoreService):
     ) -> DeadLetterRecordDiscardResult:
         ctx = ctx or RequestContext()
         self._require_or_audit(ctx, "operations:retry", "dead_letter_record", record_id)
+        self._require_write_open(ctx, operation="discard_dead_letter_record", record_id=record_id)
         with self.engine.begin() as conn:
             row = self._discard_in_transaction(conn, ctx, record_id)
         return _discard_result(row)
@@ -189,6 +192,16 @@ class RecordDlqService(CoreService):
         if row is None:
             raise NotFound("dead-letter record not found", details={"record_id": record_id})
         return row
+
+    def _require_write_open(self, ctx: RequestContext, *, operation: str, record_id: str) -> None:
+        require_write_traffic_open(
+            self.engine,
+            self.runtime_repository,
+            ctx,
+            operation=operation,
+            resource_type="dead_letter_record",
+            resource_id=record_id,
+        )
 
     def _require_or_audit(
         self,

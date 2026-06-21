@@ -156,6 +156,15 @@ class DatasetQualityBoundary(Protocol):
 
 
 class DatasetRuntimeBoundary(Protocol):
+    def _require_write_traffic_open(
+        self,
+        ctx: RequestContext,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None: ...
+
     def _require_or_audit(
         self,
         ctx: RequestContext,
@@ -202,3 +211,18 @@ class DatasetRuntimeBoundary(Protocol):
         correlation_id: str | None = None,
         adapter: str | None = None,
     ) -> Mapping[str, object]: ...
+
+
+def require_dataset_write_open(
+    runtime_service: DatasetRuntimeBoundary,
+    ctx: RequestContext,
+    operation: str,
+    resource_type: str,
+    resource_id: str,
+) -> None:
+    runtime_service._require_write_traffic_open(
+        ctx,
+        operation=operation,
+        resource_type=resource_type,
+        resource_id=resource_id,
+    )

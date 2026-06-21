@@ -24,11 +24,14 @@ from foundry_lite.domain.errors import (
     ExternalCompensationRequired,
     ExternalOutcomeUnknown,
     ExternalSystemError,
+    InvariantViolation,
     NotFound,
     PermissionDenied,
     ValidationFailed,
 )
+from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from sqlalchemy import update
 
 from tests.conftest import DEMO_ROOT, prepare_indexed_demo
 
@@ -125,25 +128,29 @@ def _disable_injected_failure(repository: object) -> None:
     repository.enabled = False
 
 
-def _action_row_count(runs: Mapping[str, list[Mapping[str, object]]], idempotency_key: str) -> int:
-    return sum(row.get("idempotency_key") == idempotency_key for row in runs["actionRuns"])
+def _runtime_rows(runs: Mapping[str, object], collection: str) -> list[Mapping[str, object]]:
+    return cast(list[Mapping[str, object]], runs[collection])
+
+
+def _action_row_count(runs: Mapping[str, object], idempotency_key: str) -> int:
+    return sum(row.get("idempotency_key") == idempotency_key for row in _runtime_rows(runs, "actionRuns"))
 
 
 def _rows_for_key(
-    runs: Mapping[str, list[Mapping[str, object]]],
+    runs: Mapping[str, object],
     collection: str,
     idempotency_key: str,
 ) -> list[Mapping[str, object]]:
-    return [row for row in runs[collection] if row.get("idempotency_key") == idempotency_key]
+    return [row for row in _runtime_rows(runs, collection) if row.get("idempotency_key") == idempotency_key]
 
 
-def _action_commit_evidence_counts(runs: Mapping[str, list[Mapping[str, object]]]) -> dict[str, int]:
+def _action_commit_evidence_counts(runs: Mapping[str, object]) -> dict[str, int]:
     return {
-        "writebacks": len(runs["actionWritebacks"]),
-        "edits": len(runs["objectEdits"]),
-        "audit_committed": _event_count(runs["auditEvents"], "action.run.committed"),
-        "outbox_action": _event_count(runs["outboxEvents"], "action.run.committed"),
-        "outbox_edit": _event_count(runs["outboxEvents"], "object.edit.committed"),
+        "writebacks": len(_runtime_rows(runs, "actionWritebacks")),
+        "edits": len(_runtime_rows(runs, "objectEdits")),
+        "audit_committed": _event_count(_runtime_rows(runs, "auditEvents"), "action.run.committed"),
+        "outbox_action": _event_count(_runtime_rows(runs, "outboxEvents"), "action.run.committed"),
+        "outbox_edit": _event_count(_runtime_rows(runs, "outboxEvents"), "object.edit.committed"),
     }
 
 
@@ -1105,6 +1112,7 @@ def test_action_rejects_target_object_type_mismatch_before_side_effects(foundry:
     prepare_indexed_demo(foundry)
     ctx = demo_admin_context()
     idempotency_key = "action-target-mismatch"
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
 
     with pytest.raises(ValidationFailed, match="target object type mismatch"):
         foundry.actions.apply(
@@ -1112,6 +1120,72 @@ def test_action_rejects_target_object_type_mismatch_before_side_effects(foundry:
             object_type="Customer",
             object_id="C-100",
             expected_object_version=1,
+            params={"reason": "Inventory confirmed"},
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    runs = foundry.operations.list_runs(ctx=ctx)
+    assert _action_row_count(runs, idempotency_key) == 0
+    assert _rows_for_key(runs, "actionWritebacks", idempotency_key) == []
+    assert _rows_for_key(runs, "objectEdits", idempotency_key) == []
+    assert _rows_for_key(runs, "outboxEvents", idempotency_key) == []
+    replay = foundry.actions.apply(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "Inventory confirmed"},
+        idempotency_key=idempotency_key,
+        ctx=ctx,
+    )
+    assert replay["status"] == "succeeded"
+
+
+def test_action_rejects_same_property_target_type_mismatch(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = _prepare_demo_with_ontology(foundry, _risk_score_action_ontology(tmp_path))
+    idempotency_key = "same-property-target-mismatch"
+    foundry.objects.reindex("Customer", ctx=ctx)
+    customer = foundry.objects.get("Customer", "C-100", ctx=ctx)
+
+    with pytest.raises(ValidationFailed, match="target object type mismatch"):
+        foundry.actions.apply(
+            "SetOrderRiskScore",
+            object_type="Customer",
+            object_id="C-100",
+            expected_object_version=customer["objectVersion"],
+            params={"riskScore": 99.0},
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    runs = foundry.operations.list_runs(ctx=ctx)
+    assert _action_row_count(runs, idempotency_key) == 0
+    assert _rows_for_key(runs, "objectEdits", idempotency_key) == []
+
+
+def test_action_rejects_corrupt_target_record_type_before_action_run(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "action-target-record-corrupt"
+    with foundry.engine.begin() as conn:
+        cast(Any, conn).execute(
+            update(db.object_records)
+            .where(
+                db.object_records.c.tenant_id == ctx.tenant_id,
+                db.object_records.c.object_type_api_name == "Order",
+                db.object_records.c.object_id == "O-1001",
+                db.object_records.c.is_active == True,  # noqa: E712
+            )
+            .values(object_type_id="otype_CorruptCustomer")
+        )
+
+    with pytest.raises(InvariantViolation, match="target record object type invariant"):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
             params={"reason": "Inventory confirmed"},
             idempotency_key=idempotency_key,
             ctx=ctx,
@@ -1166,5 +1240,35 @@ def _margin_action_ontology(tmp_path: Path) -> Path:
         valueFrom: params.margin
 """
     path = tmp_path / "order-customer-margin-action.yaml"
+    path.write_text(ontology, encoding="utf-8")
+    return path
+
+
+def _risk_score_action_ontology(tmp_path: Path) -> Path:
+    ontology = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
+    ontology = ontology.replace(
+        "      - apiName: riskScore\n        column: risk_score\n        type: float\n        indexed: true",
+        "      - apiName: riskScore\n"
+        "        column: risk_score\n"
+        "        type: float\n"
+        "        indexed: true\n"
+        "        editable: true\n"
+        "        editPolicy: edit_wins",
+        1,
+    )
+    ontology = f"""{ontology}
+  - apiName: SetOrderRiskScore
+    displayName: Set order risk score
+    target: Order
+    parameters:
+      - apiName: riskScore
+        type: float
+        required: true
+    mutations:
+      - type: setProperty
+        property: riskScore
+        valueFrom: params.riskScore
+"""
+    path = tmp_path / "order-customer-risk-score-action.yaml"
     path.write_text(ontology, encoding="utf-8")
     return path

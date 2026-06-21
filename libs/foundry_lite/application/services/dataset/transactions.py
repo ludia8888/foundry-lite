@@ -47,10 +47,12 @@ from foundry_lite.application.services.dataset.transaction_payloads import (
     build_commit_result,
     build_dataset_file_record,
     checked_manifest_hash,
+    commit_open_dataset_transaction,
     current_candidate_manifest_hash,
     dataset_commit_after_ref,
     dataset_commit_persistence_error,
     dataset_version_conflict_error,
+    ensure_snapshot_base_current,
     finalized_transaction_metadata,
 )
 from foundry_lite.domain.context import RequestContext
@@ -160,6 +162,7 @@ class DatasetTransactionService(CoreService):
         request: DatasetFinalizationRequest,
     ) -> DatasetFinalizationCheck:
         tx = self._require_open_transaction(conn, request.transaction_id)
+        ensure_snapshot_base_current(conn=conn, tx=tx, dataset_version_service=self.dataset_version_service)
         validation = self._validate_candidate_once(conn, ctx, request, branch=str(tx["branch"]))
         if current_candidate_manifest_hash(request.staged_parquet, validation) == validation.checked_manifest_hash:
             return validation
@@ -336,13 +339,14 @@ class DatasetTransactionService(CoreService):
             transaction=conn,
             record=build_dataset_file_record(ctx, validation, commit),
         )
-        self._commit_transaction_row(
-            conn,
-            ctx,
-            request.transaction_id,
-            commit.version_id,
-            commit.schema_version,
-            finalized_transaction_metadata(request, validation),
+        commit_open_dataset_transaction(
+            repository=self.dataset_transaction_repository,
+            conn=conn,
+            ctx=ctx,
+            transaction_id=request.transaction_id,
+            version_id=commit.version_id,
+            schema_version=commit.schema_version,
+            metadata=finalized_transaction_metadata(request, validation),
         )
 
     def _cleanup_committed_version_artifacts(
@@ -423,26 +427,6 @@ class DatasetTransactionService(CoreService):
             after_ref={"failures": failure_list},
         )
         raise DatasetCommitBlocked("dataset checks failed", details={"failures": failure_list})
-
-    def _commit_transaction_row(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        transaction_id: str,
-        version_id: str,
-        schema_version: int,
-        metadata: DatasetTransactionMetadata,
-    ) -> None:
-        """Mark the transaction committed after the version and files are stored."""
-        self.dataset_transaction_repository.commit_transaction(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            transaction_id=transaction_id,
-            committed_version_id=version_id,
-            schema_version=schema_version,
-            committed_at=_now(),
-            metadata=metadata,
-        )
 
     def _require_open_transaction(self, conn: TransactionContext, transaction_id: str) -> DatasetTransactionRow:
         tx = self.dataset_transaction_repository.transaction_by_id(transaction=conn, transaction_id=transaction_id)

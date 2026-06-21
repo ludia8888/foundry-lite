@@ -120,10 +120,12 @@ class FakeDatasetTransactionRepository:
         schema_version: int,
         committed_at: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         del transaction
         if self.transactions[transaction_id]["tenant_id"] != tenant_id:
-            return
+            return False
+        if self.transactions[transaction_id]["status"] != "OPEN":
+            return False
         self.transactions[transaction_id].update(
             status="COMMITTED",
             committed_version_id=committed_version_id,
@@ -131,6 +133,7 @@ class FakeDatasetTransactionRepository:
             committed_at=committed_at,
             metadata=dict(metadata or {}),
         )
+        return True
 
     def latest_committed_transaction(
         self,
@@ -757,6 +760,41 @@ def test_dataset_transaction_repository_contract_commit_flow(harness: Transactio
     assert committed["committed_version_id"] == "dsv_orders_1"
     assert harness.versions()[0]["version_id" if "version_id" in harness.versions()[0] else "id"] == "dsv_orders_1"
     assert harness.files()[0]["uri"] == "memory://part-00000.parquet"
+
+
+def test_dataset_transaction_repository_contract_commit_requires_open_state(harness: TransactionHarness) -> None:
+    repository = harness.repository
+
+    def commit_twice(transaction: Any) -> tuple[bool, bool, dict[str, Any] | None]:
+        repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_commit_once"))
+        repository.insert_version(transaction=transaction, record=_version_record("dstx_commit_once"))
+        first = repository.commit_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_commit_once",
+            committed_version_id="dsv_orders_1",
+            schema_version=1,
+            committed_at="2026-06-10T00:02:00Z",
+        )
+        second = repository.commit_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_commit_once",
+            committed_version_id="dsv_orders_2",
+            schema_version=2,
+            committed_at="2026-06-10T00:03:00Z",
+        )
+        row = repository.transaction_by_id(transaction=transaction, transaction_id="dstx_commit_once")
+        return first, second, row
+
+    first, second, committed = harness.call_in_transaction(commit_twice)
+
+    assert first is True
+    assert second is False
+    assert committed is not None
+    assert committed["status"] == "COMMITTED"
+    assert committed["committed_version_id"] == "dsv_orders_1"
+    assert committed["schema_version"] == 1
 
 
 def test_dataset_transaction_repository_contract_allows_same_content_hash_as_new_version(

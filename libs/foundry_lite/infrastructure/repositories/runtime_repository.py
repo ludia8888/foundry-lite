@@ -199,7 +199,9 @@ class SqlAlchemyRuntimeRepository:
             )
         except IntegrityError:
             savepoint.rollback()
-            return False
+            if _is_outbox_idempotency_duplicate(transaction, record):
+                return False
+            raise
         savepoint.commit()
         return True
 
@@ -224,6 +226,27 @@ def _lookup_table(table: RuntimeLookupTable) -> Any:
         "transforms": db.transforms,
         "materializations": db.materializations,
     }[table]
+
+
+def _is_outbox_idempotency_duplicate(transaction: Any, record: OutboxEventRecord) -> bool:
+    if record.idempotency_key is None:
+        return False
+    row = (
+        transaction.execute(
+            select(db.outbox_events.c.id)
+            .where(
+                and_(
+                    db.outbox_events.c.tenant_id == record.tenant_id,
+                    db.outbox_events.c.event_type == record.event_type,
+                    db.outbox_events.c.idempotency_key == record.idempotency_key,
+                )
+            )
+            .limit(1)
+        )
+        .mappings()
+        .first()
+    )
+    return row is not None
 
 
 def _rows_table(table: RuntimeRowsTable) -> Any:

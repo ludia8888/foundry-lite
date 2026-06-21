@@ -97,6 +97,17 @@ class TransformDatasetVersions(Protocol):
 class TransformRuntimeBoundary(Protocol):
     """Runtime policy, audit, and lineage hooks used by transforms."""
 
+    def _require_write_traffic_open(
+        self,
+        ctx: RequestContext,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None:
+        """Reject writes while restore mode fences the tenant."""
+        ...
+
     def _require_or_audit(
         self,
         ctx: RequestContext,
@@ -138,3 +149,18 @@ class TransformRuntimeBoundary(Protocol):
     ) -> None:
         """Persist a lineage edge emitted by a successful transform run."""
         ...
+
+
+def require_transform_write_open(
+    runtime_service: TransformRuntimeBoundary,
+    ctx: RequestContext,
+    operation: str,
+    resource_type: str,
+    resource_id: str,
+) -> None:
+    runtime_service._require_write_traffic_open(
+        ctx,
+        operation=operation,
+        resource_type=resource_type,
+        resource_id=resource_id,
+    )

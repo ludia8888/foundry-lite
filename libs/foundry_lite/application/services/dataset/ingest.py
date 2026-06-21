@@ -26,6 +26,7 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetRuntimeBoundary,
     DatasetTransactionManager,
     DatasetVersionLookup,
+    require_dataset_write_open,
 )
 from foundry_lite.application.services.dataset.stream_archive_commit import (
     StreamArchiveDeadLetter,
@@ -81,6 +82,7 @@ class DatasetIngestService(CoreService):
     ) -> CommitResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        require_dataset_write_open(self.runtime_service, ctx, "upload_csv", "dataset", dataset_ref)
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
         source_path = Path(csv_path).resolve()
         if not source_path.exists():
@@ -192,6 +194,7 @@ class DatasetIngestService(CoreService):
     ) -> CommitResult | None:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        require_dataset_write_open(self.runtime_service, ctx, "archive_stream_events", "dataset", dataset_ref)
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
         committed_transaction = self._committed_stream_transaction(ctx, dataset)
         committed_metadata = committed_transaction["metadata"] if committed_transaction is not None else {}
@@ -226,7 +229,6 @@ class DatasetIngestService(CoreService):
         dataset_ref: str,
         sync_name: str | None,
     ) -> UploadSyncPlan:
-        """Open the upload transaction and persist the EXTRACTING sync run."""
         transaction_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, dataset, "SNAPSHOT")
         run_id = _new_id("sync_run")
         self.dataset_transaction_repository.insert_sync_run(
@@ -485,7 +487,6 @@ class DatasetIngestService(CoreService):
         run_id: str,
         result: CommitResult,
     ) -> None:
-        """Close the sync run with the committed dataset version under the tenant."""
         self.dataset_transaction_repository.update_sync_run_terminal(
             transaction=conn,
             tenant_id=ctx.tenant_id,

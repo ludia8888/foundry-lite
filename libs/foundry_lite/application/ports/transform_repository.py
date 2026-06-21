@@ -41,6 +41,7 @@ class TransformRunRecord:
     transform_id: str
     status: str
     input_versions: dict[str, str]
+    definition_snapshot: dict[str, object]
     output_version_id: str | None
     transaction_id: str
     error: Mapping[str, object] | None
@@ -56,6 +57,7 @@ class TransformRunRow(TypedDict):
     transform_id: str
     status: str
     input_versions: dict[str, str]
+    definition_snapshot: dict[str, object] | None
     output_version_id: str | None
     transaction_id: str
     error: Mapping[str, object] | None

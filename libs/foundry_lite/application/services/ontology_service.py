@@ -35,6 +35,7 @@ from foundry_lite.application.services.ontology_protocols import (
     OntologyDatasetRegistry,
     OntologyDatasetVersions,
     OntologyRuntimeBoundary,
+    require_ontology_write_open,
 )
 from foundry_lite.application.services.ontology_validation import (
     build_ontology_catalog,
@@ -83,6 +84,7 @@ class OntologyService(CoreService):
     ) -> OntologyApplyResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
+        require_ontology_write_open(self.runtime_service, ctx, "apply_ontology", "ontology", "draft")
         definition = self._load_ontology_definition(yaml_path)
         with self.engine.begin() as conn:
             validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)

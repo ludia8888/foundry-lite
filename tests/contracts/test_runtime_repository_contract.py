@@ -25,6 +25,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyRuntimeRepository
 from sqlalchemy import create_engine, insert
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 
 class RuntimeRepositoryHarness(Protocol):
@@ -265,6 +266,7 @@ def _outbox_record(
     status: str = "pending",
     attempts: int = 0,
     published_at: str | None = None,
+    idempotency_key: str = "dsv_1",
 ) -> OutboxEventRecord:
     return OutboxEventRecord(
         event_id=event_id,
@@ -275,7 +277,7 @@ def _outbox_record(
         payload={"versionId": "dsv_1"},
         status=status,
         attempts=attempts,
-        idempotency_key="dsv_1",
+        idempotency_key=idempotency_key,
         correlation_id="run_1",
         created_at="2026-06-10T00:00:00Z",
         published_at=published_at,
@@ -498,6 +500,20 @@ def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(
     assert [row["id"] for row in runs["auditEvents"]] == ["audit_1"]
     assert [row["id"] for row in runs["outboxEvents"]] == ["outbox_1"]
     assert [row["id"] for row in runs["deadLetterEvents"]] == ["dlq_1"]
+
+
+def test_runtime_repository_contract_outbox_reraises_unrelated_integrity_errors(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    if isinstance(harness, FakeRuntimeRepositoryHarness):
+        return
+    with harness.transaction() as transaction:
+        assert harness.repository.insert_outbox_event(transaction=transaction, record=_outbox_record())
+        with pytest.raises(IntegrityError):
+            harness.repository.insert_outbox_event(
+                transaction=transaction,
+                record=_outbox_record(event_id="outbox_1", idempotency_key="dsv_2"),
+            )
 
 
 def test_runtime_repository_contract_queries_run_rows_with_keyset_page(

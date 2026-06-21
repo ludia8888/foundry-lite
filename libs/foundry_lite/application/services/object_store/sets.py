@@ -27,6 +27,7 @@ from foundry_lite.application.services.object_store.set_types import (
     NormalizedObjectSetDefinition,
     ObjectSetMembers,
 )
+from foundry_lite.application.services.write_traffic_gate import require_write_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 
@@ -62,6 +63,7 @@ class ObjectSetsService(CoreService):
     ) -> ObjectSetPayload:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "object:read", "object_set", name)
+        require_write_open(self.runtime_service, ctx, "create_object_set", "object_set", name)
         normalized = self._normalize_object_set_definition(
             name,
             set_type=set_type,
@@ -178,6 +180,7 @@ class ObjectSetsService(CoreService):
     def cleanup_expired_object_sets(self, *, ctx: RequestContext | None = None) -> dict[str, int]:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "object:read", "object_set", "expired")
+        require_write_open(self.runtime_service, ctx, "cleanup_expired_object_sets", "object_set", "expired")
         with self.engine.begin() as conn:
             rows = self.object_set_repository.object_sets(transaction=conn, tenant_id=ctx.tenant_id)
             expired_ids = [row["id"] for row in rows if self._object_set_is_expired(row)]

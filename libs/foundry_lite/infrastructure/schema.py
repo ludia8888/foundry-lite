@@ -210,6 +210,7 @@ transform_runs = Table(
     Column("transform_id", String, nullable=False),
     Column("status", String, nullable=False),
     Column("input_versions", JSON, nullable=False),
+    Column("definition_snapshot", JSON),
     Column("output_version_id", String),
     Column("transaction_id", String),
     Column("error", JSON),

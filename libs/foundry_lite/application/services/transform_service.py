@@ -19,6 +19,9 @@ from foundry_lite.application.services.transform_protocols import (
     TransformDatasetVersions,
     TransformRuntimeBoundary,
 )
+from foundry_lite.application.services.transform_protocols import (
+    require_transform_write_open as require_write_open,
+)
 from foundry_lite.application.services.transform_runs import (
     TransformRunPlan,
     start_failed_transform_retry,
@@ -62,6 +65,7 @@ class TransformService(CoreService):
     ) -> TransformRow:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
+        require_write_open(self.runtime_service, ctx, "register_transform", "transform", api_name)
         return self._register_transform_definition(
             ctx,
             api_name,
@@ -126,6 +130,7 @@ class TransformService(CoreService):
     def run_transform(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
+        require_write_open(self.runtime_service, ctx, "run_transform", "transform", api_name)
         with self.engine.begin() as conn:
             plan = start_transform_run(
                 conn=conn,
@@ -140,7 +145,7 @@ class TransformService(CoreService):
             plan.output_dataset, plan.transaction_id, "part-00000.parquet"
         )
         try:
-            self._execute_sql_transform(plan.entrypoint, plan.input_versions, staged)
+            self._execute_sql_transform(plan.sql_template, plan.input_versions, staged)
             blocked: DatasetCommitBlocked | None = None
             with self.engine.begin() as conn:
                 try:
@@ -164,6 +169,7 @@ class TransformService(CoreService):
     ) -> TransformRetryResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "operations:retry", "transform_run", transform_run_id)
+        require_write_open(self.runtime_service, ctx, "retry_transform_run", "transform_run", transform_run_id)
         with self.engine.begin() as conn:
             plan = start_failed_transform_retry(
                 conn=conn,
@@ -177,7 +183,7 @@ class TransformService(CoreService):
             plan.output_dataset, plan.transaction_id, "part-00000.parquet"
         )
         try:
-            self._execute_sql_transform(plan.entrypoint, plan.input_versions, staged)
+            self._execute_sql_transform(plan.sql_template, plan.input_versions, staged)
             blocked: DatasetCommitBlocked | None = None
             with self.engine.begin() as conn:
                 try:
@@ -205,8 +211,6 @@ class TransformService(CoreService):
         *,
         should_audit_retry: bool = False,
     ) -> CommitResult:
-        """Finalize the dataset version and close the transform run atomically."""
-
         def after_persist(conn: TransactionContext, result: CommitResult) -> None:
             self._record_transform_lineage(conn, ctx, plan, result)
             self._mark_transform_run_succeeded(conn, ctx, plan.run_id, result)
@@ -233,7 +237,6 @@ class TransformService(CoreService):
         plan: TransformRunPlan,
         result: CommitResult,
     ) -> None:
-        """Persist version-to-version lineage for every consumed input version."""
         for version_id in plan.input_versions.values():
             self.runtime_service._lineage(
                 conn,
@@ -451,12 +454,11 @@ class TransformService(CoreService):
 
     def _execute_sql_transform(
         self,
-        entrypoint: str,
+        sql_template: str,
         input_versions: Mapping[str, str],
         staged: Path,
     ) -> None:
-        sql = Path(entrypoint).read_text(encoding="utf-8")
-        validate_sql_transform_uses_declared_inputs(sql)
+        validate_sql_transform_uses_declared_inputs(sql_template)
         input_paths_by_ref = {
             dataset_ref: self.dataset_transaction_service._version_file_path(
                 self.dataset_version_service._get_version_by_id(version_id)
@@ -465,7 +467,7 @@ class TransformService(CoreService):
         }
         self.compute_adapter.execute_transform(
             SqlTransformPlan(
-                sql_template=sql,
+                sql_template=sql_template,
                 input_paths_by_ref=input_paths_by_ref,
                 target_path=staged,
             )

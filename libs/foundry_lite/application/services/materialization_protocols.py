@@ -92,6 +92,17 @@ class MaterializationDatasetTransactions(Protocol):
 class MaterializationRuntimeBoundary(Protocol):
     """Runtime policy, row-read, and lineage hooks used by materializations."""
 
+    def _require_write_traffic_open(
+        self,
+        ctx: RequestContext,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None:
+        """Reject writes while restore mode fences the tenant."""
+        ...
+
     def _require_or_audit(
         self,
         ctx: RequestContext,

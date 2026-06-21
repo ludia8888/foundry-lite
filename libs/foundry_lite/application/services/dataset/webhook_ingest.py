@@ -22,6 +22,7 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetTransactionManager,
     DatasetVersionLookup,
 )
+from foundry_lite.application.services.write_traffic_gate import require_write_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -188,6 +189,7 @@ def _prepare_webhook_ingest(
         secret,
     )
     runtime.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+    require_write_open(runtime.runtime_service, ctx, "ingest_webhook_event", "dataset", dataset_ref)
     dataset = runtime.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
     normalized_event_id = _webhook_event_id(connector_name, resource_name, payload, event_id)
     payload_hash = _webhook_payload_hash(payload)

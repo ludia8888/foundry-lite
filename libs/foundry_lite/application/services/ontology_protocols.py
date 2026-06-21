@@ -27,6 +27,15 @@ class OntologyDatasetVersions(Protocol):
 
 
 class OntologyRuntimeBoundary(Protocol):
+    def _require_write_traffic_open(
+        self,
+        ctx: RequestContext,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None: ...
+
     def _require_or_audit(
         self,
         ctx: RequestContext,
@@ -63,3 +72,18 @@ class OntologyRuntimeBoundary(Protocol):
         idempotency_key: str,
         correlation_id: str,
     ) -> None: ...
+
+
+def require_ontology_write_open(
+    runtime_service: OntologyRuntimeBoundary,
+    ctx: RequestContext,
+    operation: str,
+    resource_type: str,
+    resource_id: str,
+) -> None:
+    runtime_service._require_write_traffic_open(
+        ctx,
+        operation=operation,
+        resource_type=resource_type,
+        resource_id=resource_id,
+    )

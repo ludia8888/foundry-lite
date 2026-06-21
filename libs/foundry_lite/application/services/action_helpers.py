@@ -44,6 +44,32 @@ class SupportsAudit(Protocol):
     ) -> None: ...
 
 
+class SupportsWriteTrafficGate(Protocol):
+    def _require_write_traffic_open(
+        self,
+        ctx: RequestContext,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None: ...
+
+
+def require_action_write_open(
+    runtime_service: SupportsWriteTrafficGate,
+    ctx: RequestContext,
+    operation: str,
+    resource_type: str,
+    resource_id: str,
+) -> None:
+    runtime_service._require_write_traffic_open(
+        ctx,
+        operation=operation,
+        resource_type=resource_type,
+        resource_id=resource_id,
+    )
+
+
 def action_command(
     action_api_name: str,
     object_type: str,

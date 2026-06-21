@@ -47,6 +47,15 @@ class ObjectSearchOntologyLookup(Protocol):
 class ObjectSearchRuntimeBoundary(Protocol):
     """Runtime collaborator surface for permission checks and audit evidence."""
 
+    def _require_write_traffic_open(
+        self,
+        ctx: RequestContext,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None: ...
+
     def _require_or_audit(self, ctx: RequestContext, permission: str, resource_type: str, resource_id: str) -> None: ...
 
     def _error_payload(
@@ -113,6 +122,12 @@ class ObjectSearchService(CoreService):
 
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "operations:retry", "search_index", object_type_api_name)
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="index_search_rebuild",
+            resource_type="search_index",
+            resource_id=object_type_api_name,
+        )
         object_type, mapping = self._search_object_type_and_mapping(ctx, object_type_api_name)
         run_id = self._start_search_run(ctx, object_type, object_type_api_name, "search_rebuild")
         try:
@@ -148,6 +163,12 @@ class ObjectSearchService(CoreService):
         ctx = ctx or RequestContext()
         resource_id = f"{object_type_api_name}/{object_id}"
         self.runtime_service._require_or_audit(ctx, "operations:retry", "search_index", resource_id)
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="index_search_object_changed",
+            resource_type="search_index",
+            resource_id=resource_id,
+        )
         object_type, mapping = self._search_object_type_and_mapping(ctx, object_type_api_name)
         run_id = self._start_search_run(ctx, object_type, object_type_api_name, "search_object_changed", object_id)
         try:

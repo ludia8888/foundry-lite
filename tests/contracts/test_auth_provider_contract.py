@@ -125,6 +125,17 @@ def test_expired_or_wrong_audience_jwt_is_denied() -> None:
         provider.authenticate({"Authorization": f"Bearer {wrong_audience}"})
 
 
+def test_jwt_auth_provider_requires_time_and_identity_claims() -> None:
+    private_key, jwk = _rsa_key("kid-required-claims")
+    provider = _jwt_provider({"keys": [jwk]})
+
+    for claim in ("exp", "iat", "iss", "aud"):
+        token = _jwt_token(private_key, "kid-required-claims", omitted_claims=frozenset({claim}))
+
+        with pytest.raises(PermissionDenied, match="authentication failed"):
+            provider.authenticate({"Authorization": f"Bearer {token}"})
+
+
 def test_jwks_rotation_keeps_valid_sessions() -> None:
     old_private_key, old_jwk = _rsa_key("kid-old")
     new_private_key, new_jwk = _rsa_key("kid-new")
@@ -266,6 +277,7 @@ def _jwt_token(
     roles: tuple[str, ...] = ("admin",),
     expires_in: timedelta = timedelta(minutes=5),
     extra_claims: Mapping[str, object] | None = None,
+    omitted_claims: frozenset[str] = frozenset(),
 ) -> str:
     now = datetime.now(UTC)
     payload: dict[str, object] = {
@@ -285,4 +297,6 @@ def _jwt_token(
         payload["jti"] = jwt_id
     if extra_claims is not None:
         payload.update(extra_claims)
+    for claim in omitted_claims:
+        payload.pop(claim, None)
     return jwt.encode(payload, private_key, algorithm="RS256", headers={"kid": kid})

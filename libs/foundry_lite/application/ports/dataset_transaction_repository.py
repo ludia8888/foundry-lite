@@ -269,8 +269,8 @@ class DatasetTransactionRepository(Protocol):
         schema_version: int,
         committed_at: str,
         metadata: DatasetTransactionMetadata | None = None,
-    ) -> None:
-        """Mark a dataset transaction committed inside the caller transaction."""
+    ) -> bool:
+        """Mark an OPEN dataset transaction committed inside the caller transaction."""
         ...
 
     def latest_committed_transaction(

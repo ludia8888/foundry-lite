@@ -122,6 +122,7 @@ class FakeTransformRepository:
                 "transform_id": record.transform_id,
                 "status": record.status,
                 "input_versions": dict(record.input_versions),
+                "definition_snapshot": dict(record.definition_snapshot),
                 "output_version_id": record.output_version_id,
                 "transaction_id": record.transaction_id,
                 "error": record.error,
@@ -238,6 +239,17 @@ def _transform_run_record() -> TransformRunRecord:
         transform_id="tf_test",
         status="RUNNING",
         input_versions={"raw.orders": "dsv_1"},
+        definition_snapshot={
+            "api_name": "clean_orders",
+            "checks": [{"type": "primary_key"}],
+            "entrypoint": "/tmp/example.sql",
+            "inputs": {"orders": "raw.orders"},
+            "language": "sql",
+            "mode": "snapshot",
+            "output_dataset_ref": "clean.orders",
+            "sql_template": "select * from {{ input('raw.orders') }}",
+            "sql_template_sha256": "hash",
+        },
         output_version_id=None,
         transaction_id="dtx_1",
         error=None,
@@ -309,8 +321,11 @@ def test_insert_transform_run_persists(harness: TransformHarness) -> None:
     assert len(rows) == 1
     assert rows[0]["status"] == "RUNNING"
     assert rows[0]["input_versions"] == {"raw.orders": "dsv_1"}
+    assert rows[0]["definition_snapshot"]["sql_template"] == "select * from {{ input('raw.orders') }}"
     assert found is not None
     assert found["input_versions"] == {"raw.orders": "dsv_1"}
+    assert found["definition_snapshot"] is not None
+    assert found["definition_snapshot"]["output_dataset_ref"] == "clean.orders"
     assert hidden_tenant is None
 
 

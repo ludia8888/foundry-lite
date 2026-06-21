@@ -148,11 +148,15 @@ class SqlAlchemyDatasetTransactionRepository:
         schema_version: int,
         committed_at: str,
         metadata: DatasetTransactionMetadata | None = None,
-    ) -> None:
-        transaction.execute(
+    ) -> bool:
+        result = transaction.execute(
             update(db.dataset_transactions)
             .where(
-                and_(db.dataset_transactions.c.tenant_id == tenant_id, db.dataset_transactions.c.id == transaction_id)
+                and_(
+                    db.dataset_transactions.c.tenant_id == tenant_id,
+                    db.dataset_transactions.c.id == transaction_id,
+                    db.dataset_transactions.c.status == "OPEN",
+                )
             )
             .values(
                 status="COMMITTED",
@@ -162,6 +166,7 @@ class SqlAlchemyDatasetTransactionRepository:
                 metadata=dict(metadata or {}),
             )
         )
+        return result.rowcount == 1
 
     def latest_committed_transaction(
         self,

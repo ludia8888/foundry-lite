@@ -2,14 +2,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from foundry_lite.application.ports import DatasetCheckResult, DatasetFileRecord, DatasetTransactionMetadata
+from foundry_lite.application.ports import (
+    DatasetCheckResult,
+    DatasetFileRecord,
+    DatasetTransactionMetadata,
+    DatasetTransactionRepository,
+    DatasetTransactionRow,
+    TransactionContext,
+)
 from foundry_lite.application.primitives import (
     CommitResult,
     StagedFileStats,
     _candidate_manifest_hash,
     _file_hash,
     _new_id,
+    _now,
 )
+from foundry_lite.application.services.dataset.protocols import DatasetVersionLookup
 from foundry_lite.application.services.dataset.transaction_models import (
     DatasetCommitArtifacts,
     DatasetFinalizationCheck,
@@ -62,6 +71,56 @@ def finalized_transaction_metadata(
     if validation.schema_evolution_metadata is not None:
         metadata["schemaEvolution"] = validation.schema_evolution_metadata
     return metadata
+
+
+def ensure_snapshot_base_current(
+    *,
+    conn: TransactionContext,
+    tx: DatasetTransactionRow,
+    dataset_version_service: DatasetVersionLookup,
+) -> None:
+    if tx["tx_type"] != "SNAPSHOT":
+        return
+    latest = dataset_version_service._latest_version_by_dataset_id(conn, tx["dataset_id"], allow_missing=True)
+    current_base_version_id = latest["id"] if latest else None
+    if current_base_version_id == tx["base_version_id"]:
+        return
+    raise ConflictDetected(
+        "dataset transaction base version is stale",
+        details={
+            "transaction_id": tx["id"],
+            "dataset_id": tx["dataset_id"],
+            "expected_base_version_id": tx["base_version_id"],
+            "current_base_version_id": current_base_version_id,
+        },
+    )
+
+
+def commit_open_dataset_transaction(
+    *,
+    repository: DatasetTransactionRepository,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    transaction_id: str,
+    version_id: str,
+    schema_version: int,
+    metadata: DatasetTransactionMetadata,
+) -> None:
+    committed = repository.commit_transaction(
+        transaction=conn,
+        tenant_id=ctx.tenant_id,
+        transaction_id=transaction_id,
+        committed_version_id=version_id,
+        schema_version=schema_version,
+        committed_at=_now(),
+        metadata=metadata,
+    )
+    if committed:
+        return
+    raise ConflictDetected(
+        "dataset transaction commit lost its OPEN state",
+        details={"transaction_id": transaction_id, "version_id": version_id},
+    )
 
 
 def dataset_commit_after_ref(
