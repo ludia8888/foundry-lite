@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 from scripts import generate_sdk_ts as sdk
 
@@ -37,6 +38,30 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "operations: {" in generated
     assert "export type BackupRestorePreflightReport = {" in generated
     assert "export type BackupRestoreModeReport = {" in generated
+    assert "system: {" in generated
+    assert "health(): Promise<SystemHealth>;" in generated
+    assert "datasets: {" in generated
+    assert "export type Dataset = {" in generated
+    assert "export type DatasetInspectionPayload = {" in generated
+    assert "list(): Promise<Dataset[]>;" in generated
+    assert "versions(namespace: string, name: string): Promise<DatasetVersion[]>;" in generated
+    assert (
+        "preview(namespace: string, name: string, options?: DatasetPreviewOptions): Promise<TabularRow[]>;" in generated
+    )
+    assert "inspect(namespace: string, name: string, options?: DatasetInspectOptions)" in generated
+    assert "ontology: {" in generated
+    assert "export type OntologyCatalog = {" in generated
+    assert "catalog(): Promise<OntologyCatalog>;" in generated
+    assert "validate(payload: OntologyValidateRequest): Promise<OntologyValidationResult>;" in generated
+    assert "insights: {" in generated
+    assert "export type InsightReviewPayload = {" in generated
+    assert "list(filters?: InsightReviewListFilters): Promise<InsightReviewQueryResult>;" in generated
+    assert "create(payload: InsightReviewCreateRequest, options: { idempotencyKey: string })" in generated
+    assert "decide(reviewId: string, payload: InsightReviewDecisionRequest" in generated
+    assert "generic: {" in generated
+    assert "links(objectType: string, id: string, linkType: string): Promise<ObjectLinkPayload[]>;" in generated
+    assert "objectSets: {" in generated
+    assert "materializations: {" in generated
     assert "backupRestore: {" in generated
     assert "export class FoundryLiteApiError extends Error" in generated
     assert "request<T = unknown>(path: string, init?: FoundryLiteRequestInit): Promise<T>;" in generated
@@ -45,6 +70,11 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert 'createRequestId(scope: string = "sdk"): string' in generated
     assert "normalizeFoundryLiteError(error: unknown): FoundryLiteApiError" in generated
     assert "isRetryableFoundryLiteError(error: unknown): boolean" in generated
+    assert "classifyFoundryLiteError(error: unknown): FoundryLiteErrorClassification" in generated
+    assert "retryWithBackoff<T>" in generated
+    assert "collectCursorPages<TPage, TItem = unknown>" in generated
+    assert "createInFlightActionLock(): InFlightActionLock" in generated
+    assert "actionLockKey(actionName: string, objectId: string): string" in generated
     assert '"X-Request-ID": requestId' in generated
     assert "clientOptions.onResponse?.({" in generated
     assert "preflight(payload?: BackupRestorePreflightRequest): Promise<BackupRestorePreflightReport>;" in generated
@@ -54,6 +84,20 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type ObservabilityDetectorConfig = {" in generated
     assert "detect(payload: ObservabilityDetectRequest): Promise<ObservabilityReport>;" in generated
     assert "deadLetterRecords: {" in generated
+    assert "deadLetterEvents: {" in generated
+    assert "retry(id: string): Promise<RuntimeRetryResult>;" in generated
+    assert "runs: {" in generated
+    assert "list(filters?: RuntimeRunQueryFilters): Promise<RuntimeRunQueryResult>;" in generated
+    assert "detail(runType: string, runId: string): Promise<RuntimeRunDetail>;" in generated
+    assert "planReadOnly(datasetRef: string, options?: IcebergMaintenancePlanOptions)" in generated
+    assert "export type LineageEdge = {" in generated
+    assert "lineage: {" in generated
+    assert "get(resourceId: string): Promise<LineageEdge[]>;" in generated
+    assert "index: {" in generated
+    assert "replayObjectType(objectType: string): Promise<ObjectIndexRebuildResult>;" in generated
+    assert "replayFailedRun(runId: string): Promise<ObjectIndexRebuildResult>;" in generated
+    assert "transforms: {" in generated
+    assert "retry(runId: string): Promise<TransformRetryResult>;" in generated
     assert "reconciliation: {" in generated
     assert "resolve(writebackId: string, payload: ActionWritebackReconciliationRequest):" in generated
     assert "workflows: {" in generated
@@ -70,8 +114,20 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "rowCount: number | null;" in generated
     assert "reason: string;" in approve_params
     assert "any" not in approve_params
+    approve_request = _type_block(generated, "ApproveOrderApplyRequest")
+    assert "idempotencyKey: string;" in approve_request
+    assert "idempotencyKey?: string;" not in approve_request
     assert "expectedObjectVersion(object: { objectVersion: number }): number" in generated
     assert "idempotencyKey(actionName: string, objectId: string): string" in generated
+    assert "function requireIdempotencyKey(value: string | undefined" in generated
+    assert '"MISSING_IDEMPOTENCY_KEY"' in generated
+    assert "payload.idempotencyKey ?? idempotencyKey(" not in generated
+    assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.create")' in generated
+    assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.assign")' in generated
+    assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.decide")' in generated
+    assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.deadLetterRecords.retry")' in generated
+    assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.deadLetterRecords.bulkRetry")' in generated
+    assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.workflows.startConnectorSync")' in generated
     assert "export const SDK_CLIENT_SURFACE" in generated
 
 
@@ -84,15 +140,32 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface == expected_surface
     assert browser_surface == expected_surface
     assert ts_surface == browser_surface
+    assert ts_surface["system"] == ["health"]
+    assert ts_surface["datasets"] == ["list", "versions", "preview", "inspect"]
+    assert ts_surface["ontology"] == ["catalog", "validate"]
+    assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide"]}
+    objects_surface = cast(dict[str, object], ts_surface["objects"])
+    assert objects_surface["generic"] == ["get", "query", "links"]
+    assert ts_surface["objectSets"] == ["list", "create", "get"]
+    assert ts_surface["materializations"] == ["run"]
     assert ts_surface["operations"] == {
         "backupRestore": ["preflight", "startRestoreMode", "restoreModeStatus", "approveResume"],
+        "deadLetterEvents": ["retry"],
         "deadLetterRecords": ["list", "get", "retry", "bulkRetry", "discard"],
-        "icebergMaintenance": ["plan"],
+        "icebergMaintenance": ["planReadOnly", "plan"],
+        "index": ["replayObjectType", "replayFailedRun"],
+        "lineage": ["get"],
         "observability": ["detect"],
         "reconciliation": ["resolve"],
+        "runs": ["list", "detail"],
+        "transforms": ["retry"],
         "workflows": ["startConnectorSync", "get"],
     }
     assert ts_surface["helpers"] == [
+        "actionLockKey",
+        "classifyFoundryLiteError",
+        "collectCursorPages",
+        "createInFlightActionLock",
         "createFoundryLiteClient",
         "createRequestId",
         "expectedObjectVersion",
@@ -100,6 +173,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "isRetryableFoundryLiteError",
         "normalizeFoundryLiteError",
         "requestContextHeaders",
+        "retryWithBackoff",
     ]
 
 
@@ -113,6 +187,18 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "export function requestContextHeaders(context = {})",
         "export function normalizeFoundryLiteError(error)",
         "export function isRetryableFoundryLiteError(error)",
+        "insights: {",
+        "reviews: {",
+        "export function classifyFoundryLiteError(error)",
+        "export function actionLockKey(actionName, objectId)",
+        "export function createInFlightActionLock()",
+        "function requireIdempotencyKey(value, operationName)",
+        'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.create")',
+        'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.deadLetterRecords.retry")',
+        'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.workflows.startConnectorSync")',
+        '"MISSING_IDEMPOTENCY_KEY"',
+        "export async function retryWithBackoff(operation, options = {})",
+        "export async function collectCursorPages(fetchPage, options = {})",
         "requestIdFactory",
         "onResponse",
         '"X-Request-ID": requestId',

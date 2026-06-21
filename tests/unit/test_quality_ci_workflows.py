@@ -465,6 +465,45 @@ def test_root_cause_meta_gates_are_release_gate_steps() -> None:
     assert "pnpm quality:pr-root-cause" in package_json
 
 
+def test_documentation_map_gate_runs_after_doc_drift() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    doc_drift_step = "scripts/quality/check_doc_drift.py"
+    doc_map_step = "scripts/quality/check_documentation_map.py"
+    checklist_step = "scripts/quality/check_checklist_evidence.py"
+    assert doc_map_step in script
+    assert script.index(doc_drift_step) < script.index(doc_map_step) < script.index(checklist_step)
+    assert '"quality:documentation-map"' in package_json
+    assert "pnpm quality:documentation-map" in package_json
+
+
+def test_evidence_ledger_command_gate_runs_between_doc_drift_and_documentation_map() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    doc_drift_step = "scripts/quality/check_doc_drift.py"
+    evidence_command_step = "scripts/quality/check_evidence_ledger_commands.py"
+    doc_map_step = "scripts/quality/check_documentation_map.py"
+    assert evidence_command_step in script
+    assert script.index(doc_drift_step) < script.index(evidence_command_step) < script.index(doc_map_step)
+    assert '"quality:evidence-ledger-commands"' in package_json
+    assert "pnpm quality:evidence-ledger-commands" in package_json
+
+
+def test_data_platform_sprint_status_gate_runs_after_data_pattern_matrix() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    pattern_step = "scripts/quality/check_data_pattern_matrix.py"
+    status_step = "scripts/quality/check_data_platform_sprint_status.py"
+    sdk_step = "scripts/generate_sdk_ts.py --check"
+    assert status_step in script
+    assert script.index(pattern_step) < script.index(status_step) < script.index(sdk_step)
+    assert '"quality:data-platform-sprint-status"' in package_json
+    assert "pnpm quality:data-platform-sprint-status" in package_json
+
+
 def test_runtime_lane_writes_root_cause_summary_from_failure_trap() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     summary_script = (ROOT / "scripts" / "quality" / "write_runtime_root_cause_summary.py").read_text(encoding="utf-8")
@@ -647,16 +686,23 @@ def test_generated_sdk_check_is_release_gate_step() -> None:
     assert "pnpm quality:sdk-generated" in package_json
 
 
-def test_frontend_foundation_gate_runs_after_sdk_generation() -> None:
+def test_frontend_backend_surface_gate_runs_after_sdk_generation() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     sdk_step = "scripts/generate_sdk_ts.py --check"
+    surface_step = "scripts/quality/check_frontend_backend_surface.py"
     frontend_step = "pnpm --silent quality:frontend-foundation"
     schema_step = "scripts/quality/check_schema_revision_guard.py"
+    assert surface_step in script
     assert frontend_step in script
-    assert script.index(sdk_step) < script.index(frontend_step) < script.index(schema_step)
+    assert script.index(sdk_step) < script.index(surface_step) < script.index(frontend_step) < script.index(schema_step)
+    assert '"quality:frontend-backend-surface"' in package_json
+    assert "pnpm quality:frontend-backend-surface" in package_json
+    assert '"quality:sdk-request-contract"' in package_json
+    assert "pnpm --silent quality:sdk-request-contract" in package_json
     assert '"quality:frontend-foundation"' in package_json
+    assert "tests/unit/test_quality_frontend_backend_surface.py" in package_json
     assert "tests/unit/test_sdk_ts_generation.py" in package_json
     assert "tests/unit/test_web_operations_ui.py" in package_json
 
@@ -805,12 +851,28 @@ def test_ai_evidence_gate_runs_after_erasure_gate() -> None:
 
     erasure_step = "pnpm --silent quality:erasure"
     ai_evidence_step = "pnpm --silent quality:ai-evidence"
-    elasticsearch_step = "pnpm --silent quality:elasticsearch"
+    insight_review_step = "pnpm --silent quality:insight-review"
     assert ai_evidence_step in script
-    assert script.index(erasure_step) < script.index(ai_evidence_step) < script.index(elasticsearch_step)
+    assert script.index(erasure_step) < script.index(ai_evidence_step) < script.index(insight_review_step)
     assert '"quality:ai-evidence"' in package_json
     assert "tests/unit/test_ai_evidence.py" in package_json
     assert "object_property_lineage" in package_json
+
+
+def test_insight_review_gate_runs_after_ai_evidence_gate() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    insight_review_step = "pnpm --silent quality:insight-review"
+    elasticsearch_step = "pnpm --silent quality:elasticsearch"
+    assert insight_review_step in script
+    assert script.index(ai_evidence_step) < script.index(insight_review_step) < script.index(elasticsearch_step)
+    assert '"quality:insight-review"' in package_json
+    assert "tests/contracts/test_insight_review_repository_contract.py" in package_json
+    assert "test_insight_review_create_is_idempotent_by_tenant_and_key" in package_json
+    assert "test_insight_review_decision_has_one_terminal_winner" in package_json
+    assert "test_api_insight_reviews_create_assign_and_decide_with_audit_evidence" in package_json
 
 
 def test_tier_coverage_gate_includes_app_layers() -> None:

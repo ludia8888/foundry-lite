@@ -54,7 +54,7 @@ from foundry_lite.application.services.dataset.transaction_payloads import (
     finalized_transaction_metadata,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, DatasetCommitBlocked, NotFound, ValidationFailed
 
 DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
 
@@ -422,7 +422,7 @@ class DatasetTransactionService(CoreService):
             action="abort",
             after_ref={"failures": failure_list},
         )
-        raise ValidationFailed("dataset checks failed", details={"failures": failure_list})
+        raise DatasetCommitBlocked("dataset checks failed", details={"failures": failure_list})
 
     def _commit_transaction_row(
         self,

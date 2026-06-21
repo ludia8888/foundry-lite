@@ -22,6 +22,7 @@ from foundry_lite.application.ports import (
     TransformRepository,
 )
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
+from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
@@ -48,6 +49,7 @@ class CoreDependencies:
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
+    insight_review_repository: InsightReviewRepository
     object_index_repository: ObjectIndexRepository
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository

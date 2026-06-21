@@ -11,11 +11,7 @@ from foundry_lite.application.ports.transform_repository import (
     TransformRetryResult,
     TransformRow,
 )
-from foundry_lite.application.primitives import (
-    CommitResult,
-    _new_id,
-    _now,
-)
+from foundry_lite.application.primitives import CommitResult, _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.transform_protocols import (
     TransformDatasetRegistry,
@@ -32,6 +28,7 @@ from foundry_lite.application.services.transform_sql_guards import validate_sql_
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
+    DatasetCommitBlocked,
     InvariantViolation,
     NotFound,
     ValidationFailed,
@@ -144,8 +141,15 @@ class TransformService(CoreService):
         )
         try:
             self._execute_sql_transform(plan.entrypoint, plan.input_versions, staged)
+            blocked: DatasetCommitBlocked | None = None
             with self.engine.begin() as conn:
-                return self._finalize_transform_run(conn, ctx, plan, staged)
+                try:
+                    return self._finalize_transform_run(conn, ctx, plan, staged)
+                except DatasetCommitBlocked as exc:
+                    blocked = exc
+            if blocked is not None:
+                raise blocked
+            raise InvariantViolation("transform finalization did not return a commit result")
         except Exception as exc:
             self._abort_transform_run(ctx, plan, exc)
             if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
@@ -174,9 +178,17 @@ class TransformService(CoreService):
         )
         try:
             self._execute_sql_transform(plan.entrypoint, plan.input_versions, staged)
+            blocked: DatasetCommitBlocked | None = None
             with self.engine.begin() as conn:
-                result = self._finalize_transform_run(conn, ctx, plan, staged)
-                self._audit_transform_retry(conn, ctx, plan, result)
+                try:
+                    result = self._finalize_transform_run(conn, ctx, plan, staged, should_audit_retry=True)
+                except DatasetCommitBlocked as exc:
+                    blocked = exc
+                    result = None
+            if blocked is not None:
+                raise blocked
+            if result is None:
+                raise InvariantViolation("transform retry finalization did not return a commit result")
             return _transform_retry_response(plan, result)
         except Exception as exc:
             self._abort_transform_run(ctx, plan, exc)
@@ -190,12 +202,16 @@ class TransformService(CoreService):
         ctx: RequestContext,
         plan: TransformRunPlan,
         staged: Path,
+        *,
+        should_audit_retry: bool = False,
     ) -> CommitResult:
         """Finalize the dataset version and close the transform run atomically."""
 
         def after_persist(conn: TransactionContext, result: CommitResult) -> None:
             self._record_transform_lineage(conn, ctx, plan, result)
             self._mark_transform_run_succeeded(conn, ctx, plan.run_id, result)
+            if should_audit_retry:
+                self._audit_transform_retry(conn, ctx, plan, result)
 
         return self.dataset_transaction_service._finalize_open_transaction(
             conn,

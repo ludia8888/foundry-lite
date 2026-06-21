@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
 
 import pytest
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRow,
@@ -16,7 +18,7 @@ from foundry_lite.application.services.ontology_validation import (
     validate_persisted_link,
     validate_persisted_object_type,
 )
-from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ValidationFailed
 
 
@@ -44,6 +46,34 @@ def test_ontology_definition_validation_rejects_missing_primary_key_column() -> 
         validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
 
     assert exc_info.value.details == {"column": "missing_order_id"}
+
+
+def test_ontology_apply_rejects_duplicate_object_api_name_before_persisting(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ontology_path = tmp_path / "duplicate-ontology.yaml"
+    ontology_path.write_text(
+        """
+objectTypes:
+  - apiName: Order
+    primaryKey: orderId
+    backing: {dataset: clean.orders}
+    properties:
+      - {apiName: orderId, type: string, column: order_id}
+  - apiName: Order
+    primaryKey: orderId
+    backing: {dataset: clean.orders}
+    properties:
+      - {apiName: orderId, type: string, column: order_id}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationFailed, match="duplicate object apiName") as exc_info:
+        foundry.ontology.apply(ontology_path, ctx=demo_admin_context())
+
+    assert exc_info.value.details == {"objectType": "Order"}
 
 
 def test_persisted_validation_rejects_uneditable_action_mutation() -> None:

@@ -26,9 +26,8 @@ DEFAULT_DOCS = (
     ROOT / "foundry_lite_development_plan_ko_sprintified.md",
     ROOT / "foundry_lite_sprint_breakdown_ko.md",
     ROOT / "docs" / "implementation-status.md",
-    ROOT / "docs" / "mvp-scope.md",
-    ROOT / "docs" / "data-platform-expansion-roadmap.md",
-    ROOT / "docs" / "quality-observability.md",
+    ROOT / "docs" / "data-platform-expansion-sprint-plan-ko.md",
+    ROOT / "docs" / "quality-gate-roadmap.md",
 )
 
 FUTURE_MARKERS = (

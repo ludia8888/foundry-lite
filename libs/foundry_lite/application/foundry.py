@@ -7,6 +7,7 @@ from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.facades import (
     ActionGateway,
     DatasetWorkspace,
+    InsightReviewWorkspace,
     MaterializationRunner,
     ObjectStore,
     OntologyRegistry,
@@ -62,6 +63,7 @@ class FoundryLite:
         self.dataset_repository = dependencies.dataset_repository
         self.dataset_transaction_repository = dependencies.dataset_transaction_repository
         self.dataset_version_repository = dependencies.dataset_version_repository
+        self.insight_review_repository = dependencies.insight_review_repository
         self.object_index_repository = dependencies.object_index_repository
         self.object_read_repository = dependencies.object_read_repository
         self.object_set_repository = dependencies.object_set_repository
@@ -76,6 +78,7 @@ class FoundryLite:
         self.objects = ObjectStore(services.object_store)
         self.actions = ActionGateway(services.action)
         self.materialization = MaterializationRunner(services.materialization)
+        self.insights = InsightReviewWorkspace(services.insight_review)
         self.operations = OperationsConsole(
             services.action,
             services.runtime,

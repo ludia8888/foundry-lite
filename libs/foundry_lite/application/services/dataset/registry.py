@@ -209,6 +209,10 @@ class DatasetRegistryService(CoreService):
 
     def find_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> DatasetRow | None:
         ctx = ctx or RequestContext()
+        self.policy.require(ctx, "dataset:read")
+        return self._find_dataset_row(dataset_ref, ctx=ctx)
+
+    def _find_dataset_row(self, dataset_ref: str, *, ctx: RequestContext) -> DatasetRow | None:
         namespace, name = _dataset_ref_parts(dataset_ref)
         return self.dataset_repository.find_active_dataset(tenant_id=ctx.tenant_id, namespace=namespace, name=name)
 
@@ -219,6 +223,11 @@ class DatasetRegistryService(CoreService):
         if dataset is None:
             raise NotFound("dataset not found", details={"dataset_ref": dataset_ref})
         return dataset
+
+    def list_datasets(self, *, ctx: RequestContext | None = None) -> list[DatasetRow]:
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "dataset:read")
+        return self.dataset_repository.list_active_datasets(tenant_id=ctx.tenant_id)
 
     def list_dataset_versions(
         self,

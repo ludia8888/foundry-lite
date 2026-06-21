@@ -794,31 +794,19 @@
         recordDlqTopError.textContent = summary.topError;
       }
 
-      function operationQuery() {
-        const params = new URLSearchParams();
-        if (operationType.value) {
-          params.set("runType", operationType.value);
-        }
-        if (operationStatus.value) {
-          params.set("status", operationStatus.value);
-        }
-        if (operationSince.value) {
-          params.set("since", operationSince.value);
-        }
-        if (operationUntil.value) {
-          params.set("until", operationUntil.value);
-        }
-        const query = params.toString();
-        return query ? `?${query}` : "";
-      }
-
-      async function request(path, options = {}) {
-        return sdkClient().request(path, options);
+      function operationFilters(overrides = {}) {
+        return {
+          ...(operationType.value ? { runType: operationType.value } : {}),
+          ...(operationStatus.value ? { status: operationStatus.value } : {}),
+          ...(operationSince.value ? { since: operationSince.value } : {}),
+          ...(operationUntil.value ? { until: operationUntil.value } : {}),
+          ...overrides,
+        };
       }
 
       async function checkHealth() {
         try {
-          const health = await request("/healthz");
+          const health = await sdkClient().system.health();
           statusDot.classList.add("ok");
           statusText.textContent = health.status;
         } catch (error) {
@@ -832,7 +820,7 @@
         const objectClient = sdkClient().objects[objectType.value];
         currentObject = objectClient
           ? await objectClient.get(objectId.value, { explain: true })
-          : await request(`/api/objects/${objectType.value}/${objectId.value}?explain=true`);
+          : await sdkClient().objects.generic.get(objectType.value, objectId.value, { explain: true });
         show(currentObject);
       }
 
@@ -843,12 +831,9 @@
 
       async function loadDataset() {
         const { namespace, name } = datasetParts();
-        const versions = await request(
-          `/api/datasets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/versions`
-        );
-        const preview = await request(
-          `/api/datasets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/preview?limit=3`
-        );
+        const client = sdkClient();
+        const versions = await client.datasets.versions(namespace, name);
+        const preview = await client.datasets.preview(namespace, name, { limit: 3 });
         showDataset({ dataset: datasetRef.value, versions, preview });
       }
 
@@ -857,27 +842,17 @@
         const payload = { filter: { property: "status", op: "eq", value: "PENDING" }, limit: 5 };
         const result = objectClient
           ? await objectClient.query(payload)
-          : await request(`/api/objects/${encodeURIComponent(objectType.value)}/query`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            });
+          : await sdkClient().objects.generic.query(objectType.value, payload);
         showQuery(result);
       }
 
       async function validateOntology() {
-        const result = await request("/api/ontology/validate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ yaml: ontologyYaml.value }),
-        });
+        const result = await sdkClient().ontology.validate({ yaml: ontologyYaml.value });
         showOntology(result);
       }
 
       async function loadLinks() {
-        const links = await request(
-          `/api/objects/${encodeURIComponent(objectType.value)}/${encodeURIComponent(objectId.value)}/links/${encodeURIComponent(linkType.value)}`
-        );
+        const links = await sdkClient().objects.generic.links(objectType.value, objectId.value, linkType.value);
         showLinks(links);
       }
 
@@ -898,35 +873,31 @@
       }
 
       async function materializeActionLog() {
-        const materialization = await request("/api/materializations/action_log/run", { method: "POST" });
+        const materialization = await sdkClient().materializations.run("action_log");
         datasetRef.value = "ops.action_log";
         await loadDataset();
-        const runs = await request("/api/operations/runs");
+        const runs = await sdkClient().operations.runs.list();
         showRuns({ ...runs, lastMaterialization: materialization });
       }
 
       async function savePendingSet() {
-        const created = await request("/api/object-sets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: setName.value,
-            objectType: objectType.value,
-            setType: "dynamic",
-            visibility: "private",
-            filter: { property: "status", op: "eq", value: "PENDING" },
-          }),
+        const created = await sdkClient().objectSets.create({
+          name: setName.value,
+          objectType: objectType.value,
+          setType: "dynamic",
+          visibility: "private",
+          filter: { property: "status", op: "eq", value: "PENDING" },
         });
         showSet(created);
       }
 
       async function loadSets() {
-        const sets = await request(`/api/object-sets?objectType=${encodeURIComponent(objectType.value)}`);
+        const sets = await sdkClient().objectSets.list({ objectType: objectType.value });
         showSet(sets);
       }
 
       async function loadRuns() {
-        const runs = await request(`/api/operations/runs${operationQuery()}`);
+        const runs = await sdkClient().operations.runs.list(operationFilters());
         showRuns(runs);
       }
 
@@ -1009,7 +980,7 @@
         let runId = operationRunId.value;
         let runs = currentRuns;
         if (!runId) {
-          runs = await request(`/api/operations/runs?runType=${encodeURIComponent(runType)}`);
+          runs = await sdkClient().operations.runs.list({ runType });
           const row = (runs[runGroup] ?? [])[0];
           if (!row?.id) {
             showRuns({ ...runs, runDetail: { status: "skipped", reason: "no run found", runType } });
@@ -1018,9 +989,7 @@
           runId = row.id;
           operationRunId.value = runId;
         }
-        const detail = await request(
-          `/api/operations/runs/${encodeURIComponent(runType)}/${encodeURIComponent(runId)}`
-        );
+        const detail = await sdkClient().operations.runs.detail(runType, runId);
         showRuns({ ...(runs ?? {}), runDetail: detail });
       }
 
@@ -1036,18 +1005,14 @@
         operationType.value = link.runType;
         operationStatus.value = "";
         operationRunId.value = link.runId;
-        const detail = await request(
-          link.operationPath ?? `/api/operations/runs/${encodeURIComponent(link.runType)}/${encodeURIComponent(link.runId)}`
-        );
-        const runs = await request(`/api/operations/runs?runType=${encodeURIComponent(link.runType)}`);
+        const detail = await sdkClient().operations.runs.detail(link.runType, link.runId);
+        const runs = await sdkClient().operations.runs.list({ runType: link.runType });
         showRuns({ ...runs, sourceRun: link, runDetail: detail });
       }
 
       async function replayObjectIndex() {
-        const replay = await request(`/api/operations/index/${encodeURIComponent(objectType.value)}/replay`, {
-          method: "POST",
-        });
-        const runs = await request("/api/operations/runs?runType=index");
+        const replay = await sdkClient().operations.index.replayObjectType(objectType.value);
+        const runs = await sdkClient().operations.runs.list({ runType: "index" });
         operationType.value = "index";
         operationStatus.value = "";
         operationRunId.value = replay.index_run_id;
@@ -1058,7 +1023,7 @@
         let runId = operationRunId.value;
         let runs = currentRuns;
         if (!runId) {
-          runs = await request("/api/operations/runs?runType=transform&status=failed");
+          runs = await sdkClient().operations.runs.list({ runType: "transform", status: "failed" });
           const row = (runs.transformRuns ?? [])[0];
           if (!row?.id) {
             showRuns({ ...runs, lastTransformRetry: { status: "skipped", reason: "no failed transform run" } });
@@ -1066,10 +1031,8 @@
           }
           runId = row.id;
         }
-        const retry = await request(`/api/operations/runs/transform/${encodeURIComponent(runId)}/retry`, {
-          method: "POST",
-        });
-        const refreshed = await request("/api/operations/runs?runType=transform");
+        const retry = await sdkClient().operations.transforms.retry(runId);
+        const refreshed = await sdkClient().operations.runs.list({ runType: "transform" });
         operationType.value = "transform";
         operationStatus.value = "";
         operationRunId.value = retry.transform_run_id;
@@ -1080,7 +1043,7 @@
         let runId = operationRunId.value;
         let runs = currentRuns;
         if (!runId) {
-          runs = await request("/api/operations/runs?runType=index&status=failed");
+          runs = await sdkClient().operations.runs.list({ runType: "index", status: "failed" });
           const row = (runs.indexRuns ?? [])[0];
           if (!row?.id) {
             showRuns({ ...runs, lastFailedReplay: { status: "skipped", reason: "no failed index run" } });
@@ -1088,10 +1051,8 @@
           }
           runId = row.id;
         }
-        const replay = await request(`/api/operations/runs/index/${encodeURIComponent(runId)}/replay`, {
-          method: "POST",
-        });
-        const refreshed = await request("/api/operations/runs?runType=index");
+        const replay = await sdkClient().operations.index.replayFailedRun(runId);
+        const refreshed = await sdkClient().operations.runs.list({ runType: "index" });
         operationType.value = "index";
         operationStatus.value = "";
         operationRunId.value = replay.index_run_id;
@@ -1099,16 +1060,14 @@
       }
 
       async function retryFirstDlq() {
-        const runs = await request("/api/operations/runs");
+        const runs = await sdkClient().operations.runs.list();
         const event = (runs.deadLetterEvents ?? [])[0];
         if (!event?.id) {
           showRuns({ ...runs, lastRetry: { status: "skipped", reason: "no DLQ events" } });
           return;
         }
-        const retry = await request(`/api/operations/dead-letter-events/${encodeURIComponent(event.id)}/retry`, {
-          method: "POST",
-        });
-        const refreshed = await request("/api/operations/runs");
+        const retry = await sdkClient().operations.deadLetterEvents.retry(event.id);
+        const refreshed = await sdkClient().operations.runs.list();
         showRuns({ ...refreshed, lastRetry: retry });
       }
 

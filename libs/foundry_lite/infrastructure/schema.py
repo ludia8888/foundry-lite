@@ -445,6 +445,32 @@ object_conflicts = Table(
     Column("created_at", String, nullable=False),
 )
 
+insight_reviews = Table(
+    "insight_reviews",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("claim_id", String, nullable=False),
+    Column("claim_text", Text, nullable=False),
+    Column("status", String, nullable=False),
+    Column("priority", String, nullable=False),
+    Column("assignee_user_id", String),
+    Column("evidence_object_ids", JSON, nullable=False),
+    Column("evidence_refs", JSON, nullable=False),
+    Column("action_proposal", JSON),
+    Column("created_by_user_id", String, nullable=False),
+    Column("created_idempotency_key", String, nullable=False),
+    Column("assignment_idempotency_key", String),
+    Column("decision", JSON),
+    Column("decision_idempotency_key", String),
+    Column("review_metadata", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "created_idempotency_key", name="uq_insight_review_create_idempotency"),
+    UniqueConstraint("tenant_id", "assignment_idempotency_key", name="uq_insight_review_assignment_idempotency"),
+    UniqueConstraint("tenant_id", "decision_idempotency_key", name="uq_insight_review_decision_idempotency"),
+)
+
 object_sets = Table(
     "object_sets",
     metadata,

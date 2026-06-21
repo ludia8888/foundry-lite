@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import DeadLetterRecordRow
 from foundry_lite.application.services.record_dlq_service import (
     _bulk_retry_failure,
@@ -13,7 +14,10 @@ from foundry_lite.application.services.record_dlq_service import (
     _redact_sensitive,
     _retry_result,
 )
-from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected, PermissionDenied, ValidationFailed
+from foundry_lite.infrastructure import schema as db
+from sqlalchemy import select
 
 
 def test_record_dlq_status_and_retry_guards_cover_closed_edges() -> None:
@@ -94,6 +98,29 @@ def test_record_dlq_redacts_nested_sensitive_values() -> None:
         "customer": {"ssn": "***MASKED***", "name": "Ada"},
         "events": [{"secret_token": "***MASKED***"}, {"status": "ok"}],
     }
+
+
+def test_record_dlq_permission_denied_audit_records_deny_decision(foundry: FoundryLite) -> None:
+    ctx = RequestContext(
+        tenant_id="tenant-demo",
+        actor_user_id="viewer-user",
+        roles=("viewer",),
+        request_id="req-record-dlq-deny",
+    )
+
+    with pytest.raises(PermissionDenied):
+        foundry.operations.retry_dead_letter_record("missing-record", idempotency_key="retry-deny", ctx=ctx)
+
+    with foundry.engine.begin() as conn:
+        row = (
+            conn.execute(select(db.audit_events).where(db.audit_events.c.event_type == "permission.denied"))
+            .mappings()
+            .one()
+        )
+
+    assert row["action"] == "operations:retry"
+    assert row["decision"] == "deny"
+    assert row["after_ref"] == {"decision": "deny"}
 
 
 def _row(**overrides: object) -> DeadLetterRecordRow:

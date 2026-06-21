@@ -32,6 +32,7 @@ from foundry_lite.application.services.dataset.stream_archive_commit import (
     ensure_stream_archive_batch_writable,
     prepare_stream_archive_batch,
     read_stream_archive_events,
+    record_stream_read_failure,
     stream_archive_fields,
     stream_commit_metadata,
     stream_cursor_offset,
@@ -41,6 +42,7 @@ from foundry_lite.application.upload_limits import require_csv_size_limit
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
+    DatasetCommitBlocked,
     FoundryLiteError,
     InvariantViolation,
     NotFound,
@@ -91,8 +93,24 @@ class DatasetIngestService(CoreService):
         staged = self.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
         try:
             self._csv_to_parquet(source_path, staged)
-            with self.engine.begin() as conn:
-                result = self.dataset_transaction_service._finalize_open_transaction(
+        except Exception as exc:
+            self._abort_upload_after_error(ctx, plan.transaction_id, plan.run_id, exc, "compute_adapter.csv_to_parquet")
+        try:
+            return self._finalize_upload_csv(ctx, dataset, plan, staged)
+        except Exception as exc:
+            self._abort_upload_after_error(ctx, plan.transaction_id, plan.run_id, exc, "dataset_transaction.finalize")
+
+    def _finalize_upload_csv(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        plan: UploadSyncPlan,
+        staged: Path,
+    ) -> CommitResult:
+        blocked: DatasetCommitBlocked | None = None
+        with self.engine.begin() as conn:
+            try:
+                return self.dataset_transaction_service._finalize_open_transaction(
                     conn,
                     ctx,
                     dataset=dataset,
@@ -101,11 +119,15 @@ class DatasetIngestService(CoreService):
                     run_id=plan.run_id,
                     audit_action="csv_upload_commit",
                     outbox_event_type="dataset.version.committed",
+                    after_persist=lambda commit_conn, result: self._mark_sync_run_committed(
+                        commit_conn, ctx, plan.run_id, result
+                    ),
                 )
-                self._mark_sync_run_committed(conn, ctx, plan.run_id, result)
-                return result
-        except Exception as exc:
-            self._abort_upload_after_error(ctx, plan.transaction_id, plan.run_id, exc)
+            except DatasetCommitBlocked as exc:
+                blocked = exc
+        if blocked is not None:
+            raise blocked
+        raise InvariantViolation("dataset upload finalization did not return a commit result")
 
     def sync_connector_snapshot(
         self,
@@ -177,7 +199,10 @@ class DatasetIngestService(CoreService):
         try:
             events = read_stream_archive_events(self.stream_adapter, stream, resume_offset)
         except Exception as exc:
-            self._record_stream_read_failure(ctx, dataset, stream, sync_name, exc)
+            repository = self.dataset_transaction_repository
+            record_stream_read_failure(
+                self.engine, repository, self.runtime_service, ctx, dataset, stream, sync_name, exc
+            )
             if isinstance(exc, FoundryLiteError):
                 raise
             raise ValidationFailed("stream archive read failed", details={"error": str(exc)}) from exc
@@ -261,35 +286,6 @@ class DatasetIngestService(CoreService):
                 dataset_id=dataset["id"],
             )
 
-    def _record_stream_read_failure(
-        self,
-        ctx: RequestContext,
-        dataset: DatasetRow,
-        stream: StreamArchiveConfig,
-        sync_name: str | None,
-        exc: Exception,
-    ) -> None:
-        run_id = _new_id("sync_run")
-        error = self.runtime_service._error_payload(exc, ctx, run_id=run_id, adapter="stream_archive_reader")
-        now = _now()
-        with self.engine.begin() as conn:
-            self.dataset_transaction_repository.insert_sync_run(
-                transaction=conn,
-                record=SyncRunRecord(
-                    sync_run_id=run_id,
-                    tenant_id=ctx.tenant_id,
-                    sync_name=sync_name or f"stream:{stream.stream_name}:{stream.consumer_group}",
-                    source_type=f"stream.{stream.stream_name}",
-                    output_dataset_id=str(dataset["id"]),
-                    transaction_id=None,
-                    committed_version_id=None,
-                    status="FAILED",
-                    error=error,
-                    created_at=now,
-                    completed_at=now,
-                ),
-            )
-
     def _csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
         self.compute_adapter.csv_to_parquet(source_path, target_path)
 
@@ -299,6 +295,7 @@ class DatasetIngestService(CoreService):
         transaction_id: str,
         run_id: str,
         exc: Exception,
+        adapter: str | None,
     ) -> NoReturn:
         self.dataset_transaction_service._abort_transaction_after_error(
             ctx,
@@ -306,7 +303,7 @@ class DatasetIngestService(CoreService):
             run_id,
             exc,
             "sync",
-            adapter="compute_adapter.csv_to_parquet",
+            adapter=adapter,
         )
         if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
             raise exc
@@ -409,21 +406,29 @@ class DatasetIngestService(CoreService):
         dead_letters: Sequence[StreamArchiveDeadLetter],
         metadata: Mapping[str, object],
     ) -> CommitResult:
+        blocked: DatasetCommitBlocked | None = None
         with self.engine.begin() as conn:
             self._insert_stream_dead_letters(conn, ctx, dataset, stream, plan, dead_letters)
-            result = self.dataset_transaction_service._finalize_open_transaction(
-                conn,
-                ctx,
-                dataset=dataset,
-                transaction_id=plan.transaction_id,
-                staged_parquet=staged,
-                run_id=plan.run_id,
-                audit_action="stream_archive_append_commit",
-                outbox_event_type="dataset.version.committed",
-                transaction_metadata=metadata,
-            )
-            self._mark_sync_run_committed(conn, ctx, plan.run_id, result)
-            return result
+            try:
+                return self.dataset_transaction_service._finalize_open_transaction(
+                    conn,
+                    ctx,
+                    dataset=dataset,
+                    transaction_id=plan.transaction_id,
+                    staged_parquet=staged,
+                    run_id=plan.run_id,
+                    audit_action="stream_archive_append_commit",
+                    outbox_event_type="dataset.version.committed",
+                    transaction_metadata=metadata,
+                    after_persist=lambda commit_conn, result: self._mark_sync_run_committed(
+                        commit_conn, ctx, plan.run_id, result
+                    ),
+                )
+            except DatasetCommitBlocked as exc:
+                blocked = exc
+        if blocked is not None:
+            raise blocked
+        raise InvariantViolation("stream archive finalization did not return a commit result")
 
     def _persist_stream_dead_letters(
         self,

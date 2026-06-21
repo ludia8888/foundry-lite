@@ -324,6 +324,81 @@ def test_transform_output_and_lineage_commit_atomically(
     assert failed_run["error"]["details"]["orphan_cleanup"]["version_id"] == cleanup["version_id"]
 
 
+def test_transform_quality_block_preserves_failure_evidence_without_output_version(tmp_path: Path) -> None:
+    foundry = FoundryLite(
+        dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-quality-block")
+    )
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.blocked_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.blocked_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.blocked_orders", _csv(tmp_path, "blocked_orders.csv", "O-1", 100), ctx=ctx)
+    sql_path = tmp_path / "blocked_orders.sql"
+    sql_path.write_text(
+        "select order_id, amount from {{ input('raw.blocked_orders') }} "
+        "union all select order_id, amount from {{ input('raw.blocked_orders') }}",
+        encoding="utf-8",
+    )
+    foundry.transforms.register(
+        "blocked_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.blocked_orders"},
+        output_dataset_ref="clean.blocked_orders",
+        ctx=ctx,
+    )
+
+    with pytest.raises(ValidationFailed, match="dataset checks failed"):
+        foundry.transforms.run("blocked_orders", ctx=ctx)
+
+    failed_run = next(
+        run for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED"
+    )
+    assert foundry.datasets.list_versions("clean.blocked_orders", ctx=ctx) == []
+    assert failed_run["output_version_id"] is None
+
+
+def test_transform_retry_quality_block_preserves_failure_evidence_without_output_version(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "retry-quality-block"))
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.retry_blocked_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.retry_blocked_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv(
+        "raw.retry_blocked_orders", _csv(tmp_path, "retry_blocked_orders.csv", "O-1", 100), ctx=ctx
+    )
+    sql_path = tmp_path / "retry_blocked_orders.sql"
+    sql_path.write_text("select missing_column from {{ input('raw.retry_blocked_orders') }}", encoding="utf-8")
+    foundry.transforms.register(
+        "retry_blocked_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.retry_blocked_orders"},
+        output_dataset_ref="clean.retry_blocked_orders",
+        ctx=ctx,
+    )
+    with pytest.raises(ValidationFailed):
+        foundry.transforms.run("retry_blocked_orders", ctx=ctx)
+    failed_run = next(
+        run for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED"
+    )
+    sql_path.write_text(
+        "select order_id, amount from {{ input('raw.retry_blocked_orders') }} "
+        "union all select order_id, amount from {{ input('raw.retry_blocked_orders') }}",
+        encoding="utf-8",
+    )
+    foundry.transforms.register(
+        "retry_blocked_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.retry_blocked_orders"},
+        output_dataset_ref="clean.retry_blocked_orders",
+        ctx=ctx,
+    )
+
+    with pytest.raises(ValidationFailed, match="dataset checks failed"):
+        foundry.transforms.retry_run(failed_run["id"], ctx=ctx)
+
+    failed_runs = [run for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED"]
+    assert foundry.datasets.list_versions("clean.retry_blocked_orders", ctx=ctx) == []
+    assert len(failed_runs) == 2
+
+
 def test_duckdb_oom_aborts_output_transaction(tmp_path: Path) -> None:
     compute = _FailingTransformAdapter()
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "transform-oom")
@@ -383,6 +458,31 @@ def test_sql_transform_cannot_read_arbitrary_filesystem_path(tmp_path: Path) -> 
     assert foundry.datasets.list_versions("clean.guard_orders", ctx=ctx) == []
     assert failed_run["output_version_id"] is None
     assert failed_run["error"]["details"]["function"] == "read_csv"
+
+
+def test_sql_transform_cannot_reference_undeclared_input_dataset(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "input-allowlist"))
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.allowed_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("raw.secret_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.allowlisted_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.allowed_orders", _csv(tmp_path, "allowed_orders.csv", "O-1", 100), ctx=ctx)
+    foundry.datasets.upload_csv("raw.secret_orders", _csv(tmp_path, "secret_orders.csv", "O-2", 999), ctx=ctx)
+    sql_path = tmp_path / "undeclared_input.sql"
+    sql_path.write_text("select order_id, amount from {{ input('raw.secret_orders') }}", encoding="utf-8")
+    foundry.transforms.register(
+        "undeclared_input",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.allowed_orders"},
+        output_dataset_ref="clean.allowlisted_orders",
+        ctx=ctx,
+    )
+
+    with pytest.raises(ValidationFailed, match="undeclared input datasets") as exc_info:
+        foundry.transforms.run("undeclared_input", ctx=ctx)
+
+    assert exc_info.value.details == {"dataset_refs": ["raw.secret_orders"]}
+    assert foundry.datasets.list_versions("clean.allowlisted_orders", ctx=ctx) == []
 
 
 def test_python_transform_cannot_access_raw_storage_path(tmp_path: Path) -> None:

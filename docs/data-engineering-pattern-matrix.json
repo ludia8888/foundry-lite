@@ -84,7 +84,7 @@
       "status": "enforced",
       "riskTier": "P0",
       "owner": "operations-runtime",
-      "owningDoc": "docs/quality-observability.md",
+      "owningDoc": "docs/quality-gate-roadmap.md",
       "reason": "Adapter, auth, secret, and commit-point failures must be visible in run/error/audit/outbox/trace evidence, not only logs. S56 proves read-only detector reports can surface missing-data, lag, skew, and SLO evidence before source-of-truth rows are mutated. S57 proves backup/restore preflight can block DB/storage committed-version mismatches, mark search as rebuildable projection evidence, keep outbox retry/reprocess closed while restore mode is active, and reject publisher resume until post-restore closed-loop evidence exists. S58A proves local JWT/OIDC bearer-token failures are denied before a Principal is built, M2M service-account tokens remain tenant-scoped, revoked JWT ids are blocked, JWKS refresh/cache behavior is tested, webhook signing secrets are read through SecretProvider and redacted from operator evidence/errors, and REST connector credential secretRefs are re-resolved on the next snapshot after local rotation.",
       "activeInfraRefs": [
         "s3-storage",
@@ -198,7 +198,7 @@
       "status": "partial",
       "riskTier": "P0",
       "owner": "ingest-runtime",
-      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
       "reason": "S47 now has stream CDC quarantine plus Operations API, typed generated SDK, and Web Operations UI coverage for tenant-scoped dead_letter_records, single and bulk replay idempotency, valid-payload APPEND replay result, replay failure result, discard, audit evidence, DLQ-write fail-closed tests, source-side error threshold fail-closed policy, identity/ordering fail-closed policy, and PostgreSQL concurrent replay request proof. Transform-level Record DLQ policy remains future if transform record DLQ is introduced.",
       "activeInfraRefs": [
         "debezium-cdc"
@@ -239,7 +239,7 @@
             "status": "partial",
             "riskTier": "P1",
             "owner": "ingest-runtime",
-            "owningDoc": "docs/data-platform-expansion-roadmap.md",
+            "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
             "reason": "S48 now has a stream/source archive slice: StreamArchiveConfig declares event/source time fields, named timezone override, and lateness thresholds, committed archive rows separate event/source/ingest/process time with a late_data_status, too-late records route to Record DLQ, transaction metadata keeps a matching partition/source lateDataWatermark from moving backward without letting unrelated fast-partition watermarks classify slow partitions as stale, duplicate delivery after a committed late event resumes from the durable offset instead of creating a second dataset version, late stream commits expose lateDataSummary plus lateDataReprocessingPlan through Operations run detail, materialization commits expose watermark plus late-data reopen evidence when a LATE_REQUIRES_REPROCESS CDC index run forces the next closed output to be regenerated, object/materialization explain exposes late-data badges, Operations detail exposes a downstream impact graph for the regenerated materialization, and a late stale CDC delete cannot remove or resurrect the current active object.",
             "activeInfraRefs": [
                 "debezium-cdc"
@@ -273,7 +273,7 @@
       "status": "partial",
       "riskTier": "P1",
       "owner": "storage-runtime",
-      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
       "reason": "S49 now has a read/preview slice: DatasetStorageAdapter.data_file_paths resolves manifest-listed data files in order, foundry.datasets.preview reads multi-file manifests through the existing facade, unlisted files in the storage directory are not discovered by listing, dataset rows can declare layout policy fields, local/fake/S3 read/preview partition filters reduce actual read files, and Iceberg skips reads when no manifest file matches. Multi-part atomic commit, transform predicate pushdown, high-cardinality partition warnings, and Iceberg snapshot file-level pruning remain future work.",
       "activeInfraRefs": [
         "s3-storage",
@@ -303,7 +303,7 @@
       "status": "partial",
       "riskTier": "P1",
       "owner": "storage-runtime",
-      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
       "reason": "S50 now has a maintenance planning slice: Operations can request an Iceberg maintenance plan, committed DB dataset-version snapshots are marked protected, compaction candidates are reported from file-count/small-file/read-amplification thresholds, and the plan request leaves audit evidence. Actual rewrite_data_files execution, snapshot expiration, and orphan cleanup remain future work.",
       "activeInfraRefs": [
         "iceberg",
@@ -330,7 +330,7 @@
       "status": "partial",
       "riskTier": "P0",
       "owner": "ingest-runtime",
-      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
       "reason": "S51 now has a bounded continuous stream archive worker loop that repeatedly calls the existing archive_stream_events transaction boundary, stops after configured empty polls or a stop callback, and reports loop summary counts. Lease fencing, rebalance revocation, commit-unknown reconciliation, and a continuous CDC object-index worker remain future work.",
       "activeInfraRefs": [
         "debezium-cdc"
@@ -361,7 +361,7 @@
       "status": "partial",
       "riskTier": "P0",
       "owner": "workflow-runtime",
-      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
       "reason": "ConnectorSyncWorkflow now has a product workflow control-plane path through Operations/API/SDK with local/fake/Temporal contract proof and audit-linked ProductWorkflowRun evidence. Real connector activity data-plane execution, cancellation cleanup, response-loss reconciliation, continue-as-new, upgrade replay, and managed worker operations remain future work.",
       "activeInfraRefs": [
         "temporal"
@@ -392,7 +392,7 @@
       "status": "partial",
       "riskTier": "P0",
       "owner": "action-runtime",
-      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
       "reason": "S53 now has simulated before-commit writeback slices where response loss becomes outcome_unknown, external success followed by local mutation failure becomes compensation_required, and operator-provided remote-success resolve catches up the local object mutation while closing action/writeback evidence as reconciled. Same-idempotency-key replay does not blindly issue another writeback, concurrent reconcile has one winner, and sensitive writeback parameters stay masked in Operations/audit surfaces. Real vendor APIs, vendor remote lookup, compensation worker execution, persistent reconciliation queue, and operator approval remain future work.",
       "activeInfraRefs": [
       ],
@@ -426,7 +426,7 @@
       "status": "partial",
       "riskTier": "P1",
       "owner": "dataset-runtime",
-      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
       "reason": "S54 first slices record the staged candidate fingerprint and schema row/version used by dataset quality check results through checked_manifest_hash, validated_against_schema_version_id, and validated_against_schema_version. Historical check results stay pinned to the schema row/version used by that run after later schema versions are created. Successful check rows are stored as PASS, warning severity failures are visible as non-blocking WARN, and staged candidate tamper or commit-time hard failure is rejected as BLOCK_COMMIT before storage commit. Row-level not_null/unique quarantine checks route failed records to tenant-scoped Record DLQ as DATA_QUALITY_CONTRACT, rewrite the staged candidate to clean records, and revalidate before commit. Operations run detail exposes the transaction-scoped quality summary, schema references, checked manifest hashes, check results, and up to 5 data-quality quarantine failed-row samples. Full DataContract CRUD, owner notification, dedicated failed-row sample UI, quality history/trend, and production DB schema race proof remain future work.",
       "activeInfraRefs": [
       ],
@@ -462,7 +462,7 @@
       "status": "partial",
       "riskTier": "Product",
       "owner": "product-surface",
-      "owningDoc": "docs/data-platform-expansion-roadmap.md",
+      "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
       "reason": "The generated SDK and Object Explorer use public surfaces, but the full S61-S64 workspace track is not complete.",
       "activeInfraRefs": [],
       "proofLevel": "L1",
@@ -483,7 +483,7 @@
       "status": "not-applicable",
       "riskTier": "P2",
       "owner": "compute-runtime",
-      "owningDoc": "docs/mvp-scope.md",
+      "owningDoc": "docs/implementation-status.md",
       "reason": "Flink remains outside the current S46 execution path.",
       "activeInfraRefs": [],
       "proofLevel": "L0",

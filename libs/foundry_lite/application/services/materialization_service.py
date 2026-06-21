@@ -30,6 +30,7 @@ from foundry_lite.application.services.materialization_protocols import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
+    DatasetCommitBlocked,
     InvariantViolation,
     NotFound,
 )
@@ -196,25 +197,32 @@ class MaterializationService(CoreService):
         plan: MaterializationRunPlan,
     ) -> CommitResult:
         staged = self._write_materialization_rows(ctx, plan)
+        blocked: DatasetCommitBlocked | None = None
         with self.engine.begin() as conn:
 
             def after_persist(conn: TransactionContext, result: CommitResult) -> None:
                 self._mark_materialization_run_succeeded(conn, ctx, plan.run_id, result)
                 self._record_materialization_lineage(conn, ctx, plan, result)
 
-            return self.dataset_transaction_service._finalize_open_transaction(
-                conn,
-                ctx,
-                dataset=plan.target_dataset,
-                transaction_id=plan.transaction_id,
-                staged_parquet=staged,
-                run_id=plan.run_id,
-                audit_action="materialization_commit",
-                outbox_event_type="materialization.completed",
-                extra_checks=({"type": "allow_empty"},),
-                transaction_metadata=_materialization_transaction_metadata(plan),
-                after_persist=after_persist,
-            )
+            try:
+                return self.dataset_transaction_service._finalize_open_transaction(
+                    conn,
+                    ctx,
+                    dataset=plan.target_dataset,
+                    transaction_id=plan.transaction_id,
+                    staged_parquet=staged,
+                    run_id=plan.run_id,
+                    audit_action="materialization_commit",
+                    outbox_event_type="materialization.completed",
+                    extra_checks=({"type": "allow_empty"},),
+                    transaction_metadata=_materialization_transaction_metadata(plan),
+                    after_persist=after_persist,
+                )
+            except DatasetCommitBlocked as exc:
+                blocked = exc
+        if blocked is not None:
+            raise blocked
+        raise InvariantViolation("materialization finalization did not return a commit result")
 
     def _write_materialization_rows(
         self,

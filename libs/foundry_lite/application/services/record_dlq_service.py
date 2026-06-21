@@ -208,6 +208,7 @@ class RecordDlqService(CoreService):
                     resource_type=resource_type,
                     resource_id=resource_id,
                     action=permission,
+                    decision="deny",
                     after_ref={"decision": "deny"},
                 )
             raise
@@ -261,6 +262,7 @@ class RecordDlqService(CoreService):
         resource_type: str,
         resource_id: str | None,
         action: str,
+        decision: str = "allow",
         before_ref: Mapping[str, object] | None = None,
         after_ref: Mapping[str, object] | None = None,
     ) -> None:
@@ -274,7 +276,7 @@ class RecordDlqService(CoreService):
                 resource_type=resource_type,
                 resource_id=resource_id,
                 action=action,
-                decision="allow",
+                decision=decision,
                 policy_decision={},
                 before_ref=dict(before_ref or {}),
                 after_ref=dict(after_ref or {}),

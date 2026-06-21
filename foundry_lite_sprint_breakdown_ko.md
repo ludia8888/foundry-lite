@@ -4,7 +4,7 @@
 
 이 문서는 Foundry-lite 문서 체계의 **스프린트 실행 계획 원본**이다. [Foundry-lite 개발 기획서](./foundry_lite_development_plan_ko_sprintified.md)를 실제 구현 가능한 작은 스프린트 단위로 나누고, 각 스프린트가 반드시 통과해야 하는 제품/기술 Goal을 정의한다.
 
-> 현재 구현 상태 주의: 2026-06-18 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 따른다. 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
+> 현재 구현 상태 주의: 2026-06-19 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 따른다. 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
 
 ## 문서 지도
 
@@ -35,14 +35,14 @@
 - Python 백엔드 테스트 커버리지는 line, branch, function 기준 모두 95% 이상이어야 한다.
 - 필수 통합 테스트와 필수 스모크 테스트는 100% 실행되고 100% 통과해야 한다.
 
-### 2026-06-18 상세 체크박스 동기화 기준
+### 2026-06-19 상세 체크박스 동기화 기준
 
-- Sprint 00~36, Sprint 02A, Sprint 36A의 상세 체크박스는 현재 구현, [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md), [Implementation Status](./docs/implementation-status.md), 최신 `main` CI 결과를 기준으로 다시 동기화했다.
+- Sprint 00~36, Sprint 02A, Sprint 36A의 상세 체크박스는 현재 checkout 구현, [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md), [Implementation Status](./docs/implementation-status.md), 관련 품질 게이트 증거를 기준으로 다시 동기화했다.
 - `[x]`는 둘 중 하나를 뜻한다: 현재 MVP 구현과 테스트 증거로 완료되었거나, 현 MVP scope에서 명시적으로 future/deferred로 재분류되어 더 이상 Sprint 00~36 완료 조건으로 요구하지 않는다는 결정이 끝났다는 뜻이다.
 - future/deferred로 재분류된 항목은 문장 안에 그 사실을 명시한다. 구현 완료와 scope 제외를 섞어 말하지 않는다.
 - Sprint 43 Iceberg와 Sprint 44 Spark 항목은 현재 `docs/infra-ratchet.md`, `docs/infra-tricky-matrix.json`, `quality:iceberg`, `quality:spark`, `quality:infra-composition` 증거 기준으로 다시 동기화한다. 단, production cluster 운영과 분산 장애/운영 runbook은 별도 future scope다.
 - Sprint 45 Kubernetes/backup-restore 항목은 아직 구현 증거가 없으므로 `[ ]`로 남긴다. 이 미체크 상태 자체가 최신 구현 상태와 동기화된 것이다.
-- Sprint 46 이후 post-MVP 확장 순서는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 따른다. 첫 실행 단위는 S46 Semantic SSOT + Data Engineering Pattern Matrix다.
+- Sprint 46 이후 post-MVP 확장 순서는 [Data Platform Expansion Sprint Plan](./docs/data-platform-expansion-sprint-plan-ko.md)을 따른다. 현재는 S46 Semantic SSOT/Data Pattern Matrix가 complete이고, S47~S58C/S60~S63은 각 문서와 evidence ledger에 적힌 범위 안에서 partial/current proof를 갖는다. S61은 generated SDK와 frontend/backend surface lock, 42 route-surface request contract, 12 helper-surface contract, S62는 Dataset Explorer backend/API/SDK 시작점, S63은 Insight Review queue backend/API/SDK slice까지를 뜻하며 full visual workspace는 future scope다.
 
 모든 스프린트는 다음 원칙을 따른다.
 
@@ -158,8 +158,8 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 - [x] `examples/supply-chain-demo/README.md`에 end-to-end 데모 목표가 적혀 있다. ([MVP-CORE](./docs/sprint-evidence-ledger.md#mvp-core-completion-gate-evidence-map))
 - [x] `examples/supply-chain-demo/data/*.csv` seed 파일이 있다. (`examples/supply-chain-demo/data/orders.csv`, `customers.csv`)
 - [x] `examples/supply-chain-demo/ontology/order-customer.yaml` 초안이 있다. (`examples/supply-chain-demo/ontology/order-customer.yaml`)
-- [x] `docs/mvp-scope.md`에 v1 포함/제외 범위가 있다. ([docs/mvp-scope.md](./docs/mvp-scope.md))
-- [x] 팀원이 새 기능을 제안해도 `docs/mvp-scope.md`, `docs/implementation-status.md`, 이 문서의 Sprint 00~36/Sprint 37 이후 경계로 v1/v1.5/v2를 판정할 수 있다.
+- [x] `docs/implementation-status.md`에 v1 포함/제외 범위가 있다. ([Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary))
+- [x] 팀원이 새 기능을 제안해도 `docs/implementation-status.md`의 MVP boundary와 이 문서의 Sprint 00~36/Sprint 37 이후 경계로 v1/v1.5/v2를 판정할 수 있다.
 
 **Demo / Proof**
 
@@ -198,7 +198,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 
 - [x] `uv sync && pnpm install && pnpm dev`가 성공한다. 최신 로컬 확인에서 API는 `127.0.0.1:8000`, Web은 `127.0.0.1:4173`로 실행된다.
 - [x] `curl localhost:8000/healthz`가 `{"status":"ok"}`를 반환한다. (로컬 E2E 확인, 2026-06-16)
-- [x] Temporal worker 연결은 MVP core 구현 완료 조건에서 제외하고 future/deferred로 재분류했다. 현재 local MVP는 synchronous job과 `worker:stream-archive` entrypoint로 검증한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [Implementation Status](./docs/implementation-status.md#still-targeted-not-yet-implemented))
+- [x] Temporal worker 연결은 MVP core 구현 완료 조건에서 제외하고 future/deferred로 재분류했다. 현재 local MVP는 synchronous job과 `worker:stream-archive` entrypoint로 검증한다. ([Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary), [Implementation Status](./docs/implementation-status.md#still-targeted-not-yet-implemented))
 - [x] Web이 API health 상태를 화면에 표시한다. (`apps/web/index.html`, `#healthBtn`, `#statusText`; 최신 로컬 E2E 확인)
 - [x] CI에서 `ruff`, `mypy` 또는 `pyright`, `pytest`가 성공한다. ([VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static), 최신 `main` Foundry-lite CI)
 
@@ -235,7 +235,7 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 
 **Acceptance Gate**
 
-- [x] Alembic baseline migration parity는 현재 증거가 있고, multi-step migration history/rollback operations는 MVP core에서 future/deferred로 재분류했다. 현재는 SQLAlchemy schema bootstrap + schema revision guard + Alembic fresh-DB parity guard로 DB shape drift를 차단한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static))
+- [x] Alembic baseline migration parity는 현재 증거가 있고, multi-step migration history/rollback operations는 MVP core에서 future/deferred로 재분류했다. 현재는 SQLAlchemy schema bootstrap + schema revision guard + Alembic fresh-DB parity guard로 DB shape drift를 차단한다. ([Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary), [VERIFY-STATIC](./docs/sprint-evidence-ledger.md#verify-static))
 - [x] 개발용 seed tenant/user가 생성된다. (`SupplyChainDemo`, demo admin context, [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
 - [x] 인증 없는 local/demo 요청은 명시적 local/demo auth profile 또는 header-trust context로 tenant/user에 귀속되며, production profile에서는 header-trust/demo auth가 startup에서 거부된다. ([VERIFY-PRODUCTION-AUTH-GUARD](./docs/sprint-evidence-ledger.md#verify-production-auth-guard))
 - [x] mutation 테스트/API 호출은 audit row를 남긴다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
@@ -243,7 +243,9 @@ Foundry-lite를 단순 ETL/BI가 아니라 운영 객체 시스템으로 만들�
 
 **Demo / Proof**
 
-`flite dev seed` 후 `/api/me`가 tenant/user/roles를 반환하고, 호출 기록이 `audit_events`에 남는다.
+`flite dev seed` 대신 현재 local/demo profile은 명시적 header-trust/demo request context로
+tenant/user/roles를 주입하고, mutation 호출 기록이 `audit_events`에 남는다. future `/api/me`
+session introspection endpoint는 full login/session UI와 함께 추가한다.
 
 **이러면 성공으로 치지 않는다**
 
@@ -634,11 +636,11 @@ Sources UI에서 file source를 만들고 `sync_orders`를 실행해 raw dataset
 
 **Acceptance Gate**
 
-- [x] `sync_orders_pg` 데모 경로는 현재 MVP local snapshot path로 `raw.erp_orders` version을 생성한다. real PostgreSQL snapshot connector implementation은 future/deferred다. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset), [docs/mvp-scope.md](./docs/mvp-scope.md))
-- [x] source/connector 실패는 sync run FAILED 또는 aborted transaction evidence로 남긴다. 실제 PostgreSQL source failure edge는 future connector scope로 재분류했다. ([VERIFY-REST-WEBHOOK-TRICKY-EDGES](./docs/sprint-evidence-ledger.md#verify-rest-webhook-tricky-edges), [docs/mvp-scope.md](./docs/mvp-scope.md))
-- [x] large result streaming/batch PostgreSQL snapshot implementation은 MVP core에서 future/deferred로 재분류했다. 현재 MVP는 CSV/local connector snapshot과 adapter boundary를 검증한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2))
+- [x] `sync_orders_pg` 데모 경로는 현재 MVP local snapshot path로 `raw.erp_orders` version을 생성한다. real PostgreSQL snapshot connector implementation은 future/deferred다. ([MVP-RAW](./docs/sprint-evidence-ledger.md#mvp-core-raw-dataset), [Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary))
+- [x] source/connector 실패는 sync run FAILED 또는 aborted transaction evidence로 남긴다. 실제 PostgreSQL source failure edge는 future connector scope로 재분류했다. ([VERIFY-REST-WEBHOOK-TRICKY-EDGES](./docs/sprint-evidence-ledger.md#verify-rest-webhook-tricky-edges), [Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary))
+- [x] large result streaming/batch PostgreSQL snapshot implementation은 MVP core에서 future/deferred로 재분류했다. 현재 MVP는 CSV/local connector snapshot과 adapter boundary를 검증한다. ([Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary), [S02A-P2](./docs/sprint-evidence-ledger.md#s02a-p2))
 - [x] query/schema breaking 차단은 현재 dataset schema compatibility/finalization guard로 검증하고, PostgreSQL query snapshot 전용 구현은 future/deferred로 둔다. ([VERIFY-SCHEMA-COMPATIBILITY-TOCTOU](./docs/sprint-evidence-ledger.md#verify-schema-compatibility-toctou))
-- [x] Source UI의 PostgreSQL testConnection은 MVP core에서 future/deferred로 재분류했고, current Web은 dataset/object/operations proof를 제공한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [S22-A1](./docs/sprint-evidence-ledger.md#s22-a1))
+- [x] Source UI의 PostgreSQL testConnection은 MVP core에서 future/deferred로 재분류했고, current Web은 dataset/object/operations proof를 제공한다. ([Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary), [S22-A1](./docs/sprint-evidence-ledger.md#s22-a1))
 
 **Demo / Proof**
 
@@ -752,9 +754,9 @@ Transform output도 dataset health check를 통과해야만 성공으로 인정�
 **Acceptance Gate**
 
 - [x] primary key uniqueness/health failure는 SUCCESS로 인정하지 않고 failed/aborted evidence로 남긴다. ([VERIFY-DATASET-HEALTH-CANDIDATE](./docs/sprint-evidence-ledger.md#verify-dataset-health-candidate), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
-- [x] Temporal retry는 MVP core에서 future/deferred로 재분류했고, 현재 retry duplicate-output 위험은 Operations retry guard로 차단한다. ([VERIFY-TRANSFORM-RETRY-NO-DUPLICATE-OUTPUT](./docs/sprint-evidence-ledger.md#verify-transform-retry-no-duplicate-output), [docs/mvp-scope.md](./docs/mvp-scope.md))
+- [x] Temporal retry는 MVP core에서 future/deferred로 재분류했고, 현재 retry duplicate-output 위험은 Operations retry guard로 차단한다. ([VERIFY-TRANSFORM-RETRY-NO-DUPLICATE-OUTPUT](./docs/sprint-evidence-ledger.md#verify-transform-retry-no-duplicate-output), [Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary))
 - [x] run 상세에서 created/completed time, status, error, correlation id, related evidence를 볼 수 있다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5))
-- [x] scheduled run/Temporal execution은 MVP core에서 future/deferred로 재분류했다. 수동/API/CLI retry path는 current Operations proof로 검증한다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [S33-A1](./docs/sprint-evidence-ledger.md#s33-a1))
+- [x] scheduled run/Temporal execution은 MVP core에서 future/deferred로 재분류했다. 수동/API/CLI retry path는 current Operations proof로 검증한다. ([Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary), [S33-A1](./docs/sprint-evidence-ledger.md#s33-a1))
 - [x] health/failure gate 결과는 run error, audit/outbox/lineage absence proof로 남는다. ([VERIFY-TRANSFORM-LINEAGE-ATOMIC](./docs/sprint-evidence-ledger.md#verify-transform-lineage-atomic), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
 
 **Demo / Proof**
@@ -786,15 +788,15 @@ Python 사용자가 Dataset Registry의 input/output abstraction을 통해 trans
 - Python runner가 input version manifest를 받아 읽도록 한다.
 - Python output은 staging path로만 쓰고 API/worker가 commit한다.
 - Python exception을 transform run error payload로 표준화한다.
-- 예제 `clean_customers.py`를 만든다.
+- 미래 Python runner 예제 `clean_customers.py`를 만든다.
 
 **Acceptance Gate**
 
-- [x] `clean_customers.py` Python runner는 MVP core에서 future/deferred로 재분류했고, current MVP는 DuckDB SQL transform으로 `clean.customers`를 만든다. ([MVP-TRANSFORM](./docs/sprint-evidence-ledger.md#mvp-core-transform), [docs/mvp-scope.md](./docs/mvp-scope.md))
+- [x] `clean_customers.py` Python runner는 MVP core에서 future/deferred로 재분류했고, current MVP는 DuckDB SQL transform으로 `clean.customers`를 만든다. ([MVP-TRANSFORM](./docs/sprint-evidence-ledger.md#mvp-core-transform), [Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary))
 - [x] Python transform lineage/output commit은 sandboxed SDK abstraction 이전까지 fail-closed future scope로 재분류했다. SQL transform lineage/output은 현재 증명되어 있다. ([VERIFY-TRANSFORM-LINEAGE-ATOMIC](./docs/sprint-evidence-ledger.md#verify-transform-lineage-atomic), [docs/implementation-status.md](./docs/implementation-status.md))
 - [x] Python transform 실패 transaction path는 future/deferred로 재분류했고, current compute failure cleanup은 DuckDB/failing compute adapter proof로 검증한다. ([VERIFY-TRANSFORM-OOM-STAGING-CLEANUP](./docs/sprint-evidence-ledger.md#verify-transform-oom-staging-cleanup))
 - [x] SDK 사용자 코드가 raw storage path를 직접 받지 않는 정책은 current SQL transform guard와 Python transform fail-closed 정책으로 고정했다. ([VERIFY-SQL-TRANSFORM-FILESYSTEM-GUARD](./docs/sprint-evidence-ledger.md#verify-sql-transform-filesystem-guard), [VERIFY-PYTHON-TRANSFORM-FAIL-CLOSED](./docs/sprint-evidence-ledger.md#verify-python-transform-fail-closed))
-- [x] Python transforms SDK package skeleton은 존재하며, executable Python runner unit path는 future/deferred로 재분류했다. (`libs/foundry_lite/transforms_sdk/__init__.py`, [docs/mvp-scope.md](./docs/mvp-scope.md))
+- [x] Python transforms SDK package skeleton은 존재하며, executable Python runner unit path는 future/deferred로 재분류했다. (`libs/foundry_lite/transforms_sdk/__init__.py`, [Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary))
 
 **Demo / Proof**
 
@@ -1303,7 +1305,7 @@ ApproveOrder action apply dry-run으로 parameter/precondition 결과를 반환�
 
 - [x] ERP/mock writeback 실패이면 ApproveOrder는 실패하고 current internal DB action commit은 partial object edit을 남기지 않는다. ([VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
 - [x] ERP/mock writeback 성공이면 local object edit이 commit된다. 최신 로컬 E2E에서 `O-1002` 승인 후 `objectVersion=2`, `objectEditId`가 생성됨을 확인했다. ([S25-A1](./docs/sprint-evidence-ledger.md#s25-a1))
-- [x] real external success 후 local commit failure의 `COMPENSATION_REQUIRED`/reconciliation design은 MVP core에서 future/deferred로 재분류했다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [Commit-Point Risk Register T0-09/T0-10](./docs/commit-point-risk-register.md))
+- [x] real external success 후 local commit failure의 `COMPENSATION_REQUIRED`/reconciliation design은 MVP core에서 future/deferred로 재분류했다. ([Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary), [Commit-Point Risk Register T0-09/T0-10](./docs/commit-point-risk-register.md))
 - [x] writeback request/response/status evidence는 action_writebacks/runtime detail에서 추적 가능하다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
 - [x] 동일 action retry는 action idempotency key/request fingerprint로 replay 또는 conflict 처리된다. real external idempotency propagation은 future writeback adapter scope로 둔다. ([S26-A1](./docs/sprint-evidence-ledger.md#s26-a1), [S26-A2](./docs/sprint-evidence-ledger.md#s26-a2))
 
@@ -1340,8 +1342,8 @@ local object edit 성공 후 실행되는 webhook/event 같은 side effect를 ob
 
 **Acceptance Gate**
 
-- [x] ApproveOrder local commit 후 real webhook 호출은 MVP core에서 future/deferred로 재분류했다. 현재는 outbox event와 mock/local side-effect evidence를 남긴다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
-- [x] webhook 실패 시 object success와 side-effect failure를 분리하는 production behavior는 future/deferred로 재분류했다. 현재 internal action commit은 outbox/audit 경계로 보호된다. ([docs/mvp-scope.md](./docs/mvp-scope.md), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
+- [x] ApproveOrder local commit 후 real webhook 호출은 MVP core에서 future/deferred로 재분류했다. 현재는 outbox event와 mock/local side-effect evidence를 남긴다. ([Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
+- [x] webhook 실패 시 object success와 side-effect failure를 분리하는 production behavior는 future/deferred로 재분류했다. 현재 internal action commit은 outbox/audit 경계로 보호된다. ([Implementation Status MVP boundary](./docs/implementation-status.md#mvp-core-boundary), [VERIFY-ACTION-COMMIT-ATOMICITY](./docs/sprint-evidence-ledger.md#verify-action-commit-atomicity))
 - [x] 실패 side effect retry는 current MVP에서 DLQ/materialization reprocess proof로 검증하고, real webhook retry worker는 future/deferred로 둔다. ([S33-A2](./docs/sprint-evidence-ledger.md#s33-a2))
 - [x] side effect attempts/error는 outbox/DLQ/action writeback runtime evidence로 추적한다. real webhook-specific attempts는 future adapter scope다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5))
 - [x] 사용자에게 action succeeded와 side-effect failed를 구분해 보여주는 broader Operations UI는 future/deferred로 남기되, current run detail은 related evidence와 investigation summary를 제공한다. ([S33-A5](./docs/sprint-evidence-ledger.md#s33-a5), [docs/implementation-status.md](./docs/implementation-status.md))
@@ -1608,7 +1610,7 @@ Foundry 수준의 보안 완전체가 아니라도, v1에서 반드시 필요한
 - active ontology에서 TypeScript types를 생성한다.
 - objects get/query client를 생성한다.
 - actions apply client를 생성한다.
-- idempotencyKey와 expectedObjectVersion helper를 제공한다.
+- idempotencyKey와 expectedObjectVersion helper를 제공하고, S61에서는 retry/backoff, cursor, duplicate-action lock, typed-error classification helper까지 matrix/proof로 잠근다.
 - generated SDK를 `packages/sdk-ts`에 두고 examples app에서 사용한다.
 - Web Object Explorer 일부 코드를 SDK 기반으로 전환한다.
 
@@ -2100,9 +2102,9 @@ Parquet manifest 기반 Dataset transaction 모델을 Iceberg table로 확장할
 
 ---
 
-## Post-MVP Data Platform Expansion Roadmap
+## Post-MVP Data Platform Expansion Sprint Plan
 
-Sprint 46 이후의 상세 순서와 공통 Exit Checklist는 [Data Platform Expansion Roadmap](./docs/data-platform-expansion-roadmap.md)을 원본으로 본다. 이 섹션은 기존 Sprint Breakdown이 S45에서 끊겨 보이지 않도록 연결하는 요약이다. `[x]`는 sprint evidence ledger와 CI/테스트 증거가 연결된 완료 범위이고, `[~]`는 일부 path만 active-covered인 부분 구현이며, `[ ]`는 아직 future/proposed 범위다.
+Sprint 46 이후의 상세 순서와 공통 Exit Checklist는 [Data Platform Expansion Sprint Plan](./docs/data-platform-expansion-sprint-plan-ko.md)을 원본으로 본다. 이 섹션은 기존 Sprint Breakdown이 S45에서 끊겨 보이지 않도록 연결하는 요약이다. `[x]`는 sprint evidence ledger와 CI/테스트 증거가 연결된 완료 범위이고, `[~]`는 일부 path만 active-covered인 부분 구현이며, `[ ]`는 아직 future/proposed 범위다.
 
 | Sprint | 우선순위 | 핵심 결과 | 의존성 | 상태 |
 |---|---:|---|---|---|
@@ -2124,8 +2126,8 @@ Sprint 46 이후의 상세 순서와 공통 Exit Checklist는 [Data Platform Exp
 | S59 | P2 | Real Cluster/Cloud/Chaos Proofs | 관련 sprint | [ ] Proposed |
 | S60 | P1 | Fine-grained Lineage + AI Evidence | S54, S55 | [~] Partial |
 | S61 | Product | Frontend Foundation + Generated SDK | 현재 API | [~] Partial |
-| S62 | Product | Object/Dataset Explorer | S61 | [ ] Proposed |
-| S63 | Product | Insight/Action Workspace | S61, S53, S60 | [ ] Proposed |
+| S62 | Product | Object/Dataset Explorer | S61 | [~] Partial |
+| S63 | Product | Insight/Action Workspace | S61, S53, S60 | [~] Partial |
 | S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [ ] Proposed |
 
 첫 실행 순서는 `S46 -> S47 -> S48 -> S51 -> S52 -> S53`이다. Scale path는 `S49 -> S50 -> S57`, Product surface path는 `S61 -> S62 -> S63 -> S64`로 병렬 진행한다.

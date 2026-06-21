@@ -26,7 +26,7 @@ from foundry_lite.application.services.dataset.stream_archive import (
     stream_event_row,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import NotFound, ValidationFailed
+from foundry_lite.domain.errors import DatasetCommitBlocked, InvariantViolation, NotFound, ValidationFailed
 
 
 class RecordDlqReplayRuntime(Protocol):
@@ -131,22 +131,36 @@ def _finalize_replay(
     plan: UploadSyncPlan,
     staged: Path,
 ) -> DeadLetterRecordRow:
-    with runtime.engine.begin() as conn:
-        result = runtime.dataset_transaction_service._finalize_open_transaction(
-            conn,
-            ctx,
-            dataset=dataset,
-            transaction_id=plan.transaction_id,
-            staged_parquet=staged,
-            run_id=plan.run_id,
-            audit_action="record_dlq_replay_commit",
-            outbox_event_type="dataset.version.committed",
-            transaction_metadata=_replay_transaction_metadata(runtime, conn, ctx, row, dataset, stream, plan),
-        )
+    blocked: DatasetCommitBlocked | None = None
+    replayed: DeadLetterRecordRow | None = None
+
+    def after_persist(conn: TransactionContext, result: CommitResult) -> None:
+        nonlocal replayed
         runtime._mark_sync_run_committed(conn, ctx, plan.run_id, result)
-        updated = _mark_replay_succeeded(runtime, conn, ctx, row, plan, result)
+        replayed = _mark_replay_succeeded(runtime, conn, ctx, row, plan, result)
         _audit_replay_succeeded(runtime, conn, ctx, row, plan, result)
-        return updated
+
+    with runtime.engine.begin() as conn:
+        try:
+            runtime.dataset_transaction_service._finalize_open_transaction(
+                conn,
+                ctx,
+                dataset=dataset,
+                transaction_id=plan.transaction_id,
+                staged_parquet=staged,
+                run_id=plan.run_id,
+                audit_action="record_dlq_replay_commit",
+                outbox_event_type="dataset.version.committed",
+                transaction_metadata=_replay_transaction_metadata(runtime, conn, ctx, row, dataset, stream, plan),
+                after_persist=after_persist,
+            )
+        except DatasetCommitBlocked as exc:
+            blocked = exc
+    if blocked is not None:
+        raise blocked
+    if replayed is None:
+        raise InvariantViolation("record DLQ replay did not persist replay result")
+    return replayed
 
 
 def _mark_replay_succeeded(

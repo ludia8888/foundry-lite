@@ -1,10 +1,10 @@
 # Foundry-lite 데이터 플랫폼 확장 스프린트 플랜
 
-**문서 상태:** Repo-integrated 확장 계획 / S46 완료, S47-S61 부분 구현
+**문서 상태:** Repo-integrated 확장 계획 / S46 완료, S47-S63 부분 구현
 **기준일:** 2026-06-19
 **대상 저장소:** `ludia8888/foundry-lite`  
 **목표:** 현재의 강한 정합성·멱등성·커밋 안전성 코어를 유지하면서, 데이터 엔지니어링 패턴의 폭과 실제 제품 UI를 단계적으로 확장한다.  
-**입력 근거:** `Data Engineering Design Patterns`, `docs/infra-tricky-matrix.json`, `docs/infra-ratchet.md`, `docs/foundry_lite_tricky_failure_modes_checklist.md`, `docs/implementation-status.md`, `docs/commit-point-risk-register.md`, `docs/quality-gate-roadmap.md`, `docs/quality-observability.md`, `docs/sprint-evidence-ledger.md`.
+**입력 근거:** `Data Engineering Design Patterns`, `docs/infra-tricky-matrix.json`, `docs/infra-ratchet.md`, `docs/foundry_lite_tricky_failure_modes_checklist.md`, `docs/implementation-status.md`, `docs/commit-point-risk-register.md`, `docs/quality-gate-roadmap.md`, `docs/sprint-evidence-ledger.md`.
 
 > Repo integration note: 이 문서는 다운로드 폴더의 확장 PRD를 repo 안에 보존한 **상세 실행 계획**이다. 현재 구현 완료 여부의 source of truth는 [Implementation Status](./implementation-status.md), [Sprint Evidence Ledger](./sprint-evidence-ledger.md), [Infra Ratchet](./infra-ratchet.md), [Infra Tricky Matrix](./infra-tricky-matrix.json)다. S46 이후 항목은 실제 코드, 테스트, CI gate, operator evidence, ledger row가 같은 변경에 생긴 범위만 `[x]` 또는 `[~]`로 표시한다.
 >
@@ -13,6 +13,12 @@
 ---
 
 ## 0. 프로그램 결론
+
+이 문서는 이전 `docs/data-platform-expansion-sprint-plan-ko.md`의 요약 roadmap 역할까지 흡수한다. 별도
+roadmap 문서를 다시 만들지 않는다. S46 이후 확장 순서, 공통 Definition of Done, sprint status,
+cross-check summary, PR exit checklist는 이 문서가 소유하고, 실제 current/partial/future 경계는
+항상 [Implementation Status](./implementation-status.md)와 [Sprint Evidence Ledger](./sprint-evidence-ledger.md)의
+증거로 확정한다.
 
 현재 Foundry-lite는 다음 코어가 이미 강하다.
 
@@ -24,6 +30,19 @@
 - [x] Temporal WorkflowAdapter 기본 의미론
 - [x] Elasticsearch rebuildable projection
 - [x] proof matrix / source-of-truth / operator-evidence CI 하네스
+
+### 0.1 Roadmap Cross-Check Summary
+
+| Area | Current evidence boundary | Merge decision |
+|---|---|---|
+| S3/MinIO, Iceberg, Spark | `quality:s3-storage`, `quality:iceberg`, `quality:spark`, `quality:infra-composition` prove adapter/composition ratchets. | Treat as implemented ratchet proof, not full production platform packaging. |
+| Temporal | `WorkflowAdapter`, `quality:temporal`, and S52 `ConnectorSyncWorkflow` control-plane proof exist. | Treat start/status/audit linking as partial; keep full connector activity data-plane and managed workers future. |
+| External writeback / saga | S53 simulated `outcome_unknown`, `compensation_required`, reconciliation resolve, masking, and replay proofs exist. | Treat safety semantics as partial; keep real vendor APIs, vendor lookup, compensation workers, persistent queue, and approval UI future. |
+| Elasticsearch | Adapter/projection/live Testcontainers proof exists. | Keep search as rebuildable projection; managed cloud packaging and ops remain future. |
+| CDC | Archive, live Debezium proof, CDC object indexing, bounded stream loop, and active-stack composition proof exist. | Treat bounded/archive/indexing slices as active-covered; keep production daemon lease/fencing/rebalance/commit-unknown edges future. |
+| Backup/restore | S57 preflight, restore-mode status, DB/storage mismatch detection, retry lockout, and approval evidence exist. | Treat current retry/reprocess entrypoint protection as partial; keep real backup artifact creation and platform-wide traffic gate future. |
+| Auth/privacy/erasure | S58A/S58B/S58C local JWT/OIDC, secret provider, privacy transform, replication policy, and erasure manifest proofs exist. | Treat local proof as partial; keep cloud/Vault, durable workflows, encrypted durable stores, and full executors future. |
+| Frontend | S61/S62/S63 backend/API/SDK surfaces, request/helper contracts, named SDK-only Web Operations, and Insight Review queue proofs exist. | Treat backend/API/SDK foundation as partial; keep full visual workspace UX, evidence panels, and action orchestration future. |
 
 다음 확장은 무작정 기능을 늘리는 방식이 아니라 아래 순서로 진행한다.
 
@@ -125,8 +144,8 @@
 | S59 | P2 | Real Cluster/Cloud/Chaos Proofs | 관련 모든 sprint | [ ] |
 | S60 | P1 | Fine-grained Lineage + AI Evidence | S54, S55 | [~] |
 | S61 | Product | Frontend Foundation + Generated SDK | 현재 API | [~] |
-| S62 | Product | Object/Dataset Explorer | S61 | [ ] |
-| S63 | Product | Insight/Action Workspace | S61, S53, S60 | [ ] |
+| S62 | Product | Object/Dataset Explorer | S61 | [~] |
+| S63 | Product | Insight/Action Workspace | S61, S53, S60 | [~] |
 | S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [ ] |
 
 ---
@@ -1111,7 +1130,7 @@ quality:ontology-migrations
   `operations.observability.detect(...)`가 read-only report를 반환한다.
 - [ ] source health timeline
 - [~] run/dataset/object drill-down: incident evidence link가
-  `/api/operations/runs/{runType}/{runId}` 형태의 Operations path를 담는다.
+  `/api/operations/runs/{run_type}/{run_id}` 형태의 Operations path를 담는다.
 
 ## 제안 명령
 
@@ -1164,7 +1183,7 @@ PostgreSQL, S3/Iceberg, Object Store, outbox/action 상태를 일관된 시점�
   writeback, outbox, audit, materialization row count와 max timestamp/status
   counts를 report에 남긴다.
 - [~] Temporal namespace/history strategy: workflow profile과 복구 전 history
-  reconcile 전략을 report에 남긴다. 실제 Temporal namespace restore는 future다.
+  reconcile 전략을 report에 남긴다. 실제 production Temporal namespace restore는 future다.
 - [~] Elasticsearch rebuild marker: search projection은 truth가 아니며 restore 후
   rebuild 대상이라는 marker를 report에 남긴다. rebuild 실행은 future다.
 
@@ -1373,7 +1392,7 @@ production 데이터를 staging, 분석, AI 실험에 안전하게 사용할 수
   action으로 남는다. 실제 materialization recompute executor는 future다.
 - [~] Iceberg snapshot/retention policy: backup/snapshot match는 retention window 동안
   `defer_backup_expiration`으로 보류되고 retention-until/key-ref evidence를 남긴다. 실제
-  Iceberg snapshot expiration, crypto-shredding, backup manifest rewrite는 future다.
+  production Iceberg snapshot expiration, crypto-shredding, backup manifest rewrite는 future다.
 - [~] DLQ 처리: Record DLQ match는 `redact_dead_letter_payload` action으로 남는다. Durable
   DLQ payload redaction executor는 future다.
 - [~] audit 최소 보존 정책: manifest는 `minimize_audit_evidence` action을 항상 포함하고
@@ -1471,7 +1490,8 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
 - [ ] link ← source key mapping
 - [~] insight claim ← evidence object IDs: `build_insight_claim_payload`는 evidence
   object id와 pinned evidence reference 없이 insight claim 생성을 거부한다. Durable
-  insight store와 viewer는 future다.
+  AI evidence table과 viewer는 future다. 별도의 S63 slice는 Insight Review queue
+  저장/API/SDK를 제공하지만, AI evidence table 자체를 대체하지 않는다.
 - [~] LLM extraction ← source spans: `EvidenceSourceSpan`은 quote/timecode/bounding box
   좌표를 evidence payload로 만들 수 있고, masked caller에게는 raw quote를 내보내지
   않는다. 실제 LLM extraction executor는 future다.
@@ -1542,12 +1562,15 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
 - [x] request ID 표시: Web Operations 상단이 마지막 `X-Request-ID`를 보여준다.
 - [x] typed error taxonomy: generated SDK가 `FoundryLiteApiError`로 HTTP status,
   error code, message, details, request id, retryable 여부를 표준화한다.
-- [~] retryable/non-retryable UX: Web Operations가 마지막 에러의 retry 가능 여부를
-  표시한다. 자동 retry/backoff와 retry button policy는 future다.
-- [~] idempotency key helper: 기존 `idempotencyKey` helper와 generated action client
-  header wiring은 유지된다. 동일 click 중복 잠금 UI는 future다.
+- [x] retry/backoff helper: `retryWithBackoff`가 retryable error만 bounded backoff로
+  재시도한다. 화면별 retry button policy와 copy는 future다.
+- [x] idempotency/action-lock helper: 기존 `idempotencyKey` helper, generated SDK의
+  `requiresIdempotencyKey` mutation required-key header wiring, missing-key fail-fast,
+  `actionLockKey`, `createInFlightActionLock`가 유지된다. Retry UX는 한 사용자 intent에서 만든
+  같은 idempotency key를 재사용해야 하며, 동일 click 중복 잠금 버튼 UX는 future다.
 - [x] expected object version helper
-- [ ] cursor pagination helper
+- [x] cursor pagination helper: `collectCursorPages`가 cursor 기반 API를 안전하게 끝까지
+  수집한다. visual pagination/infinite scroll UX는 future다.
 - [~] loading/empty/error/degraded state components: 현재는 error/degraded telemetry
   표면만 있고 shared component library는 future다.
 
@@ -1555,13 +1578,19 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
 
 - [x] `/docs`와 `/openapi.json` 접근 문서화
 - [x] SDK regeneration CI 유지
-- [~] frontend API compatibility test: `quality:frontend-foundation`이 SDK helper
-  surface와 Web Operations 계약을 검증한다. Full browser compatibility matrix는
-  future다.
+- [~] frontend API compatibility test: `quality:frontend-backend-surface`,
+  `quality:sdk-request-contract`, `quality:frontend-foundation`이 route/helper -> named SDK ->
+  proofClass -> proof test -> operator evidence matrix, 42개 browser SDK route surface
+  method/path/query/header/body, typed error metadata, 12개 SDK helper runtime behavior,
+  Web Operations named-SDK-only 계약을 검증한다. Full browser compatibility matrix는 future다.
 
 ## 테스트
 
 - [x] generated SDK surface parity
+- [x] browser SDK request/helper-contract proof for current route and helper surfaces
+- [x] ontology catalog API/SDK surface for active object/action/link metadata
+- [x] dataset catalog/inspect/lineage API/SDK surface for Dataset Explorer start, committed manifest evidence, and lineage drill-down
+- [x] Insight Review queue API/SDK surface for list/create/get/assign/decide
 - [x] request ID visible on errors
 - [ ] same action click does not duplicate result
 - [ ] stale object version shows conflict UI
@@ -1591,12 +1620,12 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
 
 ## Dataset Explorer
 
-- [ ] namespace/name 탐색
-- [ ] version 목록
-- [ ] preview
-- [ ] raw/clean/ops 구분
-- [ ] version pin 표시
-- [ ] lineage 이동
+- [~] namespace/name 탐색: `GET /api/datasets`와 `client.datasets.list()`는 current backend/API/SDK이고, visual browser UX는 future다.
+- [~] version 목록: `GET /api/datasets/{namespace}/{name}/versions`와 `client.datasets.versions(...)`는 current backend/API/SDK이고, visual table/pin UX는 future다.
+- [~] preview: `GET /api/datasets/{namespace}/{name}/preview`와 `client.datasets.preview(...)`는 current backend/API/SDK이고, visual preview grid는 future다.
+- [~] raw/clean/ops 구분: dataset list가 namespace/classification/storage metadata를 제공하고, visual grouping UX는 future다.
+- [~] version pin 표시: `GET /api/datasets/{namespace}/{name}/inspect?version=...`와 `client.datasets.inspect(...)`는 current backend evidence이고, visual pin state는 future다.
+- [~] lineage 이동: `GET /api/operations/lineage?resourceId=...`와 `client.operations.lineage.get(...)`는 current backend/API/SDK이고, visual graph navigation UX는 future다.
 
 ## 테스트
 
@@ -1615,27 +1644,38 @@ AI/분석 결과를 검토하고 허용된 Action Type으로 실제 업무를 �
 
 ## 화면
 
-- [ ] Insight review queue
+- [~] Insight review queue: `insight_reviews` table, `foundry.insights`, `/api/insights/reviews`,
+  and generated `client.insights.reviews.*` provide the backend/API/SDK queue surface. Visual
+  queue UI remains future.
 - [ ] evidence panel
-- [ ] approve/reject/assign
+- [~] approve/reject/assign: API/SDK supports idempotent assignment and terminal approve/reject
+  decisions with audit evidence. Human-facing review UI remains future.
 - [ ] Action Type 목록
 - [ ] ontology metadata 기반 action form
 - [ ] human approval policy
-- [ ] action result and audit
+- [~] action result and audit: review decisions write `insight_review.created`,
+  `insight_review.assigned`, `insight_review.approved`, and `insight_review.rejected`
+  audit evidence. Actual action execution result orchestration remains future.
 - [ ] long-running workflow progress
 - [ ] writeback reconciliation 상태
 
 ## 안전 UX
 
-- [ ] idempotency key 자동 생성/재사용
+- [~] idempotency key 자동 생성/재사용: create/assign/decision endpoints require `Idempotency-Key`
+  and generated SDK methods require `{ idempotencyKey }`. Button-state UX remains future.
 - [ ] expected object version 전달
-- [ ] precondition failure 설명
+- [~] precondition failure 설명: terminal review decisions return conflict instead of silently
+  overwriting an approved/rejected review. Human copy/compare UX remains future.
 - [ ] `OUTCOME_UNKNOWN`을 성공/실패로 오표시하지 않음
 - [ ] high-risk action confirmation
 - [ ] retryable action과 compensation action 구분
 
 ## 테스트
 
+- [x] Insight Review create is idempotent by tenant and key
+- [x] Insight Review list filters status and assignee
+- [x] Insight Review decision has one terminal winner
+- [x] API create/assign/decision writes durable audit evidence
 - [ ] double click produces one action run
 - [ ] stale object conflicts before mutation
 - [ ] unauthorized action is hidden and denied server-side
@@ -1856,3 +1896,20 @@ S61 Frontend Foundation
 → S63 Insight/Action Workspace
 → S64 Operations/Recovery Console
 ```
+
+현재 S61 slice는 단순 request wrapper 단계에서 한 단계 더 나아가, 프론트가 쓰는 현재
+backend route와 SDK helper를 `docs/frontend-api-sdk-surface-matrix.json`에 route/helper ->
+named SDK -> proofClass -> proof test -> operator evidence로 고정한다. `quality:frontend-backend-surface`는
+FastAPI route가 분류되지 않았거나, frontend-consumable route에 generated SDK method나
+request-contract proof가 없거나, SDK helper에 `sdkHelpers` row/export/operator-evidence/helper
+proof가 없거나, Web Operations가 다시 raw `/api/...` path를 직접 조립하면 실패한다.
+`quality:sdk-request-contract`는 실제 browser SDK를 import해 42개 frontend route surface의
+method/path/query/header/body, request-id/context header, idempotency header, typed error metadata를
+fake fetch로 검증하고, 12개 `SDK_CLIENT_SURFACE.helpers`의 런타임 동작도 함께 증명한다. 즉 S62-S64 화면을
+올리기 전, 현재 사용 가능한 backend surface는 named SDK-only와 request-contract로 잠긴다.
+S63의 현재 backend/API/SDK slice는 `client.insights.reviews.list/create/get/assign/decide`와
+`quality:insight-review`로 create idempotency, assignment, terminal decision conflict, and audit
+evidence를 잠근다. 다만 full login/session, screen-specific retry/backoff UX, visual cursor
+pagination UX, duplicate-click button state UX, stale-version compare/refresh UI,
+permission-denied masking UX, full catalog-driven S62-S64 workspace UX, S63 evidence panel UI,
+and action execution orchestration은 아직 후속 product slice다.

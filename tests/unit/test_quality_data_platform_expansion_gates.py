@@ -78,7 +78,7 @@ def test_non_readme_doc_cannot_claim_deferred_feature_as_active(tmp_path: Path) 
         implementation_status="S3 storage ratchet proof is active-covered.\n",
         readme="Record DLQ remains future work.\n",
     )
-    doc_path = tmp_path / "docs" / "quality-observability.md"
+    doc_path = tmp_path / "docs" / "quality-gate-roadmap.md"
     doc_path.write_text("Record DLQ is implemented.\n", encoding="utf-8")
 
     findings = semantic_gate.collect_findings(
