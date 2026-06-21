@@ -59,10 +59,7 @@ from foundry_lite.application.services.ontology_yaml import (
     yaml_object,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import (
-    NotFound,
-    ValidationFailed,
-)
+from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
 
 class OntologyService(CoreService):
@@ -219,12 +216,15 @@ class OntologyService(CoreService):
     ) -> None:
         """Archive the old active ontology and activate the new tenant version."""
         self.ontology_repository.archive_active_ontology_versions(transaction=conn, tenant_id=ctx.tenant_id)
-        self.ontology_repository.activate_ontology_version(
+        activated = self.ontology_repository.activate_ontology_version(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             ontology_version_id=ontology_version_id,
             activated_at=_now(),
         )
+        if not activated:
+            details: dict[str, object] = {"ontology_version_id": ontology_version_id}
+            raise ConflictDetected("ontology version activation lost its draft state", details=details)
 
     def _next_ontology_version(self, conn: TransactionContext, ctx: RequestContext) -> int:
         return self.ontology_repository.next_ontology_version_number(transaction=conn, tenant_id=ctx.tenant_id)

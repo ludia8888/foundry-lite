@@ -37,7 +37,7 @@ from foundry_lite.application.services.object_store.indexing_types import (
     object_index_stats,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
 
 class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, CoreService):
@@ -305,7 +305,7 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
         cursor: IndexRunCursor | None = None,
     ) -> None:
         """Persist successful index run counters within the current tenant."""
-        self.object_index_repository.mark_index_run_succeeded(
+        updated = self.object_index_repository.mark_index_run_succeeded(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             run_id=run_id,
@@ -316,6 +316,8 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
             cursor=cursor or {"last_row": counts.rows_read},
             completed_at=_now(),
         )
+        if not updated:
+            raise ConflictDetected("index run terminal state changed concurrently", details={"run_id": run_id})
 
     def _mark_index_run_failed(
         self,

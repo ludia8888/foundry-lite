@@ -17,7 +17,7 @@ from foundry_lite.application.ports.action_repository import (
     ObjectEditRecord,
     ObjectTargetUpdate,
 )
-from foundry_lite.application.ports.transaction_context import StatusTransition
+from foundry_lite.application.ports.transaction_context import ACTION_WRITEBACK_RECONCILED, StatusTransition
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
@@ -165,19 +165,15 @@ class SqlAlchemyActionRepository:
         return _writeback_record_from_row(dict(row)) if row else None
 
     def reconcile_action_writeback(self, *, transaction: Any, record: ActionWritebackReconciliation) -> bool:
-        result = transaction.execute(
-            update(db.action_writebacks)
-            .where(
-                and_(
-                    db.action_writebacks.c.tenant_id == record.tenant_id,
-                    db.action_writebacks.c.id == record.writeback_id,
-                    db.action_writebacks.c.action_run_id == record.action_run_id,
-                    db.action_writebacks.c.status == "outcome_unknown",
-                )
-            )
-            .values(status="reconciled", response=dict(record.response), completed_at=record.completed_at)
+        return cas_status_update(
+            transaction,
+            db.action_writebacks,
+            tenant_id=record.tenant_id,
+            row_id=record.writeback_id,
+            transition=ACTION_WRITEBACK_RECONCILED,
+            values={"response": dict(record.response), "completed_at": record.completed_at},
+            conditions=(db.action_writebacks.c.action_run_id == record.action_run_id,),
         )
-        return result.rowcount == 1
 
     def update_object_target(self, *, transaction: Any, record: ObjectTargetUpdate) -> bool:
         object_change_sequence = next_object_change_sequence(transaction, record.tenant_id)

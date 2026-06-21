@@ -95,9 +95,7 @@ def test_insight_review_decision_has_one_terminal_winner() -> None:
 
     assert approved is not None
     assert approved["status"] == "approved"
-    assert rejected is not None
-    assert rejected["status"] == "approved"
-    assert rejected["decision_idempotency_key"] == "decision-1"
+    assert rejected is None
 
 
 def _sqlalchemy_harness() -> SqlAlchemyInsightReviewHarness:

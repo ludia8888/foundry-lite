@@ -89,10 +89,12 @@ class FakeObjectIndexRepository:
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
-    ) -> None:
+    ) -> bool:
         del transaction
         if self.index_runs[run_id]["tenant_id"] != tenant_id:
-            return
+            return False
+        if self.index_runs[run_id]["status"] != "running":
+            return False
         self.index_runs[run_id].update(
             status="succeeded",
             rows_read=rows_read,
@@ -102,6 +104,7 @@ class FakeObjectIndexRepository:
             cursor=cursor,
             completed_at=completed_at,
         )
+        return True
 
     def mark_index_run_failed(
         self,
@@ -111,10 +114,14 @@ class FakeObjectIndexRepository:
         run_id: str,
         error: IndexRunError,
         completed_at: str,
-    ) -> None:
+    ) -> bool:
         del transaction
-        if self.index_runs[run_id]["tenant_id"] == tenant_id:
-            self.index_runs[run_id].update(status="failed", error=error, completed_at=completed_at)
+        if self.index_runs[run_id]["tenant_id"] != tenant_id:
+            return False
+        if self.index_runs[run_id]["status"] != "running":
+            return False
+        self.index_runs[run_id].update(status="failed", error=error, completed_at=completed_at)
+        return True
 
     def insert_object_record(self, *, transaction: Any, record: ObjectRecordInsert) -> None:
         del transaction
@@ -648,7 +655,7 @@ def test_object_index_repository_contract_records_index_run_lifecycle(
 ) -> None:
     with harness.transaction() as transaction:
         harness.repository.create_index_run(transaction=transaction, record=_index_run_record("index_run_1"))
-        harness.repository.mark_index_run_succeeded(
+        succeeded_update = harness.repository.mark_index_run_succeeded(
             transaction=transaction,
             tenant_id="tenant-demo",
             run_id="index_run_1",
@@ -660,7 +667,7 @@ def test_object_index_repository_contract_records_index_run_lifecycle(
             completed_at="2026-06-10T00:02:00Z",
         )
         harness.repository.create_index_run(transaction=transaction, record=_index_run_record("index_run_failed"))
-        harness.repository.mark_index_run_failed(
+        failed_update = harness.repository.mark_index_run_failed(
             transaction=transaction,
             tenant_id="tenant-demo",
             run_id="index_run_failed",
@@ -678,6 +685,8 @@ def test_object_index_repository_contract_records_index_run_lifecycle(
             run_id="index_run_failed",
         )
 
+    assert succeeded_update is True
+    assert failed_update is True
     succeeded = harness.index_run("index_run_1")
     failed = harness.index_run("index_run_failed")
 
@@ -692,6 +701,39 @@ def test_object_index_repository_contract_records_index_run_lifecycle(
     assert failed is not None
     assert failed["status"] == "failed"
     assert failed["error"] == {"type": "ValidationFailed"}
+
+
+def test_object_index_repository_contract_terminal_index_run_is_not_overwritten(
+    harness: ObjectIndexHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.create_index_run(transaction=transaction, record=_index_run_record("index_run_terminal"))
+        first = harness.repository.mark_index_run_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            run_id="index_run_terminal",
+            rows_read=1,
+            objects_upserted=1,
+            objects_deleted=0,
+            links_upserted=0,
+            cursor={"last_row": 1},
+            completed_at="2026-06-10T00:02:00Z",
+        )
+        stale_failure = harness.repository.mark_index_run_failed(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            run_id="index_run_terminal",
+            error={"type": "LateFailure"},
+            completed_at="2026-06-10T00:03:00Z",
+        )
+
+    row = harness.index_run("index_run_terminal")
+
+    assert first is True
+    assert stale_failure is False
+    assert row is not None
+    assert row["status"] == "succeeded"
+    assert row["error"] is None
 
 
 def test_object_index_repository_contract_writes_object_record_updates_and_conflicts(

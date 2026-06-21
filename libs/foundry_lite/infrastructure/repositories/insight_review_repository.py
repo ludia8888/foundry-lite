@@ -13,7 +13,9 @@ from foundry_lite.application.ports.insight_review_repository import (
     InsightReviewRecord,
     InsightReviewRow,
 )
+from foundry_lite.application.ports.transaction_context import StatusTransition
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
 
 class SqlAlchemyInsightReviewRepository:
@@ -115,22 +117,20 @@ class SqlAlchemyInsightReviewRepository:
         decision_idempotency_key: str,
         updated_at: str,
     ) -> InsightReviewRow | None:
-        transaction.execute(
-            update(db.insight_reviews)
-            .where(
-                and_(
-                    db.insight_reviews.c.tenant_id == tenant_id,
-                    db.insight_reviews.c.id == review_id,
-                    db.insight_reviews.c.status == "pending",
-                )
-            )
-            .values(
-                status=status,
-                decision=dict(decision),
-                decision_idempotency_key=decision_idempotency_key,
-                updated_at=updated_at,
-            )
+        updated = cas_status_update(
+            transaction,
+            db.insight_reviews,
+            tenant_id=tenant_id,
+            row_id=review_id,
+            transition=StatusTransition(("pending",), status),
+            values={
+                "decision": dict(decision),
+                "decision_idempotency_key": decision_idempotency_key,
+                "updated_at": updated_at,
+            },
         )
+        if not updated:
+            return None
         return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
 
     def _review_by_create_key(

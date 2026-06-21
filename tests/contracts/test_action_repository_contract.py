@@ -666,6 +666,31 @@ def test_action_repository_contract_reconciles_outcome_unknown_writeback_once(ha
     assert writebacks[0]["response"] == reconciled_response
 
 
+def test_action_repository_contract_reconcile_requires_matching_action_run(
+    harness: ActionHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
+        harness.repository.insert_action_writeback(
+            transaction=transaction,
+            record=_writeback_record(status="outcome_unknown"),
+        )
+        updated = harness.repository.reconcile_action_writeback(
+            transaction=transaction,
+            record=ActionWritebackReconciliation(
+                writeback_id="wb_1",
+                tenant_id="tenant-demo",
+                action_run_id="arun_other",
+                response={"reconciled": True},
+                completed_at="2026-06-10T00:00:10Z",
+            ),
+        )
+
+    writebacks = harness.writeback_rows()
+    assert updated is False
+    assert writebacks[0]["status"] == "outcome_unknown"
+
+
 def test_action_repository_contract_action_run_reconciles_once(harness: ActionHarness) -> None:
     with harness.transaction() as transaction:
         harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())

@@ -296,8 +296,8 @@ class ObjectIndexRepository(Protocol):
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
-    ) -> None:
-        """Mark an index run as succeeded."""
+    ) -> bool:
+        """CAS a running index run into succeeded."""
         ...
 
     def mark_index_run_failed(
@@ -308,8 +308,8 @@ class ObjectIndexRepository(Protocol):
         run_id: str,
         error: IndexRunError,
         completed_at: str,
-    ) -> None:
-        """Mark an index run as failed."""
+    ) -> bool:
+        """CAS a running index run into failed."""
         ...
 
     def insert_object_record(self, *, transaction: TransactionContext, record: ObjectRecordInsert) -> None:

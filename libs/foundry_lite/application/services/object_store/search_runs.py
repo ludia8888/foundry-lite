@@ -14,6 +14,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.ports.object_index_repository import ObjectIndexRepository
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected
 
 
 class SearchRunRuntimeBoundary(Protocol):
@@ -82,7 +83,7 @@ def succeed_search_rebuild(
 ) -> None:
     object_count = _int_result(result, "objectCount")
     with engine.begin() as conn:
-        repository.mark_index_run_succeeded(
+        updated = repository.mark_index_run_succeeded(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             run_id=run_id,
@@ -93,6 +94,8 @@ def succeed_search_rebuild(
             cursor={"last_row": object_count},
             completed_at=_now(),
         )
+        if not updated:
+            raise ConflictDetected("search index run terminal state changed concurrently", details={"run_id": run_id})
 
 
 def succeed_search_object_change(
@@ -104,7 +107,7 @@ def succeed_search_object_change(
 ) -> None:
     status = str(result.get("status", ""))
     with engine.begin() as conn:
-        repository.mark_index_run_succeeded(
+        updated = repository.mark_index_run_succeeded(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             run_id=run_id,
@@ -115,6 +118,8 @@ def succeed_search_object_change(
             cursor={"last_row": 1},
             completed_at=_now(),
         )
+        if not updated:
+            raise ConflictDetected("search index run terminal state changed concurrently", details={"run_id": run_id})
 
 
 def fail_search_index_run(
@@ -138,14 +143,15 @@ def fail_search_index_run(
         adapter=adapter_profile,
     )
     with engine.begin() as conn:
-        repository.mark_index_run_failed(
+        updated = repository.mark_index_run_failed(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             run_id=run_id,
             error=cast(IndexRunError, dict(error)),
             completed_at=_now(),
         )
-        audit_search_failure(runtime_service, conn, ctx, resource_id, action, run_id, error)
+        if updated:
+            audit_search_failure(runtime_service, conn, ctx, resource_id, action, run_id, error)
 
 
 def audit_search_failure(
