@@ -171,6 +171,19 @@ def test_search_adapter_contract_filters_tenant_object_type_and_limit(adapter: S
     assert [hit.document_id for hit in hits] == ["O-1001"]
 
 
+def test_elasticsearch_adapter_namespaces_lossy_tenant_tokens() -> None:
+    client = FakeElasticsearchClient()
+    adapter = ElasticsearchAdapter(ElasticsearchAdapterConfig(endpoint="http://search:9200"), client=client)
+
+    adapter.upsert_document(SearchDocument("Tenant_A", "Order", "O-1001", 1, {"status": "PENDING"}))
+    adapter.upsert_document(SearchDocument("tenant-a", "Order", "O-1001", 1, {"status": "APPROVED"}))
+
+    assert adapter.document_ids(tenant_id="Tenant_A", object_type="Order") == ["O-1001"]
+    assert adapter.document_ids(tenant_id="tenant-a", object_type="Order") == ["O-1001"]
+    assert len(client.documents) == 2
+    assert len({index for index, _document_id in client.documents}) == 2
+
+
 def _fake_query_matches(document: dict[str, object], body: dict[str, object]) -> bool:
     query = body.get("query")
     if not isinstance(query, dict):

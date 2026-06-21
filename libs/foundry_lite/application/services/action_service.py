@@ -39,6 +39,7 @@ from foundry_lite.domain.errors import (
     InvariantViolation,
     NotFound,
     PermissionDenied,
+    ValidationFailed,
 )
 
 
@@ -117,6 +118,7 @@ class ActionService(CoreService):
             with self.engine.begin() as conn:
                 action_type = self.ontology_service._active_action_type(conn, ctx, command.action_api_name)
                 action_type_for_failure = action_type
+                _require_action_target_api_name(action_type, command.object_type)
                 existing = self._existing_action_run(conn, ctx, action_type, command.idempotency_key)
                 if existing is not None:
                     return self._replay_existing_action_run(conn, ctx, existing, command.request_fingerprint)
@@ -301,6 +303,9 @@ class ActionService(CoreService):
     ) -> Exception | None:
         if record is None:
             return NotFound("target object not found")
+        invariant_error = _action_target_record_error(action_type, record)
+        if invariant_error is not None:
+            return invariant_error
         if record["object_version"] != expected_object_version:
             return ConflictDetected(
                 "object version conflict",
@@ -467,3 +472,26 @@ class ActionService(CoreService):
             ontology_service=self.ontology_service,
             runtime_service=self.runtime_service,
         )
+
+
+def _require_action_target_api_name(action_type: ActionTypeRow, requested_object_type: str) -> None:
+    expected_object_type = str(action_type["target_api_name"])
+    if requested_object_type == expected_object_type:
+        return
+    raise ValidationFailed(
+        "action target object type mismatch",
+        details={"expectedObjectType": expected_object_type, "requestedObjectType": requested_object_type},
+    )
+
+
+def _action_target_record_error(action_type: ActionTypeRow, record: ObjectRecordRow) -> InvariantViolation | None:
+    expected_object_type_id = str(action_type["target_object_type_id"])
+    if str(record["object_type_id"]) == expected_object_type_id:
+        return None
+    return InvariantViolation(
+        "action target record object type invariant violated",
+        details={
+            "expectedObjectTypeId": expected_object_type_id,
+            "recordObjectTypeId": str(record["object_type_id"]),
+        },
+    )

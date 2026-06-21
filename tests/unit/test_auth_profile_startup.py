@@ -101,6 +101,21 @@ def test_unknown_auth_profile_fails_fast() -> None:
         auth_provider_for_profile("mystery", runtime_profile="local")
 
 
+def test_unknown_runtime_profile_fails_fast() -> None:
+    with pytest.raises(AuthProfileConfigurationError, match="unknown FOUNDRY_LITE_RUNTIME_PROFILE"):
+        auth_provider_for_profile("header-trust", runtime_profile="cluster")
+
+
+def test_staging_refuses_dev_header_trust_auth() -> None:
+    with pytest.raises(AuthProfileConfigurationError, match="staging cannot use"):
+        auth_provider_from_env(
+            {
+                AUTH_PROFILE_ENV: "header-trust",
+                RUNTIME_PROFILE_ENV: "staging",
+            }
+        )
+
+
 def test_jwt_oidc_authenticates_human_bearer_token() -> None:
     private_key, jwks = _jwt_key_material("kid-human")
     provider = JwtOidcAuthProvider(

@@ -7,14 +7,15 @@ workflow definitions — a worker process registers them on a task queue.
 
 Source-of-truth and idempotency contract:
 - ``start_workflow`` is an idempotent *start-and-wait*. The workflow id is the
-  caller's ``idempotency_key`` with ``WorkflowIDReusePolicy.REJECT_DUPLICATE``;
-  a second call with the same key does not start a duplicate run, it returns the
-  outcome of the existing run (running → waits for it, completed → its result).
+  tenant/workflow/idempotency namespace with
+  ``WorkflowIDReusePolicy.REJECT_DUPLICATE``; a second call in the same
+  namespace does not start a duplicate run, it returns the outcome of the
+  existing run (running → waits for it, completed → its result).
 - A workflow failure/timeout is returned as a ``WorkflowRun`` with a populated,
   durable ``error`` payload (the operator-evidence contract), never as a silent
   success. A cancelled workflow returns status ``cancelled``.
-- ``run_id`` exposed by this adapter is the Temporal *workflow id* (the
-  idempotency key), so ``workflow_run`` can look a run up again; the underlying
+- ``run_id`` exposed by this adapter is the Temporal *workflow id* (a stable,
+  tenant-scoped id), so ``workflow_run`` can look a run up again; the underlying
   Temporal run uuid is carried in the payload details.
 
 Temporal's client API is async; the port is sync. The adapter exposes an async
@@ -26,6 +27,7 @@ time-skipping ratchet tests, and thin blocking wrappers for the sync port. The
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -118,17 +120,18 @@ class TemporalWorkflowAdapter:
 
     async def start_workflow_async(self, request: WorkflowStartRequest) -> WorkflowRun:
         """Idempotent start-and-wait against Temporal."""
+        workflow_id = _temporal_workflow_id(request)
         try:
             client = await self._client_handle()
         except Exception as exc:  # noqa: BLE001 - normalized into durable adapter evidence
-            return self._start_failure_run(request, exc)
+            return self._start_failure_run(request, exc, workflow_id)
         common = import_module("temporalio.common")
         exceptions = import_module("temporalio.exceptions")
         try:
             handle = await client.start_workflow(
                 request.workflow_name,
                 dict(request.input),
-                id=request.idempotency_key,
+                id=workflow_id,
                 task_queue=self._config.task_queue,
                 id_reuse_policy=common.WorkflowIDReusePolicy.REJECT_DUPLICATE,
                 execution_timeout=timedelta(seconds=self._config.execution_timeout_seconds),
@@ -136,10 +139,10 @@ class TemporalWorkflowAdapter:
         except exceptions.WorkflowAlreadyStartedError:
             # Idempotent: a run with this key already exists. Attach to it and
             # return its outcome instead of starting a duplicate run.
-            handle = client.get_workflow_handle(request.idempotency_key)
+            handle = client.get_workflow_handle(workflow_id)
         except Exception as exc:  # noqa: BLE001 - normalized into durable adapter evidence
-            return self._start_failure_run(request, exc)
-        return await self._resolve_run(handle, request)
+            return self._start_failure_run(request, exc, workflow_id)
+        return await self._resolve_run(handle, request, workflow_id)
 
     async def workflow_run_async(self, run_id: str) -> WorkflowRun | None:
         """Describe a known run by workflow id; None when Temporal has no record."""
@@ -183,25 +186,31 @@ class TemporalWorkflowAdapter:
         client_mod = import_module("temporalio.client")
         return await client_mod.Client.connect(self._config.address, namespace=self._config.namespace)
 
-    async def _resolve_run(self, handle: Any, request: WorkflowStartRequest) -> WorkflowRun:
+    async def _resolve_run(self, handle: Any, request: WorkflowStartRequest, workflow_id: str) -> WorkflowRun:
         client_mod = import_module("temporalio.client")
         try:
             output = await handle.result()
         except client_mod.WorkflowFailureError as exc:
             # Failure, timeout, and cancellation all surface as WorkflowFailureError;
             # _classify_failure walks the cause chain to pick the run status.
-            return await self._settled_failure(handle, request, exc)
+            return await self._settled_failure(handle, request, exc, workflow_id)
         except Exception as exc:  # noqa: BLE001 - service/transport failure is durable evidence
-            return self._start_failure_run(request, exc)
+            return self._start_failure_run(request, exc, workflow_id)
         return WorkflowRun(
-            run_id=request.idempotency_key,
+            run_id=workflow_id,
             workflow_name=request.workflow_name,
             status="succeeded",
             output=_as_mapping(output),
             error=None,
         )
 
-    async def _settled_failure(self, handle: Any, request: WorkflowStartRequest, exc: BaseException) -> WorkflowRun:
+    async def _settled_failure(
+        self,
+        handle: Any,
+        request: WorkflowStartRequest,
+        exc: BaseException,
+        workflow_id: str,
+    ) -> WorkflowRun:
         kind, status = _classify_failure(exc)
         description = await handle.describe()
         failure = AdapterFailure(
@@ -213,31 +222,31 @@ class TemporalWorkflowAdapter:
             timeout_seconds=self._config.execution_timeout_seconds if kind == "timeout" else None,
             idempotency_key=request.idempotency_key,
             details={
-                "workflowId": request.idempotency_key,
+                "workflowId": workflow_id,
                 "temporalRunId": description.run_id,
                 "workflowName": request.workflow_name,
             },
         )
         return WorkflowRun(
-            run_id=request.idempotency_key,
+            run_id=workflow_id,
             workflow_name=request.workflow_name,
             status=status,
             output={},
             error=failure.to_payload(),
         )
 
-    def _start_failure_run(self, request: WorkflowStartRequest, exc: Exception) -> WorkflowRun:
+    def _start_failure_run(self, request: WorkflowStartRequest, exc: Exception, workflow_id: str) -> WorkflowRun:
         failure = _temporal_adapter_failure(
             self.profile_name,
             "start_workflow",
             exc,
             idempotency_key=request.idempotency_key,
-            workflow_id=request.idempotency_key,
+            workflow_id=workflow_id,
             workflow_name=request.workflow_name,
             timeout_seconds=self._config.execution_timeout_seconds,
         )
         return WorkflowRun(
-            run_id=request.idempotency_key,
+            run_id=workflow_id,
             workflow_name=request.workflow_name,
             status="failed",
             output={},
@@ -277,6 +286,17 @@ def _as_mapping(value: object) -> Mapping[str, object]:
     if isinstance(value, Mapping):
         return dict(value)
     return {"result": value}
+
+
+def _temporal_workflow_id(request: WorkflowStartRequest) -> str:
+    tenant = _stable_id_part(request.tenant_id)
+    workflow = _stable_id_part(request.workflow_name)
+    idempotency = _stable_id_part(request.idempotency_key)
+    return f"flite:{tenant}:{workflow}:{idempotency}"
+
+
+def _stable_id_part(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:20]
 
 
 def _workflow_run_adapter_error(profile: str, run_id: str, exc: Exception) -> AdapterError:

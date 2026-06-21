@@ -5,6 +5,7 @@ import json
 import os
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlparse
 
 from foundry_lite.application.action_types import ActionApplyResponse
 from foundry_lite.application.demo_types import SupplyChainDemoResult
@@ -28,6 +29,7 @@ JsonObject = dict[str, object]
 Handler = Callable[[FoundryLite, RequestContext, argparse.Namespace], object]
 DEFAULT_STORAGE_ROOT = ".foundry-lite"
 DEFAULT_DEMO_STORAGE_ROOT = ".foundry-lite-demo"
+_DESTRUCTIVE_DEMO_DB_SCHEMES = frozenset({"sqlite", "sqlite+pysqlite"})
 
 
 def _foundry(adapter_profile: str | None = None, *, storage_root: str | None = None) -> FoundryLite:
@@ -82,8 +84,27 @@ def _fresh_supply_chain_demo(args: argparse.Namespace) -> bool:
     if args.reuse_state:
         return False
     if args.fresh:
+        _require_safe_demo_reset_target()
         return True
-    return os.getenv("FOUNDRY_LITE_HOME") is None
+    fresh_by_default = os.getenv("FOUNDRY_LITE_HOME") is None
+    if fresh_by_default:
+        _require_safe_demo_reset_target()
+    return fresh_by_default
+
+
+def _require_safe_demo_reset_target() -> None:
+    db_url = os.getenv("FOUNDRY_LITE_DB_URL")
+    if db_url is None or _allows_destructive_demo_reset(db_url):
+        return
+    raise SystemExit(
+        "Refusing fresh supply-chain demo reset against non-local FOUNDRY_LITE_DB_URL; "
+        "use --reuse-state or point FOUNDRY_LITE_DB_URL at a SQLite demo database."
+    )
+
+
+def _allows_destructive_demo_reset(db_url: str) -> bool:
+    scheme = urlparse(db_url).scheme.lower()
+    return scheme in _DESTRUCTIVE_DEMO_DB_SCHEMES
 
 
 def _build_parser() -> argparse.ArgumentParser:

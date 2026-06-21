@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 
 import foundry_lite.infrastructure.adapters.elasticsearch_search as elasticsearch_module
 import pytest
 from foundry_lite.application.ports.search_adapter import SearchIndexMapping, SearchQuery
 from foundry_lite.infrastructure.adapters import ElasticsearchAdapter, ElasticsearchAdapterConfig
+from foundry_lite.infrastructure.adapters.elasticsearch_search import ElasticsearchClientLike
 
 from tests.contracts.test_search_adapter_contract import FakeElasticsearchClient
 
 
 def test_elasticsearch_configure_index_updates_existing_mapping() -> None:
     client = FakeElasticsearchClient()
-    adapter = ElasticsearchAdapter(ElasticsearchAdapterConfig(endpoint="http://search:9200"), client=client)
+    adapter = ElasticsearchAdapter(
+        ElasticsearchAdapterConfig(endpoint="http://search:9200"),
+        client=cast(ElasticsearchClientLike, client),
+    )
     mapping = SearchIndexMapping(
         "tenant-demo",
         "Order",
@@ -23,7 +28,11 @@ def test_elasticsearch_configure_index_updates_existing_mapping() -> None:
     adapter.configure_index(mapping)
     adapter.configure_index(mapping)
 
-    assert "foundry-lite-tenant-demo-order" in client.indices.created
+    assert len(client.indices.created) == 1
+    created_index = next(iter(client.indices.created))
+    assert created_index.startswith("foundry-lite-tenant-demo-")
+    assert "-order-" in created_index
+    assert created_index != "foundry-lite-tenant-demo-order"
 
 
 def test_elasticsearch_lazy_client_uses_configured_auth_and_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
