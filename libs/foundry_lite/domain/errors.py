@@ -14,6 +14,10 @@ class ValidationFailed(FoundryLiteError):
     code = "VALIDATION_FAILED"
 
 
+class DatasetCommitBlocked(ValidationFailed):
+    code = "VALIDATION_FAILED"
+
+
 class PermissionDenied(FoundryLiteError):
     code = "PERMISSION_DENIED"
 

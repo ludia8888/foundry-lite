@@ -78,6 +78,9 @@ class DatasetWorkspace:
     def get(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> DatasetRow:
         return self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
 
+    def list_datasets(self, *, ctx: RequestContext | None = None) -> list[DatasetRow]:
+        return self._datasets.registry.list_datasets(ctx=ctx)
+
     def list_versions(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> list[DatasetVersionRow]:
         return self._datasets.registry.list_dataset_versions(dataset_ref, ctx=ctx)
 

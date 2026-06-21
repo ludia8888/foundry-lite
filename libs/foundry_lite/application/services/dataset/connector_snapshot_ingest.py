@@ -24,7 +24,7 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetTransactionManager,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, DatasetCommitBlocked, InvariantViolation, ValidationFailed
 
 
 class ConnectorSnapshotIngestRuntime(Protocol):
@@ -195,25 +195,33 @@ def _finalize_connector_snapshot(
     resource_name: str,
     snapshot: ConnectorSnapshot,
 ) -> CommitResult:
+    blocked: DatasetCommitBlocked | None = None
     with runtime.engine.begin() as conn:
-        result = runtime.dataset_transaction_service._finalize_open_transaction(
-            conn,
-            ctx,
-            dataset=sync.dataset,
-            transaction_id=sync.plan.transaction_id,
-            staged_parquet=sync.staged,
-            run_id=sync.plan.run_id,
-            audit_action="connector_snapshot_commit",
-            outbox_event_type="dataset.version.committed",
-            transaction_metadata=_connector_transaction_metadata(
-                connector_name,
-                resource_name,
-                sync.resume_cursor,
-                snapshot.cursor,
-            ),
-        )
-        runtime._mark_sync_run_committed(conn, ctx, sync.plan.run_id, result)
-        return result
+        try:
+            return runtime.dataset_transaction_service._finalize_open_transaction(
+                conn,
+                ctx,
+                dataset=sync.dataset,
+                transaction_id=sync.plan.transaction_id,
+                staged_parquet=sync.staged,
+                run_id=sync.plan.run_id,
+                audit_action="connector_snapshot_commit",
+                outbox_event_type="dataset.version.committed",
+                transaction_metadata=_connector_transaction_metadata(
+                    connector_name,
+                    resource_name,
+                    sync.resume_cursor,
+                    snapshot.cursor,
+                ),
+                after_persist=lambda commit_conn, result: runtime._mark_sync_run_committed(
+                    commit_conn, ctx, sync.plan.run_id, result
+                ),
+            )
+        except DatasetCommitBlocked as exc:
+            blocked = exc
+    if blocked is not None:
+        raise blocked
+    raise InvariantViolation("connector snapshot finalization did not return a commit result")
 
 
 def _committed_connector_cursor(

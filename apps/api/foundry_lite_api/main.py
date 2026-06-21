@@ -6,17 +6,22 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from foundry_lite.application.action_types import ActionApplyResponse, ActionWritebackReconciliationResult
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
     BackupRestoreModeReport,
     BackupRestorePreflightReport,
+    DatasetInspectionPayload,
+    DatasetRow,
     DatasetVersionRow,
     DeadLetterRecordBulkRetryResult,
     DeadLetterRecordDiscardResult,
     DeadLetterRecordRetryResult,
     DeadLetterRecordRow,
+    LineageEdgeRow,
     ObjectIndexRebuildResult,
     ObjectLinkPayload,
     ObjectPayload,
@@ -25,6 +30,7 @@ from foundry_lite.application.ports import (
     ObjectSetQueryResult,
     ObservabilityDetectorConfig,
     ObservabilityReport,
+    OntologyCatalogResult,
     OntologyValidationResult,
     ProductWorkflowRun,
     RuntimeRetryResult,
@@ -68,6 +74,7 @@ instrument_fastapi_app(app)
 instrument_sqlalchemy_engine(foundry.engine)
 
 JsonObject = dict[str, object]
+ValidationErrorPayload = dict[str, object]
 
 
 class ObservabilityDetectRequest(BaseModel):
@@ -162,6 +169,29 @@ class ActionWritebackReconciliationRequest(BaseModel):
     remote_resource_id: str = Field(alias="remoteResourceId")
 
 
+class InsightReviewCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    claim_id: str = Field(alias="claimId")
+    claim_text: str = Field(alias="claimText")
+    evidence_object_ids: list[str] = Field(alias="evidenceObjectIds")
+    evidence_refs: list[JsonObject] = Field(alias="evidenceRefs")
+    priority: str = "normal"
+    assignee_user_id: str | None = Field(default=None, alias="assigneeUserId")
+    action_proposal: JsonObject | None = Field(default=None, alias="actionProposal")
+
+
+class InsightReviewAssignRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    assignee_user_id: str = Field(alias="assigneeUserId")
+
+
+class InsightReviewDecisionRequest(BaseModel):
+    decision: str
+    comment: str | None = None
+
+
 WEBHOOK_SIGNING_KEY_ENV = "FOUNDRY_LITE_WEBHOOK_SIGNING_KEY"
 WEBHOOK_SIGNING_KEY_NAME = "webhook_signing_key"
 
@@ -184,6 +214,34 @@ async def telemetry_middleware(request: Request, call_next: Callable[[Request], 
             status_code,
             time.perf_counter() - started_at,
         )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    request_id = _request_id(request, f"api-{time.time_ns()}")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": {
+                "code": "VALIDATION_FAILED",
+                "message": "request validation failed",
+                "details": {"validation_errors": _validation_errors(exc)},
+                "request_id": request_id,
+            }
+        },
+        headers={"X-Request-ID": request_id},
+    )
+
+
+def _validation_errors(exc: RequestValidationError) -> list[ValidationErrorPayload]:
+    return [
+        {
+            "type": str(error.get("type", "validation_error")),
+            "loc": [str(item) for item in error.get("loc", ())],
+            "msg": str(error.get("msg", "request validation failed")),
+        }
+        for error in exc.errors()
+    ]
 
 
 def _ctx(
@@ -264,6 +322,14 @@ def metrics() -> Response:
     return Response(content=payload, media_type=media_type)
 
 
+@app.get("/api/datasets")
+def list_datasets(request: Request) -> list[DatasetRow]:
+    try:
+        return foundry.datasets.list_datasets(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.get("/api/datasets/{namespace}/{name}/preview")
 def preview_dataset(request: Request, namespace: str, name: str, limit: int = 100) -> list[TabularRow]:
     try:
@@ -276,6 +342,22 @@ def preview_dataset(request: Request, namespace: str, name: str, limit: int = 10
 def list_dataset_versions(request: Request, namespace: str, name: str) -> list[DatasetVersionRow]:
     try:
         return foundry.datasets.list_versions(f"{namespace}.{name}", ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/datasets/{namespace}/{name}/inspect")
+def inspect_dataset(request: Request, namespace: str, name: str, version: str = "latest") -> DatasetInspectionPayload:
+    try:
+        return foundry.datasets.inspect(f"{namespace}.{name}", version=version, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/ontology/catalog")
+def ontology_catalog(request: Request) -> OntologyCatalogResult:
+    try:
+        return foundry.ontology.catalog(ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -320,6 +402,91 @@ def query_objects(request: Request, object_type: str, payload: ObjectQueryReques
             limit=payload.limit,
             cursor=payload.cursor,
             search_text=payload.search_text,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/insights/reviews")
+def list_insight_reviews(
+    request: Request,
+    status: str | None = Query(default=None),
+    assignee_user_id: str | None = Query(default=None, alias="assigneeUserId"),
+    limit: int = Query(default=50),
+) -> JsonObject:
+    try:
+        return foundry.insights.list(
+            ctx=_ctx(request),
+            status=status,
+            assignee_user_id=assignee_user_id,
+            limit=limit,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/insights/reviews")
+def create_insight_review(
+    request: Request,
+    payload: InsightReviewCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.insights.create(
+            claim_id=payload.claim_id,
+            claim_text=payload.claim_text,
+            evidence_object_ids=payload.evidence_object_ids,
+            evidence_refs=payload.evidence_refs,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+            priority=payload.priority,
+            assignee_user_id=payload.assignee_user_id,
+            action_proposal=payload.action_proposal,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/insights/reviews/{review_id}")
+def get_insight_review(request: Request, review_id: str) -> JsonObject:
+    try:
+        return foundry.insights.get(review_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/insights/reviews/{review_id}/assign")
+def assign_insight_review(
+    request: Request,
+    review_id: str,
+    payload: InsightReviewAssignRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.insights.assign(
+            review_id,
+            assignee_user_id=payload.assignee_user_id,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/insights/reviews/{review_id}/decision")
+def decide_insight_review(
+    request: Request,
+    review_id: str,
+    payload: InsightReviewDecisionRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.insights.decide(
+            review_id,
+            decision=payload.decision,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+            comment=payload.comment,
         )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
@@ -381,6 +548,17 @@ def list_operation_runs(
             limit=limit,
             cursor=cursor,
         )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/lineage")
+def get_operation_lineage(
+    request: Request,
+    resource_id: str = Query(alias="resourceId"),
+) -> list[LineageEdgeRow]:
+    try:
+        return foundry.operations.lineage(resource_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -679,6 +857,7 @@ async def ingest_webhook(
 ):
     try:
         raw_body = await request.body()
+        ctx = _ctx(request)
         return foundry.datasets.ingest_webhook_event(
             dataset_ref,
             connector_name=connector_name,
@@ -687,9 +866,9 @@ async def ingest_webhook(
             raw_body=raw_body,
             signature=signature,
             signature_timestamp=signature_timestamp,
-            secret=_webhook_signing_key(),
+            secret=_webhook_signing_key(ctx, dataset_ref, connector_name, resource_name),
             event_id=event_id,
-            ctx=_ctx(request),
+            ctx=ctx,
         )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
@@ -720,8 +899,38 @@ def _webhook_payload(value: WebhookPayloadRequest) -> JsonObject:
     return {str(key): item for key, item in (value.model_extra or {}).items()}
 
 
-def _webhook_signing_key() -> str:
-    return foundry.secret_provider.get_secret(WEBHOOK_SIGNING_KEY_NAME).value
+def _webhook_signing_key(
+    ctx: RequestContext,
+    dataset_ref: str,
+    connector_name: str,
+    resource_name: str,
+) -> str:
+    try:
+        return foundry.secret_provider.get_secret(WEBHOOK_SIGNING_KEY_NAME).value
+    except FoundryLiteError as exc:
+        _audit_webhook_secret_failure(ctx, dataset_ref, connector_name, resource_name, exc)
+        raise
+
+
+def _audit_webhook_secret_failure(
+    ctx: RequestContext,
+    dataset_ref: str,
+    connector_name: str,
+    resource_name: str,
+    exc: FoundryLiteError,
+) -> None:
+    foundry.operations.record_failure_audit(
+        ctx=ctx,
+        event_type="webhook.secret_resolution_failed",
+        resource_type="webhook",
+        resource_id=f"{connector_name}:{resource_name}",
+        action="webhook:ingest",
+        exc=exc,
+        decision="deny",
+        before_ref={"dataset_ref": dataset_ref},
+        after_ref={"secret_name": WEBHOOK_SIGNING_KEY_NAME, "env_var": WEBHOOK_SIGNING_KEY_ENV},
+        adapter="secret_provider.get_secret",
+    )
 
 
 if __name__ == "__main__":

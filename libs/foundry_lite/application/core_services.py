@@ -13,6 +13,7 @@ from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.application.services.runtime_bundle import (
     BackupRestoreService,
     IcebergMaintenanceService,
+    InsightReviewService,
     RecordDlqService,
     RuntimeService,
     WorkflowOrchestrationService,
@@ -24,6 +25,7 @@ __all__ = [
     "ActionService",
     "BackupRestoreService",
     "DemoService",
+    "InsightReviewService",
     "DatasetServices",
     "IcebergMaintenanceService",
     "MaterializationService",
@@ -50,6 +52,7 @@ class CoreServices:
     dataset: DatasetServices
     demo: DemoService
     iceberg_maintenance: IcebergMaintenanceService
+    insight_review: InsightReviewService
     materialization: MaterializationService
     object_store: ObjectServices
     ontology: OntologyService
@@ -71,6 +74,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     dataset = DatasetServices.create(dependencies)
     demo = build_service(DemoService, dependencies)
     iceberg_maintenance = build_service(IcebergMaintenanceService, dependencies)
+    insight_review = build_service(InsightReviewService, dependencies)
     materialization = build_service(MaterializationService, dependencies)
     object_store = ObjectServices.create(dependencies)
     ontology = build_service(OntologyService, dependencies)
@@ -84,6 +88,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         dataset=dataset,
         demo=demo,
         iceberg_maintenance=iceberg_maintenance,
+        insight_review=insight_review,
         materialization=materialization,
         object_store=object_store,
         ontology=ontology,
@@ -101,6 +106,7 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
         *services.dataset.items(),
         services.demo,
         services.iceberg_maintenance,
+        services.insight_review,
         services.materialization,
         *services.object_store.items(),
         services.ontology,

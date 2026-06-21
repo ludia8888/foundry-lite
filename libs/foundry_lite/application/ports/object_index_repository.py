@@ -196,6 +196,16 @@ class ObjectRecordSourceUpdate:
 
 
 @dataclass(frozen=True)
+class ObjectRecordSourceDeletion:
+    record_id: str
+    tenant_id: str
+    source_dataset_version_id: str
+    object_version: int
+    deletion_reason: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
 class ObjectRecordCdcUpdate:
     record_id: str
     tenant_id: str
@@ -336,6 +346,15 @@ class ObjectIndexRepository(Protocol):
         record: ObjectRecordSourceUpdate,
     ) -> None:
         """Update source-owned object fields after a dataset re-index."""
+        ...
+
+    def mark_object_record_deleted_from_source(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: ObjectRecordSourceDeletion,
+    ) -> None:
+        """Tombstone an object that disappeared from a full source snapshot."""
         ...
 
     def update_object_record_from_cdc(

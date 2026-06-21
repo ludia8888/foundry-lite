@@ -21,6 +21,7 @@ from foundry_lite.application.ports import (
     ObjectRecordCdcUpdate,
     ObjectRecordInsert,
     ObjectRecordRow,
+    ObjectRecordSourceDeletion,
     ObjectRecordSourceUpdate,
 )
 from foundry_lite.application.ports.object_index_repository import IndexRunRow
@@ -166,6 +167,18 @@ class FakeObjectIndexRepository:
             source_dataset_version_id=record.source_dataset_version_id,
             source_hash=record.source_hash,
             object_version=record.object_version,
+            updated_at=record.updated_at,
+        )
+
+    def mark_object_record_deleted_from_source(self, *, transaction: Any, record: ObjectRecordSourceDeletion) -> None:
+        del transaction
+        if self.object_records[record.record_id]["tenant_id"] != record.tenant_id:
+            return
+        self.object_records[record.record_id].update(
+            source_dataset_version_id=record.source_dataset_version_id,
+            object_version=record.object_version,
+            deleted=True,
+            deletion_reason=record.deletion_reason,
             updated_at=record.updated_at,
         )
 
@@ -704,6 +717,32 @@ def test_object_index_repository_contract_writes_object_record_updates_and_confl
     assert conflicts[0]["property_api_name"] == "status"
     assert conflicts[0]["source_value"] == "REVIEW"
     assert conflicts[0]["edit_value"] == "APPROVED"
+
+
+def test_object_index_repository_contract_marks_source_missing_record_deleted(
+    harness: ObjectIndexHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_object_record(transaction=transaction, record=_object_insert_record())
+        harness.repository.mark_object_record_deleted_from_source(
+            transaction=transaction,
+            record=ObjectRecordSourceDeletion(
+                record_id="obj_order_1",
+                tenant_id="tenant-demo",
+                source_dataset_version_id="dsv_orders_3",
+                object_version=2,
+                deletion_reason="source_missing",
+                updated_at="2026-06-10T00:04:00Z",
+            ),
+        )
+
+    record = harness.object_record("obj_order_1")
+
+    assert record is not None
+    assert record["source_dataset_version_id"] == "dsv_orders_3"
+    assert record["object_version"] == 2
+    assert record["deleted"] is True
+    assert record["deletion_reason"] == "source_missing"
 
 
 def test_object_index_repository_contract_switches_and_cleans_shadow_index(

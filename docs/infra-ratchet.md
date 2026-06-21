@@ -378,7 +378,7 @@ that pytest cannot collect.
   operator-evidence contracts run first; then focused infra ratchets +
   composition ratchet + runtime diagnostics. A failure trap always writes
   `artifacts/quality/runtime_lane_failure.json` and refreshes
-  `runtime_root_cause_summary.md`.
+  `artifacts/quality/runtime_root_cause_summary.md`.
 - `pnpm ci:gate:release` (push to main, tags, manual dispatch via `release.yml`): the
   full runtime lane plus heavier 100k/1m performance smokes and the contract gates,
   with evidence artifacts uploaded.
@@ -391,7 +391,7 @@ root cause and the files to inspect.
 
 ## S46+ Expansion Handoff
 
-[Data Platform Expansion Roadmap](./data-platform-expansion-roadmap.md) extends
+[Data Platform Expansion Sprint Plan](./data-platform-expansion-sprint-plan-ko.md) extends
 this same ratchet discipline beyond vendor infrastructure. Semantic SSOT,
 record-level DLQ, late-data watermarks, continuous CDC workers, Temporal product
 workflow integration, external saga/reconciliation, data quality contracts,

@@ -185,8 +185,19 @@ class DeadLetterRecordRetryResult(TypedDict):
     downstreamBackfillPlan: DeadLetterRecordBackfillPlan
 
 
+class DeadLetterRecordBulkRetryFailure(TypedDict):
+    deadLetterRecordId: str
+    code: str
+    message: str
+    details: DatasetTransactionMetadata
+
+
 class DeadLetterRecordBulkRetryResult(TypedDict):
+    status: str
     items: list[DeadLetterRecordRetryResult]
+    failedItems: list[DeadLetterRecordBulkRetryFailure]
+    succeededCount: int
+    failedCount: int
 
 
 class DeadLetterRecordDiscardResult(TypedDict):

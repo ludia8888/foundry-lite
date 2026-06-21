@@ -15,6 +15,7 @@ from foundry_lite.application.ports.ontology_repository import (
     ObjectTypeRecord,
     ObjectTypeRow,
     OntologyApplyResult,
+    OntologyCatalogResult,
     OntologyValidationResult,
     OntologyVersionRecord,
     OntologyVersionRow,
@@ -36,6 +37,7 @@ from foundry_lite.application.services.ontology_protocols import (
     OntologyRuntimeBoundary,
 )
 from foundry_lite.application.services.ontology_validation import (
+    build_ontology_catalog,
     ontology_validation_result,
     validate_ontology_definition,
     validate_persisted_link,
@@ -83,6 +85,7 @@ class OntologyService(CoreService):
         self.runtime_service._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
         definition = self._load_ontology_definition(yaml_path)
         with self.engine.begin() as conn:
+            validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
             migration_plan = self._candidate_migration_plan(conn, ctx, definition)
             migration_plan.raise_if_blocked()
             version_number = self._next_ontology_version(conn, ctx)
@@ -108,6 +111,22 @@ class OntologyService(CoreService):
         with self.engine.begin() as conn:
             validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
         return ontology_validation_result(definition)
+
+    def active_catalog(self, *, ctx: RequestContext | None = None) -> OntologyCatalogResult:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "ontology:read", "ontology", "active")
+        with self.engine.begin() as conn:
+            active = self._active_ontology_version(conn, ctx)
+            object_rows = self._object_types_for_version(conn, ctx, active["id"])
+            return build_ontology_catalog(
+                active=active,
+                object_rows=object_rows,
+                link_rows=self._link_types_for_version(conn, ctx, active["id"]),
+                properties_by_object_id={
+                    item["id"]: self._properties_for_object_type(conn, item["id"]) for item in object_rows
+                },
+                actions_by_object_id={item["id"]: self._actions_for_target(conn, item["id"]) for item in object_rows},
+            )
 
     def _load_ontology_definition(self, yaml_path: str | Path) -> YamlObject:
         """Load and validate the top-level ontology YAML mapping."""

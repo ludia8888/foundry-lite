@@ -112,28 +112,59 @@ class ActionService(CoreService):
         command: ActionApplyCommand,
         action_run_id: str,
     ) -> ActionApplyOutcome:
+        action_type_for_failure: ActionTypeRow | None = None
+        try:
+            with self.engine.begin() as conn:
+                action_type = self.ontology_service._active_action_type(conn, ctx, command.action_api_name)
+                action_type_for_failure = action_type
+                existing = self._existing_action_run(conn, ctx, action_type, command.idempotency_key)
+                if existing is not None:
+                    return self._replay_existing_action_run(conn, ctx, existing, command.request_fingerprint)
+                raced_existing = self._insert_action_run(
+                    conn,
+                    ctx,
+                    action_type=action_type,
+                    action_run_id=action_run_id,
+                    command=command,
+                )
+                if raced_existing is not None:
+                    return self._replay_existing_action_run(conn, ctx, raced_existing, command.request_fingerprint)
+                outcome = self._complete_received_action_run(
+                    conn,
+                    ctx,
+                    action_type=action_type,
+                    action_run_id=action_run_id,
+                    command=command,
+                )
+        except ConflictDetected as exc:
+            if action_type_for_failure is None:
+                raise
+            return self._record_rolled_back_action_conflict(ctx, command, action_run_id, action_type_for_failure, exc)
+        return outcome
+
+    def _record_rolled_back_action_conflict(
+        self,
+        ctx: RequestContext,
+        command: ActionApplyCommand,
+        action_run_id: str,
+        action_type: ActionTypeRow,
+        error: ConflictDetected,
+    ) -> ActionApplyOutcome:
         with self.engine.begin() as conn:
-            action_type = self.ontology_service._active_action_type(conn, ctx, command.action_api_name)
-            existing = self._existing_action_run(conn, ctx, action_type, command.idempotency_key)
+            current = self._existing_action_run(conn, ctx, action_type, command.idempotency_key)
+            if current is not None:
+                return self._replay_existing_action_run(conn, ctx, current, command.request_fingerprint)
+            existing = self._insert_action_run(
+                conn,
+                ctx,
+                action_type=action_type,
+                action_run_id=action_run_id,
+                command=command,
+            )
             if existing is not None:
                 return self._replay_existing_action_run(conn, ctx, existing, command.request_fingerprint)
-            raced_existing = self._insert_action_run(
-                conn,
-                ctx,
-                action_type=action_type,
-                action_run_id=action_run_id,
-                command=command,
-            )
-            if raced_existing is not None:
-                return self._replay_existing_action_run(conn, ctx, raced_existing, command.request_fingerprint)
-            outcome = self._complete_received_action_run(
-                conn,
-                ctx,
-                action_type=action_type,
-                action_run_id=action_run_id,
-                command=command,
-            )
-        return outcome
+            self._fail_action_run(conn, ctx, action_run_id, error)
+        return ActionApplyOutcome(deferred_error=error)
 
     def _complete_received_action_run(
         self,

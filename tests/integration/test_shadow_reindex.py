@@ -125,6 +125,31 @@ def test_reindex_same_dataset_version_does_not_break_expected_object_version(fou
     assert applied["status"] == "succeeded"
 
 
+def test_full_reindex_marks_source_missing_object_deleted(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    before_ids = [item["objectId"] for item in foundry.objects.query("Order", ctx=ctx, limit=10)["items"]]
+    reduced_orders = tmp_path / "orders_without_o1003.csv"
+    reduced_orders.write_text(
+        "order_id,customer_id,source_status,amount,margin,order_ts,region\n"
+        "O-1001,C-100,PENDING,1200.0,230.0,2026-06-09T10:00:00Z,NA\n"
+        "O-1002,C-101,REVIEW,800.0,80.0,2026-06-09T11:00:00Z,EU\n",
+        encoding="utf-8",
+    )
+
+    foundry.datasets.upload_csv("raw.erp_orders", str(reduced_orders), ctx=ctx)
+    foundry.transforms.run("clean_orders", ctx=ctx)
+    result = foundry.objects.reindex("Order", ctx=ctx)
+    after_page = foundry.objects.query("Order", ctx=ctx, limit=10)
+    deleted_order = foundry.objects.get("Order", "O-1003", ctx=ctx)
+
+    assert before_ids == ["O-1001", "O-1002", "O-1003"]
+    assert result["rows_read"] == 2
+    assert result["objects_deleted"] == 1
+    assert [item["objectId"] for item in after_page["items"]] == ["O-1001", "O-1002"]
+    assert deleted_order["deleted"] is True
+    assert deleted_order["deletionReason"] == "source_missing"
+
+
 def test_object_version_increments_for_base_and_edit_updates(foundry: FoundryLite, tmp_path: Path) -> None:
     ctx = prepare_indexed_demo(foundry)
     base_order = foundry.objects.get("Order", "O-1001", ctx=ctx)

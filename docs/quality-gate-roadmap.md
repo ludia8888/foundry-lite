@@ -416,24 +416,130 @@ transform, permission/tenant isolation, failed-run replay 증거를 직접 asser
 
 ### Tier G14 — current-state document drift (✅ 완료 2026-06-11 G14)
 
-`scripts/quality/check_doc_drift.py`는 `AGENTS.md`와
-`docs/implementation-status.md`를 읽어 현재 구현처럼 언급된 source path, script,
-Python class, 명시적 `Class.method` reference가 실제 코드 트리에 존재하는지 검증한다.
+`scripts/quality/check_doc_drift.py`는 repo Markdown 문서와 `docs/*.json` 문서를 읽어
+현재 구현처럼 언급된 source path, script, package script, FastAPI route, pytest node id가
+실제 코드/테스트 트리에 존재하는지 검증하고, Markdown local link target과 heading/html anchor가
+실제 문서에서 클릭 가능한지도 검증한다. Python class와 명시적 `Class.method` reference 검증은
+current-state boundary 문서인 `AGENTS.md`와 `docs/implementation-status.md`에만 적용한다.
+비개발자 관점으로 말하면, 전체 문서의 "파일/테스트/API 주소/실행 명령"은 CI가 확인하고,
+Python 내부 심볼 검사는 과장 위험이 가장 큰 현재 구현 문서에서 더 엄격하게 확인하며, 문서
+링크는 독자가 실제로 눌러 이동할 수 있어야 한다는 방식이다.
 
 검사 기준:
 - inline code span의 source path/script reference는 현재 repo에 존재해야 한다.
-- `FoundryLite`, `CoreDependencies` 같은 Python class reference는 AST symbol index에
-  존재해야 한다.
-- `Class.method` reference는 해당 class와 method가 모두 존재해야 한다.
+- 현재 명령처럼 적힌 `quality:*`, `ci:*`, `db:*`, `sdk:*` 등 package script reference와
+  `pnpm --silent ...` command는 `package.json` scripts에 존재해야 한다. 제안 명령 섹션이나
+  후속/future 문맥의 command family 예시는 제외한다.
+- `/api/...`, `/healthz`, `/metrics` route reference는 FastAPI route inventory에 존재해야 한다.
+- `tests/...::test_name` pytest node id는 해당 test file과 test function에 존재해야 한다.
+- `[label](relative.md#anchor)` Markdown link는 target file과 heading/html anchor가 존재해야 한다.
+- `FoundryLite`, `CoreDependencies` 같은 Python class reference는 current-state boundary 문서에서만
+  AST symbol index에 존재해야 한다.
+- `Class.method` reference는 current-state boundary 문서에서만 해당 class와 method가 모두 존재해야 한다.
 - `아직`, `not implemented`, `remain unextracted`, `removed`, `금지`처럼 미래 목표,
   미구현 gap, 제거/금지 상태를 정직하게 말하는 문장은 검사 대상에서 제외한다.
 - 결과는 `artifacts/quality/doc_drift.json`에 남긴다.
 
 Self-test: `tests/unit/test_quality_doc_drift.py`가 missing script reference 실패,
-missing Python symbol 실패, 기존 path/symbol/method 허용, 미래·제거 문맥 제외,
-JSON report 생성을 검증한다. 이 게이트는 가이드 66개 조항의 직접 mapping 카운트에는
-넣지 않는 meta gate지만, 문서가 현재 코드보다 앞서 “완료”처럼 말하는 root cause를
-차단한다.
+missing package script 실패, package script wildcard/미래 문맥 제외, missing Python symbol 실패,
+기존 path/symbol/method 허용, non-current 문서의 ontology 예시 심볼 허용, FastAPI route 존재/누락,
+pytest node id 존재/누락, Markdown target/anchor 존재/누락, 미래·제거 문맥 제외, JSON report 생성을
+검증한다. 이 게이트는 가이드 66개 조항의 직접
+mapping 카운트에는 넣지 않는 meta gate지만, 문서가 현재 코드보다 앞서 “완료”처럼 말하거나
+예전 파일/API/test 이름 또는 깨진 문서 링크를 남기는 root cause를 차단한다.
+
+### Tier G14A — evidence ledger command references (✅ 완료 2026-06-19)
+
+`scripts/quality/check_evidence_ledger_commands.py`는 `docs/sprint-evidence-ledger.md`의 proof
+command가 실제 repo 안의 package script, Python/Node/bash script file, test path, pytest node
+id를 가리키는지 검증한다. 비개발자 관점으로 말하면, evidence ledger가 “이 명령으로 증명했다”고
+말하는데 그 명령이 더 이상 존재하지 않는 상황을 CI가 막는 것이다.
+
+검사 기준:
+- `pnpm --silent quality:*` 또는 `pnpm ci:*` command는 `package.json` scripts에 존재해야 한다.
+- `uv run python ...`, `node ...`, `bash ...` command가 가리키는 script file은 repo에 존재해야 한다.
+- `tests/...` path는 repo에 존재해야 하고, `tests/...::test_name` node id는 해당 test file AST에서
+  collectable해야 한다.
+- 결과는 `artifacts/quality/evidence_ledger_commands.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_evidence_ledger_commands.py`가 현재 repo 통과, missing package
+script 실패, missing Python script 실패, missing pytest node 실패, JSON report 생성을 검증한다.
+`tests/unit/test_quality_ci_workflows.py`는 이 게이트가 doc-drift 이후, documentation-map 이전에
+static/release lane에서 실행됨을 검증한다.
+
+### Tier G14B — documentation operating map coverage (✅ 완료 2026-06-19)
+
+`scripts/quality/check_documentation_map.py`는 `docs/documentation-map.md`를 문서 운영
+source-of-truth로 검증한다. 비개발자 관점으로 말하면, 문서 지도 자체가 낡으면 README,
+implementation status, evidence ledger, data-pattern matrix, infra matrix, frontend/backend
+contract, commit-point risk register가 서로 다른 말을 하기 시작하므로, 이제 그 안내판도
+CI가 검사한다.
+
+검사 기준:
+- repo 안의 Markdown 문서와 `docs/*.json` 운영 문서는 `Document Roles`에 등록되어야 하고,
+  `check_doc_drift.py`의 scan inventory와 일치해야 한다.
+- 각 `Document Roles` 행은 `entrypoint`, `source-of-truth`, `machine-registry`, `risk-registry`,
+  `standard`, `template`, `reference`, `example` 중 하나의 MECE bucket으로
+  분류되어야 한다. 비개발자식으로 말하면, README/원본 장부/기계 registry/위험 장부/예제/진단
+  문서가 서로 같은 일을 하며 겹치지 않도록 CI가 문서의 "직업"을 검사한다.
+- `MECE Documentation Taxonomy` 표에는 위 bucket들이 모두 정의되어야 하고, duplicate/stale bucket이나
+  placeholder 의미/병합 규칙은 실패한다. 즉 문서 분류표 자체도 오래된 안내판이 될 수 없다.
+- core source-of-truth 문서는 `Source Of Truth Rules`에 update trigger와 함께 등록되어야 하고,
+  retired/stale source-of-truth row나 duplicate row는 없어야 한다.
+- README를 제외한 core source-of-truth Markdown 문서는 상단 24줄 안에 `Status`, `Purpose`,
+  `Scope`, `Audience`, `작성일`, `문서 상태`, `문서 역할` 같은 운영 맥락 marker가 있어야 한다.
+  비개발자가 문서를 열었을 때 "이 문서는 현재 무엇을 책임지는가"를 바로 알 수 있어야 한다.
+- `Source Of Truth Rules`와 `Document Roles`의 설명 칸은 비어 있거나 `role`/`note`/`governs`
+  같은 placeholder 수준이면 안 된다. 비개발자가 봐도 "이 문서가 무엇을 책임지고 언제 고쳐야
+  하는지"를 알 수 있어야 한다.
+- `Update Order`에는 evidence ledger, implementation status, data-platform sprint plan/sprint plan,
+  sprint breakdown, frontend/infra/quality/observability contract docs, and `README.md`가 있어야 한다.
+  `README.md`는 원본 장부가 아니므로 이 목록의 마지막이어야 한다.
+- README의 `문서 지도`에는 implementation status, documentation map, sprint evidence ledger,
+  MVP scope, infra/source-of-truth matrices, frontend/backend contract, data-platform plans,
+  quality docs, commit-point register 같은 핵심 진입점이 있어야 한다. 각 행의 역할 설명은
+  `role` 같은 placeholder가 아니라 GitHub 독자가 왜 그 문서를 눌러야 하는지 알 수 있는
+  설명이어야 하고, 같은 문서 링크가 중복되면 실패한다.
+- README의 대표 gate briefing에는 active documentation/API/SDK surface gate인
+  `check_documentation_map.py`, `check_frontend_backend_surface.py`, `quality:proof-matrix`,
+  `quality:source-of-truth`, `quality:operator-evidence`, `quality:frontend-backend-surface`,
+  `quality:sdk-request-contract`, `quality:frontend-foundation`이 `대표 gate` 표 안에 보여야 한다.
+  각 행은 어떤 root-cause 위험을 막는지 설명해야 하며, 같은 gate reference가 중복되면 실패한다.
+- `Cross-Check Commands`의 locked checklist에는 필수 command가 모두 있고, duplicate/stale command가
+  없어야 한다. `pnpm` command는 실제 `package.json` script로 존재해야 하고, `node` command는 실제 파일을 가리켜야 한다.
+- `AGENTS.md`에는 active documentation gate인 `check_doc_drift.py`와
+  `check_documentation_map.py`뿐 아니라 proof matrix/source-of-truth/operator-evidence
+  contract gate가 요약되어 있어야 한다.
+- 결과는 `artifacts/quality/documentation_map.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_documentation_map.py`가 현재 repo 통과, 누락 문서 role
+실패, stale role 실패, MECE taxonomy 정의 누락/stale/thin row 실패, 누락/unknown document-role bucket 실패, thin role/source-of-truth row 실패, core 운영 문서 상단 context 누락 실패,
+update-order reference 누락/README 순서 실패, doc-drift inventory mismatch 실패, source-of-truth rule 누락/stale/duplicate 실패, README source-of-truth 링크 누락/중복/placeholder 설명 실패,
+README 대표 gate 표 누락/표 밖 reference/중복/placeholder 설명 실패, proof-matrix/source-of-truth/operator-evidence cross-check 누락 실패,
+cross-check command 누락/중복/stale 실패, package script 누락 실패,
+node target 누락 실패, AGENTS documentation/proof gate reference 누락 실패,
+JSON report 생성을 검증한다. `tests/unit/test_quality_ci_workflows.py`는 이 게이트가
+`check_doc_drift.py` 이후, tricky checklist evidence 이전에 static/release lane에서 실행됨을
+검증한다.
+
+### Tier G14C — data-platform sprint status consistency (✅ 완료 2026-06-19)
+
+`scripts/quality/check_data_platform_sprint_status.py`는 S46-S64 data-platform expansion 상태가
+detailed sprint plan, main sprint breakdown, README, implementation status에서 같은
+경계를 말하는지 검증한다. 비개발자 관점으로 말하면, 어떤 문서는 "S63까지 부분 구현"이라고
+하고 다른 문서는 "S64까지 완료"라고 말하는 상황을 CI가 막는 것이다.
+
+검사 기준:
+- `docs/data-platform-expansion-sprint-plan-ko.md`의 S46-S64 table은 expected token을 유지해야 한다.
+- `foundry_lite_sprint_breakdown_ko.md`의 S46-S64 table은 expected token과 label을 함께 유지해야 한다.
+- README, detailed sprint plan, implementation status는 S46 complete, S47-S63 partial,
+  S59/S64 proposed/future boundary를 드러내는 high-level phrase를 유지해야 한다.
+- 결과는 `artifacts/quality/data_platform_sprint_status.json`에 남긴다.
+
+Self-test: `tests/unit/test_quality_data_platform_sprint_status.py`가 현재 repo 통과, token drift
+실패, label drift 실패, high-level boundary phrase 누락 실패, JSON report 생성을 검증한다.
+`tests/unit/test_quality_ci_workflows.py`는 이 게이트가 data-pattern matrix 이후, SDK generation
+이전에 static/release lane에서 실행됨을 검증한다.
 
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
 
@@ -1034,13 +1140,13 @@ method-registry magic dispatch로 돌아가는 것을 차단한다.
 
 규칙:
 - `scripts/quality/ast-grep-rules/no-facade-magic-dispatch.yml`
-- 대상: `libs/foundry_lite/application/core.py`
+- 대상: `libs/foundry_lite/application/foundry.py` and `libs/foundry_lite/application/facades/*.py`
 - 정량 기준: `__getattr__`/`__setattr__` 0건
 
 실행:
 - 로컬/CI release gate: `pnpm exec sg scan -c sgconfig.yml`
 - package script: `pnpm quality:ast-grep`
-- Self-test: `tests/unit/test_quality_ci_workflows.py`가 임시 `core.py` fixture에
+- Self-test: `tests/unit/test_quality_ci_workflows.py`가 임시 facade fixture에
   `__getattr__`를 심고, AST-grep가 실제 error finding을 내는지 검증한다.
 
 ### Tier 0 — 즉시 추출 가능 (정적 분석, 각 30~60분)
@@ -1054,7 +1160,7 @@ method-registry magic dispatch로 돌아가는 것을 차단한다.
 | G5 | `check_log_has_trace_keys.py` | §8.3 38, §12.1 54 | `logger.X(...)` 호출 시 `extra=` 또는 message에 `request_id`/`run_id`/`tenant_id` 중 1개 이상 포함. 위반 0 | 추적 키 끊김 차단 |
 | G6 | `check_pragma_no_cover_budget.py` | §11.4 53 | `# pragma: no cover` 총 카운트 baseline + monotonic decrease + 이유 주석 강제 (`# pragma: no cover  # reason: ...`) | 커버리지 우회 차단 |
 | G7 | `check_error_response_has_request_id.py` | §6.3 31, §8.3 | FastAPI `HTTPException(detail=...)` / exception handler가 `request_id` 포함하는지 정적 검증 | 사용자 응답에 추적 키 보존 |
-| G8 | `check_tier_coverage_by_layer.py` | §11.4 51 | `coverage.json` 파싱 후 `domain`/`application`/`infrastructure`/`apps/api`/`apps/cli` 각 영역 95%+ | 평균 95%에 가려진 가난한 영역 노출 |
+| G8 | `check_tier_coverage_by_layer.py` | §11.4 51 | `artifacts/coverage/coverage.json` 파싱 후 `domain`/`application`/`infrastructure`/`apps/api`/`apps/cli` 각 영역 95%+ | 평균 95%에 가려진 가난한 영역 노출 |
 | G9 | `check_no_test_sleep.py` | §18.1 60 | `tests/**/*.py` AST에서 `time.sleep`/`asyncio.sleep` 호출 0건 | flaky 근원 차단 |
 | G10 | `check_repository_no_business.py` | §3.1 13, §7.1 32, §18.3 | `infrastructure/repositories/*.py`에서 도메인 errors(`ValidationFailed`, `PermissionDenied`, `ConflictDetected`) raise 0건 | Repository에 비즈니스 규칙 침투 차단 |
 | G1A | `check_query_side_effects.py` | §2.3 11 | read/query service entrypoint side-effect violation 0 | 조회가 상태를 바꾸는 root cause 차단 |
@@ -1070,7 +1176,10 @@ method-registry magic dispatch로 돌아가는 것을 차단한다.
 | G12 | `check_idempotency_on_action.py` | §6.3 30, §7.3 | API `Idempotency-Key` header, Core/Service required parameter, existing action_run replay, request fingerprint comparison, idempotency-conflict audit, schema unique constraint and fingerprint column. 위반 0 | 중복 액션·잘못된 replay 차단 |
 | G13 | `check_contract_test_per_port.py` | §4.3 27 | `libs/foundry_lite/application/ports/*.py`마다 `tests/contracts/test_*_contract.py` 1:1 존재. 누락 0 | 새 boundary가 부정통하게 들어오는 것 차단 |
 | D1 | `check_strategy_specification_tests.py` | §4.2 22 | strategy/specification module missing direct test 0 | 조건 규칙이 API/Core 테스트에 갇히는 문제 차단 |
-| G14 | `check_doc_drift.py` | AGENTS.md, implementation-status.md | 문서에 명시된 클래스/모듈/메서드 이름이 코드에 실재하는지 grep + AST 검증 | 문서 과장 차단 |
+| G14 | `check_doc_drift.py` | repo Markdown, `docs/*.json`, AGENTS.md, implementation-status.md, package.json | 문서에 명시된 source path/script/package script/API route/pytest node id/Markdown local link target과 anchor가 실재하고, current-state 문서의 클래스/메서드 이름이 코드에 실재하는지 AST 검증 | 문서 과장·예전 파일/API/test/명령 이름·깨진 문서 링크 차단 |
+| G14A | `check_evidence_ledger_commands.py` | sprint-evidence-ledger.md, package.json, tests | evidence ledger의 proof command가 실제 package script, script file, test path, pytest node id를 가리킴. 위반 0 | 증거 장부 명령 stale 차단 |
+| G14B | `check_documentation_map.py` | documentation-map.md, README.md, AGENTS.md | repo Markdown + `docs/*.json` role coverage와 doc-drift scan inventory 일치, MECE taxonomy bucket 정의 누락/stale/duplicate/thin row 0, Document Roles MECE bucket 누락/unknown 0, core source-of-truth rows 누락/stale/duplicate 0, core operating Markdown top-matter context 누락 0, source-of-truth/document-role placeholder row 0, update-order reference 누락 0 및 README-last 순서 보존, README source-of-truth links 누락/중복 0 및 placeholder 설명 0, README 대표 gate refs 누락/중복 0 및 placeholder 설명 0, proof-matrix/source-of-truth/operator-evidence/doc/API/SDK/product cross-check command 누락/stale/duplicate 0 및 target 존재, AGENTS active documentation/proof gate reference 존재. 위반 0 | 문서 지도 stale/MECE drift 차단 |
+| G14C | `check_data_platform_sprint_status.py` | sprint plan, sprint breakdown, README.md, implementation-status.md | S46-S64 status table token/label과 high-level current/future boundary가 문서 간 일치. 위반 0 | 스프린트 상태 drift 차단 |
 | G15A | `check_schema_revision_guard.py` | §18.1 62 | SQLAlchemy metadata fingerprint와 최신 `infra/schema_revisions` snapshot 일치. mismatch 0 | DB 모양 code-only 변경 차단 |
 | G15 | `check_integration_scenario_markers.py` | §11.4 52 | `@pytest.mark.integration_scenario("connector_sync"|...)` 마커가 가이드 §11.4 7개 시나리오 모두 존재 | 통합 100% 약속 검증 |
 ### Tier 2 — 동적 / 메타 (런타임 분석, 각 3~8시간)
@@ -1083,7 +1192,7 @@ method-registry magic dispatch로 돌아가는 것을 차단한다.
 | G17 | `check_audit_count_runtime.py` | §10.2 45, §18.3 65 | demo smoke 후 `audit_events` row 수 ≥ mutation 호출 카운트. 차이 0 | audit 누락 동적 검증 |
 | G18 | `check_outbox_consistency.py` | §7.1 33 | demo smoke 후 state change ↔ outbox event 1:1 매칭. 불일치 0 | outbox 약속 동적 검증 |
 | G19 | `check_flaky_detector.py` | §11.4 47 | pytest 3회 반복 후 결과 변동 0 | flaky를 통과로 보지 않음 |
-| G20 | `check_gate_self_test.py` | (메타) | 모든 quality 게이트가 자체 fixture로 violation 인공 생성 시 정확히 fail하는지 확인 | 게이트의 거짓 negative 차단 |
+| G20 | `check_gate_self_test.py` (future/deferred) | (메타) | 모든 quality 게이트가 자체 fixture로 violation 인공 생성 시 정확히 fail하는지 확인 | 게이트의 거짓 negative 차단 |
 
 ### Tier 3 — Root cause 메타 게이트 (PR/git 통합, 1일+)
 
@@ -1091,7 +1200,7 @@ method-registry magic dispatch로 돌아가는 것을 차단한다.
 |---|---|---|---|---|
 | G21 | `check_regression_test_per_bugfix.py` | §11.3, §18.1, §18.2 4 | git log → "fix"/"bug"/"patch"/"regression" 커밋은 같은 커밋에 `tests/` 변경 동반 | 버그 수정에 회귀 테스트 강제 |
 | G22 | `check_pr_root_cause_section.py` | §18.1, §18.2 | PR description에 `Root Cause`, `Impact`, `Regression Test` 섹션 강제 (GitHub Actions) | 증상 제거 패치 차단 |
-| G23 | `check_anti_pattern_count.py` | §18.3 표 12종 | 12개 안티패턴을 정적 패턴(AST/regex)으로 인코딩 → 총 카운트 baseline + monotonic decrease | 안티패턴 monotonic decrease |
+| G23 | `check_anti_pattern_count.py` (future/deferred) | §18.3 표 12종 | 12개 안티패턴을 정적 패턴(AST/regex)으로 인코딩 → 총 카운트 baseline + monotonic decrease | 안티패턴 monotonic decrease |
 
 ---
 
@@ -1122,12 +1231,15 @@ tests 실패, bugfix commit with tests 허용, non-bugfix commit 제외, JSON re
 
 ### 즉시 (다음 세션 첫 1~2시간)
 
-**가장 ROI 높은 4개:**
+**가장 ROI 높은 7개:**
 
 1. **G1 `check_router_layer_purity`** — ✅ 완료 2026-06-11, API direct DB/repository 접근 차단
 2. **G10 `check_repository_no_business`** — ✅ 완료 2026-06-11, Repository 비즈니스 침투 차단
 3. **G13 `check_contract_test_per_port`** — ✅ 완료 2026-06-11, 새 boundary 정통화 강제
 4. **G14 `check_doc_drift`** — ✅ 완료 2026-06-11, 문서가 코드보다 거짓말 못 함
+5. **G14A `check_evidence_ledger_commands`** — ✅ 완료 2026-06-19, 증거 장부 명령 stale 차단
+6. **G14B `check_documentation_map`** — ✅ 완료 2026-06-19, 문서 지도 자체가 낡는 문제 차단
+7. **G14C `check_data_platform_sprint_status`** — ✅ 완료 2026-06-19, S46-S64 상태 drift 차단
 
 각 게이트는 **반드시 self-test와 함께** 박는다 (G20 원칙).
 
@@ -1159,7 +1271,7 @@ Pyright strict, pytest-randomly, pytest-xdist, gitleaks는 위 Tier 섹션으로
 
 ### S46 — Semantic SSOT / Data Pattern Matrix
 
-[Data Platform Expansion Roadmap](./data-platform-expansion-roadmap.md)의 첫 번째
+[Data Platform Expansion Sprint Plan](./data-platform-expansion-sprint-plan-ko.md)의 첫 번째
 post-MVP 작업은 문서와 machine-readable matrix가 서로 다른 현재 상태를 주장하지 못하게
 하는 것이다. 2026-06-18 현재 S46 정적 게이트가 구현되어 static lane에 연결되었다.
 S47 이후 product/data 기능은 이 matrix와 semantic-doc consistency gate를 먼저
@@ -1484,8 +1596,10 @@ prompt version, parameter hash, source span, human review status를 함께 들�
 `quality:ai-evidence`는 insight claim이 evidence object 없이 만들어지지 않는지, LLM
 extraction evidence가 model/prompt version을 pinning하는지, reprocessing이 이전 evidence를
 덮어쓰지 않고 새 revision을 만드는지, masked source span이 raw quote를 노출하지 않는지
-검증한다. Durable evidence table, real LLM executor, insight evidence viewer, model diff
-UI, and AI action policy enforcement는 후속 slice다.
+검증한다. Durable AI evidence table, real LLM executor, insight evidence viewer, model diff
+UI, and AI action policy enforcement는 후속 slice다. 별도의 S63 backend/API/SDK slice는
+durable Insight Review queue state를 제공하지만, AI evidence table과 visual evidence viewer를
+완성했다고 주장하지 않는다.
 
 | 게이트 | 명령 | Root cause |
 |---|---|---|
@@ -1494,19 +1608,49 @@ UI, and AI action policy enforcement는 후속 slice다.
 ### S61 — Frontend Foundation SDK Contract
 
 S61의 현재 slice는 full frontend workspace가 아니라 generated SDK가 프론트의 공통
-요청/에러/요청 ID 경계를 맡도록 만드는 기반 proof다. `createFoundryLiteClient`는
-공통 `request` wrapper, tenant/user/role context header, request-id factory, and
-response telemetry callback을 제공한다. SDK-generated TypeScript/browser output은
-`FoundryLiteApiError`, `createRequestId`, `requestContextHeaders`,
-`normalizeFoundryLiteError`, and `isRetryableFoundryLiteError`를 노출한다.
-Web Operations는 남은 generic API call을 `sdkClient().request(path, options)`로
-보내고 마지막 request id, error code, retry 가능 여부를 표시한다. Login/session UI,
-automatic retry/backoff, cursor helper, duplicate-click lock, stale-version conflict UI,
-and permission-denied masking UX는 후속 slice다.
+요청/에러/요청 ID 경계를 맡고, 현재 frontend-consumable backend route와 SDK helper를
+named SDK-only와 browser request/helper-contract로 잠그는 기반 proof다. `createFoundryLiteClient`는 공통 `request` escape hatch,
+tenant/user/role context header, request-id factory, and response telemetry callback을
+제공한다. SDK-generated TypeScript/browser output은 `FoundryLiteApiError`,
+`createRequestId`, `requestContextHeaders`, `normalizeFoundryLiteError`,
+`isRetryableFoundryLiteError`, `retryWithBackoff`, `collectCursorPages`,
+`createInFlightActionLock`, `actionLockKey`, `classifyFoundryLiteError`와 함께
+system, datasets, ontology catalog/validation, generic objects, objectSets, materializations,
+operations, and Insight Review 하위 named method를 노출한다.
+`docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
+proof class -> proof test -> operator evidence mapping의 source of truth이며,
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 42개 frontend route surface의
+method/path/query/header/body와 typed error metadata, 그리고 12개 SDK helper의 retry/backoff,
+cursor collection, duplicate-action lock, request/context header, typed error normalization,
+stale-version classification, permission-denied classification behavior, and missing idempotency-key
+fail-fast for every `requiresIdempotencyKey` surface를 fake fetch로 검증한다.
+Web Operations는 현재 product controls에서 raw `/api/...` path를 직접 조립하지 않는다.
+Login/session UI, screen-specific retry/backoff UX, visual cursor pagination UX, duplicate-click
+button state UX, stale-version compare/refresh UI, permission-denied masking UX, full
+catalog-driven workspace UX는 후속 slice다.
 
 | 게이트 | 명령 | Root cause |
 |---|---|---|
+| Frontend backend API/SDK surface contract | `quality:frontend-backend-surface` | FastAPI route가 frontend/non-frontend로 분류되지 않거나, frontend-consumable route에 named SDK method/proofClass/request-contract proof test가 없거나, FastAPI `Idempotency-Key` route와 matrix `requiresIdempotencyKey` marker가 어긋나거나, 문서의 frontend route surface/helper count claim이 실제 matrix/generated SDK count와 어긋나거나, `SDK_CLIENT_SURFACE.helpers` helper가 matrix row/export/operator-evidence/helper-contract proof 없이 생기거나, Web Operations가 raw `/api/...` 호출로 SDK 계약을 우회하는 문제 차단 |
+| Browser SDK request/helper contract | `quality:sdk-request-contract` | named SDK method가 실제 browser SDK에서 잘못된 HTTP method/path/query/header/body/idempotency key/error metadata를 보내거나, SDK helper가 retry/backoff/cursor/duplicate-action/error classification/request context 계약에서 drift 나는 문제 차단 |
 | Frontend foundation SDK contract | `quality:frontend-foundation` | generated SDK와 browser SDK helper surface가 달라지거나, Web Operations가 SDK request/error/request-id 경계를 우회하거나, frontend error가 request id/retryability 없이 표시되는 문제 차단 |
+
+### S63 — Insight Review Backend/API/SDK Contract
+
+S63의 현재 slice는 full Insight/Action Workspace UI가 아니라, 화면이 붙을 수 있는
+durable review queue backend contract다. `insight_reviews`는 tenant-scoped claim, evidence
+refs, action proposal, assignment, decision, and idempotency keys를 저장한다.
+`foundry.insights`, `/api/insights/reviews`, and generated `client.insights.reviews.*`는
+list/create/get/assign/decide를 named SDK로 노출한다. `quality:insight-review`는 create replay가
+같은 review를 반환하는지, status/assignee filtering이 tenant-scoped로 동작하는지, terminal
+decision에 한 winner만 있는지, API create/assign/decision이 duplicate request를 안전하게
+처리하는지, and `insight_review.created`, `insight_review.assigned`,
+`insight_review.approved`, `insight_review.rejected` audit evidence가 남는지
+검증한다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Insight Review backend/API/SDK contract | `quality:insight-review` | Insight queue가 화면-only 상태로 남거나, 같은 idempotency key가 중복 review를 만들거나, approve/reject가 덮어써지거나, 운영자가 audit에서 review mutation 원인을 추적하지 못하는 문제 차단 |
 
 | 도구 | 분류 | 효과 |
 |---|---|---|
@@ -1532,3 +1676,58 @@ and permission-denied masking UX는 후속 slice다.
 - "왜 약화/삭제하는가" 코드 주석 + 본 문서에 사유 1줄.
 - 약화의 부작용을 보완하는 다른 게이트가 있는지 명시.
 - 예: `check_service_method_conflicts` 삭제 시 — 명시적 collaborator 호출이 도입돼 글로벌 메서드 이름 충돌이 더 이상 문제 아님. `check_service_call_graph`가 보완.
+
+## 6. Operational Evidence And Diagnostics
+
+이 섹션은 삭제된 별도 관측성/진단 문서의 운영 진단 역할을 흡수한다. 별도 관측성/진단
+README를 다시 만들지 않는다. 비개발자식으로 말하면,
+품질 게이트가 실패했을 때 "어디서 왜 실패했는지"를 찾는 길은 이 문서와 CI artifact에서 시작한다.
+
+### 6.1 Release And Runtime Lanes
+
+| 실행 위치 | 명령/잡 | 역할 |
+|---|---|---|
+| 로컬 | `pnpm ci:gate` | 전체 release evidence를 직렬로 실행한다. |
+| GitHub Actions | `quality-static` | 정적 분석, 타입, 아키텍처, 문서 drift, 보안/복잡도 gate를 실행한다. |
+| GitHub Actions | `quality-coverage` | 전체 pytest branch coverage, tier/public API coverage를 확인한다. |
+| GitHub Actions | `quality-flaky` | 전체 pytest suite를 반복 실행해 outcome 흔들림을 차단한다. |
+| GitHub Actions | `quality-runtime` | demo, OpenLineage, audit/outbox, data correctness, trace, diagnostics를 확인한다. |
+| GitHub Actions | `quality-e2e` | Playwright browser E2E를 실행한다. |
+| GitHub Actions | `quality-gate` | 위 lane 결과를 required check 하나로 집계한다. |
+
+### 6.2 Operator Evidence Rule
+
+실패가 console log에만 있으면 proof가 불완전하다. 위험한 실패는 다음 중 하나 이상의 durable
+payload에 남아야 한다.
+
+- run/error payload
+- dataset transaction metadata
+- audit event
+- outbox or DLQ record
+- trace/span artifact
+- GitHub Actions summary or uploaded quality artifact
+
+운영자가 `request_id`, `tenant_id`, `actor_user_id`, `dataset_version_id`, `transform_run_id`,
+`action_run_id`, `object_type`, `object_id`, `object_version` 중 관련 키를 따라가면 같은 실패를
+다시 설명할 수 있어야 한다.
+
+### 6.3 Runtime Diagnostics
+
+데모나 runtime lane이 실패하면 아래 진단 스크립트가 Python runtime 상태를 `artifacts/diagnostics/`에
+남긴다.
+
+```bash
+uv run python scripts/diagnostics/run_runtime_diagnostics.py
+uv run python scripts/diagnostics/run_runtime_diagnostics.py --console-traces
+```
+
+진단 artifact는 다음을 확인한다.
+
+| 도구 | 남기는 증거 |
+|---|---|
+| `faulthandler` | Python이 멈추거나 크래시가 날 때의 스택 |
+| `tracemalloc` | 어떤 코드가 메모리를 많이 잡는지 |
+| `cProfile`/`pstats` | 어느 함수가 시간을 많이 쓰는지 |
+| `gc` | 가비지 컬렉션 상태 |
+| `warnings` | 이후 장애가 될 수 있는 경고 |
+| OpenTelemetry console exporter | 선택적으로 사람이 읽을 수 있는 span 출력 |

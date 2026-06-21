@@ -25,6 +25,70 @@ class OntologyValidationResult(TypedDict):
     action_type_count: int
 
 
+class OntologyCatalogProperty(TypedDict):
+    """Frontend-safe property metadata for the active ontology catalog."""
+
+    apiName: str
+    displayName: str
+    dataType: str
+    nullable: bool
+    indexed: bool
+    searchable: bool
+    editable: bool
+    classification: str | None
+    source: str
+    columnName: str | None
+    editPolicy: str
+    derivation: PropertyDerivation | None
+
+
+class OntologyCatalogAction(TypedDict):
+    """Frontend-safe action metadata for the active ontology catalog."""
+
+    apiName: str
+    displayName: str
+    target: str
+    parameterSchema: ActionParameterSchema
+    definition: ActionTypeDefinition
+    enabled: bool
+
+
+class OntologyCatalogObject(TypedDict):
+    """Frontend-safe object type metadata for the active ontology catalog."""
+
+    apiName: str
+    displayName: str
+    description: str | None
+    primaryKeyProperty: str
+    backing: ObjectTypeBacking
+    properties: Sequence[OntologyCatalogProperty]
+    actions: Sequence[OntologyCatalogAction]
+    config: OntologyJsonObject
+
+
+class OntologyCatalogLink(TypedDict):
+    """Frontend-safe link type metadata for the active ontology catalog."""
+
+    apiName: str
+    displayName: str
+    fromObjectType: str
+    toObjectType: str
+    cardinality: str
+    backing: LinkTypeBacking
+
+
+class OntologyCatalogResult(TypedDict):
+    """Public read-only catalog for building object/action UI dynamically."""
+
+    ontologyVersionId: str
+    versionNumber: int
+    status: str
+    createdAt: str
+    activatedAt: str | None
+    objectTypes: Sequence[OntologyCatalogObject]
+    linkTypes: Sequence[OntologyCatalogLink]
+
+
 class ObjectTypeBacking(TypedDict):
     """Dataset backing declaration for an ontology object type."""
 

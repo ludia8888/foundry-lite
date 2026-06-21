@@ -19,6 +19,7 @@ from foundry_lite.application.ports import (
     ObjectRecordCdcUpdate,
     ObjectRecordInsert,
     ObjectRecordRow,
+    ObjectRecordSourceDeletion,
     ObjectRecordSourceUpdate,
 )
 from foundry_lite.application.ports.object_index_repository import IndexRunRow
@@ -243,6 +244,27 @@ class SqlAlchemyObjectIndexRepository:
                 source_hash=record.source_hash,
                 object_version=record.object_version,
                 object_change_sequence=object_change_sequence,
+                updated_at=record.updated_at,
+            )
+        )
+        _insert_object_record_version_from_current(transaction, record.tenant_id, record.record_id)
+
+    def mark_object_record_deleted_from_source(
+        self,
+        *,
+        transaction: Any,
+        record: ObjectRecordSourceDeletion,
+    ) -> None:
+        object_change_sequence = next_object_change_sequence(transaction, record.tenant_id)
+        transaction.execute(
+            update(db.object_records)
+            .where(and_(db.object_records.c.tenant_id == record.tenant_id, db.object_records.c.id == record.record_id))
+            .values(
+                source_dataset_version_id=record.source_dataset_version_id,
+                object_version=record.object_version,
+                object_change_sequence=object_change_sequence,
+                deleted=True,
+                deletion_reason=record.deletion_reason,
                 updated_at=record.updated_at,
             )
         )

@@ -152,6 +152,12 @@ run_static_gate() {
   echo "== Static: current-state documentation drift =="
   uv run python scripts/quality/check_doc_drift.py
 
+  echo "== Static: evidence ledger command references =="
+  uv run python scripts/quality/check_evidence_ledger_commands.py
+
+  echo "== Static: documentation operating map =="
+  uv run python scripts/quality/check_documentation_map.py
+
   echo "== Static: tricky checklist evidence =="
   uv run python scripts/quality/check_checklist_evidence.py
 
@@ -164,8 +170,14 @@ run_static_gate() {
   echo "== Static: data engineering pattern matrix =="
   uv run python scripts/quality/check_data_pattern_matrix.py
 
+  echo "== Static: data platform sprint status =="
+  uv run python scripts/quality/check_data_platform_sprint_status.py
+
   echo "== Static: generated TypeScript SDK drift =="
   uv run python scripts/generate_sdk_ts.py --check
+
+  echo "== Static: frontend backend API/SDK surface contract =="
+  uv run python scripts/quality/check_frontend_backend_surface.py
 
   echo "== Static: frontend foundation SDK contract =="
   pnpm --silent quality:frontend-foundation
@@ -361,6 +373,8 @@ run_runtime_gate() {
   run_runtime_step "Right-to-erasure manifest ratchet" pnpm --silent quality:erasure
 
   run_runtime_step "AI evidence lineage ratchet" pnpm --silent quality:ai-evidence
+
+  run_runtime_step "Insight review workspace ratchet" pnpm --silent quality:insight-review
 
   run_runtime_step "Elasticsearch deployment ratchet" pnpm --silent quality:elasticsearch
 

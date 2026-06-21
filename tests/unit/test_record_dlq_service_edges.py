@@ -3,15 +3,21 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import DeadLetterRecordRow
 from foundry_lite.application.services.record_dlq_service import (
+    _bulk_retry_failure,
+    _bulk_retry_result,
     _discard_result,
     _ensure_retryable,
     _optional_status,
     _redact_sensitive,
     _retry_result,
 )
-from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected, PermissionDenied, ValidationFailed
+from foundry_lite.infrastructure import schema as db
+from sqlalchemy import select
 
 
 def test_record_dlq_status_and_retry_guards_cover_closed_edges() -> None:
@@ -63,6 +69,25 @@ def test_record_dlq_result_payloads_preserve_replay_and_discard_evidence() -> No
         _discard_result(_row(discarded_at=None))
 
 
+def test_record_dlq_bulk_retry_result_reports_partial_success() -> None:
+    retry = _retry_result(_row(replay_run_id="sync_run_bulk"), is_idempotent_replay=False)
+    failure = _bulk_retry_failure("dlq_missing", ValidationFailed("record is not retryable", details={"field": "id"}))
+
+    result = _bulk_retry_result([retry], [failure])
+
+    assert result["status"] == "PARTIAL_SUCCESS"
+    assert result["succeededCount"] == 1
+    assert result["failedCount"] == 1
+    assert result["failedItems"] == [
+        {
+            "deadLetterRecordId": "dlq_missing",
+            "code": "VALIDATION_FAILED",
+            "message": "record is not retryable",
+            "details": {"field": "id"},
+        }
+    ]
+
+
 def test_record_dlq_redacts_nested_sensitive_values() -> None:
     payload = {
         "customer": {"ssn": "123-45-6789", "name": "Ada"},
@@ -73,6 +98,29 @@ def test_record_dlq_redacts_nested_sensitive_values() -> None:
         "customer": {"ssn": "***MASKED***", "name": "Ada"},
         "events": [{"secret_token": "***MASKED***"}, {"status": "ok"}],
     }
+
+
+def test_record_dlq_permission_denied_audit_records_deny_decision(foundry: FoundryLite) -> None:
+    ctx = RequestContext(
+        tenant_id="tenant-demo",
+        actor_user_id="viewer-user",
+        roles=("viewer",),
+        request_id="req-record-dlq-deny",
+    )
+
+    with pytest.raises(PermissionDenied):
+        foundry.operations.retry_dead_letter_record("missing-record", idempotency_key="retry-deny", ctx=ctx)
+
+    with foundry.engine.begin() as conn:
+        row = (
+            conn.execute(select(db.audit_events).where(db.audit_events.c.event_type == "permission.denied"))
+            .mappings()
+            .one()
+        )
+
+    assert row["action"] == "operations:retry"
+    assert row["decision"] == "deny"
+    assert row["after_ref"] == {"decision": "deny"}
 
 
 def _row(**overrides: object) -> DeadLetterRecordRow:

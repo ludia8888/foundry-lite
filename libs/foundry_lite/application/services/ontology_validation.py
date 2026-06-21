@@ -13,6 +13,7 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyValidationResult,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.ontology_catalog import build_ontology_catalog as build_ontology_catalog
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
     action_type_definition,
@@ -25,6 +26,14 @@ from foundry_lite.application.services.ontology_yaml import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
+
+__all__ = [
+    "build_ontology_catalog",
+    "ontology_validation_result",
+    "validate_ontology_definition",
+    "validate_persisted_link",
+    "validate_persisted_object_type",
+]
 
 DatasetColumnsLookup = Callable[
     [TransactionContext, RequestContext, str],

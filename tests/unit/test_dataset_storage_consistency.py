@@ -11,8 +11,10 @@ from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import DatasetFileRecord
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
+from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.infrastructure.repositories import SqlAlchemyDatasetTransactionRepository
+from sqlalchemy import func, select
 
 
 class _FailingFileInsertRepository:
@@ -25,6 +27,35 @@ class _FailingFileInsertRepository:
     def insert_file(self, *, transaction: object, record: DatasetFileRecord) -> None:
         del transaction, record
         raise RuntimeError("dataset file insert exploded after storage promotion")
+
+
+class _FailingSyncRunCommitRepository:
+    def __init__(self, wrapped: SqlAlchemyDatasetTransactionRepository) -> None:
+        self._wrapped = wrapped
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._wrapped, name)
+
+    def update_sync_run_terminal(
+        self,
+        *,
+        transaction: object,
+        tenant_id: str,
+        sync_run_id: str,
+        status: str,
+        committed_version_id: str | None,
+        completed_at: str,
+    ) -> None:
+        if status == "COMMITTED":
+            raise RuntimeError("sync run terminal update exploded after storage promotion")
+        self._wrapped.update_sync_run_terminal(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            sync_run_id=sync_run_id,
+            status=status,
+            committed_version_id=committed_version_id,
+            completed_at=completed_at,
+        )
 
 
 def test_dataset_commit_storage_success_db_failure_creates_orphan_cleanup_evidence(tmp_path: Path) -> None:
@@ -44,6 +75,53 @@ def test_dataset_commit_storage_success_db_failure_creates_orphan_cleanup_eviden
     error = failed_run["error"]
     assert error["type"] == "INVARIANT_VIOLATION"
     assert error["details"]["orphan_cleanup"]["manifest_uri"] == cleanup["manifest_uri"]
+
+
+def test_sync_run_commit_failure_removes_promoted_storage_artifacts(tmp_path: Path) -> None:
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "terminal-update-failure")
+    failing = _FailingSyncRunCommitRepository(dependencies.dataset_transaction_repository)
+    foundry = FoundryLite(dependencies=replace(dependencies, dataset_transaction_repository=failing))
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+
+    with pytest.raises(InvariantViolation) as exc_info:
+        foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+
+    with dependencies.engine.begin() as conn:
+        version_count = conn.execute(select(func.count()).select_from(db.dataset_versions)).scalar_one()
+        file_count = conn.execute(select(func.count()).select_from(db.dataset_files)).scalar_one()
+        transaction = conn.execute(select(db.dataset_transactions)).mappings().one()
+        sync_run = conn.execute(select(db.sync_runs)).mappings().one()
+
+    assert exc_info.value.details["orphan_cleanup"]["removed"] is True
+    assert version_count == 0
+    assert file_count == 0
+    assert transaction["status"] == "ABORTED"
+    assert sync_run["status"] == "FAILED"
+    assert not list(dependencies.storage_root.glob("**/version=*"))
+
+
+def test_blocked_quality_check_results_survive_upload_rollback(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "quality-evidence"))
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+
+    with pytest.raises(ValidationFailed, match="dataset checks failed"):
+        foundry.datasets.upload_csv("raw.orders", _duplicate_csv_file(tmp_path), ctx=ctx)
+
+    with foundry.engine.begin() as conn:
+        check_rows = conn.execute(select(db.dataset_check_results)).mappings().all()
+        transaction = conn.execute(select(db.dataset_transactions)).mappings().one()
+        sync_run = conn.execute(select(db.sync_runs)).mappings().one()
+
+    blocking_checks = [row for row in check_rows if row["status"] == "BLOCK_COMMIT"]
+    assert len(check_rows) >= 1
+    assert len(blocking_checks) == 1
+    assert blocking_checks[0]["details"]["check"] == "unique"
+    assert transaction["status"] == "ABORTED"
+    assert transaction["metadata"]["validationFailures"][0]["check"] == "unique"
+    assert sync_run["status"] == "FAILED"
+    assert sync_run["error"]["trace"]["adapter"] == "dataset_transaction.finalize"
 
 
 def test_dataset_commit_db_success_manifest_missing_marks_storage_corruption(tmp_path: Path) -> None:

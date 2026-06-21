@@ -183,6 +183,12 @@ def _resolve_transform_inputs(
     template = Path(entrypoint).read_text(encoding="utf-8")
     referenced = set(INPUT_PATTERN.findall(template))
     configured = set(inputs.values())
+    undeclared = sorted(referenced - configured)
+    if undeclared:
+        raise ValidationFailed(
+            "transform SQL references undeclared input datasets",
+            details={"dataset_refs": undeclared},
+        )
     for dataset_ref in sorted(referenced | configured):
         dataset = dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
         version = dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])

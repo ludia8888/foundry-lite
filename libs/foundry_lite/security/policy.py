@@ -33,12 +33,16 @@ class PolicyService:
         "dataset:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
         "dataset:write": {"admin", "data_engineer"},
         "transform:run": {"admin", "data_engineer"},
+        "ontology:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
         "ontology:validate": {"admin", "data_engineer"},
         "ontology:activate": {"admin", "data_engineer"},
         "object:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
         # explain exposes base/edit property layers plus operational lineage and
         # source-run metadata, so it is gated above plain read (viewers are excluded).
         "object:explain": {"admin", "data_engineer", "ops_manager", "finance"},
+        "insight:read": {"admin", "data_engineer", "ops_manager", "finance"},
+        "insight:create": {"admin", "data_engineer"},
+        "insight:review": {"admin", "ops_manager"},
         "action:execute:ApproveOrder": {"admin", "ops_manager"},
         "materialization:run": {"admin", "data_engineer", "ops_manager"},
         # Operations exposes raw run/writeback/outbox/audit rows, so reads are

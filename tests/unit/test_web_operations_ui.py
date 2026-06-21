@@ -26,7 +26,22 @@ def test_operations_ui_record_dlq_retry_shows_result() -> None:
         'tenantId: "tenant-demo"',
         'userId: "web-demo-operator"',
         'roles: ["ops_manager", "data_engineer", "finance"]',
-        "sdkClient().request(path, options)",
+        "sdkClient().system.health",
+        "client.datasets.versions",
+        "client.datasets.preview",
+        "sdkClient().ontology.validate",
+        "sdkClient().objects.generic.get",
+        "sdkClient().objects.generic.query",
+        "sdkClient().objects.generic.links",
+        "sdkClient().objectSets.create",
+        "sdkClient().objectSets.list",
+        "sdkClient().materializations.run",
+        "sdkClient().operations.runs.list",
+        "sdkClient().operations.runs.detail",
+        "sdkClient().operations.index.replayObjectType",
+        "sdkClient().operations.index.replayFailedRun",
+        "sdkClient().operations.transforms.retry",
+        "sdkClient().operations.deadLetterEvents.retry",
         'id="metricLateData"',
         'id="metricImpactRuns"',
         'id="metricImpactRoots"',
@@ -44,3 +59,13 @@ def test_operations_ui_record_dlq_retry_shows_result() -> None:
 
     for fragment in expected_fragments:
         assert fragment in html
+
+    forbidden_fragments = [
+        "sdkClient().request(",
+        "async function request(",
+        'request("/api',
+        "request('/api",
+        "request(`/api",
+    ]
+    for fragment in forbidden_fragments:
+        assert fragment not in html

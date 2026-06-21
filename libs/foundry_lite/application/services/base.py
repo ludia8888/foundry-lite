@@ -25,6 +25,7 @@ from foundry_lite.application.ports import (
     TransformRepository,
     WorkflowAdapter,
 )
+from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
 from foundry_lite.security.policy import PolicyService
@@ -77,6 +78,7 @@ class CoreService:
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
+    insight_review_repository: InsightReviewRepository
     object_index_repository: ObjectIndexRepository
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository

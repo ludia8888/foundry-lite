@@ -210,6 +210,7 @@ class RuntimeService(CoreService):
         ctx: RequestContext | None = None,
     ) -> RuntimeRetryPlan:
         ctx = ctx or RequestContext()
+        self._require_or_audit(ctx, "operations:retry", "dead_letter_event", event_id)
         with self.engine.begin() as conn:
             self._require_outbox_retry_open(conn, ctx)
             return dead_letter_retry_plan(self.runtime_repository, conn, ctx, event_id)

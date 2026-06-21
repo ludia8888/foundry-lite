@@ -6,9 +6,9 @@ from typing import Any, cast
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import RequestContext, demo_admin_context
-from foundry_lite.domain.errors import ConflictDetected
+from foundry_lite.domain.errors import ConflictDetected, PermissionDenied
 from foundry_lite.infrastructure import schema as db
-from sqlalchemy import insert
+from sqlalchemy import func, insert, select
 
 from tests.conftest import prepare_indexed_demo
 
@@ -97,6 +97,28 @@ def test_restore_pauses_outbox_until_reconciliation(foundry: FoundryLite, tmp_pa
     runs = foundry.operations.list_runs(ctx=ctx)
     assert _runtime_row(runs["outboxEvents"], "outbox_restore_pause")["status"] == "failed"
     assert _runtime_row(runs["deadLetterEvents"], "dlq_restore_pause")["id"] == "dlq_restore_pause"
+
+
+def test_operations_retry_dead_letter_event_checks_permission_before_materialization(foundry: FoundryLite) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
+    _seed_dead_letter_event(foundry, outbox_id="outbox_retry_denied", dlq_id="dlq_retry_denied")
+    unauthorized = RequestContext(
+        tenant_id=ctx.tenant_id,
+        actor_user_id="data-engineer-user",
+        roles=("data_engineer",),
+        request_id="req-retry-denied",
+    )
+    before_versions = _table_count(foundry, db.dataset_versions)
+    before_runs = _table_count(foundry, db.materialization_runs)
+
+    with pytest.raises(PermissionDenied):
+        foundry.operations.retry_dead_letter_event("dlq_retry_denied", ctx=unauthorized)
+
+    assert _table_count(foundry, db.dataset_versions) == before_versions
+    assert _table_count(foundry, db.materialization_runs) == before_runs
+    runs = foundry.operations.list_runs(ctx=ctx)
+    assert _runtime_row(runs["deadLetterEvents"], "dlq_retry_denied")["id"] == "dlq_retry_denied"
 
 
 def test_restore_resume_requires_closed_loop_validation(foundry: FoundryLite, tmp_path: Path) -> None:
@@ -253,3 +275,8 @@ def _runtime_row(rows: object, row_id: str) -> dict[str, object]:
         if isinstance(row, dict) and row.get("id") == row_id:
             return row
     raise AssertionError(f"missing runtime row {row_id}")
+
+
+def _table_count(foundry: FoundryLite, table: object) -> int:
+    with foundry.engine.begin() as conn:
+        return cast(int, conn.execute(select(func.count()).select_from(table)).scalar_one())

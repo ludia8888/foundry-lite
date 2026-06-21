@@ -10,6 +10,7 @@ from foundry_lite.application.ports import (
     ObjectPropertyMap,
     ObjectRecordInsert,
     ObjectRecordRow,
+    ObjectRecordSourceDeletion,
     ObjectRecordSourceUpdate,
     ObjectTypeRow,
     PropertyTypeRow,
@@ -44,11 +45,14 @@ class ObjectIndexingRebuildMixin:
         rows: Sequence[TabularRow],
     ) -> ObjectIndexRebuildCounts:
         objects_upserted = 0
+        source_object_ids: set[str] = set()
         for row in rows:
-            self._index_object_row(conn, ctx, plan, row)
+            object_id = self._index_object_row(conn, ctx, plan, row)
+            source_object_ids.add(object_id)
             objects_upserted += 1
+        objects_deleted = self._delete_missing_source_records(conn, ctx, plan, source_object_ids)
         links_upserted = self._index_links_for_object_type(conn, ctx, plan, rows)
-        return ObjectIndexRebuildCounts(len(rows), objects_upserted, 0, links_upserted)
+        return ObjectIndexRebuildCounts(len(rows), objects_upserted, objects_deleted, links_upserted)
 
     def _index_object_row(
         self,
@@ -56,7 +60,7 @@ class ObjectIndexingRebuildMixin:
         ctx: RequestContext,
         plan: ObjectIndexRebuildPlan,
         row: TabularRow,
-    ) -> None:
+    ) -> str:
         source = self._source_row_from_dataset_row(conn, plan.object_type, row)
         existing = self.object_index_repository.object_record_in_index(
             transaction=conn,
@@ -79,6 +83,51 @@ class ObjectIndexingRebuildMixin:
                 source.object_id,
                 plan.source_dataset_version_id,
             )
+        return source.object_id
+
+    def _delete_missing_source_records(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        plan: ObjectIndexRebuildPlan,
+        source_object_ids: set[str],
+    ) -> int:
+        if plan.mode != "full":
+            return 0
+        records = self.object_index_repository.object_records_for_index_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_id=plan.object_type["id"],
+            index_version=plan.index_version,
+        )
+        deleted_count = 0
+        for record in records:
+            if record["deleted"] or str(record["object_id"]) in source_object_ids:
+                continue
+            self._mark_source_missing_record_deleted(conn, ctx, plan, record)
+            deleted_count += 1
+        return deleted_count
+
+    def _mark_source_missing_record_deleted(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        plan: ObjectIndexRebuildPlan,
+        record: ObjectRecordRow,
+    ) -> None:
+        object_id = str(record["object_id"])
+        self.object_index_repository.mark_object_record_deleted_from_source(
+            transaction=conn,
+            record=ObjectRecordSourceDeletion(
+                record_id=record["id"],
+                tenant_id=ctx.tenant_id,
+                source_dataset_version_id=plan.source_dataset_version_id,
+                object_version=int(record["object_version"]) + 1,
+                deletion_reason="source_missing",
+                updated_at=_now(),
+            ),
+        )
+        self._emit_object_changed(conn, ctx, plan.object_type["api_name"], object_id, plan.source_dataset_version_id)
 
     def _source_row_from_dataset_row(
         self,

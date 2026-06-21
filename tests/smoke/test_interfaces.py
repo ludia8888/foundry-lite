@@ -83,6 +83,97 @@ def test_action_expected_object_version_required(monkeypatch) -> None:
     assert response.headers["X-Request-ID"]
 
 
+def test_api_validation_errors_preserve_request_id_without_raw_input(monkeypatch) -> None:
+    class FailingCore:
+        def apply_action(self, *_args, **_kwargs):
+            raise AssertionError("invalid request should not reach foundry")
+
+    monkeypatch.setattr(api_main, "foundry", FailingCore())
+    response = TestClient(app).post(
+        "/api/actions/ApproveOrder/apply",
+        headers={"Idempotency-Key": "invalid-params-shape"},
+        json={
+            "target": {"objectType": "Order", "objectId": "O-1001"},
+            "expectedObjectVersion": 1,
+            "params": "raw-secret-token",
+        },
+    )
+
+    body = response.json()
+    assert response.status_code == 422
+    assert body["detail"]["code"] == "VALIDATION_FAILED"
+    assert body["detail"]["request_id"] == response.headers["X-Request-ID"]
+    assert body["detail"]["details"]["validation_errors"][0]["loc"] == ["body", "params"]
+    assert "input" not in body["detail"]["details"]["validation_errors"][0]
+    assert "raw-secret-token" not in response.text
+
+
+def test_api_read_endpoint_domain_errors_preserve_request_id(monkeypatch) -> None:
+    class FailingDatasets:
+        def list_datasets(self, **_kwargs):
+            raise ValidationFailed("dataset list failed")
+
+        def inspect(self, *_args, **_kwargs):
+            raise ValidationFailed("dataset inspect failed")
+
+    class FailingOntology:
+        def catalog(self, **_kwargs):
+            raise ValidationFailed("ontology catalog failed")
+
+    class FailingInsights:
+        def list(self, **_kwargs):
+            raise ValidationFailed("insight list failed")
+
+        def get(self, *_args, **_kwargs):
+            raise ValidationFailed("insight get failed")
+
+        def assign(self, *_args, **_kwargs):
+            raise ValidationFailed("insight assign failed")
+
+    class FailingOperations:
+        def lineage(self, *_args, **_kwargs):
+            raise ValidationFailed("lineage failed")
+
+        def observability_report(self, **_kwargs):
+            raise ValidationFailed("observability failed")
+
+        def plan_iceberg_maintenance(self, *_args, **_kwargs):
+            raise ValidationFailed("maintenance failed")
+
+    class FailingFoundry:
+        datasets = FailingDatasets()
+        ontology = FailingOntology()
+        insights = FailingInsights()
+        operations = FailingOperations()
+
+    monkeypatch.setattr(api_main, "foundry", FailingFoundry())
+    client = TestClient(app)
+    headers = {"X-Tenant-ID": "tenant-demo", "X-User-ID": "ops-user", "X-Roles": "admin,ops_manager"}
+    requests = [
+        ("get", "/api/datasets", {}, None),
+        ("get", "/api/datasets/clean/orders/inspect", {}, None),
+        ("get", "/api/ontology/catalog", {}, None),
+        ("get", "/api/insights/reviews", {}, None),
+        ("get", "/api/insights/reviews/review-1", {}, None),
+        ("post", "/api/insights/reviews/review-1/assign", {}, {"assigneeUserId": "ops-reviewer"}),
+        ("get", "/api/operations/lineage", {"resourceId": "version-1"}, None),
+        ("post", "/api/operations/observability/detect", {}, {"configs": []}),
+        ("get", "/api/operations/maintenance/iceberg", {"datasetRef": "clean.orders"}, None),
+    ]
+
+    for method, path, params, payload in requests:
+        response = client.request(
+            method.upper(),
+            path,
+            headers={**headers, "Idempotency-Key": path},
+            params=params,
+            json=payload,
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"]["code"] == "VALIDATION_FAILED"
+        assert response.json()["detail"]["request_id"] == response.headers["X-Request-ID"]
+
+
 def test_cli_demo_seed_smoke(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_HOME", str(tmp_path / "cli"))
     main(["demo", "seed"])
@@ -139,6 +230,101 @@ def test_api_object_set_create_and_query(foundry, monkeypatch) -> None:
     )
     assert fetched.status_code == 200
     assert fetched.json()["name"] == "Pending Orders"
+
+
+def test_api_ontology_catalog_returns_active_object_action_and_link_metadata(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    monkeypatch.setattr(api_main, "foundry", foundry)
+
+    response = TestClient(app).get(
+        "/api/ontology/catalog",
+        headers={"X-Tenant-ID": ctx.tenant_id, "X-User-ID": "viewer-user", "X-Roles": "viewer"},
+    )
+
+    assert response.status_code == 200
+    catalog = response.json()
+    assert catalog["status"] == "active"
+    assert catalog["ontologyVersionId"].startswith("ont_")
+
+    objects = {item["apiName"]: item for item in catalog["objectTypes"]}
+    assert set(objects) == {"Customer", "Order"}
+    assert objects["Order"]["primaryKeyProperty"] == "orderId"
+
+    order_properties = {item["apiName"]: item for item in objects["Order"]["properties"]}
+    assert order_properties["orderId"]["columnName"] == "order_id"
+    assert order_properties["margin"]["classification"] == "finance"
+    assert order_properties["operatorNote"]["source"] == "edit_layer"
+
+    assert objects["Order"]["actions"][0]["apiName"] == "ApproveOrder"
+    assert objects["Order"]["actions"][0]["parameterSchema"]["required"] == ["reason"]
+    assert catalog["linkTypes"][0]["apiName"] == "OrderCustomer"
+    assert catalog["linkTypes"][0]["fromObjectType"] == "Order"
+    assert catalog["linkTypes"][0]["toObjectType"] == "Customer"
+
+
+def test_api_insight_reviews_create_assign_and_decide_with_audit_evidence(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    client = TestClient(app)
+    headers = {
+        "X-Tenant-ID": ctx.tenant_id,
+        "X-User-ID": ctx.actor_user_id,
+        "X-Roles": "admin,data_engineer,ops_manager",
+    }
+    payload = {
+        "claimId": "claim-1",
+        "claimText": "Supplier risk increased",
+        "evidenceObjectIds": ["evidence-1"],
+        "evidenceRefs": [{"evidenceId": "evidence-1", "sourceObjectId": "O-1001"}],
+        "priority": "high",
+        "actionProposal": {"actionApiName": "ApproveOrder", "targetObjectId": "O-1001"},
+    }
+
+    created = client.post(
+        "/api/insights/reviews",
+        headers={**headers, "Idempotency-Key": "insight-create-key"},
+        json=payload,
+    )
+    replayed = client.post(
+        "/api/insights/reviews",
+        headers={**headers, "Idempotency-Key": "insight-create-key"},
+        json=payload,
+    )
+    mismatched_replay = client.post(
+        "/api/insights/reviews",
+        headers={**headers, "Idempotency-Key": "insight-create-key"},
+        json={**payload, "claimText": "Different supplier risk claim"},
+    )
+    review_id = created.json()["id"]
+    listing = client.get("/api/insights/reviews?status=pending", headers=headers)
+    assigned = client.post(
+        f"/api/insights/reviews/{review_id}/assign",
+        headers={**headers, "Idempotency-Key": "insight-assign-key"},
+        json={"assigneeUserId": "ops-reviewer"},
+    )
+    decided = client.post(
+        f"/api/insights/reviews/{review_id}/decision",
+        headers={**headers, "Idempotency-Key": "insight-decision-key"},
+        json={"decision": "approved", "comment": "Evidence checked"},
+    )
+    conflict = client.post(
+        f"/api/insights/reviews/{review_id}/decision",
+        headers={**headers, "Idempotency-Key": "insight-reject-key"},
+        json={"decision": "rejected"},
+    )
+
+    assert created.status_code == 200
+    assert replayed.json()["id"] == review_id
+    assert mismatched_replay.status_code == 409
+    assert listing.json()["items"][0]["id"] == review_id
+    assert assigned.json()["assigneeUserId"] == "ops-reviewer"
+    assert decided.json()["status"] == "approved"
+    assert conflict.status_code == 409
+    assert _audit_event_types(foundry.engine, "insight_review") == [
+        "insight_review.created",
+        "insight_review.assigned",
+        "insight_review.approved",
+    ]
 
 
 def test_api_observability_detect_returns_active_incident_report(monkeypatch) -> None:
@@ -350,6 +536,43 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monk
     assert rejected_shape.status_code == 422
     deny_events = foundry.operations.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
     assert deny_events[0]["action"] == "webhook:ingest"
+
+
+def test_api_webhook_missing_secret_leaves_operator_evidence(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    body = b'{"order_id":"O-9001","status":"PENDING"}'
+    timestamp = _webhook_timestamp()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Foundry-Lite-Signature": _webhook_signature(body, "missing-secret", timestamp),
+        "X-Foundry-Lite-Timestamp": timestamp,
+        "X-Foundry-Lite-Event-ID": "evt-order-missing-secret",
+        "X-Request-ID": ctx.request_id,
+        "X-User-ID": ctx.actor_user_id,
+        "X-Roles": ",".join(ctx.roles),
+    }
+    foundry.datasets.ensure("raw.webhook_missing_secret_orders", ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.delenv(api_main.WEBHOOK_SIGNING_KEY_ENV, raising=False)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_missing_secret_orders"},
+        headers=headers,
+        content=body,
+    )
+
+    audit_events = foundry.operations.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
+    failure_events = [event for event in audit_events if event["event_type"] == "webhook.secret_resolution_failed"]
+    error = failure_events[0]["after_ref"]["error"]
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "VALIDATION_FAILED"
+    assert foundry.datasets.list_versions("raw.webhook_missing_secret_orders", ctx=ctx) == []
+    assert failure_events[0]["request_id"] == ctx.request_id
+    assert error["type"] == "VALIDATION_FAILED"
+    assert error["trace"]["adapter"] == "secret_provider.get_secret"
+    assert error["details"]["secret_value"] == "***REDACTED***"
 
 
 def test_webhook_same_event_id_different_payload_is_deduped(foundry, monkeypatch) -> None:
@@ -617,10 +840,22 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert preview.status_code == 200
     assert preview.json()[0]["order_id"] == "O-1001"
 
+    datasets = client.get("/api/datasets", headers=headers)
+    dataset_rows = {(row["namespace"], row["name"]): row for row in datasets.json()}
+    assert datasets.status_code == 200
+    assert ("clean", "orders") in dataset_rows
+    assert dataset_rows[("clean", "orders")]["primary_key"] == ["order_id"]
+
     versions = client.get("/api/datasets/clean/orders/versions", headers=headers)
     assert versions.status_code == 200
     assert versions.json()[0]["version_number"] == 1
     assert versions.json()[0]["row_count"] == 3
+
+    inspected = client.get("/api/datasets/clean/orders/inspect", headers=headers)
+    assert inspected.status_code == 200
+    assert inspected.json()["dataset"] == "clean.orders"
+    assert inspected.json()["version"]["version_number"] == 1
+    assert inspected.json()["manifest"]["files"][0]["row_count"] == 3
 
     valid_ontology = Path("examples/supply-chain-demo/ontology/order-customer.yaml").read_text(encoding="utf-8")
     ontology_validation = client.post("/api/ontology/validate", headers=headers, json={"yaml": valid_ontology})
@@ -659,6 +894,14 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert source_run_detail.status_code == 200
     assert source_run_detail.json()["runType"] == "index"
     assert source_run_detail.json()["runId"] == source_run["runId"]
+
+    lineage = client.get(
+        "/api/operations/lineage",
+        headers=headers,
+        params={"resourceId": order_payload["sourceDatasetVersionId"]},
+    )
+    assert lineage.status_code == 200
+    assert any(row["to_resource_id"] == order_payload["sourceDatasetVersionId"] for row in lineage.json())
 
     query = client.post(
         "/api/objects/Order/query",
@@ -889,6 +1132,14 @@ def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundr
         source_event_id="shipment_cdc_events:0:3",
         payload_hash="payload-hash-discard",
     )
+    _seed_dead_letter_record(
+        foundry.engine,
+        tenant_id=ctx.tenant_id,
+        record_id="dlqr_api_contract",
+        source_event_id="shipment_cdc_events:0:4",
+        payload_hash="payload-hash-contract",
+        metadata_overrides={"recordDlqKind": "data_quality_contract"},
+    )
     monkeypatch.setattr(api_main, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
@@ -907,14 +1158,19 @@ def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundr
     bulk = client.post(
         "/api/operations/dead-letter-records/bulk-retry",
         headers={**headers, "Idempotency-Key": "bulk-record-replay-key"},
-        json={"ids": ["dlqr_api_bulk"]},
+        json={"ids": ["dlqr_api_bulk", "dlqr_api_contract", "dlqr_api_missing"]},
     )
     discard = client.post("/api/operations/dead-letter-records/dlqr_api_discard/discard", headers=headers)
     audits = client.get("/api/operations/runs?runType=audit", headers=headers).json()["auditEvents"]
     preview = client.get("/api/datasets/raw/shipment_cdc/preview", headers=headers).json()
 
     assert listing.status_code == 200
-    assert {row["id"] for row in listing.json()} == {"dlqr_api_retry", "dlqr_api_bulk", "dlqr_api_discard"}
+    assert {row["id"] for row in listing.json()} == {
+        "dlqr_api_retry",
+        "dlqr_api_bulk",
+        "dlqr_api_discard",
+        "dlqr_api_contract",
+    }
     assert detail.json()["source_event_id"] == "shipment_cdc_events:0:1"
     assert retry.status_code == 200
     assert retry.json()["replayStatus"] == "SUCCEEDED"
@@ -922,13 +1178,21 @@ def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundr
     assert duplicate.json()["is_idempotent_replay"] is True
     assert duplicate.json()["replayRunId"] == retry.json()["replayRunId"]
     assert duplicate.json()["replayDatasetVersionId"] == retry.json()["replayDatasetVersionId"]
+    assert bulk.json()["status"] == "PARTIAL_SUCCESS"
+    assert bulk.json()["succeededCount"] == 1
+    assert bulk.json()["failedCount"] == 2
     assert bulk.json()["items"][0]["deadLetterRecordId"] == "dlqr_api_bulk"
     assert bulk.json()["items"][0]["replayStatus"] == "SUCCEEDED"
+    assert {item["deadLetterRecordId"] for item in bulk.json()["failedItems"]} == {
+        "dlqr_api_contract",
+        "dlqr_api_missing",
+    }
     assert discard.json()["status"] == "DISCARDED"
     assert first_preview[0]["event_id"] == "shipment_cdc_events:0:1"
     assert preview[0]["event_id"] == "shipment_cdc_events:0:2"
     assert any(row["event_type"] == "dead_letter_record.replay_requested" for row in audits)
     assert any(row["event_type"] == "dead_letter_record.replayed" for row in audits)
+    assert any(row["event_type"] == "dead_letter_record.bulk_replay_item_failed" for row in audits)
     assert any(row["event_type"] == "dead_letter_record.discarded" for row in audits)
 
 
@@ -1539,8 +1803,23 @@ def _seed_dead_letter_record(
     record_id: str,
     source_event_id: str = "shipment_cdc_events:0:1",
     payload_hash: str = "payload-hash-api",
+    metadata_overrides: Mapping[str, object] | None = None,
 ) -> None:
     offset = int(source_event_id.rsplit(":", maxsplit=1)[-1])
+    metadata = {
+        "dataset_id": "ds_shipment_cdc",
+        "dataset_ref": "raw.shipment_cdc",
+        "schema_strategy": "cdc_envelope_json",
+        "stream": "shipment_cdc",
+        "topic": "shipment_cdc_events",
+        "consumer_group": "foundry-lite-archive",
+        "partition": 0,
+        "offset": offset,
+        "event_type": "shipment.changed",
+        "event_key": record_id,
+        "request_id": "api-seed",
+    }
+    metadata.update(dict(metadata_overrides or {}))
     with engine.begin() as conn:
         conn.execute(
             insert(db.dead_letter_records).values(
@@ -1573,19 +1852,7 @@ def _seed_dead_letter_record(
                 discarded_at=None,
                 backfill_plan=None,
                 is_closed_partition_affected=False,
-                metadata={
-                    "dataset_id": "ds_shipment_cdc",
-                    "dataset_ref": "raw.shipment_cdc",
-                    "schema_strategy": "cdc_envelope_json",
-                    "stream": "shipment_cdc",
-                    "topic": "shipment_cdc_events",
-                    "consumer_group": "foundry-lite-archive",
-                    "partition": 0,
-                    "offset": offset,
-                    "event_type": "shipment.changed",
-                    "event_key": record_id,
-                    "request_id": "api-seed",
-                },
+                metadata=metadata,
             )
         )
 
@@ -1648,3 +1915,17 @@ def _seed_failed_transform_run(engine, *, tenant_id: str, run_id: str) -> dict[s
 
 def _runtime_row(rows: list[dict[str, object]], row_id: str) -> dict[str, object]:
     return next(row for row in rows if row["id"] == row_id)
+
+
+def _audit_event_types(engine, resource_type: str) -> list[str]:
+    with engine.begin() as conn:
+        rows = (
+            conn.execute(
+                select(db.audit_events.c.event_type)
+                .where(db.audit_events.c.resource_type == resource_type)
+                .order_by(db.audit_events.c.created_at, db.audit_events.c.id)
+            )
+            .scalars()
+            .all()
+        )
+    return [str(row) for row in rows]
