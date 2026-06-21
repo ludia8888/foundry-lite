@@ -1675,9 +1675,18 @@ def test_cli_argument_helpers_reject_invalid_values(monkeypatch) -> None:
     args = type("Args", (), {"group": "demo", "command": "run-supply-chain", "fresh": True, "reuse_state": False})()
     assert _fresh_supply_chain_demo(args) is True
 
+    monkeypatch.setenv("FOUNDRY_LITE_DB_URL", "postgresql://prod.example/foundry")
+    with pytest.raises(SystemExit, match="Refusing fresh supply-chain demo reset"):
+        _fresh_supply_chain_demo(args)
+
     args = type("Args", (), {"group": "demo", "command": "run-supply-chain", "fresh": False, "reuse_state": True})()
     assert _fresh_supply_chain_demo(args) is False
 
+    monkeypatch.setenv("FOUNDRY_LITE_DB_URL", "sqlite:///tmp/foundry-lite-demo.db")
+    args = type("Args", (), {"group": "demo", "command": "run-supply-chain", "fresh": True, "reuse_state": False})()
+    assert _fresh_supply_chain_demo(args) is True
+
+    monkeypatch.delenv("FOUNDRY_LITE_DB_URL", raising=False)
     monkeypatch.setenv("FOUNDRY_LITE_HOME", "/tmp/flite-test")
     args = type("Args", (), {"group": "demo", "command": "run-supply-chain", "fresh": False, "reuse_state": False})()
     assert _fresh_supply_chain_demo(args) is False

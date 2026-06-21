@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import re
 from collections.abc import Callable, Generator, Mapping, Sequence
@@ -104,7 +105,7 @@ class ElasticsearchAdapter:
         with self._guard("upsert_document"):
             self.client.update(
                 index=self._index_name(document.tenant_id, document.object_type),
-                id=document.document_id,
+                id=_physical_document_id(document.tenant_id, document.object_type, document.document_id),
                 body=_version_guarded_update_body(document),
                 retry_on_conflict=5,
                 refresh=True,
@@ -114,7 +115,7 @@ class ElasticsearchAdapter:
         with self._guard("delete_document"):
             self.client.delete(
                 index=self._index_name(tenant_id, object_type),
-                id=document_id,
+                id=_physical_document_id(tenant_id, object_type, document_id),
                 ignore_status=(404,),
                 refresh=True,
             )
@@ -123,7 +124,18 @@ class ElasticsearchAdapter:
         with self._guard("document_ids"):
             response = self.client.search(
                 index=self._index_name(tenant_id, object_type),
-                body={"query": {"match_all": {}}, "_source": ["object_id"], "size": 10_000},
+                body={
+                    "query": {
+                        "bool": {
+                            "filter": [
+                                {"term": {"tenant_id": tenant_id}},
+                                {"term": {"object_type": object_type}},
+                            ]
+                        }
+                    },
+                    "_source": ["object_id"],
+                    "size": 10_000,
+                },
             )
         return sorted(_hit_document_id(hit) for hit in _raw_hits(response) if _hit_document_id(hit))
 
@@ -159,8 +171,8 @@ class ElasticsearchAdapter:
 
     def _index_name(self, tenant_id: str, object_type: str) -> str:
         prefix = _index_token(self.config.index_prefix)
-        tenant = _index_token(tenant_id)
-        object_name = _index_token(object_type)
+        tenant = _namespace_token(tenant_id)
+        object_name = _namespace_token(object_type)
         return f"{prefix}-{tenant}-{object_name}"
 
 
@@ -228,6 +240,21 @@ def _api_error_kind(exc: Exception) -> tuple[AdapterFailureKind, bool, int | Non
 def _index_token(value: str) -> str:
     normalized = INDEX_TOKEN_PATTERN.sub("-", value.casefold()).strip("-")
     return normalized or "default"
+
+
+def _namespace_token(value: str) -> str:
+    return f"{_index_token(value)}-{_stable_hash(value)}"
+
+
+def _physical_document_id(tenant_id: str, object_type: str, document_id: str) -> str:
+    tenant = _stable_hash(tenant_id)
+    object_name = _stable_hash(object_type)
+    document = _stable_hash(document_id)
+    return f"{tenant}:{object_name}:{document}"
+
+
+def _stable_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _index_mappings(mapping: SearchIndexMapping) -> Mapping[str, object]:

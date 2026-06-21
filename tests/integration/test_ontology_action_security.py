@@ -1101,6 +1101,29 @@ def test_only_ops_manager_or_admin_can_execute_approve_order(
     assert any(event["decision"] == "deny" for event in foundry.operations.list_runs(ctx=ops_manager)["auditEvents"])
 
 
+def test_action_rejects_target_object_type_mismatch_before_side_effects(foundry: FoundryLite) -> None:
+    prepare_indexed_demo(foundry)
+    ctx = demo_admin_context()
+    idempotency_key = "action-target-mismatch"
+
+    with pytest.raises(ValidationFailed, match="target object type mismatch"):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Customer",
+            object_id="C-100",
+            expected_object_version=1,
+            params={"reason": "Inventory confirmed"},
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    runs = foundry.operations.list_runs(ctx=ctx)
+    assert _action_row_count(runs, idempotency_key) == 0
+    assert _rows_for_key(runs, "actionWritebacks", idempotency_key) == []
+    assert _rows_for_key(runs, "objectEdits", idempotency_key) == []
+    assert _rows_for_key(runs, "outboxEvents", idempotency_key) == []
+
+
 def _prepare_demo_with_ontology(foundry: FoundryLite, ontology_path: Path) -> RequestContext:
     ctx = demo_admin_context()
     foundry.demo.seed_files()

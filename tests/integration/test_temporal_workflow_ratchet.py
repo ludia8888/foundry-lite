@@ -21,12 +21,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import tempfile
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import Callable, Coroutine, Iterator, Mapping
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 try:
     import fcntl
@@ -43,6 +43,7 @@ from foundry_lite.infrastructure.adapters.temporal_workflow import (
     TemporalWorkflowAdapter,
     TemporalWorkflowAdapterConfig,
 )
+from foundry_lite.infrastructure.adapters.temporal_workflow import _temporal_workflow_id as temporal_workflow_id
 from foundry_lite.infrastructure.adapters.temporal_workflows import (
     FOUNDRY_TASK_QUEUE,
     FOUNDRY_WORKFLOW_NAME,
@@ -244,7 +245,8 @@ def test_start_workflow_returns_processed_output() -> None:
         async with _harness() as (_env, adapter):
             run = await adapter.start_workflow_async(_request(FOUNDRY_WORKFLOW_NAME, "wf-ok", value=7))
             assert run.status == "succeeded"
-            assert run.run_id == "wf-ok"
+            assert run.run_id.startswith("flite:")
+            assert run.run_id != "wf-ok"
             assert run.output["processed"] is True
             assert run.output["value"] == 7
             assert run.error is None
@@ -278,7 +280,8 @@ def test_same_idempotency_key_returns_existing_run_without_duplicate() -> None:
             attempts_after_first = _FLAKY_ATTEMPTS["wf-idem"]
             second = await adapter.start_workflow_async(_request(FLAKY_WORKFLOW, "wf-idem"))
             assert first.status == second.status == "succeeded"
-            assert first.run_id == second.run_id == "wf-idem"
+            assert first.run_id == second.run_id
+            assert first.run_id != "wf-idem"
             assert second.output == first.output
             # The second start re-attached to the completed run: the activity
             # did not run again (no new attempts), so there is no duplicate run.
@@ -298,7 +301,8 @@ def test_concurrent_starts_on_one_key_produce_one_run() -> None:
                 adapter.start_workflow_async(_request(FLAKY_WORKFLOW, "wf-race")),
                 adapter.start_workflow_async(_request(FLAKY_WORKFLOW, "wf-race")),
             )
-            assert {run.run_id for run in runs} == {"wf-race"}
+            assert len({run.run_id for run in runs}) == 1
+            assert runs[0].run_id != "wf-race"
             assert all(run.status == "succeeded" for run in runs)
             assert runs[0].output == runs[1].output
 
@@ -321,9 +325,11 @@ def test_business_failure_returns_durable_error_payload() -> None:
             assert run.error["operation"] == "start_workflow"
             assert run.error["kind"] == "unknown"
             assert run.error["retryable"] is False
-            assert "permanent business failure" in run.error["operatorMessage"]
-            assert run.error["details"]["workflowId"] == "wf-fail"
-            assert run.error["details"]["temporalRunId"]
+            details = cast(Mapping[str, object], run.error["details"])
+            assert "permanent business failure" in str(run.error["operatorMessage"])
+            assert details["workflowId"] == run.run_id
+            assert details["workflowId"] != "wf-fail"
+            assert details["temporalRunId"]
 
     _run(body)
 
@@ -358,7 +364,9 @@ def test_start_workflow_temporal_unavailable_returns_retryable_error_payload() -
         assert run.error["kind"] == "unavailable"
         assert run.error["retryable"] is True
         assert run.error["idempotencyKey"] == "wf-unavailable"
-        assert run.error["details"]["workflowId"] == "wf-unavailable"
+        details = cast(Mapping[str, object], run.error["details"])
+        assert details["workflowId"] == run.run_id
+        assert details["workflowId"] != "wf-unavailable"
 
     _run(body)
 
@@ -386,10 +394,12 @@ def test_workflow_run_temporal_unavailable_raises_retryable_adapter_error() -> N
 def test_cancelled_workflow_is_reported_as_cancelled() -> None:
     async def body() -> None:
         async with _harness() as (env, adapter):
+            request = _request(SLEEPY_WORKFLOW, "wf-cancel")
+            workflow_id = temporal_workflow_id(request)
             handle = await env.client.start_workflow(
                 SLEEPY_WORKFLOW,
                 {"key": "wf-cancel"},
-                id="wf-cancel",
+                id=workflow_id,
                 task_queue=FOUNDRY_TASK_QUEUE,
             )
             await handle.cancel()
@@ -397,12 +407,13 @@ def test_cancelled_workflow_is_reported_as_cancelled() -> None:
             # reaches its terminal cancelled state before we observe it.
             with contextlib.suppress(WorkflowFailureError):
                 await handle.result()
-            run = await adapter.workflow_run_async("wf-cancel")
+            run = await adapter.workflow_run_async(workflow_id)
             assert run is not None
             assert run.status == "cancelled"
             # The adapter's start path also classifies a terminal cancelled run:
             # an idempotent re-start re-attaches and reports cancelled, not a dup.
-            restart = await adapter.start_workflow_async(_request(SLEEPY_WORKFLOW, "wf-cancel"))
+            restart = await adapter.start_workflow_async(request)
+            assert restart.run_id == workflow_id
             assert restart.status == "cancelled"
 
     _run(body)
@@ -422,8 +433,8 @@ def test_workflow_run_returns_none_for_unknown_id() -> None:
 def test_workflow_run_describes_completed_run() -> None:
     async def body() -> None:
         async with _harness() as (_env, adapter):
-            await adapter.start_workflow_async(_request(FOUNDRY_WORKFLOW_NAME, "wf-lookup", n=1))
-            run = await adapter.workflow_run_async("wf-lookup")
+            started = await adapter.start_workflow_async(_request(FOUNDRY_WORKFLOW_NAME, "wf-lookup", n=1))
+            run = await adapter.workflow_run_async(started.run_id)
             assert run is not None
             assert run.status == "succeeded"
             assert run.workflow_name == FOUNDRY_WORKFLOW_NAME
@@ -477,17 +488,21 @@ def test_product_connector_sync_workflow_runs_through_temporal_and_audits(tmp_pa
                 ctx=ctx,
             )
 
-            assert run["workflowRunId"] == "temporal-connector-sync-orders"
+            assert str(run["workflowRunId"]).startswith("flite:")
+            assert run["workflowRunId"] != "temporal-connector-sync-orders"
             assert run["workflowName"] == CONNECTOR_SYNC_WORKFLOW_NAME
             assert run["workflowProfile"] == "temporal"
             assert run["status"] == "succeeded"
-            assert run["output"]["workflowKind"] == "connector_sync"
-            assert run["output"]["datasetRef"] == "raw.workflow_orders"
+            output = cast(Mapping[str, object], run["output"])
+            assert output["workflowKind"] == "connector_sync"
+            assert output["datasetRef"] == "raw.workflow_orders"
             assert lookup["workflowRunId"] == run["workflowRunId"]
             assert run["foundryRunId"] is not None
             detail = foundry.operations.run_detail("audit", str(run["foundryRunId"]), ctx=ctx)
-            assert detail["row"]["resource_id"] == run["workflowRunId"]
-            assert detail["row"]["after_ref"]["workflowRunId"] == run["workflowRunId"]
-            assert detail["row"]["after_ref"]["foundryRunId"] == run["foundryRunId"]
+            row = cast(Mapping[str, object], detail["row"])
+            after_ref = cast(Mapping[str, object], row["after_ref"])
+            assert row["resource_id"] == run["workflowRunId"]
+            assert after_ref["workflowRunId"] == run["workflowRunId"]
+            assert after_ref["foundryRunId"] == run["foundryRunId"]
 
     _run(body)

@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
+from foundry_lite.application.ports.workflow_adapter import WorkflowStartRequest
 from foundry_lite.infrastructure.adapters import temporal_workflow as temporal_mod
 from foundry_lite.infrastructure.adapters.temporal_workflow import TemporalWorkflowAdapter
 from temporalio.client import WorkflowExecutionStatus
@@ -23,6 +24,17 @@ class _LookupClient:
 
     def get_workflow_handle(self, _run_id: str) -> object:
         return self._handle
+
+
+class _StartClient:
+    def __init__(self) -> None:
+        self.started_ids: list[str] = []
+
+    async def start_workflow(self, _workflow_name: str, _input: dict[str, object], **kwargs: object) -> object:
+        workflow_id = kwargs["id"]
+        assert isinstance(workflow_id, str)
+        self.started_ids.append(workflow_id)
+        return _CompletedHandle()
 
 
 class _CompletedHandle:
@@ -57,6 +69,25 @@ def test_sync_workflow_run_bridge_uses_async_core() -> None:
     assert run is not None
     assert run.status == "succeeded"
     assert run.output == {"ok": True}
+
+
+def test_start_workflow_id_namespaces_tenant_and_workflow() -> None:
+    async def body() -> None:
+        client = _StartClient()
+        adapter = TemporalWorkflowAdapter(client=client)
+        request_a = _workflow_request("tenant-a", "ConnectorSyncWorkflow", "daily-sync")
+        request_b = _workflow_request("tenant-b", "ConnectorSyncWorkflow", "daily-sync")
+        request_c = _workflow_request("tenant-a", "DifferentWorkflow", "daily-sync")
+
+        run_a = await adapter.start_workflow_async(request_a)
+        run_b = await adapter.start_workflow_async(request_b)
+        run_c = await adapter.start_workflow_async(request_c)
+
+        assert run_a.run_id == client.started_ids[0]
+        assert len({run_a.run_id, run_b.run_id, run_c.run_id}) == 3
+        assert all(run_id.startswith("flite:") for run_id in client.started_ids)
+
+    asyncio.run(body())
 
 
 def test_workflow_run_result_fetch_failure_raises_retryable_adapter_error() -> None:
@@ -124,3 +155,13 @@ def test_temporal_failure_helpers_preserve_unknown_root_message() -> None:
     assert payload["kind"] == "unknown"
     assert payload["retryable"] is False
     assert "deep temporal cause" in payload["operatorMessage"]
+
+
+def _workflow_request(tenant_id: str, workflow_name: str, idempotency_key: str) -> WorkflowStartRequest:
+    return WorkflowStartRequest(
+        workflow_name=workflow_name,
+        tenant_id=tenant_id,
+        request_id=f"req-{tenant_id}",
+        idempotency_key=idempotency_key,
+        input={"tenant": tenant_id},
+    )
