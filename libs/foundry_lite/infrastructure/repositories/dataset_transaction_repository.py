@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from sqlalchemy import and_, insert, or_, select, update
+from sqlalchemy import and_, insert, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -24,6 +24,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.transaction_context import (
     DATASET_TRANSACTION_ABORT,
+    DATASET_TRANSACTION_COMMIT,
     DEAD_LETTER_DISCARDED,
     DEAD_LETTER_REPLAY_FAILED,
     DEAD_LETTER_REPLAY_REQUESTED,
@@ -161,24 +162,19 @@ class SqlAlchemyDatasetTransactionRepository:
         committed_at: str,
         metadata: DatasetTransactionMetadata | None = None,
     ) -> bool:
-        result = transaction.execute(
-            update(db.dataset_transactions)
-            .where(
-                and_(
-                    db.dataset_transactions.c.tenant_id == tenant_id,
-                    db.dataset_transactions.c.id == transaction_id,
-                    db.dataset_transactions.c.status == "OPEN",
-                )
-            )
-            .values(
-                status="COMMITTED",
-                committed_version_id=committed_version_id,
-                schema_version=schema_version,
-                committed_at=committed_at,
-                metadata=dict(metadata or {}),
-            )
+        return cas_status_update(
+            transaction,
+            db.dataset_transactions,
+            tenant_id=tenant_id,
+            row_id=transaction_id,
+            transition=DATASET_TRANSACTION_COMMIT,
+            values={
+                "committed_version_id": committed_version_id,
+                "schema_version": schema_version,
+                "committed_at": committed_at,
+                "metadata": dict(metadata or {}),
+            },
         )
-        return result.rowcount == 1
 
     def latest_committed_transaction(
         self,

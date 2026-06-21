@@ -80,6 +80,32 @@ def cas_status_update_many(
     return int(result.rowcount or 0)
 
 
+def cas_status_guarded_update(
+    transaction: Any,
+    table: Any,
+    *,
+    tenant_id: str,
+    row_id: str,
+    allowed_statuses: Sequence[str],
+    values: Mapping[str, object],
+    conditions: Sequence[Any] = (),
+) -> bool:
+    """Update non-status fields only while the row is still in an allowed state."""
+    result = transaction.execute(
+        update(table)
+        .where(
+            and_(
+                table.c.tenant_id == tenant_id,
+                table.c.id == row_id,
+                table.c.status.in_(allowed_statuses),
+                *conditions,
+            )
+        )
+        .values(**dict(values))
+    )
+    return result.rowcount == 1
+
+
 def _current_status(transaction: Any, table: Any, tenant_id: str, row_id: str) -> str | None:
     row = (
         transaction.execute(select(table.c.status).where(and_(table.c.tenant_id == tenant_id, table.c.id == row_id)))

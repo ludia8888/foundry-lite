@@ -134,6 +134,9 @@ run_static_gate() {
   echo "== Static: tenant-scoped repository writes =="
   uv run python scripts/quality/check_tenant_write_guard.py
 
+  echo "== Static: repository status transitions use CAS =="
+  uv run python scripts/quality/check_status_transition_cas.py
+
   echo "== Static: contract test coverage per port =="
   uv run python scripts/quality/check_contract_test_per_port.py
 
@@ -379,6 +382,8 @@ run_runtime_gate() {
   run_runtime_step "Elasticsearch deployment ratchet" pnpm --silent quality:elasticsearch
 
   run_runtime_step "S3 + Iceberg + Spark composition ratchet" pnpm --silent quality:infra-composition
+
+  run_runtime_step "distributed control-plane CAS/lease/orchestration ratchet" pnpm --silent quality:distributed-control-plane
   run_runtime_root_cause_summary
 
   RUNTIME_GATE_STEP="supply-chain demo smoke"
