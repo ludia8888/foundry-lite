@@ -57,6 +57,21 @@ class _UnexpectedMutation:
         raise AssertionError("idempotency race replay must not reach object mutation")
 
 
+class _WriteOpenRuntime:
+    """Runtime stub for a tenant that is not in restore mode (write traffic open)."""
+
+    def _require_write_traffic_open(
+        self,
+        _ctx: RequestContext,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None:
+        del operation, resource_type, resource_id
+        return None
+
+
 def test_action_service_replays_when_insert_loses_idempotency_race() -> None:
     repository = _RaceActionRepository()
     service = ActionService(engine=_FakeEngine(), policy=_AllowPolicy(), action_repository=repository)
@@ -65,7 +80,7 @@ def test_action_service_replays_when_insert_loses_idempotency_race() -> None:
             "object_indexing_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),
             "ontology_service": _Ontology(),
-            "runtime_service": object(),
+            "runtime_service": _WriteOpenRuntime(),
         }
     )
 

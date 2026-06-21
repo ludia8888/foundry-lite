@@ -123,9 +123,6 @@ class ActionService(CoreService):
                 action_type = self.ontology_service._active_action_type(conn, ctx, command.action_api_name)
                 action_type_for_failure = action_type
                 require_action_target_api_name(action_type, command.object_type)
-                record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
-                if record is not None and (error := action_target_record_error(action_type, record)) is not None:
-                    raise error
                 existing = self._existing_action_run(conn, ctx, action_type, command.idempotency_key)
                 if existing is not None:
                     return self._replay_existing_action_run(conn, ctx, existing, command.request_fingerprint)
@@ -138,6 +135,9 @@ class ActionService(CoreService):
                 )
                 if raced_existing is not None:
                     return self._replay_existing_action_run(conn, ctx, raced_existing, command.request_fingerprint)
+                record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
+                if record is not None and (error := action_target_record_error(action_type, record)) is not None:
+                    raise error
                 outcome = self._complete_received_action_run(
                     conn,
                     ctx,
