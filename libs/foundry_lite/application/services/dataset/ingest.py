@@ -32,6 +32,7 @@ from foundry_lite.application.services.dataset.protocols import (
 from foundry_lite.application.services.dataset.stream_archive_commit import (
     StreamArchiveDeadLetter,
     ensure_stream_archive_batch_writable,
+    finalize_stream_archive_commit,
     prepare_stream_archive_batch,
     read_stream_archive_events,
     record_stream_read_failure,
@@ -393,45 +394,23 @@ class DatasetIngestService(CoreService):
                 raise
             self._rows_to_parquet(batch.rows, staged, stream_archive_fields(stream))
             metadata = stream_commit_metadata(dataset, stream, events, committed_transaction, batch.rows)
-            return self._finalize_stream_archive_commit(
-                ctx, dataset, stream, plan, staged, batch.dead_letters, metadata
+            return finalize_stream_archive_commit(
+                engine=self.engine,
+                repository=self.dataset_transaction_repository,
+                transaction_service=self.dataset_transaction_service,
+                insert_dead_letters=self._insert_stream_dead_letters,
+                ctx=ctx,
+                dataset=dataset,
+                stream=stream,
+                plan=plan,
+                staged=staged,
+                dead_letters=batch.dead_letters,
+                metadata=metadata,
+                events=events,
+                committed_transaction=committed_transaction,
             )
         except Exception as exc:
             self._abort_stream_after_error(ctx, plan.transaction_id, plan.run_id, exc)
-
-    def _finalize_stream_archive_commit(
-        self,
-        ctx: RequestContext,
-        dataset: DatasetRow,
-        stream: StreamArchiveConfig,
-        plan: UploadSyncPlan,
-        staged: Path,
-        dead_letters: Sequence[StreamArchiveDeadLetter],
-        metadata: Mapping[str, object],
-    ) -> CommitResult:
-        blocked: DatasetCommitBlocked | None = None
-        with self.engine.begin() as conn:
-            self._insert_stream_dead_letters(conn, ctx, dataset, stream, plan, dead_letters)
-            try:
-                return self.dataset_transaction_service._finalize_open_transaction(
-                    conn,
-                    ctx,
-                    dataset=dataset,
-                    transaction_id=plan.transaction_id,
-                    staged_parquet=staged,
-                    run_id=plan.run_id,
-                    audit_action="stream_archive_append_commit",
-                    outbox_event_type="dataset.version.committed",
-                    transaction_metadata=metadata,
-                    after_persist=lambda commit_conn, result: mark_sync_run_committed(
-                        self.dataset_transaction_repository, commit_conn, ctx, plan.run_id, result
-                    ),
-                )
-            except DatasetCommitBlocked as exc:
-                blocked = exc
-        if blocked is not None:
-            raise blocked
-        raise InvariantViolation("stream archive finalization did not return a commit result")
 
     def _persist_stream_dead_letters(
         self,
