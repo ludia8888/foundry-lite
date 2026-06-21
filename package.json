@@ -18,6 +18,8 @@
     "diagnostics": "uv run python scripts/diagnostics/run_runtime_diagnostics.py",
     "diagnostics:trace": "uv run python scripts/diagnostics/run_runtime_diagnostics.py --console-traces",
     "db:migrate": "PYTHONPATH=.:libs uv run python scripts/operations/run_migrations.py",
+    "fault:local": "PYTHONPATH=.:libs:apps/worker:apps/cli:apps/api uv run python scripts/operations/run_local_fault_lab.py",
+    "fault:local:stress": "PYTHONPATH=.:libs:apps/worker:apps/cli:apps/api uv run python scripts/operations/run_local_fault_lab.py --level stress",
     "worker:stream-archive": "PYTHONPATH=.:libs:apps/worker:apps/cli:apps/api uv run python -m foundry_lite_worker.stream_archive",
     "quality:complexity": "uv run radon cc libs apps scripts -s -a && uv run xenon --max-absolute B --max-modules B --max-average A libs apps scripts",
     "quality:architecture": "uv run python scripts/quality/check_dependency_graph.py && uv run tach check --dependencies",
