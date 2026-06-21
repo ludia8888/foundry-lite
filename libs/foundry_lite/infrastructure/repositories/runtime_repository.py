@@ -19,6 +19,7 @@ from foundry_lite.application.ports import (
     RuntimeRunType,
 )
 from foundry_lite.application.ports.transaction_context import StatusTransition
+from foundry_lite.application.ports.workflow_adapter import WorkflowRunRecord, WorkflowRunRow
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
@@ -73,6 +74,11 @@ class SqlAlchemyRuntimeRepository:
                 "deadLetterEvents": self.rows_for_tenant(
                     transaction=transaction,
                     table="dead_letter_events",
+                    tenant_id=tenant_id,
+                ),
+                "workflowRuns": self.rows_for_tenant(
+                    transaction=transaction,
+                    table="workflow_runs",
                     tenant_id=tenant_id,
                 ),
                 "auditEvents": self.rows_for_tenant(transaction=transaction, table="audit_events", tenant_id=tenant_id),
@@ -156,6 +162,128 @@ class SqlAlchemyRuntimeRepository:
             .first()
         )
         return cast(RuntimeRow, dict(row)) if row else None
+
+    def workflow_run_by_id(self, *, transaction: Any, tenant_id: str, workflow_run_id: str) -> WorkflowRunRow | None:
+        row = (
+            transaction.execute(
+                select(db.workflow_runs).where(
+                    and_(db.workflow_runs.c.tenant_id == tenant_id, db.workflow_runs.c.id == workflow_run_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(WorkflowRunRow, dict(row)) if row else None
+
+    def workflow_run_by_idempotency(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        workflow_name: str,
+        idempotency_key: str,
+    ) -> WorkflowRunRow | None:
+        row = (
+            transaction.execute(
+                select(db.workflow_runs).where(
+                    and_(
+                        db.workflow_runs.c.tenant_id == tenant_id,
+                        db.workflow_runs.c.workflow_name == workflow_name,
+                        db.workflow_runs.c.idempotency_key == idempotency_key,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(WorkflowRunRow, dict(row)) if row else None
+
+    def insert_workflow_run_or_get_existing(
+        self, *, transaction: Any, record: WorkflowRunRecord
+    ) -> WorkflowRunRow | None:
+        savepoint = transaction.begin_nested()
+        try:
+            transaction.execute(
+                insert(db.workflow_runs).values(
+                    id=record.workflow_run_id,
+                    tenant_id=record.tenant_id,
+                    workflow_name=record.workflow_name,
+                    workflow_profile=record.workflow_profile,
+                    status=record.status,
+                    idempotency_key=record.idempotency_key,
+                    request_fingerprint=record.request_fingerprint,
+                    input=dict(record.input),
+                    output=dict(record.output),
+                    error=dict(record.error) if record.error is not None else None,
+                    dataset_id=record.dataset_id,
+                    audit_event_id=record.audit_event_id,
+                    attempts=record.attempts,
+                    created_at=record.created_at,
+                    started_at=record.started_at,
+                    completed_at=record.completed_at,
+                )
+            )
+        except IntegrityError:
+            savepoint.rollback()
+            existing = self.workflow_run_by_idempotency(
+                transaction=transaction,
+                tenant_id=record.tenant_id,
+                workflow_name=record.workflow_name,
+                idempotency_key=record.idempotency_key,
+            )
+            if existing is not None:
+                return existing
+            raise
+        savepoint.commit()
+        return None
+
+    def update_workflow_run_status(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        workflow_run_id: str,
+        transition: StatusTransition,
+        output: RuntimeRow,
+        error: RuntimeRow | None,
+        started_at: str | None,
+        completed_at: str | None,
+    ) -> WorkflowRunRow | None:
+        values: dict[str, object] = {"output": dict(output), "error": dict(error) if error is not None else None}
+        if started_at is not None:
+            values["started_at"] = started_at
+        if completed_at is not None:
+            values["completed_at"] = completed_at
+        if transition.to_status == "starting":
+            values["attempts"] = db.workflow_runs.c.attempts + 1
+        updated = cas_status_update(
+            transaction,
+            db.workflow_runs,
+            tenant_id=tenant_id,
+            row_id=workflow_run_id,
+            transition=transition,
+            values=values,
+        )
+        if not updated:
+            return None
+        return self.workflow_run_by_id(transaction=transaction, tenant_id=tenant_id, workflow_run_id=workflow_run_id)
+
+    def link_workflow_audit_event(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        workflow_run_id: str,
+        audit_event_id: str,
+    ) -> WorkflowRunRow | None:
+        result = transaction.execute(
+            db.workflow_runs.update()
+            .where(and_(db.workflow_runs.c.tenant_id == tenant_id, db.workflow_runs.c.id == workflow_run_id))
+            .values(audit_event_id=audit_event_id)
+        )
+        if result.rowcount != 1:
+            return None
+        return self.workflow_run_by_id(transaction=transaction, tenant_id=tenant_id, workflow_run_id=workflow_run_id)
 
     def delete_dead_letter_event(self, *, transaction: Any, tenant_id: str, event_id: str) -> bool:
         result = transaction.execute(
@@ -273,6 +401,7 @@ def _rows_table(table: RuntimeRowsTable) -> Any:
         "materialization_runs": db.materialization_runs,
         "outbox_events": db.outbox_events,
         "dead_letter_events": db.dead_letter_events,
+        "workflow_runs": db.workflow_runs,
         "audit_events": db.audit_events,
         "object_edits": db.object_edits,
         "object_records": db.object_records,
@@ -289,6 +418,7 @@ def _run_table(run_type: RuntimeRunType) -> Any:
         "materialization": db.materialization_runs,
         "outbox": db.outbox_events,
         "dead_letter": db.dead_letter_events,
+        "workflow": db.workflow_runs,
         "audit": db.audit_events,
     }[run_type]
 

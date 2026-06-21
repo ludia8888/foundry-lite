@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
@@ -17,7 +16,12 @@ from foundry_lite.application.ports.search_adapter import (
     SearchQuery,
 )
 from foundry_lite.application.ports.stream_adapter import StreamAdapter, StreamEvent, StreamPublishRequest
-from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter, WorkflowRun, WorkflowStartRequest
+from foundry_lite.application.ports.workflow_adapter import (
+    WorkflowAdapter,
+    WorkflowRun,
+    WorkflowStartRequest,
+    workflow_run_id,
+)
 
 
 class LocalWorkflowAdapter:
@@ -46,7 +50,7 @@ class LocalWorkflowAdapter:
         )
 
     def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
-        run_id = _workflow_run_id(request)
+        run_id = workflow_run_id(request)
         existing = self._runs_by_idempotency.get(run_id)
         if existing is not None:
             return existing
@@ -73,17 +77,6 @@ class FakeWorkflowAdapter(LocalWorkflowAdapter):
     """Fake workflow profile that preserves the local contract surface."""
 
     profile_name = "fake-workflow"
-
-
-def _workflow_run_id(request: WorkflowStartRequest) -> str:
-    tenant = _stable_id_part(request.tenant_id)
-    workflow = _stable_id_part(request.workflow_name)
-    idempotency = _stable_id_part(request.idempotency_key)
-    return f"flite:{tenant}:{workflow}:{idempotency}"
-
-
-def _stable_id_part(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:20]
 
 
 class LocalStreamAdapter:

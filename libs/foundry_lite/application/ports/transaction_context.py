@@ -1,50 +1,45 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-
-@dataclass(frozen=True)
-class StatusTransition:
-    """Allowed current statuses and the single next status for a CAS update."""
-
-    from_statuses: tuple[str, ...]
-    to_status: str
-
-
-DATASET_TRANSACTION_ABORT = StatusTransition(("OPEN",), "ABORTED")
-SYNC_RUN_COMMITTED = StatusTransition(("EXTRACTING",), "COMMITTED")
-SYNC_RUN_FAILED = StatusTransition(("EXTRACTING",), "FAILED")
-TRANSFORM_RUN_SUCCEEDED = StatusTransition(("RUNNING",), "SUCCESS")
-TRANSFORM_RUN_FAILED = StatusTransition(("RUNNING",), "FAILED")
-MATERIALIZATION_RUN_SUCCEEDED = StatusTransition(("running",), "succeeded")
-MATERIALIZATION_RUN_FAILED = StatusTransition(("running",), "failed")
-MATERIALIZATION_RUN_ABORT_FAILED = StatusTransition(("running",), "FAILED")
-INDEX_RUN_SUCCEEDED = StatusTransition(("running",), "succeeded")
-INDEX_RUN_FAILED = StatusTransition(("running",), "failed")
-ONTOLOGY_VERSION_ARCHIVED = StatusTransition(("active",), "archived")
-ONTOLOGY_VERSION_ACTIVE = StatusTransition(("draft",), "active")
-ACTION_RUN_SUCCEEDED = StatusTransition(("received",), "succeeded")
-ACTION_RUN_FAILED = StatusTransition(("received",), "failed")
-ACTION_RUN_CONFLICT = StatusTransition(("received",), "conflict")
-ACTION_RUN_OUTCOME_UNKNOWN = StatusTransition(("received",), "outcome_unknown")
-ACTION_RUN_COMPENSATION_REQUIRED = StatusTransition(("received",), "compensation_required")
-ACTION_RUN_RECONCILED = StatusTransition(("outcome_unknown",), "reconciled")
-ACTION_WRITEBACK_RECONCILED = StatusTransition(("outcome_unknown",), "reconciled")
-DEAD_LETTER_REPLAY_REQUESTED = StatusTransition(("QUARANTINED",), "REPLAY_REQUESTED")
-DEAD_LETTER_REPLAY_SUCCEEDED = StatusTransition(("REPLAY_REQUESTED", "REPLAYING"), "RESOLVED")
-DEAD_LETTER_REPLAY_FAILED = StatusTransition(("REPLAY_REQUESTED", "REPLAYING"), "QUARANTINED")
-DEAD_LETTER_DISCARDED = StatusTransition(("QUARANTINED",), "DISCARDED")
-OUTBOX_RETRY_PENDING = StatusTransition(("failed",), "pending")
-
-
-def dataset_run_failed_transition(run_kind: str) -> StatusTransition:
-    if run_kind == "sync":
-        return SYNC_RUN_FAILED
-    if run_kind == "transform":
-        return TRANSFORM_RUN_FAILED
-    return MATERIALIZATION_RUN_ABORT_FAILED
+from foundry_lite.application.state_transitions import (
+    ACTION_RUN_COMPENSATION_REQUIRED,
+    ACTION_RUN_CONFLICT,
+    ACTION_RUN_FAILED,
+    ACTION_RUN_OUTCOME_UNKNOWN,
+    ACTION_RUN_RECONCILED,
+    ACTION_RUN_SUCCEEDED,
+    ACTION_WRITEBACK_RECONCILED,
+    DATASET_TRANSACTION_ABORT,
+    DEAD_LETTER_DISCARDED,
+    DEAD_LETTER_REPLAY_FAILED,
+    DEAD_LETTER_REPLAY_REQUESTED,
+    DEAD_LETTER_REPLAY_RUNNING,
+    DEAD_LETTER_REPLAY_SUCCEEDED,
+    INDEX_RUN_FAILED,
+    INDEX_RUN_SUCCEEDED,
+    MATERIALIZATION_RUN_ABORT_FAILED,
+    MATERIALIZATION_RUN_FAILED,
+    MATERIALIZATION_RUN_SUCCEEDED,
+    ONTOLOGY_VERSION_ACTIVE,
+    ONTOLOGY_VERSION_ARCHIVED,
+    OUTBOX_RETRY_PENDING,
+    SYNC_RUN_COMMITTED,
+    SYNC_RUN_FAILED,
+    TRANSFORM_RUN_FAILED,
+    TRANSFORM_RUN_SUCCEEDED,
+    WORKFLOW_RUN_CANCELLED,
+    WORKFLOW_RUN_FAILED,
+    WORKFLOW_RUN_RUNNING,
+    WORKFLOW_RUN_START_UNKNOWN,
+    WORKFLOW_RUN_STARTING,
+    WORKFLOW_RUN_SUCCEEDED,
+    StatusTransition,
+    TransitionOutcome,
+    TransitionResult,
+    dataset_run_failed_transition,
+)
 
 
 @runtime_checkable
@@ -71,3 +66,44 @@ class TransactionManager(Protocol):
     def begin(self) -> AbstractContextManager[TransactionContext]:
         """Open a transaction context and yield its opaque handle."""
         ...
+
+
+__all__ = [
+    "ACTION_RUN_COMPENSATION_REQUIRED",
+    "ACTION_RUN_CONFLICT",
+    "ACTION_RUN_FAILED",
+    "ACTION_RUN_OUTCOME_UNKNOWN",
+    "ACTION_RUN_RECONCILED",
+    "ACTION_RUN_SUCCEEDED",
+    "ACTION_WRITEBACK_RECONCILED",
+    "DATASET_TRANSACTION_ABORT",
+    "DEAD_LETTER_DISCARDED",
+    "DEAD_LETTER_REPLAY_FAILED",
+    "DEAD_LETTER_REPLAY_REQUESTED",
+    "DEAD_LETTER_REPLAY_RUNNING",
+    "DEAD_LETTER_REPLAY_SUCCEEDED",
+    "INDEX_RUN_FAILED",
+    "INDEX_RUN_SUCCEEDED",
+    "MATERIALIZATION_RUN_ABORT_FAILED",
+    "MATERIALIZATION_RUN_FAILED",
+    "MATERIALIZATION_RUN_SUCCEEDED",
+    "ONTOLOGY_VERSION_ACTIVE",
+    "ONTOLOGY_VERSION_ARCHIVED",
+    "OUTBOX_RETRY_PENDING",
+    "SYNC_RUN_COMMITTED",
+    "SYNC_RUN_FAILED",
+    "TRANSFORM_RUN_FAILED",
+    "TRANSFORM_RUN_SUCCEEDED",
+    "WORKFLOW_RUN_CANCELLED",
+    "WORKFLOW_RUN_FAILED",
+    "WORKFLOW_RUN_RUNNING",
+    "WORKFLOW_RUN_START_UNKNOWN",
+    "WORKFLOW_RUN_STARTING",
+    "WORKFLOW_RUN_SUCCEEDED",
+    "StatusTransition",
+    "TransactionContext",
+    "TransactionManager",
+    "TransitionOutcome",
+    "TransitionResult",
+    "dataset_run_failed_transition",
+]

@@ -136,6 +136,7 @@ def test_runtime_service_query_runs_builds_group_next_cursors() -> None:
     assert [row["id"] for row in result["materializationRuns"]] == ["materialization_b"]
     assert [row["id"] for row in result["outboxEvents"]] == ["outbox_b"]
     assert [row["id"] for row in result["deadLetterEvents"]] == ["dead_letter_b"]
+    assert [row["id"] for row in result["workflowRuns"]] == ["workflow_b"]
     assert [row["id"] for row in result["auditEvents"]] == ["audit_b"]
     assert set(result["nextCursors"]) == set(repository.requested_types)
 

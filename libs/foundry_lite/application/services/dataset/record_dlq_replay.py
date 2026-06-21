@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import NoReturn, Protocol, cast
 
@@ -14,7 +15,7 @@ from foundry_lite.application.ports import (
     TransactionContext,
     TransactionManager,
 )
-from foundry_lite.application.primitives import CommitResult
+from foundry_lite.application.primitives import CommitResult, _new_id, _now
 from foundry_lite.application.services.dataset.ingest_models import UploadSyncPlan
 from foundry_lite.application.services.dataset.protocols import (
     DatasetRegistryLookup,
@@ -26,7 +27,13 @@ from foundry_lite.application.services.dataset.stream_archive import (
     stream_event_row,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import DatasetCommitBlocked, InvariantViolation, NotFound, ValidationFailed
+from foundry_lite.domain.errors import (
+    ConflictDetected,
+    DatasetCommitBlocked,
+    InvariantViolation,
+    NotFound,
+    ValidationFailed,
+)
 
 
 class RecordDlqReplayRuntime(Protocol):
@@ -79,8 +86,35 @@ def replay_dead_letter_record(
 ) -> DeadLetterRecordRow:
     with runtime.engine.begin() as conn:
         row = _require_row(runtime, conn, ctx, record_id)
-    sync = _prepare_replay_sync(runtime, ctx, row)
+        row = _claim_replay_lease(runtime, conn, ctx, row)
+    try:
+        sync = _prepare_replay_sync(runtime, ctx, row)
+    except Exception as exc:
+        return _record_replay_prepare_failure(runtime, ctx, row, exc)
     return _execute_replay_sync(runtime, ctx, row, sync)
+
+
+def _claim_replay_lease(
+    runtime: RecordDlqReplayRuntime,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    row: DeadLetterRecordRow,
+) -> DeadLetterRecordRow:
+    token = _new_id("dlq_lease")
+    started_at = _now()
+    updated = runtime.dataset_transaction_repository.claim_dead_letter_record_replay(
+        transaction=conn,
+        tenant_id=ctx.tenant_id,
+        record_id=row["id"],
+        replay_run_id=_replay_run_id(row),
+        replay_lease_token=token,
+        replay_started_at=started_at,
+        replay_lease_expires_at=_lease_expires_at(),
+        metadata=_lease_metadata(row, ctx, token, started_at),
+    )
+    if updated is None:
+        raise ConflictDetected("dead-letter record replay lease changed concurrently", details={"record_id": row["id"]})
+    return updated
 
 
 def _prepare_replay_sync(
@@ -176,6 +210,7 @@ def _mark_replay_succeeded(
         tenant_id=ctx.tenant_id,
         record_id=row["id"],
         replay_run_id=plan.run_id,
+        replay_lease_token=_replay_lease_token(row),
         metadata=_success_metadata(row, ctx, result),
     )
     if updated is None:
@@ -217,6 +252,7 @@ def _record_replay_failure(
             tenant_id=ctx.tenant_id,
             record_id=row["id"],
             replay_run_id=plan.run_id,
+            replay_lease_token=_replay_lease_token(row),
             metadata=_failure_metadata(row, ctx, exc),
         )
         if updated is None:
@@ -232,6 +268,46 @@ def _record_replay_failure(
             correlation_id=plan.run_id,
         )
         return updated
+
+
+def _record_replay_prepare_failure(
+    runtime: RecordDlqReplayRuntime,
+    ctx: RequestContext,
+    row: DeadLetterRecordRow,
+    exc: Exception,
+) -> DeadLetterRecordRow:
+    with runtime.engine.begin() as conn:
+        updated = runtime.dataset_transaction_repository.update_dead_letter_record_replay_failed(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            record_id=row["id"],
+            replay_run_id=_replay_run_id(row),
+            replay_lease_token=_replay_lease_token(row),
+            metadata=_failure_metadata(row, ctx, exc),
+        )
+        if updated is None:
+            raise NotFound("dead-letter record not found", details={"record_id": row["id"]})
+        _audit_prepare_failure(runtime, conn, ctx, row, exc)
+        return updated
+
+
+def _audit_prepare_failure(
+    runtime: RecordDlqReplayRuntime,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    row: DeadLetterRecordRow,
+    exc: Exception,
+) -> None:
+    runtime.runtime_service._audit(
+        conn,
+        ctx,
+        event_type="dead_letter_record.replay_failed",
+        resource_type="dead_letter_record",
+        resource_id=row["id"],
+        action="operations:retry",
+        after_ref={"error": str(exc), "replayRunId": _replay_run_id(row), "stage": "prepare"},
+        correlation_id=_replay_run_id(row),
+    )
 
 
 def _abort_replay_transaction(
@@ -260,6 +336,33 @@ def _require_row(
     if row is None:
         raise NotFound("dead-letter record not found", details={"record_id": record_id})
     return row
+
+
+def _replay_lease_token(row: DeadLetterRecordRow) -> str:
+    token = row.get("replay_lease_token")
+    if not isinstance(token, str) or not token:
+        raise InvariantViolation("record DLQ replay lease is missing")
+    return token
+
+
+def _lease_metadata(
+    row: DeadLetterRecordRow,
+    ctx: RequestContext,
+    token: str,
+    started_at: str,
+) -> Mapping[str, object]:
+    metadata = dict(row["metadata"])
+    metadata["replayLease"] = {
+        "token": token,
+        "requestId": ctx.request_id,
+        "actorUserId": ctx.actor_user_id,
+        "startedAt": started_at,
+    }
+    return metadata
+
+
+def _lease_expires_at() -> str:
+    return (datetime.now().astimezone() + timedelta(minutes=15)).isoformat()
 
 
 def _replay_transaction_metadata(

@@ -115,6 +115,9 @@ class DeadLetterRecord:
     metadata: DatasetTransactionMetadata
     replay_idempotency_key: str | None = None
     replay_requested_at: str | None = None
+    replay_lease_token: str | None = None
+    replay_started_at: str | None = None
+    replay_lease_expires_at: str | None = None
     discarded_at: str | None = None
     backfill_plan: DatasetTransactionMetadata | None = None
 
@@ -162,6 +165,9 @@ class DeadLetterRecordRow(TypedDict):
     metadata: DatasetTransactionMetadata
     replay_idempotency_key: str | None
     replay_requested_at: str | None
+    replay_lease_token: str | None
+    replay_started_at: str | None
+    replay_lease_expires_at: str | None
     discarded_at: str | None
     backfill_plan: DatasetTransactionMetadata | None
 
@@ -385,6 +391,21 @@ class DatasetTransactionRepository(Protocol):
         """Mark one record discarded and return the updated row."""
         ...
 
+    def claim_dead_letter_record_replay(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        replay_lease_token: str,
+        replay_started_at: str,
+        replay_lease_expires_at: str,
+        metadata: DatasetTransactionMetadata,
+    ) -> DeadLetterRecordRow | None:
+        """CAS one requested replay into REPLAYING with a lease/fencing token."""
+        ...
+
     def update_dead_letter_record_replay_succeeded(
         self,
         *,
@@ -393,6 +414,7 @@ class DatasetTransactionRepository(Protocol):
         record_id: str,
         replay_run_id: str,
         metadata: DatasetTransactionMetadata,
+        replay_lease_token: str | None = None,
     ) -> DeadLetterRecordRow | None:
         """Mark one record resolved after a replay commit and return the row."""
         ...
@@ -405,6 +427,7 @@ class DatasetTransactionRepository(Protocol):
         record_id: str,
         replay_run_id: str,
         metadata: DatasetTransactionMetadata,
+        replay_lease_token: str | None = None,
     ) -> DeadLetterRecordRow | None:
         """Mark one record replay-failed and return the row."""
         ...

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Literal, NotRequired, Protocol, TypedDict
 
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
+from foundry_lite.application.ports.workflow_adapter import WorkflowRunRecord, WorkflowRunRow
 
 RuntimeLookupTable = Literal["transforms", "materializations"]
 RuntimeRowsTable = Literal[
@@ -16,6 +17,7 @@ RuntimeRowsTable = Literal[
     "materialization_runs",
     "outbox_events",
     "dead_letter_events",
+    "workflow_runs",
     "audit_events",
     "object_edits",
     "object_records",
@@ -29,6 +31,7 @@ RuntimeRunType = Literal[
     "materialization",
     "outbox",
     "dead_letter",
+    "workflow",
     "audit",
 ]
 RuntimeJsonObject = Mapping[str, object]
@@ -288,6 +291,7 @@ class RuntimeRunSnapshot(TypedDict):
     materializationRuns: list[RuntimeRow]
     outboxEvents: list[RuntimeRow]
     deadLetterEvents: list[RuntimeRow]
+    workflowRuns: list[RuntimeRow]
     auditEvents: list[RuntimeRow]
     objectEdits: list[RuntimeRow]
 
@@ -398,6 +402,55 @@ class RuntimeRepository(Protocol):
         transition: StatusTransition,
     ) -> RuntimeRow | None:
         """CAS an outbox event back to pending for retry."""
+        ...
+
+    def workflow_run_by_id(
+        self, *, transaction: TransactionContext, tenant_id: str, workflow_run_id: str
+    ) -> WorkflowRunRow | None:
+        """Return one tenant-scoped workflow run ledger row."""
+        ...
+
+    def workflow_run_by_idempotency(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        workflow_name: str,
+        idempotency_key: str,
+    ) -> WorkflowRunRow | None:
+        """Return the tenant/workflow/idempotency winner row."""
+        ...
+
+    def insert_workflow_run_or_get_existing(
+        self, *, transaction: TransactionContext, record: WorkflowRunRecord
+    ) -> WorkflowRunRow | None:
+        """Insert a workflow intent, returning the existing winner on conflict."""
+        ...
+
+    def update_workflow_run_status(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        workflow_run_id: str,
+        transition: StatusTransition,
+        output: RuntimeJsonObject,
+        error: RuntimeJsonObject | None,
+        started_at: str | None,
+        completed_at: str | None,
+    ) -> WorkflowRunRow | None:
+        """CAS a workflow run status and return the updated row."""
+        ...
+
+    def link_workflow_audit_event(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        workflow_run_id: str,
+        audit_event_id: str,
+    ) -> WorkflowRunRow | None:
+        """Attach a workflow start audit event to the workflow ledger row."""
         ...
 
     def delete_dead_letter_event(self, *, transaction: TransactionContext, tenant_id: str, event_id: str) -> bool:

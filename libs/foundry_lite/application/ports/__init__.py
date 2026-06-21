@@ -224,6 +224,8 @@ from foundry_lite.application.ports.transaction_context import (
     StatusTransition,
     TransactionContext,
     TransactionManager,
+    TransitionOutcome,
+    TransitionResult,
 )
 from foundry_lite.application.ports.transform_repository import (
     TransformCheck,
@@ -236,10 +238,16 @@ from foundry_lite.application.ports.transform_repository import (
 )
 from foundry_lite.application.ports.workflow_adapter import (
     ProductWorkflowRun,
+    ProductWorkflowStatus,
     WorkflowAdapter,
+    WorkflowLedgerStatus,
     WorkflowRun,
+    WorkflowRunRecord,
+    WorkflowRunRow,
     WorkflowStartRequest,
     WorkflowStatus,
+    workflow_request_fingerprint,
+    workflow_run_id,
 )
 
 __all__ = [
@@ -437,6 +445,8 @@ __all__ = [
     "TabularRow",
     "TransactionContext",
     "TransactionManager",
+    "TransitionOutcome",
+    "TransitionResult",
     "TransformCheck",
     "TransformRecord",
     "TransformRepository",
@@ -446,7 +456,13 @@ __all__ = [
     "TransformRunRow",
     "TRANSFORM_RUN_SUCCEEDED",
     "WorkflowAdapter",
+    "WorkflowLedgerStatus",
     "WorkflowRun",
+    "WorkflowRunRecord",
+    "WorkflowRunRow",
     "WorkflowStartRequest",
     "WorkflowStatus",
+    "ProductWorkflowStatus",
+    "workflow_request_fingerprint",
+    "workflow_run_id",
 ]

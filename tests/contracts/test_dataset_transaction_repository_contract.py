@@ -308,8 +308,37 @@ class FakeDatasetTransactionRepository:
             replay_run_id=replay_run_id,
             replay_idempotency_key=replay_idempotency_key,
             replay_requested_at=replay_requested_at,
+            replay_lease_token=None,
+            replay_started_at=None,
+            replay_lease_expires_at=None,
             metadata=dict(metadata),
             backfill_plan=dict(backfill_plan),
+        )
+        return dict(row)
+
+    def claim_dead_letter_record_replay(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        replay_lease_token: str,
+        replay_started_at: str,
+        replay_lease_expires_at: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        del transaction
+        row = self._mutable_dead_letter(tenant_id, record_id)
+        if row is None or not _can_claim_replay(row, replay_run_id, replay_started_at):
+            return None
+        row.update(
+            status="REPLAYING",
+            replay_status="REPLAYING",
+            replay_lease_token=replay_lease_token,
+            replay_started_at=replay_started_at,
+            replay_lease_expires_at=replay_lease_expires_at,
+            metadata=dict(metadata),
         )
         return dict(row)
 
@@ -321,15 +350,17 @@ class FakeDatasetTransactionRepository:
         record_id: str,
         replay_run_id: str,
         metadata: dict[str, Any],
+        replay_lease_token: str | None = None,
     ) -> dict[str, Any] | None:
         del transaction
         row = self._mutable_dead_letter(tenant_id, record_id)
-        if not _is_matching_replay(row, replay_run_id):
+        if not _is_matching_replay(row, replay_run_id, replay_lease_token):
             return None
         row.update(
             status="RESOLVED",
             replay_status="SUCCEEDED",
             replay_run_id=replay_run_id,
+            replay_lease_token=replay_lease_token,
             metadata=dict(metadata),
         )
         return dict(row)
@@ -342,15 +373,17 @@ class FakeDatasetTransactionRepository:
         record_id: str,
         replay_run_id: str,
         metadata: dict[str, Any],
+        replay_lease_token: str | None = None,
     ) -> dict[str, Any] | None:
         del transaction
         row = self._mutable_dead_letter(tenant_id, record_id)
-        if not _is_matching_replay(row, replay_run_id):
+        if not _is_matching_replay(row, replay_run_id, replay_lease_token):
             return None
         row.update(
             status="QUARANTINED",
             replay_status="FAILED",
             replay_run_id=replay_run_id,
+            replay_lease_token=replay_lease_token,
             attempts=row["attempts"] + 1,
             metadata=dict(metadata),
         )
@@ -602,6 +635,9 @@ def _dead_letter_values(record: DeadLetterRecord) -> dict[str, Any]:
         "replay_run_id": record.replay_run_id,
         "replay_idempotency_key": record.replay_idempotency_key,
         "replay_requested_at": record.replay_requested_at,
+        "replay_lease_token": record.replay_lease_token,
+        "replay_started_at": record.replay_started_at,
+        "replay_lease_expires_at": record.replay_lease_expires_at,
         "discarded_at": record.discarded_at,
         "backfill_plan": dict(record.backfill_plan) if record.backfill_plan is not None else None,
         "is_closed_partition_affected": record.is_closed_partition_affected,
@@ -748,10 +784,22 @@ def _failed_run_from_statuses(run_kind: DatasetRunKind) -> tuple[str, ...]:
     return dataset_run_failed_transition(run_kind).from_statuses
 
 
-def _is_matching_replay(row: dict[str, Any] | None, replay_run_id: str) -> bool:
+def _is_matching_replay(row: dict[str, Any] | None, replay_run_id: str, replay_lease_token: str | None) -> bool:
     if row is None:
         return False
-    return row["status"] in {"REPLAY_REQUESTED", "REPLAYING"} and row["replay_run_id"] == replay_run_id
+    if row["status"] not in {"REPLAY_REQUESTED", "REPLAYING"} or row["replay_run_id"] != replay_run_id:
+        return False
+    if replay_lease_token is None:
+        return row.get("replay_lease_token") is None
+    return row.get("replay_lease_token") == replay_lease_token
+
+
+def _can_claim_replay(row: dict[str, Any], replay_run_id: str, replay_started_at: str) -> bool:
+    if row["replay_run_id"] != replay_run_id:
+        return False
+    if row["status"] == "REPLAY_REQUESTED":
+        return True
+    return row["status"] == "REPLAYING" and str(row.get("replay_lease_expires_at")) < replay_started_at
 
 
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
@@ -1340,6 +1388,154 @@ def test_dataset_transaction_repository_contract_dead_letter_record_replay_and_d
     assert discarded is not None
     assert discarded["status"] == "DISCARDED"
     assert discarded["discarded_at"] == "2026-06-10T00:05:00Z"
+
+
+def test_dataset_transaction_repository_contract_dead_letter_replay_lease_fences_terminal_updates(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def lease_flow(transaction: Any) -> dict[str, Any | None]:
+        repository.insert_dead_letter_record(transaction=transaction, record=_dead_letter_record())
+        repository.insert_dead_letter_record(
+            transaction=transaction,
+            record=replace(
+                _dead_letter_record("dlqr_orders_bad_2"),
+                source_event_id="shipment_events:0:2",
+                payload_hash="payload-hash-2",
+            ),
+        )
+        requested = repository.update_dead_letter_record_replay_requested(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_idempotency_key="retry-key-1",
+            replay_requested_at="2026-06-10T00:04:00Z",
+            metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
+            backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
+        )
+        claimed = repository.claim_dead_letter_record_replay(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_lease_token="lease-token-1",
+            replay_started_at="2026-06-10T00:04:01Z",
+            replay_lease_expires_at="2026-06-10T00:04:30Z",
+            metadata={"stream": "shipments", "replayLease": {"token": "lease-token-1"}},
+        )
+        duplicate_claim = repository.claim_dead_letter_record_replay(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_lease_token="lease-token-2",
+            replay_started_at="2026-06-10T00:04:02Z",
+            replay_lease_expires_at="2026-06-10T00:04:40Z",
+            metadata={"stream": "shipments", "replayLease": {"token": "lease-token-2"}},
+        )
+        missing_token_terminal = repository.update_dead_letter_record_replay_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            metadata={"stream": "shipments", "replayResult": {"datasetVersionId": "dsv_wrong"}},
+        )
+        wrong_token_terminal = repository.update_dead_letter_record_replay_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_lease_token="wrong-token",
+            metadata={"stream": "shipments", "replayResult": {"datasetVersionId": "dsv_wrong"}},
+        )
+        succeeded = repository.update_dead_letter_record_replay_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_lease_token="lease-token-1",
+            metadata={"stream": "shipments", "replayResult": {"datasetVersionId": "dsv_replay_1"}},
+        )
+        second_requested = repository.update_dead_letter_record_replay_requested(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_idempotency_key="retry-key-2",
+            replay_requested_at="2026-06-10T00:05:00Z",
+            metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
+            backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
+        )
+        first_expiring_claim = repository.claim_dead_letter_record_replay(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_lease_token="lease-token-old",
+            replay_started_at="2026-06-10T00:05:01Z",
+            replay_lease_expires_at="2026-06-10T00:05:10Z",
+            metadata={"stream": "shipments", "replayLease": {"token": "lease-token-old"}},
+        )
+        reclaimed = repository.claim_dead_letter_record_replay(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_lease_token="lease-token-new",
+            replay_started_at="2026-06-10T00:05:11Z",
+            replay_lease_expires_at="2026-06-10T00:06:00Z",
+            metadata={"stream": "shipments", "replayLease": {"token": "lease-token-new"}},
+        )
+        old_token_terminal = repository.update_dead_letter_record_replay_failed(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_lease_token="lease-token-old",
+            metadata={"stream": "shipments", "lastReplayError": {"type": "stale-worker"}},
+        )
+        failed = repository.update_dead_letter_record_replay_failed(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_lease_token="lease-token-new",
+            metadata={"stream": "shipments", "lastReplayError": {"type": "ValidationFailed"}},
+        )
+        return {
+            "requested": requested,
+            "claimed": claimed,
+            "duplicate_claim": duplicate_claim,
+            "missing_token_terminal": missing_token_terminal,
+            "wrong_token_terminal": wrong_token_terminal,
+            "succeeded": succeeded,
+            "second_requested": second_requested,
+            "first_expiring_claim": first_expiring_claim,
+            "reclaimed": reclaimed,
+            "old_token_terminal": old_token_terminal,
+            "failed": failed,
+        }
+
+    result = harness.call_in_transaction(lease_flow)
+
+    assert result["requested"] is not None
+    assert result["claimed"] is not None
+    assert result["duplicate_claim"] is None
+    assert result["missing_token_terminal"] is None
+    assert result["wrong_token_terminal"] is None
+    assert result["succeeded"] is not None
+    assert result["succeeded"]["status"] == "RESOLVED"
+    assert result["succeeded"]["replay_lease_token"] == "lease-token-1"
+    assert result["second_requested"] is not None
+    assert result["first_expiring_claim"] is not None
+    assert result["reclaimed"] is not None
+    assert result["reclaimed"]["replay_lease_token"] == "lease-token-new"
+    assert result["old_token_terminal"] is None
+    assert result["failed"] is not None
+    assert result["failed"]["status"] == "QUARANTINED"
+    assert result["failed"]["replay_status"] == "FAILED"
 
 
 def test_concurrent_replay_requests_create_one_replay_run(postgres_fixture: Any) -> None:

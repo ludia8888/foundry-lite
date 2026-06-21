@@ -27,7 +27,6 @@ time-skipping ratchet tests, and thin blocking wrappers for the sync port. The
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -45,6 +44,7 @@ from foundry_lite.application.ports.workflow_adapter import (
     WorkflowRun,
     WorkflowStartRequest,
     WorkflowStatus,
+    workflow_run_id,
 )
 
 
@@ -289,14 +289,7 @@ def _as_mapping(value: object) -> Mapping[str, object]:
 
 
 def _temporal_workflow_id(request: WorkflowStartRequest) -> str:
-    tenant = _stable_id_part(request.tenant_id)
-    workflow = _stable_id_part(request.workflow_name)
-    idempotency = _stable_id_part(request.idempotency_key)
-    return f"flite:{tenant}:{workflow}:{idempotency}"
-
-
-def _stable_id_part(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:20]
+    return workflow_run_id(request)
 
 
 def _workflow_run_adapter_error(profile: str, run_id: str, exc: Exception) -> AdapterError:

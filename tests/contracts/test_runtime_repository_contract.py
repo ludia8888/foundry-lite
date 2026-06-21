@@ -20,8 +20,16 @@ from foundry_lite.application.ports import (
     RuntimeRunPageCursor,
     RuntimeRunSnapshot,
     RuntimeRunType,
+    WorkflowRunRecord,
+    WorkflowRunRow,
 )
-from foundry_lite.application.ports.transaction_context import OUTBOX_RETRY_PENDING, StatusTransition
+from foundry_lite.application.ports.transaction_context import (
+    OUTBOX_RETRY_PENDING,
+    WORKFLOW_RUN_FAILED,
+    WORKFLOW_RUN_STARTING,
+    WORKFLOW_RUN_SUCCEEDED,
+    StatusTransition,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyRuntimeRepository
 from sqlalchemy import create_engine, insert
@@ -84,6 +92,7 @@ class FakeRuntimeRepository:
                 table="dead_letter_events",
                 tenant_id=tenant_id,
             ),
+            "workflowRuns": self.rows_for_tenant(transaction=None, table="workflow_runs", tenant_id=tenant_id),
             "auditEvents": self.rows_for_tenant(transaction=None, table="audit_events", tenant_id=tenant_id),
             "objectEdits": self.rows_for_tenant(transaction=None, table="object_edits", tenant_id=tenant_id),
         }
@@ -135,6 +144,86 @@ class FakeRuntimeRepository:
             if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
                 row.update(status=transition.to_status, attempts=0, published_at=None)
                 return cast(RuntimeRow, dict(row))
+        return None
+
+    def workflow_run_by_id(self, *, transaction: Any, tenant_id: str, workflow_run_id: str) -> WorkflowRunRow | None:
+        del transaction
+        for row in self.tables["workflow_runs"]:
+            if row["tenant_id"] == tenant_id and row["id"] == workflow_run_id:
+                return cast(WorkflowRunRow, dict(row))
+        return None
+
+    def workflow_run_by_idempotency(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        workflow_name: str,
+        idempotency_key: str,
+    ) -> WorkflowRunRow | None:
+        del transaction
+        for row in self.tables["workflow_runs"]:
+            if _workflow_key_matches(row, tenant_id, workflow_name, idempotency_key):
+                return cast(WorkflowRunRow, dict(row))
+        return None
+
+    def insert_workflow_run_or_get_existing(
+        self, *, transaction: Any, record: WorkflowRunRecord
+    ) -> WorkflowRunRow | None:
+        del transaction
+        existing = self.workflow_run_by_idempotency(
+            transaction=None,
+            tenant_id=record.tenant_id,
+            workflow_name=record.workflow_name,
+            idempotency_key=record.idempotency_key,
+        )
+        if existing is not None:
+            return existing
+        self.tables["workflow_runs"].append(_workflow_row(record))
+        return None
+
+    def update_workflow_run_status(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        workflow_run_id: str,
+        transition: StatusTransition,
+        output: dict[str, object],
+        error: dict[str, object] | None,
+        started_at: str | None,
+        completed_at: str | None,
+    ) -> WorkflowRunRow | None:
+        del transaction
+        for row in self.tables["workflow_runs"]:
+            if (
+                row["tenant_id"] == tenant_id
+                and row["id"] == workflow_run_id
+                and row["status"] in transition.from_statuses
+            ):
+                row.update(status=transition.to_status, output=dict(output), error=error)
+                if started_at is not None:
+                    row["started_at"] = started_at
+                if completed_at is not None:
+                    row["completed_at"] = completed_at
+                if transition.to_status == "starting":
+                    row["attempts"] += 1
+                return cast(WorkflowRunRow, dict(row))
+        return None
+
+    def link_workflow_audit_event(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        workflow_run_id: str,
+        audit_event_id: str,
+    ) -> WorkflowRunRow | None:
+        del transaction
+        for row in self.tables["workflow_runs"]:
+            if row["tenant_id"] == tenant_id and row["id"] == workflow_run_id:
+                row["audit_event_id"] = audit_event_id
+                return cast(WorkflowRunRow, dict(row))
         return None
 
     def delete_dead_letter_event(self, *, transaction: Any, tenant_id: str, event_id: str) -> bool:
@@ -306,6 +395,32 @@ def _lineage_record(*, edge_id: str = "lineage_1", tenant_id: str = "tenant-demo
     )
 
 
+def _workflow_record_obj(
+    *,
+    workflow_run_id: str = "flite:workflow:run:1",
+    tenant_id: str = "tenant-demo",
+    idempotency_key: str = "workflow-key-1",
+) -> WorkflowRunRecord:
+    return WorkflowRunRecord(
+        workflow_run_id=workflow_run_id,
+        tenant_id=tenant_id,
+        workflow_name="ConnectorSyncWorkflow",
+        workflow_profile="local",
+        status="requested",
+        idempotency_key=idempotency_key,
+        request_fingerprint=f"fingerprint-{idempotency_key}",
+        input={"datasetRef": "raw.orders"},
+        output={},
+        error=None,
+        dataset_id="ds_orders",
+        audit_event_id=None,
+        attempts=0,
+        created_at="2026-06-10T00:00:00Z",
+        started_at=None,
+        completed_at=None,
+    )
+
+
 def _audit_row(record: AuditEventRecord) -> dict[str, Any]:
     return {
         "id": record.event_id,
@@ -357,6 +472,35 @@ def _lineage_row(record: LineageEdgeRecord) -> dict[str, Any]:
     }
 
 
+def _workflow_row(record: WorkflowRunRecord) -> dict[str, Any]:
+    return {
+        "id": record.workflow_run_id,
+        "tenant_id": record.tenant_id,
+        "workflow_name": record.workflow_name,
+        "workflow_profile": record.workflow_profile,
+        "status": record.status,
+        "idempotency_key": record.idempotency_key,
+        "request_fingerprint": record.request_fingerprint,
+        "input": record.input,
+        "output": record.output,
+        "error": record.error,
+        "dataset_id": record.dataset_id,
+        "audit_event_id": record.audit_event_id,
+        "attempts": record.attempts,
+        "created_at": record.created_at,
+        "started_at": record.started_at,
+        "completed_at": record.completed_at,
+    }
+
+
+def _workflow_key_matches(row: dict[str, Any], tenant_id: str, workflow_name: str, idempotency_key: str) -> bool:
+    return (
+        row["tenant_id"] == tenant_id
+        and row["workflow_name"] == workflow_name
+        and row["idempotency_key"] == idempotency_key
+    )
+
+
 def _dead_letter_row(*, event_id: str, tenant_id: str) -> dict[str, Any]:
     return {
         "id": event_id,
@@ -380,6 +524,7 @@ def _run_table_name(run_type: RuntimeRunType) -> str:
         "materialization": "materialization_runs",
         "outbox": "outbox_events",
         "dead_letter": "dead_letter_events",
+        "workflow": "workflow_runs",
         "audit": "audit_events",
     }[run_type]
 
@@ -634,6 +779,96 @@ def test_runtime_repository_contract_requeues_dead_letter_event(
     assert outbox["published_at"] is None
     assert deleted is True
     assert runs["deadLetterEvents"] == []
+
+
+def test_runtime_repository_contract_workflow_run_ledger_status_cas(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        inserted = harness.repository.insert_workflow_run_or_get_existing(
+            transaction=transaction,
+            record=_workflow_record_obj(),
+        )
+        duplicate = harness.repository.insert_workflow_run_or_get_existing(
+            transaction=transaction,
+            record=_workflow_record_obj(workflow_run_id="flite:workflow:duplicate:1"),
+        )
+        by_id = harness.repository.workflow_run_by_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            workflow_run_id="flite:workflow:run:1",
+        )
+        by_key = harness.repository.workflow_run_by_idempotency(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            workflow_name="ConnectorSyncWorkflow",
+            idempotency_key="workflow-key-1",
+        )
+        starting = harness.repository.update_workflow_run_status(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            workflow_run_id="flite:workflow:run:1",
+            transition=WORKFLOW_RUN_STARTING,
+            output={},
+            error=None,
+            started_at="2026-06-10T00:00:01Z",
+            completed_at=None,
+        )
+        duplicate_start = harness.repository.update_workflow_run_status(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            workflow_run_id="flite:workflow:run:1",
+            transition=WORKFLOW_RUN_STARTING,
+            output={},
+            error=None,
+            started_at="2026-06-10T00:00:02Z",
+            completed_at=None,
+        )
+        succeeded = harness.repository.update_workflow_run_status(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            workflow_run_id="flite:workflow:run:1",
+            transition=WORKFLOW_RUN_SUCCEEDED,
+            output={"datasetRef": "raw.orders"},
+            error=None,
+            started_at=None,
+            completed_at="2026-06-10T00:00:03Z",
+        )
+        late_failure = harness.repository.update_workflow_run_status(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            workflow_run_id="flite:workflow:run:1",
+            transition=WORKFLOW_RUN_FAILED,
+            output={},
+            error={"kind": "timeout"},
+            started_at=None,
+            completed_at="2026-06-10T00:00:04Z",
+        )
+        linked = harness.repository.link_workflow_audit_event(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            workflow_run_id="flite:workflow:run:1",
+            audit_event_id="audit_workflow_1",
+        )
+
+    runs = harness.repository.list_runs(tenant_id="tenant-demo")
+
+    assert inserted is None
+    assert duplicate is not None
+    assert duplicate["id"] == "flite:workflow:run:1"
+    assert by_id is not None
+    assert by_key is not None
+    assert starting is not None
+    assert starting["status"] == "starting"
+    assert starting["attempts"] == 1
+    assert duplicate_start is None
+    assert succeeded is not None
+    assert succeeded["status"] == "succeeded"
+    assert succeeded["output"] == {"datasetRef": "raw.orders"}
+    assert late_failure is None
+    assert linked is not None
+    assert linked["audit_event_id"] == "audit_workflow_1"
+    assert [row["id"] for row in runs["workflowRuns"]] == ["flite:workflow:run:1"]
 
 
 def test_runtime_repository_contract_allowlisted_row_reads(
