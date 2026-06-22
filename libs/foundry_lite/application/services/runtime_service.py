@@ -36,6 +36,7 @@ from foundry_lite.application.services.runtime_detail_payload import (
     related_evidence_for_row,
     run_relations_for_row,
     runtime_run_detail_payload,
+    scoped_source_runs,
 )
 from foundry_lite.application.services.runtime_error_payloads import (
     dead_letter_retry_plan,
@@ -52,6 +53,7 @@ from foundry_lite.application.services.runtime_run_queries import (
     downstream_impact_graph,
     object_late_data_badge,
     optional_run_type,
+    relation_resource_ids,
     required_run_type,
     source_run_chain,
 )
@@ -98,10 +100,16 @@ class RuntimeService(CoreService):
         ctx: RequestContext | None = None,
     ) -> list[RuntimeRunLink]:
         ctx = ctx or RequestContext()
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
         lineage_rows = self.runtime_repository.lineage_for_resource(
             tenant_id=ctx.tenant_id,
             resource_id=source_dataset_version_id,
+        )
+        snapshot = scoped_source_runs(
+            self.runtime_repository,
+            ctx,
+            object_type_api_name,
+            resource_ids=relation_resource_ids(source_dataset_version_id, lineage_rows),
+            run_ids=[edge["created_by_run_id"] for edge in lineage_rows],
         )
         return source_run_chain(
             snapshot,
@@ -118,7 +126,7 @@ class RuntimeService(CoreService):
         ctx: RequestContext | None = None,
     ) -> RuntimeJsonObject | None:
         ctx = ctx or RequestContext()
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        snapshot = scoped_source_runs(self.runtime_repository, ctx, object_type_api_name)
         return object_late_data_badge(
             snapshot,
             source_dataset_version_id=source_dataset_version_id,

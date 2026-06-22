@@ -83,6 +83,79 @@ class SqlAlchemyRuntimeRepository:
         rows = transaction.execute(query).mappings().all()
         return [cast(RuntimeRow, dict(row)) for row in rows]
 
+    def runs_for_source_chain(
+        self,
+        *,
+        tenant_id: str,
+        object_type_api_name: str,
+        resource_ids: Sequence[str],
+        run_ids: Sequence[str],
+        limit: int,
+    ) -> RuntimeRunSnapshot:
+        rids = list(resource_ids)
+        runids = list(run_ids)
+        with self.engine.begin() as transaction:
+            return {
+                "syncRuns": self._scoped_rows(
+                    transaction,
+                    db.sync_runs,
+                    tenant_id,
+                    limit,
+                    _in_or_none(db.sync_runs.c.committed_version_id, rids),
+                    run_ids=runids,
+                ),
+                "transformRuns": self._scoped_rows(
+                    transaction,
+                    db.transform_runs,
+                    tenant_id,
+                    limit,
+                    _in_or_none(db.transform_runs.c.output_version_id, rids),
+                    run_ids=runids,
+                ),
+                "indexRuns": self._scoped_rows(
+                    transaction,
+                    db.index_runs,
+                    tenant_id,
+                    limit,
+                    db.index_runs.c.object_type_api_name == object_type_api_name,
+                    run_ids=runids,
+                ),
+                "actionRuns": [],
+                "actionWritebacks": [],
+                "materializationRuns": self._scoped_rows(
+                    transaction,
+                    db.materialization_runs,
+                    tenant_id,
+                    limit,
+                    _in_or_none(db.materialization_runs.c.target_dataset_version_id, rids),
+                    run_ids=runids,
+                ),
+                "outboxEvents": [],
+                "deadLetterEvents": [],
+                "workflowRuns": self._scoped_rows(
+                    transaction, db.workflow_runs, tenant_id, limit, None, run_ids=runids
+                ),
+                "auditEvents": [],
+                "objectEdits": [],
+            }
+
+    def _scoped_rows(
+        self, transaction: Any, table: Any, tenant_id: str, limit: int, *match: Any, run_ids: Sequence[str]
+    ) -> list[RuntimeRow]:
+        conditions = [condition for condition in match if condition is not None]
+        if run_ids:
+            conditions.append(table.c.id.in_(list(run_ids)))
+        if not conditions:
+            return []
+        query = (
+            select(table)
+            .where(and_(table.c.tenant_id == tenant_id, or_(*conditions)))
+            .order_by(desc(table.c.created_at), desc(table.c.id))
+            .limit(limit)
+        )
+        rows = transaction.execute(query).mappings().all()
+        return [cast(RuntimeRow, dict(row)) for row in rows]
+
     def query_run_rows(
         self,
         *,
@@ -533,6 +606,11 @@ def _relation_columns(runtime_table: Any) -> list[Any]:
         for column in runtime_table.c
         if column.name != "tenant_id" and (column.name.endswith("_id") or column.name in {"id", "correlation_id"})
     ]
+
+
+def _in_or_none(column: Any, values: list[str]) -> Any:
+    # Build an IN clause only when there are values; empty IN clauses are noise.
+    return column.in_(values) if values else None
 
 
 def _rows_timestamp_column(table: RuntimeRowsTable) -> Any:

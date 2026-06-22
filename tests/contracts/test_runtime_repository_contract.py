@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,7 +59,7 @@ class RuntimeRepositoryHarness(Protocol):
 
     def add_dead_letter_event(self, *, event_id: str, tenant_id: str) -> None: ...
 
-    def add_index_run(self, *, run_id: str, tenant_id: str) -> None: ...
+    def add_index_run(self, *, run_id: str, tenant_id: str, object_type_api_name: str = "Order") -> None: ...
 
 
 @dataclass
@@ -132,6 +132,45 @@ class FakeRuntimeRepository:
     def rows_for_tenant(self, *, transaction: Any, table: RuntimeRowsTable, tenant_id: str) -> list[RuntimeRow]:
         del transaction
         return [cast(RuntimeRow, dict(row)) for row in self.tables[table] if row["tenant_id"] == tenant_id]
+
+    def runs_for_source_chain(
+        self,
+        *,
+        tenant_id: str,
+        object_type_api_name: str,
+        resource_ids: Sequence[str],
+        run_ids: Sequence[str],
+        limit: int,
+    ) -> RuntimeRunSnapshot:
+        rids = set(resource_ids)
+        runids = set(run_ids)
+
+        def scoped(table: RuntimeRowsTable, predicate: Callable[[dict[str, Any]], bool]) -> list[RuntimeRow]:
+            matched = [
+                row
+                for row in self.tables[table]
+                if row["tenant_id"] == tenant_id and (predicate(row) or row.get("id") in runids)
+            ]
+            ordered = sorted(
+                matched, key=lambda row: (str(row.get("created_at") or ""), str(row.get("id") or "")), reverse=True
+            )
+            return [cast(RuntimeRow, dict(row)) for row in ordered[:limit]]
+
+        return {
+            "syncRuns": scoped("sync_runs", lambda row: row.get("committed_version_id") in rids),
+            "transformRuns": scoped("transform_runs", lambda row: row.get("output_version_id") in rids),
+            "indexRuns": scoped("index_runs", lambda row: row.get("object_type_api_name") == object_type_api_name),
+            "actionRuns": [],
+            "actionWritebacks": [],
+            "materializationRuns": scoped(
+                "materialization_runs", lambda row: row.get("target_dataset_version_id") in rids
+            ),
+            "outboxEvents": [],
+            "deadLetterEvents": [],
+            "workflowRuns": scoped("workflow_runs", lambda _row: False),
+            "auditEvents": [],
+            "objectEdits": [],
+        }
 
     def run_row(self, *, tenant_id: str, run_type: RuntimeRunType, run_id: str) -> RuntimeRow | None:
         for row in self.tables[_run_table_name(run_type)]:
@@ -345,9 +384,11 @@ class FakeRuntimeRepositoryHarness:
         assert isinstance(self.repository, FakeRuntimeRepository)
         self.repository.tables["dead_letter_events"].append(_dead_letter_row(event_id=event_id, tenant_id=tenant_id))
 
-    def add_index_run(self, *, run_id: str, tenant_id: str) -> None:
+    def add_index_run(self, *, run_id: str, tenant_id: str, object_type_api_name: str = "Order") -> None:
         assert isinstance(self.repository, FakeRuntimeRepository)
-        self.repository.tables["index_runs"].append(_index_run_row(run_id=run_id, tenant_id=tenant_id))
+        self.repository.tables["index_runs"].append(
+            _index_run_row(run_id=run_id, tenant_id=tenant_id, object_type_api_name=object_type_api_name)
+        )
 
 
 @dataclass
@@ -393,9 +434,13 @@ class SqlAlchemyRuntimeRepositoryHarness:
                 insert(db.dead_letter_events).values(**_dead_letter_row(event_id=event_id, tenant_id=tenant_id))
             )
 
-    def add_index_run(self, *, run_id: str, tenant_id: str) -> None:
+    def add_index_run(self, *, run_id: str, tenant_id: str, object_type_api_name: str = "Order") -> None:
         with self.engine.begin() as conn:
-            conn.execute(insert(db.index_runs).values(**_index_run_row(run_id=run_id, tenant_id=tenant_id)))
+            conn.execute(
+                insert(db.index_runs).values(
+                    **_index_run_row(run_id=run_id, tenant_id=tenant_id, object_type_api_name=object_type_api_name)
+                )
+            )
 
 
 def _audit_record(*, event_id: str = "audit_1", tenant_id: str = "tenant-demo") -> AuditEventRecord:
@@ -750,12 +795,18 @@ def _action_run_row(
     }
 
 
-def _index_run_row(*, run_id: str, tenant_id: str, created_at: str = "2026-06-10T00:00:00Z") -> dict[str, Any]:
+def _index_run_row(
+    *,
+    run_id: str,
+    tenant_id: str,
+    object_type_api_name: str = "Order",
+    created_at: str = "2026-06-10T00:00:00Z",
+) -> dict[str, Any]:
     return {
         "id": run_id,
         "tenant_id": tenant_id,
         "object_type_id": "ot_1",
-        "object_type_api_name": "Order",
+        "object_type_api_name": object_type_api_name,
         "trigger_type": "manual",
         "source_ref": {"dataset": "clean.orders"},
         "status": "SUCCEEDED",
@@ -820,6 +871,33 @@ def test_runtime_repository_contract_list_runs_windows_to_recent_rows(
     # Without a limit the full per-tenant history is returned.
     full = harness.repository.list_runs(tenant_id="tenant-demo")
     assert {row["id"] for row in full["actionRuns"]} == {"run-old", "run-mid", "run-new"}
+
+
+def test_runtime_repository_contract_runs_for_source_chain_scopes_rows(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    harness.add_index_run(run_id="idx-order", tenant_id="tenant-demo", object_type_api_name="Order")
+    harness.add_index_run(run_id="idx-prod", tenant_id="tenant-demo", object_type_api_name="Product")
+    harness.add_index_run(run_id="idx-other", tenant_id="tenant-other", object_type_api_name="Order")
+
+    scoped = harness.repository.runs_for_source_chain(
+        tenant_id="tenant-demo",
+        object_type_api_name="Order",
+        resource_ids=["dataset-version-1"],
+        run_ids=["idx-prod"],
+        limit=50,
+    )
+
+    index_ids = {row["id"] for row in scoped["indexRuns"]}
+    # "Order" index run by object type; "Product" index run pulled in by run_ids.
+    assert index_ids == {"idx-order", "idx-prod"}
+    # Other tenants never leak into a scoped snapshot.
+    assert "idx-other" not in index_ids
+    # Producer/lineage tables resolve (no matching rows here) and unrelated tables stay empty.
+    assert scoped["syncRuns"] == []
+    assert scoped["workflowRuns"] == []
+    assert scoped["auditEvents"] == []
+    assert scoped["outboxEvents"] == []
 
 
 def test_runtime_repository_contract_run_row_and_evidence_pushdown(
