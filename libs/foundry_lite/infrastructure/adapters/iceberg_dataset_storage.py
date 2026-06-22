@@ -238,7 +238,15 @@ class IcebergDatasetStorageAdapter:
         if table.snapshot_by_id(snapshot_id) is None:
             raise FileNotFoundError(manifest_uri)
         sidecar = self._load_sidecar_manifest(table, snapshot_id)
-        self._verify_snapshot_files(table, snapshot_id, manifest_uri, expected_files=_expected_files(sidecar))
+        expected_files = _expected_files(sidecar)
+        self._verify_snapshot_files(table, snapshot_id, manifest_uri, expected_files=expected_files)
+        _, has_delete_files = self._snapshot_data_file_uris(table, snapshot_id)
+        # The common case is a single coalesced data file with no row-deletes: stream that
+        # file directly instead of scanning the whole snapshot into Arrow and rewriting it.
+        # Multi-file snapshots and delete files still materialize a single merged file so the
+        # single-file read contract (committed_version_file_path -> paths[0]) is preserved.
+        if partition_filter is None and len(expected_files) == 1 and not has_delete_files:
+            return [self._download_snapshot_file(table, next(iter(expected_files.values())))]
         return [self._materialize_snapshot(table, snapshot_id, identifier)]
 
     def preview_file_paths(
