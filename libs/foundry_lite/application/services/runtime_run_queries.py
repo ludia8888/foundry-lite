@@ -342,6 +342,10 @@ def _row_matches_relation(row: RuntimeRow, ids: set[str]) -> bool:
 
 
 def _is_relation_key(key: str) -> bool:
+    # ``tenant_id`` scopes the snapshot, not a correlation: every row in a
+    # tenant shares it, so treating it as a relation key matched all evidence.
+    if key == "tenant_id":
+        return False
     return key.endswith("_id") or key in {"id", "correlation_id"}
 
 

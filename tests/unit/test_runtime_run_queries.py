@@ -33,6 +33,28 @@ def test_runtime_run_query_helpers_filter_and_join_related_rows() -> None:
     ) == {"version_clean", "version_raw"}
 
 
+def test_related_helpers_exclude_unrelated_same_tenant_evidence() -> None:
+    # Regression: ``tenant_id`` scopes the snapshot, it is not a correlation key.
+    # Evidence that merely shares the tenant (but references a different run) must
+    # not be reported as related, which previously matched the whole tenant.
+    snapshot = _snapshot()
+    snapshot["actionRuns"] = [
+        {"id": "action_run_1", "tenant_id": "t-1", "status": "succeeded", "correlation_id": "action_run_1"}
+    ]
+    snapshot["outboxEvents"] = [
+        {"id": "ob-related", "tenant_id": "t-1", "correlation_id": "action_run_1"},
+        {"id": "ob-unrelated", "tenant_id": "t-1", "correlation_id": "other_run"},
+    ]
+    snapshot["auditEvents"] = [
+        {"id": "au-related", "tenant_id": "t-1", "resource_id": "action_run_1"},
+        {"id": "au-unrelated", "tenant_id": "t-1", "resource_id": "other_run"},
+    ]
+    row = queries.row_for_detail(snapshot, "action", "action_run_1")
+
+    assert [event["id"] for event in queries.related_outbox(snapshot, row)] == ["ob-related"]
+    assert [event["id"] for event in queries.related_audit(snapshot, row)] == ["au-related"]
+
+
 def test_runtime_run_query_helpers_cover_error_and_empty_branches() -> None:
     snapshot = _snapshot()
 
