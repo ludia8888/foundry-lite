@@ -111,6 +111,7 @@ def dataset_transaction_for_row(
     ctx: RequestContext,
     row: RuntimeRow,
 ) -> RuntimeRow | None:
+    """Resolve the dataset transaction backing a runtime row, scoped to the tenant."""
     transaction_id = row.get("transaction_id")
     version_id = row.get("target_dataset_version_id") or row.get("committed_version_id")
     with engine.begin() as conn:
@@ -139,6 +140,7 @@ def quality_evidence_for_transaction(
     ctx: RequestContext,
     dataset_transaction: RuntimeRow | None,
 ) -> tuple[list[DatasetCheckResultRow], list[RuntimeRow]]:
+    """Return data-quality check results and failed-row samples for a transaction."""
     if dataset_transaction is None:
         return [], []
     transaction_id = dataset_transaction.get("id")
@@ -163,6 +165,7 @@ def lineage_edges_for_row(
     ctx: RequestContext,
     row: RuntimeRow,
 ) -> list[LineageEdgeRow]:
+    """Collect deduplicated lineage edges touching the row's resources."""
     edges: list[LineageEdgeRow] = []
     seen: set[str] = set()
     for resource_id in resource_ids_for_lineage(row):
@@ -181,6 +184,7 @@ def run_relations_for_row(
     run_type: RuntimeRunType,
     run_id: str,
 ) -> list[RuntimeRunRelationRow]:
+    """Read durable operator run relations for a runtime run."""
     with engine.begin() as conn:
         return runtime_repository.run_relations_for_run(
             transaction=conn,
@@ -191,6 +195,7 @@ def run_relations_for_row(
 
 
 def _is_quality_sample_for_transaction(row: RuntimeRow, transaction_id: str) -> bool:
+    """Whether a dead-letter row is a quality sample for the transaction."""
     metadata = row.get("metadata")
     return (
         row.get("error_kind") == "DATA_QUALITY_CONTRACT"

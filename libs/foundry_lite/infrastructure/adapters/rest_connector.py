@@ -240,7 +240,7 @@ def _http_get(
 class _ReadableHTTPResponse(AbstractContextManager["_ReadableHTTPResponse"], Protocol):
     """Small protocol for urllib responses used by the REST connector."""
 
-    def read(self, amt: int | None = None) -> bytes: ...
+    def read(self, _: int | None = None) -> bytes: ...
 
 
 class _TunnelableHTTPConnection(Protocol):
@@ -416,30 +416,45 @@ def _validated_http_target(url: str, *, allow_private_network: bool = False) -> 
     port = _validated_port(url) or (443 if split.scheme == "https" else 80)
     normalized_host = unquote(host.strip("[]").rstrip(".")).lower()
     if not allow_private_network:
-        hostname_reason = _private_hostname_reason(normalized_host)
-        if hostname_reason is not None:
-            raise ValidationFailed(
-                "REST connector URL cannot target private or local network addresses",
-                details={"url": url, "host": host, "reason": hostname_reason},
-            )
-        literal = _ip_literal(normalized_host)
-        if literal is not None:
-            literal_reason = _non_global_ip_reason(literal)
-            if literal_reason is not None:
-                raise ValidationFailed(
-                    "REST connector URL cannot target private or local network addresses",
-                    details={"url": url, "host": host, "reason": literal_reason},
-                )
+        _reject_private_literal_host(url, host, normalized_host)
     target_addresses = _resolved_target_addresses(normalized_host, port)
-    target_address = target_addresses[0]
     if not allow_private_network:
-        reason = _private_network_reason_for_addresses(normalized_host, target_addresses)
-        if reason is not None:
-            raise ValidationFailed(
-                "REST connector URL cannot target private or local network addresses",
-                details={"url": url, "host": host, "reason": reason},
-            )
-    return _ValidatedHttpTarget(url=url, host=host, port=port, resolved_host=str(target_address))
+        _reject_private_resolved_host(url, host, normalized_host, target_addresses)
+    return _ValidatedHttpTarget(url=url, host=host, port=port, resolved_host=str(target_addresses[0]))
+
+
+def _reject_private_literal_host(url: str, host: str, normalized_host: str) -> None:
+    """Reject private/local hostnames and IP literals before DNS resolution (SSRF guard)."""
+    hostname_reason = _private_hostname_reason(normalized_host)
+    if hostname_reason is not None:
+        raise ValidationFailed(
+            "REST connector URL cannot target private or local network addresses",
+            details={"url": url, "host": host, "reason": hostname_reason},
+        )
+    literal = _ip_literal(normalized_host)
+    if literal is None:
+        return
+    literal_reason = _non_global_ip_reason(literal)
+    if literal_reason is not None:
+        raise ValidationFailed(
+            "REST connector URL cannot target private or local network addresses",
+            details={"url": url, "host": host, "reason": literal_reason},
+        )
+
+
+def _reject_private_resolved_host(
+    url: str,
+    host: str,
+    normalized_host: str,
+    target_addresses: tuple[IPv4Address | IPv6Address, ...],
+) -> None:
+    """Reject hosts whose resolved addresses fall in private/local network ranges (SSRF guard)."""
+    reason = _private_network_reason_for_addresses(normalized_host, target_addresses)
+    if reason is not None:
+        raise ValidationFailed(
+            "REST connector URL cannot target private or local network addresses",
+            details={"url": url, "host": host, "reason": reason},
+        )
 
 
 def _private_network_reason_for_addresses(

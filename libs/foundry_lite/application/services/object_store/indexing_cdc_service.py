@@ -391,6 +391,7 @@ def _build_cdc_object_record_update(
     *,
     deleted: bool,
 ) -> ObjectRecordCdcUpdate:
+    """Build the ObjectRecordCdcUpdate record for a CDC object update."""
     return ObjectRecordCdcUpdate(
         record_id=existing["id"],
         tenant_id=ctx.tenant_id,

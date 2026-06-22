@@ -89,6 +89,7 @@ class ObjectQueryService(CoreService):
         record: ObjectRecordRow,
         properties: dict[str, object],
     ) -> ObjectPayload:
+        """Build the object read payload, including deletion markers."""
         payload: ObjectPayload = {
             "objectType": object_type_api_name,
             "objectId": object_id,

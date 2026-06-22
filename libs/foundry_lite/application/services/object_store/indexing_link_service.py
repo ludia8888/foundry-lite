@@ -25,6 +25,8 @@ from foundry_lite.domain.context import RequestContext
 
 
 class ObjectIndexingLinkMixin:
+    """Object-link indexing methods shared into the rebuild service."""
+
     object_index_repository: ObjectIndexRepository
     ontology_service: IndexOntologyLookup
 
@@ -35,6 +37,7 @@ class ObjectIndexingLinkMixin:
         plan: ObjectIndexRebuildPlan,
         rows: Sequence[TabularRow],
     ) -> int:
+        """Upsert all source-derived links for the object type and prune missing ones."""
         active = self.ontology_service._active_ontology_version(conn, ctx)
         links = self.object_index_repository.link_types_for_object_type(
             transaction=conn,
@@ -55,6 +58,7 @@ class ObjectIndexingLinkMixin:
         return links_upserted
 
     def _source_link_key(self, link: LinkTypeRow, row: TabularRow) -> tuple[str, str, str] | None:
+        """Return the (link_type, from, to) key for a source row, or None if incomplete."""
         from_id = row.get(link["backing"]["fromKey"])
         to_id = row.get(link["backing"]["toKey"])
         if from_id in {None, ""} or to_id in {None, ""}:
@@ -69,6 +73,7 @@ class ObjectIndexingLinkMixin:
         link: LinkTypeRow,
         link_key: tuple[str, str, str],
     ) -> int:
+        """Upsert a single object link, refreshing it if it already exists."""
         _, from_id, to_id = link_key
         existing = self.object_index_repository.object_link(
             transaction=conn,
@@ -91,6 +96,7 @@ class ObjectIndexingLinkMixin:
         plan: ObjectIndexRebuildPlan,
         source_link_keys: set[tuple[str, str, str]],
     ) -> None:
+        """Mark links deleted when their source row is gone on a full rebuild."""
         if plan.mode != "full":
             return
         links = self.object_index_repository.object_links_for_index_version(
@@ -122,6 +128,7 @@ class ObjectIndexingLinkMixin:
         plan: ObjectIndexRebuildPlan,
         existing: ObjectIndexLinkRow,
     ) -> None:
+        """Bump an existing link's version and source pointer."""
         self.object_index_repository.refresh_object_link(
             transaction=conn,
             tenant_id=ctx.tenant_id,
@@ -140,6 +147,7 @@ class ObjectIndexingLinkMixin:
         from_id: str,
         to_id: str,
     ) -> None:
+        """Insert a new object link from a source row."""
         self.object_index_repository.insert_object_link(
             transaction=conn,
             record=build_object_link_insert(

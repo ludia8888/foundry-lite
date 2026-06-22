@@ -75,6 +75,7 @@ class ActionWritebackRecorder:
         writeback_id: str,
         status: str,
     ) -> None:
+        """Record the action->writeback run relation."""
         self.runtime_service._run_relation(
             conn,
             ctx,
