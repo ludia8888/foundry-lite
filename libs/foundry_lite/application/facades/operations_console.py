@@ -102,7 +102,9 @@ class OperationsConsole:
         self._workflow = workflow
 
     def lineage(self, resource_id: str, *, ctx: RequestContext | None = None) -> list[LineageEdgeRow]:
-        return self._runtime.lineage_for_resource(resource_id, ctx=ctx)
+        resolved_ctx = ctx or RequestContext()
+        self._runtime._require_or_audit(resolved_ctx, "operations:read:detail", "lineage", resource_id)
+        return self._runtime.lineage_for_resource(resource_id, ctx=resolved_ctx)
 
     def list_runs(self, *, ctx: RequestContext | None = None) -> RuntimeRunSnapshot:
         return self._runtime.list_runs(ctx=ctx)

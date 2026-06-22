@@ -22,7 +22,10 @@ from foundry_lite.application.ports import (
     RuntimeRunDetail,
     RuntimeRunLink,
     RuntimeRunQueryResult,
+    RuntimeRunRelationRecord,
+    RuntimeRunRelationRow,
     RuntimeRunSnapshot,
+    RuntimeRunType,
     TransactionContext,
 )
 from foundry_lite.application.primitives import _new_id, _now
@@ -181,6 +184,7 @@ class RuntimeService(CoreService):
         object_edits = related_object_edits(snapshot, row)
         action_writebacks = related_action_writebacks(snapshot, row)
         lineage_edges = self._lineage_edges_for_row(ctx, row)
+        run_relations = self._run_relations_for_row(ctx, parsed_type, run_id)
         dataset_transaction = self._dataset_transaction_for_row(ctx, row)
         quality_check_results, quality_failed_row_samples = self._quality_evidence_for_transaction(
             ctx, dataset_transaction
@@ -193,6 +197,7 @@ class RuntimeService(CoreService):
             audit_events=audit_events,
             object_edits=object_edits,
             action_writebacks=action_writebacks,
+            run_relations=run_relations,
             lineage_edges=lineage_edges,
             dataset_transaction=dataset_transaction,
             downstream_impact=self._downstream_impact(ctx, row, dataset_transaction, snapshot),
@@ -286,6 +291,18 @@ class RuntimeService(CoreService):
                 outbox_event_id=outbox_event_id,
                 event_type=plan["eventType"],
             )
+            self._run_relation(
+                conn,
+                ctx,
+                source_run_type="dead_letter",
+                source_run_id=event_id,
+                target_run_type="outbox",
+                target_run_id=outbox_event_id,
+                relation="requeued",
+                resource_type="outbox_event",
+                resource_id=outbox_event_id,
+                metadata={"eventType": plan["eventType"]},
+            )
         return {**plan, "status": "pending"}
 
     def _require_outbox_retry_open(self, conn: TransactionContext, ctx: RequestContext) -> None:
@@ -348,6 +365,20 @@ class RuntimeService(CoreService):
                     seen.add(edge_id)
                     edges.append(edge)
         return edges
+
+    def _run_relations_for_row(
+        self,
+        ctx: RequestContext,
+        run_type: RuntimeRunType,
+        run_id: str,
+    ) -> list[RuntimeRunRelationRow]:
+        with self.engine.begin() as conn:
+            return self.runtime_repository.run_relations_for_run(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                run_type=run_type,
+                run_id=run_id,
+            )
 
     def _downstream_impact(
         self,
@@ -413,11 +444,12 @@ class RuntimeService(CoreService):
         *,
         idempotency_key: str,
         correlation_id: str,
-    ) -> None:
-        self.runtime_repository.insert_outbox_event(
+    ) -> str | None:
+        event_id = _new_id("outbox")
+        inserted = self.runtime_repository.insert_outbox_event(
             transaction=conn,
             record=OutboxEventRecord(
-                event_id=_new_id("outbox"),
+                event_id=event_id,
                 tenant_id=ctx.tenant_id,
                 event_type=event_type,
                 aggregate_type=aggregate_type,
@@ -431,6 +463,7 @@ class RuntimeService(CoreService):
                 published_at=None,
             ),
         )
+        return event_id if inserted else None
 
     def _lineage(
         self,
@@ -454,6 +487,37 @@ class RuntimeService(CoreService):
                 to_resource_id=to_id,
                 relation=relation,
                 created_by_run_id=run_id,
+                created_at=_now(),
+            ),
+        )
+
+    def _run_relation(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        *,
+        source_run_type: RuntimeRunType,
+        source_run_id: str,
+        target_run_type: RuntimeRunType,
+        target_run_id: str,
+        relation: str,
+        resource_type: str,
+        resource_id: str,
+        metadata: Mapping[str, object] | None = None,
+    ) -> bool:
+        return self.runtime_repository.insert_run_relation(
+            transaction=conn,
+            record=RuntimeRunRelationRecord(
+                relation_id=_new_id("run_relation"),
+                tenant_id=ctx.tenant_id,
+                source_run_type=source_run_type,
+                source_run_id=source_run_id,
+                target_run_type=target_run_type,
+                target_run_id=target_run_id,
+                relation=relation,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                metadata=dict(metadata or {}),
                 created_at=_now(),
             ),
         )

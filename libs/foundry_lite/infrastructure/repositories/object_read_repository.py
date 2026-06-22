@@ -26,17 +26,21 @@ class SqlAlchemyObjectReadRepository:
         tenant_id: str,
         object_type_api_name: str,
         object_id: str,
+        object_type_id: str | None = None,
     ) -> ObjectRecordRow | None:
         row = (
             transaction.execute(
                 select(db.object_records).where(
                     and_(
-                        db.object_records.c.tenant_id == tenant_id,
-                        db.object_records.c.object_type_api_name == object_type_api_name,
+                        *_active_object_conditions(
+                            tenant_id,
+                            object_type_api_name,
+                            object_type_id,
+                            include_deleted=True,
+                        ),
                         db.object_records.c.object_id == object_id,
-                        db.object_records.c.is_active == True,  # noqa: E712
                     )
-                )
+                ),
             )
             .mappings()
             .first()
@@ -49,18 +53,12 @@ class SqlAlchemyObjectReadRepository:
         transaction: Any,
         tenant_id: str,
         object_type_api_name: str,
+        object_type_id: str | None = None,
     ) -> list[ObjectRecordRow]:
         rows = (
             transaction.execute(
                 select(db.object_records)
-                .where(
-                    and_(
-                        db.object_records.c.tenant_id == tenant_id,
-                        db.object_records.c.object_type_api_name == object_type_api_name,
-                        db.object_records.c.is_active == True,  # noqa: E712
-                        db.object_records.c.deleted == False,  # noqa: E712
-                    )
-                )
+                .where(and_(*_active_object_conditions(tenant_id, object_type_api_name, object_type_id)))
                 .order_by(db.object_records.c.object_id)
             )
             .mappings()
@@ -78,10 +76,17 @@ class SqlAlchemyObjectReadRepository:
         order_by: Sequence[ObjectOrderBy],
         cursor: ObjectQueryCursor | None,
         limit: int,
+        object_type_id: str | None = None,
+        property_object_type_id: str | None = None,
     ) -> list[ObjectRecordRow]:
-        property_data_types = self._property_data_types(transaction, tenant_id, object_type_api_name)
+        property_data_types = self._property_data_types(
+            transaction,
+            tenant_id,
+            object_type_api_name,
+            property_object_type_id or object_type_id,
+        )
         sort_columns = _sort_columns(order_by, property_data_types)
-        conditions = _active_object_conditions(tenant_id, object_type_api_name)
+        conditions = _active_object_conditions(tenant_id, object_type_api_name, object_type_id)
         if filter_ast:
             conditions.append(_filter_condition(filter_ast, property_data_types))
         cursor_condition = _cursor_condition(sort_columns, cursor)
@@ -155,7 +160,13 @@ class SqlAlchemyObjectReadRepository:
         transaction: Any,
         tenant_id: str,
         object_type_api_name: str,
+        object_type_id: str | None = None,
     ) -> dict[str, str]:
+        object_type_condition = (
+            db.object_types.c.id == object_type_id
+            if object_type_id is not None
+            else db.object_types.c.api_name == object_type_api_name
+        )
         rows = transaction.execute(
             select(db.property_types.c.api_name, db.property_types.c.data_type)
             .select_from(
@@ -167,20 +178,30 @@ class SqlAlchemyObjectReadRepository:
             .where(
                 and_(
                     db.object_types.c.tenant_id == tenant_id,
-                    db.object_types.c.api_name == object_type_api_name,
+                    object_type_condition,
                 )
             )
         ).mappings()
         return {str(row["api_name"]): str(row["data_type"]) for row in rows}
 
 
-def _active_object_conditions(tenant_id: str, object_type_api_name: str) -> list[Any]:
-    return [
+def _active_object_conditions(
+    tenant_id: str,
+    object_type_api_name: str,
+    object_type_id: str | None,
+    *,
+    include_deleted: bool = False,
+) -> list[Any]:
+    conditions = [
         db.object_records.c.tenant_id == tenant_id,
         db.object_records.c.object_type_api_name == object_type_api_name,
         db.object_records.c.is_active == True,  # noqa: E712
-        db.object_records.c.deleted == False,  # noqa: E712
     ]
+    if not include_deleted:
+        conditions.append(db.object_records.c.deleted == False)  # noqa: E712
+    if object_type_id is not None:
+        conditions.append(db.object_records.c.object_type_id == object_type_id)
+    return conditions
 
 
 def _sort_columns(

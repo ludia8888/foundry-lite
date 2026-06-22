@@ -151,6 +151,36 @@ def test_jwks_rotation_keeps_valid_sessions() -> None:
     assert provider.authenticate({"Authorization": f"Bearer {old_token}"}).actor_user_id == "user-oidc"
 
 
+def test_retired_jwks_key_is_denied_after_grace_period() -> None:
+    old_private_key, old_jwk = _rsa_key("kid-old-retired")
+    new_private_key, new_jwk = _rsa_key("kid-new-retired")
+    jwks_state: dict[str, object] = {"keys": [old_jwk]}
+    clock_value = 1_000.0
+    provider = JwtOidcAuthProvider(
+        JwtOidcAuthConfig(
+            issuer="https://issuer.example.test",
+            audience="foundry-lite",
+            jwks=jwks_state,
+            jwks_refresh_interval_seconds=0,
+            retired_key_grace_seconds=10,
+        ),
+        jwks_loader=lambda: jwks_state,
+        clock=lambda: clock_value,
+    )
+    old_token = _jwt_token(old_private_key, "kid-old-retired", expires_in=timedelta(minutes=10))
+    new_token = _jwt_token(new_private_key, "kid-new-retired", subject="user-new")
+
+    assert provider.authenticate({"Authorization": f"Bearer {old_token}"}).actor_user_id == "user-oidc"
+    jwks_state = {"keys": [new_jwk]}
+    clock_value += 1
+    assert provider.authenticate({"Authorization": f"Bearer {new_token}"}).actor_user_id == "user-new"
+    assert provider.authenticate({"Authorization": f"Bearer {old_token}"}).actor_user_id == "user-oidc"
+    clock_value += 11
+
+    with pytest.raises(PermissionDenied, match="authentication failed"):
+        provider.authenticate({"Authorization": f"Bearer {old_token}"})
+
+
 def test_oidc_profile_loads_discovery_and_jwks_from_env() -> None:
     private_key, jwk = _rsa_key("kid-env")
     env = {

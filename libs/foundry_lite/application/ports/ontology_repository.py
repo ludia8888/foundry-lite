@@ -430,3 +430,13 @@ class OntologyRepository(Protocol):
     ) -> ActionTypeRow | None:
         """Return one enabled action type in a version by API name."""
         ...
+
+    def action_type_by_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        action_type_id: str,
+    ) -> ActionTypeRow | None:
+        """Return one action type by immutable persisted id."""
+        ...

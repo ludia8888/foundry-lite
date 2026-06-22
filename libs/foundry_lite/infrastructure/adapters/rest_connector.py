@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import json
+import math
 import socket
-from collections.abc import Mapping
+import ssl
+import threading
+import time
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
-from http.client import HTTPMessage
+from dataclasses import dataclass
+from http.client import HTTPConnection, HTTPMessage, HTTPResponse, HTTPSConnection
 from ipaddress import IPv4Address, IPv6Address, ip_address
 from typing import IO, Protocol, cast
 from urllib.error import HTTPError
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPHandler, HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
-from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
+from foundry_lite.application.ports.adapter_failure import (
+    AdapterError,
+    AdapterFailure,
+    AdapterFailureContract,
+    AdapterFailureMode,
+)
 from foundry_lite.application.ports.connector_adapter import (
     ConnectorRateLimitedError,
     ConnectorSnapshot,
@@ -24,6 +34,15 @@ from foundry_lite.application.ports.secret_provider import REDACTED_VALUE, Secre
 from foundry_lite.domain.errors import ValidationFailed
 
 REST_CONNECTOR_PROFILE = "rest-pull-connector"
+_TARGET_ATTR = "_foundry_lite_rest_target"
+
+
+@dataclass(frozen=True)
+class _ValidatedHttpTarget:
+    url: str
+    host: str
+    port: int
+    resolved_host: str
 
 
 class RestPullConnectorAdapter:
@@ -31,8 +50,16 @@ class RestPullConnectorAdapter:
 
     profile_name = REST_CONNECTOR_PROFILE
 
-    def __init__(self, *, secret_provider: SecretProvider | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        secret_provider: SecretProvider | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._secret_provider = secret_provider
+        self._clock = clock
+        self._rate_limit_lock = threading.Lock()
+        self._last_request_at: dict[tuple[str, str, str], float] = {}
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -57,11 +84,13 @@ class RestPullConnectorAdapter:
 
     def snapshot(self, request: ConnectorSnapshotRequest) -> ConnectorSnapshot:
         config = _required_rest_config(request.rest)
+        self._enforce_rate_limit(request, config)
         payload = _load_json(
             _http_get(
                 _request_url(config, request.cursor),
                 _auth_headers(config.auth, self._secret_provider),
                 allow_private_network=config.allow_private_network,
+                max_response_bytes=config.max_response_bytes,
             )
         )
         rows = _rows_from_payload(payload, config.pagination)
@@ -75,12 +104,36 @@ class RestPullConnectorAdapter:
             source_watermark=request.request_id,
         )
 
+    def _enforce_rate_limit(self, request: ConnectorSnapshotRequest, config: RestSourceConfig) -> None:
+        if config.rate_limit_per_minute is None:
+            return
+        if config.rate_limit_per_minute <= 0:
+            raise ValidationFailed(
+                "REST connector rateLimitPerMinute must be positive",
+                details={"rateLimitPerMinute": config.rate_limit_per_minute},
+            )
+        interval_seconds = 60.0 / config.rate_limit_per_minute
+        now = self._clock()
+        key = (request.tenant_id, request.connector_name, request.resource_name)
+        with self._rate_limit_lock:
+            last_request_at = self._last_request_at.get(key)
+            if last_request_at is not None:
+                wait_seconds = interval_seconds - (now - last_request_at)
+                if wait_seconds > 0:
+                    raise _client_rate_limited(wait_seconds, request)
+            self._last_request_at[key] = now
+
 
 def _required_rest_config(config: RestSourceConfig | None) -> RestSourceConfig:
     if config is None:
         raise ValidationFailed("REST connector requires source config")
     if not config.base_url or not config.resource_path:
         raise ValidationFailed("REST connector requires baseUrl and resourcePath")
+    if config.max_response_bytes <= 0:
+        raise ValidationFailed(
+            "REST connector maxResponseBytes must be positive",
+            details={"maxResponseBytes": config.max_response_bytes},
+        )
     _require_replayable_pagination(config.pagination)
     return config
 
@@ -160,12 +213,19 @@ def _configured_string(value: str | None) -> str | None:
     return stripped or None
 
 
-def _http_get(url: str, headers: Mapping[str, str], *, allow_private_network: bool = False) -> bytes:
-    safe_url = _validated_http_url(url, allow_private_network=allow_private_network)
-    request = Request(safe_url, headers=dict(headers), method="GET")
+def _http_get(
+    url: str,
+    headers: Mapping[str, str],
+    *,
+    allow_private_network: bool = False,
+    max_response_bytes: int,
+) -> bytes:
+    target = _validated_http_target(url, allow_private_network=allow_private_network)
+    request = Request(target.url, headers=dict(headers), method="GET")
+    setattr(request, _TARGET_ATTR, target)
     try:
         with _open_http_request(request, allow_private_network=allow_private_network) as response:
-            return response.read()
+            return _read_bounded_response(response, max_bytes=max_response_bytes)
     except HTTPError as exc:
         if exc.code == 429:
             retry_after = exc.headers.get("Retry-After")
@@ -180,7 +240,68 @@ def _http_get(url: str, headers: Mapping[str, str], *, allow_private_network: bo
 class _ReadableHTTPResponse(AbstractContextManager["_ReadableHTTPResponse"], Protocol):
     """Small protocol for urllib responses used by the REST connector."""
 
-    def read(self) -> bytes: ...
+    def read(self, amt: int | None = None) -> bytes: ...
+
+
+class _TunnelableHTTPConnection(Protocol):
+    source_address: tuple[str, int] | None
+    _tunnel_host: str | None
+
+    def _tunnel(self) -> None: ...
+
+
+class _TunnelableHTTPSConnection(_TunnelableHTTPConnection, Protocol):
+    _context: ssl.SSLContext
+
+
+class _ContextHTTPSHandler(Protocol):
+    _context: ssl.SSLContext | None
+
+
+def _read_bounded_response(response: _ReadableHTTPResponse, *, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = response.read(min(64 * 1024, max_bytes - total + 1))
+        if not chunk:
+            return b"".join(chunks)
+        total += len(chunk)
+        if total > max_bytes:
+            raise _response_too_large(max_bytes=max_bytes, bytes_read=total)
+        chunks.append(chunk)
+
+
+def _response_too_large(*, max_bytes: int, bytes_read: int) -> AdapterError:
+    return AdapterError(
+        AdapterFailure(
+            adapter_profile=REST_CONNECTOR_PROFILE,
+            operation="snapshot",
+            kind="validation",
+            is_retryable=False,
+            operator_message="REST connector response exceeded maxResponseBytes; reduce source page size.",
+            details={"maxResponseBytes": max_bytes, "bytesRead": bytes_read},
+        )
+    )
+
+
+def _client_rate_limited(wait_seconds: float, request: ConnectorSnapshotRequest) -> AdapterError:
+    retry_after_seconds = max(1, math.ceil(wait_seconds))
+    return AdapterError(
+        AdapterFailure(
+            adapter_profile=REST_CONNECTOR_PROFILE,
+            operation="snapshot",
+            kind="rate_limited",
+            is_retryable=True,
+            timeout_seconds=retry_after_seconds,
+            operator_message="REST connector local rate limit reached; retry after the configured window.",
+            details={
+                "tenantId": request.tenant_id,
+                "connectorName": request.connector_name,
+                "resourceName": request.resource_name,
+                "retryAfterSeconds": retry_after_seconds,
+            },
+        )
+    )
 
 
 class _ValidatingRedirectHandler(HTTPRedirectHandler):
@@ -199,32 +320,153 @@ class _ValidatingRedirectHandler(HTTPRedirectHandler):
         headers: HTTPMessage,
         newurl: str,
     ) -> Request | None:
-        _validated_http_url(newurl, allow_private_network=self._allow_private_network)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        target = _validated_http_target(newurl, allow_private_network=self._allow_private_network)
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if redirected is not None:
+            setattr(redirected, _TARGET_ATTR, target)
+        return redirected
+
+
+class _PinnedHTTPHandler(HTTPHandler):
+    def __init__(self, allow_private_network: bool) -> None:
+        super().__init__()
+        self._allow_private_network = allow_private_network
+
+    def http_open(self, req: Request) -> HTTPResponse:
+        target = _target_for_request(req, allow_private_network=self._allow_private_network)
+        return self.do_open(_pinned_http_connection(target), req)
+
+
+class _PinnedHTTPSHandler(HTTPSHandler):
+    def __init__(self, allow_private_network: bool) -> None:
+        super().__init__()
+        self._allow_private_network = allow_private_network
+
+    def https_open(self, req: Request) -> HTTPResponse:
+        target = _target_for_request(req, allow_private_network=self._allow_private_network)
+        handler = cast(_ContextHTTPSHandler, self)
+        return self.do_open(_pinned_https_connection(target), req, context=handler._context)
 
 
 def _open_http_request(request: Request, *, allow_private_network: bool) -> _ReadableHTTPResponse:
-    """Open a request with redirect validation installed on this call."""
-    opener = build_opener(_ValidatingRedirectHandler(allow_private_network))
+    """Open a request with redirect validation and pinned-IP transport."""
+    opener = build_opener(
+        ProxyHandler({}),
+        _PinnedHTTPHandler(allow_private_network),
+        _PinnedHTTPSHandler(allow_private_network),
+        _ValidatingRedirectHandler(allow_private_network),
+    )
     return cast(_ReadableHTTPResponse, opener.open(request, timeout=5))
 
 
+def _target_for_request(req: Request, *, allow_private_network: bool) -> _ValidatedHttpTarget:
+    target = getattr(req, _TARGET_ATTR, None)
+    if isinstance(target, _ValidatedHttpTarget):
+        return target
+    return _validated_http_target(req.full_url, allow_private_network=allow_private_network)
+
+
+def _pinned_http_connection(target: _ValidatedHttpTarget) -> type[HTTPConnection]:
+    class _PinnedHTTPConnection(HTTPConnection):
+        def connect(self) -> None:
+            connection = cast(_TunnelableHTTPConnection, self)
+            self.sock = socket.create_connection(
+                (target.resolved_host, target.port),
+                self.timeout,
+                connection.source_address,
+            )
+            if connection._tunnel_host:
+                connection._tunnel()
+
+    return _PinnedHTTPConnection
+
+
+def _pinned_https_connection(target: _ValidatedHttpTarget) -> type[HTTPSConnection]:
+    class _PinnedHTTPSConnection(HTTPSConnection):
+        def connect(self) -> None:
+            connection = cast(_TunnelableHTTPSConnection, self)
+            sock = socket.create_connection(
+                (target.resolved_host, target.port),
+                self.timeout,
+                connection.source_address,
+            )
+            tunnel_host = connection._tunnel_host
+            if tunnel_host:
+                self.sock = sock
+                connection._tunnel()
+                server_hostname = tunnel_host
+            else:
+                server_hostname = target.host
+            self.sock = connection._context.wrap_socket(sock, server_hostname=server_hostname)
+
+    return _PinnedHTTPSConnection
+
+
 def _validated_http_url(url: str, *, allow_private_network: bool = False) -> str:
+    return _validated_http_target(url, allow_private_network=allow_private_network).url
+
+
+def _validated_http_target(url: str, *, allow_private_network: bool = False) -> _ValidatedHttpTarget:
     split = urlsplit(url)
     if split.scheme not in {"http", "https"} or not split.netloc:
         raise ValidationFailed("REST connector URL must use http or https", details={"url": url})
     host = split.hostname
     if host is None:
         raise ValidationFailed("REST connector URL must include a host", details={"url": url})
-    if allow_private_network:
-        return url
-    reason = _private_network_reason(host, _validated_port(url))
-    if reason is not None:
+    port = _validated_port(url) or (443 if split.scheme == "https" else 80)
+    normalized_host = unquote(host.strip("[]").rstrip(".")).lower()
+    if not allow_private_network:
+        hostname_reason = _private_hostname_reason(normalized_host)
+        if hostname_reason is not None:
+            raise ValidationFailed(
+                "REST connector URL cannot target private or local network addresses",
+                details={"url": url, "host": host, "reason": hostname_reason},
+            )
+        literal = _ip_literal(normalized_host)
+        if literal is not None:
+            literal_reason = _non_global_ip_reason(literal)
+            if literal_reason is not None:
+                raise ValidationFailed(
+                    "REST connector URL cannot target private or local network addresses",
+                    details={"url": url, "host": host, "reason": literal_reason},
+                )
+    target_addresses = _resolved_target_addresses(normalized_host, port)
+    target_address = target_addresses[0]
+    if not allow_private_network:
+        reason = _private_network_reason_for_addresses(normalized_host, target_addresses)
+        if reason is not None:
+            raise ValidationFailed(
+                "REST connector URL cannot target private or local network addresses",
+                details={"url": url, "host": host, "reason": reason},
+            )
+    return _ValidatedHttpTarget(url=url, host=host, port=port, resolved_host=str(target_address))
+
+
+def _private_network_reason_for_addresses(
+    normalized_host: str,
+    target_addresses: tuple[IPv4Address | IPv6Address, ...],
+) -> str | None:
+    hostname_reason = _private_hostname_reason(normalized_host)
+    if hostname_reason is not None:
+        return hostname_reason
+    literal = _ip_literal(normalized_host)
+    if literal is not None:
+        return _non_global_ip_reason(literal)
+    for resolved in target_addresses:
+        reason = _non_global_ip_reason(resolved)
+        if reason is not None:
+            return f"resolved_{reason}"
+    return None
+
+
+def _resolved_target_addresses(host: str, port: int) -> tuple[IPv4Address | IPv6Address, ...]:
+    resolved = _resolved_addresses(host, port)
+    if not resolved:
         raise ValidationFailed(
-            "REST connector URL cannot target private or local network addresses",
-            details={"url": url, "host": host, "reason": reason},
+            "REST connector URL host could not be resolved",
+            details={"host": host},
         )
-    return url
+    return resolved
 
 
 def _validated_port(url: str) -> int | None:
@@ -313,11 +555,14 @@ def _resolved_addresses(host: str, port: int | None) -> tuple[IPv4Address | IPv6
         infos = socket.getaddrinfo(host, port or 443, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise ValidationFailed("REST connector URL host could not be resolved", details={"host": host}) from exc
-    addresses: set[IPv4Address | IPv6Address] = set()
+    addresses: list[IPv4Address | IPv6Address] = []
     for info in infos:
         sockaddr = info[4]
-        if sockaddr:
-            addresses.add(ip_address(str(sockaddr[0])))
+        if not sockaddr:
+            continue
+        address = ip_address(str(sockaddr[0]))
+        if address not in addresses:
+            addresses.append(address)
     return tuple(addresses)
 
 

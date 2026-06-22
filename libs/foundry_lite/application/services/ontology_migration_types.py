@@ -117,6 +117,21 @@ class OntologyMigrationPlan:
             )
 
 
+def object_type_serving_config(plan: OntologyMigrationPlan, api_name: str) -> dict[str, object]:
+    """Return object-type config that binds serving reads to a required reindex contract."""
+    operations = [operation for operation in plan.reindex_operations if operation.object_type_api_name == api_name]
+    if not operations:
+        return {}
+    payload: dict[str, object] = {
+        "servingRecordScope": "object_type_id",
+        "servingContractStatus": "object_reindex_required",
+        "objectReindexPlan": [operation.to_payload() for operation in operations],
+    }
+    if plan.source_ontology_version_id is not None:
+        payload["sourceOntologyVersionId"] = plan.source_ontology_version_id
+    return payload
+
+
 def _consumer_compatibility(plan: OntologyMigrationPlan) -> str:
     if plan.blocking_changes:
         return "blocked_until_ontology_migration_plan"

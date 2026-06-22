@@ -106,6 +106,26 @@ def test_cdc_delete_event_allows_null_before_payload() -> None:
             },
             "CDC JSON field must decode to an object",
         ),
+        (
+            {
+                "event_id": "topic:0:1",
+                "op": "u",
+                "pk": {"order_id": "O-1001"},
+                "after": {"order_id": "O-1001"},
+                "ordering": {"source_ts_ms": 1700000000001},
+            },
+            "CDC ordering field must be an integer",
+        ),
+        (
+            {
+                "event_id": "event-without-offset",
+                "op": "u",
+                "pk": {"order_id": "O-1001"},
+                "after": {"order_id": "O-1001"},
+                "ordering": {"lsn": 1},
+            },
+            "CDC ordering requires a stream offset tie-breaker",
+        ),
     ],
 )
 def test_cdc_event_parser_rejects_malformed_events(raw: dict[str, object], message: str) -> None:
@@ -136,6 +156,44 @@ def test_cdc_primary_key_falls_back_to_property_column() -> None:
     )
 
     assert event.object_id == "O-1001"
+
+
+def test_cdc_composite_primary_key_uses_canonical_tuple_identity() -> None:
+    object_type = _object_type(
+        backing={
+            "dataset": "clean.orders",
+            "cdc": {
+                "dataset": "raw_cdc.erp_order_lines",
+                "primaryKeyColumns": ["region", "order_id"],
+            },
+        }
+    )
+    ambiguous_left = parse_object_cdc_event(
+        {
+            "event_id": "topic:0:10",
+            "op": "u",
+            "pk": {"region": "A|B", "order_id": "C"},
+            "after": {"region": "A|B", "order_id": "C", "status": "APPROVED"},
+            "ordering": {"lsn": 10},
+        },
+        object_type,
+        _properties(),
+    )
+    ambiguous_right = parse_object_cdc_event(
+        {
+            "event_id": "topic:0:11",
+            "op": "u",
+            "pk": {"region": "A", "order_id": "B|C"},
+            "after": {"region": "A", "order_id": "B|C", "status": "APPROVED"},
+            "ordering": {"lsn": 11},
+        },
+        object_type,
+        _properties(),
+    )
+
+    assert ambiguous_left.object_id.startswith("cdc_pk:v1:")
+    assert ambiguous_right.object_id.startswith("cdc_pk:v1:")
+    assert ambiguous_left.object_id != ambiguous_right.object_id
 
 
 def test_cdc_primary_key_fallback_requires_a_column() -> None:

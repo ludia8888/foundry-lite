@@ -24,7 +24,7 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetTransactionManager,
     DatasetVersionLookup,
 )
-from foundry_lite.application.services.dataset.storage_consistency import committed_version_file_paths
+from foundry_lite.application.services.dataset.storage_consistency import committed_version_preview_file_paths
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -258,7 +258,7 @@ class DatasetRegistryService(CoreService):
         self.policy.require(ctx, "dataset:read")
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
         version_row = self.dataset_version_service._get_version(dataset["id"], version, ctx=ctx)
-        parquet_paths = committed_version_file_paths(
+        parquet_paths = committed_version_preview_file_paths(
             self.dataset_storage,
             version_row,
             partition_filter=partition_filter,

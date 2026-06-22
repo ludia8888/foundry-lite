@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from foundry_lite.application.ports import DatasetTransactionRow
+from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
 from foundry_lite.application.services.dataset.storage_consistency import cleanup_staging_transaction
 from foundry_lite.domain.context import RequestContext
+
+WATCHDOG_ABORT_REASON = "stale_open_transaction"
 
 
 class DatasetRecoveryService(CoreService):
@@ -29,7 +32,7 @@ class DatasetRecoveryService(CoreService):
     ) -> list[str]:
         ctx = ctx or RequestContext()
         with self.engine.begin() as conn:
-            stale = self.dataset_transaction_repository.list_open_transactions(
+            stale = self.dataset_transaction_repository.list_recoverable_transactions(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
                 created_before=created_before,
@@ -43,11 +46,14 @@ class DatasetRecoveryService(CoreService):
 
     def _abort_stale_open_transaction(self, ctx: RequestContext, tx: DatasetTransactionRow) -> str | None:
         transaction_id = str(tx["id"])
-        staging_cleanup = cleanup_staging_transaction(self.dataset_storage, ctx, tx, transaction_id)
+        claimed = self._claim_watchdog_abort(ctx, tx)
+        if claimed is None:
+            return None
+        staging_cleanup = cleanup_staging_transaction(self.dataset_storage, ctx, claimed, transaction_id)
         metadata = {
-            **dict(tx["metadata"]),
+            **dict(claimed["metadata"]),
             "abortedBy": "watchdog",
-            "abortReason": "stale_open_transaction",
+            "abortReason": WATCHDOG_ABORT_REASON,
         }
         with self.engine.begin() as conn:
             aborted = self.dataset_transaction_repository.abort_transaction(
@@ -65,6 +71,30 @@ class DatasetRecoveryService(CoreService):
                 resource_type="dataset_transaction",
                 resource_id=transaction_id,
                 action="abort_stale_open_transaction",
-                after_ref={"stagingCleanup": staging_cleanup, "abortReason": "stale_open_transaction"},
+                after_ref={"stagingCleanup": staging_cleanup, "abortReason": WATCHDOG_ABORT_REASON},
             )
         return transaction_id
+
+    def _claim_watchdog_abort(self, ctx: RequestContext, tx: DatasetTransactionRow) -> DatasetTransactionRow | None:
+        if tx["status"] == "ABORTING":
+            return tx if _is_watchdog_claim(tx) else None
+        if tx["status"] != "OPEN":
+            return None
+        metadata = {
+            **dict(tx["metadata"]),
+            "abortedBy": "watchdog",
+            "abortReason": WATCHDOG_ABORT_REASON,
+            "abortClaimedAt": _now(),
+        }
+        with self.engine.begin() as conn:
+            return self.dataset_transaction_repository.claim_stale_open_transaction(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                transaction_id=str(tx["id"]),
+                metadata=metadata,
+            )
+
+
+def _is_watchdog_claim(tx: DatasetTransactionRow) -> bool:
+    metadata = dict(tx["metadata"])
+    return metadata.get("abortedBy") == "watchdog" and metadata.get("abortReason") == WATCHDOG_ABORT_REASON

@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 
 StreamSchemaStrategy = Literal["envelope_json", "cdc_envelope_json"]
-LateDataStatus = Literal["ON_TIME", "LATE_ACCEPTED", "LATE_REQUIRES_REPROCESS", "TOO_LATE"]
+LateDataStatus = Literal["ON_TIME", "LATE_ACCEPTED", "LATE_REQUIRES_REPROCESS", "TOO_LATE", "FUTURE_CLOCK_SKEW"]
 
 
 @dataclass(frozen=True)

@@ -18,6 +18,7 @@ from foundry_lite.application.ports import (
     ObjectIndexLinkRow,
     ObjectIndexRepository,
     ObjectLinkInsert,
+    ObjectLinkSourceDeletion,
     ObjectRecordCdcUpdate,
     ObjectRecordInsert,
     ObjectRecordRow,
@@ -132,6 +133,7 @@ class FakeObjectIndexRepository:
         *,
         transaction: Any,
         tenant_id: str,
+        object_type_id: str,
         object_type_api_name: str,
         object_id: str,
         index_version: str,
@@ -140,6 +142,7 @@ class FakeObjectIndexRepository:
         for row in self.object_records.values():
             if (
                 row["tenant_id"] == tenant_id
+                and row["object_type_id"] == object_type_id
                 and row["object_type_api_name"] == object_type_api_name
                 and row["object_id"] == object_id
                 and row["index_version"] == index_version
@@ -189,10 +192,12 @@ class FakeObjectIndexRepository:
             updated_at=record.updated_at,
         )
 
-    def update_object_record_from_cdc(self, *, transaction: Any, record: ObjectRecordCdcUpdate) -> None:
+    def update_object_record_from_cdc(self, *, transaction: Any, record: ObjectRecordCdcUpdate) -> bool:
         del transaction
         if self.object_records[record.record_id]["tenant_id"] != record.tenant_id:
-            return
+            return False
+        if self.object_records[record.record_id]["object_version"] != record.expected_object_version:
+            return False
         self.object_records[record.record_id].update(
             properties=record.properties,
             base_properties=record.base_properties,
@@ -204,6 +209,7 @@ class FakeObjectIndexRepository:
             deletion_reason=record.deletion_reason,
             updated_at=record.updated_at,
         )
+        return True
 
     def insert_object_conflict(self, *, transaction: Any, record: ObjectConflictRecord) -> None:
         del transaction
@@ -265,12 +271,45 @@ class FakeObjectIndexRepository:
             link_version=link_version,
             source_dataset_version_id=source_dataset_version_id,
             deleted=False,
+            deletion_reason=None,
             updated_at=updated_at,
         )
 
     def insert_object_link(self, *, transaction: Any, record: ObjectLinkInsert) -> None:
         del transaction
         self.object_links[record.link_id] = _link_row(record)
+
+    def object_links_for_index_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        from_object_type_id: str,
+        index_version: str,
+    ) -> list[ObjectIndexLinkRow]:
+        del transaction
+        return [
+            cast(ObjectIndexLinkRow, dict(row))
+            for row in sorted(
+                self.object_links.values(),
+                key=lambda item: (item["link_type_id"], item["from_object_id"], item["to_object_id"]),
+            )
+            if row["tenant_id"] == tenant_id
+            and row["from_object_type_id"] == from_object_type_id
+            and row["index_version"] == index_version
+        ]
+
+    def mark_object_link_deleted_from_source(self, *, transaction: Any, record: ObjectLinkSourceDeletion) -> None:
+        del transaction
+        if self.object_links[record.link_id]["tenant_id"] != record.tenant_id:
+            return
+        self.object_links[record.link_id].update(
+            source_dataset_version_id=record.source_dataset_version_id,
+            link_version=record.link_version,
+            deleted=True,
+            deletion_reason=record.deletion_reason,
+            updated_at=record.updated_at,
+        )
 
     def switch_active_index_version(
         self,
@@ -410,13 +449,14 @@ def _index_run_record(run_id: str, *, status: str = "running") -> IndexRunRecord
 def _object_insert_record(
     record_id: str = "obj_order_1",
     *,
+    object_type_id: str = "ot_order",
     index_version: str = "active",
     is_active: bool = True,
 ) -> ObjectRecordInsert:
     return ObjectRecordInsert(
         record_id=record_id,
         tenant_id="tenant-demo",
-        object_type_id="ot_order",
+        object_type_id=object_type_id,
         object_type_api_name="Order",
         object_id="O-1",
         properties={"status": "PENDING", "amount": 100},
@@ -452,6 +492,7 @@ def _object_cdc_update_record(record_id: str = "obj_order_1") -> ObjectRecordCdc
     return ObjectRecordCdcUpdate(
         record_id=record_id,
         tenant_id="tenant-demo",
+        expected_object_version=2,
         properties={"status": "CANCELLED", "amount": 120},
         base_properties={"status": "CANCELLED", "amount": 120},
         property_versions={"status": 3, "amount": 2, "_cdc": {"eventId": "topic:0:3", "ordering": {"lsn": 3}}},
@@ -742,12 +783,16 @@ def test_object_index_repository_contract_writes_object_record_updates_and_confl
     with harness.transaction() as transaction:
         harness.repository.insert_object_record(transaction=transaction, record=_object_insert_record())
         harness.repository.update_object_record_from_source(transaction=transaction, record=_object_update_record())
-        harness.repository.update_object_record_from_cdc(transaction=transaction, record=_object_cdc_update_record())
+        cdc_updated = harness.repository.update_object_record_from_cdc(
+            transaction=transaction,
+            record=_object_cdc_update_record(),
+        )
         harness.repository.insert_object_conflict(transaction=transaction, record=_conflict_record())
 
     record = harness.object_record("obj_order_1")
     conflicts = harness.conflicts()
 
+    assert cdc_updated is True
     assert record is not None
     assert record["object_version"] == 3
     assert record["properties"] == {"status": "CANCELLED", "amount": 120}
@@ -759,6 +804,65 @@ def test_object_index_repository_contract_writes_object_record_updates_and_confl
     assert conflicts[0]["property_api_name"] == "status"
     assert conflicts[0]["source_value"] == "REVIEW"
     assert conflicts[0]["edit_value"] == "APPROVED"
+
+
+def test_object_index_repository_contract_scopes_index_record_lookup_by_object_type_id(
+    harness: ObjectIndexHarness,
+) -> None:
+    old_record = _object_insert_record("obj_old", object_type_id="ot_order_old")
+    new_record = _object_insert_record("obj_new", object_type_id="ot_order_new")
+
+    with harness.transaction() as transaction:
+        harness.repository.insert_object_record(transaction=transaction, record=old_record)
+        harness.repository.insert_object_record(transaction=transaction, record=new_record)
+        old_lookup = harness.repository.object_record_in_index(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order_old",
+            object_type_api_name="Order",
+            object_id="O-1",
+            index_version="active",
+        )
+        new_lookup = harness.repository.object_record_in_index(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order_new",
+            object_type_api_name="Order",
+            object_id="O-1",
+            index_version="active",
+        )
+        missing_lookup = harness.repository.object_record_in_index(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order_missing",
+            object_type_api_name="Order",
+            object_id="O-1",
+            index_version="active",
+        )
+
+    assert old_lookup is not None
+    assert old_lookup["id"] == "obj_old"
+    assert new_lookup is not None
+    assert new_lookup["id"] == "obj_new"
+    assert missing_lookup is None
+
+
+def test_object_index_repository_contract_cdc_update_requires_expected_object_version(
+    harness: ObjectIndexHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_object_record(transaction=transaction, record=_object_insert_record())
+        stale_update = harness.repository.update_object_record_from_cdc(
+            transaction=transaction,
+            record=_object_cdc_update_record(),
+        )
+
+    record = harness.object_record("obj_order_1")
+
+    assert stale_update is False
+    assert record is not None
+    assert record["object_version"] == 1
+    assert record["properties"] == {"status": "PENDING", "amount": 100}
 
 
 def test_object_index_repository_contract_marks_source_missing_record_deleted(
@@ -980,6 +1084,23 @@ def test_object_index_repository_contract_reads_link_types_and_upserts_links(
             transaction=transaction,
             record=_link_insert_record(link_id="olink_2", to_object_id="C-2", link_version=1),
         )
+        links = harness.repository.object_links_for_index_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            from_object_type_id="ot_order",
+            index_version="active",
+        )
+        harness.repository.mark_object_link_deleted_from_source(
+            transaction=transaction,
+            record=ObjectLinkSourceDeletion(
+                link_id="olink_2",
+                tenant_id="tenant-demo",
+                source_dataset_version_id="dsv_orders_3",
+                link_version=2,
+                deletion_reason="source_missing",
+                updated_at="2026-06-10T00:03:00Z",
+            ),
+        )
         refreshed = harness.repository.object_link(
             transaction=transaction,
             tenant_id="tenant-demo",
@@ -988,8 +1109,22 @@ def test_object_index_repository_contract_reads_link_types_and_upserts_links(
             to_object_id="C-1",
             index_version="active",
         )
+        deleted = harness.repository.object_link(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            link_type_id="lt_order_customer",
+            from_object_id="O-1",
+            to_object_id="C-2",
+            index_version="active",
+        )
 
     assert [row["api_name"] for row in link_types] == ["OrderCustomer"]
+    assert [row["to_object_id"] for row in links] == ["C-1", "C-2"]
     assert refreshed is not None
     assert refreshed["link_version"] == 5
     assert refreshed["deleted"] is False
+    assert refreshed["deletion_reason"] is None
+    assert deleted is not None
+    assert deleted["deleted"] is True
+    assert deleted["deletion_reason"] == "source_missing"
+    assert deleted["source_dataset_version_id"] == "dsv_orders_3"

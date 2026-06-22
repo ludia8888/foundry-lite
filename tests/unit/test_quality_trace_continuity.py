@@ -79,6 +79,33 @@ def test_trace_continuity_flags_db_trace_mismatch() -> None:
     ]
 
 
+def test_trace_continuity_flags_raw_identity_attributes() -> None:
+    records = _passing_records()
+    records.append(
+        _span(
+            "ActionService.apply_action",
+            attributes={
+                "foundry_lite.request_id": gate.REQUEST_ID,
+                "foundry_lite.tenant_id": "tenant-secret",
+                "foundry_lite.actor_user_id": "user-secret",
+            },
+        )
+    )
+
+    findings = gate.collect_findings(records)
+
+    assert findings == [
+        gate.TraceFinding(
+            code="trace_raw_identity_attribute",
+            message=(
+                "Span exports raw tenant/user identity attributes: "
+                "foundry_lite.actor_user_id, foundry_lite.tenant_id"
+            ),
+            span_name="ActionService.apply_action",
+        )
+    ]
+
+
 def test_trace_continuity_accepts_request_service_and_db_spans() -> None:
     assert gate.collect_findings(_passing_records()) == []
 

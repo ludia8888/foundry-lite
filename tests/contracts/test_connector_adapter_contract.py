@@ -14,13 +14,21 @@ def adapter(request: pytest.FixtureRequest) -> ConnectorAdapter:
     adapter_type = request.param
     return adapter_type(
         {
-            ("postgres", "orders"): ConnectorSnapshot(
+            ("tenant-demo", "postgres", "orders"): ConnectorSnapshot(
                 connector_name="postgres",
                 resource_name="orders",
                 rows=({"order_id": "O-1001", "status": "PENDING"},),
                 schema={"columns": ["order_id", "status"]},
                 cursor={"lsn": "42"},
                 source_watermark="2026-06-12T00:00:00Z",
+            ),
+            ("tenant-other", "postgres", "orders"): ConnectorSnapshot(
+                connector_name="postgres",
+                resource_name="orders",
+                rows=({"order_id": "O-2001", "status": "SHIPPED"},),
+                schema={"columns": ["order_id", "status"]},
+                cursor={"lsn": "84"},
+                source_watermark="2026-06-13T00:00:00Z",
             )
         }
     )
@@ -40,6 +48,29 @@ def test_connector_adapter_contract_returns_configured_snapshot(adapter: Connect
     assert snapshot.resource_name == "orders"
     assert snapshot.rows[0]["order_id"] == "O-1001"
     assert snapshot.cursor == {"lsn": "42"}
+
+
+def test_connector_adapter_contract_scopes_snapshots_by_tenant(adapter: ConnectorAdapter) -> None:
+    tenant_a = adapter.snapshot(
+        ConnectorSnapshotRequest(
+            connector_name="postgres",
+            resource_name="orders",
+            tenant_id="tenant-demo",
+            request_id="req-tenant-a",
+        )
+    )
+    tenant_b = adapter.snapshot(
+        ConnectorSnapshotRequest(
+            connector_name="postgres",
+            resource_name="orders",
+            tenant_id="tenant-other",
+            request_id="req-tenant-b",
+        )
+    )
+
+    assert tenant_a.rows == ({"order_id": "O-1001", "status": "PENDING"},)
+    assert tenant_b.rows == ({"order_id": "O-2001", "status": "SHIPPED"},)
+    assert tenant_b.cursor == {"lsn": "84"}
 
 
 def test_connector_adapter_contract_returns_empty_missing_snapshot(adapter: ConnectorAdapter) -> None:

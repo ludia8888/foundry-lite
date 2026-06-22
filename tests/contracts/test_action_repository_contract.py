@@ -114,6 +114,7 @@ class FakeActionRepository:
         transition: StatusTransition,
         error: Mapping[str, object] | None,
         completed_at: str,
+        result: Mapping[str, object] | None = None,
     ) -> bool:
         del transaction
         for row in self.action_runs:
@@ -122,7 +123,7 @@ class FakeActionRepository:
                 and row["id"] == action_run_id
                 and row["status"] in transition.from_statuses
             ):
-                row.update(status=transition.to_status, error=error, completed_at=completed_at)
+                row.update(status=transition.to_status, error=error, result=result, completed_at=completed_at)
                 return True
         return False
 
@@ -267,6 +268,7 @@ def _action_run_record(
         status="received",
         idempotency_key=idempotency_key,
         request_fingerprint=request_fingerprint,
+        result=None,
         error=None,
         created_at="2026-06-10T00:00:00Z",
         completed_at=None,
@@ -288,6 +290,7 @@ def _action_run_row(record: ActionRunRecord) -> ActionRunRow:
         "status": record.status,
         "idempotency_key": record.idempotency_key,
         "request_fingerprint": record.request_fingerprint,
+        "result": record.result,
         "error": record.error,
         "created_at": record.created_at,
         "completed_at": record.completed_at,
@@ -565,6 +568,32 @@ def test_action_repository_contract_updates_terminal_state_and_writebacks(harnes
     assert action_runs[0]["error"] == {"type": "ExternalSystemError"}
     assert writebacks[0]["status"] == "failed"
     assert writebacks[0]["connector_id"] == "mock_erp"
+
+
+def test_action_repository_contract_persists_terminal_result_snapshot(harness: ActionHarness) -> None:
+    result = {
+        "actionRunId": "arun_1",
+        "status": "succeeded",
+        "objectEditId": "edit_1",
+        "newObjectVersion": 2,
+    }
+
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
+        updated = harness.repository.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            transition=ACTION_RUN_SUCCEEDED,
+            error=None,
+            completed_at="2026-06-10T00:00:05Z",
+            result=result,
+        )
+
+    action_runs = harness.action_run_rows()
+    assert updated is True
+    assert action_runs[0]["status"] == "succeeded"
+    assert action_runs[0]["result"] == result
 
 
 def test_action_repository_contract_persists_outcome_unknown_writeback_fields(harness: ActionHarness) -> None:

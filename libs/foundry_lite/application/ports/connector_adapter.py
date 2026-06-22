@@ -12,6 +12,7 @@ from foundry_lite.application.ports.adapter_failure import (
 
 RestAuthMode = Literal["none", "bearer", "header"]
 RestPaginationStrategy = Literal["cursor", "page_number"]
+DEFAULT_REST_MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ class RestSourceConfig:
     auth: RestAuthConfig = field(default_factory=RestAuthConfig)
     pagination: RestPaginationConfig = field(default_factory=RestPaginationConfig)
     rate_limit_per_minute: int | None = None
+    max_response_bytes: int = DEFAULT_REST_MAX_RESPONSE_BYTES
     schema_columns: tuple[str, ...] = ()
     allow_private_network: bool = False
 

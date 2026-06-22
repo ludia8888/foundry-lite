@@ -21,12 +21,16 @@ from foundry_lite.application.ports.search_adapter import (
     SearchQuery,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.search_projection_context import (
+    search_projection_context as projection_ctx,
+)
 from foundry_lite.application.services.object_store.search_runs import (
     fail_search_index_run,
     start_search_index_run,
     succeed_search_object_change,
     succeed_search_rebuild,
 )
+from foundry_lite.application.services.object_store.serving_contract import record_scope_object_type_id
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.security.policy import PolicyService
@@ -103,7 +107,6 @@ class ObjectSearchService(CoreService):
         limit: int,
     ) -> ObjectQueryResult:
         """Search via the adapter, then re-read active objects for policy masking."""
-
         self.policy.require(ctx, "object:read")
         query_limit = _search_limit(limit)
         mapping = self._search_mapping(ctx, object_type_api_name)
@@ -119,8 +122,8 @@ class ObjectSearchService(CoreService):
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
         """Rebuild all documents for one object type and report projection drift."""
-
         ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "object:index", "search_index", object_type_api_name)
         self.runtime_service._require_or_audit(ctx, "operations:retry", "search_index", object_type_api_name)
         self.runtime_service._require_write_traffic_open(
             ctx,
@@ -128,10 +131,10 @@ class ObjectSearchService(CoreService):
             resource_type="search_index",
             resource_id=object_type_api_name,
         )
-        object_type, mapping = self._search_object_type_and_mapping(ctx, object_type_api_name)
+        object_type, mapping = self._search_object_type_and_mapping(projection_ctx(ctx), object_type_api_name)
         run_id = self._start_search_run(ctx, object_type, object_type_api_name, "search_rebuild")
         try:
-            rows = self._active_rows(ctx, object_type_api_name)
+            rows = self._active_rows(ctx, object_type_api_name, object_type)
             self.search_adapter.configure_index(mapping)
             for row in rows:
                 self.search_adapter.upsert_document(_search_document(ctx, object_type_api_name, row, mapping))
@@ -159,9 +162,9 @@ class ObjectSearchService(CoreService):
         ctx: RequestContext | None = None,
     ) -> dict[str, object]:
         """Apply one object.changed-style update to the search projection."""
-
         ctx = ctx or RequestContext()
         resource_id = f"{object_type_api_name}/{object_id}"
+        self.runtime_service._require_or_audit(ctx, "object:index", "search_index", resource_id)
         self.runtime_service._require_or_audit(ctx, "operations:retry", "search_index", resource_id)
         self.runtime_service._require_write_traffic_open(
             ctx,
@@ -169,7 +172,7 @@ class ObjectSearchService(CoreService):
             resource_type="search_index",
             resource_id=resource_id,
         )
-        object_type, mapping = self._search_object_type_and_mapping(ctx, object_type_api_name)
+        object_type, mapping = self._search_object_type_and_mapping(projection_ctx(ctx), object_type_api_name)
         run_id = self._start_search_run(ctx, object_type, object_type_api_name, "search_object_changed", object_id)
         try:
             record = self._object_record(ctx, object_type_api_name, object_id)
@@ -241,10 +244,13 @@ class ObjectSearchService(CoreService):
         object_type_api_name: str,
         hits: Sequence[SearchHit],
     ) -> list[ObjectQueryItem]:
-        """Load current object rows for search hits that still exist."""
-
         with self.engine.begin() as conn:
-            rows = [(hit, self._record_if_active(conn, ctx, object_type_api_name, hit.document_id)) for hit in hits]
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
+            object_type_id = record_scope_object_type_id(object_type)
+            rows = [
+                (hit, self._record_if_active(conn, ctx, object_type_api_name, hit.document_id, object_type_id))
+                for hit in hits
+            ]
         return [
             _object_query_item(
                 ctx,
@@ -263,36 +269,40 @@ class ObjectSearchService(CoreService):
         ctx: RequestContext,
         object_type_api_name: str,
         object_id: str,
+        object_type_id: str | None,
     ) -> ObjectRecordRow | None:
-        """Return the active object row or drop stale/deleted search hits."""
-
         record = self.object_read_repository.object_record(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             object_type_api_name=object_type_api_name,
             object_id=object_id,
+            object_type_id=object_type_id,
         )
         return None if record is None or record["deleted"] else record
 
-    def _active_rows(self, ctx: RequestContext, object_type_api_name: str) -> list[ObjectRecordRow]:
-        """Return all active source rows for a full search projection rebuild."""
-
+    def _active_rows(
+        self,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        object_type: ObjectTypeRow,
+    ) -> list[ObjectRecordRow]:
         with self.engine.begin() as conn:
             return self.object_read_repository.active_object_rows(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
                 object_type_api_name=object_type_api_name,
+                object_type_id=record_scope_object_type_id(object_type),
             )
 
     def _object_record(self, ctx: RequestContext, object_type_api_name: str, object_id: str) -> ObjectRecordRow | None:
-        """Return the current source row for one changed object id."""
-
         with self.engine.begin() as conn:
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
             return self.object_read_repository.object_record(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
                 object_type_api_name=object_type_api_name,
                 object_id=object_id,
+                object_type_id=record_scope_object_type_id(object_type),
             )
 
     def _search_mapping(self, ctx: RequestContext, object_type_api_name: str) -> SearchIndexMapping:
@@ -332,14 +342,35 @@ class ObjectSearchService(CoreService):
         search_ids = set(self.search_adapter.document_ids(tenant_id=ctx.tenant_id, object_type=object_type_api_name))
         missing = sorted(object_ids - search_ids)
         orphan = sorted(search_ids - object_ids)
+        deleted_orphans = self._delete_orphan_documents(ctx, object_type_api_name, orphan)
+        remaining_search_ids = search_ids - set(deleted_orphans)
+        remaining_orphan = sorted(remaining_search_ids - object_ids)
         return {
             "objectType": object_type_api_name,
             "objectCount": len(object_ids),
-            "searchCount": len(search_ids),
+            "searchCount": len(remaining_search_ids),
             "missingDocumentIds": missing,
             "orphanDocumentIds": orphan,
-            "status": "consistent" if not missing and not orphan else "drift_detected",
+            "orphanDocumentsDeleted": deleted_orphans,
+            "remainingOrphanDocumentIds": remaining_orphan,
+            "status": "consistent" if not missing and not remaining_orphan else "drift_detected",
         }
+
+    def _delete_orphan_documents(
+        self,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        orphan_document_ids: Sequence[str],
+    ) -> list[str]:
+        deleted: list[str] = []
+        for document_id in orphan_document_ids:
+            self.search_adapter.delete_document(
+                tenant_id=ctx.tenant_id,
+                object_type=object_type_api_name,
+                document_id=document_id,
+            )
+            deleted.append(document_id)
+        return deleted
 
     def _audit_search_index(
         self,

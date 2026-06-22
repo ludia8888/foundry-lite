@@ -25,6 +25,7 @@ from foundry_lite.application.services.transform_protocols import (
 from foundry_lite.application.services.transform_runs import (
     TransformRunPlan,
     mark_transform_run_succeeded,
+    normalize_transform_output_mode,
     start_failed_transform_retry,
     start_transform_run,
 )
@@ -91,6 +92,7 @@ class TransformService(CoreService):
         language: str,
     ) -> TransformRow:
         language = _supported_transform_language(language)
+        mode = normalize_transform_output_mode(mode)
         normalized_checks = self._normalized_checks(checks)
         with self.engine.begin() as conn:
             existing = self._transform_by_api_name(conn, ctx, api_name)
@@ -433,6 +435,18 @@ class TransformService(CoreService):
             before_ref={"transform_run_id": plan.retry_of_run_id},
             after_ref={"transform_run_id": plan.run_id, "output_version_id": result.version_id},
             correlation_id=plan.run_id,
+        )
+        self.runtime_service._run_relation(
+            conn,
+            ctx,
+            source_run_type="transform",
+            source_run_id=plan.retry_of_run_id,
+            target_run_type="transform",
+            target_run_id=plan.run_id,
+            relation="retry_of",
+            resource_type="transform",
+            resource_id=plan.transform_id,
+            metadata={"outputVersionId": result.version_id},
         )
 
     def _execute_sql_transform(

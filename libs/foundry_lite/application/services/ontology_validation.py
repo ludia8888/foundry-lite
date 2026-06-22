@@ -40,6 +40,15 @@ DatasetColumnsLookup = Callable[
     Mapping[str, Mapping[str, object]],
 ]
 
+PROPERTY_DATA_TYPES = frozenset({"boolean", "float", "integer", "string"})
+PROPERTY_SOURCES = frozenset({"dataset", "edit_layer"})
+PROPERTY_EDIT_POLICIES = frozenset({"conflict_requires_review", "edit_only", "edit_wins", "source_wins"})
+PROPERTY_CLASSIFICATIONS = frozenset({"finance", "pii", "public"})
+LINK_CARDINALITIES = frozenset({"many_to_many", "many_to_one", "one_to_many", "one_to_one"})
+OBJECT_BACKING_MODES = frozenset({"snapshot"})
+CDC_DELETE_POLICIES = frozenset({"tombstone"})
+ACTION_MUTATION_TYPES = frozenset({"setProperty"})
+
 
 def validate_persisted_object_type(
     object_type: ObjectTypeRow,
@@ -160,11 +169,22 @@ def _validate_yaml_object_type(
 ) -> None:
     """Validate one YAML object type against the referenced dataset."""
     object_api_name = required_str(object_def, "apiName")
+    _validate_yaml_object_backing(object_def)
     columns = dataset_columns_for_ref(conn, ctx, object_type_backing(object_def)["dataset"])
     property_defs = _property_definitions_by_api(object_def)
+    _validate_yaml_property_contracts(object_api_name, property_defs.values())
     _validate_yaml_primary_key(object_def, property_defs, columns)
     _validate_yaml_dataset_properties(object_api_name, property_defs.values(), columns)
     _validate_yaml_action_mutations(definition, object_api_name, property_defs)
+
+
+def _validate_yaml_object_backing(object_def: YamlObject) -> None:
+    backing = object_type_backing(object_def)
+    details = {"objectType": required_str(object_def, "apiName")}
+    _require_allowed_optional(backing.get("mode"), OBJECT_BACKING_MODES, "object backing mode", details)
+    cdc = backing.get("cdc")
+    if cdc is not None:
+        _require_allowed_optional(cdc.get("deletePolicy"), CDC_DELETE_POLICIES, "cdc delete policy", details)
 
 
 def _property_definitions_by_api(object_def: YamlObject) -> dict[str, YamlObject]:
@@ -212,6 +232,28 @@ def _validate_yaml_dataset_properties(
             )
 
 
+def _validate_yaml_property_contracts(object_api_name: str, properties: Iterable[YamlObject]) -> None:
+    for prop in properties:
+        prop_api = required_str(prop, "apiName")
+        details = {"objectType": object_api_name, "property": prop_api}
+        source = optional_str(prop, "source", "dataset" if "column" in prop else "edit_layer")
+        edit_default = "edit_only" if source == "edit_layer" else "source_wins"
+        _require_allowed(required_str(prop, "type"), PROPERTY_DATA_TYPES, "property type", details)
+        _require_allowed_optional(source, PROPERTY_SOURCES, "property source", details)
+        _require_allowed_optional(
+            optional_str(prop, "editPolicy", edit_default),
+            PROPERTY_EDIT_POLICIES,
+            "edit policy",
+            details,
+        )
+        _require_allowed_optional(
+            optional_str(prop, "classification"),
+            PROPERTY_CLASSIFICATIONS,
+            "classification",
+            details,
+        )
+
+
 def _validate_yaml_action_mutations(
     definition: YamlObject,
     object_api_name: str,
@@ -221,8 +263,16 @@ def _validate_yaml_action_mutations(
     for action_def in mapping_sequence(definition, "actionTypes"):
         if required_str(action_def, "target") != object_api_name:
             continue
+        _validate_yaml_action_parameters(action_def)
         for mutation in action_type_definition(action_def).get("mutations", ()):
             _validate_yaml_action_mutation_property(mutation, property_defs)
+
+
+def _validate_yaml_action_parameters(action_def: YamlObject) -> None:
+    action_api = required_str(action_def, "apiName")
+    for parameter in mapping_sequence(action_def, "parameters"):
+        details = {"actionType": action_api, "parameter": required_str(parameter, "apiName")}
+        _require_allowed(required_str(parameter, "type"), PROPERTY_DATA_TYPES, "action parameter type", details)
 
 
 def _validate_yaml_action_mutation_property(
@@ -230,6 +280,7 @@ def _validate_yaml_action_mutation_property(
     property_defs: Mapping[str, YamlObject],
 ) -> None:
     """Ensure a YAML action mutation targets an editable property."""
+    _require_allowed(required_str(mutation, "type"), ACTION_MUTATION_TYPES, "action mutation type", dict(mutation))
     prop = mutation.get("property")
     if not isinstance(prop, str) or prop not in property_defs:
         raise ValidationFailed("action mutation property missing", details=dict(mutation))
@@ -247,6 +298,12 @@ def _validate_yaml_link(
     """Validate a YAML link type against object references and backing keys."""
     from_api = required_str(link_def, "from")
     to_api = required_str(link_def, "to")
+    _require_allowed(
+        optional_str(link_def, "cardinality", "many_to_one") or "many_to_one",
+        LINK_CARDINALITIES,
+        "link cardinality",
+        {"linkType": required_str(link_def, "apiName")},
+    )
     if from_api not in object_defs or to_api not in object_defs:
         raise ValidationFailed("link references unknown object type", details=dict(link_def))
     backing = link_type_backing(link_def)
@@ -260,3 +317,25 @@ def _validate_yaml_link(
                 "missing": missing_keys,
             },
         )
+
+
+def _require_allowed(value: str, allowed: frozenset[str], label: str, details: Mapping[str, object]) -> None:
+    if value in allowed:
+        return
+    payload = dict(details)
+    payload["value"] = value
+    payload["allowed"] = sorted(allowed)
+    raise ValidationFailed(f"unsupported {label}", details=payload)
+
+
+def _require_allowed_optional(
+    value: object,
+    allowed: frozenset[str],
+    label: str,
+    details: Mapping[str, object],
+) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise ValidationFailed(f"{label} must be a string", details=dict(details))
+    _require_allowed(value, allowed, label, details)

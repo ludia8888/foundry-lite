@@ -59,9 +59,11 @@ def test_trace_operation_adds_request_context_attributes(monkeypatch: pytest.Mon
 
     assert wrapped(ctx=ctx) == "ok"
     assert span.attributes["foundry_lite.operation"] == "unit.operation"
-    assert span.attributes["foundry_lite.tenant_id"] == "tenant-a"
-    assert span.attributes["foundry_lite.actor_user_id"] == "user-a"
+    assert span.attributes["foundry_lite.tenant_hash"] == tracing.trace_identity_hash("tenant-a")
+    assert span.attributes["foundry_lite.actor_user_hash"] == tracing.trace_identity_hash("user-a")
     assert span.attributes["foundry_lite.request_id"] == "req-a"
+    assert "foundry_lite.tenant_id" not in span.attributes
+    assert "foundry_lite.actor_user_id" not in span.attributes
 
 
 def test_trace_public_methods_wraps_only_public_instance_methods(monkeypatch: pytest.MonkeyPatch) -> None:

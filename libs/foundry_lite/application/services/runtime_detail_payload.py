@@ -7,6 +7,7 @@ from foundry_lite.application.ports import (
     RuntimeRow,
     RuntimeRunDetail,
     RuntimeRunInvestigation,
+    RuntimeRunRelationRow,
     RuntimeRunType,
 )
 from foundry_lite.application.services.runtime_quality_report import quality_report_for_transaction
@@ -30,6 +31,7 @@ def runtime_run_detail_payload(
     audit_events: list[RuntimeRow],
     object_edits: list[RuntimeRow],
     action_writebacks: list[RuntimeRow],
+    run_relations: list[RuntimeRunRelationRow],
     lineage_edges: list[LineageEdgeRow],
     dataset_transaction: RuntimeRow | None,
     downstream_impact: RuntimeJsonObject | None,
@@ -53,6 +55,7 @@ def runtime_run_detail_payload(
         "relatedAuditEvents": audit_events,
         "relatedObjectEdits": object_edits,
         "relatedActionWritebacks": action_writebacks,
+        "runRelations": run_relations,
         "lineageEdges": lineage_edges,
         "datasetTransaction": dataset_transaction,
         "lateData": late_data_detail(dataset_transaction),

@@ -88,6 +88,7 @@ class SqlAlchemyActionRepository:
                 status=record.status,
                 idempotency_key=record.idempotency_key,
                 request_fingerprint=record.request_fingerprint,
+                result=dict(record.result) if record.result is not None else None,
                 error=dict(record.error) if record.error is not None else None,
                 created_at=record.created_at,
                 completed_at=record.completed_at,
@@ -118,6 +119,7 @@ class SqlAlchemyActionRepository:
         transition: StatusTransition,
         error: Mapping[str, object] | None,
         completed_at: str,
+        result: Mapping[str, object] | None = None,
     ) -> bool:
         return cas_status_update(
             transaction,
@@ -125,7 +127,11 @@ class SqlAlchemyActionRepository:
             tenant_id=tenant_id,
             row_id=action_run_id,
             transition=transition,
-            values={"error": dict(error) if error is not None else None, "completed_at": completed_at},
+            values={
+                "error": dict(error) if error is not None else None,
+                "result": dict(result) if result is not None else None,
+                "completed_at": completed_at,
+            },
         )
 
     def insert_action_writeback(self, *, transaction: Any, record: ActionWritebackRecord) -> None:
@@ -233,6 +239,7 @@ def _action_run_values(record: ActionRunRecord) -> dict[str, object]:
         "status": record.status,
         "idempotency_key": record.idempotency_key,
         "request_fingerprint": record.request_fingerprint,
+        "result": dict(record.result) if record.result is not None else None,
         "error": dict(record.error) if record.error is not None else None,
         "created_at": record.created_at,
         "completed_at": record.completed_at,

@@ -163,6 +163,18 @@ class WorkflowOrchestrationService(CoreService):
                 workflow_run_id=row["id"],
                 audit_event_id=audit_id,
             )
+            self.runtime_service._run_relation(
+                conn,
+                ctx,
+                source_run_type="workflow",
+                source_run_id=row["id"],
+                target_run_type="audit",
+                target_run_id=audit_id,
+                relation="audited_by",
+                resource_type="product_workflow",
+                resource_id=row["id"],
+                metadata={"status": row["status"]},
+            )
         return linked or self._workflow_row_by_id(ctx, row["id"])
 
     def _workflow_row_by_id(self, ctx: RequestContext, workflow_run_id_value: str) -> WorkflowRunRow:

@@ -70,13 +70,44 @@ def test_compute_adapter_contract_rows_to_parquet_and_health_checks(
     min_check = adapter.execute_check(parquet_path, row_count, {"type": "row_count_min", "min": 4})
     not_null = adapter.execute_check(parquet_path, row_count, {"type": "not_null", "columns": ["order_id"]})
     unique = adapter.execute_check(parquet_path, row_count, {"type": "unique", "column": "order_id"})
-    custom = adapter.execute_check(parquet_path, row_count, {"type": "custom"})
-
+    unique_tuple = adapter.execute_check(
+        parquet_path,
+        row_count,
+        {"type": "unique_tuple", "columns": ["order_id", "status"]},
+    )
     assert min_check["status"] == "failed"
     assert not_null == {"check": "not_null", "status": "failed", "failures": {"order_id": 1}}
     assert unique["status"] == "failed"
     assert unique["duplicate_groups"] == 1
-    assert custom["status"] == "passed"
+    assert unique_tuple["status"] == "passed"
+    with pytest.raises(ValidationFailed, match="unsupported dataset quality check type"):
+        adapter.execute_check(parquet_path, row_count, {"type": "custom"})
+
+
+def test_compute_adapter_contract_detects_duplicate_composite_tuple(
+    adapter: ComputeAdapter,
+    tmp_path: Path,
+) -> None:
+    parquet_path = tmp_path / "composite.parquet"
+    adapter.rows_to_parquet(
+        [
+            {"order_id": "O-1", "line_id": "1", "amount": 10},
+            {"order_id": "O-1", "line_id": "2", "amount": 20},
+            {"order_id": "O-1", "line_id": "1", "amount": 30},
+        ],
+        parquet_path,
+        ["order_id", "line_id", "amount"],
+    )
+
+    row_count = adapter.inspect_parquet(parquet_path, ["order_id", "line_id"]).row_count
+    result = adapter.execute_check(
+        parquet_path,
+        row_count,
+        {"type": "unique_tuple", "columns": ["order_id", "line_id"]},
+    )
+
+    assert result["status"] == "failed"
+    assert result["duplicate_groups"] == 1
 
 
 def test_compute_adapter_contract_sql_transform_and_unresolved_inputs(

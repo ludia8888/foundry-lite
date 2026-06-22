@@ -18,6 +18,8 @@ from foundry_lite.application.ports import (
     RuntimeRow,
     RuntimeRowsTable,
     RuntimeRunPageCursor,
+    RuntimeRunRelationRecord,
+    RuntimeRunRelationRow,
     RuntimeRunSnapshot,
     RuntimeRunType,
     WorkflowRunRecord,
@@ -255,6 +257,34 @@ class FakeRuntimeRepository:
         del transaction
         self.tables["lineage_edges"].append(_lineage_row(record))
 
+    def insert_run_relation(self, *, transaction: Any, record: RuntimeRunRelationRecord) -> bool:
+        del transaction
+        if any(_relation_key(row) == _relation_record_key(record) for row in self.tables["runtime_run_relations"]):
+            return False
+        self.tables["runtime_run_relations"].append(_runtime_run_relation_row(record))
+        return True
+
+    def run_relations_for_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        run_type: RuntimeRunType,
+        run_id: str,
+    ) -> list[RuntimeRunRelationRow]:
+        del transaction
+        rows = [
+            row
+            for row in self.tables["runtime_run_relations"]
+            if row["tenant_id"] == tenant_id
+            and (
+                (row["source_run_type"] == run_type and row["source_run_id"] == run_id)
+                or (row["target_run_type"] == run_type and row["target_run_id"] == run_id)
+            )
+        ]
+        rows.sort(key=lambda row: (row["created_at"], row["id"]))
+        return [cast(RuntimeRunRelationRow, dict(row)) for row in rows]
+
 
 @dataclass
 class FakeRuntimeRepositoryHarness:
@@ -395,6 +425,28 @@ def _lineage_record(*, edge_id: str = "lineage_1", tenant_id: str = "tenant-demo
     )
 
 
+def _run_relation_record(
+    *,
+    relation_id: str = "run_relation_1",
+    tenant_id: str = "tenant-demo",
+    source_run_id: str = "action_run_1",
+    target_run_id: str = "outbox_1",
+) -> RuntimeRunRelationRecord:
+    return RuntimeRunRelationRecord(
+        relation_id=relation_id,
+        tenant_id=tenant_id,
+        source_run_type="action",
+        source_run_id=source_run_id,
+        target_run_type="outbox",
+        target_run_id=target_run_id,
+        relation="emitted",
+        resource_type="object",
+        resource_id="Order:O-1",
+        metadata={"reason": "action commit outbox"},
+        created_at="2026-06-10T00:00:00Z",
+    )
+
+
 def _workflow_record_obj(
     *,
     workflow_run_id: str = "flite:workflow:run:1",
@@ -470,6 +522,48 @@ def _lineage_row(record: LineageEdgeRecord) -> dict[str, Any]:
         "created_by_run_id": record.created_by_run_id,
         "created_at": record.created_at,
     }
+
+
+def _runtime_run_relation_row(record: RuntimeRunRelationRecord) -> dict[str, Any]:
+    return {
+        "id": record.relation_id,
+        "tenant_id": record.tenant_id,
+        "source_run_type": record.source_run_type,
+        "source_run_id": record.source_run_id,
+        "target_run_type": record.target_run_type,
+        "target_run_id": record.target_run_id,
+        "relation": record.relation,
+        "resource_type": record.resource_type,
+        "resource_id": record.resource_id,
+        "metadata": dict(record.metadata),
+        "created_at": record.created_at,
+    }
+
+
+def _relation_key(row: dict[str, Any]) -> tuple[object, ...]:
+    return (
+        row["tenant_id"],
+        row["source_run_type"],
+        row["source_run_id"],
+        row["target_run_type"],
+        row["target_run_id"],
+        row["relation"],
+        row["resource_type"],
+        row["resource_id"],
+    )
+
+
+def _relation_record_key(record: RuntimeRunRelationRecord) -> tuple[object, ...]:
+    return (
+        record.tenant_id,
+        record.source_run_type,
+        record.source_run_id,
+        record.target_run_type,
+        record.target_run_id,
+        record.relation,
+        record.resource_type,
+        record.resource_id,
+    )
 
 
 def _workflow_row(record: WorkflowRunRecord) -> dict[str, Any]:
@@ -735,6 +829,54 @@ def test_runtime_repository_contract_lineage_lookup_is_tenant_scoped(
     assert [row["id"] for row in by_input] == ["lineage_1"]
     assert [row["id"] for row in by_output] == ["lineage_1"]
     assert [row["id"] for row in other_tenant] == ["lineage_other"]
+
+
+def test_runtime_repository_contract_run_relations_are_tenant_scoped_and_idempotent(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        inserted = harness.repository.insert_run_relation(transaction=transaction, record=_run_relation_record())
+        duplicate = harness.repository.insert_run_relation(
+            transaction=transaction,
+            record=_run_relation_record(relation_id="run_relation_duplicate"),
+        )
+        other_tenant = harness.repository.insert_run_relation(
+            transaction=transaction,
+            record=_run_relation_record(relation_id="run_relation_other", tenant_id="tenant-other"),
+        )
+
+    with harness.transaction() as transaction:
+        by_source = harness.repository.run_relations_for_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            run_type="action",
+            run_id="action_run_1",
+        )
+        by_target = harness.repository.run_relations_for_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            run_type="outbox",
+            run_id="outbox_1",
+        )
+        hidden_other_tenant = harness.repository.run_relations_for_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            run_type="action",
+            run_id="action_run_1",
+        )
+        visible_other_tenant = harness.repository.run_relations_for_run(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            run_type="action",
+            run_id="action_run_1",
+        )
+
+    assert inserted is True
+    assert duplicate is False
+    assert other_tenant is True
+    assert [row["id"] for row in by_source] == ["run_relation_1"]
+    assert by_source == by_target == hidden_other_tenant
+    assert [row["id"] for row in visible_other_tenant] == ["run_relation_other"]
 
 
 def test_runtime_repository_contract_requeues_dead_letter_event(

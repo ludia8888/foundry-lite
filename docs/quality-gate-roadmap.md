@@ -774,12 +774,15 @@ request span을 만들고, 그 아래에서 service span과 SQLAlchemy DB span�
   `ObjectIndexingService.index_rebuild`, `ActionService.apply_action`,
   `MaterializationService.materialize` span이 있어야 한다.
 - 위 service span은 같은 `foundry_lite.request_id`를 가져야 한다.
+- span에는 raw `foundry_lite.tenant_id`나 `foundry_lite.actor_user_id`가 없어야 하며,
+  correlation이 필요하면 bounded hash attribute만 사용해야 한다.
 - SQLAlchemy DB span이 request trace 안에 1개 이상 있어야 한다.
 - service span/DB span이 request trace 밖으로 새 trace를 만들면 fail한다.
 - 결과는 `artifacts/quality/trace_continuity.json`에 남긴다.
 
 Self-test: `tests/unit/test_quality_trace_continuity.py`가 missing request span,
-service request_id 누락, DB trace mismatch, 정상 span set, JSON report 생성을 검증한다.
+service request_id 누락, raw tenant/user span attribute, DB trace mismatch, 정상 span set,
+JSON report 생성을 검증한다.
 실제 demo probe에서는 service span 13개와 DB span 651개가 하나의 request trace 안에
 묶이는 것을 확인했다.
 

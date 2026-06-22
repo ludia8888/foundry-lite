@@ -12,6 +12,7 @@ from urllib.request import Request
 
 import foundry_lite.infrastructure.adapters.rest_connector as rest_connector_module
 import pytest
+from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.connector_adapter import (
     ConnectorRateLimitedError,
     ConnectorSnapshotRequest,
@@ -38,6 +39,13 @@ class _RedirectHandler(Protocol):
 
 class _RequestRecordingHandler(Protocol):
     requests: ClassVar[list[dict[str, str | None]]]
+
+
+def _redirect_handler_from_handlers(handlers: tuple[object, ...]) -> _RedirectHandler:
+    for handler in handlers:
+        if isinstance(handler, rest_connector_module._ValidatingRedirectHandler):
+            return cast(_RedirectHandler, handler)
+    raise AssertionError("redirect validation handler was not installed")
 
 
 class MockRestServer(AbstractContextManager["MockRestServer"]):
@@ -219,6 +227,84 @@ def test_rest_connector_raises_rate_limit_error() -> None:
     assert failure.adapter_profile == "rest-pull-connector"
 
 
+def test_rest_connector_applies_configured_local_rate_limit() -> None:
+    current_time = [100.0]
+    with MockRestServer() as server:
+        adapter = RestPullConnectorAdapter(clock=lambda: current_time[0])
+        source = RestSourceConfig(
+            base_url=server.base_url,
+            resource_path="/orders",
+            allow_private_network=True,
+            rate_limit_per_minute=60,
+        )
+        first = adapter.snapshot(
+            ConnectorSnapshotRequest("rest", "orders", "tenant-demo", "req-rest-local-rate-1", rest=source)
+        )
+        with pytest.raises(AdapterError) as exc_info:
+            adapter.snapshot(
+                ConnectorSnapshotRequest("rest", "orders", "tenant-demo", "req-rest-local-rate-2", rest=source)
+            )
+        other_tenant = adapter.snapshot(
+            ConnectorSnapshotRequest("rest", "orders", "tenant-other", "req-rest-local-rate-other", rest=source)
+        )
+        current_time[0] = 101.0
+        retry = adapter.snapshot(
+            ConnectorSnapshotRequest("rest", "orders", "tenant-demo", "req-rest-local-rate-3", rest=source)
+        )
+
+    failure = exc_info.value.failure
+    assert first.rows == ({"order_id": "O-1001", "amount": 100},)
+    assert other_tenant.rows == ({"order_id": "O-1001", "amount": 100},)
+    assert retry.rows == ({"order_id": "O-1001", "amount": 100},)
+    assert failure.kind == "rate_limited"
+    assert failure.is_retryable is True
+    assert failure.timeout_seconds == 1
+    assert failure.details["tenantId"] == "tenant-demo"
+
+
+def test_rest_connector_rejects_invalid_local_rate_limit() -> None:
+    with pytest.raises(ValidationFailed, match="rateLimitPerMinute"):
+        RestPullConnectorAdapter().snapshot(
+            ConnectorSnapshotRequest(
+                connector_name="rest",
+                resource_name="orders",
+                tenant_id="tenant-demo",
+                request_id="req-rest-invalid-local-rate",
+                rest=RestSourceConfig(
+                    base_url="https://api.example.test",
+                    resource_path="/orders",
+                    rate_limit_per_minute=0,
+                ),
+            )
+        )
+
+
+def test_rest_connector_caps_response_size_before_json_parsing() -> None:
+    with MockRestServer() as server:
+        with pytest.raises(AdapterError) as exc_info:
+            RestPullConnectorAdapter().snapshot(
+                ConnectorSnapshotRequest(
+                    connector_name="rest",
+                    resource_name="orders",
+                    tenant_id="tenant-demo",
+                    request_id="req-rest-large-response",
+                    rest=RestSourceConfig(
+                        base_url=server.base_url,
+                        resource_path="/large-response",
+                        allow_private_network=True,
+                        max_response_bytes=64,
+                    ),
+                )
+            )
+
+    failure = exc_info.value.failure
+    assert failure.adapter_profile == "rest-pull-connector"
+    assert failure.operation == "snapshot"
+    assert failure.kind == "validation"
+    assert failure.is_retryable is False
+    assert failure.details == {"maxResponseBytes": 64, "bytesRead": 65}
+
+
 def test_rest_connector_rejects_missing_or_incomplete_config() -> None:
     adapter = RestPullConnectorAdapter()
     with pytest.raises(ValidationFailed, match="source config"):
@@ -379,8 +465,8 @@ def test_rest_redirect_to_private_ip_blocked(monkeypatch: pytest.MonkeyPatch) ->
             )
             return _FakeHTTPResponse({"items": [], "nextCursor": None})
 
-    def fake_build_opener(handler: _RedirectHandler) -> RedirectingOpener:
-        return RedirectingOpener(handler)
+    def fake_build_opener(*handlers: object) -> RedirectingOpener:
+        return RedirectingOpener(_redirect_handler_from_handlers(handlers))
 
     monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
     monkeypatch.setattr(rest_connector_module, "build_opener", fake_build_opener)
@@ -431,8 +517,8 @@ def test_rest_redirect_encoded_decimal_octal_private_hosts_blocked(
             self._handler.redirect_request(request, object(), 302, "Found", {}, redirect_url)
             return _FakeHTTPResponse({"items": [], "nextCursor": None})
 
-    def fake_build_opener(handler: _RedirectHandler) -> RedirectingOpener:
-        return RedirectingOpener(handler)
+    def fake_build_opener(*handlers: object) -> RedirectingOpener:
+        return RedirectingOpener(_redirect_handler_from_handlers(handlers))
 
     monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
     monkeypatch.setattr(rest_connector_module, "build_opener", fake_build_opener)
@@ -496,8 +582,8 @@ def test_rest_dns_rebinding_to_private_ip_blocked(monkeypatch: pytest.MonkeyPatc
             )
             return _FakeHTTPResponse({"items": [], "nextCursor": None})
 
-    def fake_build_opener(handler: _RedirectHandler) -> RebindingRedirectOpener:
-        return RebindingRedirectOpener(handler)
+    def fake_build_opener(*handlers: object) -> RebindingRedirectOpener:
+        return RebindingRedirectOpener(_redirect_handler_from_handlers(handlers))
 
     monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
     monkeypatch.setattr(rest_connector_module, "build_opener", fake_build_opener)
@@ -515,6 +601,81 @@ def test_rest_dns_rebinding_to_private_ip_blocked(monkeypatch: pytest.MonkeyPatc
 
     assert resolutions == ["93.184.216.34", "10.0.0.8"]
     assert exc_info.value.details["reason"] == "resolved_private_ip"
+
+
+def test_rest_pinned_http_connection_uses_validated_ip_not_original_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolutions: list[str] = []
+    connection_attempts: list[tuple[tuple[str, int], object, object]] = []
+
+    def fake_getaddrinfo(
+        host: str,
+        port: int,
+        *,
+        type: socket.SocketKind,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        address = "93.184.216.34" if not resolutions else "10.0.0.8"
+        resolutions.append(address)
+        return [(socket.AF_INET, type, 0, "", (address, port))]
+
+    def fake_create_connection(address: tuple[str, int], timeout: object, source_address: object) -> object:
+        connection_attempts.append((address, timeout, source_address))
+        return object()
+
+    monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(rest_connector_module.socket, "create_connection", fake_create_connection)
+
+    target = rest_connector_module._validated_http_target(
+        "http://api.example.test/orders",
+        allow_private_network=False,
+    )
+    connection = rest_connector_module._pinned_http_connection(target)("api.example.test", timeout=5)
+    connection.connect()
+
+    assert resolutions == ["93.184.216.34"]
+    assert connection_attempts == [(("93.184.216.34", 80), 5, None)]
+
+
+def test_rest_pinned_https_connection_preserves_sni_for_original_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection_attempts: list[tuple[tuple[str, int], object, object]] = []
+    server_names: list[str | None] = []
+
+    class FakeTLSContext:
+        def wrap_socket(self, sock: object, *, server_hostname: str | None) -> object:
+            server_names.append(server_hostname)
+            return sock
+
+    def fake_getaddrinfo(
+        host: str,
+        port: int,
+        *,
+        type: socket.SocketKind,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, type, 0, "", ("93.184.216.34", port))]
+
+    def fake_create_connection(address: tuple[str, int], timeout: object, source_address: object) -> object:
+        connection_attempts.append((address, timeout, source_address))
+        return object()
+
+    monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(rest_connector_module.socket, "create_connection", fake_create_connection)
+
+    target = rest_connector_module._validated_http_target(
+        "https://api.example.test/orders",
+        allow_private_network=False,
+    )
+    connection = rest_connector_module._pinned_https_connection(target)(
+        "api.example.test",
+        timeout=5,
+        context=FakeTLSContext(),
+    )
+    connection.connect()
+
+    assert connection_attempts == [(("93.184.216.34", 443), 5, None)]
+    assert server_names == ["api.example.test"]
 
 
 def test_rest_connector_rejects_unresolvable_source_host(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -560,7 +721,7 @@ def test_rest_connector_accepts_source_url_resolving_to_global_address(
             requests.append((str(request.full_url), timeout))
             return _FakeHTTPResponse({"items": [{"order_id": "O-1003"}], "nextCursor": ""})
 
-    def fake_build_opener(_handler: object) -> SuccessfulOpener:
+    def fake_build_opener(*_handlers: object) -> SuccessfulOpener:
         return SuccessfulOpener()
 
     monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
@@ -634,6 +795,7 @@ def test_rest_connector_returns_empty_schema_for_empty_page_without_declared_col
 class _FakeHTTPResponse(AbstractContextManager["_FakeHTTPResponse"]):
     def __init__(self, payload: Mapping[str, object]) -> None:
         self._body = json.dumps(payload).encode("utf-8")
+        self._offset = 0
 
     def __enter__(self) -> _FakeHTTPResponse:
         return self
@@ -641,8 +803,14 @@ class _FakeHTTPResponse(AbstractContextManager["_FakeHTTPResponse"]):
     def __exit__(self, *exc_info: object) -> None:
         return None
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, amt: int | None = None) -> bytes:
+        if amt is None or amt < 0:
+            chunk = self._body[self._offset :]
+            self._offset = len(self._body)
+            return chunk
+        start = self._offset
+        self._offset = min(len(self._body), start + amt)
+        return self._body[start : self._offset]
 
 
 def _handler_class() -> type[BaseHTTPRequestHandler]:
@@ -674,6 +842,9 @@ def _handler_class() -> type[BaseHTTPRequestHandler]:
                 return
             if split.path == "/invalid-json":
                 self._write_raw(b"not-json")
+                return
+            if split.path == "/large-response":
+                self._write_json({"items": [{"payload": "x" * 1024}], "nextCursor": None})
                 return
             if split.path == "/array-payload":
                 self._write_json([])

@@ -36,6 +36,30 @@ def test_commit_dataset_version_aborts_when_primary_key_check_fails(
     assert any(failure["contract_status"] == "BLOCK_COMMIT" for failure in failures)
 
 
+def test_composite_primary_key_uses_tuple_uniqueness(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.order_lines", ctx=ctx, primary_key=["order_id", "line_id"])
+    valid_csv = tmp_path / "valid_order_lines.csv"
+    valid_csv.write_text(
+        "order_id,line_id,amount\nO-1,1,100\nO-1,2,200\n",
+        encoding="utf-8",
+    )
+    invalid_csv = tmp_path / "duplicate_order_lines.csv"
+    invalid_csv.write_text(
+        "order_id,line_id,amount\nO-1,1,100\nO-1,1,150\n",
+        encoding="utf-8",
+    )
+
+    committed = foundry.datasets.upload_csv("raw.order_lines", valid_csv, ctx=ctx)
+    with pytest.raises(ValidationFailed, match="dataset checks failed") as exc_info:
+        foundry.datasets.upload_csv("raw.order_lines", invalid_csv, ctx=ctx)
+
+    failures = exc_info.value.details["failures"]
+    assert committed.version_number == 1
+    assert [str(row["line_id"]) for row in foundry.datasets.preview("raw.order_lines", ctx=ctx)] == ["1", "2"]
+    assert any(failure["check"] == "unique_tuple" and failure["status"] == "failed" for failure in failures)
+
+
 def test_dataset_health_check_reads_candidate_not_latest(
     foundry: FoundryLite,
     tmp_path: Path,
@@ -318,6 +342,30 @@ def test_warn_does_not_block_commit_but_is_visible(foundry: FoundryLite, tmp_pat
     assert warning_rows
     assert warning_rows[0]["details"]["status"] == "failed"
     assert warning_rows[0]["details"]["contract_status"] == "WARN"
+
+
+def test_unknown_quality_check_type_blocks_commit(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.unknown_check_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.unknown_check_orders", ctx=ctx, primary_key=["order_id"])
+    csv_path = tmp_path / "unknown_check_orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,100\n", encoding="utf-8")
+    foundry.datasets.upload_csv("raw.unknown_check_orders", csv_path, ctx=ctx)
+    sql_path = tmp_path / "unknown_check_orders.sql"
+    sql_path.write_text("select order_id, amount from {{ input('raw.unknown_check_orders') }}", encoding="utf-8")
+    foundry.transforms.register(
+        "unknown_check_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.unknown_check_orders"},
+        output_dataset_ref="clean.unknown_check_orders",
+        checks=[{"type": "custom"}],
+        ctx=ctx,
+    )
+
+    with pytest.raises(ValidationFailed, match="unsupported dataset quality check type"):
+        foundry.transforms.run("unknown_check_orders", ctx=ctx)
+
+    assert foundry.datasets.list_versions("clean.unknown_check_orders", ctx=ctx) == []
 
 
 def test_quarantine_routes_bad_records_to_record_dlq(foundry: FoundryLite, tmp_path: Path) -> None:

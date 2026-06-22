@@ -50,6 +50,20 @@ def committed_version_file_paths(
         raise version_storage_error(storage, version, "committed_version_storage_corrupt", str(exc)) from exc
 
 
+def committed_version_preview_file_paths(
+    storage: DatasetStorageAdapter,
+    version: DatasetVersionRow,
+    *,
+    partition_filter: Mapping[str, object] | None = None,
+) -> list[Path]:
+    try:
+        return storage.preview_file_paths(version["manifest_uri"], partition_filter=partition_filter)
+    except FileNotFoundError as exc:
+        raise version_storage_error(storage, version, "committed_version_storage_missing", str(exc)) from exc
+    except (IndexError, KeyError, ValueError) as exc:
+        raise version_storage_error(storage, version, "committed_version_storage_corrupt", str(exc)) from exc
+
+
 def committed_manifest(storage: DatasetStorageAdapter, manifest_uri: str) -> DatasetManifest:
     try:
         return storage.load_manifest(manifest_uri)

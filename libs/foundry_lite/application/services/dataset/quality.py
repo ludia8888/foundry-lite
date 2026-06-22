@@ -23,6 +23,9 @@ from foundry_lite.application.services.dataset.schema_evolution import (
     build_schema_evolution_result,
 )
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ValidationFailed
+
+SUPPORTED_DATASET_CHECK_TYPES = frozenset({"allow_empty", "row_count_min", "not_null", "unique", "unique_tuple"})
 
 
 @dataclass(frozen=True)
@@ -127,12 +130,18 @@ class DatasetQualityService(CoreService):
         dataset: DatasetRow,
         extra_checks: Sequence[DatasetCheckConfig],
     ) -> list[DatasetCheckConfig]:
+        for check in extra_checks:
+            _validate_dataset_check_config(check)
         checks: list[DatasetCheckConfig] = []
         if not _allows_empty_dataset(extra_checks):
             checks.append({"type": "row_count_min", "min": 1})
-        for pk in dataset["primary_key"]:
+        primary_key = list(dataset["primary_key"])
+        for pk in primary_key:
             checks.append({"type": "not_null", "columns": [pk]})
-            checks.append({"type": "unique", "column": pk})
+        if len(primary_key) == 1:
+            checks.append({"type": "unique", "column": primary_key[0]})
+        elif len(primary_key) > 1:
+            checks.append({"type": "unique_tuple", "columns": primary_key})
         checks.extend(check for check in extra_checks if check.get("type") != "allow_empty")
         return checks
 
@@ -238,7 +247,15 @@ class DatasetQualityService(CoreService):
                 enabled=True,
             ),
         )
-        return check_id
+        persisted = self.dataset_quality_repository.check_by_name(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            dataset_id=dataset_id,
+            name=name,
+        )
+        if persisted is None:
+            raise RuntimeError("dataset check insert had no persisted winner")
+        return persisted["id"]
 
     def _execute_check(
         self,
@@ -330,6 +347,15 @@ def _quality_policy_status(result: DatasetCheckResult, check: DatasetCheckConfig
     return "BLOCK_COMMIT"
 
 
+def _validate_dataset_check_config(check: DatasetCheckConfig) -> None:
+    check_type = check.get("type")
+    if check_type not in SUPPORTED_DATASET_CHECK_TYPES:
+        raise ValidationFailed(
+            "unsupported dataset quality check type",
+            details={"check_type": str(check_type)},
+        )
+
+
 def _quality_result_details(result: DatasetCheckResult, policy_status: str) -> DatasetCheckResult:
     return {**result, "contract_status": policy_status}
 
@@ -339,7 +365,7 @@ def _check_severity(check: DatasetCheckConfig) -> str:
 
 
 def _is_row_quarantine_check(check: DatasetCheckConfig) -> bool:
-    return str(check.get("type")) in {"not_null", "unique"}
+    return str(check.get("type")) in {"not_null", "unique", "unique_tuple"}
 
 
 def _failed_row_indexes(rows: Sequence[Mapping[str, object]], check: DatasetCheckConfig) -> list[int]:
@@ -348,6 +374,8 @@ def _failed_row_indexes(rows: Sequence[Mapping[str, object]], check: DatasetChec
         return _not_null_failed_indexes(rows, check)
     if check_type == "unique":
         return _unique_failed_indexes(rows, check)
+    if check_type == "unique_tuple":
+        return _unique_tuple_failed_indexes(rows, check)
     return []
 
 
@@ -360,6 +388,15 @@ def _unique_failed_indexes(rows: Sequence[Mapping[str, object]], check: DatasetC
     column = str(check.get("column"))
     counts: dict[str, int] = {}
     keys = [_json_hash({"value": row.get(column)}) for row in rows]
+    for key in keys:
+        counts[key] = counts.get(key, 0) + 1
+    return [index for index, key in enumerate(keys) if counts[key] > 1]
+
+
+def _unique_tuple_failed_indexes(rows: Sequence[Mapping[str, object]], check: DatasetCheckConfig) -> list[int]:
+    columns = _string_list(check.get("columns"))
+    counts: dict[str, int] = {}
+    keys = [_json_hash({column: row.get(column) for column in columns}) for row in rows]
     for key in keys:
         counts[key] = counts.get(key, 0) + 1
     return [index for index, key in enumerate(keys) if counts[key] > 1]

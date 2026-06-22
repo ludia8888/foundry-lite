@@ -24,6 +24,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.transaction_context import (
     DATASET_TRANSACTION_ABORT,
+    DATASET_TRANSACTION_ABORTING,
     DATASET_TRANSACTION_COMMIT,
     DEAD_LETTER_DISCARDED,
     DEAD_LETTER_REPLAY_FAILED,
@@ -89,6 +90,46 @@ class SqlAlchemyDatasetTransactionRepository:
             .all()
         )
         return [cast(DatasetTransactionRow, dict(row)) for row in rows]
+
+    def list_recoverable_transactions(
+        self, *, transaction: Any, tenant_id: str, created_before: str
+    ) -> list[DatasetTransactionRow]:
+        rows = (
+            transaction.execute(
+                select(db.dataset_transactions)
+                .where(
+                    and_(
+                        db.dataset_transactions.c.tenant_id == tenant_id,
+                        db.dataset_transactions.c.status.in_(("OPEN", "ABORTING")),
+                        db.dataset_transactions.c.created_at < created_before,
+                    )
+                )
+                .order_by(db.dataset_transactions.c.created_at)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(DatasetTransactionRow, dict(row)) for row in rows]
+
+    def claim_stale_open_transaction(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transaction_id: str,
+        metadata: DatasetTransactionMetadata,
+    ) -> DatasetTransactionRow | None:
+        claimed = cas_status_update(
+            transaction,
+            db.dataset_transactions,
+            tenant_id=tenant_id,
+            row_id=transaction_id,
+            transition=DATASET_TRANSACTION_ABORTING,
+            values={"metadata": dict(metadata)},
+        )
+        if not claimed:
+            return None
+        return self.transaction_by_id(transaction=transaction, transaction_id=transaction_id)
 
     def abort_transaction(
         self, *, transaction: Any, tenant_id: str, transaction_id: str, metadata: DatasetTransactionMetadata

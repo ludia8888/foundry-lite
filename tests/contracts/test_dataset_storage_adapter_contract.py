@@ -120,9 +120,11 @@ def test_dataset_storage_adapter_resolves_manifest_files_with_partition_filter_w
     paths = adapter.data_file_paths(manifest_uri)
     filtered_paths = adapter.data_file_paths(manifest_uri, partition_filter={"bucket": "b"})
     empty_paths = adapter.data_file_paths(manifest_uri, partition_filter={"bucket": "missing"})
+    preview_paths = adapter.preview_file_paths(manifest_uri, partition_filter={"bucket": "b"})
 
     assert [path.read_bytes() for path in paths] == [b"first part", b"second part"]
     assert [path.read_bytes() for path in filtered_paths] == [b"second part"]
+    assert [path.read_bytes() for path in preview_paths] == [b"second part"]
     assert empty_paths == []
 
 

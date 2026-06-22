@@ -64,9 +64,17 @@ class DebeziumPostgresStreamAdapter:
 
     def _normalize_event(self, event: StreamEvent, *, operation: str) -> StreamEvent:
         try:
-            payload = normalize_debezium_postgres_payload(event.payload, self.config.primary_key)
+            payload = dict(normalize_debezium_postgres_payload(event.payload, self.config.primary_key))
         except DebeziumPayloadError as exc:
             raise self._error(operation, "validation", exc.message, exc.details) from exc
+        ordering = payload.get("ordering")
+        if not isinstance(ordering, Mapping):
+            raise self._error(operation, "validation", "CDC payload ordering is not an object", {"ordering": ordering})
+        payload["ordering"] = {
+            **dict(ordering),
+            "stream_name": event.stream_name,
+            "stream_offset": event.offset,
+        }
         return StreamEvent(
             stream_name=event.stream_name,
             offset=event.offset,
@@ -175,8 +183,26 @@ def _required_pk_value(row: Mapping[str, object], name: str) -> object:
 
 def _ordering(body: Mapping[str, object], source: Mapping[str, object]) -> Mapping[str, object]:
     source_ts_ms = source.get("ts_ms", body.get("ts_ms"))
-    return {
+    ordering: dict[str, object] = {
         "lsn": source.get("lsn"),
         "source_ts_ms": source_ts_ms,
         "table": source.get("table"),
     }
+    _copy_optional_ordering_value(ordering, source, "txId", "tx_id")
+    transaction = body.get("transaction")
+    if isinstance(transaction, Mapping):
+        _copy_optional_ordering_value(ordering, transaction, "id", "transaction_id")
+        _copy_optional_ordering_value(ordering, transaction, "total_order", "transaction_order")
+        _copy_optional_ordering_value(ordering, transaction, "data_collection_order", "data_collection_order")
+    return ordering
+
+
+def _copy_optional_ordering_value(
+    ordering: dict[str, object],
+    source: Mapping[str, object],
+    source_key: str,
+    target_key: str,
+) -> None:
+    value = source.get(source_key)
+    if value is not None:
+        ordering[target_key] = value

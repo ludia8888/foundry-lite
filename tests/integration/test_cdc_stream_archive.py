@@ -40,7 +40,10 @@ def test_cdc_stream_archive_appends_standard_changelog_preview(tmp_path: Path) -
     assert result.row_count == 3
     assert [row["op"] for row in preview] == ["c", "u", "d"]
     assert preview[0]["pk_json"] == '{"order_id":"O-1001"}'
-    assert preview[0]["ordering_json"] == '{"lsn":11,"source_ts_ms":1700000000011,"table":"orders"}'
+    assert (
+        preview[0]["ordering_json"]
+        == '{"lsn":11,"source_ts_ms":1700000000011,"stream_name":"erp_orders_cdc","stream_offset":0,"table":"orders"}'
+    )
     assert preview[2]["after_json"] == "null"
 
 

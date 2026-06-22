@@ -9,7 +9,11 @@ from foundry_lite.infrastructure.repositories.dataset_transaction_repository imp
 from foundry_lite.infrastructure.repositories.dataset_version_repository import SqlAlchemyDatasetVersionRepository
 from foundry_lite.infrastructure.repositories.insight_review_repository import SqlAlchemyInsightReviewRepository
 from foundry_lite.infrastructure.repositories.materialization_repository import SqlAlchemyMaterializationRepository
-from foundry_lite.infrastructure.repositories.metadata_repository import SqlAlchemyMetadataRepository
+from foundry_lite.infrastructure.repositories.metadata_repository import (
+    SchemaMutationDisabledError,
+    SqlAlchemyDestructiveDevelopmentAdmin,
+    SqlAlchemyMetadataRepository,
+)
 from foundry_lite.infrastructure.repositories.object_index_repository import SqlAlchemyObjectIndexRepository
 from foundry_lite.infrastructure.repositories.object_read_repository import SqlAlchemyObjectReadRepository
 from foundry_lite.infrastructure.repositories.object_set_repository import SqlAlchemyObjectSetRepository
@@ -25,6 +29,8 @@ __all__ = [
     "SqlAlchemyDatasetVersionRepository",
     "SqlAlchemyInsightReviewRepository",
     "SqlAlchemyMaterializationRepository",
+    "SchemaMutationDisabledError",
+    "SqlAlchemyDestructiveDevelopmentAdmin",
     "SqlAlchemyMetadataRepository",
     "SqlAlchemyObjectIndexRepository",
     "SqlAlchemyObjectReadRepository",

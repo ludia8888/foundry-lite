@@ -240,6 +240,27 @@ def test_ontology_migration_apply_blocks_required_action_parameter(
     assert {change["kind"] for change in blocked} == {"required_action_parameter_added"}
 
 
+def test_ontology_reindex_required_activation_does_not_serve_previous_index(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    assert foundry.objects.get("Order", "O-1001", ctx=ctx)["properties"]["status"] == "PENDING"
+
+    foundry.ontology.apply(_status_remapped_ontology(tmp_path), ctx=ctx)
+    catalog = foundry.ontology.catalog(ctx=ctx)
+    order_type = next(item for item in catalog["objectTypes"] if item["apiName"] == "Order")
+
+    assert order_type["config"]["servingRecordScope"] == "object_type_id"
+    with pytest.raises(NotFound):
+        foundry.objects.get("Order", "O-1001", ctx=ctx)
+    assert foundry.objects.query("Order", ctx=ctx)["items"] == []
+
+    foundry.objects.reindex("Order", ctx=ctx)
+    remapped = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    assert remapped["properties"]["status"] == "C-100"
+
+
 @pytest.mark.integration_scenario("object_action_audit")
 def test_action_apply_is_idempotent_and_rejects_stale_object_version(
     foundry: FoundryLite,
@@ -280,6 +301,9 @@ def test_action_apply_is_idempotent_and_rejects_stale_object_version(
 
     assert replay["idempotentReplay"] is True
     assert replay["actionRunId"] == first["actionRunId"]
+    assert replay["objectEditId"] == first["objectEditId"]
+    assert replay["newObjectVersion"] == first["newObjectVersion"]
+    assert replay["patch"] == first["patch"]
     with pytest.raises(ConflictDetected) as idempotency_conflict:
         foundry.actions.apply(
             "ApproveOrder",
@@ -397,6 +421,7 @@ def test_before_commit_writeback_failure_does_not_edit_object(
         expected_object_version=order["objectVersion"],
         params={"reason": "Inventory confirmed"},
         idempotency_key="writeback-fails",
+        simulate_writeback_failure=True,
         ctx=ctx,
     )
     after_replay_runs = [
@@ -500,6 +525,7 @@ def test_outcome_unknown_is_not_blindly_retried(
         expected_object_version=order["objectVersion"],
         params={"reason": "Inventory confirmed"},
         idempotency_key=idempotency_key,
+        simulate_writeback_outcome_unknown=True,
         ctx=ctx,
     )
 
@@ -558,6 +584,54 @@ def test_reconciliation_resolves_remote_success(foundry: FoundryLite) -> None:
     assert response["remote_resource_id"] == f"mock-resource-{idempotency_key}"
     assert response["last_observed_status"] == "succeeded"
     assert _event_count(snapshot["auditEvents"], "action.run.reconciled") == 1
+
+    replay = foundry.operations.reconcile_action_writeback(
+        cast(str, writeback_id),
+        remote_status="succeeded",
+        remote_resource_id="caller-supplied-different-remote",
+        ctx=ctx,
+    )
+    assert replay["alreadyReconciled"] is True
+    assert replay["remoteResourceId"] == f"mock-resource-{idempotency_key}"
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_reconciliation_uses_failed_run_action_definition_after_ontology_change(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-reconcile-old-action-definition"
+
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "ERP success confirmed after action changed"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_outcome_unknown=True,
+            ctx=ctx,
+        )
+    writeback_id = cast(
+        str,
+        _rows_for_key(foundry.operations.list_runs(ctx=ctx), "actionWritebacks", idempotency_key)[0]["id"],
+    )
+
+    foundry.ontology.apply(_cancel_approve_action_ontology(tmp_path), ctx=ctx)
+    result = foundry.operations.reconcile_action_writeback(
+        writeback_id,
+        remote_status="succeeded",
+        remote_resource_id=f"mock-resource-{idempotency_key}",
+        ctx=ctx,
+    )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    assert result["status"] == "reconciled"
+    assert after["properties"]["status"] == "APPROVED"
+    assert after["properties"]["operatorNote"] == "ERP success confirmed after action changed"
 
 
 @pytest.mark.integration_scenario("failed_run_replay_or_dlq")
@@ -738,6 +812,7 @@ def test_compensation_is_idempotent(
         expected_object_version=order["objectVersion"],
         params={"reason": "ERP accepted before local commit"},
         idempotency_key=idempotency_key,
+        simulate_writeback_compensation_required=True,
         ctx=ctx,
     )
 
@@ -899,6 +974,14 @@ def test_action_audit_masks_sensitive_params(foundry: FoundryLite, tmp_path: Pat
     assert result["patch"]["margin"] == 9999.99
     assert audit["before_ref"]["margin"] == "***MASKED***"
     assert audit["after_ref"]["patch"]["margin"] == "***MASKED***"
+
+    foundry.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
+    action_log = foundry.materialization.run("action_log", ctx=ctx)
+    rows = foundry.datasets.preview("ops.action_log", ctx=ctx, version=action_log.version_id)
+    rendered_rows = repr(rows)
+    assert "9999.99" not in rendered_rows
+    assert "***MASKED***" in str(rows[0]["parameters_json"])
+    assert "***MASKED***" in str(rows[0]["edit_patch_json"])
 
 
 def test_operations_read_is_operator_only_and_redacts_sensitive_params(foundry: FoundryLite, tmp_path: Path) -> None:
@@ -1272,4 +1355,24 @@ def _risk_score_action_ontology(tmp_path: Path) -> Path:
 """
     path = tmp_path / "order-customer-risk-score-action.yaml"
     path.write_text(ontology, encoding="utf-8")
+    return path
+
+
+def _status_remapped_ontology(tmp_path: Path) -> Path:
+    ontology = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
+    path = tmp_path / "order-customer-status-remapped.yaml"
+    remapped = ontology.replace(
+        "        column: source_status",
+        "        column: customer_id",
+        1,
+    )
+    path.write_text(remapped, encoding="utf-8")
+    return path
+
+
+def _cancel_approve_action_ontology(tmp_path: Path) -> Path:
+    ontology = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
+    path = tmp_path / "order-customer-cancel-action.yaml"
+    changed = ontology.replace("        value: APPROVED", "        value: CANCELLED", 1)
+    path.write_text(changed, encoding="utf-8")
     return path

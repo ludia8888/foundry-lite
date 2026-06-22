@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import os
 from collections.abc import Callable, Mapping
 from typing import Any, cast
@@ -16,6 +17,7 @@ from foundry_lite.observability.metrics import core_operation
 
 _CONFIGURED = False
 _TRACED_MARKER = "__foundry_lite_traced__"
+_TRACE_IDENTITY_HASH_PREFIX = 16
 
 
 def configure_observability(service_name: str = "foundry-lite") -> None:
@@ -46,6 +48,16 @@ def _ctx_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> RequestCont
     return None
 
 
+def trace_identity_hash(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:_TRACE_IDENTITY_HASH_PREFIX]
+
+
+def _set_context_attributes(span: Any, ctx: RequestContext) -> None:
+    span.set_attribute("foundry_lite.tenant_hash", trace_identity_hash(ctx.tenant_id))
+    span.set_attribute("foundry_lite.actor_user_hash", trace_identity_hash(ctx.actor_user_id))
+    span.set_attribute("foundry_lite.request_id", ctx.request_id)
+
+
 def trace_operation[F: Callable[..., Any]](operation: str, func: F) -> F:
     if getattr(func, _TRACED_MARKER, False):
         return func
@@ -56,9 +68,7 @@ def trace_operation[F: Callable[..., Any]](operation: str, func: F) -> F:
         with tracer().start_as_current_span(operation) as span:
             span.set_attribute("foundry_lite.operation", operation)
             if ctx is not None:
-                span.set_attribute("foundry_lite.tenant_id", ctx.tenant_id)
-                span.set_attribute("foundry_lite.actor_user_id", ctx.actor_user_id)
-                span.set_attribute("foundry_lite.request_id", ctx.request_id)
+                _set_context_attributes(span, ctx)
             with core_operation(operation):
                 return func(*args, **kwargs)
 

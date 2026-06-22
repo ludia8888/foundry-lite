@@ -11,6 +11,7 @@ from foundry_lite.application.ports import (
     DatasetStorageAdapter,
     DatasetTransactionRepository,
     DatasetVersionRepository,
+    DestructiveDevelopmentAdmin,
     MaterializationRepository,
     MetadataRepository,
     ObjectIndexRepository,
@@ -46,6 +47,7 @@ class CoreDependencies:
     compute_adapter: ComputeAdapter
     connector_adapter: ConnectorAdapter
     metadata_repository: MetadataRepository
+    destructive_development_admin: DestructiveDevelopmentAdmin
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository

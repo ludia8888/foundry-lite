@@ -90,12 +90,35 @@ class FakeDatasetTransactionRepository:
         ]
         return sorted(rows, key=lambda row: row["created_at"])
 
+    def list_recoverable_transactions(
+        self, *, transaction: Any, tenant_id: str, created_before: str
+    ) -> list[dict[str, Any]]:
+        del transaction
+        rows = [
+            dict(row)
+            for row in self.transactions.values()
+            if row["tenant_id"] == tenant_id
+            and row["status"] in {"OPEN", "ABORTING"}
+            and row["created_at"] < created_before
+        ]
+        return sorted(rows, key=lambda row: row["created_at"])
+
+    def claim_stale_open_transaction(
+        self, *, transaction: Any, tenant_id: str, transaction_id: str, metadata: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        del transaction
+        row = self.transactions[transaction_id]
+        if row["tenant_id"] == tenant_id and row["status"] == "OPEN":
+            row.update(status="ABORTING", metadata=metadata)
+            return dict(row)
+        return None
+
     def abort_transaction(
         self, *, transaction: Any, tenant_id: str, transaction_id: str, metadata: dict[str, Any]
     ) -> bool:
         del transaction
         row = self.transactions[transaction_id]
-        if row["tenant_id"] == tenant_id and row["status"] == "OPEN":
+        if row["tenant_id"] == tenant_id and row["status"] in {"OPEN", "ABORTING"}:
             row.update(status="ABORTED", metadata=metadata)
             return True
         return False
@@ -938,6 +961,71 @@ def test_dataset_transaction_repository_contract_lists_stale_open_transactions(h
     # Only OPEN transactions created before the cutoff are returned: the recent
     # OPEN transaction and the already-committed transaction are excluded.
     assert [row["id"] for row in stale] == ["dstx_old"]
+
+
+def test_dataset_transaction_repository_contract_lists_recoverable_transactions(harness: TransactionHarness) -> None:
+    repository = harness.repository
+
+    def create_and_list(transaction: Any) -> list[dict[str, Any]]:
+        repository.create_open_transaction(
+            transaction=transaction, record=_transaction_record("dstx_open", created_at="2026-06-10T00:00:00Z")
+        )
+        repository.create_open_transaction(
+            transaction=transaction,
+            record=_transaction_record("dstx_abort_claim", status="ABORTING", created_at="2026-06-10T00:01:00Z"),
+        )
+        repository.create_open_transaction(
+            transaction=transaction,
+            record=_transaction_record("dstx_done", status="COMMITTED", created_at="2026-06-09T00:00:00Z"),
+        )
+        return list(
+            repository.list_recoverable_transactions(
+                transaction=transaction, tenant_id="tenant-demo", created_before="2026-06-12T00:00:00Z"
+            )
+        )
+
+    recoverable = harness.call_in_transaction(create_and_list)
+
+    assert [row["id"] for row in recoverable] == ["dstx_open", "dstx_abort_claim"]
+
+
+def test_dataset_transaction_repository_contract_claims_stale_open_before_abort(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def claim_and_abort(transaction: Any) -> dict[str, Any] | None:
+        repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_watchdog"))
+        claimed = repository.claim_stale_open_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_watchdog",
+            metadata={"abortedBy": "watchdog"},
+        )
+        assert claimed is not None
+        assert claimed["status"] == "ABORTING"
+        assert (
+            repository.claim_stale_open_transaction(
+                transaction=transaction,
+                tenant_id="tenant-demo",
+                transaction_id="dstx_watchdog",
+                metadata={"abortedBy": "watchdog-again"},
+            )
+            is None
+        )
+        assert repository.abort_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_watchdog",
+            metadata={"abortedBy": "watchdog", "cleanup": "done"},
+        )
+        return repository.transaction_by_id(transaction=transaction, transaction_id="dstx_watchdog")
+
+    aborted = harness.call_in_transaction(claim_and_abort)
+
+    assert aborted is not None
+    assert aborted["status"] == "ABORTED"
+    assert aborted["metadata"] == {"abortedBy": "watchdog", "cleanup": "done"}
 
 
 def test_dataset_transaction_repository_contract_latest_committed_metadata(

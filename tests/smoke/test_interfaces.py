@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.upload_limits import WEBHOOK_BODY_LIMIT_ENV
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import ExternalOutcomeUnknown, NotFound, ValidationFailed
 from foundry_lite.infrastructure import schema as db
@@ -538,6 +539,35 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monk
     assert deny_events[0]["action"] == "webhook:ingest"
 
 
+def test_api_webhook_rejects_oversized_body_before_commit(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    body = b'{"order_id":"O-oversized","status":"PENDING","padding":"too-large"}'
+    timestamp = _webhook_timestamp()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Foundry-Lite-Signature": "sha256=not-used-before-size-check",
+        "X-Foundry-Lite-Timestamp": timestamp,
+        "X-Foundry-Lite-Event-ID": "evt-order-oversized",
+        "X-User-ID": ctx.actor_user_id,
+        "X-Roles": ",".join(ctx.roles),
+    }
+    foundry.datasets.ensure("raw.webhook_oversized_orders", ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setenv(WEBHOOK_BODY_LIMIT_ENV, "16")
+
+    response = TestClient(app).post(
+        "/api/connectors/webhooks/mock_saas/orders",
+        params={"datasetRef": "raw.webhook_oversized_orders"},
+        headers=headers,
+        content=body,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "VALIDATION_FAILED"
+    assert response.json()["detail"]["details"]["max_bytes"] == 16
+    assert foundry.datasets.list_versions("raw.webhook_oversized_orders", ctx=ctx) == []
+
+
 def test_api_webhook_missing_secret_leaves_operator_evidence(foundry, monkeypatch) -> None:
     ctx = demo_admin_context()
     body = b'{"order_id":"O-9001","status":"PENDING"}'
@@ -839,6 +869,9 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     preview = client.get("/api/datasets/clean/orders/preview", headers=headers)
     assert preview.status_code == 200
     assert preview.json()[0]["order_id"] == "O-1001"
+    metrics_after_preview = client.get("/metrics")
+    assert 'path="/api/datasets/{namespace}/{name}/preview"' in metrics_after_preview.text
+    assert 'path="/api/datasets/clean/orders/preview"' not in metrics_after_preview.text
 
     datasets = client.get("/api/datasets", headers=headers)
     dataset_rows = {(row["namespace"], row["name"]): row for row in datasets.json()}
@@ -902,6 +935,13 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     )
     assert lineage.status_code == 200
     assert any(row["to_resource_id"] == order_payload["sourceDatasetVersionId"] for row in lineage.json())
+    viewer_lineage = client.get(
+        "/api/operations/lineage",
+        headers={**headers, "X-User-ID": "viewer-user", "X-Roles": "viewer"},
+        params={"resourceId": order_payload["sourceDatasetVersionId"]},
+    )
+    assert viewer_lineage.status_code == 403
+    assert viewer_lineage.json()["detail"]["code"] == "PERMISSION_DENIED"
 
     query = client.post(
         "/api/objects/Order/query",
@@ -959,11 +999,40 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert any(event["event_type"] == "action.run.committed" for event in detail["relatedOutboxEvents"])
     assert any(event["event_type"] == "action.run.committed" for event in detail["relatedAuditEvents"])
     assert any(edit["action_run_id"] == action_run["id"] for edit in detail["relatedObjectEdits"])
+    relation_targets = {
+        (row["target_run_type"], row["relation"], row["metadata"].get("eventType"))
+        for row in detail["runRelations"]
+    }
+    assert ("action_writeback", "writeback_attempt", None) in relation_targets
+    assert ("outbox", "emitted", "action.run.committed") in relation_targets
 
     action_log = client.post("/api/materializations/action_log/run", headers=headers)
     assert action_log.status_code == 200
-    assert action_log.json()["dataset_ref"] == "ops.action_log"
-    assert action_log.json()["row_count"] == 1
+    action_log_payload = action_log.json()
+    assert action_log_payload["dataset_ref"] == "ops.action_log"
+    assert action_log_payload["row_count"] == 1
+    materialization_runs = client.get(
+        "/api/operations/runs",
+        headers=headers,
+        params={"runType": "materialization", "status": "succeeded"},
+    )
+    assert materialization_runs.status_code == 200
+    materialization_run = next(
+        row
+        for row in materialization_runs.json()["materializationRuns"]
+        if row["target_dataset_version_id"] == action_log_payload["version_id"]
+    )
+    materialization_detail = client.get(
+        f"/api/operations/runs/materialization/{materialization_run['id']}",
+        headers=headers,
+    )
+    assert materialization_detail.status_code == 200
+    assert any(
+        row["target_run_type"] == "outbox"
+        and row["relation"] == "emitted"
+        and row["resource_id"] == action_log_payload["version_id"]
+        for row in materialization_detail.json()["runRelations"]
+    )
     action_log_preview = client.get("/api/datasets/ops/action_log/preview", headers=headers)
     assert action_log_preview.status_code == 200
     assert action_log_preview.json()[0]["action_run_id"] == action_payload["actionRunId"]
@@ -1039,8 +1108,16 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
         headers=headers,
     )
     assert transform_detail.status_code == 200
+    transform_detail_payload = transform_detail.json()
     assert any(
-        row["event_type"] == "transform.run.retry_requested" for row in transform_detail.json()["relatedAuditEvents"]
+        row["event_type"] == "transform.run.retry_requested"
+        for row in transform_detail_payload["relatedAuditEvents"]
+    )
+    assert any(
+        row["source_run_id"] == "transform_api_failed"
+        and row["target_run_id"] == transform_retry_payload["transform_run_id"]
+        and row["relation"] == "retry_of"
+        for row in transform_detail_payload["runRelations"]
     )
 
     missing = client.get("/api/objects/Order/NOPE", headers=headers)

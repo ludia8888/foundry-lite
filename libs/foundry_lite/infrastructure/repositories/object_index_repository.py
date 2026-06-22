@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
     ObjectConflictRecord,
     ObjectIndexLinkRow,
     ObjectLinkInsert,
+    ObjectLinkSourceDeletion,
     ObjectRecordCdcUpdate,
     ObjectRecordInsert,
     ObjectRecordRow,
@@ -189,6 +190,7 @@ class SqlAlchemyObjectIndexRepository:
         *,
         transaction: Any,
         tenant_id: str,
+        object_type_id: str,
         object_type_api_name: str,
         object_id: str,
         index_version: str,
@@ -198,6 +200,7 @@ class SqlAlchemyObjectIndexRepository:
                 select(db.object_records).where(
                     and_(
                         db.object_records.c.tenant_id == tenant_id,
+                        db.object_records.c.object_type_id == object_type_id,
                         db.object_records.c.object_type_api_name == object_type_api_name,
                         db.object_records.c.object_id == object_id,
                         db.object_records.c.index_version == index_version,
@@ -282,11 +285,17 @@ class SqlAlchemyObjectIndexRepository:
         *,
         transaction: Any,
         record: ObjectRecordCdcUpdate,
-    ) -> None:
+    ) -> bool:
         object_change_sequence = next_object_change_sequence(transaction, record.tenant_id)
-        transaction.execute(
+        result = transaction.execute(
             update(db.object_records)
-            .where(and_(db.object_records.c.tenant_id == record.tenant_id, db.object_records.c.id == record.record_id))
+            .where(
+                and_(
+                    db.object_records.c.tenant_id == record.tenant_id,
+                    db.object_records.c.id == record.record_id,
+                    db.object_records.c.object_version == record.expected_object_version,
+                )
+            )
             .values(
                 properties=record.properties,
                 base_properties=record.base_properties,
@@ -300,7 +309,10 @@ class SqlAlchemyObjectIndexRepository:
                 updated_at=record.updated_at,
             )
         )
+        if result.rowcount != 1:
+            return False
         _insert_object_record_version_from_current(transaction, record.tenant_id, record.record_id)
+        return True
 
     def insert_object_conflict(self, *, transaction: Any, record: ObjectConflictRecord) -> None:
         transaction.execute(
@@ -386,6 +398,7 @@ class SqlAlchemyObjectIndexRepository:
                 link_version=link_version,
                 source_dataset_version_id=source_dataset_version_id,
                 deleted=False,
+                deletion_reason=None,
                 updated_at=updated_at,
             )
         )
@@ -409,6 +422,48 @@ class SqlAlchemyObjectIndexRepository:
                 source_dataset_version_id=record.source_dataset_version_id,
                 link_version=record.link_version,
                 deleted=record.deleted,
+                deletion_reason=record.deletion_reason,
+                updated_at=record.updated_at,
+            )
+        )
+
+    def object_links_for_index_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        from_object_type_id: str,
+        index_version: str,
+    ) -> list[ObjectIndexLinkRow]:
+        rows = (
+            transaction.execute(
+                select(db.object_links)
+                .where(
+                    and_(
+                        db.object_links.c.tenant_id == tenant_id,
+                        db.object_links.c.from_object_type_id == from_object_type_id,
+                        db.object_links.c.index_version == index_version,
+                    )
+                )
+                .order_by(
+                    db.object_links.c.link_type_id,
+                    db.object_links.c.from_object_id,
+                    db.object_links.c.to_object_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(ObjectIndexLinkRow, dict(row)) for row in rows]
+
+    def mark_object_link_deleted_from_source(self, *, transaction: Any, record: ObjectLinkSourceDeletion) -> None:
+        transaction.execute(
+            update(db.object_links)
+            .where(and_(db.object_links.c.tenant_id == record.tenant_id, db.object_links.c.id == record.link_id))
+            .values(
+                source_dataset_version_id=record.source_dataset_version_id,
+                link_version=record.link_version,
+                deleted=True,
                 deletion_reason=record.deletion_reason,
                 updated_at=record.updated_at,
             )
@@ -511,17 +566,33 @@ class SqlAlchemyObjectIndexRepository:
         index_version: str,
         updated_at: str,
     ) -> None:
-        transaction.execute(
-            update(db.object_records)
-            .where(
-                and_(
-                    db.object_records.c.tenant_id == tenant_id,
-                    db.object_records.c.object_type_id == object_type_id,
-                    db.object_records.c.index_version == index_version,
+        rows = (
+            transaction.execute(
+                select(db.object_records.c.id)
+                .where(
+                    and_(
+                        db.object_records.c.tenant_id == tenant_id,
+                        db.object_records.c.object_type_id == object_type_id,
+                        db.object_records.c.index_version == index_version,
+                    )
+                )
+                .order_by(db.object_records.c.object_id)
+            )
+            .mappings()
+            .all()
+        )
+        for row in rows:
+            object_change_sequence = next_object_change_sequence(transaction, tenant_id)
+            transaction.execute(
+                update(db.object_records)
+                .where(and_(db.object_records.c.tenant_id == tenant_id, db.object_records.c.id == row["id"]))
+                .values(
+                    is_active=True,
+                    object_change_sequence=object_change_sequence,
+                    updated_at=updated_at,
                 )
             )
-            .values(is_active=True, updated_at=updated_at)
-        )
+            _insert_object_record_version_from_current(transaction, tenant_id, str(row["id"]))
         transaction.execute(
             update(db.object_links)
             .where(

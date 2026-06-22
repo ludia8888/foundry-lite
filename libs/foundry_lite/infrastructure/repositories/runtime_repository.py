@@ -15,6 +15,8 @@ from foundry_lite.application.ports import (
     RuntimeRow,
     RuntimeRowsTable,
     RuntimeRunPageCursor,
+    RuntimeRunRelationRecord,
+    RuntimeRunRelationRow,
     RuntimeRunSnapshot,
     RuntimeRunType,
 )
@@ -362,6 +364,65 @@ class SqlAlchemyRuntimeRepository:
             )
         )
 
+    def insert_run_relation(self, *, transaction: Any, record: RuntimeRunRelationRecord) -> bool:
+        savepoint = transaction.begin_nested()
+        try:
+            transaction.execute(
+                insert(db.runtime_run_relations).values(
+                    id=record.relation_id,
+                    tenant_id=record.tenant_id,
+                    source_run_type=record.source_run_type,
+                    source_run_id=record.source_run_id,
+                    target_run_type=record.target_run_type,
+                    target_run_id=record.target_run_id,
+                    relation=record.relation,
+                    resource_type=record.resource_type,
+                    resource_id=record.resource_id,
+                    metadata=dict(record.metadata),
+                    created_at=record.created_at,
+                )
+            )
+        except IntegrityError:
+            savepoint.rollback()
+            if _is_run_relation_duplicate(transaction, record):
+                return False
+            raise
+        savepoint.commit()
+        return True
+
+    def run_relations_for_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        run_type: RuntimeRunType,
+        run_id: str,
+    ) -> list[RuntimeRunRelationRow]:
+        rows = (
+            transaction.execute(
+                select(db.runtime_run_relations)
+                .where(
+                    and_(
+                        db.runtime_run_relations.c.tenant_id == tenant_id,
+                        or_(
+                            and_(
+                                db.runtime_run_relations.c.source_run_type == run_type,
+                                db.runtime_run_relations.c.source_run_id == run_id,
+                            ),
+                            and_(
+                                db.runtime_run_relations.c.target_run_type == run_type,
+                                db.runtime_run_relations.c.target_run_id == run_id,
+                            ),
+                        ),
+                    )
+                )
+                .order_by(db.runtime_run_relations.c.created_at, db.runtime_run_relations.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(RuntimeRunRelationRow, dict(row)) for row in rows]
+
 
 def _lookup_table(table: RuntimeLookupTable) -> Any:
     return {
@@ -381,6 +442,30 @@ def _is_outbox_idempotency_duplicate(transaction: Any, record: OutboxEventRecord
                     db.outbox_events.c.tenant_id == record.tenant_id,
                     db.outbox_events.c.event_type == record.event_type,
                     db.outbox_events.c.idempotency_key == record.idempotency_key,
+                )
+            )
+            .limit(1)
+        )
+        .mappings()
+        .first()
+    )
+    return row is not None
+
+
+def _is_run_relation_duplicate(transaction: Any, record: RuntimeRunRelationRecord) -> bool:
+    row = (
+        transaction.execute(
+            select(db.runtime_run_relations.c.id)
+            .where(
+                and_(
+                    db.runtime_run_relations.c.tenant_id == record.tenant_id,
+                    db.runtime_run_relations.c.source_run_type == record.source_run_type,
+                    db.runtime_run_relations.c.source_run_id == record.source_run_id,
+                    db.runtime_run_relations.c.target_run_type == record.target_run_type,
+                    db.runtime_run_relations.c.target_run_id == record.target_run_id,
+                    db.runtime_run_relations.c.relation == record.relation,
+                    db.runtime_run_relations.c.resource_type == record.resource_type,
+                    db.runtime_run_relations.c.resource_id == record.resource_id,
                 )
             )
             .limit(1)

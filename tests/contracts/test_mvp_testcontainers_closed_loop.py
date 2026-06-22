@@ -50,9 +50,10 @@ def _postgres_core_with_connector(postgres_fixture, tmp_path: Path) -> FoundryLi
 
 
 def _connector_adapter() -> LocalConnectorAdapter:
+    tenant_id = demo_admin_context().tenant_id
     return LocalConnectorAdapter(
         {
-            ("postgres", "erp_orders"): ConnectorSnapshot(
+            (tenant_id, "postgres", "erp_orders"): ConnectorSnapshot(
                 connector_name="postgres",
                 resource_name="erp_orders",
                 rows=_order_rows(),
@@ -62,7 +63,7 @@ def _connector_adapter() -> LocalConnectorAdapter:
                 cursor={"snapshot": "orders-1"},
                 source_watermark="orders-watermark-1",
             ),
-            ("postgres", "crm_customers"): ConnectorSnapshot(
+            (tenant_id, "postgres", "crm_customers"): ConnectorSnapshot(
                 connector_name="postgres",
                 resource_name="crm_customers",
                 rows=_customer_rows(),

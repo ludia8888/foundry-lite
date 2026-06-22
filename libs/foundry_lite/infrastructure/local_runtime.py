@@ -11,6 +11,9 @@ from foundry_lite.application.ports.dataset_storage import DatasetStorageAdapter
 from foundry_lite.application.ports.ontology_repository import PropertyClassificationRow
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
+from foundry_lite.application.services.object_store.query_cursor import (
+    require_object_query_cursor_signing_key_for_runtime,
+)
 from foundry_lite.infrastructure.adapters import (
     DuckDBComputeAdapter,
     ElasticsearchAdapter,
@@ -40,6 +43,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyDatasetRepository,
     SqlAlchemyDatasetTransactionRepository,
     SqlAlchemyDatasetVersionRepository,
+    SqlAlchemyDestructiveDevelopmentAdmin,
     SqlAlchemyInsightReviewRepository,
     SqlAlchemyMaterializationRepository,
     SqlAlchemyMetadataRepository,
@@ -52,6 +56,9 @@ from foundry_lite.infrastructure.repositories import (
 )
 from foundry_lite.infrastructure.secrets import secret_provider_from_env
 from foundry_lite.security.policy import ClassificationProvider, PolicyService
+
+_RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
+_SCHEMA_MUTATION_PROTECTED_PROFILES = frozenset({"production", "prod", "staging", "stage"})
 
 
 def _classification_provider(
@@ -78,6 +85,7 @@ def create_local_core_dependencies(
 ) -> CoreDependencies:
     """Build the local composition root used by CLI, API, tests, and demos."""
 
+    require_object_query_cursor_signing_key_for_runtime()
     root = Path(storage_root or ".foundry-lite").resolve()
     root.mkdir(parents=True, exist_ok=True)
     object_storage_root = root / "object-storage"
@@ -92,6 +100,7 @@ def create_local_core_dependencies(
     database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
     engine = create_engine(database_url, future=True)
     ontology_repository = SqlAlchemyOntologyRepository(engine)
+    allow_schema_mutation = _schema_mutation_allowed_from_env()
     return CoreDependencies(
         root=root,
         storage_root=object_storage_root,
@@ -104,7 +113,14 @@ def create_local_core_dependencies(
         dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),
         compute_adapter=compute_adapter,
         connector_adapter=connector_adapter,
-        metadata_repository=SqlAlchemyMetadataRepository(engine),
+        metadata_repository=SqlAlchemyMetadataRepository(
+            engine,
+            allow_schema_mutation=allow_schema_mutation,
+        ),
+        destructive_development_admin=SqlAlchemyDestructiveDevelopmentAdmin(
+            engine,
+            allow_schema_mutation=allow_schema_mutation,
+        ),
         dataset_repository=SqlAlchemyDatasetRepository(engine),
         dataset_transaction_repository=SqlAlchemyDatasetTransactionRepository(engine),
         dataset_version_repository=SqlAlchemyDatasetVersionRepository(engine),
@@ -186,6 +202,11 @@ def _workflow_adapter(adapter_profile: str) -> WorkflowAdapter:
     if workflow_profile == "fake-storage":
         return FakeWorkflowAdapter()
     raise ValueError(f"unknown workflow profile: {workflow_profile}")
+
+
+def _schema_mutation_allowed_from_env() -> bool:
+    runtime_profile = os.getenv(_RUNTIME_PROFILE_ENV, "local").strip().casefold()
+    return runtime_profile not in _SCHEMA_MUTATION_PROTECTED_PROFILES
 
 
 def _temporal_workflow_config() -> TemporalWorkflowAdapterConfig:

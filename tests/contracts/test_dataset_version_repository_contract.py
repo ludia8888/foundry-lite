@@ -25,6 +25,8 @@ class DatasetVersionRepositoryHarness(Protocol):
 
     def version_by_id(self, *, version_id: str) -> dict[str, Any] | None: ...
 
+    def version_by_dataset_id_and_id(self, *, dataset_id: str, version_id: str) -> dict[str, Any] | None: ...
+
 
 @dataclass
 class FakeDatasetVersionRepository:
@@ -56,6 +58,15 @@ class FakeDatasetVersionRepository:
                 return dict(version)
         return None
 
+    def version_by_dataset_id_and_id(
+        self, *, transaction: Any, dataset_id: str, version_id: str
+    ) -> dict[str, Any] | None:
+        del transaction
+        for version in self.versions:
+            if version["dataset_id"] == dataset_id and version["id"] == version_id:
+                return dict(version)
+        return None
+
     def list_versions(self, *, dataset_id: str) -> list[dict[str, Any]]:
         return sorted(
             [dict(version) for version in self.versions if version["dataset_id"] == dataset_id],
@@ -83,6 +94,13 @@ class FakeDatasetVersionRepositoryHarness:
 
     def version_by_id(self, *, version_id: str) -> dict[str, Any] | None:
         return self.repository.version_by_id(transaction=None, version_id=version_id)
+
+    def version_by_dataset_id_and_id(self, *, dataset_id: str, version_id: str) -> dict[str, Any] | None:
+        return self.repository.version_by_dataset_id_and_id(
+            transaction=None,
+            dataset_id=dataset_id,
+            version_id=version_id,
+        )
 
 
 @dataclass
@@ -117,6 +135,14 @@ class SqlAlchemyDatasetVersionRepositoryHarness:
     def version_by_id(self, *, version_id: str) -> dict[str, Any] | None:
         with self.engine.begin() as conn:
             return self.repository.version_by_id(transaction=conn, version_id=version_id)
+
+    def version_by_dataset_id_and_id(self, *, dataset_id: str, version_id: str) -> dict[str, Any] | None:
+        with self.engine.begin() as conn:
+            return self.repository.version_by_dataset_id_and_id(
+                transaction=conn,
+                dataset_id=dataset_id,
+                version_id=version_id,
+            )
 
 
 def _schema_row(*, dataset_id: str, version: int, schema_hash: str) -> dict[str, Any]:
@@ -191,6 +217,18 @@ def test_dataset_version_repository_contract_reads_latest_and_version_by_id(
     assert selected["version_number"] == 1
     assert harness.latest_version_by_dataset_id(dataset_id="ds_empty") is None
     assert harness.version_by_id(version_id="dsv_missing") is None
+
+
+def test_dataset_version_repository_contract_scopes_version_id_to_dataset(
+    harness: DatasetVersionRepositoryHarness,
+) -> None:
+    harness.add_version(dataset_id="ds_orders", version_id="dsv_shared", version_number=1)
+
+    selected = harness.version_by_dataset_id_and_id(dataset_id="ds_orders", version_id="dsv_shared")
+
+    assert selected is not None
+    assert selected["id"] == "dsv_shared"
+    assert harness.version_by_dataset_id_and_id(dataset_id="ds_customers", version_id="dsv_shared") is None
 
 
 def test_dataset_version_repository_contract_reads_schema_by_dataset_version(

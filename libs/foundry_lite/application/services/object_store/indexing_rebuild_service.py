@@ -7,6 +7,7 @@ from foundry_lite.application.ports import (
     ObjectConflictRecord,
     ObjectIndexLinkRow,
     ObjectIndexRepository,
+    ObjectLinkSourceDeletion,
     ObjectPropertyMap,
     ObjectRecordInsert,
     ObjectRecordRow,
@@ -46,25 +47,35 @@ class ObjectIndexingRebuildMixin:
     ) -> ObjectIndexRebuildCounts:
         objects_upserted = 0
         source_object_ids: set[str] = set()
-        for row in rows:
-            object_id = self._index_object_row(conn, ctx, plan, row)
-            source_object_ids.add(object_id)
+        source_rows = self._source_rows_from_dataset_rows(conn, plan, rows)
+        _require_unique_source_object_ids(plan, source_rows)
+        for source in source_rows:
+            source_object_ids.add(source.object_id)
+            self._index_object_source_row(conn, ctx, plan, source)
             objects_upserted += 1
         objects_deleted = self._delete_missing_source_records(conn, ctx, plan, source_object_ids)
         links_upserted = self._index_links_for_object_type(conn, ctx, plan, rows)
         return ObjectIndexRebuildCounts(len(rows), objects_upserted, objects_deleted, links_upserted)
 
-    def _index_object_row(
+    def _source_rows_from_dataset_rows(
+        self,
+        conn: TransactionContext,
+        plan: ObjectIndexRebuildPlan,
+        rows: Sequence[TabularRow],
+    ) -> list[ObjectIndexSourceRow]:
+        return [self._source_row_from_dataset_row(conn, plan.object_type, row) for row in rows]
+
+    def _index_object_source_row(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
         plan: ObjectIndexRebuildPlan,
-        row: TabularRow,
-    ) -> str:
-        source = self._source_row_from_dataset_row(conn, plan.object_type, row)
+        source: ObjectIndexSourceRow,
+    ) -> None:
         existing = self.object_index_repository.object_record_in_index(
             transaction=conn,
             tenant_id=ctx.tenant_id,
+            object_type_id=plan.object_type["id"],
             object_type_api_name=plan.object_type["api_name"],
             object_id=source.object_id,
             index_version=plan.index_version,
@@ -83,7 +94,6 @@ class ObjectIndexingRebuildMixin:
                 source.object_id,
                 plan.source_dataset_version_id,
             )
-        return source.object_id
 
     def _delete_missing_source_records(
         self,
@@ -362,7 +372,24 @@ class ObjectIndexingRebuildMixin:
             ontology_version_id=active["id"],
             from_object_type_id=plan.object_type["id"],
         )
-        return sum(self._index_link_row(conn, ctx, plan, link, row) for link in links for row in rows)
+        source_link_keys: set[tuple[str, str, str]] = set()
+        links_upserted = 0
+        for link in links:
+            for row in rows:
+                link_key = self._source_link_key(link, row)
+                if link_key is None:
+                    continue
+                source_link_keys.add(link_key)
+                links_upserted += self._index_link_row(conn, ctx, plan, link, link_key)
+        self._delete_missing_source_links(conn, ctx, plan, source_link_keys)
+        return links_upserted
+
+    def _source_link_key(self, link: LinkTypeRow, row: TabularRow) -> tuple[str, str, str] | None:
+        from_id = row.get(link["backing"]["fromKey"])
+        to_id = row.get(link["backing"]["toKey"])
+        if from_id in {None, ""} or to_id in {None, ""}:
+            return None
+        return link["id"], str(from_id), str(to_id)
 
     def _index_link_row(
         self,
@@ -370,12 +397,9 @@ class ObjectIndexingRebuildMixin:
         ctx: RequestContext,
         plan: ObjectIndexRebuildPlan,
         link: LinkTypeRow,
-        row: TabularRow,
+        link_key: tuple[str, str, str],
     ) -> int:
-        from_id = row.get(link["backing"]["fromKey"])
-        to_id = row.get(link["backing"]["toKey"])
-        if from_id in {None, ""} or to_id in {None, ""}:
-            return 0
+        _, from_id, to_id = link_key
         existing = self.object_index_repository.object_link(
             transaction=conn,
             tenant_id=ctx.tenant_id,
@@ -389,6 +413,37 @@ class ObjectIndexingRebuildMixin:
             return 1
         self._insert_new_link(conn, ctx, plan, link, str(from_id), str(to_id))
         return 1
+
+    def _delete_missing_source_links(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        plan: ObjectIndexRebuildPlan,
+        source_link_keys: set[tuple[str, str, str]],
+    ) -> None:
+        if plan.mode != "full":
+            return
+        links = self.object_index_repository.object_links_for_index_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            from_object_type_id=plan.object_type["id"],
+            index_version=plan.index_version,
+        )
+        for link in links:
+            link_key = (link["link_type_id"], link["from_object_id"], link["to_object_id"])
+            if link["deleted"] or link_key in source_link_keys:
+                continue
+            self.object_index_repository.mark_object_link_deleted_from_source(
+                transaction=conn,
+                record=ObjectLinkSourceDeletion(
+                    link_id=link["id"],
+                    tenant_id=ctx.tenant_id,
+                    source_dataset_version_id=plan.source_dataset_version_id,
+                    link_version=int(link["link_version"]) + 1,
+                    deletion_reason="source_missing",
+                    updated_at=_now(),
+                ),
+            )
 
     def _refresh_existing_link(
         self,
@@ -452,3 +507,25 @@ class ObjectIndexingRebuildMixin:
                 updated_at=_now(),
             ),
         )
+
+
+def _require_unique_source_object_ids(
+    plan: ObjectIndexRebuildPlan,
+    source_rows: Sequence[ObjectIndexSourceRow],
+) -> None:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for source in source_rows:
+        if source.object_id in seen:
+            duplicates.add(source.object_id)
+        seen.add(source.object_id)
+    if not duplicates:
+        return
+    raise ValidationFailed(
+        "object source snapshot contains duplicate primary keys",
+        details={
+            "objectType": plan.object_type_api_name,
+            "sourceDatasetVersionId": plan.source_dataset_version_id,
+            "duplicateObjectIds": sorted(duplicates),
+        },
+    )

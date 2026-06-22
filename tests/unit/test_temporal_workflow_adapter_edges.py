@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
-from foundry_lite.application.ports.workflow_adapter import WorkflowStartRequest
+from foundry_lite.application.ports.workflow_adapter import WorkflowStartRequest, workflow_run_id
 from foundry_lite.infrastructure.adapters import temporal_workflow as temporal_mod
 from foundry_lite.infrastructure.adapters.temporal_workflow import TemporalWorkflowAdapter
 from temporalio.client import WorkflowExecutionStatus
@@ -63,12 +63,24 @@ class _FailedButResultUnavailableHandle:
 
 def test_sync_workflow_run_bridge_uses_async_core() -> None:
     adapter = TemporalWorkflowAdapter(client=_LookupClient(_CompletedHandle()))
+    request = _workflow_request("tenant-demo", "EdgeWorkflow", "sync-lookup")
 
-    run = adapter.workflow_run("wf-sync-lookup")
+    run = adapter.workflow_run(request.tenant_id, workflow_run_id(request))
 
     assert run is not None
     assert run.status == "succeeded"
     assert run.output == {"ok": True}
+
+
+def test_workflow_run_rejects_cross_tenant_lookup_before_temporal_call() -> None:
+    class _ExplodingClient:
+        def get_workflow_handle(self, _run_id: str) -> object:
+            raise AssertionError("cross-tenant lookup should not reach Temporal")
+
+    adapter = TemporalWorkflowAdapter(client=_ExplodingClient())
+    request = _workflow_request("tenant-a", "EdgeWorkflow", "daily-sync")
+
+    assert adapter.workflow_run("tenant-b", workflow_run_id(request)) is None
 
 
 def test_start_workflow_id_namespaces_tenant_and_workflow() -> None:
@@ -93,15 +105,16 @@ def test_start_workflow_id_namespaces_tenant_and_workflow() -> None:
 def test_workflow_run_result_fetch_failure_raises_retryable_adapter_error() -> None:
     async def body() -> None:
         adapter = TemporalWorkflowAdapter(client=_LookupClient(_CompletedButResultUnavailableHandle()))
+        request = _workflow_request("tenant-demo", "EdgeWorkflow", "result-down")
 
         with pytest.raises(AdapterError) as raised:
-            await adapter.workflow_run_async("wf-result-down")
+            await adapter.workflow_run_async(request.tenant_id, workflow_run_id(request))
 
         failure = raised.value.failure
         assert failure.operation == "workflow_run"
         assert failure.kind == "unavailable"
         assert failure.is_retryable is True
-        assert failure.details["workflowId"] == "wf-result-down"
+        assert failure.details["workflowId"] == workflow_run_id(request)
 
     asyncio.run(body())
 
@@ -109,8 +122,9 @@ def test_workflow_run_result_fetch_failure_raises_retryable_adapter_error() -> N
 def test_terminal_lookup_failure_returns_durable_error_payload() -> None:
     async def body() -> None:
         adapter = TemporalWorkflowAdapter(client=_LookupClient(_FailedButResultUnavailableHandle()))
+        request = _workflow_request("tenant-demo", "EdgeWorkflow", "terminal-down")
 
-        run = await adapter.workflow_run_async("wf-terminal-down")
+        run = await adapter.workflow_run_async(request.tenant_id, workflow_run_id(request))
 
         assert run is not None
         assert run.status == "failed"
@@ -118,7 +132,7 @@ def test_terminal_lookup_failure_returns_durable_error_payload() -> None:
         assert run.error["operation"] == "workflow_run"
         assert run.error["kind"] == "unavailable"
         assert run.error["retryable"] is True
-        assert run.error["details"]["workflowId"] == "wf-terminal-down"
+        assert run.error["details"]["workflowId"] == workflow_run_id(request)
         assert run.error["details"]["workflowName"] == "EdgeWorkflow"
 
     asyncio.run(body())

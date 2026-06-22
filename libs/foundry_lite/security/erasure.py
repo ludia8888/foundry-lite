@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final, Literal
 
 ErasureResourceType = Literal[
@@ -29,6 +30,8 @@ ErasureActionType = Literal[
 ]
 ErasureActionStatus = Literal["READY", "DEFERRED"]
 ErasureManifestStatus = Literal["READY_TO_APPLY", "PENDING_RETENTION"]
+ErasureReceiptStatus = Literal["APPLIED", "DEFERRED"]
+ErasureCertificateStatus = Literal["CERTIFIED", "CERTIFIED_WITH_DEFERRED_BACKUP"]
 
 _ERASURE_MANIFEST_NAMESPACE: Final = uuid.UUID("a8019d04-44b6-41d6-b9f8-a42e833e3878")
 _PROTECTED_VALUE: Final = "***PROTECTED***"
@@ -46,6 +49,8 @@ class ErasureRequest:
     idempotency_key: str
     reason: str
     requested_at: str
+    subject_token_secret: str = field(repr=False)
+    subject_token_key_id: str = "local-erasure-key"
 
     @property
     def subject_hash(self) -> str:
@@ -56,7 +61,11 @@ class ErasureRequest:
             "subjectKind": self.subject_kind,
             "subjectValue": self.subject_value,
         }
-        return _stable_hash(payload)
+        return _subject_hmac_token(
+            payload,
+            secret=self.subject_token_secret,
+            key_id=self.subject_token_key_id,
+        )
 
     def redacted_evidence(self) -> dict[str, object]:
         """Return operator evidence without exposing the raw subject value."""
@@ -67,6 +76,7 @@ class ErasureRequest:
             "subjectKind": self.subject_kind,
             "subjectValue": _PROTECTED_VALUE,
             "subjectHash": self.subject_hash,
+            "subjectTokenKeyId": self.subject_token_key_id,
             "requestedBy": self.requested_by,
             "idempotencyKey": self.idempotency_key,
             "reason": self.reason,
@@ -149,6 +159,7 @@ class ErasureManifest:
     tenant_id: str
     request_id: str
     subject_hash: str
+    subject_token_key_id: str
     status: ErasureManifestStatus
     actions: tuple[ErasureManifestAction, ...]
 
@@ -160,8 +171,59 @@ class ErasureManifest:
             "tenantId": self.tenant_id,
             "requestId": self.request_id,
             "subjectHash": self.subject_hash,
+            "subjectTokenKeyId": self.subject_token_key_id,
             "status": self.status,
             "actions": [action.redacted_evidence() for action in self.actions],
+        }
+
+
+@dataclass(frozen=True)
+class ErasureActionReceipt:
+    """Executor receipt for one erasure manifest action."""
+
+    action_type: ErasureActionType
+    resource: ErasureResourceRef
+    status: ErasureReceiptStatus
+    completed_at: str
+    evidence: Mapping[str, object]
+
+    def redacted_evidence(self) -> dict[str, object]:
+        return {
+            "actionType": self.action_type,
+            "resource": self.resource.manifest_payload(),
+            "status": self.status,
+            "completedAt": self.completed_at,
+            "evidence": dict(self.evidence),
+        }
+
+
+@dataclass(frozen=True)
+class ErasureCertificate:
+    """Raw-subject-free proof that a manifest was applied or safely deferred."""
+
+    certificate_id: str
+    manifest_id: str
+    tenant_id: str
+    request_id: str
+    subject_hash: str
+    subject_token_key_id: str
+    status: ErasureCertificateStatus
+    certified_at: str
+    certified_by: str
+    receipts: tuple[ErasureActionReceipt, ...]
+
+    def redacted_evidence(self) -> dict[str, object]:
+        return {
+            "certificateId": self.certificate_id,
+            "manifestId": self.manifest_id,
+            "tenantId": self.tenant_id,
+            "requestId": self.request_id,
+            "subjectHash": self.subject_hash,
+            "subjectTokenKeyId": self.subject_token_key_id,
+            "status": self.status,
+            "certifiedAt": self.certified_at,
+            "certifiedBy": self.certified_by,
+            "receipts": [receipt.redacted_evidence() for receipt in self.receipts],
         }
 
 
@@ -220,8 +282,39 @@ def build_erasure_manifest(
         tenant_id=request.tenant_id,
         request_id=request.request_id,
         subject_hash=request.subject_hash,
+        subject_token_key_id=request.subject_token_key_id,
         status=status,
         actions=actions,
+    )
+
+
+def build_erasure_certificate(
+    manifest: ErasureManifest,
+    receipts: Sequence[ErasureActionReceipt],
+    *,
+    certified_at: str,
+    certified_by: str,
+) -> ErasureCertificate:
+    """Build a certificate only when every manifest action has a matching receipt."""
+
+    sorted_receipts = tuple(sorted(receipts, key=_receipt_sort_key))
+    _validate_action_receipts(manifest.actions, sorted_receipts)
+    status: ErasureCertificateStatus = (
+        "CERTIFIED_WITH_DEFERRED_BACKUP"
+        if any(receipt.status == "DEFERRED" for receipt in sorted_receipts)
+        else "CERTIFIED"
+    )
+    return ErasureCertificate(
+        certificate_id=_certificate_id(manifest, sorted_receipts, certified_at=certified_at, certified_by=certified_by),
+        manifest_id=manifest.manifest_id,
+        tenant_id=manifest.tenant_id,
+        request_id=manifest.request_id,
+        subject_hash=manifest.subject_hash,
+        subject_token_key_id=manifest.subject_token_key_id,
+        status=status,
+        certified_at=certified_at,
+        certified_by=certified_by,
+        receipts=sorted_receipts,
     )
 
 
@@ -287,6 +380,7 @@ def _action_for_resource(
         evidence={
             "requestId": request.request_id,
             "subjectHash": request.subject_hash,
+            "subjectTokenKeyId": request.subject_token_key_id,
         },
     )
 
@@ -307,6 +401,7 @@ def _backup_deferred_action(
         evidence={
             "requestId": request.request_id,
             "subjectHash": request.subject_hash,
+            "subjectTokenKeyId": request.subject_token_key_id,
             "retentionUntil": retention_policy.backup_retention_until,
             "cryptoShreddingKeyRef": retention_policy.crypto_shredding_key_ref,
         },
@@ -333,6 +428,7 @@ def _audit_minimization_action(
         evidence={
             "requestId": request.request_id,
             "subjectHash": request.subject_hash,
+            "subjectTokenKeyId": request.subject_token_key_id,
             "auditRetentionBasis": retention_policy.audit_retention_basis,
             "minimumFields": list(retention_policy.minimum_audit_fields),
         },
@@ -393,10 +489,57 @@ def _action_sort_key(action: ErasureManifestAction) -> tuple[str, str, str, str]
     return (action.action_type, action.resource.resource_type, action.resource.surface, action.resource.resource_id)
 
 
-def _stable_hash(payload: Mapping[str, object]) -> str:
-    """Hash evidence payloads without leaking full protected values."""
+def _receipt_sort_key(receipt: ErasureActionReceipt) -> tuple[str, str, str, str]:
+    return (receipt.action_type, receipt.resource.resource_type, receipt.resource.surface, receipt.resource.resource_id)
 
-    return "sha256:" + hashlib.sha256(_json_dumps(payload).encode("utf-8")).hexdigest()[:16]
+
+def _validate_action_receipts(
+    actions: Sequence[ErasureManifestAction],
+    receipts: Sequence[ErasureActionReceipt],
+) -> None:
+    receipt_by_key = {_receipt_key(receipt.action_type, receipt.resource): receipt for receipt in receipts}
+    for action in actions:
+        receipt = receipt_by_key.get(_receipt_key(action.action_type, action.resource))
+        if receipt is None:
+            raise ValueError(
+                f"erasure certificate missing receipt for {action.action_type}:{action.resource.resource_id}"
+            )
+        _validate_receipt_status(action, receipt)
+    if len(receipts) != len(actions):
+        raise ValueError("erasure certificate contains receipts outside the manifest")
+
+
+def _validate_receipt_status(action: ErasureManifestAction, receipt: ErasureActionReceipt) -> None:
+    expected_status: ErasureReceiptStatus = "DEFERRED" if action.status == "DEFERRED" else "APPLIED"
+    if receipt.status != expected_status:
+        raise ValueError(f"erasure receipt status must be {expected_status} for {action.action_type}")
+
+
+def _receipt_key(action_type: ErasureActionType, resource: ErasureResourceRef) -> tuple[str, str, str, str]:
+    return (action_type, resource.resource_type, resource.surface, resource.resource_id)
+
+
+def _certificate_id(
+    manifest: ErasureManifest,
+    receipts: Sequence[ErasureActionReceipt],
+    *,
+    certified_at: str,
+    certified_by: str,
+) -> str:
+    payload = {
+        "manifest": manifest.redacted_evidence(),
+        "receipts": [receipt.redacted_evidence() for receipt in receipts],
+        "certifiedAt": certified_at,
+        "certifiedBy": certified_by,
+    }
+    return "erase_cert_" + str(uuid.uuid5(_ERASURE_MANIFEST_NAMESPACE, _json_dumps(payload)))
+
+
+def _subject_hmac_token(payload: Mapping[str, object], *, secret: str, key_id: str) -> str:
+    if not secret:
+        raise ValueError("erasure subject token secret is required")
+    digest = hmac.new(secret.encode("utf-8"), _json_dumps(payload).encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"hmac-sha256:{key_id}:{digest[:32]}"
 
 
 def _json_dumps(payload: object) -> str:

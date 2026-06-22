@@ -105,6 +105,37 @@ class LineageEdgeRow(TypedDict):
     created_at: str
 
 
+@dataclass(frozen=True)
+class RuntimeRunRelationRecord:
+    relation_id: str
+    tenant_id: str
+    source_run_type: RuntimeRunType
+    source_run_id: str
+    target_run_type: RuntimeRunType
+    target_run_id: str
+    relation: str
+    resource_type: str
+    resource_id: str
+    metadata: RuntimeJsonObject
+    created_at: str
+
+
+class RuntimeRunRelationRow(TypedDict):
+    """Durable operator relation between two Operations rows."""
+
+    id: str
+    tenant_id: str
+    source_run_type: RuntimeRunType
+    source_run_id: str
+    target_run_type: RuntimeRunType
+    target_run_id: str
+    relation: str
+    resource_type: str
+    resource_id: str
+    metadata: RuntimeJsonObject
+    created_at: str
+
+
 RuntimeRow = Mapping[str, object]
 
 
@@ -342,6 +373,7 @@ class RuntimeRunDetail(TypedDict):
     relatedAuditEvents: list[RuntimeRow]
     relatedObjectEdits: list[RuntimeRow]
     relatedActionWritebacks: list[RuntimeRow]
+    runRelations: list[RuntimeRunRelationRow]
     lineageEdges: list[LineageEdgeRow]
     datasetTransaction: NotRequired[RuntimeRow | None]
     lateData: NotRequired[RuntimeJsonObject | None]
@@ -467,4 +499,19 @@ class RuntimeRepository(Protocol):
 
     def insert_lineage_edge(self, *, transaction: TransactionContext, record: LineageEdgeRecord) -> None:
         """Persist a lineage edge inside the caller transaction."""
+        ...
+
+    def insert_run_relation(self, *, transaction: TransactionContext, record: RuntimeRunRelationRecord) -> bool:
+        """Persist one durable Operations run relation, returning False for idempotent duplicates."""
+        ...
+
+    def run_relations_for_run(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        run_type: RuntimeRunType,
+        run_id: str,
+    ) -> list[RuntimeRunRelationRow]:
+        """Return durable relations touching one Operations run."""
         ...

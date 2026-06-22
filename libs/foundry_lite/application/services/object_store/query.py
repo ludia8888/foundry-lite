@@ -27,6 +27,7 @@ from foundry_lite.application.services.object_store.query_protocols import (
     ObjectRecordLookup,
     ObjectSearchQueryPlanner,
 )
+from foundry_lite.application.services.object_store.serving_contract import record_scope_object_type_id
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     NotFound,
@@ -55,7 +56,14 @@ class ObjectQueryService(CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
         with self.engine.begin() as conn:
-            record = self.object_records_service._object_record(conn, ctx, object_type_api_name, object_id)
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
+            record = self.object_records_service._object_record(
+                conn,
+                ctx,
+                object_type_api_name,
+                object_id,
+                object_type_id=record_scope_object_type_id(object_type),
+            )
             if record is None:
                 raise NotFound(
                     "object not found",
@@ -185,6 +193,8 @@ class ObjectQueryService(CoreService):
                 order_by=order_by,
                 cursor=cursor_state,
                 limit=query_limit + 1,
+                object_type_id=record_scope_object_type_id(object_type),
+                property_object_type_id=object_type["id"],
             )
         return records, active_index_version
 

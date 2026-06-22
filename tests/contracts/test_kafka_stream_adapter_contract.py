@@ -9,6 +9,7 @@ from foundry_lite.application.ports import StreamPublishRequest
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.domain.context import demo_admin_context
+from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters import (
     KafkaStreamAdapter,
     KafkaStreamAdapterConfig,
@@ -23,6 +24,7 @@ from foundry_lite_worker.stream_archive import (
     run_stream_archive_continuously,
     run_stream_archive_once,
 )
+from sqlalchemy import select
 
 
 def test_kafka_stream_adapter_reads_assigned_offsets() -> None:
@@ -263,6 +265,62 @@ def test_stream_archive_worker_continuous_loop_archives_until_empty_poll(tmp_pat
     assert result.archived_batches == 2
     assert result.rows_archived == 2
     assert [row["event_id"] for row in archived_rows] == ["shipment_events:0:0", "shipment_events:0:1"]
+
+
+def test_stream_archive_worker_continuous_loop_reuses_runtime_and_marks_batch_request_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage_root = tmp_path / "continuous-runtime"
+    adapter = LocalStreamAdapter()
+    _publish_local_event(adapter, "shipments", "S-211")
+    _publish_local_event(adapter, "shipments", "S-212")
+    dependency_builds = 0
+    original_dependencies = worker_module.create_local_core_dependencies
+
+    def counted_dependencies(*args: object, **kwargs: object):
+        nonlocal dependency_builds
+        dependency_builds += 1
+        return original_dependencies(*args, **kwargs)
+
+    monkeypatch.setattr(worker_module, "create_local_core_dependencies", counted_dependencies)
+
+    result = run_stream_archive_continuously(
+        StreamArchiveWorkerConfig(
+            dataset_ref="raw.shipment_events",
+            stream_name="shipments",
+            topic="shipment_events",
+            bootstrap_servers="redpanda:9092",
+            storage_root=storage_root,
+            limit=1,
+            request_id="req-worker-runtime",
+            is_continuous=True,
+            continuous_max_empty_polls=1,
+        ),
+        stream_adapter=adapter,
+    )
+
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    with foundry.engine.begin() as conn:
+        committed_request_ids = [
+            str(row["request_id"])
+            for row in conn.execute(
+                select(db.audit_events.c.request_id)
+                .where(
+                    db.audit_events.c.tenant_id == demo_admin_context().tenant_id,
+                    db.audit_events.c.action == "stream_archive_append_commit",
+                )
+                .order_by(db.audit_events.c.created_at, db.audit_events.c.id)
+            )
+            .mappings()
+            .all()
+        ]
+    assert result.archived_batches == 2
+    assert dependency_builds == 1
+    assert committed_request_ids == [
+        "req-worker-runtime:batch-1",
+        "req-worker-runtime:batch-2",
+    ]
 
 
 def test_stream_archive_worker_continuous_loop_honors_stop_callback(tmp_path: Path) -> None:

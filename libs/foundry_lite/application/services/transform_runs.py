@@ -23,6 +23,8 @@ from foundry_lite.application.services.transform_protocols import (
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
+SUPPORTED_TRANSFORM_OUTPUT_MODES = ("snapshot",)
+
 
 @dataclass(frozen=True)
 class TransformRunPlan:
@@ -111,7 +113,12 @@ def _open_transform_run(
     retry_of_run_id: str | None = None,
 ) -> TransformRunPlan:
     output_dataset = dataset_registry_service.get_dataset(str(transform["output_dataset_ref"]), ctx=ctx)
-    transaction_id = dataset_transaction_service._open_dataset_transaction(conn, ctx, output_dataset, "SNAPSHOT")
+    transaction_id = dataset_transaction_service._open_dataset_transaction(
+        conn,
+        ctx,
+        output_dataset,
+        output_transaction_type_for_mode(str(transform["mode"])),
+    )
     definition_snapshot = _definition_snapshot(transform, sql_template)
     plan = TransformRunPlan(
         transform_id=str(transform["id"]),
@@ -229,6 +236,21 @@ def _resolve_transform_inputs(
 
 def _read_transform_sql_template(entrypoint: str) -> str:
     return Path(entrypoint).read_text(encoding="utf-8")
+
+
+def normalize_transform_output_mode(mode: str) -> str:
+    normalized = mode.strip().lower()
+    if normalized in SUPPORTED_TRANSFORM_OUTPUT_MODES:
+        return normalized
+    raise ValidationFailed(
+        "unsupported transform output mode",
+        details={"mode": mode, "supported_modes": list(SUPPORTED_TRANSFORM_OUTPUT_MODES)},
+    )
+
+
+def output_transaction_type_for_mode(mode: str) -> str:
+    normalize_transform_output_mode(mode)
+    return "SNAPSHOT"
 
 
 def _definition_snapshot(transform: TransformRow, sql_template: str) -> dict[str, object]:

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 from foundry_lite.application.ports.action_repository import ActionRunRecord
+from foundry_lite.application.services.object_store.query_cursor import CURSOR_SIGNING_KEY_ENV
+from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.local_runtime import (
     _compute_adapter,
     _connector_adapter,
@@ -13,7 +15,9 @@ from foundry_lite.infrastructure.local_runtime import (
     _search_adapter,
     _stream_adapter,
     _workflow_adapter,
+    create_local_core_dependencies,
 )
+from foundry_lite.infrastructure.repositories import SchemaMutationDisabledError
 from foundry_lite.infrastructure.repositories.action_repository import SqlAlchemyActionRepository
 from foundry_lite.infrastructure.repositories.dataset_transaction_repository import _webhook_event_matches
 from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
@@ -78,6 +82,32 @@ def test_runtime_workflow_adapter_selects_temporal_and_rejects_unknown_profile(
         _workflow_adapter("local")
 
 
+def test_protected_runtime_profile_disables_create_all_schema_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
+    monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "production-cursor-secret")
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "prod")
+
+    with pytest.raises(SchemaMutationDisabledError, match="run Alembic migrations"):
+        dependencies.metadata_repository.initialize_schema()
+    with pytest.raises(SchemaMutationDisabledError, match="run Alembic migrations"):
+        dependencies.destructive_development_admin.reset_schema()
+    assert not hasattr(dependencies.metadata_repository, "reset_schema")
+
+
+def test_protected_runtime_profile_requires_object_query_cursor_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
+    monkeypatch.delenv(CURSOR_SIGNING_KEY_ENV, raising=False)
+
+    with pytest.raises(ValidationFailed, match="cursor signing key"):
+        create_local_core_dependencies(storage_root=tmp_path / "missing-cursor-secret")
+
+
 def test_object_change_sequence_rejects_unknown_dialect() -> None:
     with pytest.raises(RuntimeError, match="unsupported object change sequence dialect"):
         next_object_change_sequence(_FakeTransaction("unknown"), "tenant-demo")
@@ -119,6 +149,7 @@ def _action_run_record() -> ActionRunRecord:
         status="received",
         idempotency_key="idem-1",
         request_fingerprint="fingerprint-1",
+        result=None,
         error=None,
         created_at="2026-06-10T00:00:00Z",
         completed_at=None,

@@ -23,6 +23,7 @@ class ObjectRecordLookup(Protocol):
         ctx: RequestContext,
         object_type_api_name: str,
         object_id: str,
+        object_type_id: str | None = None,
     ) -> ObjectRecordRow | None: ...
 
 

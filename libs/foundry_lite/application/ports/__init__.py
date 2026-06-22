@@ -85,6 +85,7 @@ from foundry_lite.application.ports.dataset_version_repository import (
     DatasetVersionRepository,
     DatasetVersionRow,
 )
+from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
 from foundry_lite.application.ports.materialization_repository import (
     MaterializationRecord,
     MaterializationReplayResult,
@@ -109,6 +110,7 @@ from foundry_lite.application.ports.object_index_repository import (
     ObjectIndexShadowRebuildResult,
     ObjectIndexValidationResult,
     ObjectLinkInsert,
+    ObjectLinkSourceDeletion,
     ObjectPropertyMap,
     ObjectPropertyVersions,
     ObjectRecordCdcUpdate,
@@ -199,6 +201,8 @@ from foundry_lite.application.ports.runtime_repository import (
     RuntimeRunLink,
     RuntimeRunPageCursor,
     RuntimeRunQueryResult,
+    RuntimeRunRelationRecord,
+    RuntimeRunRelationRow,
     RuntimeRunSnapshot,
     RuntimeRunType,
 )
@@ -321,6 +325,7 @@ __all__ = [
     "DatasetVersionConflictError",
     "DatasetVersionRecord",
     "DatasetVersionRow",
+    "DestructiveDevelopmentAdmin",
     "DatasetFilePartitionValues",
     "DatasetRunError",
     "IndexRunRecord",
@@ -351,6 +356,7 @@ __all__ = [
     "ObjectIndexShadowRebuildResult",
     "ObjectIndexValidationResult",
     "ObjectLinkInsert",
+    "ObjectLinkSourceDeletion",
     "ObjectLinkPayload",
     "ObjectLinkRow",
     "ObjectOrderBy",
@@ -425,6 +431,8 @@ __all__ = [
     "RuntimeRunLink",
     "RuntimeRunPageCursor",
     "RuntimeRunQueryResult",
+    "RuntimeRunRelationRecord",
+    "RuntimeRunRelationRow",
     "RuntimeRow",
     "RuntimeRunSnapshot",
     "RuntimeRowsTable",

@@ -250,6 +250,67 @@ def test_too_late_event_goes_to_record_dlq(tmp_path: Path) -> None:
     assert preview[0]["event_id"] == "shipment_events:0:1"
 
 
+def test_future_event_time_beyond_clock_skew_goes_to_record_dlq(tmp_path: Path) -> None:
+    foundry, dependencies = _core_with_stream(tmp_path)
+    ctx = demo_admin_context()
+    stream = StreamArchiveConfig(
+        stream_name="shipments",
+        topic="shipment_events",
+        clock_skew_seconds=60,
+    )
+    foundry.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
+    future_at = _iso_seconds_from_now(5 * 60)
+    _publish_shipment(
+        dependencies.stream_adapter,
+        "S-future",
+        ctx=ctx,
+        payload={"shipment_id": "S-future", "status": "IN_TRANSIT", "event_time": future_at},
+    )
+    _publish_shipment(
+        dependencies.stream_adapter,
+        "S-100",
+        ctx=ctx,
+        payload={"shipment_id": "S-100", "status": "IN_TRANSIT", "event_time": _iso_seconds_ago(30)},
+    )
+
+    result = foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+
+    dead_letters = _dead_letter_records(dependencies, ctx)
+    preview = foundry.datasets.preview("raw.shipment_events", ctx=ctx)
+    latest = _latest_stream_transaction(foundry, dependencies, ctx, "raw.shipment_events")
+    assert result is not None
+    assert result.row_count == 1
+    assert [row["source_event_id"] for row in dead_letters] == ["shipment_events:0:0"]
+    assert dead_letters[0]["error_kind"] == "FUTURE_CLOCK_SKEW"
+    assert dead_letters[0]["event_time"] == future_at
+    assert preview[0]["event_id"] == "shipment_events:0:1"
+    assert latest["metadata"]["lateDataWatermark"]["watermarkEventTime"] != future_at
+
+
+def test_stream_archive_quarantines_tenant_mismatch_and_commits_valid_records(tmp_path: Path) -> None:
+    foundry, dependencies = _core_with_stream(tmp_path)
+    ctx = demo_admin_context()
+    other_ctx = RequestContext(tenant_id="tenant-other", actor_user_id="other-user", request_id="req-other")
+    stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events")
+    foundry.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
+    _publish_shipment(dependencies.stream_adapter, "S-other", ctx=other_ctx)
+    _publish_shipment(dependencies.stream_adapter, "S-100", ctx=ctx)
+
+    result = foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+
+    dead_letters = _dead_letter_records(dependencies, ctx)
+    preview = foundry.datasets.preview("raw.shipment_events", ctx=ctx)
+    latest = _latest_stream_transaction(foundry, dependencies, ctx, "raw.shipment_events")
+    assert result is not None
+    assert result.row_count == 1
+    assert [row["event_id"] for row in preview] == ["shipment_events:0:1"]
+    assert preview[0]["tenant_id"] == ctx.tenant_id
+    assert latest["metadata"]["streamCursor"]["offset"] == 1
+    assert [row["source_event_id"] for row in dead_letters] == ["shipment_events:0:0"]
+    assert dead_letters[0]["error_kind"] == "TENANT_MISMATCH"
+    assert dead_letters[0]["payload"]["shipment_id"] == "S-other"
+
+
 def test_event_time_and_processing_time_sla_are_separate(tmp_path: Path) -> None:
     foundry, dependencies = _core_with_stream(tmp_path)
     ctx = demo_admin_context()
@@ -702,6 +763,10 @@ def _invalid_after_payload(shipment_id: str) -> dict[str, object]:
 
 def _iso_seconds_ago(seconds: int) -> str:
     return (datetime.now(UTC) - timedelta(seconds=seconds)).isoformat()
+
+
+def _iso_seconds_from_now(seconds: int) -> str:
+    return (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
 
 
 def _same_instant(left: object, right: object) -> bool:

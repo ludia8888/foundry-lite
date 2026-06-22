@@ -88,6 +88,13 @@ class FakeDatasetQualityRepository:
 
     def insert_check(self, *, transaction: Any, record: DatasetCheckRecord) -> None:
         del transaction
+        if self.check_by_name(
+            transaction=None,
+            tenant_id=record.tenant_id,
+            dataset_id=record.dataset_id,
+            name=record.name,
+        ):
+            return
         self.checks.append(
             {
                 "id": record.check_id,
@@ -303,6 +310,30 @@ def test_insert_check_round_trips_via_name(harness: QualityHarness) -> None:
     assert found["check_type"] == "unique"
     assert found["enabled"] is True
     assert found["config"] == {"type": "unique", "column": "id"}
+
+
+def test_insert_check_is_idempotent_by_tenant_dataset_and_name(harness: QualityHarness) -> None:
+    first = _check_record(check_id="check_first", name="shared-check")
+    duplicate = _check_record(check_id="check_duplicate", name="shared-check")
+
+    with harness.transaction() as txn:
+        harness.repository.insert_check(transaction=txn, record=first)
+        harness.repository.insert_check(transaction=txn, record=duplicate)
+        found = harness.repository.check_by_name(
+            transaction=txn,
+            tenant_id=first.tenant_id,
+            dataset_id=first.dataset_id,
+            name=first.name,
+        )
+
+    matching_rows = [
+        row
+        for row in harness.check_rows()
+        if row["tenant_id"] == first.tenant_id and row["dataset_id"] == first.dataset_id and row["name"] == first.name
+    ]
+    assert len(matching_rows) == 1
+    assert found is not None
+    assert found["id"] == "check_first"
 
 
 def test_check_by_name_isolated_by_tenant(harness: QualityHarness) -> None:

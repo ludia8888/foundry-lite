@@ -241,6 +241,26 @@ class IcebergDatasetStorageAdapter:
         self._verify_snapshot_files(table, snapshot_id, manifest_uri, expected_files=_expected_files(sidecar))
         return [self._materialize_snapshot(table, snapshot_id, identifier)]
 
+    def preview_file_paths(
+        self,
+        manifest_uri: str,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]:
+        """Readable data paths for bounded preview without full snapshot materialization."""
+        identifier, snapshot_id = self._parse_manifest_uri(manifest_uri)
+        table = self._load_table(identifier)
+        if table.snapshot_by_id(snapshot_id) is None:
+            raise FileNotFoundError(manifest_uri)
+        expected_files = _expected_files(self._load_sidecar_manifest(table, snapshot_id))
+        actual_files, has_delete_files = self._snapshot_data_file_uris(table, snapshot_id)
+        if set(expected_files) != actual_files:
+            raise ValueError("Iceberg snapshot file list differs from the committed Foundry manifest")
+        if has_delete_files:
+            return [self._materialize_snapshot(table, snapshot_id, identifier)]
+        files = _matching_expected_files(expected_files, partition_filter)
+        return [self._download_snapshot_file(table, file) for file in files]
+
     # -- commit helpers ---------------------------------------------------
 
     def _commit_snapshot(
@@ -506,6 +526,36 @@ class IcebergDatasetStorageAdapter:
         pq.write_table(arrow_table, str(target))
         return target
 
+    def _snapshot_data_file_uris(self, table: Any, snapshot_id: int) -> tuple[set[str], bool]:
+        """Return snapshot data-file URIs and whether row deletes affect the scan."""
+        uris: set[str] = set()
+        has_delete_files = False
+        for task in table.scan(snapshot_id=snapshot_id).plan_files():
+            uris.add(str(task.file.file_path))
+            delete_files = getattr(task, "delete_files", ())
+            if callable(delete_files):
+                delete_files = delete_files()
+            has_delete_files = has_delete_files or bool(delete_files)
+        return uris, has_delete_files
+
+    def _download_snapshot_file(self, table: Any, manifest_file: DatasetManifestFile) -> Path:
+        """Download one Iceberg data file and verify it against the Foundry manifest."""
+        uri = manifest_file["uri"]
+        target = self.cache_root / "downloads" / "files" / f"{hashlib.sha256(uri.encode('utf-8')).hexdigest()}.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            source = table.io.new_input(uri)
+            if not source.exists():
+                raise FileNotFoundError(uri)
+            with source.open() as source_stream, target.open("wb") as target_stream:
+                shutil.copyfileobj(source_stream, target_stream, length=1024 * 1024)
+        except FileNotFoundError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - classified by the adapter contract
+            raise self._adapter_error("load_manifest", exc) from exc
+        _verify_downloaded_snapshot_file(target, manifest_file)
+        return target
+
     # -- catalog/table helpers -------------------------------------------
 
     def _evolve_schema_if_needed(self, identifier: str, arrow_schema: Any) -> None:
@@ -676,6 +726,31 @@ def _expected_files(sidecar: Mapping[str, object]) -> Mapping[str, DatasetManife
             entry["partition_values"] = dict(partition_values)
         expected[entry["uri"]] = entry
     return expected
+
+
+def _matching_expected_files(
+    expected_files: Mapping[str, DatasetManifestFile],
+    partition_filter: Mapping[str, object] | None,
+) -> list[DatasetManifestFile]:
+    files = list(expected_files.values())
+    if partition_filter is None:
+        return files
+    return [file for file in files if _matches_partition_filter(file, partition_filter)]
+
+
+def _verify_downloaded_snapshot_file(target: Path, manifest_file: DatasetManifestFile) -> None:
+    if target.stat().st_size != manifest_file["byte_size"]:
+        raise ValueError(f"Iceberg data file byte size mismatch: {manifest_file['uri']}")
+    if _path_sha256(target) != manifest_file["content_hash"]:
+        raise ValueError(f"Iceberg data file content hash mismatch: {manifest_file['uri']}")
+
+
+def _path_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _matches_partition_filter(

@@ -65,6 +65,31 @@ def test_stream_archive_time_parse_errors_become_dead_letters() -> None:
         ensure_stream_archive_batch_writable(batch, stream, total_events=2)
 
 
+def test_future_event_time_beyond_clock_skew_becomes_dead_letter() -> None:
+    stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events", clock_skew_seconds=60)
+    future_event_time = (datetime.now(UTC) + timedelta(seconds=300)).isoformat()
+
+    batch = prepare_stream_archive_batch([_event({"event_time": future_event_time})], stream)
+
+    assert batch.rows == []
+    assert len(batch.dead_letters) == 1
+    assert batch.dead_letters[0].error_kind == "FUTURE_CLOCK_SKEW"
+    assert batch.dead_letters[0].event_time == future_event_time
+    with pytest.raises(ValidationFailed, match="no valid records"):
+        ensure_stream_archive_batch_writable(batch, stream, total_events=1)
+
+
+def test_stream_archive_tenant_mismatch_becomes_dead_letter() -> None:
+    stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events")
+
+    batch = prepare_stream_archive_batch([_event({})], stream, expected_tenant_id="tenant-other")
+
+    assert batch.rows == []
+    assert len(batch.dead_letters) == 1
+    assert batch.dead_letters[0].error_kind == "TENANT_MISMATCH"
+    assert batch.dead_letters[0].error_message == "stream event tenant does not match request tenant"
+
+
 def test_stream_archive_watermark_keeps_previous_when_batch_has_no_event_time() -> None:
     stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events")
     previous = {

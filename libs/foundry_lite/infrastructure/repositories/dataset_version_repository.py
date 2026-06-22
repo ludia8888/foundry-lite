@@ -64,6 +64,27 @@ class SqlAlchemyDatasetVersionRepository:
         )
         return cast(DatasetVersionRow, dict(row)) if row else None
 
+    def version_by_dataset_id_and_id(
+        self,
+        *,
+        transaction: Any,
+        dataset_id: str,
+        version_id: str,
+    ) -> DatasetVersionRow | None:
+        row = (
+            transaction.execute(
+                select(db.dataset_versions).where(
+                    and_(
+                        db.dataset_versions.c.dataset_id == dataset_id,
+                        db.dataset_versions.c.id == version_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(DatasetVersionRow, dict(row)) if row else None
+
     def list_versions(self, *, dataset_id: str) -> list[DatasetVersionRow]:
         with self.engine.begin() as conn:
             rows = (

@@ -275,6 +275,7 @@ class ActionService(CoreService):
                 status="received",
                 idempotency_key=command.idempotency_key,
                 request_fingerprint=command.request_fingerprint,
+                result=None,
                 error=None,
                 created_at=_now(),
                 completed_at=None,

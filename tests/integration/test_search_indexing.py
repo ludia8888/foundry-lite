@@ -109,6 +109,14 @@ def test_search_rebuild_full_text_and_orphan_detection(tmp_path: Path) -> None:
     assert rebuild["objectCount"] == rebuild["searchCount"] == 3
     assert rebuild["status"] == "consistent"
     assert drift["orphanDocumentIds"] == ["O-ORPHAN"]
+    assert drift["orphanDocumentsDeleted"] == ["O-ORPHAN"]
+    assert drift["remainingOrphanDocumentIds"] == []
+    assert drift["status"] == "consistent"
+    assert dependencies.search_adapter.document_ids(tenant_id=ctx.tenant_id, object_type="Order") == [
+        "O-1001",
+        "O-1002",
+        "O-1003",
+    ]
     assert _object_changed_count(foundry) >= 1
 
 
@@ -236,12 +244,13 @@ def test_masked_property_cannot_filter_sort_search(tmp_path: Path) -> None:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
     foundry = FoundryLite(dependencies=dependencies)
     admin = prepare_indexed_demo(foundry)
+    operator = RequestContext(actor_user_id="ops-1", roles=("ops_manager",))
     viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
     finance = RequestContext(actor_user_id="finance-1", roles=("finance",))
 
     foundry.ontology.apply(str(_margin_searchable_ontology(tmp_path)), ctx=admin)
     foundry.objects.reindex("Order", ctx=admin)
-    foundry.objects.rebuild_search("Order", ctx=admin)
+    foundry.objects.rebuild_search("Order", ctx=operator)
     viewer_page = foundry.objects.query("Order", ctx=viewer, search_text="230.0", limit=10)
     finance_page = foundry.objects.query("Order", ctx=finance, search_text="230.0", limit=10)
 

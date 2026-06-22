@@ -16,6 +16,7 @@ ClassificationProvider = Callable[[str], Sequence[Mapping[str, object]]]
 #: place sensitivity is *defined*; which properties carry it comes from the
 #: ontology, so a new finance/PII property in YAML is protected automatically.
 SENSITIVE_CLASSIFICATIONS = frozenset({"finance", "pii"})
+KNOWN_PROPERTY_CLASSIFICATIONS = SENSITIVE_CLASSIFICATIONS | frozenset({"public"})
 
 _MASKED = "***MASKED***"
 
@@ -40,6 +41,8 @@ class PolicyService:
         # explain exposes base/edit property layers plus operational lineage and
         # source-run metadata, so it is gated above plain read (viewers are excluded).
         "object:explain": {"admin", "data_engineer", "ops_manager", "finance"},
+        "object:index": {"admin", "data_engineer", "ops_manager"},
+        "object:set:manage": {"admin", "data_engineer", "ops_manager"},
         "insight:read": {"admin", "data_engineer", "ops_manager", "finance"},
         "insight:create": {"admin", "data_engineer"},
         "insight:review": {"admin", "ops_manager"},
@@ -52,10 +55,14 @@ class PolicyService:
         "operations:retry": {"admin", "ops_manager"},
     }
 
-    def __init__(self, classification_provider: ClassificationProvider | None = None) -> None:
-        # When unwired (bare construction in narrow unit tests) the policy masks
-        # nothing; the composition root always wires the ontology-backed provider.
+    def __init__(
+        self,
+        classification_provider: ClassificationProvider | None = None,
+        *,
+        allow_unwired_classification_provider: bool = False,
+    ) -> None:
         self._classification_provider = classification_provider
+        self._allow_unwired_classification_provider = allow_unwired_classification_provider
 
     def decide(self, ctx: RequestContext, permission: str) -> PolicyDecision:
         allowed_roles = self.permission_roles.get(permission, {"admin"})
@@ -113,11 +120,24 @@ class PolicyService:
     def _sensitive_sets(self, ctx: RequestContext) -> tuple[dict[str, set[str]], set[str]]:
         """Resolve (sensitive properties by object type, sensitive columns) from the ontology."""
         if self._classification_provider is None:
+            if not self._allow_unwired_classification_provider:
+                raise PermissionDenied(
+                    "classification provider is not configured",
+                    details={"classification_provider": "missing"},
+                )
             return {}, set()
         properties_by_type: dict[str, set[str]] = {}
         columns: set[str] = set()
         for row in self._classification_provider(ctx.tenant_id):
-            if not _is_sensitive(row.get("classification")):
+            classification = row.get("classification")
+            if classification is None:
+                continue
+            if not _is_known_classification(classification):
+                raise PermissionDenied(
+                    "unsupported property classification",
+                    details={"classification": classification},
+                )
+            if not _is_sensitive(classification):
                 continue
             object_type = row.get("object_type_api_name")
             property_name = row.get("property_api_name")
@@ -135,6 +155,10 @@ def _can_read_sensitive(ctx: RequestContext) -> bool:
 
 def _is_sensitive(classification: object) -> bool:
     return isinstance(classification, str) and classification in SENSITIVE_CLASSIFICATIONS
+
+
+def _is_known_classification(classification: object) -> bool:
+    return isinstance(classification, str) and classification in KNOWN_PROPERTY_CLASSIFICATIONS
 
 
 def _mask(values: dict[str, object], names: set[str]) -> dict[str, object]:

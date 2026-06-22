@@ -152,6 +152,14 @@ class LocalDatasetStorageAdapter:
             raise ValueError(f"dataset manifest has no files: {manifest_uri}")
         return [self._data_file_path(file) for file in _matching_manifest_files(manifest, partition_filter)]
 
+    def preview_file_paths(
+        self,
+        manifest_uri: str,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]:
+        return self.data_file_paths(manifest_uri, partition_filter=partition_filter)
+
     def _data_file_path(self, manifest_file: DatasetManifestFile) -> Path:
         path = self._path_for(manifest_file["uri"])
         if not path.exists():
