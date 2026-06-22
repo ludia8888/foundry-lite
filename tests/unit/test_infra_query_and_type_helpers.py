@@ -15,6 +15,8 @@ from foundry_lite.infrastructure.repositories.object_read_repository import (
     _property_eq_condition,
     _property_in_condition,
     _property_range_condition,
+    _property_value_expression,
+    _sort_columns,
 )
 
 
@@ -79,3 +81,16 @@ def test_iceberg_compatible_type_normalizes_nested_and_timestamp() -> None:
     mapped = _iceberg_compatible_type(pa, pa.map_(pa.string(), pa.timestamp("ns")))
     assert pa.types.is_map(mapped)
     assert _iceberg_compatible_type(pa, pa.int64()) == pa.int64()
+
+
+def test_property_value_expression_and_sort_columns_by_type() -> None:
+    # value expression branches: boolean, number, string
+    assert _property_value_expression("flag", "boolean") is not None
+    assert _property_value_expression("margin", "number") is not None
+    assert _property_value_expression("name", "string") is not None
+    # sort columns over boolean and string properties exercise both coalesce branches
+    sort_columns = _sort_columns(
+        [{"property": "flag", "direction": "asc"}, {"property": "name", "direction": "desc"}],
+        {"flag": "boolean", "name": "string"},
+    )
+    assert [data_type for _, _, data_type in sort_columns] == ["boolean", "string"]
