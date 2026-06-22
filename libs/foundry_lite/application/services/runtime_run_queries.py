@@ -34,6 +34,7 @@ RUN_GROUPS: Mapping[RuntimeRunType, str] = {
     "materialization": "materializationRuns",
     "outbox": "outboxEvents",
     "dead_letter": "deadLetterEvents",
+    "workflow": "workflowRuns",
     "audit": "auditEvents",
 }
 
@@ -72,6 +73,7 @@ def filtered_snapshot(
         ),
         "outboxEvents": _filtered_rows(snapshot["outboxEvents"], run_type, "outbox", status, since, until),
         "deadLetterEvents": _filtered_rows(snapshot["deadLetterEvents"], run_type, "dead_letter", status, since, until),
+        "workflowRuns": _filtered_rows(snapshot["workflowRuns"], run_type, "workflow", status, since, until),
         "auditEvents": _filtered_rows(snapshot["auditEvents"], run_type, "audit", status, since, until),
         "objectEdits": _filtered_support_rows(snapshot["objectEdits"], run_type, status, since, until),
     }
@@ -309,6 +311,8 @@ def _suggested_actions(run_type: RuntimeRunType, run_id: str, status: str) -> li
         return [f"flite index replay-run {run_id}", f"POST /api/operations/runs/index/{run_id}/replay"]
     if run_type == "dead_letter":
         return [f"flite outbox retry {run_id}", f"POST /api/operations/dead-letter-events/{run_id}/retry"]
+    if run_type == "workflow":
+        return [f"GET /api/operations/workflows/{run_id}", f"GET /api/operations/runs/workflow/{run_id}"]
     if run_type == "sync":
         return ["fix the source input, then rerun the dataset upload"]
     return ["inspect errorMessage, references, and related audit/outbox evidence"]
@@ -324,6 +328,7 @@ def _rows_for_type(snapshot: RuntimeRunSnapshot, run_type: RuntimeRunType) -> li
         "materialization": snapshot["materializationRuns"],
         "outbox": snapshot["outboxEvents"],
         "dead_letter": snapshot["deadLetterEvents"],
+        "workflow": snapshot["workflowRuns"],
         "audit": snapshot["auditEvents"],
     }[run_type]
 
@@ -440,15 +445,20 @@ def _lineage_run_links(
 
 
 def _run_type_for_id(snapshot: RuntimeRunSnapshot, run_id: str) -> RuntimeRunType | None:
-    if any(row.get("id") == run_id for row in snapshot["syncRuns"]):
-        return "sync"
-    if any(row.get("id") == run_id for row in snapshot["transformRuns"]):
-        return "transform"
-    if any(row.get("id") == run_id for row in snapshot["indexRuns"]):
-        return "index"
-    if any(row.get("id") == run_id for row in snapshot["materializationRuns"]):
-        return "materialization"
+    for run_type, group in _lineage_run_groups(snapshot):
+        if any(row.get("id") == run_id for row in group):
+            return run_type
     return None
+
+
+def _lineage_run_groups(snapshot: RuntimeRunSnapshot) -> tuple[tuple[RuntimeRunType, list[RuntimeRow]], ...]:
+    return (
+        ("sync", snapshot["syncRuns"]),
+        ("transform", snapshot["transformRuns"]),
+        ("index", snapshot["indexRuns"]),
+        ("materialization", snapshot["materializationRuns"]),
+        ("workflow", snapshot["workflowRuns"]),
+    )
 
 
 def _run_link(

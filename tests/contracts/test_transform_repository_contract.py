@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any, Protocol, cast
 
 import pytest
+from foundry_lite.application.ports.transaction_context import (
+    TRANSFORM_RUN_FAILED,
+    TRANSFORM_RUN_SUCCEEDED,
+    StatusTransition,
+)
 from foundry_lite.application.ports.transform_repository import (
     TransformCheck,
     TransformRecord,
@@ -122,6 +127,7 @@ class FakeTransformRepository:
                 "transform_id": record.transform_id,
                 "status": record.status,
                 "input_versions": dict(record.input_versions),
+                "definition_snapshot": dict(record.definition_snapshot),
                 "output_version_id": record.output_version_id,
                 "transaction_id": record.transaction_id,
                 "error": record.error,
@@ -136,23 +142,28 @@ class FakeTransformRepository:
         transaction: Any,
         tenant_id: str,
         transform_run_id: str,
-        status: str,
+        transition: StatusTransition,
         output_version_id: str | None,
         error: Mapping[str, object] | None,
         completed_at: str,
-    ) -> None:
+    ) -> bool:
         del transaction
         for row in self.transform_runs:
-            if row["tenant_id"] == tenant_id and row["id"] == transform_run_id:
+            if (
+                row["tenant_id"] == tenant_id
+                and row["id"] == transform_run_id
+                and row["status"] in transition.from_statuses
+            ):
                 row.update(
                     {
-                        "status": status,
+                        "status": transition.to_status,
                         "output_version_id": output_version_id,
                         "error": error,
                         "completed_at": completed_at,
                     }
                 )
-                return
+                return True
+        return False
 
 
 @dataclass
@@ -238,6 +249,17 @@ def _transform_run_record() -> TransformRunRecord:
         transform_id="tf_test",
         status="RUNNING",
         input_versions={"raw.orders": "dsv_1"},
+        definition_snapshot={
+            "api_name": "clean_orders",
+            "checks": [{"type": "primary_key"}],
+            "entrypoint": "/tmp/example.sql",
+            "inputs": {"orders": "raw.orders"},
+            "language": "sql",
+            "mode": "snapshot",
+            "output_dataset_ref": "clean.orders",
+            "sql_template": "select * from {{ input('raw.orders') }}",
+            "sql_template_sha256": "hash",
+        },
         output_version_id=None,
         transaction_id="dtx_1",
         error=None,
@@ -309,8 +331,11 @@ def test_insert_transform_run_persists(harness: TransformHarness) -> None:
     assert len(rows) == 1
     assert rows[0]["status"] == "RUNNING"
     assert rows[0]["input_versions"] == {"raw.orders": "dsv_1"}
+    assert rows[0]["definition_snapshot"]["sql_template"] == "select * from {{ input('raw.orders') }}"
     assert found is not None
     assert found["input_versions"] == {"raw.orders": "dsv_1"}
+    assert found["definition_snapshot"] is not None
+    assert found["definition_snapshot"]["output_dataset_ref"] == "clean.orders"
     assert hidden_tenant is None
 
 
@@ -318,16 +343,27 @@ def test_update_transform_run_terminal_marks_success(harness: TransformHarness) 
     with harness.transaction() as txn:
         harness.repository.insert_transform(transaction=txn, record=_transform_record())
         harness.repository.insert_transform_run(transaction=txn, record=_transform_run_record())
-        harness.repository.update_transform_run_terminal(
+        updated = harness.repository.update_transform_run_terminal(
             transaction=txn,
             tenant_id="tenant-test",
             transform_run_id="trun_test",
-            status="SUCCESS",
+            transition=TRANSFORM_RUN_SUCCEEDED,
             output_version_id="dsv_out",
             error=None,
             completed_at="2025-01-01T01:00:00Z",
         )
+        stale = harness.repository.update_transform_run_terminal(
+            transaction=txn,
+            tenant_id="tenant-test",
+            transform_run_id="trun_test",
+            transition=TRANSFORM_RUN_FAILED,
+            output_version_id=None,
+            error={"message": "late failure"},
+            completed_at="2025-01-01T01:00:01Z",
+        )
     row = harness.transform_run_rows()[0]
+    assert updated is True
+    assert stale is False
     assert row["status"] == "SUCCESS"
     assert row["output_version_id"] == "dsv_out"
     assert row["completed_at"] == "2025-01-01T01:00:00Z"
@@ -337,16 +373,17 @@ def test_update_transform_run_terminal_marks_failure(harness: TransformHarness) 
     with harness.transaction() as txn:
         harness.repository.insert_transform(transaction=txn, record=_transform_record())
         harness.repository.insert_transform_run(transaction=txn, record=_transform_run_record())
-        harness.repository.update_transform_run_terminal(
+        updated = harness.repository.update_transform_run_terminal(
             transaction=txn,
             tenant_id="tenant-test",
             transform_run_id="trun_test",
-            status="FAILED",
+            transition=TRANSFORM_RUN_FAILED,
             output_version_id=None,
             error={"message": "boom"},
             completed_at="2025-01-01T01:00:00Z",
         )
     row = harness.transform_run_rows()[0]
+    assert updated is True
     assert row["status"] == "FAILED"
     assert row["error"] == {"message": "boom"}
     assert row["output_version_id"] is None

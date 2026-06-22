@@ -657,6 +657,7 @@
         materialization: "materializationRuns",
         outbox: "outboxEvents",
         dead_letter: "deadLetterEvents",
+        workflow: "workflowRuns",
         audit: "auditEvents",
       };
       const demoContext = {
@@ -752,6 +753,7 @@
           "actionRuns",
           "actionWritebacks",
           "materializationRuns",
+          "workflowRuns",
         ];
         const failedRuns = runGroups
           .flatMap((key) => value[key] ?? [])

@@ -128,6 +128,7 @@ class JwtOidcAuthProvider:
                 audience=self.config.audience,
                 issuer=self.config.issuer,
                 leeway=self.config.leeway_seconds,
+                options={"require": ["exp", "iat", "iss", "aud"]},
             )
         except PyJWTError as exc:
             raise _permission_denied(self.profile_name, "invalid_token", exc.__class__.__name__) from exc

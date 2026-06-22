@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, func, insert, select, update
+from sqlalchemy import and_, func, insert, select
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.ontology_repository import (
@@ -18,7 +18,9 @@ from foundry_lite.application.ports.ontology_repository import (
     PropertyTypeRecord,
     PropertyTypeRow,
 )
+from foundry_lite.application.ports.transaction_context import ONTOLOGY_VERSION_ACTIVE, ONTOLOGY_VERSION_ARCHIVED
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update, cas_status_update_many
 
 
 class SqlAlchemyOntologyRepository:
@@ -51,16 +53,14 @@ class SqlAlchemyOntologyRepository:
             )
         )
 
-    def archive_active_ontology_versions(self, *, transaction: Any, tenant_id: str) -> None:
-        transaction.execute(
-            update(db.ontology_versions)
-            .where(
-                and_(
-                    db.ontology_versions.c.tenant_id == tenant_id,
-                    db.ontology_versions.c.status == "active",
-                )
-            )
-            .values(status="archived")
+    def archive_active_ontology_versions(self, *, transaction: Any, tenant_id: str) -> int:
+        return cas_status_update_many(
+            transaction,
+            db.ontology_versions,
+            tenant_id=tenant_id,
+            transition=ONTOLOGY_VERSION_ARCHIVED,
+            values={},
+            conditions=(),
         )
 
     def activate_ontology_version(
@@ -70,16 +70,14 @@ class SqlAlchemyOntologyRepository:
         tenant_id: str,
         ontology_version_id: str,
         activated_at: str,
-    ) -> None:
-        transaction.execute(
-            update(db.ontology_versions)
-            .where(
-                and_(
-                    db.ontology_versions.c.tenant_id == tenant_id,
-                    db.ontology_versions.c.id == ontology_version_id,
-                )
-            )
-            .values(status="active", activated_at=activated_at)
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.ontology_versions,
+            tenant_id=tenant_id,
+            row_id=ontology_version_id,
+            transition=ONTOLOGY_VERSION_ACTIVE,
+            values={"activated_at": activated_at},
         )
 
     def insert_object_type(self, *, transaction: Any, record: ObjectTypeRecord) -> None:

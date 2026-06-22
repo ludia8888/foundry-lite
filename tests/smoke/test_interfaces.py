@@ -1216,12 +1216,15 @@ def test_api_operations_workflow_start_status_and_audit(foundry, monkeypatch) ->
     detail = client.get(f"/api/operations/runs/audit/{started.json()['foundryRunId']}", headers=headers)
 
     assert started.status_code == 200
-    assert started.json()["workflowRunId"] == "api-workflow-start"
+    assert started.json()["workflowRunId"].startswith("flite:")
+    assert started.json()["workflowRunId"] != "api-workflow-start"
+    assert started.json()["idempotencyKey"] == "api-workflow-start"
     assert started.json()["workflowName"] == "ConnectorSyncWorkflow"
     assert started.json()["workflowProfile"] == "local-workflow"
     assert started.json()["output"]["datasetRef"] == "raw.workflow_orders"
     assert fetched.status_code == 200
     assert fetched.json()["workflowRunId"] == started.json()["workflowRunId"]
+    assert fetched.json()["idempotencyKey"] == "api-workflow-start"
     assert detail.status_code == 200
     assert detail.json()["row"]["after_ref"]["workflowRunId"] == started.json()["workflowRunId"]
 
@@ -1905,6 +1908,7 @@ def _seed_failed_transform_run(engine, *, tenant_id: str, run_id: str) -> dict[s
         )
         assert source is not None
         input_versions = dict(source["input_versions"])
+        definition_snapshot = dict(source["definition_snapshot"])
         conn.execute(
             insert(db.transform_runs).values(
                 id=run_id,
@@ -1912,6 +1916,7 @@ def _seed_failed_transform_run(engine, *, tenant_id: str, run_id: str) -> dict[s
                 transform_id=source["transform_id"],
                 status="FAILED",
                 input_versions=input_versions,
+                definition_snapshot=definition_snapshot,
                 output_version_id=None,
                 transaction_id="dstx_failed_transform_seed",
                 error={"message": "transform failed"},

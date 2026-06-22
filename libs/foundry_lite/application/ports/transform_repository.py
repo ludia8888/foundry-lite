@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
-from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 TransformCheck = Mapping[str, object]
 
@@ -41,6 +41,7 @@ class TransformRunRecord:
     transform_id: str
     status: str
     input_versions: dict[str, str]
+    definition_snapshot: dict[str, object]
     output_version_id: str | None
     transaction_id: str
     error: Mapping[str, object] | None
@@ -56,6 +57,7 @@ class TransformRunRow(TypedDict):
     transform_id: str
     status: str
     input_versions: dict[str, str]
+    definition_snapshot: dict[str, object] | None
     output_version_id: str | None
     transaction_id: str
     error: Mapping[str, object] | None
@@ -135,10 +137,10 @@ class TransformRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         transform_run_id: str,
-        status: str,
+        transition: StatusTransition,
         output_version_id: str | None,
         error: Mapping[str, object] | None,
         completed_at: str,
-    ) -> None:
-        """Mark a transform run as terminal (SUCCESS/FAILED/ABORTED)."""
+    ) -> bool:
+        """CAS a transform run from an allowed state into a terminal state."""
         ...

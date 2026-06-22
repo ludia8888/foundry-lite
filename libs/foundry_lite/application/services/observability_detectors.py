@@ -309,6 +309,8 @@ def _rows_for_run_type(snapshot: RuntimeRunSnapshot, run_type: RuntimeRunType) -
         return list(snapshot["outboxEvents"])
     if run_type == "dead_letter":
         return list(snapshot["deadLetterEvents"])
+    if run_type == "workflow":
+        return list(snapshot["workflowRuns"])
     return list(snapshot["auditEvents"])
 
 

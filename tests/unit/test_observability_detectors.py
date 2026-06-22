@@ -326,6 +326,7 @@ def _snapshot(
     materialization_runs: list[dict[str, object]] | None = None,
     outbox_events: list[dict[str, object]] | None = None,
     dead_letter_events: list[dict[str, object]] | None = None,
+    workflow_runs: list[dict[str, object]] | None = None,
     audit_events: list[dict[str, object]] | None = None,
 ) -> RuntimeRunSnapshot:
     return {
@@ -337,6 +338,7 @@ def _snapshot(
         "materializationRuns": materialization_runs or [],
         "outboxEvents": outbox_events or [],
         "deadLetterEvents": dead_letter_events or [],
+        "workflowRuns": workflow_runs or [],
         "auditEvents": audit_events or [],
         "objectEdits": [],
     }

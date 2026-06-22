@@ -4,7 +4,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from foundry_lite.application.action_types import ActionApplyResponse
-from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, TransactionContext
+from foundry_lite.application.ports import (
+    ACTION_RUN_SUCCEEDED,
+    ActionTypeRow,
+    ObjectRecordRow,
+    StatusTransition,
+    TransactionContext,
+)
 from foundry_lite.application.ports.action_repository import (
     ActionRepository,
     ObjectEditRecord,
@@ -41,19 +47,22 @@ class ActionMutationUnitOfWork:
         record: ObjectRecordRow,
         params: Mapping[str, object],
         idempotency_key: str,
+        transition: StatusTransition = ACTION_RUN_SUCCEEDED,
     ) -> ActionApplyResponse:
         patch = dict(action_patch(action_type, params))
         previous_values = dict(previous_action_values(record, patch))
         self._update_action_target(conn, record, patch)
         edit_id = self._insert_object_edit(conn, ctx, action_run_id, record, patch, previous_values, idempotency_key)
-        self.action_repository.update_action_run_terminal(
+        updated = self.action_repository.update_action_run_terminal(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             action_run_id=action_run_id,
-            status="succeeded",
+            transition=transition,
             error=None,
             completed_at=_now(),
         )
+        if not updated:
+            raise ConflictDetected("action run terminal state changed concurrently")
         self._publish_action_commit_events(conn, ctx, action_run_id, record, edit_id)
         self._audit_action_commit(conn, ctx, action_run_id, record, previous_values, patch, edit_id)
         return action_success_response(action_run_id, record, edit_id, patch)

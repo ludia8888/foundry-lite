@@ -15,11 +15,7 @@ from foundry_lite.application.ports.materialization_repository import (
     MaterializationSourceRef,
     MaterializationTargetRef,
 )
-from foundry_lite.application.primitives import (
-    CommitResult,
-    _new_id,
-    _now,
-)
+from foundry_lite.application.primitives import CommitResult, _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.materialization_late_data import object_snapshot_watermark
 from foundry_lite.application.services.materialization_protocols import (
@@ -27,7 +23,13 @@ from foundry_lite.application.services.materialization_protocols import (
     MaterializationDatasetRegistry,
     MaterializationDatasetTransactions,
     MaterializationRuntimeBoundary,
+    mark_materialization_run_succeeded,
 )
+from foundry_lite.application.services.materialization_types import (
+    supported_materialization_type,
+    unsupported_materialization_type,
+)
+from foundry_lite.application.services.write_traffic_gate import require_write_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     DatasetCommitBlocked,
@@ -51,8 +53,6 @@ class MaterializationRunPlan:
 
 @dataclass(frozen=True)
 class MaterializationSpec:
-    """Built-in materialization definition used by the local MVP runtime."""
-
     materialization_type: str
     source: MaterializationSourceRef
     target: MaterializationTargetRef
@@ -93,22 +93,24 @@ class MaterializationService(CoreService):
     ) -> CommitResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "materialization:run", "materialization", api_name)
+        require_write_open(self.runtime_service, ctx, "materialize", "materialization", api_name)
         materialization = self._ensure_materialization(api_name, ctx=ctx)
         target_dataset = self.dataset_registry_service.get_dataset(materialization["target_ref"]["dataset"], ctx=ctx)
         run_id = _new_id("mat_run")
         with self.engine.begin() as conn:
             tx_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, target_dataset, "SNAPSHOT")
+            materialization_type = supported_materialization_type(materialization["materialization_type"])
             watermark = self._materialization_watermark(conn, ctx, materialization)
             rows, fieldnames = self._materialization_rows(
                 conn,
-                materialization["materialization_type"],
+                materialization_type,
                 ctx=ctx,
                 watermark=watermark,
             )
             plan = MaterializationRunPlan(
                 api_name=api_name,
                 materialization_id=materialization["id"],
-                materialization_type=materialization["materialization_type"],
+                materialization_type=materialization_type,
                 target_dataset=target_dataset,
                 transaction_id=tx_id,
                 run_id=run_id,
@@ -140,9 +142,10 @@ class MaterializationService(CoreService):
             if materialization is None:
                 raise NotFound("materialization not found", details={"materialization_run_id": materialization_run_id})
             watermark = _run_watermark(run)
+            materialization_type = supported_materialization_type(materialization["materialization_type"])
             rows, _ = self._materialization_rows(
                 conn,
-                materialization["materialization_type"],
+                materialization_type,
                 ctx=ctx,
                 watermark=watermark,
             )
@@ -201,7 +204,7 @@ class MaterializationService(CoreService):
         with self.engine.begin() as conn:
 
             def after_persist(conn: TransactionContext, result: CommitResult) -> None:
-                self._mark_materialization_run_succeeded(conn, ctx, plan.run_id, result)
+                mark_materialization_run_succeeded(self.materialization_repository, conn, ctx, plan.run_id, result)
                 self._record_materialization_lineage(conn, ctx, plan, result)
 
             try:
@@ -271,25 +274,6 @@ class MaterializationService(CoreService):
             adapter="compute_adapter.rows_to_parquet",
         )
 
-    def _mark_materialization_run_succeeded(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run_id: str,
-        result: CommitResult,
-    ) -> None:
-        """Close a materialization run with the produced dataset version."""
-        self.materialization_repository.update_materialization_run_terminal(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            materialization_run_id=run_id,
-            status="succeeded",
-            target_dataset_version_id=result.version_id,
-            row_count=result.row_count,
-            error=None,
-            completed_at=_now(),
-        )
-
     def _ensure_materialization(
         self,
         api_name: str,
@@ -345,9 +329,11 @@ class MaterializationService(CoreService):
                 "action_run_completed_at_lte": watermark["completed_at"],
                 "action_run_id_lte": watermark["action_run_id"],
             }
-        return object_snapshot_watermark(
-            self.materialization_repository, self.runtime_service, conn, ctx, materialization
-        )
+        if materialization_type == "object_snapshot":
+            return object_snapshot_watermark(
+                self.materialization_repository, self.runtime_service, conn, ctx, materialization
+            )
+        unsupported_materialization_type(materialization_type)
 
     def _materialization_rows(
         self,
@@ -359,7 +345,9 @@ class MaterializationService(CoreService):
     ) -> tuple[Sequence[Mapping[str, object]], list[str]]:
         if materialization_type == "action_log":
             return self._action_log_materialization_rows(conn, ctx, watermark)
-        return self._order_current_materialization_rows(conn, ctx, watermark)
+        if materialization_type == "object_snapshot":
+            return self._order_current_materialization_rows(conn, ctx, watermark)
+        unsupported_materialization_type(materialization_type)
 
     def _action_log_materialization_rows(
         self,

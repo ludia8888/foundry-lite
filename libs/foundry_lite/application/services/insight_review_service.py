@@ -12,6 +12,7 @@ from foundry_lite.application.ports.insight_review_repository import (
 )
 from foundry_lite.application.primitives import _json_hash, _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.runtime_restore_gates import require_write_traffic_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied, ValidationFailed
 
@@ -41,6 +42,7 @@ class InsightReviewService(CoreService):
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self._require_or_audit(ctx, "insight:create", "insight_review", claim_id)
+        self._require_write_open(ctx, operation="create_review", resource_id=claim_id)
         now = _now()
         record = _review_record(
             ctx,
@@ -99,6 +101,7 @@ class InsightReviewService(CoreService):
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self._require_or_audit(ctx, "insight:review", "insight_review", review_id)
+        self._require_write_open(ctx, operation="assign_review", resource_id=review_id)
         key = _required_idempotency_key(idempotency_key)
         with self.engine.begin() as conn:
             before = self._require_pending_or_idempotent_assignment(conn, ctx, review_id, key)
@@ -127,6 +130,7 @@ class InsightReviewService(CoreService):
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self._require_or_audit(ctx, "insight:review", "insight_review", review_id)
+        self._require_write_open(ctx, operation="decide_review", resource_id=review_id)
         key = _required_idempotency_key(idempotency_key)
         parsed = _decision(decision)
         with self.engine.begin() as conn:
@@ -170,6 +174,16 @@ class InsightReviewService(CoreService):
             with self.engine.begin() as conn:
                 self._audit_permission_denied(conn, ctx, permission, resource_type, resource_id)
             raise
+
+    def _require_write_open(self, ctx: RequestContext, *, operation: str, resource_id: str) -> None:
+        require_write_traffic_open(
+            self.engine,
+            self.runtime_repository,
+            ctx,
+            operation=operation,
+            resource_type="insight_review",
+            resource_id=resource_id,
+        )
 
     def _require_pending_or_idempotent_assignment(
         self,

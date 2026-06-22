@@ -106,6 +106,12 @@ class ObjectIndexingCdcMixin(ABC):
         ctx: RequestContext | None = None,
     ) -> ObjectIndexCdcResult:
         ctx = ctx or RequestContext()
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="index_cdc_events",
+            resource_type="object_type",
+            resource_id=object_type_api_name,
+        )
         with self.engine.begin() as conn:
             object_type = self._cdc_object_type(conn, ctx, object_type_api_name)
             run_id = self._create_cdc_index_run(conn, ctx, object_type, events)

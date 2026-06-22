@@ -426,6 +426,18 @@ def test_tenant_write_guard_is_release_gate_step() -> None:
     assert "pnpm quality:tenant-write" in package_json
 
 
+def test_status_transition_cas_is_release_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert "scripts/quality/check_status_transition_cas.py" in script
+    assert '"quality:status-cas"' in package_json
+    assert "pnpm quality:status-cas" in package_json
+    assert script.index("scripts/quality/check_tenant_write_guard.py") < script.index(
+        "scripts/quality/check_status_transition_cas.py"
+    )
+
+
 def test_contract_test_per_port_is_release_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
@@ -873,6 +885,23 @@ def test_insight_review_gate_runs_after_ai_evidence_gate() -> None:
     assert "test_insight_review_create_is_idempotent_by_tenant_and_key" in package_json
     assert "test_insight_review_decision_has_one_terminal_winner" in package_json
     assert "test_api_insight_reviews_create_assign_and_decide_with_audit_evidence" in package_json
+
+
+def test_distributed_control_plane_gate_runs_after_infra_composition() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    infra_composition_step = "pnpm --silent quality:infra-composition"
+    distributed_step = "pnpm --silent quality:distributed-control-plane"
+    assert distributed_step in script
+    assert script.index(infra_composition_step) < script.index(distributed_step)
+    assert '"quality:distributed-control-plane"' in package_json
+    assert "test_postgres_control_plane_iceberg_s3_spark_failure_aborts_once" in package_json
+    assert "test_kafka_live_broker_event_archives_through_worker" in package_json
+    assert "test_product_connector_sync_workflow_runs_through_temporal_and_audits" in package_json
+    assert "test_runtime_repository_contract_workflow_run_ledger_status_cas" in package_json
+    replay_lease_test = "test_dataset_transaction_repository_contract_dead_letter_replay_lease_fences_terminal_updates"
+    assert replay_lease_test in package_json
 
 
 def test_tier_coverage_gate_includes_app_layers() -> None:

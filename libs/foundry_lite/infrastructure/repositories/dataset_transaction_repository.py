@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from sqlalchemy import and_, insert, select, update
+from sqlalchemy import and_, insert, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -22,7 +22,19 @@ from foundry_lite.application.ports import (
     SyncRunRecord,
     SyncRunRow,
 )
+from foundry_lite.application.ports.transaction_context import (
+    DATASET_TRANSACTION_ABORT,
+    DATASET_TRANSACTION_COMMIT,
+    DEAD_LETTER_DISCARDED,
+    DEAD_LETTER_REPLAY_FAILED,
+    DEAD_LETTER_REPLAY_REQUESTED,
+    DEAD_LETTER_REPLAY_RUNNING,
+    DEAD_LETTER_REPLAY_SUCCEEDED,
+    StatusTransition,
+    dataset_run_failed_transition,
+)
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
 
 class SqlAlchemyDatasetTransactionRepository:
@@ -80,13 +92,14 @@ class SqlAlchemyDatasetTransactionRepository:
 
     def abort_transaction(
         self, *, transaction: Any, tenant_id: str, transaction_id: str, metadata: DatasetTransactionMetadata
-    ) -> None:
-        transaction.execute(
-            update(db.dataset_transactions)
-            .where(
-                and_(db.dataset_transactions.c.tenant_id == tenant_id, db.dataset_transactions.c.id == transaction_id)
-            )
-            .values(status="ABORTED", metadata=dict(metadata))
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.dataset_transactions,
+            tenant_id=tenant_id,
+            row_id=transaction_id,
+            transition=DATASET_TRANSACTION_ABORT,
+            values={"metadata": dict(metadata)},
         )
 
     def lock_dataset_for_version_allocation(self, *, transaction: Any, tenant_id: str, dataset_id: str) -> None:
@@ -148,19 +161,19 @@ class SqlAlchemyDatasetTransactionRepository:
         schema_version: int,
         committed_at: str,
         metadata: DatasetTransactionMetadata | None = None,
-    ) -> None:
-        transaction.execute(
-            update(db.dataset_transactions)
-            .where(
-                and_(db.dataset_transactions.c.tenant_id == tenant_id, db.dataset_transactions.c.id == transaction_id)
-            )
-            .values(
-                status="COMMITTED",
-                committed_version_id=committed_version_id,
-                schema_version=schema_version,
-                committed_at=committed_at,
-                metadata=dict(metadata or {}),
-            )
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.dataset_transactions,
+            tenant_id=tenant_id,
+            row_id=transaction_id,
+            transition=DATASET_TRANSACTION_COMMIT,
+            values={
+                "committed_version_id": committed_version_id,
+                "schema_version": schema_version,
+                "committed_at": committed_at,
+                "metadata": dict(metadata or {}),
+            },
         )
 
     def latest_committed_transaction(
@@ -252,24 +265,28 @@ class SqlAlchemyDatasetTransactionRepository:
         error: DatasetRunError,
         completed_at: str,
     ) -> bool:
-        abort_result = transaction.execute(
-            update(db.dataset_transactions)
-            .where(
-                and_(
-                    db.dataset_transactions.c.tenant_id == tenant_id,
-                    db.dataset_transactions.c.id == transaction_id,
-                    db.dataset_transactions.c.status == "OPEN",
-                )
-            )
-            .values(status="ABORTED", metadata={"error": dict(error)})
+        aborted = cas_status_update(
+            transaction,
+            db.dataset_transactions,
+            tenant_id=tenant_id,
+            row_id=transaction_id,
+            transition=DATASET_TRANSACTION_ABORT,
+            values={"metadata": {"error": dict(error)}},
         )
+        if not aborted:
+            tx = self.transaction_by_id(transaction=transaction, transaction_id=transaction_id)
+            if tx is None or tx["tenant_id"] != tenant_id or tx["status"] != "ABORTED":
+                return False
         run_table = _run_table(run_kind)
-        transaction.execute(
-            update(run_table)
-            .where(and_(run_table.c.tenant_id == tenant_id, run_table.c.id == run_id))
-            .values(status="FAILED", error=dict(error), completed_at=completed_at)
+        updated = cas_status_update(
+            transaction,
+            run_table,
+            tenant_id=tenant_id,
+            row_id=run_id,
+            transition=dataset_run_failed_transition(run_kind),
+            values={"error": dict(error), "completed_at": completed_at},
         )
-        return abort_result.rowcount == 1
+        return updated
 
     def insert_sync_run(self, *, transaction: Any, record: SyncRunRecord) -> None:
         transaction.execute(
@@ -328,6 +345,9 @@ class SqlAlchemyDatasetTransactionRepository:
                     replay_run_id=record.replay_run_id,
                     replay_idempotency_key=record.replay_idempotency_key,
                     replay_requested_at=record.replay_requested_at,
+                    replay_lease_token=record.replay_lease_token,
+                    replay_started_at=record.replay_started_at,
+                    replay_lease_expires_at=record.replay_lease_expires_at,
                     discarded_at=record.discarded_at,
                     backfill_plan=dict(record.backfill_plan) if record.backfill_plan is not None else None,
                     is_closed_partition_affected=record.is_closed_partition_affected,
@@ -391,26 +411,25 @@ class SqlAlchemyDatasetTransactionRepository:
         metadata: DatasetTransactionMetadata,
         backfill_plan: DatasetTransactionMetadata,
     ) -> DeadLetterRecordRow | None:
-        result = transaction.execute(
-            update(db.dead_letter_records)
-            .where(
-                and_(
-                    db.dead_letter_records.c.tenant_id == tenant_id,
-                    db.dead_letter_records.c.id == record_id,
-                    db.dead_letter_records.c.status == "QUARANTINED",
-                )
-            )
-            .values(
-                status="REPLAY_REQUESTED",
-                replay_status="REQUESTED",
-                replay_run_id=replay_run_id,
-                replay_idempotency_key=replay_idempotency_key,
-                replay_requested_at=replay_requested_at,
-                backfill_plan=dict(backfill_plan),
-                metadata=dict(metadata),
-            )
+        updated = cas_status_update(
+            transaction,
+            db.dead_letter_records,
+            tenant_id=tenant_id,
+            row_id=record_id,
+            transition=DEAD_LETTER_REPLAY_REQUESTED,
+            values={
+                "replay_status": "REQUESTED",
+                "replay_run_id": replay_run_id,
+                "replay_idempotency_key": replay_idempotency_key,
+                "replay_requested_at": replay_requested_at,
+                "replay_lease_token": None,  # nosec B105 - column name reset, not a secret value
+                "replay_started_at": None,
+                "replay_lease_expires_at": None,
+                "backfill_plan": dict(backfill_plan),
+                "metadata": dict(metadata),
+            },
         )
-        if result.rowcount != 1:
+        if not updated:
             return None
         return self.dead_letter_record_by_id(transaction=transaction, tenant_id=tenant_id, record_id=record_id)
 
@@ -423,16 +442,53 @@ class SqlAlchemyDatasetTransactionRepository:
         discarded_at: str,
         metadata: DatasetTransactionMetadata,
     ) -> DeadLetterRecordRow | None:
-        transaction.execute(
-            update(db.dead_letter_records)
-            .where(and_(db.dead_letter_records.c.tenant_id == tenant_id, db.dead_letter_records.c.id == record_id))
-            .values(
-                status="DISCARDED",
-                replay_status="DISCARDED",
-                discarded_at=discarded_at,
-                metadata=dict(metadata),
-            )
+        updated = cas_status_update(
+            transaction,
+            db.dead_letter_records,
+            tenant_id=tenant_id,
+            row_id=record_id,
+            transition=DEAD_LETTER_DISCARDED,
+            values={"replay_status": "DISCARDED", "discarded_at": discarded_at, "metadata": dict(metadata)},
         )
+        if not updated:
+            return None
+        return self.dead_letter_record_by_id(transaction=transaction, tenant_id=tenant_id, record_id=record_id)
+
+    def claim_dead_letter_record_replay(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        replay_lease_token: str,
+        replay_started_at: str,
+        replay_lease_expires_at: str,
+        metadata: DatasetTransactionMetadata,
+    ) -> DeadLetterRecordRow | None:
+        updated = cas_status_update(
+            transaction,
+            db.dead_letter_records,
+            tenant_id=tenant_id,
+            row_id=record_id,
+            transition=DEAD_LETTER_REPLAY_RUNNING,
+            values={
+                "replay_status": "REPLAYING",
+                "replay_lease_token": replay_lease_token,
+                "replay_started_at": replay_started_at,
+                "replay_lease_expires_at": replay_lease_expires_at,
+                "metadata": dict(metadata),
+            },
+            conditions=(
+                db.dead_letter_records.c.replay_run_id == replay_run_id,
+                or_(
+                    db.dead_letter_records.c.status == "REPLAY_REQUESTED",
+                    db.dead_letter_records.c.replay_lease_expires_at < replay_started_at,
+                ),
+            ),
+        )
+        if not updated:
+            return None
         return self.dead_letter_record_by_id(transaction=transaction, tenant_id=tenant_id, record_id=record_id)
 
     def update_dead_letter_record_replay_succeeded(
@@ -443,17 +499,25 @@ class SqlAlchemyDatasetTransactionRepository:
         record_id: str,
         replay_run_id: str,
         metadata: DatasetTransactionMetadata,
+        replay_lease_token: str | None = None,
     ) -> DeadLetterRecordRow | None:
-        transaction.execute(
-            update(db.dead_letter_records)
-            .where(and_(db.dead_letter_records.c.tenant_id == tenant_id, db.dead_letter_records.c.id == record_id))
-            .values(
-                status="RESOLVED",
-                replay_status="SUCCEEDED",
-                replay_run_id=replay_run_id,
-                metadata=dict(metadata),
-            )
+        conditions = _dead_letter_replay_conditions(replay_run_id, replay_lease_token)
+        updated = cas_status_update(
+            transaction,
+            db.dead_letter_records,
+            tenant_id=tenant_id,
+            row_id=record_id,
+            transition=DEAD_LETTER_REPLAY_SUCCEEDED,
+            values={
+                "replay_status": "SUCCEEDED",
+                "replay_run_id": replay_run_id,
+                "replay_lease_token": replay_lease_token,
+                "metadata": dict(metadata),
+            },
+            conditions=conditions,
         )
+        if not updated:
+            return None
         return self.dead_letter_record_by_id(transaction=transaction, tenant_id=tenant_id, record_id=record_id)
 
     def update_dead_letter_record_replay_failed(
@@ -464,18 +528,26 @@ class SqlAlchemyDatasetTransactionRepository:
         record_id: str,
         replay_run_id: str,
         metadata: DatasetTransactionMetadata,
+        replay_lease_token: str | None = None,
     ) -> DeadLetterRecordRow | None:
-        transaction.execute(
-            update(db.dead_letter_records)
-            .where(and_(db.dead_letter_records.c.tenant_id == tenant_id, db.dead_letter_records.c.id == record_id))
-            .values(
-                status="QUARANTINED",
-                replay_status="FAILED",
-                replay_run_id=replay_run_id,
-                attempts=db.dead_letter_records.c.attempts + 1,
-                metadata=dict(metadata),
-            )
+        conditions = _dead_letter_replay_conditions(replay_run_id, replay_lease_token)
+        updated = cas_status_update(
+            transaction,
+            db.dead_letter_records,
+            tenant_id=tenant_id,
+            row_id=record_id,
+            transition=DEAD_LETTER_REPLAY_FAILED,
+            values={
+                "replay_status": "FAILED",
+                "replay_run_id": replay_run_id,
+                "replay_lease_token": replay_lease_token,
+                "attempts": db.dead_letter_records.c.attempts + 1,
+                "metadata": dict(metadata),
+            },
+            conditions=conditions,
         )
+        if not updated:
+            return None
         return self.dead_letter_record_by_id(transaction=transaction, tenant_id=tenant_id, record_id=record_id)
 
     def update_sync_run_terminal(
@@ -484,19 +556,25 @@ class SqlAlchemyDatasetTransactionRepository:
         transaction: Any,
         tenant_id: str,
         sync_run_id: str,
-        status: str,
+        transition: StatusTransition,
         committed_version_id: str | None,
         completed_at: str,
-    ) -> None:
-        transaction.execute(
-            update(db.sync_runs)
-            .where(and_(db.sync_runs.c.tenant_id == tenant_id, db.sync_runs.c.id == sync_run_id))
-            .values(
-                status=status,
-                committed_version_id=committed_version_id,
-                completed_at=completed_at,
-            )
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.sync_runs,
+            tenant_id=tenant_id,
+            row_id=sync_run_id,
+            transition=transition,
+            values={"committed_version_id": committed_version_id, "completed_at": completed_at},
         )
+
+
+def _dead_letter_replay_conditions(replay_run_id: str, replay_lease_token: str | None) -> tuple[Any, ...]:
+    conditions: tuple[Any, ...] = (db.dead_letter_records.c.replay_run_id == replay_run_id,)
+    if replay_lease_token is None:
+        return (*conditions, db.dead_letter_records.c.replay_lease_token.is_(None))
+    return (*conditions, db.dead_letter_records.c.replay_lease_token == replay_lease_token)
 
 
 def _run_table(run_kind: DatasetRunKind) -> Any:

@@ -6,6 +6,7 @@ from typing import Any, cast
 from sqlalchemy import and_, insert, select, update
 from sqlalchemy.engine import Engine
 
+from foundry_lite.application.ports.transaction_context import StatusTransition
 from foundry_lite.application.ports.transform_repository import (
     TransformCheck,
     TransformRecord,
@@ -14,6 +15,7 @@ from foundry_lite.application.ports.transform_repository import (
     TransformRunRow,
 )
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
 
 class SqlAlchemyTransformRepository:
@@ -114,6 +116,7 @@ class SqlAlchemyTransformRepository:
                 transform_id=record.transform_id,
                 status=record.status,
                 input_versions=record.input_versions,
+                definition_snapshot=record.definition_snapshot,
                 output_version_id=record.output_version_id,
                 transaction_id=record.transaction_id,
                 error=record.error,
@@ -128,18 +131,20 @@ class SqlAlchemyTransformRepository:
         transaction: Any,
         tenant_id: str,
         transform_run_id: str,
-        status: str,
+        transition: StatusTransition,
         output_version_id: str | None,
         error: Mapping[str, object] | None,
         completed_at: str,
-    ) -> None:
-        transaction.execute(
-            update(db.transform_runs)
-            .where(and_(db.transform_runs.c.tenant_id == tenant_id, db.transform_runs.c.id == transform_run_id))
-            .values(
-                status=status,
-                output_version_id=output_version_id,
-                error=error,
-                completed_at=completed_at,
-            )
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.transform_runs,
+            tenant_id=tenant_id,
+            row_id=transform_run_id,
+            transition=transition,
+            values={
+                "output_version_id": output_version_id,
+                "error": error,
+                "completed_at": completed_at,
+            },
         )

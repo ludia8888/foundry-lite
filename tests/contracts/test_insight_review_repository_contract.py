@@ -95,9 +95,45 @@ def test_insight_review_decision_has_one_terminal_winner() -> None:
 
     assert approved is not None
     assert approved["status"] == "approved"
-    assert rejected is not None
-    assert rejected["status"] == "approved"
-    assert rejected["decision_idempotency_key"] == "decision-1"
+    assert rejected is None
+
+
+def test_insight_review_assignment_does_not_mutate_terminal_review() -> None:
+    harness = _sqlalchemy_harness()
+    with harness.transaction() as transaction:
+        harness.repository.insert_review_or_get_existing(
+            transaction=transaction,
+            record=_record("review_1", create_key="create-1"),
+        )
+        approved = harness.repository.decide_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            status="approved",
+            decision={"decision": "approved"},
+            decision_idempotency_key="decision-1",
+            updated_at="2026-06-19T00:00:01Z",
+        )
+        assigned = harness.repository.assign_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            assignee_user_id="late-ops",
+            assignment_idempotency_key="assign-late",
+            updated_at="2026-06-19T00:00:02Z",
+        )
+        current = harness.repository.review_by_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+        )
+
+    assert approved is not None
+    assert assigned is None
+    assert current is not None
+    assert current["status"] == "approved"
+    assert current["assignee_user_id"] is None
+    assert current["assignment_idempotency_key"] is None
 
 
 def _sqlalchemy_harness() -> SqlAlchemyInsightReviewHarness:

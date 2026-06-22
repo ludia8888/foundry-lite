@@ -62,11 +62,14 @@ class FakeOntologyRepository:
         del transaction
         self.ontology_versions.append(_ontology_version_row(record))
 
-    def archive_active_ontology_versions(self, *, transaction: Any, tenant_id: str) -> None:
+    def archive_active_ontology_versions(self, *, transaction: Any, tenant_id: str) -> int:
         del transaction
+        archived = 0
         for row in self.ontology_versions:
             if row["tenant_id"] == tenant_id and row["status"] == "active":
                 row["status"] = "archived"
+                archived += 1
+        return archived
 
     def activate_ontology_version(
         self,
@@ -75,12 +78,13 @@ class FakeOntologyRepository:
         tenant_id: str,
         ontology_version_id: str,
         activated_at: str,
-    ) -> None:
+    ) -> bool:
         del transaction
         for row in self.ontology_versions:
-            if row["tenant_id"] == tenant_id and row["id"] == ontology_version_id:
+            if row["tenant_id"] == tenant_id and row["id"] == ontology_version_id and row["status"] == "draft":
                 row.update(status="active", activated_at=activated_at)
-                return
+                return True
+        return False
 
     def insert_object_type(self, *, transaction: Any, record: ObjectTypeRecord) -> None:
         del transaction
@@ -455,8 +459,8 @@ def test_ontology_repository_contract_manages_version_lifecycle(harness: Ontolog
             transaction=transaction,
             record=_ontology_version_record("ont_new", version_number=2),
         )
-        harness.repository.archive_active_ontology_versions(transaction=transaction, tenant_id="tenant-demo")
-        harness.repository.activate_ontology_version(
+        archived = harness.repository.archive_active_ontology_versions(transaction=transaction, tenant_id="tenant-demo")
+        activated = harness.repository.activate_ontology_version(
             transaction=transaction,
             tenant_id="tenant-demo",
             ontology_version_id="ont_new",
@@ -464,12 +468,33 @@ def test_ontology_repository_contract_manages_version_lifecycle(harness: Ontolog
         )
         active = harness.repository.active_ontology_version(transaction=transaction, tenant_id="tenant-demo")
 
+    assert archived == 1
+    assert activated is True
     rows = {row["id"]: row for row in harness.ontology_version_rows()}
     assert active is not None
     assert active["id"] == "ont_new"
     assert rows["ont_old"]["status"] == "archived"
     assert rows["ont_new"]["status"] == "active"
     assert rows["ont_new"]["activated_at"] == "2026-06-10T00:00:01Z"
+
+
+def test_ontology_repository_contract_activation_requires_draft_state(harness: OntologyHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_ontology_version(
+            transaction=transaction,
+            record=_ontology_version_record("ont_archived", version_number=1, status="archived"),
+        )
+        activated = harness.repository.activate_ontology_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            ontology_version_id="ont_archived",
+            activated_at="2026-06-10T00:00:01Z",
+        )
+
+    rows = {row["id"]: row for row in harness.ontology_version_rows()}
+    assert activated is False
+    assert rows["ont_archived"]["status"] == "archived"
+    assert rows["ont_archived"]["activated_at"] is None
 
 
 def test_ontology_repository_contract_persists_and_reads_type_metadata(harness: OntologyHarness) -> None:

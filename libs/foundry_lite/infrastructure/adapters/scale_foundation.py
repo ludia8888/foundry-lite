@@ -16,7 +16,12 @@ from foundry_lite.application.ports.search_adapter import (
     SearchQuery,
 )
 from foundry_lite.application.ports.stream_adapter import StreamAdapter, StreamEvent, StreamPublishRequest
-from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter, WorkflowRun, WorkflowStartRequest
+from foundry_lite.application.ports.workflow_adapter import (
+    WorkflowAdapter,
+    WorkflowRun,
+    WorkflowStartRequest,
+    workflow_run_id,
+)
 
 
 class LocalWorkflowAdapter:
@@ -45,11 +50,12 @@ class LocalWorkflowAdapter:
         )
 
     def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
-        existing = self._runs_by_idempotency.get(request.idempotency_key)
+        run_id = workflow_run_id(request)
+        existing = self._runs_by_idempotency.get(run_id)
         if existing is not None:
             return existing
         run = WorkflowRun(
-            run_id=request.idempotency_key,
+            run_id=run_id,
             workflow_name=request.workflow_name,
             status="succeeded",
             output={
@@ -60,7 +66,7 @@ class LocalWorkflowAdapter:
             },
         )
         self._runs_by_id[run.run_id] = run
-        self._runs_by_idempotency[request.idempotency_key] = run
+        self._runs_by_idempotency[run_id] = run
         return run
 
     def workflow_run(self, run_id: str) -> WorkflowRun | None:

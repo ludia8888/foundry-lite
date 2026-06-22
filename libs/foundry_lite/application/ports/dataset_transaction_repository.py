@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypedDict
 
-from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 DatasetRunKind = Literal["sync", "transform", "materialization"]
 DeadLetterRecordStatus = Literal["QUARANTINED", "REPLAY_REQUESTED", "REPLAYING", "RESOLVED", "DISCARDED"]
@@ -115,6 +115,9 @@ class DeadLetterRecord:
     metadata: DatasetTransactionMetadata
     replay_idempotency_key: str | None = None
     replay_requested_at: str | None = None
+    replay_lease_token: str | None = None
+    replay_started_at: str | None = None
+    replay_lease_expires_at: str | None = None
     discarded_at: str | None = None
     backfill_plan: DatasetTransactionMetadata | None = None
 
@@ -162,6 +165,9 @@ class DeadLetterRecordRow(TypedDict):
     metadata: DatasetTransactionMetadata
     replay_idempotency_key: str | None
     replay_requested_at: str | None
+    replay_lease_token: str | None
+    replay_started_at: str | None
+    replay_lease_expires_at: str | None
     discarded_at: str | None
     backfill_plan: DatasetTransactionMetadata | None
 
@@ -237,8 +243,8 @@ class DatasetTransactionRepository(Protocol):
         tenant_id: str,
         transaction_id: str,
         metadata: DatasetTransactionMetadata,
-    ) -> None:
-        """Mark a dataset transaction aborted inside the caller transaction."""
+    ) -> bool:
+        """CAS an OPEN dataset transaction into ABORTED inside the caller transaction."""
         ...
 
     def lock_dataset_for_version_allocation(
@@ -269,8 +275,8 @@ class DatasetTransactionRepository(Protocol):
         schema_version: int,
         committed_at: str,
         metadata: DatasetTransactionMetadata | None = None,
-    ) -> None:
-        """Mark a dataset transaction committed inside the caller transaction."""
+    ) -> bool:
+        """Mark an OPEN dataset transaction committed inside the caller transaction."""
         ...
 
     def latest_committed_transaction(
@@ -385,6 +391,21 @@ class DatasetTransactionRepository(Protocol):
         """Mark one record discarded and return the updated row."""
         ...
 
+    def claim_dead_letter_record_replay(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        replay_lease_token: str,
+        replay_started_at: str,
+        replay_lease_expires_at: str,
+        metadata: DatasetTransactionMetadata,
+    ) -> DeadLetterRecordRow | None:
+        """CAS one requested replay into REPLAYING with a lease/fencing token."""
+        ...
+
     def update_dead_letter_record_replay_succeeded(
         self,
         *,
@@ -393,6 +414,7 @@ class DatasetTransactionRepository(Protocol):
         record_id: str,
         replay_run_id: str,
         metadata: DatasetTransactionMetadata,
+        replay_lease_token: str | None = None,
     ) -> DeadLetterRecordRow | None:
         """Mark one record resolved after a replay commit and return the row."""
         ...
@@ -405,6 +427,7 @@ class DatasetTransactionRepository(Protocol):
         record_id: str,
         replay_run_id: str,
         metadata: DatasetTransactionMetadata,
+        replay_lease_token: str | None = None,
     ) -> DeadLetterRecordRow | None:
         """Mark one record replay-failed and return the row."""
         ...
@@ -415,9 +438,9 @@ class DatasetTransactionRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         sync_run_id: str,
-        status: str,
+        transition: StatusTransition,
         committed_version_id: str | None,
         completed_at: str,
-    ) -> None:
-        """Mark a sync run terminal inside the caller transaction."""
+    ) -> bool:
+        """CAS a sync run from an allowed state into a terminal state."""
         ...

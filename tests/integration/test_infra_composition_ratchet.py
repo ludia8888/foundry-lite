@@ -17,6 +17,7 @@ from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import StreamArchiveConfig, StreamPublishRequest
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters import (
     DebeziumPostgresSourceConfig,
     DebeziumPostgresStreamAdapter,
@@ -25,7 +26,10 @@ from foundry_lite.infrastructure.adapters import (
     SparkComputeAdapter,
 )
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from sqlalchemy import and_, create_engine, select
+from sqlalchemy.engine import Engine
 from testcontainers.core.container import DockerContainer  # type: ignore[import-untyped]
+from testcontainers.postgres import PostgresContainer
 
 from tests.conftest import DEMO_ROOT
 
@@ -36,6 +40,11 @@ MINIO_SECRET_KEY = "foundry_lite_password"
 @dataclass(frozen=True)
 class MinioServer:
     endpoint_url: str
+
+
+@dataclass(frozen=True)
+class PostgresServer:
+    db_url: str
 
 
 @pytest.fixture(scope="session")
@@ -52,6 +61,22 @@ def minio_server() -> Iterator[MinioServer]:
         endpoint = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9000)}"
         _wait_until(lambda: _minio_ready(endpoint))
         yield MinioServer(endpoint_url=endpoint)
+    finally:
+        container.stop()
+
+
+@pytest.fixture(scope="session")
+def postgres_server() -> Iterator[PostgresServer]:
+    container = PostgresContainer("postgres:16-alpine", driver="psycopg")
+    container.start()
+    try:
+        db_url = container.get_connection_url()
+        if db_url.startswith("postgresql://") and "+psycopg" not in db_url:
+            db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+        engine = create_engine(db_url, future=True)
+        db.create_database(engine)
+        engine.dispose()
+        yield PostgresServer(db_url=db_url)
     finally:
         container.stop()
 
@@ -137,6 +162,52 @@ def test_iceberg_s3_spark_failure_aborts_without_output_version(
     trace = cast(dict[str, Any], error["trace"])
     assert adapter_failure["adapterProfile"] == "spark"
     assert trace["adapter"] == "compute_adapter.execute_transform"
+
+
+def test_postgres_control_plane_iceberg_s3_spark_failure_aborts_once(
+    minio_server: MinioServer,
+    postgres_server: PostgresServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bucket = _make_bucket(minio_server)
+    _set_iceberg_spark_env(monkeypatch, minio_server, bucket, tmp_path)
+    deps = create_local_core_dependencies(
+        adapter_profile="iceberg",
+        storage_root=tmp_path / "runtime",
+        db_url=postgres_server.db_url,
+    )
+    assert isinstance(deps.dataset_storage, IcebergDatasetStorageAdapter)
+    assert isinstance(deps.compute_adapter, SparkComputeAdapter)
+    postgres_engine = cast(Engine, deps.engine)
+    assert postgres_engine.dialect.name == "postgresql"
+
+    foundry = FoundryLite(dependencies=deps)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("broken.orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.erp_orders", DEMO_ROOT / "data" / "orders.csv", ctx=ctx)
+    bad_sql = tmp_path / "broken_orders.sql"
+    bad_sql.write_text(
+        "select definitely_missing_column from {{ input('raw.erp_orders') }}",
+        encoding="utf-8",
+    )
+    foundry.transforms.register(
+        "broken_orders",
+        entrypoint=bad_sql,
+        inputs={"raw.erp_orders": "raw.erp_orders"},
+        output_dataset_ref="broken.orders",
+        ctx=ctx,
+    )
+
+    with pytest.raises(ValidationFailed):
+        foundry.transforms.run("broken_orders", ctx=ctx)
+
+    assert foundry.datasets.list_versions("broken.orders", ctx=ctx) == []
+    failed_runs = foundry.operations.query_runs(ctx=ctx, run_type="transform", status="FAILED")["transformRuns"]
+    assert len(failed_runs) == 1
+    aborted_transactions = _dataset_transaction_statuses(postgres_engine, "broken", "orders")
+    assert aborted_transactions == [("ABORTED", None)]
 
 
 def test_debezium_cdc_iceberg_s3_spark_archives_indexes_and_materializes_end_to_end(
@@ -424,3 +495,32 @@ def _materialization_rows_for_version(
         if row["target_dataset_version_id"] == version_id
     )
     return [dict(row) for row in foundry.materialization.replay_rows(str(run["id"]), ctx=ctx).rows]
+
+
+def _dataset_transaction_statuses(engine: Engine, namespace: str, name: str) -> list[tuple[str, str | None]]:
+    with engine.begin() as conn:
+        rows = (
+            conn.execute(
+                select(db.dataset_transactions.c.status, db.dataset_transactions.c.committed_version_id)
+                .select_from(
+                    db.dataset_transactions.join(
+                        db.datasets,
+                        and_(
+                            db.datasets.c.tenant_id == db.dataset_transactions.c.tenant_id,
+                            db.datasets.c.id == db.dataset_transactions.c.dataset_id,
+                        ),
+                    )
+                )
+                .where(
+                    and_(
+                        db.dataset_transactions.c.tenant_id == "tenant-demo",
+                        db.datasets.c.namespace == namespace,
+                        db.datasets.c.name == name,
+                    )
+                )
+                .order_by(db.dataset_transactions.c.created_at, db.dataset_transactions.c.id)
+            )
+            .mappings()
+            .all()
+        )
+    return [(str(row["status"]), row["committed_version_id"]) for row in rows]

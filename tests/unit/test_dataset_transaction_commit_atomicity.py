@@ -14,11 +14,12 @@ from foundry_lite.infrastructure.adapters import LocalDatasetStorageAdapter
 
 
 class _ConflictTransactionRepository:
-    def __init__(self) -> None:
+    def __init__(self, *, base_version_id: str | None = None) -> None:
         self.lock_calls: list[tuple[str, str]] = []
         self.abort_called = False
         self.insert_file_called = False
         self.commit_transaction_called = False
+        self.base_version_id = base_version_id
 
     def transaction_by_id(self, *, transaction: object, transaction_id: str) -> dict[str, Any] | None:
         del transaction, transaction_id
@@ -29,7 +30,7 @@ class _ConflictTransactionRepository:
             "branch": "main",
             "tx_type": "SNAPSHOT",
             "status": "OPEN",
-            "base_version_id": None,
+            "base_version_id": self.base_version_id,
             "committed_version_id": None,
             "schema_version": None,
             "created_by": "user-demo",
@@ -49,9 +50,10 @@ class _ConflictTransactionRepository:
         tenant_id: str,
         transaction_id: str,
         metadata: dict[str, object],
-    ) -> None:
+    ) -> bool:
         del transaction, tenant_id, transaction_id, metadata
         self.abort_called = True
+        return True
 
     def insert_version(self, *, transaction: object, record: object) -> None:
         del transaction, record
@@ -60,8 +62,9 @@ class _ConflictTransactionRepository:
     def insert_file(self, **_kwargs: object) -> None:
         self.insert_file_called = True
 
-    def commit_transaction(self, **_kwargs: object) -> None:
+    def commit_transaction(self, **_kwargs: object) -> bool:
         self.commit_transaction_called = True
+        return True
 
 
 class _FileInsertFailureRepository(_ConflictTransactionRepository):
@@ -120,9 +123,21 @@ class _SchemaRaceQuality(_Quality):
 
 
 class _VersionLookup:
+    def __init__(self, *, latest_version_id: str | None = None) -> None:
+        self.latest_version_id = latest_version_id
+
     def _next_dataset_version_number(self, _conn: object, dataset_id: str) -> int:
         assert dataset_id == "ds_orders"
         return 7
+
+    def _latest_version_by_dataset_id(
+        self, _conn: object, dataset_id: str, *, allow_missing: bool = False
+    ) -> dict[str, Any] | None:
+        del allow_missing
+        assert dataset_id == "ds_orders"
+        if self.latest_version_id is None:
+            return None
+        return {"id": self.latest_version_id}
 
 
 class _Runtime:
@@ -150,6 +165,27 @@ def test_dataset_finalize_cleans_orphan_artifacts_after_version_conflict(tmp_pat
     assert list((tmp_path / "object-storage").glob("**/version=*")) == []
     assert exc_info.value.details["version_number"] == 7
     assert exc_info.value.details["orphan_cleanup"]["removed"] is True
+
+
+def test_dataset_finalize_rejects_stale_snapshot_base_before_commit(tmp_path: Path) -> None:
+    staged = tmp_path / "staged.parquet"
+    staged.write_bytes(b"fake parquet bytes")
+    repository = _ConflictTransactionRepository(base_version_id="dsv_old")
+    service = _service(tmp_path, staged, repository, latest_version_id="dsv_current")
+
+    with pytest.raises(ConflictDetected, match="base version is stale") as exc_info:
+        _finalize(service, staged)
+
+    assert repository.lock_calls == [("tenant-demo", "ds_orders")]
+    assert repository.insert_file_called is False
+    assert repository.commit_transaction_called is False
+    assert list((tmp_path / "object-storage").glob("**/version=*")) == []
+    assert exc_info.value.details == {
+        "transaction_id": "dstx_conflict",
+        "dataset_id": "ds_orders",
+        "expected_base_version_id": "dsv_old",
+        "current_base_version_id": "dsv_current",
+    }
 
 
 def test_dataset_finalize_cleans_orphan_artifacts_after_file_persistence_failure(tmp_path: Path) -> None:
@@ -199,6 +235,7 @@ def _service(
     staged: Path,
     repository: _ConflictTransactionRepository,
     quality: _Quality | None = None,
+    latest_version_id: str | None = None,
 ) -> DatasetTransactionService:
     storage = LocalDatasetStorageAdapter(tmp_path / "object-storage")
     service = DatasetTransactionService(
@@ -209,7 +246,7 @@ def _service(
     service.bind_collaborators(
         {
             "dataset_quality_service": quality or _Quality(staged),
-            "dataset_version_service": _VersionLookup(),
+            "dataset_version_service": _VersionLookup(latest_version_id=latest_version_id),
             "runtime_service": _Runtime(),
         }
     )

@@ -26,10 +26,13 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetRuntimeBoundary,
     DatasetTransactionManager,
     DatasetVersionLookup,
+    mark_sync_run_committed,
+    require_dataset_write_open,
 )
 from foundry_lite.application.services.dataset.stream_archive_commit import (
     StreamArchiveDeadLetter,
     ensure_stream_archive_batch_writable,
+    finalize_stream_archive_commit,
     prepare_stream_archive_batch,
     read_stream_archive_events,
     record_stream_read_failure,
@@ -81,6 +84,7 @@ class DatasetIngestService(CoreService):
     ) -> CommitResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        require_dataset_write_open(self.runtime_service, ctx, "upload_csv", "dataset", dataset_ref)
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
         source_path = Path(csv_path).resolve()
         if not source_path.exists():
@@ -119,8 +123,8 @@ class DatasetIngestService(CoreService):
                     run_id=plan.run_id,
                     audit_action="csv_upload_commit",
                     outbox_event_type="dataset.version.committed",
-                    after_persist=lambda commit_conn, result: self._mark_sync_run_committed(
-                        commit_conn, ctx, plan.run_id, result
+                    after_persist=lambda commit_conn, result: mark_sync_run_committed(
+                        self.dataset_transaction_repository, commit_conn, ctx, plan.run_id, result
                     ),
                 )
             except DatasetCommitBlocked as exc:
@@ -192,6 +196,7 @@ class DatasetIngestService(CoreService):
     ) -> CommitResult | None:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        require_dataset_write_open(self.runtime_service, ctx, "archive_stream_events", "dataset", dataset_ref)
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
         committed_transaction = self._committed_stream_transaction(ctx, dataset)
         committed_metadata = committed_transaction["metadata"] if committed_transaction is not None else {}
@@ -226,7 +231,6 @@ class DatasetIngestService(CoreService):
         dataset_ref: str,
         sync_name: str | None,
     ) -> UploadSyncPlan:
-        """Open the upload transaction and persist the EXTRACTING sync run."""
         transaction_id = self.dataset_transaction_service._open_dataset_transaction(conn, ctx, dataset, "SNAPSHOT")
         run_id = _new_id("sync_run")
         self.dataset_transaction_repository.insert_sync_run(
@@ -390,45 +394,23 @@ class DatasetIngestService(CoreService):
                 raise
             self._rows_to_parquet(batch.rows, staged, stream_archive_fields(stream))
             metadata = stream_commit_metadata(dataset, stream, events, committed_transaction, batch.rows)
-            return self._finalize_stream_archive_commit(
-                ctx, dataset, stream, plan, staged, batch.dead_letters, metadata
+            return finalize_stream_archive_commit(
+                engine=self.engine,
+                repository=self.dataset_transaction_repository,
+                transaction_service=self.dataset_transaction_service,
+                insert_dead_letters=self._insert_stream_dead_letters,
+                ctx=ctx,
+                dataset=dataset,
+                stream=stream,
+                plan=plan,
+                staged=staged,
+                dead_letters=batch.dead_letters,
+                metadata=metadata,
+                events=events,
+                committed_transaction=committed_transaction,
             )
         except Exception as exc:
             self._abort_stream_after_error(ctx, plan.transaction_id, plan.run_id, exc)
-
-    def _finalize_stream_archive_commit(
-        self,
-        ctx: RequestContext,
-        dataset: DatasetRow,
-        stream: StreamArchiveConfig,
-        plan: UploadSyncPlan,
-        staged: Path,
-        dead_letters: Sequence[StreamArchiveDeadLetter],
-        metadata: Mapping[str, object],
-    ) -> CommitResult:
-        blocked: DatasetCommitBlocked | None = None
-        with self.engine.begin() as conn:
-            self._insert_stream_dead_letters(conn, ctx, dataset, stream, plan, dead_letters)
-            try:
-                return self.dataset_transaction_service._finalize_open_transaction(
-                    conn,
-                    ctx,
-                    dataset=dataset,
-                    transaction_id=plan.transaction_id,
-                    staged_parquet=staged,
-                    run_id=plan.run_id,
-                    audit_action="stream_archive_append_commit",
-                    outbox_event_type="dataset.version.committed",
-                    transaction_metadata=metadata,
-                    after_persist=lambda commit_conn, result: self._mark_sync_run_committed(
-                        commit_conn, ctx, plan.run_id, result
-                    ),
-                )
-            except DatasetCommitBlocked as exc:
-                blocked = exc
-        if blocked is not None:
-            raise blocked
-        raise InvariantViolation("stream archive finalization did not return a commit result")
 
     def _persist_stream_dead_letters(
         self,
@@ -485,15 +467,7 @@ class DatasetIngestService(CoreService):
         run_id: str,
         result: CommitResult,
     ) -> None:
-        """Close the sync run with the committed dataset version under the tenant."""
-        self.dataset_transaction_repository.update_sync_run_terminal(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            sync_run_id=run_id,
-            status="COMMITTED",
-            committed_version_id=result.version_id,
-            completed_at=_now(),
-        )
+        mark_sync_run_committed(self.dataset_transaction_repository, conn, ctx, run_id, result)
 
     def _rows_to_parquet(self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]) -> None:
         self.compute_adapter.rows_to_parquet(rows, target_path, fieldnames)

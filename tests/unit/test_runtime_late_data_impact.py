@@ -163,6 +163,7 @@ def _snapshot(
         "materializationRuns": list(materialization_runs),
         "outboxEvents": [],
         "deadLetterEvents": [],
+        "workflowRuns": [],
         "auditEvents": [],
         "objectEdits": [],
     }

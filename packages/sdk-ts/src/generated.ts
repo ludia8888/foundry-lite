@@ -342,6 +342,7 @@ export type RuntimeRunType =
   | "materialization"
   | "outbox"
   | "dead_letter"
+  | "workflow"
   | "audit";
 export type RuntimeRow = Record<string, unknown>;
 export type LineageEdge = {
@@ -381,6 +382,7 @@ export type RuntimeRunQueryResult = {
   materializationRuns: RuntimeRow[];
   outboxEvents: RuntimeRow[];
   deadLetterEvents: RuntimeRow[];
+  workflowRuns: RuntimeRow[];
   auditEvents: RuntimeRow[];
   objectEdits: RuntimeRow[];
   nextCursor?: string | null;
@@ -672,7 +674,10 @@ export type ProductWorkflowStatus =
   | "running"
   | "succeeded"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "requested"
+  | "starting"
+  | "start_unknown";
 export type ProductWorkflowRun = {
   workflowRunId: string;
   workflowName: string;

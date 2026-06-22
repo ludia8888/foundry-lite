@@ -59,6 +59,15 @@ class IndexOntologyLookup(Protocol):
 
 
 class IndexRuntimeBoundary(Protocol):
+    def _require_write_traffic_open(
+        self,
+        ctx: RequestContext,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None: ...
+
     def _require_or_audit(
         self,
         ctx: RequestContext,

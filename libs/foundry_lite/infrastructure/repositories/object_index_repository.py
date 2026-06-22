@@ -23,8 +23,10 @@ from foundry_lite.application.ports import (
     ObjectRecordSourceUpdate,
 )
 from foundry_lite.application.ports.object_index_repository import IndexRunRow
+from foundry_lite.application.ports.transaction_context import INDEX_RUN_FAILED, INDEX_RUN_SUCCEEDED
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
 
 class SqlAlchemyObjectIndexRepository:
@@ -117,19 +119,21 @@ class SqlAlchemyObjectIndexRepository:
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
-    ) -> None:
-        transaction.execute(
-            update(db.index_runs)
-            .where(and_(db.index_runs.c.tenant_id == tenant_id, db.index_runs.c.id == run_id))
-            .values(
-                status="succeeded",
-                rows_read=rows_read,
-                objects_upserted=objects_upserted,
-                objects_deleted=objects_deleted,
-                links_upserted=links_upserted,
-                cursor=cursor,
-                completed_at=completed_at,
-            )
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.index_runs,
+            tenant_id=tenant_id,
+            row_id=run_id,
+            transition=INDEX_RUN_SUCCEEDED,
+            values={
+                "rows_read": rows_read,
+                "objects_upserted": objects_upserted,
+                "objects_deleted": objects_deleted,
+                "links_upserted": links_upserted,
+                "cursor": cursor,
+                "completed_at": completed_at,
+            },
         )
 
     def mark_index_run_failed(
@@ -140,11 +144,14 @@ class SqlAlchemyObjectIndexRepository:
         run_id: str,
         error: IndexRunError,
         completed_at: str,
-    ) -> None:
-        transaction.execute(
-            update(db.index_runs)
-            .where(and_(db.index_runs.c.tenant_id == tenant_id, db.index_runs.c.id == run_id))
-            .values(status="failed", error=error, completed_at=completed_at)
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.index_runs,
+            tenant_id=tenant_id,
+            row_id=run_id,
+            transition=INDEX_RUN_FAILED,
+            values={"error": error, "completed_at": completed_at},
         )
 
     def insert_object_record(self, *, transaction: Any, record: ObjectRecordInsert) -> None:

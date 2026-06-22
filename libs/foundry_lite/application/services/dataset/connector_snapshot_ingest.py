@@ -23,6 +23,7 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetRuntimeBoundary,
     DatasetTransactionManager,
 )
+from foundry_lite.application.services.write_traffic_gate import require_write_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, DatasetCommitBlocked, InvariantViolation, ValidationFailed
 
@@ -146,6 +147,7 @@ def _prepare_connector_snapshot_sync(
     cursor: Mapping[str, object] | None,
 ) -> ConnectorSnapshotSync:
     runtime.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+    require_write_open(runtime.runtime_service, ctx, "sync_connector_snapshot", "dataset", dataset_ref)
     dataset = runtime.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
     resume_cursor = cursor or _committed_connector_cursor(runtime, ctx, dataset, connector_name, resource_name)
     with runtime.engine.begin() as conn:

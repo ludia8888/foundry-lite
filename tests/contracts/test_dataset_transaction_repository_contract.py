@@ -15,6 +15,11 @@ from foundry_lite.application.ports import (
     DeadLetterRecord,
     SyncRunRecord,
 )
+from foundry_lite.application.ports.transaction_context import (
+    SYNC_RUN_COMMITTED,
+    StatusTransition,
+    dataset_run_failed_transition,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyDatasetTransactionRepository,
@@ -87,10 +92,13 @@ class FakeDatasetTransactionRepository:
 
     def abort_transaction(
         self, *, transaction: Any, tenant_id: str, transaction_id: str, metadata: dict[str, Any]
-    ) -> None:
+    ) -> bool:
         del transaction
-        if self.transactions[transaction_id]["tenant_id"] == tenant_id:
-            self.transactions[transaction_id].update(status="ABORTED", metadata=metadata)
+        row = self.transactions[transaction_id]
+        if row["tenant_id"] == tenant_id and row["status"] == "OPEN":
+            row.update(status="ABORTED", metadata=metadata)
+            return True
+        return False
 
     def lock_dataset_for_version_allocation(self, *, transaction: Any, tenant_id: str, dataset_id: str) -> None:
         del transaction, tenant_id, dataset_id
@@ -120,10 +128,12 @@ class FakeDatasetTransactionRepository:
         schema_version: int,
         committed_at: str,
         metadata: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         del transaction
         if self.transactions[transaction_id]["tenant_id"] != tenant_id:
-            return
+            return False
+        if self.transactions[transaction_id]["status"] != "OPEN":
+            return False
         self.transactions[transaction_id].update(
             status="COMMITTED",
             committed_version_id=committed_version_id,
@@ -131,6 +141,7 @@ class FakeDatasetTransactionRepository:
             committed_at=committed_at,
             metadata=dict(metadata or {}),
         )
+        return True
 
     def latest_committed_transaction(
         self,
@@ -202,11 +213,15 @@ class FakeDatasetTransactionRepository:
         tx = self.transactions[transaction_id]
         if tx["tenant_id"] != tenant_id:
             return False
-        aborted = tx["status"] == "OPEN"
+        if tx["status"] not in {"OPEN", "ABORTED"}:
+            return False
         if tx["status"] == "OPEN":
             tx.update(status="ABORTED", metadata={"error": error})
-        self.runs[(run_kind, run_id)].update(status="FAILED", error=error, completed_at=completed_at)
-        return aborted
+        run = self.runs[(run_kind, run_id)]
+        if run["status"] not in _failed_run_from_statuses(run_kind):
+            return False
+        run.update(status="FAILED", error=error, completed_at=completed_at)
+        return True
 
     def insert_sync_run(self, *, transaction: Any, record: SyncRunRecord) -> None:
         del transaction
@@ -293,8 +308,37 @@ class FakeDatasetTransactionRepository:
             replay_run_id=replay_run_id,
             replay_idempotency_key=replay_idempotency_key,
             replay_requested_at=replay_requested_at,
+            replay_lease_token=None,
+            replay_started_at=None,
+            replay_lease_expires_at=None,
             metadata=dict(metadata),
             backfill_plan=dict(backfill_plan),
+        )
+        return dict(row)
+
+    def claim_dead_letter_record_replay(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        record_id: str,
+        replay_run_id: str,
+        replay_lease_token: str,
+        replay_started_at: str,
+        replay_lease_expires_at: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        del transaction
+        row = self._mutable_dead_letter(tenant_id, record_id)
+        if row is None or not _can_claim_replay(row, replay_run_id, replay_started_at):
+            return None
+        row.update(
+            status="REPLAYING",
+            replay_status="REPLAYING",
+            replay_lease_token=replay_lease_token,
+            replay_started_at=replay_started_at,
+            replay_lease_expires_at=replay_lease_expires_at,
+            metadata=dict(metadata),
         )
         return dict(row)
 
@@ -306,15 +350,17 @@ class FakeDatasetTransactionRepository:
         record_id: str,
         replay_run_id: str,
         metadata: dict[str, Any],
+        replay_lease_token: str | None = None,
     ) -> dict[str, Any] | None:
         del transaction
         row = self._mutable_dead_letter(tenant_id, record_id)
-        if row is None:
+        if not _is_matching_replay(row, replay_run_id, replay_lease_token):
             return None
         row.update(
             status="RESOLVED",
             replay_status="SUCCEEDED",
             replay_run_id=replay_run_id,
+            replay_lease_token=replay_lease_token,
             metadata=dict(metadata),
         )
         return dict(row)
@@ -327,15 +373,17 @@ class FakeDatasetTransactionRepository:
         record_id: str,
         replay_run_id: str,
         metadata: dict[str, Any],
+        replay_lease_token: str | None = None,
     ) -> dict[str, Any] | None:
         del transaction
         row = self._mutable_dead_letter(tenant_id, record_id)
-        if row is None:
+        if not _is_matching_replay(row, replay_run_id, replay_lease_token):
             return None
         row.update(
             status="QUARANTINED",
             replay_status="FAILED",
             replay_run_id=replay_run_id,
+            replay_lease_token=replay_lease_token,
             attempts=row["attempts"] + 1,
             metadata=dict(metadata),
         )
@@ -352,7 +400,7 @@ class FakeDatasetTransactionRepository:
     ) -> dict[str, Any] | None:
         del transaction
         row = self._mutable_dead_letter(tenant_id, record_id)
-        if row is None:
+        if row is None or row["status"] != "QUARANTINED":
             return None
         row.update(
             status="DISCARDED",
@@ -374,18 +422,21 @@ class FakeDatasetTransactionRepository:
         transaction: Any,
         tenant_id: str,
         sync_run_id: str,
-        status: str,
+        transition: StatusTransition,
         committed_version_id: str | None,
         completed_at: str,
-    ) -> None:
+    ) -> bool:
         del transaction
         if self.sync_runs_store[sync_run_id]["tenant_id"] != tenant_id:
-            return
+            return False
+        if self.sync_runs_store[sync_run_id]["status"] not in transition.from_statuses:
+            return False
         self.sync_runs_store[sync_run_id].update(
-            status=status,
+            status=transition.to_status,
             committed_version_id=committed_version_id,
             completed_at=completed_at,
         )
+        return True
 
 
 @dataclass
@@ -399,7 +450,7 @@ class FakeTransactionHarness:
         self.repository.runs[(run_kind, run_id)] = {
             "id": run_id,
             "transaction_id": transaction_id,
-            "status": "RUNNING",
+            "status": _initial_run_status(run_kind),
             "error": None,
             "completed_at": None,
         }
@@ -584,6 +635,9 @@ def _dead_letter_values(record: DeadLetterRecord) -> dict[str, Any]:
         "replay_run_id": record.replay_run_id,
         "replay_idempotency_key": record.replay_idempotency_key,
         "replay_requested_at": record.replay_requested_at,
+        "replay_lease_token": record.replay_lease_token,
+        "replay_started_at": record.replay_started_at,
+        "replay_lease_expires_at": record.replay_lease_expires_at,
         "discarded_at": record.discarded_at,
         "backfill_plan": dict(record.backfill_plan) if record.backfill_plan is not None else None,
         "is_closed_partition_affected": record.is_closed_partition_affected,
@@ -684,7 +738,7 @@ def _run_values(run_kind: DatasetRunKind, run_id: str, transaction_id: str) -> d
     base = {
         "id": run_id,
         "tenant_id": "tenant-demo",
-        "status": "RUNNING",
+        "status": _initial_run_status(run_kind),
         "error": None,
         "created_at": "2026-06-10T00:00:00Z",
         "completed_at": None,
@@ -716,6 +770,36 @@ def _run_values(run_kind: DatasetRunKind, run_id: str, transaction_id: str) -> d
         "target_dataset_version_id": None,
         "row_count": None,
     }
+
+
+def _initial_run_status(run_kind: DatasetRunKind) -> str:
+    if run_kind == "sync":
+        return "EXTRACTING"
+    if run_kind == "transform":
+        return "RUNNING"
+    return "running"
+
+
+def _failed_run_from_statuses(run_kind: DatasetRunKind) -> tuple[str, ...]:
+    return dataset_run_failed_transition(run_kind).from_statuses
+
+
+def _is_matching_replay(row: dict[str, Any] | None, replay_run_id: str, replay_lease_token: str | None) -> bool:
+    if row is None:
+        return False
+    if row["status"] not in {"REPLAY_REQUESTED", "REPLAYING"} or row["replay_run_id"] != replay_run_id:
+        return False
+    if replay_lease_token is None:
+        return row.get("replay_lease_token") is None
+    return row.get("replay_lease_token") == replay_lease_token
+
+
+def _can_claim_replay(row: dict[str, Any], replay_run_id: str, replay_started_at: str) -> bool:
+    if row["replay_run_id"] != replay_run_id:
+        return False
+    if row["status"] == "REPLAY_REQUESTED":
+        return True
+    return row["status"] == "REPLAYING" and str(row.get("replay_lease_expires_at")) < replay_started_at
 
 
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
@@ -757,6 +841,41 @@ def test_dataset_transaction_repository_contract_commit_flow(harness: Transactio
     assert committed["committed_version_id"] == "dsv_orders_1"
     assert harness.versions()[0]["version_id" if "version_id" in harness.versions()[0] else "id"] == "dsv_orders_1"
     assert harness.files()[0]["uri"] == "memory://part-00000.parquet"
+
+
+def test_dataset_transaction_repository_contract_commit_requires_open_state(harness: TransactionHarness) -> None:
+    repository = harness.repository
+
+    def commit_twice(transaction: Any) -> tuple[bool, bool, dict[str, Any] | None]:
+        repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_commit_once"))
+        repository.insert_version(transaction=transaction, record=_version_record("dstx_commit_once"))
+        first = repository.commit_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_commit_once",
+            committed_version_id="dsv_orders_1",
+            schema_version=1,
+            committed_at="2026-06-10T00:02:00Z",
+        )
+        second = repository.commit_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_commit_once",
+            committed_version_id="dsv_orders_2",
+            schema_version=2,
+            committed_at="2026-06-10T00:03:00Z",
+        )
+        row = repository.transaction_by_id(transaction=transaction, transaction_id="dstx_commit_once")
+        return first, second, row
+
+    first, second, committed = harness.call_in_transaction(commit_twice)
+
+    assert first is True
+    assert second is False
+    assert committed is not None
+    assert committed["status"] == "COMMITTED"
+    assert committed["committed_version_id"] == "dsv_orders_1"
+    assert committed["schema_version"] == 1
 
 
 def test_dataset_transaction_repository_contract_allows_same_content_hash_as_new_version(
@@ -1084,6 +1203,55 @@ def test_dataset_transaction_repository_contract_abort_open_transaction_and_fail
     assert failed_tx["metadata"] == {"error": {"code": "VALIDATION_FAILED"}}
 
 
+@pytest.mark.parametrize("run_kind", ["sync", "transform", "materialization"])
+def test_dataset_transaction_repository_contract_fails_run_when_transaction_already_aborted(
+    harness: TransactionHarness,
+    run_kind: DatasetRunKind,
+) -> None:
+    repository = harness.repository
+
+    harness.call_in_transaction(
+        lambda transaction: repository.create_open_transaction(
+            transaction=transaction,
+            record=_transaction_record("dstx_quality_blocked"),
+        )
+    )
+    harness.call_in_transaction(
+        lambda transaction: repository.abort_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_quality_blocked",
+            metadata={"validationFailures": [{"check": "unique"}]},
+        )
+    )
+    harness.add_run(run_kind=run_kind, run_id="run_quality_blocked", transaction_id="dstx_quality_blocked")
+
+    updated = harness.call_in_transaction(
+        lambda transaction: repository.abort_open_transaction_and_fail_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_quality_blocked",
+            run_id="run_quality_blocked",
+            run_kind=run_kind,
+            error={"code": "VALIDATION_FAILED"},
+            completed_at="2026-06-10T00:04:00Z",
+        )
+    )
+    failed_run = harness.run_status(run_kind=run_kind, run_id="run_quality_blocked")
+    failed_tx = harness.call_in_transaction(
+        lambda transaction: repository.transaction_by_id(
+            transaction=transaction,
+            transaction_id="dstx_quality_blocked",
+        )
+    )
+
+    assert updated is True
+    assert failed_run is not None
+    assert failed_run["status"] == "FAILED"
+    assert failed_tx is not None
+    assert failed_tx["metadata"] == {"validationFailures": [{"check": "unique"}]}
+
+
 def test_dataset_transaction_repository_contract_dead_letter_record_is_tenant_scoped(
     harness: TransactionHarness,
 ) -> None:
@@ -1151,8 +1319,19 @@ def test_dataset_transaction_repository_contract_dead_letter_record_replay_and_d
             metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
             backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
         )
+        failed_request = repository.update_dead_letter_record_replay_requested(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_idempotency_key="retry-key-2",
+            replay_requested_at="2026-06-10T00:04:02Z",
+            metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
+            backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
+        )
         assert updated is not None
         assert duplicate_request is None
+        assert failed_request is not None
         succeeded = repository.update_dead_letter_record_replay_succeeded(
             transaction=transaction,
             tenant_id="tenant-demo",
@@ -1209,6 +1388,154 @@ def test_dataset_transaction_repository_contract_dead_letter_record_replay_and_d
     assert discarded is not None
     assert discarded["status"] == "DISCARDED"
     assert discarded["discarded_at"] == "2026-06-10T00:05:00Z"
+
+
+def test_dataset_transaction_repository_contract_dead_letter_replay_lease_fences_terminal_updates(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def lease_flow(transaction: Any) -> dict[str, Any | None]:
+        repository.insert_dead_letter_record(transaction=transaction, record=_dead_letter_record())
+        repository.insert_dead_letter_record(
+            transaction=transaction,
+            record=replace(
+                _dead_letter_record("dlqr_orders_bad_2"),
+                source_event_id="shipment_events:0:2",
+                payload_hash="payload-hash-2",
+            ),
+        )
+        requested = repository.update_dead_letter_record_replay_requested(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_idempotency_key="retry-key-1",
+            replay_requested_at="2026-06-10T00:04:00Z",
+            metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
+            backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
+        )
+        claimed = repository.claim_dead_letter_record_replay(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_lease_token="lease-token-1",
+            replay_started_at="2026-06-10T00:04:01Z",
+            replay_lease_expires_at="2026-06-10T00:04:30Z",
+            metadata={"stream": "shipments", "replayLease": {"token": "lease-token-1"}},
+        )
+        duplicate_claim = repository.claim_dead_letter_record_replay(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_lease_token="lease-token-2",
+            replay_started_at="2026-06-10T00:04:02Z",
+            replay_lease_expires_at="2026-06-10T00:04:40Z",
+            metadata={"stream": "shipments", "replayLease": {"token": "lease-token-2"}},
+        )
+        missing_token_terminal = repository.update_dead_letter_record_replay_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            metadata={"stream": "shipments", "replayResult": {"datasetVersionId": "dsv_wrong"}},
+        )
+        wrong_token_terminal = repository.update_dead_letter_record_replay_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_lease_token="wrong-token",
+            metadata={"stream": "shipments", "replayResult": {"datasetVersionId": "dsv_wrong"}},
+        )
+        succeeded = repository.update_dead_letter_record_replay_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_1",
+            replay_run_id="record_replay_1",
+            replay_lease_token="lease-token-1",
+            metadata={"stream": "shipments", "replayResult": {"datasetVersionId": "dsv_replay_1"}},
+        )
+        second_requested = repository.update_dead_letter_record_replay_requested(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_idempotency_key="retry-key-2",
+            replay_requested_at="2026-06-10T00:05:00Z",
+            metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
+            backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
+        )
+        first_expiring_claim = repository.claim_dead_letter_record_replay(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_lease_token="lease-token-old",
+            replay_started_at="2026-06-10T00:05:01Z",
+            replay_lease_expires_at="2026-06-10T00:05:10Z",
+            metadata={"stream": "shipments", "replayLease": {"token": "lease-token-old"}},
+        )
+        reclaimed = repository.claim_dead_letter_record_replay(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_lease_token="lease-token-new",
+            replay_started_at="2026-06-10T00:05:11Z",
+            replay_lease_expires_at="2026-06-10T00:06:00Z",
+            metadata={"stream": "shipments", "replayLease": {"token": "lease-token-new"}},
+        )
+        old_token_terminal = repository.update_dead_letter_record_replay_failed(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_lease_token="lease-token-old",
+            metadata={"stream": "shipments", "lastReplayError": {"type": "stale-worker"}},
+        )
+        failed = repository.update_dead_letter_record_replay_failed(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            record_id="dlqr_orders_bad_2",
+            replay_run_id="record_replay_2",
+            replay_lease_token="lease-token-new",
+            metadata={"stream": "shipments", "lastReplayError": {"type": "ValidationFailed"}},
+        )
+        return {
+            "requested": requested,
+            "claimed": claimed,
+            "duplicate_claim": duplicate_claim,
+            "missing_token_terminal": missing_token_terminal,
+            "wrong_token_terminal": wrong_token_terminal,
+            "succeeded": succeeded,
+            "second_requested": second_requested,
+            "first_expiring_claim": first_expiring_claim,
+            "reclaimed": reclaimed,
+            "old_token_terminal": old_token_terminal,
+            "failed": failed,
+        }
+
+    result = harness.call_in_transaction(lease_flow)
+
+    assert result["requested"] is not None
+    assert result["claimed"] is not None
+    assert result["duplicate_claim"] is None
+    assert result["missing_token_terminal"] is None
+    assert result["wrong_token_terminal"] is None
+    assert result["succeeded"] is not None
+    assert result["succeeded"]["status"] == "RESOLVED"
+    assert result["succeeded"]["replay_lease_token"] == "lease-token-1"
+    assert result["second_requested"] is not None
+    assert result["first_expiring_claim"] is not None
+    assert result["reclaimed"] is not None
+    assert result["reclaimed"]["replay_lease_token"] == "lease-token-new"
+    assert result["old_token_terminal"] is None
+    assert result["failed"] is not None
+    assert result["failed"]["status"] == "QUARANTINED"
+    assert result["failed"]["replay_status"] == "FAILED"
 
 
 def test_concurrent_replay_requests_create_one_replay_run(postgres_fixture: Any) -> None:
@@ -1331,21 +1658,32 @@ def test_dataset_transaction_repository_contract_sync_run_terminal_committed(
 ) -> None:
     repository = harness.repository
 
-    def insert_then_commit(transaction: Any) -> None:
+    def insert_then_commit(transaction: Any) -> tuple[bool, bool]:
         repository.insert_sync_run(transaction=transaction, record=_sync_run_record())
-        repository.update_sync_run_terminal(
+        updated = repository.update_sync_run_terminal(
             transaction=transaction,
             tenant_id="tenant-demo",
             sync_run_id="sync_run_1",
-            status="COMMITTED",
+            transition=SYNC_RUN_COMMITTED,
             committed_version_id="dsv_orders_1",
             completed_at="2026-06-10T00:05:00Z",
         )
+        stale = repository.update_sync_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            sync_run_id="sync_run_1",
+            transition=SYNC_RUN_COMMITTED,
+            committed_version_id="dsv_orders_2",
+            completed_at="2026-06-10T00:06:00Z",
+        )
+        return updated, stale
 
-    harness.call_in_transaction(insert_then_commit)
+    updated, stale = harness.call_in_transaction(insert_then_commit)
 
     row = harness.sync_run_row(sync_run_id="sync_run_1")
     assert row is not None
+    assert updated is True
+    assert stale is False
     assert row["status"] == "COMMITTED"
     assert row["committed_version_id"] == "dsv_orders_1"
     assert row["completed_at"] == "2026-06-10T00:05:00Z"

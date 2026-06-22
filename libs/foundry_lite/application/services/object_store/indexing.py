@@ -37,7 +37,7 @@ from foundry_lite.application.services.object_store.indexing_types import (
     object_index_stats,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
 
 class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, CoreService):
@@ -64,6 +64,12 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
         ctx: RequestContext | None = None,
     ) -> ObjectIndexRebuildResult:
         ctx = ctx or RequestContext()
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="index_rebuild",
+            resource_type="object_type",
+            resource_id=object_type_api_name,
+        )
         with self.engine.begin() as conn:
             plan = _start_index_rebuild_plan(
                 conn=conn,
@@ -94,6 +100,12 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
         expected_hash: str | None = None,
     ) -> ObjectIndexShadowRebuildResult:
         ctx = ctx or RequestContext()
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="index_shadow_rebuild",
+            resource_type="object_type",
+            resource_id=object_type_api_name,
+        )
         with self.engine.begin() as conn:
             plan = _start_index_rebuild_plan(
                 conn=conn,
@@ -125,6 +137,12 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
     ) -> ObjectIndexRebuildResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "operations:retry", "index_run", index_run_id)
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="index_replay_run",
+            resource_type="index_run",
+            resource_id=index_run_id,
+        )
         with self.engine.begin() as conn:
             plan = _start_failed_index_replay_plan(
                 conn=conn,
@@ -287,7 +305,7 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
         cursor: IndexRunCursor | None = None,
     ) -> None:
         """Persist successful index run counters within the current tenant."""
-        self.object_index_repository.mark_index_run_succeeded(
+        updated = self.object_index_repository.mark_index_run_succeeded(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             run_id=run_id,
@@ -298,6 +316,8 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
             cursor=cursor or {"last_row": counts.rows_read},
             completed_at=_now(),
         )
+        if not updated:
+            raise ConflictDetected("index run terminal state changed concurrently", details={"run_id": run_id})
 
     def _mark_index_run_failed(
         self,

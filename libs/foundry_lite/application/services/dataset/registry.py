@@ -84,6 +84,12 @@ class DatasetRegistryService(CoreService):
     ) -> DatasetRow:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="create",
+            resource_type="dataset",
+            resource_id=dataset_ref,
+        )
         fields = self._dataset_create_fields(
             ctx,
             dataset_ref,

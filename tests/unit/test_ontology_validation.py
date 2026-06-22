@@ -12,6 +12,8 @@ from foundry_lite.application.ports.ontology_repository import (
     ObjectTypeRow,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.ontology_migration_types import OntologyMigrationPlan, reindex_operation
+from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.application.services.ontology_validation import (
     ontology_validation_result,
     validate_ontology_definition,
@@ -19,7 +21,7 @@ from foundry_lite.application.services.ontology_validation import (
     validate_persisted_object_type,
 )
 from foundry_lite.domain.context import RequestContext, demo_admin_context
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 
 
 class FakeTransaction:
@@ -95,6 +97,127 @@ def test_persisted_link_validation_rejects_missing_backing_key() -> None:
         )
 
     assert exc_info.value.details == {"linkType": "OrderCustomer", "missing": ["missing_customer_id"]}
+
+
+def test_ontology_activation_cas_conflict_reports_lost_draft_state() -> None:
+    service = OntologyService(engine=object(), ontology_repository=_ActivationConflictRepository())
+
+    with pytest.raises(ConflictDetected, match="lost its draft state") as exc_info:
+        service._activate_ontology_version(FakeTransaction(), demo_admin_context(), "ont_candidate")
+
+    assert exc_info.value.details == {"ontology_version_id": "ont_candidate"}
+
+
+def test_ontology_activation_evidence_includes_migration_plan_payload() -> None:
+    runtime = _RecordingRuntimeService()
+    service = OntologyService(engine=object(), ontology_repository=_RecordingOntologyRepository())
+    service.bind_collaborators(
+        {
+            "dataset_registry_service": object(),
+            "dataset_version_service": object(),
+            "runtime_service": runtime,
+        }
+    )
+    operation = reindex_operation("Order", ["backing"])
+    assert operation is not None
+
+    service._record_ontology_activation(
+        FakeTransaction(),
+        demo_admin_context(),
+        "ont_candidate",
+        2,
+        OntologyMigrationPlan("ont_active", (), (operation,)),
+    )
+
+    assert runtime.outbox_payloads[0]["ontologyMigration"]["sourceOntologyVersionId"] == "ont_active"
+    assert runtime.audit_after_refs[0]["ontologyMigration"]["objectReindexPlan"]
+
+
+def test_ontology_import_rejects_duplicate_property_at_persistence_boundary() -> None:
+    service = OntologyService(engine=object(), ontology_repository=_RecordingOntologyRepository())
+
+    with pytest.raises(ValidationFailed, match="duplicate property apiName") as exc_info:
+        service._import_properties_for_object_type(
+            FakeTransaction(),
+            demo_admin_context(),
+            "otype_Order",
+            {
+                "properties": [
+                    {"apiName": "status", "type": "string", "column": "source_status"},
+                    {"apiName": "status", "type": "string", "column": "source_status"},
+                ]
+            },
+        )
+
+    assert exc_info.value.details == {"property": "status"}
+
+
+def test_ontology_import_rejects_null_property_source() -> None:
+    service = OntologyService(engine=object(), ontology_repository=_RecordingOntologyRepository())
+
+    with pytest.raises(ValidationFailed, match="property source must be set") as exc_info:
+        service._insert_property_type(
+            FakeTransaction(),
+            demo_admin_context(),
+            "otype_Order",
+            {"apiName": "manualStatus", "type": "string", "source": None},
+        )
+
+    assert exc_info.value.details == {"property": "manualStatus"}
+
+
+def test_ontology_import_rejects_unknown_link_and_action_targets() -> None:
+    service = OntologyService(engine=object(), ontology_repository=_RecordingOntologyRepository())
+
+    with pytest.raises(ValidationFailed, match="link references unknown object type"):
+        service._import_link_types(
+            FakeTransaction(),
+            demo_admin_context(),
+            "ont_candidate",
+            {"linkTypes": [{"apiName": "OrderCustomer", "from": "Order", "to": "Customer"}]},
+            {"Order": "otype_Order"},
+        )
+    with pytest.raises(ValidationFailed, match="action target object type not found"):
+        service._import_action_types(
+            FakeTransaction(),
+            demo_admin_context(),
+            "ont_candidate",
+            {"actionTypes": [{"apiName": "ApproveOrder", "target": "Customer"}]},
+            {"Order": "otype_Order"},
+        )
+
+
+class _ActivationConflictRepository:
+    def archive_active_ontology_versions(self, **_kwargs: object) -> int:
+        return 1
+
+    def activate_ontology_version(self, **_kwargs: object) -> bool:
+        return False
+
+
+class _RecordingOntologyRepository:
+    def __init__(self) -> None:
+        self.property_records: list[object] = []
+
+    def insert_property_type(self, **kwargs: object) -> None:
+        self.property_records.append(kwargs["record"])
+
+
+class _RecordingRuntimeService:
+    def __init__(self) -> None:
+        self.outbox_payloads: list[dict[str, object]] = []
+        self.audit_after_refs: list[dict[str, object]] = []
+
+    def _outbox(self, *_args: object, **kwargs: object) -> None:
+        payload = _args[5]
+        assert isinstance(payload, dict)
+        self.outbox_payloads.append(payload)
+        assert kwargs["idempotency_key"] == "ont_candidate"
+
+    def _audit(self, *_args: object, **kwargs: object) -> None:
+        after_ref = kwargs["after_ref"]
+        assert isinstance(after_ref, dict)
+        self.audit_after_refs.append(after_ref)
 
 
 def _dataset_columns(

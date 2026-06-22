@@ -38,6 +38,15 @@ class ActionOntologyLookup(Protocol):
 
 
 class ActionRuntimeBoundary(Protocol):
+    def _require_write_traffic_open(
+        self,
+        ctx: RequestContext,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None: ...
+
     def _audit(
         self,
         conn: TransactionContext,

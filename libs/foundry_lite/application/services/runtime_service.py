@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 from foundry_lite.application.ports import (
+    OUTBOX_RETRY_PENDING,
     AuditEventRecord,
     DatasetCheckResultRow,
     DatasetTransactionRepository,
@@ -29,8 +30,9 @@ from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.observability_detectors import build_observability_report
 from foundry_lite.application.services.runtime_detail_payload import runtime_run_detail_payload
 from foundry_lite.application.services.runtime_error_payloads import (
-    active_restore_mode_report,
     dead_letter_retry_plan,
+    require_outbox_retry_open,
+    require_write_traffic_open,
     runtime_error_payload,
 )
 from foundry_lite.application.services.runtime_run_paging import OPERATIONS_RUN_DEFAULT_LIMIT, query_runtime_run_page
@@ -48,11 +50,7 @@ from foundry_lite.application.services.runtime_run_queries import (
     source_run_chain,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import (
-    ConflictDetected,
-    NotFound,
-    PermissionDenied,
-)
+from foundry_lite.domain.errors import NotFound, PermissionDenied
 
 
 def _redact_sensitive(value: object, sensitive: set[str]) -> object:
@@ -269,7 +267,10 @@ class RuntimeService(CoreService):
             plan = dead_letter_retry_plan(self.runtime_repository, conn, ctx, event_id)
             outbox_event_id = plan["outboxEventId"]
             outbox = self.runtime_repository.update_outbox_event_for_retry(
-                transaction=conn, tenant_id=ctx.tenant_id, event_id=outbox_event_id
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                event_id=outbox_event_id,
+                transition=OUTBOX_RETRY_PENDING,
             )
             if outbox is None:
                 raise NotFound("source outbox event not found", details={"event_id": outbox_event_id})
@@ -288,21 +289,24 @@ class RuntimeService(CoreService):
         return {**plan, "status": "pending"}
 
     def _require_outbox_retry_open(self, conn: TransactionContext, ctx: RequestContext) -> None:
-        audit_events = self.runtime_repository.rows_for_tenant(
-            transaction=conn,
-            table="audit_events",
-            tenant_id=ctx.tenant_id,
+        require_outbox_retry_open(self.runtime_repository, conn, ctx)
+
+    def _require_write_traffic_open(
+        self,
+        ctx: RequestContext,
+        *,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None:
+        require_write_traffic_open(
+            self.engine,
+            self.runtime_repository,
+            ctx,
+            operation=operation,
+            resource_type=resource_type,
+            resource_id=resource_id,
         )
-        restore_mode = active_restore_mode_report(audit_events)
-        if restore_mode is not None:
-            raise ConflictDetected(
-                "restore mode keeps outbox publisher paused",
-                details={
-                    "restore_id": restore_mode["restoreId"],
-                    "status": restore_mode["status"],
-                    "is_outbox_publisher_paused": restore_mode["is_outbox_publisher_paused"],
-                },
-            )
 
     def _require_or_audit(
         self,

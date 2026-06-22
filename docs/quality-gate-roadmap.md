@@ -1509,11 +1509,10 @@ object index pointer와 action/outbox/audit/materialization high-watermark가 re
 projection을 restore truth로 쓰지 않고 rebuild marker로 남기는지, restore mode
 start/status가 `is_serving_traffic_open=false`와 `is_outbox_publisher_paused=true`를 남기는지,
 같은 `restoreId` 재시도가 audit event를 중복 생성하지 않는지, restore mode 중 outbox
-dead-letter retry/reprocess entry가 차단되는지, post-restore 폐루프 증거가 없으면
+dead-letter retry/reprocess entry와 주요 platform write traffic이 차단되는지, post-restore 폐루프 증거가 없으면
 `resume_approved`가 거절되고 검증 통과 후 현재 retry/reprocess entrypoint가 다시 열리는지,
 그리고 generated SDK surface가 유지되는지 검증한다. 실제 backup artifact 생성,
-platform-wide restore-mode write traffic gate, real outbox publisher pause/resume executor,
-자동 restore smoke 실행은 후속 S57 slice다.
+real outbox publisher pause/resume executor, 자동 restore smoke 실행은 후속 S57 slice다.
 
 | 게이트 | 명령 | Root cause |
 |---|---|---|

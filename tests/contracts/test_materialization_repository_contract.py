@@ -15,6 +15,11 @@ from foundry_lite.application.ports.materialization_repository import (
     MaterializationRunRecord,
     ObjectRecordVersionRow,
 )
+from foundry_lite.application.ports.transaction_context import (
+    MATERIALIZATION_RUN_FAILED,
+    MATERIALIZATION_RUN_SUCCEEDED,
+    StatusTransition,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyMaterializationRepository
 from sqlalchemy import create_engine, select
@@ -111,25 +116,30 @@ class FakeMaterializationRepository:
         transaction: Any,
         tenant_id: str,
         materialization_run_id: str,
-        status: str,
+        transition: StatusTransition,
         target_dataset_version_id: str | None,
         row_count: int | None,
         error: Mapping[str, object] | None,
         completed_at: str,
-    ) -> None:
+    ) -> bool:
         del transaction
         for row in self.materialization_runs:
-            if row["tenant_id"] == tenant_id and row["id"] == materialization_run_id:
+            if (
+                row["tenant_id"] == tenant_id
+                and row["id"] == materialization_run_id
+                and row["status"] in transition.from_statuses
+            ):
                 row.update(
                     {
-                        "status": status,
+                        "status": transition.to_status,
                         "target_dataset_version_id": target_dataset_version_id,
                         "row_count": row_count,
                         "error": error,
                         "completed_at": completed_at,
                     }
                 )
-                return
+                return True
+        return False
 
     def latest_action_run_watermark(self, *, transaction: Any, tenant_id: str) -> ActionRunWatermark:
         del transaction
@@ -523,17 +533,29 @@ def test_update_materialization_run_terminal_succeeded(harness: MaterializationH
     with harness.transaction() as txn:
         harness.repository.insert_materialization(transaction=txn, record=_materialization_record())
         harness.repository.insert_materialization_run(transaction=txn, record=_materialization_run_record())
-        harness.repository.update_materialization_run_terminal(
+        updated = harness.repository.update_materialization_run_terminal(
             transaction=txn,
             tenant_id="tenant-test",
             materialization_run_id="mrun_test",
-            status="succeeded",
+            transition=MATERIALIZATION_RUN_SUCCEEDED,
             target_dataset_version_id="dsv_target",
             row_count=42,
             error=None,
             completed_at="2025-01-01T01:00:00Z",
         )
+        stale = harness.repository.update_materialization_run_terminal(
+            transaction=txn,
+            tenant_id="tenant-test",
+            materialization_run_id="mrun_test",
+            transition=MATERIALIZATION_RUN_FAILED,
+            target_dataset_version_id=None,
+            row_count=None,
+            error={"message": "late failure"},
+            completed_at="2025-01-01T01:00:01Z",
+        )
     row = harness.materialization_run_rows()[0]
+    assert updated is True
+    assert stale is False
     assert row["status"] == "succeeded"
     assert row["row_count"] == 42
     assert row["target_dataset_version_id"] == "dsv_target"
@@ -543,17 +565,18 @@ def test_update_materialization_run_terminal_failed(harness: MaterializationHarn
     with harness.transaction() as txn:
         harness.repository.insert_materialization(transaction=txn, record=_materialization_record())
         harness.repository.insert_materialization_run(transaction=txn, record=_materialization_run_record())
-        harness.repository.update_materialization_run_terminal(
+        updated = harness.repository.update_materialization_run_terminal(
             transaction=txn,
             tenant_id="tenant-test",
             materialization_run_id="mrun_test",
-            status="failed",
+            transition=MATERIALIZATION_RUN_FAILED,
             target_dataset_version_id=None,
             row_count=None,
             error={"message": "boom"},
             completed_at="2025-01-01T01:00:00Z",
         )
     row = harness.materialization_run_rows()[0]
+    assert updated is True
     assert row["status"] == "failed"
     assert row["error"] == {"message": "boom"}
 

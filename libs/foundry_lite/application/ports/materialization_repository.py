@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
-from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 
 class MaterializationSourceRef(TypedDict, total=False):
@@ -121,13 +121,13 @@ class MaterializationRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         materialization_run_id: str,
-        status: str,
+        transition: StatusTransition,
         target_dataset_version_id: str | None,
         row_count: int | None,
         error: Mapping[str, object] | None,
         completed_at: str,
-    ) -> None:
-        """Mark a materialization run as terminal (succeeded/failed/aborted)."""
+    ) -> bool:
+        """CAS a materialization run from an allowed state into a terminal state."""
         ...
 
     def latest_action_run_watermark(

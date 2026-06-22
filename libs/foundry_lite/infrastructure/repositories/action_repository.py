@@ -17,8 +17,10 @@ from foundry_lite.application.ports.action_repository import (
     ObjectEditRecord,
     ObjectTargetUpdate,
 )
+from foundry_lite.application.ports.transaction_context import ACTION_WRITEBACK_RECONCILED, StatusTransition
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
 
 class SqlAlchemyActionRepository:
@@ -113,14 +115,17 @@ class SqlAlchemyActionRepository:
         transaction: Any,
         tenant_id: str,
         action_run_id: str,
-        status: str,
+        transition: StatusTransition,
         error: Mapping[str, object] | None,
         completed_at: str,
-    ) -> None:
-        transaction.execute(
-            update(db.action_runs)
-            .where(and_(db.action_runs.c.tenant_id == tenant_id, db.action_runs.c.id == action_run_id))
-            .values(status=status, error=dict(error) if error is not None else None, completed_at=completed_at)
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.action_runs,
+            tenant_id=tenant_id,
+            row_id=action_run_id,
+            transition=transition,
+            values={"error": dict(error) if error is not None else None, "completed_at": completed_at},
         )
 
     def insert_action_writeback(self, *, transaction: Any, record: ActionWritebackRecord) -> None:
@@ -160,19 +165,15 @@ class SqlAlchemyActionRepository:
         return _writeback_record_from_row(dict(row)) if row else None
 
     def reconcile_action_writeback(self, *, transaction: Any, record: ActionWritebackReconciliation) -> bool:
-        result = transaction.execute(
-            update(db.action_writebacks)
-            .where(
-                and_(
-                    db.action_writebacks.c.tenant_id == record.tenant_id,
-                    db.action_writebacks.c.id == record.writeback_id,
-                    db.action_writebacks.c.action_run_id == record.action_run_id,
-                    db.action_writebacks.c.status == "outcome_unknown",
-                )
-            )
-            .values(status="reconciled", response=dict(record.response), completed_at=record.completed_at)
+        return cas_status_update(
+            transaction,
+            db.action_writebacks,
+            tenant_id=record.tenant_id,
+            row_id=record.writeback_id,
+            transition=ACTION_WRITEBACK_RECONCILED,
+            values={"response": dict(record.response), "completed_at": record.completed_at},
+            conditions=(db.action_writebacks.c.action_run_id == record.action_run_id,),
         )
-        return result.rowcount == 1
 
     def update_object_target(self, *, transaction: Any, record: ObjectTargetUpdate) -> bool:
         object_change_sequence = next_object_change_sequence(transaction, record.tenant_id)

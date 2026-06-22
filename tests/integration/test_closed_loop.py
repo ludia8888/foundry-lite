@@ -13,6 +13,7 @@ from foundry_lite.application.services.materialization_service import Materializ
 from foundry_lite.application.services.transform_service import TransformService
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ExternalSystemError, InvariantViolation, NotFound, ValidationFailed
+from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
@@ -251,6 +252,28 @@ def test_action_log_same_cursor_rerun_does_not_duplicate_rows(foundry: FoundryLi
     assert first_run["object_store_watermark"] == second_run["object_store_watermark"]
 
 
+def test_unknown_materialization_type_fails_closed(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "bad-materialization"))
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
+    with foundry.engine.begin() as conn:
+        conn.execute(
+            db.materializations.insert().values(
+                id="mat_unknown_type",
+                tenant_id=ctx.tenant_id,
+                api_name="order_current",
+                materialization_type="object_snapsh0t",
+                source_ref={"objectType": "Order"},
+                target_ref={"dataset": "ops.order_current"},
+                trigger_config={"type": "manual"},
+                enabled=True,
+            )
+        )
+
+    with pytest.raises(ValidationFailed, match="unsupported materialization type"):
+        foundry.materialization.run("order_current", ctx=ctx)
+
+
 def test_transform_retry_after_commit_does_not_create_second_output_version(tmp_path: Path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-retry"))
     ctx = RequestContext(roles=("admin", "data_engineer"))
@@ -356,7 +379,7 @@ def test_transform_quality_block_preserves_failure_evidence_without_output_versi
     assert failed_run["output_version_id"] is None
 
 
-def test_transform_retry_quality_block_preserves_failure_evidence_without_output_version(tmp_path: Path) -> None:
+def test_transform_retry_uses_failed_run_definition_snapshot(tmp_path: Path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "retry-quality-block"))
     ctx = RequestContext(roles=("admin", "data_engineer"))
     foundry.datasets.ensure("raw.retry_blocked_orders", ctx=ctx, primary_key=["order_id"])
@@ -378,11 +401,7 @@ def test_transform_retry_quality_block_preserves_failure_evidence_without_output
     failed_run = next(
         run for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED"
     )
-    sql_path.write_text(
-        "select order_id, amount from {{ input('raw.retry_blocked_orders') }} "
-        "union all select order_id, amount from {{ input('raw.retry_blocked_orders') }}",
-        encoding="utf-8",
-    )
+    sql_path.write_text("select order_id, amount from {{ input('raw.retry_blocked_orders') }}", encoding="utf-8")
     foundry.transforms.register(
         "retry_blocked_orders",
         entrypoint=sql_path,
@@ -391,12 +410,13 @@ def test_transform_retry_quality_block_preserves_failure_evidence_without_output
         ctx=ctx,
     )
 
-    with pytest.raises(ValidationFailed, match="dataset checks failed"):
+    with pytest.raises(ValidationFailed, match="transform failed"):
         foundry.transforms.retry_run(failed_run["id"], ctx=ctx)
 
     failed_runs = [run for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED"]
     assert foundry.datasets.list_versions("clean.retry_blocked_orders", ctx=ctx) == []
     assert len(failed_runs) == 2
+    assert all(run["output_version_id"] is None for run in failed_runs)
 
 
 def test_duckdb_oom_aborts_output_transaction(tmp_path: Path) -> None:

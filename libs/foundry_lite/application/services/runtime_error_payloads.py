@@ -8,13 +8,14 @@ from foundry_lite.application.ports import (
     RuntimeRetryPlan,
     RuntimeRow,
     TransactionContext,
+    TransactionManager,
 )
 from foundry_lite.application.ports.adapter_failure import AdapterError, adapter_failure_payload
 from foundry_lite.application.services.backup_restore_mode import (
     active_restore_mode_report as active_restore_mode_report,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import FoundryLiteError, NotFound, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, ValidationFailed
 
 
 def runtime_error_payload(
@@ -128,3 +129,54 @@ def _required_payload(row: RuntimeRow, event_id: str) -> RuntimeJsonObject:
     if isinstance(value, Mapping):
         return {str(key): item for key, item in value.items()}
     raise ValidationFailed("dead-letter event is not retryable", details={"event_id": event_id, "field": "payload"})
+
+
+def require_outbox_retry_open(
+    runtime_repository: RuntimeRepository,
+    conn: TransactionContext,
+    ctx: RequestContext,
+) -> None:
+    audit_events = runtime_repository.rows_for_tenant(transaction=conn, table="audit_events", tenant_id=ctx.tenant_id)
+    restore_mode = active_restore_mode_report(audit_events)
+    if restore_mode is None:
+        return
+    raise ConflictDetected(
+        "restore mode keeps outbox publisher paused",
+        details={
+            "restore_id": restore_mode["restoreId"],
+            "status": restore_mode["status"],
+            "is_outbox_publisher_paused": restore_mode["is_outbox_publisher_paused"],
+        },
+    )
+
+
+def require_write_traffic_open(
+    engine: TransactionManager,
+    runtime_repository: RuntimeRepository,
+    ctx: RequestContext,
+    *,
+    operation: str,
+    resource_type: str,
+    resource_id: str,
+) -> None:
+    with engine.begin() as conn:
+        audit_events = runtime_repository.rows_for_tenant(
+            transaction=conn,
+            table="audit_events",
+            tenant_id=ctx.tenant_id,
+        )
+    restore_mode = active_restore_mode_report(audit_events)
+    if restore_mode is None:
+        return
+    raise ConflictDetected(
+        "restore mode blocks write traffic",
+        details={
+            "restore_id": restore_mode["restoreId"],
+            "status": restore_mode["status"],
+            "operation": operation,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "is_write_traffic_paused": restore_mode["is_write_traffic_paused"],
+            "is_serving_traffic_open": restore_mode["is_serving_traffic_open"],
+        },
+    )

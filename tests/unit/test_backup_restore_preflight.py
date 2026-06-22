@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -8,7 +9,7 @@ from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ConflictDetected, PermissionDenied
 from foundry_lite.infrastructure import schema as db
-from sqlalchemy import func, insert, select
+from sqlalchemy import Table, func, insert, select
 
 from tests.conftest import prepare_indexed_demo
 
@@ -97,6 +98,63 @@ def test_restore_pauses_outbox_until_reconciliation(foundry: FoundryLite, tmp_pa
     runs = foundry.operations.list_runs(ctx=ctx)
     assert _runtime_row(runs["outboxEvents"], "outbox_restore_pause")["status"] == "failed"
     assert _runtime_row(runs["deadLetterEvents"], "dlq_restore_pause")["id"] == "dlq_restore_pause"
+
+
+def test_restore_mode_blocks_platform_write_traffic(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+
+    mode = foundry.operations.start_restore_mode(
+        ctx=ctx,
+        backup_id="backup-write-gate",
+        restore_id="restore-write-gate",
+    )
+
+    assert mode["status"] == "paused"
+    assert foundry.datasets.preview("clean.orders", ctx=ctx)
+    _assert_restore_blocks("create", lambda: foundry.datasets.ensure("raw.restore_new", ctx=ctx))
+    _assert_restore_blocks(
+        "upload_csv",
+        lambda: foundry.datasets.upload_csv(
+            "raw.erp_orders",
+            _csv(tmp_path, "g.csv"),
+            ctx=ctx,
+        ),
+    )
+    _assert_restore_blocks(
+        "apply",
+        lambda: foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "restore gate"},
+            idempotency_key="restore-write-gate-action",
+            ctx=ctx,
+        ),
+    )
+    _assert_restore_blocks("index_rebuild", lambda: foundry.objects.reindex("Order", ctx=ctx))
+    _assert_restore_blocks("materialize", lambda: foundry.materialization.run("action_log", ctx=ctx))
+    _assert_restore_blocks(
+        "register_transform",
+        lambda: foundry.transforms.register(
+            "restore_gate_transform",
+            entrypoint=tmp_path / "missing.sql",
+            inputs={},
+            output_dataset_ref="clean.orders",
+            ctx=ctx,
+        ),
+    )
+    _assert_restore_blocks(
+        "start_connector_sync_workflow",
+        lambda: foundry.operations.start_connector_sync_workflow(
+            "clean.orders",
+            connector_name="rest",
+            resource_name="orders",
+            idempotency_key="restore-write-gate-workflow",
+            ctx=ctx,
+        ),
+    )
 
 
 def test_operations_retry_dead_letter_event_checks_permission_before_materialization(foundry: FoundryLite) -> None:
@@ -228,6 +286,13 @@ def _apply_action_and_materialize(foundry: FoundryLite, ctx: RequestContext) -> 
     foundry.materialization.run("action_log", ctx=ctx)
 
 
+def _assert_restore_blocks(operation: str, callback: Callable[[], object]) -> None:
+    with pytest.raises(ConflictDetected, match="restore mode blocks write traffic") as exc:
+        callback()
+    assert exc.value.details["operation"] == operation
+    assert exc.value.details["restore_id"] == "restore-write-gate"
+
+
 def _version(report: object, version_id: str) -> dict[str, object]:
     assert isinstance(report, dict)
     for version in report["datasetVersions"]:
@@ -277,6 +342,7 @@ def _runtime_row(rows: object, row_id: str) -> dict[str, object]:
     raise AssertionError(f"missing runtime row {row_id}")
 
 
-def _table_count(foundry: FoundryLite, table: object) -> int:
+def _table_count(foundry: FoundryLite, table: Table) -> int:
     with foundry.engine.begin() as conn:
-        return cast(int, conn.execute(select(func.count()).select_from(table)).scalar_one())
+        transaction = cast(Any, conn)
+        return cast(int, transaction.execute(select(func.count()).select_from(table)).scalar_one())

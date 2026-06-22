@@ -497,6 +497,7 @@ def test_product_connector_sync_workflow_runs_through_temporal_and_audits(tmp_pa
             assert output["workflowKind"] == "connector_sync"
             assert output["datasetRef"] == "raw.workflow_orders"
             assert lookup["workflowRunId"] == run["workflowRunId"]
+            assert lookup["idempotencyKey"] == "temporal-connector-sync-orders"
             assert run["foundryRunId"] is not None
             detail = foundry.operations.run_detail("audit", str(run["foundryRunId"]), ctx=ctx)
             row = cast(Mapping[str, object], detail["row"])

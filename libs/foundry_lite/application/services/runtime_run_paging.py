@@ -116,6 +116,7 @@ def _empty_run_query_result() -> RuntimeRunQueryResult:
         "materializationRuns": [],
         "outboxEvents": [],
         "deadLetterEvents": [],
+        "workflowRuns": [],
         "auditEvents": [],
         "objectEdits": [],
     }
@@ -138,6 +139,8 @@ def _set_run_group(result: RuntimeRunQueryResult, run_type: RuntimeRunType, rows
         result["outboxEvents"] = rows
     elif run_type == "dead_letter":
         result["deadLetterEvents"] = rows
+    elif run_type == "workflow":
+        result["workflowRuns"] = rows
     else:
         result["auditEvents"] = rows
 

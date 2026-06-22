@@ -474,6 +474,7 @@
       "qualityScript": "quality:temporal",
       "ciCommand": "pnpm --silent quality:temporal",
       "testPaths": [
+        "tests/unit/test_temporal_workflow_identity.py",
         "tests/integration/test_temporal_workflow_ratchet.py"
       ],
       "proofs": {
@@ -494,6 +495,7 @@
           "test_concurrent_starts_on_one_key_produce_one_run"
         ],
         "retry-idempotency": [
+          "test_temporal_workflow_id_namespaces_tenant_and_workflow",
           "test_flaky_activity_is_retried_until_success",
           "test_same_idempotency_key_returns_existing_run_without_duplicate"
         ],
@@ -534,6 +536,7 @@
         {
           "id": "WF4",
           "tests": [
+            "test_temporal_workflow_id_namespaces_tenant_and_workflow",
             "test_same_idempotency_key_returns_existing_run_without_duplicate"
           ]
         },

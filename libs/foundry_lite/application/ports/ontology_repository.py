@@ -333,8 +333,8 @@ class OntologyRepository(Protocol):
         """Persist one ontology version row."""
         ...
 
-    def archive_active_ontology_versions(self, *, transaction: TransactionContext, tenant_id: str) -> None:
-        """Archive currently active ontology versions for a tenant."""
+    def archive_active_ontology_versions(self, *, transaction: TransactionContext, tenant_id: str) -> int:
+        """Archive currently active ontology versions for a tenant and return the changed row count."""
         ...
 
     def activate_ontology_version(
@@ -344,8 +344,8 @@ class OntologyRepository(Protocol):
         tenant_id: str,
         ontology_version_id: str,
         activated_at: str,
-    ) -> None:
-        """Mark an ontology version active."""
+    ) -> bool:
+        """CAS a draft ontology version into active."""
         ...
 
     def insert_object_type(self, *, transaction: TransactionContext, record: ObjectTypeRecord) -> None:
