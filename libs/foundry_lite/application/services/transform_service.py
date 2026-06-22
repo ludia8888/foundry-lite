@@ -95,8 +95,7 @@ class TransformService(CoreService):
         mode = normalize_transform_output_mode(mode)
         normalized_checks = self._normalized_checks(checks)
         with self.engine.begin() as conn:
-            existing = self._transform_by_api_name(conn, ctx, api_name)
-            if existing:
+            if existing := self._transform_by_api_name(conn, ctx, api_name):
                 return self._replace_transform_definition(
                     conn,
                     ctx,

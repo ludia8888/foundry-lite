@@ -140,36 +140,48 @@ class ActionMutationUnitOfWork:
             "editId": edit_id,
         }
         for event_type in ["action.run.committed", "object.edit.committed", "object.changed"]:
-            aggregate_type = "action_run" if event_type == "action.run.committed" else "object"
-            aggregate_id = action_run_id if event_type == "action.run.committed" else record["object_id"]
-            outbox_event_id = self.runtime_service._outbox(
+            self._publish_commit_event(conn, ctx, action_run_id, record, edit_id, payload, event_type)
+
+    def _publish_commit_event(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        record: ObjectRecordRow,
+        edit_id: str,
+        payload: Mapping[str, object],
+        event_type: str,
+    ) -> None:
+        aggregate_type = "action_run" if event_type == "action.run.committed" else "object"
+        aggregate_id = action_run_id if event_type == "action.run.committed" else record["object_id"]
+        outbox_event_id = self.runtime_service._outbox(
+            conn,
+            ctx,
+            event_type,
+            aggregate_type,
+            aggregate_id,
+            payload,
+            idempotency_key=f"{event_type}:{action_run_id}",
+            correlation_id=action_run_id,
+        )
+        if outbox_event_id is not None:
+            self.runtime_service._run_relation(
                 conn,
                 ctx,
-                event_type,
-                aggregate_type,
-                aggregate_id,
-                payload,
-                idempotency_key=f"{event_type}:{action_run_id}",
-                correlation_id=action_run_id,
+                source_run_type="action",
+                source_run_id=action_run_id,
+                target_run_type="outbox",
+                target_run_id=outbox_event_id,
+                relation="emitted",
+                resource_type="outbox_event",
+                resource_id=outbox_event_id,
+                metadata={
+                    "eventType": event_type,
+                    "aggregateType": aggregate_type,
+                    "aggregateId": aggregate_id,
+                    "objectEditId": edit_id,
+                },
             )
-            if outbox_event_id is not None:
-                self.runtime_service._run_relation(
-                    conn,
-                    ctx,
-                    source_run_type="action",
-                    source_run_id=action_run_id,
-                    target_run_type="outbox",
-                    target_run_id=outbox_event_id,
-                    relation="emitted",
-                    resource_type="outbox_event",
-                    resource_id=outbox_event_id,
-                    metadata={
-                        "eventType": event_type,
-                        "aggregateType": aggregate_type,
-                        "aggregateId": aggregate_id,
-                        "objectEditId": edit_id,
-                    },
-                )
 
     def _audit_action_commit(
         self,

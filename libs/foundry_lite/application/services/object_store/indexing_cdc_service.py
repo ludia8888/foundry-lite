@@ -303,20 +303,7 @@ class ObjectIndexingCdcMixin(ABC):
         current = dict(self._merge_properties(conn, object_type["id"], base_patch, existing["edit_properties"]))
         updated = self.object_index_repository.update_object_record_from_cdc(
             transaction=conn,
-            record=ObjectRecordCdcUpdate(
-                record_id=existing["id"],
-                tenant_id=ctx.tenant_id,
-                expected_object_version=existing["object_version"],
-                properties=current,
-                base_properties=base_patch,
-                property_versions=cdc_property_versions(existing, event, current),
-                source_dataset_version_id=cdc_source_dataset_version_id(event),
-                source_hash=cdc_source_hash(event, base_patch),
-                object_version=existing["object_version"] + 1,
-                deleted=deleted,
-                deletion_reason=_cdc_deletion_reason(deleted),
-                updated_at=_now(),
-            ),
+            record=_build_cdc_object_record_update(existing, ctx, current, base_patch, event, deleted=deleted),
         )
         if not updated:
             refreshed = self.object_records_service._object_record(conn, ctx, object_type["api_name"], event.object_id)
@@ -392,4 +379,29 @@ def _cdc_object_insert(
         updated_at=now,
         index_version=index_version,
         is_active=True,
+    )
+
+
+def _build_cdc_object_record_update(
+    existing: ObjectRecordRow,
+    ctx: RequestContext,
+    current: dict[str, object],
+    base_patch: dict[str, object],
+    event: ObjectCdcEvent,
+    *,
+    deleted: bool,
+) -> ObjectRecordCdcUpdate:
+    return ObjectRecordCdcUpdate(
+        record_id=existing["id"],
+        tenant_id=ctx.tenant_id,
+        expected_object_version=existing["object_version"],
+        properties=current,
+        base_properties=base_patch,
+        property_versions=cdc_property_versions(existing, event, current),
+        source_dataset_version_id=cdc_source_dataset_version_id(event),
+        source_hash=cdc_source_hash(event, base_patch),
+        object_version=existing["object_version"] + 1,
+        deleted=deleted,
+        deletion_reason=_cdc_deletion_reason(deleted),
+        updated_at=_now(),
     )

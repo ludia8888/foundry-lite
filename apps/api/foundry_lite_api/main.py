@@ -39,11 +39,10 @@ from foundry_lite.application.ports import (
     TabularRow,
     TransformRetryResult,
 )
-from foundry_lite.application.ports.auth_provider import AuthProvider
 from foundry_lite.application.upload_limits import max_webhook_body_bytes
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
-from foundry_lite.infrastructure.auth import AUTHORIZATION_HEADER, auth_provider_from_env
+from foundry_lite.infrastructure.auth import AUTHORIZATION_HEADER, AuthProvider, auth_provider_from_env
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.observability.metrics import prometheus_payload, record_http_request
 from foundry_lite.observability.tracing import (

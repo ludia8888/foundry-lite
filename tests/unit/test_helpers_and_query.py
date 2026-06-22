@@ -539,8 +539,7 @@ def test_full_reindex_tombstones_links_missing_from_source_snapshot(
         stale_link = (
             conn.execute(
                 select(db.object_links).where(
-                    (db.object_links.c.from_object_id == "O-1003")
-                    & (db.object_links.c.to_object_id == "C-100")
+                    (db.object_links.c.from_object_id == "O-1003") & (db.object_links.c.to_object_id == "C-100")
                 )
             )
             .mappings()

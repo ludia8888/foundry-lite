@@ -85,7 +85,6 @@ from foundry_lite.application.ports.dataset_version_repository import (
     DatasetVersionRepository,
     DatasetVersionRow,
 )
-from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
 from foundry_lite.application.ports.materialization_repository import (
     MaterializationRecord,
     MaterializationReplayResult,
@@ -325,7 +324,6 @@ __all__ = [
     "DatasetVersionConflictError",
     "DatasetVersionRecord",
     "DatasetVersionRow",
-    "DestructiveDevelopmentAdmin",
     "DatasetFilePartitionValues",
     "DatasetRunError",
     "IndexRunRecord",

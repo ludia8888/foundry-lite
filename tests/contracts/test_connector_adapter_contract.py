@@ -29,7 +29,7 @@ def adapter(request: pytest.FixtureRequest) -> ConnectorAdapter:
                 schema={"columns": ["order_id", "status"]},
                 cursor={"lsn": "84"},
                 source_watermark="2026-06-13T00:00:00Z",
-            )
+            ),
         }
     )
 

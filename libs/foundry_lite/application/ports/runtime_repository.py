@@ -6,6 +6,30 @@ from typing import Literal, NotRequired, Protocol, TypedDict
 
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 from foundry_lite.application.ports.workflow_adapter import WorkflowRunRecord, WorkflowRunRow
+from foundry_lite.application.runtime_repository_backup_restore import (
+    BackupRestoreDatasetVersion as BackupRestoreDatasetVersion,
+)
+from foundry_lite.application.runtime_repository_backup_restore import (
+    BackupRestoreIndexPointer as BackupRestoreIndexPointer,
+)
+from foundry_lite.application.runtime_repository_backup_restore import (
+    BackupRestoreManifestIssue as BackupRestoreManifestIssue,
+)
+from foundry_lite.application.runtime_repository_backup_restore import (
+    BackupRestoreModeReport as BackupRestoreModeReport,
+)
+from foundry_lite.application.runtime_repository_backup_restore import (
+    BackupRestoreModeStatus as BackupRestoreModeStatus,
+)
+from foundry_lite.application.runtime_repository_backup_restore import (
+    BackupRestorePreflightReport as BackupRestorePreflightReport,
+)
+from foundry_lite.application.runtime_repository_backup_restore import (
+    BackupRestorePreflightStatus as BackupRestorePreflightStatus,
+)
+from foundry_lite.application.runtime_repository_backup_restore import (
+    BackupRestoreVersionStatus as BackupRestoreVersionStatus,
+)
 
 RuntimeLookupTable = Literal["transforms", "materializations"]
 RuntimeRowsTable = Literal[
@@ -38,9 +62,6 @@ RuntimeJsonObject = Mapping[str, object]
 ObservabilityDetectorType = Literal["flow_interruption", "lag", "skew", "slo", "detector_failure"]
 ObservabilityIncidentStatus = Literal["active", "suppressed"]
 ObservabilitySeverity = Literal["info", "warning", "critical"]
-BackupRestorePreflightStatus = Literal["ready", "blocked"]
-BackupRestoreVersionStatus = Literal["valid", "missing", "corrupt"]
-BackupRestoreModeStatus = Literal["inactive", "paused", "blocked", "resume_approved"]
 
 
 @dataclass(frozen=True)
@@ -196,83 +217,6 @@ class ObservabilityReport(TypedDict):
     configurationVersion: str
     activeIncidents: list[ObservabilityIncident]
     suppressedIncidents: list[ObservabilityIncident]
-    summary: RuntimeJsonObject
-
-
-class BackupRestoreManifestIssue(TypedDict):
-    """Restore-blocking mismatch between metadata DB and committed storage."""
-
-    code: str
-    datasetRef: str
-    datasetId: str
-    versionId: str
-    manifestUri: str
-    message: str
-    details: RuntimeJsonObject
-
-
-class BackupRestoreDatasetVersion(TypedDict):
-    """Committed dataset version inventory entry for restore preflight."""
-
-    datasetRef: str
-    datasetId: str
-    branch: str
-    versionId: str
-    versionNumber: int
-    manifestUri: str
-    rowCount: int
-    byteSize: int
-    storageProfile: str
-    manifestFileCount: int
-    manifestRowCount: int
-    manifestByteSize: int
-    manifestContentHashes: list[str]
-    status: BackupRestoreVersionStatus
-    issue: BackupRestoreManifestIssue | None
-
-
-class BackupRestoreIndexPointer(TypedDict):
-    """Active object index pointer that restore must preserve or rebuild."""
-
-    objectTypeId: str
-    objectTypeApiName: str
-    activeIndexVersion: str
-
-
-class BackupRestorePreflightReport(TypedDict):
-    """Read-only backup/restore commit-point compatibility report."""
-
-    generatedAt: str
-    tenantId: str
-    backupId: str
-    status: BackupRestorePreflightStatus
-    datasetVersions: list[BackupRestoreDatasetVersion]
-    issues: list[BackupRestoreManifestIssue]
-    activeIndexPointers: list[BackupRestoreIndexPointer]
-    highWatermarks: RuntimeJsonObject
-    temporalStrategy: RuntimeJsonObject
-    searchRebuild: RuntimeJsonObject
-    restoreTrafficGate: RuntimeJsonObject
-    summary: RuntimeJsonObject
-
-
-class BackupRestoreModeReport(TypedDict):
-    """Durable restore-mode traffic and publisher gate status."""
-
-    generatedAt: str
-    tenantId: str
-    restoreId: str
-    backupId: str
-    status: BackupRestoreModeStatus
-    preflightStatus: str
-    is_write_traffic_paused: bool
-    is_outbox_publisher_paused: bool
-    is_serving_traffic_open: bool
-    is_post_restore_validation_required: bool
-    is_operator_approval_required: bool
-    blockingIssueCount: int
-    reason: str
-    highWatermarks: RuntimeJsonObject
     summary: RuntimeJsonObject
 
 

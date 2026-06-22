@@ -5,8 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from foundry_lite.application.ports import TransactionContext
-from foundry_lite.application.ports.ontology_repository import (
+from foundry_lite.application.ports import (
     ActionParameterSchema,
     ActionTypeRecord,
     ActionTypeRow,
@@ -21,6 +20,7 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyVersionRow,
     PropertyTypeRecord,
     PropertyTypeRow,
+    TransactionContext,
 )
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
@@ -487,9 +487,7 @@ class OntologyService(CoreService):
             raise NotFound("action type not found", details={"api_name": api_name})
         return row
 
-    def _action_type_by_id(
-        self, conn: TransactionContext, ctx: RequestContext, action_type_id: str
-    ) -> ActionTypeRow:
+    def _action_type_by_id(self, conn: TransactionContext, ctx: RequestContext, action_type_id: str) -> ActionTypeRow:
         row = self.ontology_repository.action_type_by_id(
             transaction=conn, tenant_id=ctx.tenant_id, action_type_id=action_type_id
         )

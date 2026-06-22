@@ -1,5 +1,6 @@
 """Local infrastructure adapters for the AuthProvider port."""
 
+from foundry_lite.application.ports.auth_provider import AuthProvider
 from foundry_lite.infrastructure.auth.local import (
     HEADER_ROLES_KEY,
     HEADER_TENANT_KEY,
@@ -40,6 +41,7 @@ __all__ = [
     "HEADER_USER_KEY",
     "RUNTIME_PROFILE_ENV",
     "AuthProfileConfigurationError",
+    "AuthProvider",
     "DemoAuthProvider",
     "HeaderTrustAuthProvider",
     "JwtOidcAuthConfig",

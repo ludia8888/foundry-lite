@@ -1000,8 +1000,7 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert any(event["event_type"] == "action.run.committed" for event in detail["relatedAuditEvents"])
     assert any(edit["action_run_id"] == action_run["id"] for edit in detail["relatedObjectEdits"])
     relation_targets = {
-        (row["target_run_type"], row["relation"], row["metadata"].get("eventType"))
-        for row in detail["runRelations"]
+        (row["target_run_type"], row["relation"], row["metadata"].get("eventType")) for row in detail["runRelations"]
     }
     assert ("action_writeback", "writeback_attempt", None) in relation_targets
     assert ("outbox", "emitted", "action.run.committed") in relation_targets
@@ -1110,8 +1109,7 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert transform_detail.status_code == 200
     transform_detail_payload = transform_detail.json()
     assert any(
-        row["event_type"] == "transform.run.retry_requested"
-        for row in transform_detail_payload["relatedAuditEvents"]
+        row["event_type"] == "transform.run.retry_requested" for row in transform_detail_payload["relatedAuditEvents"]
     )
     assert any(
         row["source_run_id"] == "transform_api_failed"

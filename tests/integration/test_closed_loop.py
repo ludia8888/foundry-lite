@@ -85,8 +85,7 @@ def test_action_materialization_writes_dataset_versions_and_manifest_rows(
         for row in action_detail["runRelations"]
     }
     materialization_relations = {
-        (row["target_run_type"], row["relation"], row["resource_id"])
-        for row in order_current_detail["runRelations"]
+        (row["target_run_type"], row["relation"], row["resource_id"]) for row in order_current_detail["runRelations"]
     }
 
     assert action_log.version_id == action_log_versions[0]["id"]

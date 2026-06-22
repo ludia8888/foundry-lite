@@ -64,6 +64,17 @@ class ActionWritebackRecorder:
                 completed_at=now,
             ),
         )
+        self._record_writeback_relation(conn, ctx, action_run_id, writeback_id, status)
+        return writeback_id
+
+    def _record_writeback_relation(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        writeback_id: str,
+        status: str,
+    ) -> None:
         self.runtime_service._run_relation(
             conn,
             ctx,
@@ -76,7 +87,6 @@ class ActionWritebackRecorder:
             resource_id=writeback_id,
             metadata={"status": status, "connector": MOCK_WRITEBACK_CONNECTOR, "mode": "before_commit"},
         )
-        return writeback_id
 
     def fail_before_commit(
         self,

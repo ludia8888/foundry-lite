@@ -98,8 +98,7 @@ def test_trace_continuity_flags_raw_identity_attributes() -> None:
         gate.TraceFinding(
             code="trace_raw_identity_attribute",
             message=(
-                "Span exports raw tenant/user identity attributes: "
-                "foundry_lite.actor_user_id, foundry_lite.tenant_id"
+                "Span exports raw tenant/user identity attributes: foundry_lite.actor_user_id, foundry_lite.tenant_id"
             ),
             span_name="ActionService.apply_action",
         )

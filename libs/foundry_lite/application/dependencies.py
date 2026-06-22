@@ -11,7 +11,6 @@ from foundry_lite.application.ports import (
     DatasetStorageAdapter,
     DatasetTransactionRepository,
     DatasetVersionRepository,
-    DestructiveDevelopmentAdmin,
     MaterializationRepository,
     MetadataRepository,
     ObjectIndexRepository,
@@ -23,6 +22,7 @@ from foundry_lite.application.ports import (
     TransformRepository,
 )
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
+from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider

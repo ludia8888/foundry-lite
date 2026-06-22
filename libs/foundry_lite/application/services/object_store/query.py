@@ -74,22 +74,32 @@ class ObjectQueryService(CoreService):
                 object_type_api_name,
                 dict(record["properties"]),
             )
-            payload: ObjectPayload = {
-                "objectType": object_type_api_name,
-                "objectId": object_id,
-                "objectVersion": record["object_version"],
-                "properties": properties,
-                "sourceDatasetVersionId": record["source_dataset_version_id"],
-            }
-            if record["deleted"]:
-                payload["deleted"] = True
-                payload["deletionReason"] = record["deletion_reason"]
+            payload = self._build_object_payload(object_type_api_name, object_id, record, properties)
             # explain carries the base/edit property layers and operational
             # lineage/source metadata, so it is withheld unless the caller holds
             # object:explain — otherwise ?explain=true would bypass masking.
             if include_explain and self.policy.decide(ctx, "object:explain").allowed:
                 payload["explain"] = self._object_explain(conn, ctx, record)
             return payload
+
+    def _build_object_payload(
+        self,
+        object_type_api_name: str,
+        object_id: str,
+        record: ObjectRecordRow,
+        properties: dict[str, object],
+    ) -> ObjectPayload:
+        payload: ObjectPayload = {
+            "objectType": object_type_api_name,
+            "objectId": object_id,
+            "objectVersion": record["object_version"],
+            "properties": properties,
+            "sourceDatasetVersionId": record["source_dataset_version_id"],
+        }
+        if record["deleted"]:
+            payload["deleted"] = True
+            payload["deletionReason"] = record["deletion_reason"]
+        return payload
 
     def _object_explain(
         self,

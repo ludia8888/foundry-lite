@@ -6,7 +6,6 @@ from typing import cast
 from foundry_lite.application.ports import (
     OUTBOX_RETRY_PENDING,
     AuditEventRecord,
-    DatasetCheckResultRow,
     DatasetTransactionRepository,
     LineageEdgeRecord,
     LineageEdgeRow,
@@ -23,7 +22,6 @@ from foundry_lite.application.ports import (
     RuntimeRunLink,
     RuntimeRunQueryResult,
     RuntimeRunRelationRecord,
-    RuntimeRunRelationRow,
     RuntimeRunSnapshot,
     RuntimeRunType,
     TransactionContext,
@@ -31,7 +29,13 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.observability_detectors import build_observability_report
-from foundry_lite.application.services.runtime_detail_payload import runtime_run_detail_payload
+from foundry_lite.application.services.runtime_detail_payload import (
+    dataset_transaction_for_row,
+    lineage_edges_for_row,
+    quality_evidence_for_transaction,
+    run_relations_for_row,
+    runtime_run_detail_payload,
+)
 from foundry_lite.application.services.runtime_error_payloads import (
     dead_letter_retry_plan,
     require_outbox_retry_open,
@@ -48,7 +52,6 @@ from foundry_lite.application.services.runtime_run_queries import (
     related_object_edits,
     related_outbox,
     required_run_type,
-    resource_ids_for_lineage,
     row_for_detail,
     source_run_chain,
 )
@@ -183,11 +186,15 @@ class RuntimeService(CoreService):
         audit_events = related_audit(snapshot, row)
         object_edits = related_object_edits(snapshot, row)
         action_writebacks = related_action_writebacks(snapshot, row)
-        lineage_edges = self._lineage_edges_for_row(ctx, row)
-        run_relations = self._run_relations_for_row(ctx, parsed_type, run_id)
-        dataset_transaction = self._dataset_transaction_for_row(ctx, row)
-        quality_check_results, quality_failed_row_samples = self._quality_evidence_for_transaction(
-            ctx, dataset_transaction
+        lineage_edges = lineage_edges_for_row(self.runtime_repository, ctx, row)
+        run_relations = run_relations_for_row(self.runtime_repository, self.engine, ctx, parsed_type, run_id)
+        dataset_transaction = dataset_transaction_for_row(self.dataset_transaction_repository, self.engine, ctx, row)
+        quality_check_results, quality_failed_row_samples = quality_evidence_for_transaction(
+            self.dataset_quality_repository,
+            self.dataset_transaction_repository,
+            self.engine,
+            ctx,
+            dataset_transaction,
         )
         detail = runtime_run_detail_payload(
             parsed_type=parsed_type,
@@ -217,52 +224,6 @@ class RuntimeService(CoreService):
         with self.engine.begin() as conn:
             self._require_outbox_retry_open(conn, ctx)
             return dead_letter_retry_plan(self.runtime_repository, conn, ctx, event_id)
-
-    def _dataset_transaction_for_row(self, ctx: RequestContext, row: RuntimeRow) -> RuntimeRow | None:
-        transaction_id = row.get("transaction_id")
-        version_id = row.get("target_dataset_version_id") or row.get("committed_version_id")
-        with self.engine.begin() as conn:
-            if isinstance(transaction_id, str) and transaction_id:
-                transaction = self.dataset_transaction_repository.transaction_by_id(
-                    transaction=conn,
-                    transaction_id=transaction_id,
-                )
-            elif isinstance(version_id, str) and version_id:
-                transaction = self.dataset_transaction_repository.committed_transaction_by_version(
-                    transaction=conn,
-                    tenant_id=ctx.tenant_id,
-                    committed_version_id=version_id,
-                )
-            else:
-                transaction = None
-        if transaction is None or transaction["tenant_id"] != ctx.tenant_id:
-            return None
-        return transaction
-
-    def _quality_evidence_for_transaction(
-        self,
-        ctx: RequestContext,
-        dataset_transaction: RuntimeRow | None,
-    ) -> tuple[list[DatasetCheckResultRow], list[RuntimeRow]]:
-        if dataset_transaction is None:
-            return [], []
-        transaction_id = dataset_transaction.get("id")
-        if not isinstance(transaction_id, str) or not transaction_id:
-            return [], []
-        with self.engine.begin() as conn:
-            check_results = self.dataset_quality_repository.check_results_for_transaction(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                transaction_id=transaction_id,
-            )
-            rows = self.dataset_transaction_repository.list_dead_letter_records(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-            )
-        samples = cast(
-            list[RuntimeRow], [row for row in rows if _is_quality_sample_for_transaction(row, transaction_id)]
-        )
-        return check_results, samples
 
     def retry_dead_letter_event(self, event_id: str, *, ctx: RequestContext | None = None) -> RuntimeRetryResult:
         ctx = ctx or RequestContext()
@@ -354,31 +315,6 @@ class RuntimeService(CoreService):
         self, conn: TransactionContext, table: RuntimeRowsTable, ctx: RequestContext
     ) -> Sequence[RuntimeRow]:
         return self.runtime_repository.rows_for_tenant(transaction=conn, table=table, tenant_id=ctx.tenant_id)
-
-    def _lineage_edges_for_row(self, ctx: RequestContext, row: RuntimeRow) -> list[LineageEdgeRow]:
-        edges: list[LineageEdgeRow] = []
-        seen: set[str] = set()
-        for resource_id in resource_ids_for_lineage(row):
-            for edge in self.runtime_repository.lineage_for_resource(tenant_id=ctx.tenant_id, resource_id=resource_id):
-                edge_id = edge["id"]
-                if edge_id not in seen:
-                    seen.add(edge_id)
-                    edges.append(edge)
-        return edges
-
-    def _run_relations_for_row(
-        self,
-        ctx: RequestContext,
-        run_type: RuntimeRunType,
-        run_id: str,
-    ) -> list[RuntimeRunRelationRow]:
-        with self.engine.begin() as conn:
-            return self.runtime_repository.run_relations_for_run(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                run_type=run_type,
-                run_id=run_id,
-            )
 
     def _downstream_impact(
         self,
@@ -553,12 +489,3 @@ class RuntimeService(CoreService):
             after_ref={"outboxEventId": outbox_event_id, "status": "pending"},
             correlation_id=ctx.request_id,
         )
-
-
-def _is_quality_sample_for_transaction(row: RuntimeRow, transaction_id: str) -> bool:
-    metadata = row.get("metadata")
-    return (
-        row.get("error_kind") == "DATA_QUALITY_CONTRACT"
-        and isinstance(metadata, Mapping)
-        and metadata.get("transactionId") == transaction_id
-    )

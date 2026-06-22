@@ -134,13 +134,11 @@ def _dataset_check_insert_or_ignore(transaction: Any, record: DatasetCheckRecord
     values = _dataset_check_values(record)
     conflict_columns = ["tenant_id", "dataset_id", "name"]
     if transaction.dialect.name == "postgresql":
-        return postgres_insert(db.dataset_checks).values(**values).on_conflict_do_nothing(
-            index_elements=conflict_columns
+        return (
+            postgres_insert(db.dataset_checks).values(**values).on_conflict_do_nothing(index_elements=conflict_columns)
         )
     if transaction.dialect.name == "sqlite":
-        return sqlite_insert(db.dataset_checks).values(**values).on_conflict_do_nothing(
-            index_elements=conflict_columns
-        )
+        return sqlite_insert(db.dataset_checks).values(**values).on_conflict_do_nothing(index_elements=conflict_columns)
     return insert(db.dataset_checks).values(**values)
 
 

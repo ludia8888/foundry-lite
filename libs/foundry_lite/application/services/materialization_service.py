@@ -2,18 +2,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from foundry_lite.application.ports import DatasetRow, RuntimeRow, TransactionContext
+from foundry_lite.application.ports import RuntimeRow, TransactionContext
 from foundry_lite.application.ports.materialization_repository import (
     MaterializationRecord,
     MaterializationReplayResult,
     MaterializationRow,
     MaterializationRunRecord,
-    MaterializationSourceRef,
-    MaterializationTargetRef,
 )
 from foundry_lite.application.primitives import CommitResult, _new_id, _now
 from foundry_lite.application.services.base import CoreService
@@ -26,6 +23,8 @@ from foundry_lite.application.services.materialization_protocols import (
     mark_materialization_run_succeeded,
 )
 from foundry_lite.application.services.materialization_types import (
+    MATERIALIZATION_SPECS,
+    MaterializationRunPlan,
     supported_materialization_type,
     unsupported_materialization_type,
 )
@@ -36,40 +35,6 @@ from foundry_lite.domain.errors import (
     InvariantViolation,
     NotFound,
 )
-
-
-@dataclass(frozen=True)
-class MaterializationRunPlan:
-    api_name: str
-    materialization_id: str
-    materialization_type: str
-    target_dataset: DatasetRow
-    transaction_id: str
-    run_id: str
-    watermark: Mapping[str, object]
-    rows: Sequence[Mapping[str, object]]
-    fieldnames: list[str]
-
-
-@dataclass(frozen=True)
-class MaterializationSpec:
-    materialization_type: str
-    source: MaterializationSourceRef
-    target: MaterializationTargetRef
-
-
-MATERIALIZATION_SPECS: dict[str, MaterializationSpec] = {
-    "action_log": MaterializationSpec(
-        materialization_type="action_log",
-        source={"type": "action_runs"},
-        target={"dataset": "ops.action_log"},
-    ),
-    "order_current": MaterializationSpec(
-        materialization_type="object_snapshot",
-        source={"objectType": "Order"},
-        target={"dataset": "ops.order_current"},
-    ),
-}
 
 
 class MaterializationService(CoreService):
