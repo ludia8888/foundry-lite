@@ -216,7 +216,7 @@ def source_run_chain(
 ) -> list[RuntimeRunLink]:
     links = _cdc_index_run_links(snapshot, source_dataset_version_id, object_type_api_name)
     links.extend(_index_run_links(snapshot, source_dataset_version_id, object_type_api_name))
-    resource_ids = _lineage_resource_ids(source_dataset_version_id, lineage_rows)
+    resource_ids = relation_resource_ids(source_dataset_version_id, lineage_rows)
     for resource_id in resource_ids:
         relation = "source_producer" if resource_id == source_dataset_version_id else "upstream_producer"
         links.extend(_producer_run_links(snapshot, resource_id, relation))
@@ -349,7 +349,7 @@ def _cdc_event_id(source_dataset_version_id: str) -> str | None:
     return event_id if event_id != source_dataset_version_id and event_id else None
 
 
-def _lineage_resource_ids(source_dataset_version_id: str, lineage_rows: list[LineageEdgeRow]) -> list[str]:
+def relation_resource_ids(source_dataset_version_id: str, lineage_rows: list[LineageEdgeRow]) -> list[str]:
     resource_ids: set[str] = set()
     for row in lineage_rows:
         if row["to_resource_id"] == source_dataset_version_id:

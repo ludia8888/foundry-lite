@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import cast
 
 from foundry_lite.application.ports import (
@@ -14,10 +14,12 @@ from foundry_lite.application.ports import (
     RuntimeRunDetail,
     RuntimeRunInvestigation,
     RuntimeRunRelationRow,
+    RuntimeRunSnapshot,
     RuntimeRunType,
     TransactionManager,
 )
 from foundry_lite.application.services.runtime_quality_report import quality_report_for_transaction
+from foundry_lite.application.services.runtime_run_paging import OPERATIONS_RUN_MAX_LIMIT
 from foundry_lite.application.services.runtime_run_queries import (
     correlation_id,
     error_message,
@@ -72,6 +74,24 @@ def runtime_run_detail_payload(
         "downstreamImpact": downstream_impact,
         "quality": _detail_quality_report(dataset_transaction, quality_check_results, quality_failed_row_samples),
     }
+
+
+def scoped_source_runs(
+    repository: RuntimeRepository,
+    ctx: RequestContext,
+    object_type_api_name: str,
+    *,
+    resource_ids: Sequence[str] = (),
+    run_ids: Sequence[str] = (),
+) -> RuntimeRunSnapshot:
+    """Fetch a bounded snapshot scoped to one source's index/producer/lineage runs."""
+    return repository.runs_for_source_chain(
+        tenant_id=ctx.tenant_id,
+        object_type_api_name=object_type_api_name,
+        resource_ids=resource_ids,
+        run_ids=run_ids,
+        limit=OPERATIONS_RUN_MAX_LIMIT,
+    )
 
 
 def related_evidence_for_row(

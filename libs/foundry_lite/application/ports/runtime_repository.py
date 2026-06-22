@@ -355,6 +355,23 @@ class RuntimeRepository(Protocol):
         """Return one bounded, ordered Operations run page for one tenant."""
         ...
 
+    def runs_for_source_chain(
+        self,
+        *,
+        tenant_id: str,
+        object_type_api_name: str,
+        resource_ids: Sequence[str],
+        run_ids: Sequence[str],
+        limit: int,
+    ) -> RuntimeRunSnapshot:
+        """Return a bounded snapshot scoped to one source's index/producer/lineage runs.
+
+        Index runs are scoped by object type, producer runs (sync/transform/
+        materialization) by the resources they produce, and any run referenced by
+        ``run_ids`` is included so lineage edges resolve. Other tables are empty.
+        """
+        ...
+
     def run_row(self, *, tenant_id: str, run_type: RuntimeRunType, run_id: str) -> RuntimeRow | None:
         """Return one tenant-scoped run row by type and id without loading the snapshot."""
         ...
