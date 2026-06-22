@@ -77,6 +77,7 @@ DEAD_LETTER_REPLAY_SUCCEEDED = StatusTransition(("REPLAY_REQUESTED", "REPLAYING"
 DEAD_LETTER_REPLAY_FAILED = StatusTransition(("REPLAY_REQUESTED", "REPLAYING"), "QUARANTINED")
 DEAD_LETTER_DISCARDED = StatusTransition(("QUARANTINED",), "DISCARDED")
 OUTBOX_RETRY_PENDING = StatusTransition(("failed",), "pending")
+ERASURE_REQUEST_EXECUTED = StatusTransition(("requested",), "executed")
 WORKFLOW_RUN_STARTING = StatusTransition(("requested", "start_unknown"), "starting")
 WORKFLOW_RUN_RUNNING = StatusTransition(("starting",), "running")
 WORKFLOW_RUN_SUCCEEDED = StatusTransition(("starting", "running"), "succeeded")

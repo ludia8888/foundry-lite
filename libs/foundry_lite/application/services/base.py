@@ -25,6 +25,7 @@ from foundry_lite.application.ports import (
     TransformRepository,
     WorkflowAdapter,
 )
+from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
@@ -83,6 +84,7 @@ class CoreService:
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository
     runtime_repository: RuntimeRepository
+    erasure_repository: ErasureRepository
     search_adapter: SearchAdapter
     stream_adapter: StreamAdapter
     workflow_adapter: WorkflowAdapter

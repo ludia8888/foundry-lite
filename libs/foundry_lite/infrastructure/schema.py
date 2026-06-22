@@ -709,6 +709,40 @@ materialization_runs = Table(
 )
 
 
+erasure_requests = Table(
+    "erasure_requests",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("subject_kind", String, nullable=False),
+    # Only the secret-backed HMAC token is persisted; the raw subject value never lands here.
+    Column("subject_hash", String, nullable=False),
+    Column("subject_token_key_id", String, nullable=False),
+    Column("requested_by", String, nullable=False),
+    Column("idempotency_key", String, nullable=False),
+    Column("reason", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("manifest_id", String),
+    Column("evidence", JSON, nullable=False),
+    Column("requested_at", String, nullable=False),
+    Column("executed_at", String),
+    UniqueConstraint("tenant_id", "idempotency_key", name="uq_erasure_requests_tenant_idempotency"),
+)
+
+
+erasure_certificates = Table(
+    "erasure_certificates",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("request_id", String, nullable=False),
+    Column("manifest_id", String, nullable=False),
+    Column("certificate", JSON, nullable=False),
+    Column("certified_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "request_id", name="uq_erasure_certificates_tenant_request"),
+)
+
+
 def tenant_rls_tables() -> tuple[Table, ...]:
     return tuple(table for table in metadata.sorted_tables if "tenant_id" in table.c)
 
