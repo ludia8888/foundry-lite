@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
-from foundry_lite.application.ports import RuntimeRow, RuntimeRunPageCursor, RuntimeRunType
+from foundry_lite.application.ports import RuntimeRow, RuntimeRunPageCursor, RuntimeRunSnapshot, RuntimeRunType
 from foundry_lite.application.services.runtime_run_cursors import encode_runtime_run_cursor
 from foundry_lite.application.services.runtime_service import RuntimeService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.errors import NotFound, ValidationFailed
 from foundry_lite.security.policy import PolicyService
 
 _OPERATOR = RequestContext(roles=("ops_manager",))
@@ -75,6 +77,12 @@ class _UnusedEngine:
     pass
 
 
+class _BeginEngine:
+    @contextmanager
+    def begin(self):
+        yield object()
+
+
 class _UnusedDatasetTransactionRepository:
     def transaction_by_id(self, **_kwargs: object) -> object:
         raise AssertionError("query_runs must not read dataset transactions")
@@ -88,9 +96,51 @@ class _UnusedDatasetQualityRepository:
         raise AssertionError("query_runs must not read dataset quality results")
 
 
+class _SnapshotRuntimeRepository:
+    def __init__(self, snapshot: RuntimeRunSnapshot) -> None:
+        self.snapshot = snapshot
+
+    def list_runs(self, *, tenant_id: str) -> RuntimeRunSnapshot:
+        assert tenant_id == "tenant-demo"
+        return self.snapshot
+
+
+class _RetryDeadLetterRepository:
+    def __init__(self, update_result: dict[str, object] | None, *, deleted: bool = True) -> None:
+        self.update_result = update_result
+        self.deleted = deleted
+
+    def rows_for_tenant(self, **kwargs: object) -> list[dict[str, object]]:
+        table = kwargs["table"]
+        if table == "audit_events":
+            return []
+        if table == "outbox_events":
+            return [{"id": "outbox-1"}]
+        raise AssertionError(f"unexpected table {table}")
+
+    def dead_letter_event_by_id(self, **_kwargs: object) -> dict[str, object]:
+        return {"source_event_id": "outbox-1", "event_type": "materialization.requested", "payload": {}}
+
+    def update_outbox_event_for_retry(self, **_kwargs: object) -> dict[str, object] | None:
+        return self.update_result
+
+    def delete_dead_letter_event(self, **_kwargs: object) -> bool:
+        return self.deleted
+
+
 def _runtime_service(repository: object) -> RuntimeService:
     return RuntimeService(
         engine=_UnusedEngine(),
+        policy=PolicyService(),
+        runtime_repository=repository,
+        dataset_transaction_repository=_UnusedDatasetTransactionRepository(),
+        dataset_quality_repository=_UnusedDatasetQualityRepository(),
+    )
+
+
+def _runtime_service_with_engine(repository: object) -> RuntimeService:
+    return RuntimeService(
+        engine=_BeginEngine(),
         policy=PolicyService(),
         runtime_repository=repository,
         dataset_transaction_repository=_UnusedDatasetTransactionRepository(),
@@ -178,6 +228,46 @@ def test_runtime_service_query_runs_rejects_cursor_shape_mismatch() -> None:
             since=None,
             until=None,
         )
+
+
+def test_runtime_service_observability_report_reads_tenant_snapshot() -> None:
+    service = _runtime_service(_SnapshotRuntimeRepository(_empty_snapshot()))
+
+    report = service.observability_report(ctx=_OPERATOR, observed_at="2026-06-10T00:00:00Z")
+
+    assert report["generatedAt"] == "2026-06-10T00:00:00Z"
+    assert report["summary"] == {"active": 0, "suppressed": 0, "evaluatedDetectors": 0}
+
+
+def test_retry_dead_letter_event_rejects_outbox_retry_cas_miss() -> None:
+    service = _runtime_service_with_engine(_RetryDeadLetterRepository(None))
+
+    with pytest.raises(NotFound, match="source outbox event not found"):
+        service.retry_dead_letter_event("dlq-1", ctx=_OPERATOR)
+
+
+def test_retry_dead_letter_event_rejects_dead_letter_delete_race() -> None:
+    repository = _RetryDeadLetterRepository({"id": "outbox-1", "status": "pending"}, deleted=False)
+    service = _runtime_service_with_engine(repository)
+
+    with pytest.raises(NotFound, match="dead-letter event not found"):
+        service.retry_dead_letter_event("dlq-1", ctx=_OPERATOR)
+
+
+def _empty_snapshot() -> RuntimeRunSnapshot:
+    return {
+        "syncRuns": [],
+        "transformRuns": [],
+        "indexRuns": [],
+        "actionRuns": [],
+        "actionWritebacks": [],
+        "materializationRuns": [],
+        "outboxEvents": [],
+        "deadLetterEvents": [],
+        "workflowRuns": [],
+        "auditEvents": [],
+        "objectEdits": [],
+    }
 
 
 def _runtime_row(run_id: str, created_at: str) -> RuntimeRow:
