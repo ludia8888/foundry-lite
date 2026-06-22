@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 
+from foundry_lite.application.ports import RuntimeRepository, TransactionManager
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.primitives import _now
 from foundry_lite.security.erasure import ErasureActionReceipt, ErasureManifestAction
@@ -9,19 +10,39 @@ from foundry_lite.security.erasure import ErasureActionReceipt, ErasureManifestA
 ErasureActionExecutor = Callable[[ErasureManifestAction], ErasureActionReceipt]
 
 
-def default_erasure_executors(*, search_adapter: SearchAdapter) -> Mapping[str, ErasureActionExecutor]:
+def default_erasure_executors(
+    *, search_adapter: SearchAdapter, runtime_repository: RuntimeRepository, engine: TransactionManager
+) -> Mapping[str, ErasureActionExecutor]:
     """Concrete executors for the serving/projection surfaces.
 
     Surfaces that require richer source context (dataset-row redaction, object
-    tombstones, materialization rebuild, dead-letter redaction) are added on top
-    of this map as their executors land; an unmapped action fails closed in the
-    service rather than being silently certified.
+    tombstones, materialization rebuild) are added on top of this map as their
+    executors land; an unmapped action fails closed in the service rather than
+    being silently certified.
     """
     return {
         "remove_search_document": lambda action: _remove_search_document(action, search_adapter),
+        "redact_dead_letter_payload": lambda action: _redact_dead_letter_payload(action, runtime_repository, engine),
         "minimize_audit_evidence": _minimize_audit_evidence,
         "defer_backup_expiration": _defer_backup_expiration,
     }
+
+
+def _redact_dead_letter_payload(
+    action: ErasureManifestAction, runtime_repository: RuntimeRepository, engine: TransactionManager
+) -> ErasureActionReceipt:
+    resource = action.resource
+    with engine.begin() as conn:
+        deleted = runtime_repository.delete_dead_letter_event(
+            transaction=conn, tenant_id=resource.tenant_id, event_id=resource.resource_id
+        )
+    return ErasureActionReceipt(
+        action_type=action.action_type,
+        resource=resource,
+        status="APPLIED",
+        completed_at=_now(),
+        evidence={"executor": "runtime_repository.delete_dead_letter_event", "deleted": deleted},
+    )
 
 
 def _remove_search_document(action: ErasureManifestAction, search_adapter: SearchAdapter) -> ErasureActionReceipt:
