@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, NotRequired, Protocol, TypedDict
 
@@ -349,6 +349,20 @@ class RuntimeRepository(Protocol):
         limit: int,
     ) -> list[RuntimeRow]:
         """Return one bounded, ordered Operations run page for one tenant."""
+        ...
+
+    def run_row(self, *, tenant_id: str, run_type: RuntimeRunType, run_id: str) -> RuntimeRow | None:
+        """Return one tenant-scoped run row by type and id without loading the snapshot."""
+        ...
+
+    def run_row_any_type(self, *, tenant_id: str, run_id: str) -> tuple[RuntimeRunType, RuntimeRow] | None:
+        """Resolve a run id to its type and row across lineage-producing run tables."""
+        ...
+
+    def related_evidence_rows(
+        self, *, tenant_id: str, table: RuntimeRowsTable, relation_ids: Sequence[str], limit: int
+    ) -> list[RuntimeRow]:
+        """Return bounded evidence rows whose relation columns match any correlation id."""
         ...
 
     def row_by_id(

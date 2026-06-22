@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from foundry_lite.application.ports import RuntimeRunSnapshot
 from foundry_lite.application.services import runtime_run_queries as queries
-from foundry_lite.domain.errors import NotFound, ValidationFailed
+from foundry_lite.domain.errors import ValidationFailed
 
 
 def test_runtime_run_query_helpers_filter_and_join_related_rows() -> None:
@@ -16,7 +16,7 @@ def test_runtime_run_query_helpers_filter_and_join_related_rows() -> None:
         since="2026-06-10T00:00:00Z",
         until="2026-06-11T00:00:00Z",
     )
-    row = queries.row_for_detail(filtered, "action", "action_run_1")
+    row = filtered["actionRuns"][0]
 
     assert queries.optional_run_type("") is None
     assert filtered["transformRuns"] == []
@@ -25,34 +25,23 @@ def test_runtime_run_query_helpers_filter_and_join_related_rows() -> None:
     assert queries.row_status(row) == "succeeded"
     assert queries.correlation_id(row) == "action_run_1"
     assert queries.row_references(row)["target_object_id"] == "O-1001"
-    assert queries.related_outbox(snapshot, row) == [snapshot["outboxEvents"][0]]
-    assert queries.related_audit(snapshot, row) == [snapshot["auditEvents"][0]]
-    assert queries.related_object_edits(snapshot, row) == [snapshot["objectEdits"][0]]
     assert queries.resource_ids_for_lineage(
         {"output_version_id": "version_clean", "input_versions": {"raw": "version_raw", "bad": 1}}
     ) == {"version_clean", "version_raw"}
 
 
-def test_related_helpers_exclude_unrelated_same_tenant_evidence() -> None:
+def test_relation_ids_exclude_tenant_scope() -> None:
     # Regression: ``tenant_id`` scopes the snapshot, it is not a correlation key.
-    # Evidence that merely shares the tenant (but references a different run) must
-    # not be reported as related, which previously matched the whole tenant.
-    snapshot = _snapshot()
-    snapshot["actionRuns"] = [
-        {"id": "action_run_1", "tenant_id": "t-1", "status": "succeeded", "correlation_id": "action_run_1"}
-    ]
-    snapshot["outboxEvents"] = [
-        {"id": "ob-related", "tenant_id": "t-1", "correlation_id": "action_run_1"},
-        {"id": "ob-unrelated", "tenant_id": "t-1", "correlation_id": "other_run"},
-    ]
-    snapshot["auditEvents"] = [
-        {"id": "au-related", "tenant_id": "t-1", "resource_id": "action_run_1"},
-        {"id": "au-unrelated", "tenant_id": "t-1", "resource_id": "other_run"},
-    ]
-    row = queries.row_for_detail(snapshot, "action", "action_run_1")
+    # Including it matched every same-tenant evidence row as "related", so the
+    # correlation ids that drive related-evidence push-down must omit it.
+    row = {"id": "run-1", "tenant_id": "t-1", "correlation_id": "corr-A", "transform_id": "tx-9", "status": "ok"}
 
-    assert [event["id"] for event in queries.related_outbox(snapshot, row)] == ["ob-related"]
-    assert [event["id"] for event in queries.related_audit(snapshot, row)] == ["au-related"]
+    ids = queries.relation_ids(row)
+
+    assert "t-1" not in ids
+    assert set(ids) == {"run-1", "corr-A", "tx-9"}
+    # A row carrying only the tenant scope and non-relation fields has no correlation ids.
+    assert queries.relation_ids({"tenant_id": "t-1", "status": "ok"}) == []
 
 
 def test_runtime_run_query_helpers_cover_error_and_empty_branches() -> None:
@@ -60,8 +49,6 @@ def test_runtime_run_query_helpers_cover_error_and_empty_branches() -> None:
 
     with pytest.raises(ValidationFailed):
         queries.required_run_type("unknown")
-    with pytest.raises(NotFound):
-        queries.row_for_detail(snapshot, "action", "missing")
 
     assert queries.required_run_type("dead-letter") == "dead_letter"
     assert queries.row_status({}, "dead_letter") == "dead_lettered"

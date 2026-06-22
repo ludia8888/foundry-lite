@@ -23,6 +23,7 @@ from foundry_lite.application.services.runtime_run_queries import (
     error_message,
     late_data_detail,
     materialization_detail,
+    relation_ids,
     resource_ids_for_lineage,
     row_references,
     row_status,
@@ -71,6 +72,19 @@ def runtime_run_detail_payload(
         "downstreamImpact": downstream_impact,
         "quality": _detail_quality_report(dataset_transaction, quality_check_results, quality_failed_row_samples),
     }
+
+
+def related_evidence_for_row(
+    repository: RuntimeRepository, *, tenant_id: str, run_row: RuntimeRow, limit: int
+) -> tuple[list[RuntimeRow], list[RuntimeRow], list[RuntimeRow], list[RuntimeRow]]:
+    """Fetch a run's correlated evidence with bounded push-down queries (no full snapshot load)."""
+    ids = relation_ids(run_row)
+    return (
+        repository.related_evidence_rows(tenant_id=tenant_id, table="outbox_events", relation_ids=ids, limit=limit),
+        repository.related_evidence_rows(tenant_id=tenant_id, table="audit_events", relation_ids=ids, limit=limit),
+        repository.related_evidence_rows(tenant_id=tenant_id, table="object_edits", relation_ids=ids, limit=limit),
+        repository.related_evidence_rows(tenant_id=tenant_id, table="action_writebacks", relation_ids=ids, limit=limit),
+    )
 
 
 def _detail_investigation(

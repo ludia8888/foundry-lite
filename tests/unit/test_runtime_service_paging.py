@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from contextlib import contextmanager
 
 import pytest
 from foundry_lite.application.ports import (
     RuntimeRow,
+    RuntimeRowsTable,
     RuntimeRunPageCursor,
     RuntimeRunRelationRow,
     RuntimeRunSnapshot,
@@ -115,11 +117,21 @@ class _DetailRuntimeRepository:
     def __init__(self) -> None:
         self.relation_reads: list[tuple[str, RuntimeRunType, str]] = []
 
-    def list_runs(self, *, tenant_id: str) -> RuntimeRunSnapshot:
+    def run_row(self, *, tenant_id: str, run_type: RuntimeRunType, run_id: str) -> RuntimeRow | None:
         assert tenant_id == "tenant-demo"
-        snapshot = _empty_snapshot()
-        snapshot["actionRuns"].append(_runtime_row("action_run_1", "2026-06-10T00:00:01Z"))
-        return snapshot
+        if run_type == "action" and run_id == "action_run_1":
+            return _runtime_row("action_run_1", "2026-06-10T00:00:01Z")
+        return None
+
+    def run_row_any_type(self, *, tenant_id: str, run_id: str) -> tuple[RuntimeRunType, RuntimeRow] | None:
+        del tenant_id, run_id
+        return None
+
+    def related_evidence_rows(
+        self, *, tenant_id: str, table: RuntimeRowsTable, relation_ids: Sequence[str], limit: int
+    ) -> list[RuntimeRow]:
+        del tenant_id, table, relation_ids, limit
+        return []
 
     def lineage_for_resource(self, *, tenant_id: str, resource_id: str) -> list[dict[str, object]]:
         del tenant_id, resource_id
@@ -312,6 +324,13 @@ def test_runtime_service_run_detail_exposes_durable_run_relations() -> None:
     assert repository.relation_reads == [("tenant-demo", "action", "action_run_1")]
     assert [row["id"] for row in detail["runRelations"]] == ["run_relation_1"]
     assert detail["runRelations"][0]["target_run_id"] == "outbox_1"
+
+
+def test_runtime_service_run_detail_raises_not_found_for_missing_run() -> None:
+    service = _runtime_service_with_engine(_DetailRuntimeRepository())
+
+    with pytest.raises(NotFound, match="operations run not found"):
+        service.run_detail("action", "missing-run", ctx=_OPERATOR)
 
 
 def test_retry_dead_letter_event_rejects_outbox_retry_cas_miss() -> None:

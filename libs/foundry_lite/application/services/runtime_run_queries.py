@@ -20,7 +20,7 @@ from foundry_lite.application.services.runtime_late_data_impact import (
 from foundry_lite.application.services.runtime_late_data_impact import (
     object_late_data_badge as _object_late_data_badge,
 )
-from foundry_lite.domain.errors import NotFound, ValidationFailed
+from foundry_lite.domain.errors import ValidationFailed
 
 downstream_impact_graph = _downstream_impact_graph
 object_late_data_badge = _object_late_data_badge
@@ -77,13 +77,6 @@ def filtered_snapshot(
         "auditEvents": _filtered_rows(snapshot["auditEvents"], run_type, "audit", status, since, until),
         "objectEdits": _filtered_support_rows(snapshot["objectEdits"], run_type, status, since, until),
     }
-
-
-def row_for_detail(snapshot: RuntimeRunSnapshot, run_type: RuntimeRunType, run_id: str) -> RuntimeRow:
-    for row in _rows_for_type(snapshot, run_type):
-        if row.get("id") == run_id:
-            return row
-    raise NotFound("operations run not found", details={"run_type": run_type, "run_id": run_id})
 
 
 def row_status(row: RuntimeRow, run_type: RuntimeRunType | None = None) -> str:
@@ -170,26 +163,6 @@ def row_references(row: RuntimeRow) -> dict[str, object]:
         "source_event_id",
     )
     return {key: row[key] for key in keys if key in row and row[key] is not None}
-
-
-def related_outbox(snapshot: RuntimeRunSnapshot, row: RuntimeRow) -> list[RuntimeRow]:
-    ids = _relation_ids(row)
-    return [event for event in snapshot["outboxEvents"] if _row_matches_relation(event, ids)]
-
-
-def related_audit(snapshot: RuntimeRunSnapshot, row: RuntimeRow) -> list[RuntimeRow]:
-    ids = _relation_ids(row)
-    return [event for event in snapshot["auditEvents"] if _row_matches_relation(event, ids)]
-
-
-def related_object_edits(snapshot: RuntimeRunSnapshot, row: RuntimeRow) -> list[RuntimeRow]:
-    ids = _relation_ids(row)
-    return [event for event in snapshot["objectEdits"] if _row_matches_relation(event, ids)]
-
-
-def related_action_writebacks(snapshot: RuntimeRunSnapshot, row: RuntimeRow) -> list[RuntimeRow]:
-    ids = _relation_ids(row)
-    return [event for event in snapshot["actionWritebacks"] if _row_matches_relation(event, ids)]
 
 
 def resource_ids_for_lineage(row: RuntimeRow) -> set[str]:
@@ -318,27 +291,9 @@ def _suggested_actions(run_type: RuntimeRunType, run_id: str, status: str) -> li
     return ["inspect errorMessage, references, and related audit/outbox evidence"]
 
 
-def _rows_for_type(snapshot: RuntimeRunSnapshot, run_type: RuntimeRunType) -> list[RuntimeRow]:
-    return {
-        "sync": snapshot["syncRuns"],
-        "transform": snapshot["transformRuns"],
-        "index": snapshot["indexRuns"],
-        "action": snapshot["actionRuns"],
-        "action_writeback": snapshot["actionWritebacks"],
-        "materialization": snapshot["materializationRuns"],
-        "outbox": snapshot["outboxEvents"],
-        "dead_letter": snapshot["deadLetterEvents"],
-        "workflow": snapshot["workflowRuns"],
-        "audit": snapshot["auditEvents"],
-    }[run_type]
-
-
-def _relation_ids(row: RuntimeRow) -> set[str]:
-    return {value for key, value in row.items() if _is_relation_key(key) and isinstance(value, str) and value}
-
-
-def _row_matches_relation(row: RuntimeRow, ids: set[str]) -> bool:
-    return any(value in ids for key, value in row.items() if _is_relation_key(key) and isinstance(value, str))
+def relation_ids(row: RuntimeRow) -> list[str]:
+    """Return the correlation ids on a run row used to fetch its related evidence."""
+    return sorted({value for key, value in row.items() if _is_relation_key(key) and isinstance(value, str) and value})
 
 
 def _is_relation_key(key: str) -> bool:
