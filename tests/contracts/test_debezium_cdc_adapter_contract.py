@@ -27,7 +27,12 @@ def test_debezium_adapter_normalizes_insert_update_delete_envelopes() -> None:
 
     assert [event.event_type for event in events] == ["cdc.c", "cdc.u", "cdc.d"]
     assert events[0].payload["pk"] == {"order_id": "O-1001"}
-    assert events[0].payload["ordering"] == {"lsn": 11, "source_ts_ms": 1700000000011, "table": "orders"}
+    first_ordering = events[0].payload["ordering"]
+    assert first_ordering["lsn"] == 11
+    assert first_ordering["source_ts_ms"] == 1700000000011
+    assert first_ordering["table"] == "orders"
+    assert first_ordering["stream_name"] == "erp_orders_cdc"
+    assert isinstance(first_ordering["stream_offset"], int)
     assert events[2].payload["after"] is None
 
 

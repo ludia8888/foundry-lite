@@ -463,7 +463,7 @@ def _cdc_event(
         "pk": {"order_id": row["order_id"]},
         "before": before,
         "after": after,
-        "ordering": {"lsn": lsn, "source_ts_ms": 1700000000000 + lsn, "table": "orders"},
+        "ordering": {"lsn": lsn, "offset": lsn, "source_ts_ms": 1700000000000 + lsn, "table": "orders"},
     }
 
 

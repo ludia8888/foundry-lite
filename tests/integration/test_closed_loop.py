@@ -35,7 +35,7 @@ def test_supply_chain_closed_loop_updates_customer_risk_and_records_replay_state
     assert linked[0]["to"]["objectId"] == "C-100"
 
     clean_orders = foundry.datasets.inspect("clean.orders")
-    clean_order_lineage = foundry.operations.lineage(result["cleanOrdersVersion"])
+    clean_order_lineage = foundry.operations.lineage(result["cleanOrdersVersion"], ctx=demo_admin_context())
     assert clean_orders["manifest"]["files"][0]["row_count"] == 3
     assert any(
         edge["from_resource_id"] == result["rawOrdersVersion"]

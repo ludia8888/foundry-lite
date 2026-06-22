@@ -75,6 +75,7 @@ class _FailingActionRepository:
         transition: StatusTransition,
         error: Mapping[str, object] | None,
         completed_at: str,
+        result: Mapping[str, object] | None = None,
     ) -> bool:
         if self.enabled and self.fail_method == "update_action_run_terminal" and transition.to_status == "succeeded":
             raise _InjectedActionCommitFailure("injected action terminal failure")
@@ -85,6 +86,7 @@ class _FailingActionRepository:
             transition=transition,
             error=error,
             completed_at=completed_at,
+            result=result,
         )
 
 
@@ -1028,6 +1030,9 @@ def test_viewer_sees_masked_margin_and_cannot_approve_order(
     admin_ctx = prepare_indexed_demo(foundry)
     viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
     finance = RequestContext(actor_user_id="finance-1", roles=("finance",))
+    # Can manage object sets (object:set:manage) but cannot read finance-classified
+    # margin, so a margin filter must still be rejected as a masked property.
+    set_manager = RequestContext(actor_user_id="eng-1", roles=("data_engineer",))
     other_tenant = RequestContext(
         tenant_id="tenant-other",
         actor_user_id="other-admin",
@@ -1066,7 +1071,7 @@ def test_viewer_sees_masked_margin_and_cannot_approve_order(
             "Order",
             set_type="dynamic",
             filter_ast={"property": "margin", "op": "gte", "value": 80.0},
-            ctx=viewer,
+            ctx=set_manager,
         )
     with pytest.raises(PermissionDenied):
         foundry.ontology.apply(str(DEMO_ROOT / "ontology" / "order-customer.yaml"), ctx=viewer)
