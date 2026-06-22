@@ -12,6 +12,7 @@ from foundry_lite.application.services.object_service import ObjectServices
 from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.application.services.runtime_bundle import (
     BackupRestoreService,
+    ErasureService,
     IcebergMaintenanceService,
     InsightReviewService,
     RecordDlqService,
@@ -25,6 +26,7 @@ __all__ = [
     "ActionService",
     "BackupRestoreService",
     "DemoService",
+    "ErasureService",
     "InsightReviewService",
     "DatasetServices",
     "IcebergMaintenanceService",
@@ -51,6 +53,7 @@ class CoreServices:
     backup_restore: BackupRestoreService
     dataset: DatasetServices
     demo: DemoService
+    erasure: ErasureService
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
     materialization: MaterializationService
@@ -73,6 +76,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     backup_restore = build_service(BackupRestoreService, dependencies)
     dataset = DatasetServices.create(dependencies)
     demo = build_service(DemoService, dependencies)
+    erasure = build_service(ErasureService, dependencies)
     iceberg_maintenance = build_service(IcebergMaintenanceService, dependencies)
     insight_review = build_service(InsightReviewService, dependencies)
     materialization = build_service(MaterializationService, dependencies)
@@ -87,6 +91,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         backup_restore=backup_restore,
         dataset=dataset,
         demo=demo,
+        erasure=erasure,
         iceberg_maintenance=iceberg_maintenance,
         insight_review=insight_review,
         materialization=materialization,
@@ -105,6 +110,7 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
         services.backup_restore,
         *services.dataset.items(),
         services.demo,
+        services.erasure,
         services.iceberg_maintenance,
         services.insight_review,
         services.materialization,

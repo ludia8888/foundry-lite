@@ -23,6 +23,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
+from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider
@@ -56,6 +57,7 @@ class CoreDependencies:
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository
     runtime_repository: RuntimeRepository
+    erasure_repository: ErasureRepository
     dataset_storage: DatasetStorageAdapter
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
