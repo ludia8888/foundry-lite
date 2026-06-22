@@ -2,18 +2,15 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from foundry_lite.application.ports import DatasetRow, RuntimeRow, TransactionContext
+from foundry_lite.application.ports import RuntimeRow, TransactionContext
 from foundry_lite.application.ports.materialization_repository import (
     MaterializationRecord,
     MaterializationReplayResult,
     MaterializationRow,
     MaterializationRunRecord,
-    MaterializationSourceRef,
-    MaterializationTargetRef,
 )
 from foundry_lite.application.primitives import CommitResult, _new_id, _now
 from foundry_lite.application.services.base import CoreService
@@ -26,6 +23,8 @@ from foundry_lite.application.services.materialization_protocols import (
     mark_materialization_run_succeeded,
 )
 from foundry_lite.application.services.materialization_types import (
+    MATERIALIZATION_SPECS,
+    MaterializationRunPlan,
     supported_materialization_type,
     unsupported_materialization_type,
 )
@@ -38,42 +37,8 @@ from foundry_lite.domain.errors import (
 )
 
 
-@dataclass(frozen=True)
-class MaterializationRunPlan:
-    api_name: str
-    materialization_id: str
-    materialization_type: str
-    target_dataset: DatasetRow
-    transaction_id: str
-    run_id: str
-    watermark: Mapping[str, object]
-    rows: Sequence[Mapping[str, object]]
-    fieldnames: list[str]
-
-
-@dataclass(frozen=True)
-class MaterializationSpec:
-    materialization_type: str
-    source: MaterializationSourceRef
-    target: MaterializationTargetRef
-
-
-MATERIALIZATION_SPECS: dict[str, MaterializationSpec] = {
-    "action_log": MaterializationSpec(
-        materialization_type="action_log",
-        source={"type": "action_runs"},
-        target={"dataset": "ops.action_log"},
-    ),
-    "order_current": MaterializationSpec(
-        materialization_type="object_snapshot",
-        source={"objectType": "Order"},
-        target={"dataset": "ops.order_current"},
-    ),
-}
-
-
 class MaterializationService(CoreService):
-    required_dependencies = ("engine", "materialization_repository")
+    required_dependencies = ("engine", "materialization_repository", "policy")
     required_collaborators = (
         "dataset_ingest_service",
         "dataset_registry_service",
@@ -206,6 +171,7 @@ class MaterializationService(CoreService):
             def after_persist(conn: TransactionContext, result: CommitResult) -> None:
                 mark_materialization_run_succeeded(self.materialization_repository, conn, ctx, plan.run_id, result)
                 self._record_materialization_lineage(conn, ctx, plan, result)
+                self._record_materialization_outbox_relation(conn, ctx, plan, result)
 
             try:
                 return self.dataset_transaction_service._finalize_open_transaction(
@@ -257,6 +223,51 @@ class MaterializationService(CoreService):
             result.version_id,
             "materializes_to",
             plan.run_id,
+        )
+
+    def _record_materialization_outbox_relation(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        plan: MaterializationRunPlan,
+        result: CommitResult,
+    ) -> None:
+        outbox_event_id = self._materialization_completed_outbox_event_id(conn, ctx, plan, result)
+        self.runtime_service._run_relation(
+            conn,
+            ctx,
+            source_run_type="materialization",
+            source_run_id=plan.run_id,
+            target_run_type="outbox",
+            target_run_id=outbox_event_id,
+            relation="emitted",
+            resource_type="dataset_version",
+            resource_id=result.version_id,
+            metadata={
+                "apiName": plan.api_name,
+                "datasetRef": result.dataset_ref,
+                "eventType": "materialization.completed",
+            },
+        )
+
+    def _materialization_completed_outbox_event_id(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        plan: MaterializationRunPlan,
+        result: CommitResult,
+    ) -> str:
+        for row in self.runtime_service._rows_for_tenant(conn, "outbox_events", ctx):
+            if (
+                row.get("event_type") == "materialization.completed"
+                and row.get("aggregate_type") == "dataset_version"
+                and row.get("aggregate_id") == result.version_id
+                and row.get("correlation_id") == plan.run_id
+            ):
+                return str(row["id"])
+        raise InvariantViolation(
+            "materialization completed without durable outbox event",
+            details={"run_id": plan.run_id, "version_id": result.version_id},
         )
 
     def _abort_materialization_run(
@@ -355,13 +366,14 @@ class MaterializationService(CoreService):
         ctx: RequestContext,
         watermark: Mapping[str, object],
     ) -> tuple[Sequence[Mapping[str, object]], list[str]]:
-        action_rows = self.runtime_service._rows_for_tenant(conn, "action_runs", ctx)
-        edit_rows = self.runtime_service._rows_for_tenant(conn, "object_edits", ctx)
-        edit_by_action = {row["action_run_id"]: row for row in edit_rows}
         rows = [
-            self._action_log_row(action, edit_by_action.get(action["id"], {}))
-            for action in action_rows
-            if action["status"] == "succeeded" and _action_within_watermark(action, watermark)
+            self._action_log_row(ctx, action)
+            for action in self.materialization_repository.action_log_rows_at_watermark(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                completed_at_lte=_optional_string(watermark.get("action_run_completed_at_lte")),
+                action_run_id_lte=_optional_string(watermark.get("action_run_id_lte")),
+            )
         ]
         return rows, [
             "action_run_id",
@@ -375,18 +387,31 @@ class MaterializationService(CoreService):
             "created_at",
         ]
 
-    def _action_log_row(self, action: RuntimeRow, edit: RuntimeRow) -> Mapping[str, object]:
+    def _action_log_row(self, ctx: RequestContext, action: RuntimeRow) -> Mapping[str, object]:
+        object_type = str(action["target_object_type_api_name"])
+        parameters = self._masked_action_mapping(ctx, object_type, action.get("parameters"))
+        edit_patch = self._masked_action_mapping(ctx, object_type, action.get("edit_patch"))
         return {
-            "action_run_id": action["id"],
+            "action_run_id": action["action_run_id"],
             "actor_user_id": action["actor_user_id"],
             "action_type": action["action_type_api_name"],
             "target_object_type": action["target_object_type_api_name"],
             "target_object_id": action["target_object_id"],
             "status": action["status"],
-            "parameters_json": json.dumps(action["parameters"], sort_keys=True),
-            "edit_patch_json": json.dumps(edit.get("patch", {}), sort_keys=True),
+            "parameters_json": json.dumps(parameters, sort_keys=True),
+            "edit_patch_json": json.dumps(edit_patch, sort_keys=True),
             "created_at": action["created_at"],
         }
+
+    def _masked_action_mapping(
+        self,
+        ctx: RequestContext,
+        object_type: str,
+        value: object,
+    ) -> Mapping[str, object]:
+        if not isinstance(value, Mapping):
+            return {}
+        return self.policy.mask_sensitive_properties(ctx, object_type, dict(value))
 
     def _order_current_materialization_rows(
         self,
@@ -457,15 +482,8 @@ def _materialization_transaction_metadata(plan: MaterializationRunPlan) -> dict[
     }
 
 
-def _action_within_watermark(row: RuntimeRow, watermark: Mapping[str, object]) -> bool:
-    completed_at = row.get("completed_at")
-    max_completed = watermark.get("action_run_completed_at_lte")
-    max_action_id = watermark.get("action_run_id_lte")
-    if not isinstance(completed_at, str) or not isinstance(max_completed, str):
-        return False
-    if completed_at < max_completed:
-        return True
-    return completed_at == max_completed and isinstance(max_action_id, str) and str(row["id"]) <= max_action_id
+def _optional_string(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _run_watermark(run: RuntimeRow) -> Mapping[str, object]:

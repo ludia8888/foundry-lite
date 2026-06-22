@@ -172,6 +172,14 @@ class S3DatasetStorageAdapter:
             if partition_filter is None or _matches_partition_filter(file, partition_filter)
         ]
 
+    def preview_file_paths(
+        self,
+        manifest_uri: str,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]:
+        return self.data_file_paths(manifest_uri, partition_filter=partition_filter)
+
     def _commit_objects(
         self,
         data_key: str,

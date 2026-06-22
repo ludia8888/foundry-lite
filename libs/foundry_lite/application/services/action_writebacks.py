@@ -40,8 +40,9 @@ class ActionWritebackRecorder:
         idempotency_key: str,
         request_hash: str,
         response: ActionWritebackPayload,
-    ) -> None:
+    ) -> str:
         now = _now()
+        writeback_id = _new_id("writeback")
         request = _writeback_request(
             idempotency_key=idempotency_key,
             request_hash=request_hash,
@@ -49,7 +50,7 @@ class ActionWritebackRecorder:
         self.action_repository.insert_action_writeback(
             transaction=conn,
             record=ActionWritebackRecord(
-                writeback_id=_new_id("writeback"),
+                writeback_id=writeback_id,
                 tenant_id=ctx.tenant_id,
                 action_run_id=action_run_id,
                 mode="before_commit",
@@ -62,6 +63,30 @@ class ActionWritebackRecorder:
                 created_at=now,
                 completed_at=now,
             ),
+        )
+        self._record_writeback_relation(conn, ctx, action_run_id, writeback_id, status)
+        return writeback_id
+
+    def _record_writeback_relation(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        writeback_id: str,
+        status: str,
+    ) -> None:
+        """Record the action->writeback run relation."""
+        self.runtime_service._run_relation(
+            conn,
+            ctx,
+            source_run_type="action",
+            source_run_id=action_run_id,
+            target_run_type="action_writeback",
+            target_run_id=writeback_id,
+            relation="writeback_attempt",
+            resource_type="action_writeback",
+            resource_id=writeback_id,
+            metadata={"status": status, "connector": MOCK_WRITEBACK_CONNECTOR, "mode": "before_commit"},
         )
 
     def fail_before_commit(

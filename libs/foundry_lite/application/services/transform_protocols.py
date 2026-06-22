@@ -9,6 +9,7 @@ from foundry_lite.application.ports import (
     DatasetRow,
     DatasetRunKind,
     DatasetVersionRow,
+    RuntimeRunType,
     TransactionContext,
 )
 from foundry_lite.application.primitives import CommitResult
@@ -148,6 +149,23 @@ class TransformRuntimeBoundary(Protocol):
         run_id: str,
     ) -> None:
         """Persist a lineage edge emitted by a successful transform run."""
+        ...
+
+    def _run_relation(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        *,
+        source_run_type: RuntimeRunType,
+        source_run_id: str,
+        target_run_type: RuntimeRunType,
+        target_run_id: str,
+        relation: str,
+        resource_type: str,
+        resource_id: str,
+        metadata: Mapping[str, object] | None = None,
+    ) -> bool:
+        """Persist a durable Operations relation emitted by a transform run."""
         ...
 
 

@@ -120,3 +120,12 @@ class DatasetStorageAdapter(Protocol):
     ) -> list[Path]:
         """Resolve all manifest data files to readable local paths in manifest order."""
         ...
+
+    def preview_file_paths(
+        self,
+        manifest_uri: str,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]:
+        """Resolve local files suitable for bounded preview reads."""
+        ...

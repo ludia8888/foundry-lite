@@ -209,6 +209,7 @@ class ObjectRecordSourceDeletion:
 class ObjectRecordCdcUpdate:
     record_id: str
     tenant_id: str
+    expected_object_version: int
     properties: ObjectPropertyMap
     base_properties: ObjectPropertyMap
     property_versions: ObjectPropertyVersions
@@ -255,6 +256,16 @@ class ObjectLinkInsert:
     updated_at: str
     index_version: str = "active"
     is_active: bool = True
+
+
+@dataclass(frozen=True)
+class ObjectLinkSourceDeletion:
+    link_id: str
+    tenant_id: str
+    source_dataset_version_id: str
+    link_version: int
+    deletion_reason: str
+    updated_at: str
 
 
 class ObjectIndexRepository(Protocol):
@@ -321,6 +332,7 @@ class ObjectIndexRepository(Protocol):
         *,
         transaction: TransactionContext,
         tenant_id: str,
+        object_type_id: str,
         object_type_api_name: str,
         object_id: str,
         index_version: str,
@@ -362,8 +374,8 @@ class ObjectIndexRepository(Protocol):
         *,
         transaction: TransactionContext,
         record: ObjectRecordCdcUpdate,
-    ) -> None:
-        """Apply one ordered CDC source patch or tombstone to an object record."""
+    ) -> bool:
+        """CAS-apply one ordered CDC source patch or tombstone to an object record."""
         ...
 
     def insert_object_conflict(self, *, transaction: TransactionContext, record: ObjectConflictRecord) -> None:
@@ -409,6 +421,26 @@ class ObjectIndexRepository(Protocol):
 
     def insert_object_link(self, *, transaction: TransactionContext, record: ObjectLinkInsert) -> None:
         """Insert a new object link."""
+        ...
+
+    def object_links_for_index_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        from_object_type_id: str,
+        index_version: str,
+    ) -> list[ObjectIndexLinkRow]:
+        """Return all links emitted from one object type and index version."""
+        ...
+
+    def mark_object_link_deleted_from_source(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: ObjectLinkSourceDeletion,
+    ) -> None:
+        """Tombstone a link that disappeared from a full source snapshot."""
         ...
 
     def switch_active_index_version(

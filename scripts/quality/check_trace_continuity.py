@@ -4,7 +4,8 @@ The gate runs the supply-chain demo under an in-memory OpenTelemetry provider.
 It creates a synthetic request span, executes service methods and SQLAlchemy DB
 work underneath it, then verifies that required service spans and DB spans share
 one trace id. Service spans that receive a RequestContext must also carry the
-same `foundry_lite.request_id`.
+same `foundry_lite.request_id`. Tenant and actor identity may only be exported
+as bounded hashes, never as raw span attributes.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ REQUIRED_SERVICE_SPANS = {
     "ActionService.apply_action",
     "MaterializationService.materialize",
 }
+RAW_IDENTITY_ATTRIBUTES = {"foundry_lite.tenant_id", "foundry_lite.actor_user_id"}
 
 
 @dataclass(frozen=True)
@@ -124,6 +126,22 @@ def _service_request_id_findings(records: list[SpanRecord], *, request_id: str) 
     return findings
 
 
+def _raw_identity_attribute_findings(records: list[SpanRecord]) -> list[TraceFinding]:
+    findings: list[TraceFinding] = []
+    for record in records:
+        leaked = sorted(RAW_IDENTITY_ATTRIBUTES & set(record.attributes))
+        if not leaked:
+            continue
+        findings.append(
+            TraceFinding(
+                code="trace_raw_identity_attribute",
+                message=f"Span exports raw tenant/user identity attributes: {', '.join(leaked)}",
+                span_name=record.name,
+            )
+        )
+    return findings
+
+
 def _trace_mismatch_findings(records: list[SpanRecord], *, trace_id: str) -> list[TraceFinding]:
     findings: list[TraceFinding] = []
     for record in records:
@@ -164,6 +182,7 @@ def collect_findings(records: list[SpanRecord], *, request_id: str = REQUEST_ID)
     service_records = _service_records(records)
     findings.extend(_missing_required_service_findings({record.name for record in service_records}))
     findings.extend(_service_request_id_findings(service_records, request_id=request_id))
+    findings.extend(_raw_identity_attribute_findings(records))
     findings.extend(_trace_mismatch_findings(records, trace_id=request_span.trace_id))
     if not any(_is_db_span(record) and record.trace_id == request_span.trace_id for record in records):
         findings.append(
@@ -213,7 +232,7 @@ def _run_demo_and_collect_spans(storage_root: Path) -> list[SpanRecord]:
     from foundry_lite.application.foundry import FoundryLite
     from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID, RequestContext
     from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
-    from foundry_lite.observability.tracing import instrument_sqlalchemy_engine
+    from foundry_lite.observability.tracing import instrument_sqlalchemy_engine, trace_identity_hash
 
     dependencies = create_local_core_dependencies(storage_root=storage_root)
     instrument_sqlalchemy_engine(dependencies.engine)
@@ -228,8 +247,8 @@ def _run_demo_and_collect_spans(storage_root: Path) -> list[SpanRecord]:
     )
     tracer = trace.get_tracer("foundry_lite.quality.trace_continuity")
     with tracer.start_as_current_span(REQUEST_SPAN_NAME) as span:
-        span.set_attribute("foundry_lite.tenant_id", ctx.tenant_id)
-        span.set_attribute("foundry_lite.actor_user_id", ctx.actor_user_id)
+        span.set_attribute("foundry_lite.tenant_hash", trace_identity_hash(ctx.tenant_id))
+        span.set_attribute("foundry_lite.actor_user_hash", trace_identity_hash(ctx.actor_user_id))
         span.set_attribute("foundry_lite.request_id", ctx.request_id)
         foundry.demo.run(ctx=ctx, fresh=True)
 

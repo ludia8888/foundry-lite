@@ -31,6 +31,8 @@ def test_shadow_reindex_replays_action_edits(
     result = foundry.objects.shadow_reindex("Order", ctx=ctx)
     after_switch = foundry.objects.get("Order", "O-1001", ctx=ctx)
     query_page = foundry.objects.query("Order", ctx=ctx, limit=10)
+    materialized = foundry.materialization.run("order_current", ctx=ctx)
+    materialized_rows = foundry.datasets.preview("ops.order_current", ctx=ctx, version=materialized.version_id)
     run = _index_run(foundry, ctx, result["index_run_id"])
 
     assert result["is_switched"] is True
@@ -43,6 +45,7 @@ def test_shadow_reindex_replays_action_edits(
     assert after_switch["properties"]["status"] == "APPROVED"
     assert after_switch["properties"]["operatorNote"] == "Shadow validation proof"
     assert [item["objectId"] for item in query_page["items"]] == ["O-1001", "O-1002", "O-1003"]
+    assert [row["orderId"] for row in materialized_rows] == ["O-1001", "O-1002", "O-1003"]
     assert run["trigger_type"] == "shadow_reindex"
     assert run["status"] == "succeeded"
 
@@ -224,13 +227,13 @@ def test_index_progress_cursor_advances_only_after_bulk_upsert_commit(
 ) -> None:
     ctx = prepare_indexed_demo(foundry)
     before = foundry.objects.get("Order", "O-1001", ctx=ctx)
-    original_index_object_row = ObjectIndexingService._index_object_row
+    original_index_object_source_row = ObjectIndexingService._index_object_source_row
 
-    def fail_during_bulk_upsert(self, conn, ctx, plan, row):
-        original_index_object_row(self, conn, ctx, plan, row)
+    def fail_during_bulk_upsert(self, conn, ctx, plan, source):
+        original_index_object_source_row(self, conn, ctx, plan, source)
         raise RuntimeError("injected bulk upsert failure")
 
-    monkeypatch.setattr(ObjectIndexingService, "_index_object_row", fail_during_bulk_upsert)
+    monkeypatch.setattr(ObjectIndexingService, "_index_object_source_row", fail_during_bulk_upsert)
 
     with pytest.raises(RuntimeError, match="injected bulk upsert failure"):
         foundry.objects.reindex("Order", ctx=ctx)

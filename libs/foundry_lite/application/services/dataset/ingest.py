@@ -386,7 +386,7 @@ class DatasetIngestService(CoreService):
     ) -> CommitResult:
         try:
             committed_metadata = committed_transaction["metadata"] if committed_transaction is not None else {}
-            batch = prepare_stream_archive_batch(events, stream, committed_metadata)
+            batch = prepare_stream_archive_batch(events, stream, committed_metadata, expected_tenant_id=ctx.tenant_id)
             try:
                 ensure_stream_archive_batch_writable(batch, stream, len(events))
             except ValidationFailed:

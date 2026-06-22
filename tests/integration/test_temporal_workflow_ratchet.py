@@ -374,16 +374,17 @@ def test_start_workflow_temporal_unavailable_returns_retryable_error_payload() -
 def test_workflow_run_temporal_unavailable_raises_retryable_adapter_error() -> None:
     async def body() -> None:
         adapter = TemporalWorkflowAdapter(client=_UnavailableLookupClient())
+        request = _request(FOUNDRY_WORKFLOW_NAME, "wf-lookup-down")
 
         with pytest.raises(AdapterError) as raised:
-            await adapter.workflow_run_async("wf-lookup-down")
+            await adapter.workflow_run_async(request.tenant_id, temporal_workflow_id(request))
 
         failure = raised.value.failure
         assert failure.adapter_profile == "temporal"
         assert failure.operation == "workflow_run"
         assert failure.kind == "unavailable"
         assert failure.is_retryable is True
-        assert failure.details["workflowId"] == "wf-lookup-down"
+        assert failure.details["workflowId"] == temporal_workflow_id(request)
 
     _run(body)
 
@@ -407,7 +408,7 @@ def test_cancelled_workflow_is_reported_as_cancelled() -> None:
             # reaches its terminal cancelled state before we observe it.
             with contextlib.suppress(WorkflowFailureError):
                 await handle.result()
-            run = await adapter.workflow_run_async(workflow_id)
+            run = await adapter.workflow_run_async(request.tenant_id, workflow_id)
             assert run is not None
             assert run.status == "cancelled"
             # The adapter's start path also classifies a terminal cancelled run:
@@ -425,7 +426,8 @@ def test_cancelled_workflow_is_reported_as_cancelled() -> None:
 def test_workflow_run_returns_none_for_unknown_id() -> None:
     async def body() -> None:
         async with _harness() as (_env, adapter):
-            assert await adapter.workflow_run_async("does-not-exist") is None
+            request = _request(FOUNDRY_WORKFLOW_NAME, "does-not-exist")
+            assert await adapter.workflow_run_async(request.tenant_id, temporal_workflow_id(request)) is None
 
     _run(body)
 
@@ -433,8 +435,9 @@ def test_workflow_run_returns_none_for_unknown_id() -> None:
 def test_workflow_run_describes_completed_run() -> None:
     async def body() -> None:
         async with _harness() as (_env, adapter):
-            started = await adapter.start_workflow_async(_request(FOUNDRY_WORKFLOW_NAME, "wf-lookup", n=1))
-            run = await adapter.workflow_run_async(started.run_id)
+            request = _request(FOUNDRY_WORKFLOW_NAME, "wf-lookup", n=1)
+            started = await adapter.start_workflow_async(request)
+            run = await adapter.workflow_run_async(request.tenant_id, started.run_id)
             assert run is not None
             assert run.status == "succeeded"
             assert run.workflow_name == FOUNDRY_WORKFLOW_NAME

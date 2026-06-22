@@ -27,6 +27,7 @@ from foundry_lite.application.services.object_store.query_protocols import (
     ObjectRecordLookup,
     ObjectSearchQueryPlanner,
 )
+from foundry_lite.application.services.object_store.serving_contract import record_scope_object_type_id
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     NotFound,
@@ -55,7 +56,14 @@ class ObjectQueryService(CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
         with self.engine.begin() as conn:
-            record = self.object_records_service._object_record(conn, ctx, object_type_api_name, object_id)
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
+            record = self.object_records_service._object_record(
+                conn,
+                ctx,
+                object_type_api_name,
+                object_id,
+                object_type_id=record_scope_object_type_id(object_type),
+            )
             if record is None:
                 raise NotFound(
                     "object not found",
@@ -66,22 +74,33 @@ class ObjectQueryService(CoreService):
                 object_type_api_name,
                 dict(record["properties"]),
             )
-            payload: ObjectPayload = {
-                "objectType": object_type_api_name,
-                "objectId": object_id,
-                "objectVersion": record["object_version"],
-                "properties": properties,
-                "sourceDatasetVersionId": record["source_dataset_version_id"],
-            }
-            if record["deleted"]:
-                payload["deleted"] = True
-                payload["deletionReason"] = record["deletion_reason"]
+            payload = self._build_object_payload(object_type_api_name, object_id, record, properties)
             # explain carries the base/edit property layers and operational
             # lineage/source metadata, so it is withheld unless the caller holds
             # object:explain — otherwise ?explain=true would bypass masking.
             if include_explain and self.policy.decide(ctx, "object:explain").allowed:
                 payload["explain"] = self._object_explain(conn, ctx, record)
             return payload
+
+    def _build_object_payload(
+        self,
+        object_type_api_name: str,
+        object_id: str,
+        record: ObjectRecordRow,
+        properties: dict[str, object],
+    ) -> ObjectPayload:
+        """Build the object read payload, including deletion markers."""
+        payload: ObjectPayload = {
+            "objectType": object_type_api_name,
+            "objectId": object_id,
+            "objectVersion": record["object_version"],
+            "properties": properties,
+            "sourceDatasetVersionId": record["source_dataset_version_id"],
+        }
+        if record["deleted"]:
+            payload["deleted"] = True
+            payload["deletionReason"] = record["deletion_reason"]
+        return payload
 
     def _object_explain(
         self,
@@ -185,6 +204,8 @@ class ObjectQueryService(CoreService):
                 order_by=order_by,
                 cursor=cursor_state,
                 limit=query_limit + 1,
+                object_type_id=record_scope_object_type_id(object_type),
+                property_object_type_id=object_type["id"],
             )
         return records, active_index_version
 

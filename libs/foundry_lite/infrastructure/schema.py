@@ -4,6 +4,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     Column,
+    Index,
     Integer,
     MetaData,
     String,
@@ -153,6 +154,7 @@ dataset_checks = Table(
     Column("config", JSON, nullable=False),
     Column("severity", String, nullable=False),
     Column("enabled", Boolean, nullable=False),
+    UniqueConstraint("tenant_id", "dataset_id", "name", name="uq_dataset_check_name"),
 )
 
 dataset_check_results = Table(
@@ -232,6 +234,33 @@ lineage_edges = Table(
     Column("created_at", String, nullable=False),
 )
 
+runtime_run_relations = Table(
+    "runtime_run_relations",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("source_run_type", String, nullable=False),
+    Column("source_run_id", String, nullable=False),
+    Column("target_run_type", String, nullable=False),
+    Column("target_run_id", String, nullable=False),
+    Column("relation", String, nullable=False),
+    Column("resource_type", String, nullable=False),
+    Column("resource_id", String, nullable=False),
+    Column("metadata", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint(
+        "tenant_id",
+        "source_run_type",
+        "source_run_id",
+        "target_run_type",
+        "target_run_id",
+        "relation",
+        "resource_type",
+        "resource_id",
+        name="uq_runtime_run_relation",
+    ),
+)
+
 ontology_versions = Table(
     "ontology_versions",
     metadata,
@@ -242,6 +271,13 @@ ontology_versions = Table(
     Column("created_by", String),
     Column("created_at", String, nullable=False),
     Column("activated_at", String),
+)
+Index(
+    "uq_ontology_active_per_tenant",
+    ontology_versions.c.tenant_id,
+    unique=True,
+    sqlite_where=ontology_versions.c.status == "active",
+    postgresql_where=ontology_versions.c.status == "active",
 )
 
 object_types = Table(
@@ -610,6 +646,7 @@ action_runs = Table(
     Column("status", String, nullable=False),
     Column("idempotency_key", String, nullable=False),
     Column("request_fingerprint", String, nullable=False),
+    Column("result", JSON),
     Column("error", JSON),
     Column("created_at", String, nullable=False),
     Column("completed_at", String),
@@ -704,6 +741,7 @@ def _apply_tenant_rls_policy(conn: Connection, table: Table) -> None:
     policy_name = _identifier(conn, f"{table.name}_tenant_isolation")
     condition = f"tenant_id = current_setting('{POSTGRES_TENANT_SETTING}', true)"
     conn.execute(text(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY"))
+    conn.execute(text(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY"))
     conn.execute(text(f"DROP POLICY IF EXISTS {policy_name} ON {table_name}"))
     conn.execute(text(f"CREATE POLICY {policy_name} ON {table_name} USING ({condition}) WITH CHECK ({condition})"))
 
@@ -720,6 +758,7 @@ def _apply_dataset_schema_rls_policy(conn: Connection) -> None:
         f"AND d.tenant_id = current_setting('{POSTGRES_TENANT_SETTING}', true))"
     )
     conn.execute(text(f"ALTER TABLE {table_name} ENABLE ROW LEVEL SECURITY"))
+    conn.execute(text(f"ALTER TABLE {table_name} FORCE ROW LEVEL SECURITY"))
     conn.execute(text(f"DROP POLICY IF EXISTS {policy_name} ON {table_name}"))
     conn.execute(text(f"CREATE POLICY {policy_name} ON {table_name} USING ({condition}) WITH CHECK ({condition})"))
 

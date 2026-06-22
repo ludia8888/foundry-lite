@@ -24,6 +24,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyOntologyRepository
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 
 class OntologyHarness(Protocol):
@@ -60,6 +61,10 @@ class FakeOntologyRepository:
 
     def insert_ontology_version(self, *, transaction: Any, record: OntologyVersionRecord) -> None:
         del transaction
+        if record.status == "active" and any(
+            row["tenant_id"] == record.tenant_id and row["status"] == "active" for row in self.ontology_versions
+        ):
+            raise ValueError("tenant already has an active ontology version")
         self.ontology_versions.append(_ontology_version_row(record))
 
     def archive_active_ontology_versions(self, *, transaction: Any, tenant_id: str) -> int:
@@ -189,6 +194,19 @@ class FakeOntologyRepository:
                 and row["api_name"] == api_name
                 and row["enabled"] is True
             ):
+                return cast(ActionTypeRow, dict(row))
+        return None
+
+    def action_type_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_type_id: str,
+    ) -> ActionTypeRow | None:
+        del transaction
+        for row in self.action_types:
+            if row["tenant_id"] == tenant_id and row["id"] == action_type_id:
                 return cast(ActionTypeRow, dict(row))
         return None
 
@@ -497,6 +515,39 @@ def test_ontology_repository_contract_activation_requires_draft_state(harness: O
     assert rows["ont_archived"]["activated_at"] is None
 
 
+def test_ontology_repository_contract_rejects_two_active_versions_for_one_tenant(
+    harness: OntologyHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_ontology_version(
+            transaction=transaction,
+            record=_ontology_version_record("ont_active_1", version_number=1, status="active"),
+        )
+        harness.repository.insert_ontology_version(
+            transaction=transaction,
+            record=_ontology_version_record(
+                "ont_other_tenant_active",
+                tenant_id="tenant-other",
+                version_number=1,
+                status="active",
+            ),
+        )
+    if isinstance(harness, FakeOntologyHarness):
+        with harness.transaction() as transaction:
+            with pytest.raises(ValueError, match="already has an active"):
+                harness.repository.insert_ontology_version(
+                    transaction=transaction,
+                    record=_ontology_version_record("ont_active_2", version_number=2, status="active"),
+                )
+    else:
+        with pytest.raises(IntegrityError):
+            with harness.transaction() as transaction:
+                harness.repository.insert_ontology_version(
+                    transaction=transaction,
+                    record=_ontology_version_record("ont_active_2", version_number=2, status="active"),
+                )
+
+
 def test_ontology_repository_contract_persists_and_reads_type_metadata(harness: OntologyHarness) -> None:
     with harness.transaction() as transaction:
         harness.repository.insert_object_type(transaction=transaction, record=_object_type_record())
@@ -582,6 +633,21 @@ def test_ontology_repository_contract_scopes_active_lookups(harness: OntologyHar
             ontology_version_id="ont_1",
             api_name="DisabledOrderAction",
         )
+        action_by_id = harness.repository.action_type_by_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_type_id="at_approve",
+        )
+        disabled_action_by_id = harness.repository.action_type_by_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_type_id="at_disabled",
+        )
+        missing_action_by_id = harness.repository.action_type_by_id(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            action_type_id="at_approve",
+        )
 
     assert active is not None
     assert active["id"] == "ont_1"
@@ -591,3 +657,8 @@ def test_ontology_repository_contract_scopes_active_lookups(harness: OntologyHar
     assert action_type is not None
     assert action_type["id"] == "at_approve"
     assert disabled_action is None
+    assert action_by_id is not None
+    assert action_by_id["id"] == "at_approve"
+    assert disabled_action_by_id is not None
+    assert disabled_action_by_id["id"] == "at_disabled"
+    assert missing_action_by_id is None

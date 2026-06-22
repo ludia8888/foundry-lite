@@ -18,6 +18,9 @@ def test_postgres_rls_hides_dataset_and_object_rows_between_tenants(postgres_fix
     assert _rls_enabled(engine, db.datasets.name)
     assert _rls_enabled(engine, db.object_records.name)
     assert _rls_enabled(engine, db.dataset_schemas.name)
+    assert _rls_forced(engine, db.datasets.name)
+    assert _rls_forced(engine, db.object_records.name)
+    assert _rls_forced(engine, db.dataset_schemas.name)
     assert _visible_values(engine, role_name, "tenant-demo", db.datasets.c.id) == ["dataset-demo"]
     assert _visible_values(engine, role_name, "tenant-demo", db.object_records.c.id) == ["object-demo"]
     assert _visible_values(engine, role_name, "tenant-demo", db.dataset_schemas.c.id) == ["schema-demo"]
@@ -141,6 +144,15 @@ def _rls_enabled(engine: Engine, table_name: str) -> bool:
             {"table_name": table_name},
         ).scalar_one()
     return bool(enabled)
+
+
+def _rls_forced(engine: Engine, table_name: str) -> bool:
+    with engine.begin() as conn:
+        forced = conn.execute(
+            text("SELECT relforcerowsecurity FROM pg_class WHERE relname = :table_name"),
+            {"table_name": table_name},
+        ).scalar_one()
+    return bool(forced)
 
 
 def _visible_values(engine: Engine, role_name: str, tenant_id: str, column) -> list[str]:

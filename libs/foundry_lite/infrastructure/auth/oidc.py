@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, cast
@@ -21,7 +22,9 @@ __all__ = [
     "OIDC_AUDIENCE_ENV",
     "OIDC_DISCOVERY_JSON_ENV",
     "OIDC_ISSUER_ENV",
+    "OIDC_JWKS_REFRESH_INTERVAL_SECONDS_ENV",
     "OIDC_JWKS_JSON_ENV",
+    "OIDC_RETIRED_KEY_GRACE_SECONDS_ENV",
     "OIDC_REVOKED_JTIS_JSON_ENV",
     "OIDC_ROLES_CLAIM_ENV",
     "OIDC_SERVICE_ACCOUNT_CLAIM_ENV",
@@ -36,6 +39,8 @@ OIDC_DISCOVERY_JSON_ENV: Final = "FOUNDRY_LITE_OIDC_DISCOVERY_JSON"
 OIDC_ISSUER_ENV: Final = "FOUNDRY_LITE_OIDC_ISSUER"
 OIDC_AUDIENCE_ENV: Final = "FOUNDRY_LITE_OIDC_AUDIENCE"
 OIDC_JWKS_JSON_ENV: Final = "FOUNDRY_LITE_OIDC_JWKS_JSON"
+OIDC_JWKS_REFRESH_INTERVAL_SECONDS_ENV: Final = "FOUNDRY_LITE_OIDC_JWKS_REFRESH_INTERVAL_SECONDS"
+OIDC_RETIRED_KEY_GRACE_SECONDS_ENV: Final = "FOUNDRY_LITE_OIDC_RETIRED_KEY_GRACE_SECONDS"
 OIDC_REVOKED_JTIS_JSON_ENV: Final = "FOUNDRY_LITE_OIDC_REVOKED_JTIS_JSON"
 OIDC_TENANT_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_TENANT_CLAIM"
 OIDC_ROLES_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_ROLES_CLAIM"
@@ -51,6 +56,13 @@ _SUBJECT_CLAIM: Final = "sub"
 _JSON_REQUIRED: Final = object()
 
 JwksLoader = Callable[[], Mapping[str, object]]
+Clock = Callable[[], float]
+
+
+@dataclass(frozen=True)
+class _CachedJwk:
+    key: Any
+    retired_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +78,8 @@ class JwtOidcAuthConfig:
     revoked_token_ids: frozenset[str] = field(default_factory=frozenset)
     algorithm: str = _DEFAULT_ALGORITHM
     leeway_seconds: int = 0
+    jwks_refresh_interval_seconds: int = 300
+    retired_key_grace_seconds: int = 300
 
 
 @dataclass
@@ -75,7 +89,9 @@ class JwtOidcAuthProvider:
     config: JwtOidcAuthConfig
     jwks_loader: JwksLoader | None = None
     profile_name: str = "jwt-oidc-auth"
-    _key_cache: dict[str, Any] = field(default_factory=dict, init=False)
+    clock: Clock = time.time
+    _key_cache: dict[str, _CachedJwk] = field(default_factory=dict, init=False)
+    _last_jwks_refresh_at: float = field(default=0.0, init=False)
 
     def __post_init__(self) -> None:
         self._merge_jwks(self.config.jwks)
@@ -135,18 +151,55 @@ class JwtOidcAuthProvider:
         return cast(dict[str, object], payload)
 
     def _key_for_kid(self, kid: str) -> Any:
-        if kid in self._key_cache:
-            return self._key_cache[kid]
+        self._refresh_jwks_if_stale()
+        cached = self._cached_key(kid)
+        if cached is not None:
+            return cached
         if self.jwks_loader is not None:
-            self._merge_jwks(self.jwks_loader())
-        if kid not in self._key_cache:
+            self._refresh_jwks()
+        cached = self._cached_key(kid)
+        if cached is None:
             raise _permission_denied(self.profile_name, "unknown_key_id")
-        return self._key_cache[kid]
+        return cached
 
     def _merge_jwks(self, jwks: Mapping[str, object]) -> None:
+        now = self.clock()
+        incoming_kids: set[str] = set()
         for key_data in _jwks_keys(jwks):
             kid = _required_jwk_string(key_data, "kid")
-            self._key_cache[kid] = RSAAlgorithm.from_jwk(json.dumps(dict(key_data)))
+            incoming_kids.add(kid)
+            self._key_cache[kid] = _CachedJwk(RSAAlgorithm.from_jwk(json.dumps(dict(key_data))))
+        for kid, cached in tuple(self._key_cache.items()):
+            if kid in incoming_kids:
+                continue
+            if cached.retired_at is None:
+                self._key_cache[kid] = _CachedJwk(cached.key, retired_at=now)
+            elif self._is_retired_key_expired(cached, now):
+                del self._key_cache[kid]
+        self._last_jwks_refresh_at = now
+
+    def _refresh_jwks_if_stale(self) -> None:
+        if self.jwks_loader is None:
+            return
+        elapsed = self.clock() - self._last_jwks_refresh_at
+        if elapsed >= self.config.jwks_refresh_interval_seconds:
+            self._refresh_jwks()
+
+    def _refresh_jwks(self) -> None:
+        if self.jwks_loader is not None:
+            self._merge_jwks(self.jwks_loader())
+
+    def _cached_key(self, kid: str) -> Any | None:
+        cached = self._key_cache.get(kid)
+        if cached is None:
+            return None
+        if self._is_retired_key_expired(cached, self.clock()):
+            del self._key_cache[kid]
+            return None
+        return cached.key
+
+    def _is_retired_key_expired(self, cached: _CachedJwk, now: float) -> bool:
+        return cached.retired_at is not None and now - cached.retired_at > self.config.retired_key_grace_seconds
 
 
 def jwt_oidc_auth_provider_from_env(environ: Mapping[str, str] | None = None) -> JwtOidcAuthProvider:
@@ -168,6 +221,8 @@ def jwt_oidc_auth_provider_from_env(environ: Mapping[str, str] | None = None) ->
         roles_claim=_env_value(source, OIDC_ROLES_CLAIM_ENV) or _DEFAULT_ROLES_CLAIM,
         service_account_claim=_env_value(source, OIDC_SERVICE_ACCOUNT_CLAIM_ENV) or _DEFAULT_SERVICE_ACCOUNT_CLAIM,
         revoked_token_ids=_json_string_set_from_env(source, OIDC_REVOKED_JTIS_JSON_ENV),
+        jwks_refresh_interval_seconds=_int_from_env(source, OIDC_JWKS_REFRESH_INTERVAL_SECONDS_ENV, 300),
+        retired_key_grace_seconds=_int_from_env(source, OIDC_RETIRED_KEY_GRACE_SECONDS_ENV, 300),
     )
     return JwtOidcAuthProvider(config=config, jwks_loader=lambda: _json_object_from_env(source, OIDC_JWKS_JSON_ENV))
 
@@ -302,6 +357,16 @@ def _json_string_set_from_env(environ: Mapping[str, str], name: str) -> frozense
             raise ValueError(f"{name} must contain only non-empty strings")
         values.add(item.strip())
     return frozenset(values)
+
+
+def _int_from_env(environ: Mapping[str, str], name: str, default: int) -> int:
+    raw = _env_value(environ, name)
+    if raw is None:
+        return default
+    value = int(raw)
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
 
 
 def _env_value(environ: Mapping[str, str], name: str) -> str | None:

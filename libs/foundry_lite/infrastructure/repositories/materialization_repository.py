@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, cast
 
-from sqlalchemy import and_, func, insert, select
+from sqlalchemy import and_, func, insert, or_, select
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.materialization_repository import (
+    ActionLogSourceRow,
     ActionRunWatermark,
     MaterializationRecord,
     MaterializationRow,
@@ -126,6 +127,56 @@ class SqlAlchemyMaterializationRepository:
         if row is None:
             return {"completed_at": None, "action_run_id": None}
         return {"completed_at": str(row["completed_at"]), "action_run_id": str(row["id"])}
+
+    def action_log_rows_at_watermark(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        completed_at_lte: str | None,
+        action_run_id_lte: str | None,
+    ) -> list[ActionLogSourceRow]:
+        if completed_at_lte is None or action_run_id_lte is None:
+            return []
+        query = (
+            select(
+                db.action_runs.c.id.label("action_run_id"),
+                db.action_runs.c.actor_user_id,
+                db.action_runs.c.action_type_api_name,
+                db.action_runs.c.target_object_type_api_name,
+                db.action_runs.c.target_object_id,
+                db.action_runs.c.status,
+                db.action_runs.c.parameters,
+                db.action_runs.c.created_at,
+                db.object_edits.c.patch.label("edit_patch"),
+            )
+            .select_from(
+                db.action_runs.outerjoin(
+                    db.object_edits,
+                    and_(
+                        db.object_edits.c.tenant_id == db.action_runs.c.tenant_id,
+                        db.object_edits.c.action_run_id == db.action_runs.c.id,
+                    ),
+                )
+            )
+            .where(
+                and_(
+                    db.action_runs.c.tenant_id == tenant_id,
+                    db.action_runs.c.status == "succeeded",
+                    db.action_runs.c.completed_at.is_not(None),
+                    or_(
+                        db.action_runs.c.completed_at < completed_at_lte,
+                        and_(
+                            db.action_runs.c.completed_at == completed_at_lte,
+                            db.action_runs.c.id <= action_run_id_lte,
+                        ),
+                    ),
+                )
+            )
+            .order_by(db.action_runs.c.completed_at, db.action_runs.c.id)
+        )
+        rows = transaction.execute(query).mappings().all()
+        return [cast(ActionLogSourceRow, dict(row)) for row in rows]
 
     def latest_object_record_watermark(
         self,

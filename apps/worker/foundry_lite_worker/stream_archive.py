@@ -51,13 +51,14 @@ class StreamArchiveWorkerConfig:
     continuous_max_batches: int | None = None
     continuous_max_empty_polls: int = 1
 
-    def request_context(self) -> RequestContext:
+    def request_context(self, *, batch_number: int | None = None) -> RequestContext:
         tenant_id = _required_worker_value("tenant_id", self.tenant_id)
         actor_user_id = _required_worker_value("actor_user_id", self.actor_user_id)
+        request_id = self.request_id if batch_number is None else f"{self.request_id}:batch-{batch_number}"
         return RequestContext(
             tenant_id=tenant_id,
             actor_user_id=actor_user_id,
-            request_id=self.request_id,
+            request_id=request_id,
             roles=DEMO_ADMIN_ROLES,
         )
 
@@ -108,11 +109,25 @@ class ContinuousStreamArchiveResult:
     stop_reason: str
 
 
+@dataclass(frozen=True)
+class StreamArchiveWorkerRuntime:
+    foundry: FoundryLite
+
+
 def run_stream_archive_once(
     config: StreamArchiveWorkerConfig,
     *,
     stream_adapter: StreamAdapter | None = None,
 ) -> CommitResult | None:
+    runtime = build_stream_archive_runtime(config, stream_adapter=stream_adapter)
+    return _run_stream_archive_once(config, runtime, ctx=config.request_context())
+
+
+def build_stream_archive_runtime(
+    config: StreamArchiveWorkerConfig,
+    *,
+    stream_adapter: StreamAdapter | None = None,
+) -> StreamArchiveWorkerRuntime:
     dependencies = create_local_core_dependencies(
         db_url=config.db_url,
         storage_root=config.storage_root,
@@ -122,7 +137,16 @@ def run_stream_archive_once(
     foundry = FoundryLite(dependencies=replace(dependencies, stream_adapter=adapter))
     ctx = config.request_context()
     foundry.datasets.ensure(config.dataset_ref, ctx=ctx, primary_key=["event_id"])
-    return foundry.datasets.archive_stream_events(
+    return StreamArchiveWorkerRuntime(foundry=foundry)
+
+
+def _run_stream_archive_once(
+    config: StreamArchiveWorkerConfig,
+    runtime: StreamArchiveWorkerRuntime,
+    *,
+    ctx: RequestContext,
+) -> CommitResult | None:
+    return runtime.foundry.datasets.archive_stream_events(
         config.dataset_ref,
         stream=config.stream_config(),
         ctx=ctx,
@@ -137,6 +161,7 @@ def run_stream_archive_continuously(
     should_stop: Callable[[], bool] | None = None,
 ) -> ContinuousStreamArchiveResult:
     stop_requested = should_stop or _never_stop
+    runtime = build_stream_archive_runtime(config, stream_adapter=stream_adapter)
     iterations = 0
     archived_batches = 0
     empty_polls = 0
@@ -151,7 +176,7 @@ def run_stream_archive_continuously(
             return _continuous_result(
                 iterations, archived_batches, empty_polls, rows_archived, last_version_id, "max_batches"
             )
-        result = run_stream_archive_once(config, stream_adapter=stream_adapter)
+        result = _run_stream_archive_once(config, runtime, ctx=config.request_context(batch_number=iterations + 1))
         iterations += 1
         if result is None:
             empty_polls += 1

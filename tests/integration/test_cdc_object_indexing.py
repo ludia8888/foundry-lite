@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.ports import TabularRow
+from foundry_lite.application.ports import ObjectIndexRepository, ObjectRecordCdcUpdate, TabularRow, TransactionContext
 from foundry_lite.application.services.object_store.indexing import ObjectIndexingService
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure import schema as db
@@ -22,6 +22,27 @@ class EmptyReindexReadComputeAdapter(DuckDBComputeAdapter):
         if self.force_empty_reads:
             return []
         return super().rows_from_parquet(parquet_path)
+
+
+class _OneShotCdcCasMissRepository:
+    def __init__(self, wrapped: ObjectIndexRepository) -> None:
+        self._wrapped = wrapped
+        self._missed = False
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._wrapped, name)
+
+    def update_object_record_from_cdc(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: ObjectRecordCdcUpdate,
+    ) -> bool:
+        if self._missed:
+            return self._wrapped.update_object_record_from_cdc(transaction=transaction, record=record)
+        self._missed = True
+        assert self._wrapped.update_object_record_from_cdc(transaction=transaction, record=record) is True
+        return False
 
 
 def test_cdc_object_indexing_updates_tombstones_and_skips_stale_events(tmp_path: Path) -> None:
@@ -133,6 +154,56 @@ def test_cdc_duplicate_event_idempotent(tmp_path: Path) -> None:
     assert duplicate["objects_upserted"] == 0
     assert after_duplicate["objectVersion"] == after_first["objectVersion"]
     assert after_duplicate["properties"] == after_first["properties"]
+
+
+def test_cdc_same_lsn_events_use_stream_offset_tie_breaker(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    _seed_order_snapshot(foundry, tmp_path, ctx)
+    foundry.ontology.apply(str(_order_ontology(tmp_path)), ctx=ctx)
+    foundry.objects.reindex("Order", ctx=ctx)
+    first = _cdc_event(
+        "topic:0:60",
+        "u",
+        60,
+        after={"order_id": "O-1001", "status": "APPROVED_FIRST", "amount": 910},
+    )
+    second = _cdc_event(
+        "topic:0:61",
+        "u",
+        60,
+        after={"order_id": "O-1001", "status": "APPROVED_SECOND", "amount": 920},
+    )
+
+    result = foundry.objects.index_cdc_events("Order", [first, second], ctx=ctx)
+
+    current = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    assert result["objects_upserted"] == 2
+    assert result["events_skipped"] == 0
+    assert current["properties"]["status"] == "APPROVED_SECOND"
+
+
+def test_cdc_cas_miss_after_concurrent_winner_is_treated_as_skip(tmp_path: Path) -> None:
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = demo_admin_context()
+    _seed_order_snapshot(foundry, tmp_path, ctx)
+    foundry.ontology.apply(str(_order_ontology(tmp_path)), ctx=ctx)
+    foundry.objects.reindex("Order", ctx=ctx)
+    losing_foundry = FoundryLite(
+        dependencies=replace(
+            dependencies,
+            object_index_repository=_OneShotCdcCasMissRepository(dependencies.object_index_repository),
+        )
+    )
+    update = _cdc_event("topic:0:32", "u", 32, after={"order_id": "O-1001", "status": "APPROVED", "amount": 930})
+
+    result = losing_foundry.objects.index_cdc_events("Order", [update], ctx=ctx)
+
+    current = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    assert result["events_skipped"] == 1
+    assert result["objects_upserted"] == 0
+    assert current["properties"]["status"] == "APPROVED"
 
 
 def test_late_event_reopens_expected_materialization(tmp_path: Path) -> None:
@@ -392,7 +463,7 @@ def _cdc_event(
         "pk": {"order_id": row["order_id"]},
         "before": before,
         "after": after,
-        "ordering": {"lsn": lsn, "source_ts_ms": 1700000000000 + lsn, "table": "orders"},
+        "ordering": {"lsn": lsn, "offset": lsn, "source_ts_ms": 1700000000000 + lsn, "table": "orders"},
     }
 
 

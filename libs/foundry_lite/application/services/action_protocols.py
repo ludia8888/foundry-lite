@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol
 
-from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, TransactionContext
+from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, RuntimeRunType, TransactionContext
 from foundry_lite.application.ports.action_repository import ActionErrorPayload, ObjectProperties
 from foundry_lite.domain.context import RequestContext
 
@@ -25,6 +25,7 @@ class ActionObjectRecordLookup(Protocol):
         ctx: RequestContext,
         object_type_api_name: str,
         object_id: str,
+        object_type_id: str | None = None,
     ) -> ObjectRecordRow | None: ...
 
 
@@ -34,6 +35,13 @@ class ActionOntologyLookup(Protocol):
         conn: TransactionContext,
         ctx: RequestContext,
         api_name: str,
+    ) -> ActionTypeRow: ...
+
+    def _action_type_by_id(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_type_id: str,
     ) -> ActionTypeRow: ...
 
 
@@ -74,7 +82,22 @@ class ActionRuntimeBoundary(Protocol):
         *,
         idempotency_key: str,
         correlation_id: str,
-    ) -> None: ...
+    ) -> str | None: ...
+
+    def _run_relation(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        *,
+        source_run_type: RuntimeRunType,
+        source_run_id: str,
+        target_run_type: RuntimeRunType,
+        target_run_id: str,
+        relation: str,
+        resource_type: str,
+        resource_id: str,
+        metadata: Mapping[str, object] | None = None,
+    ) -> bool: ...
 
     def _error_payload(
         self,

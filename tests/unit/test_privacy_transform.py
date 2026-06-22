@@ -60,6 +60,18 @@ def test_anonymized_dataset_contains_no_raw_pii_samples() -> None:
     assert "202-555-0101" not in rendered
 
 
+def test_privacy_transform_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="unsupported privacy transform mode"):
+        PrivacyFieldRule("email", "hash")  # type: ignore[arg-type]
+
+
+def test_redact_text_requires_string_value() -> None:
+    plan = _privacy_plan()
+
+    with pytest.raises(ValueError, match="redact_text privacy field requires a string value"):
+        transform_privacy_rows([{"support_note": {"raw": "ada@example.com"}}], tenant_id="tenant-a", plan=plan)
+
+
 def test_privacy_transform_is_versioned_and_replayable() -> None:
     plan = _privacy_plan()
     rows = [{"customer_id": "C-100", "email": "ada@example.com"}]

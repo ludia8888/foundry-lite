@@ -31,6 +31,8 @@ def late_data_status(
     event_at = parse_iso_datetime(event_time, stream.event_time_field)
     processed = parse_iso_datetime(processed_at, "processed_at")
     lag_seconds = (processed - event_at).total_seconds()
+    if lag_seconds < -stream.clock_skew_seconds:
+        return "FUTURE_CLOCK_SKEW"
     if lag_seconds > stream.too_late_after_seconds:
         return "TOO_LATE"
     previous_watermark = previous_watermark_datetime(previous_metadata, stream)

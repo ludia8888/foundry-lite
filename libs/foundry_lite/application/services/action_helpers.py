@@ -105,6 +105,9 @@ def action_command(
             object_id=object_id,
             expected_object_version=expected_object_version,
             params=normalized_params,
+            simulate_writeback_failure=simulate_writeback_failure,
+            simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
+            simulate_writeback_compensation_required=simulate_writeback_compensation_required,
         ),
         simulate_writeback_failure=simulate_writeback_failure,
         simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
@@ -119,6 +122,9 @@ def action_request_fingerprint(
     object_id: str,
     expected_object_version: int,
     params: Mapping[str, object],
+    simulate_writeback_failure: bool = False,
+    simulate_writeback_outcome_unknown: bool = False,
+    simulate_writeback_compensation_required: bool = False,
 ) -> str:
     return _json_hash(
         {
@@ -128,20 +134,34 @@ def action_request_fingerprint(
             "objectId": object_id,
             "expectedObjectVersion": expected_object_version,
             "params": dict(params),
+            "simulateWritebackCompensationRequired": simulate_writeback_compensation_required,
+            "simulateWritebackFailure": simulate_writeback_failure,
+            "simulateWritebackOutcomeUnknown": simulate_writeback_outcome_unknown,
         }
     )
 
 
 def action_replay_response(existing: ActionRunRow) -> ActionApplyResponse:
-    return {
+    result = dict(existing["result"] or {})
+    response: ActionApplyResponse = {
         "actionRunId": existing["id"],
         "status": existing["status"],
-        "idempotentReplay": True,
         "target": {
             "objectType": existing["target_object_type_api_name"],
             "objectId": existing["target_object_id"],
         },
+        "idempotentReplay": True,
     }
+    object_edit_id = result.get("objectEditId")
+    if isinstance(object_edit_id, str):
+        response["objectEditId"] = object_edit_id
+    new_object_version = result.get("newObjectVersion")
+    if isinstance(new_object_version, int):
+        response["newObjectVersion"] = new_object_version
+    patch = result.get("patch")
+    if isinstance(patch, Mapping):
+        response["patch"] = patch
+    return response
 
 
 def audit_idempotency_conflict(

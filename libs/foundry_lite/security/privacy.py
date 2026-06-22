@@ -13,6 +13,7 @@ PrivacyTransformMode = Literal["passthrough", "pseudonymize", "anonymize", "reda
 
 ANONYMIZED_VALUE: Final = "***ANONYMIZED***"
 REDACTED_PII_VALUE: Final = "***REDACTED_PII***"
+PRIVACY_TRANSFORM_MODES: Final = frozenset({"passthrough", "pseudonymize", "anonymize", "redact_text"})
 PRIVACY_PROTECTING_MODES: Final = frozenset({"pseudonymize", "anonymize", "redact_text"})
 
 _EMAIL_RE: Final = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
@@ -29,6 +30,10 @@ class PrivacyFieldRule:
     mode: PrivacyTransformMode
     scope: str = "tenant"
     is_reversible: bool = False
+
+    def __post_init__(self) -> None:
+        if self.mode not in PRIVACY_TRANSFORM_MODES:
+            raise ValueError(f"unsupported privacy transform mode: {self.mode}")
 
 
 @dataclass(frozen=True)
@@ -302,9 +307,11 @@ def _transform_value(
         return pseudonym
     if rule.mode == "anonymize":
         return ANONYMIZED_VALUE
-    if rule.mode == "redact_text" and isinstance(value, str):
+    if rule.mode == "redact_text":
+        if not isinstance(value, str):
+            raise ValueError("redact_text privacy field requires a string value")
         return redact_text_pii(value)
-    return value
+    raise ValueError(f"unsupported privacy transform mode: {rule.mode}")
 
 
 def _pseudonym(

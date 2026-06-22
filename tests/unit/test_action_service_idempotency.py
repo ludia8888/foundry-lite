@@ -96,9 +96,31 @@ def test_action_service_replays_when_insert_loses_idempotency_race() -> None:
 
     assert response["idempotentReplay"] is True
     assert response["actionRunId"] == "action_run_winner"
+    assert response["objectEditId"] == "edit_winner"
+    assert response["newObjectVersion"] == 2
     assert response["target"] == {"objectType": "Order", "objectId": "O-1001"}
     assert repository.lookup_count == 1
     assert repository.insert_or_get_count == 1
+
+
+def test_action_request_fingerprint_includes_writeback_simulation_flags() -> None:
+    base = action_request_fingerprint(
+        action_api_name="ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=1,
+        params={"reason": "Inventory confirmed"},
+    )
+    simulated = action_request_fingerprint(
+        action_api_name="ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=1,
+        params={"reason": "Inventory confirmed"},
+        simulate_writeback_outcome_unknown=True,
+    )
+
+    assert simulated != base
 
 
 def _action_run_row() -> ActionRunRow:
@@ -122,6 +144,12 @@ def _action_run_row() -> ActionRunRow:
             expected_object_version=1,
             params={"reason": "Inventory confirmed"},
         ),
+        "result": {
+            "actionRunId": "action_run_winner",
+            "status": "succeeded",
+            "objectEditId": "edit_winner",
+            "newObjectVersion": 2,
+        },
         "error": None,
         "created_at": "2026-06-13T00:00:00Z",
         "completed_at": "2026-06-13T00:00:01Z",

@@ -60,6 +60,7 @@ class FoundryLite:
         self.dataset_quality_repository = dependencies.dataset_quality_repository
         self.compute_adapter = dependencies.compute_adapter
         self.metadata_repository = dependencies.metadata_repository
+        self.destructive_development_admin = dependencies.destructive_development_admin
         self.dataset_repository = dependencies.dataset_repository
         self.dataset_transaction_repository = dependencies.dataset_transaction_repository
         self.dataset_version_repository = dependencies.dataset_version_repository
@@ -93,7 +94,7 @@ class FoundryLite:
     def reset(self, *, confirm_dev: bool = False) -> None:
         if not confirm_dev:
             raise ValidationFailed("reset is destructive and requires confirm_dev=True")
-        self.metadata_repository.reset_schema()
+        self.destructive_development_admin.reset_schema()
         if self.storage_root.exists():
             shutil.rmtree(self.storage_root)
         self.storage_root.mkdir(parents=True, exist_ok=True)

@@ -15,10 +15,12 @@ class ObjectRecordsService(CoreService):
         ctx: RequestContext,
         object_type_api_name: str,
         object_id: str,
+        object_type_id: str | None = None,
     ) -> ObjectRecordRow | None:
         return self.object_read_repository.object_record(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             object_type_api_name=object_type_api_name,
             object_id=object_id,
+            object_type_id=object_type_id,
         )

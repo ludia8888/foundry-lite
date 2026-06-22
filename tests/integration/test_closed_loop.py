@@ -35,7 +35,7 @@ def test_supply_chain_closed_loop_updates_customer_risk_and_records_replay_state
     assert linked[0]["to"]["objectId"] == "C-100"
 
     clean_orders = foundry.datasets.inspect("clean.orders")
-    clean_order_lineage = foundry.operations.lineage(result["cleanOrdersVersion"])
+    clean_order_lineage = foundry.operations.lineage(result["cleanOrdersVersion"], ctx=demo_admin_context())
     assert clean_orders["manifest"]["files"][0]["row_count"] == 3
     assert any(
         edge["from_resource_id"] == result["rawOrdersVersion"]
@@ -75,13 +75,25 @@ def test_action_materialization_writes_dataset_versions_and_manifest_rows(
     action_log_manifest = foundry.datasets.inspect("ops.action_log", ctx=ctx)["manifest"]
     order_current_manifest = foundry.datasets.inspect("ops.order_current", ctx=ctx)["manifest"]
     customer_risk_rows = foundry.datasets.preview("clean.customers", ctx=ctx)
+    action_detail = foundry.operations.run_detail("action", action["actionRunId"], ctx=ctx)
     order_current_run = _materialization_run_for_version(foundry, ctx, order_current.version_id)
+    order_current_detail = foundry.operations.run_detail("materialization", str(order_current_run["id"]), ctx=ctx)
     downstream_lineage = foundry.operations.lineage(order_current.version_id, ctx=ctx)
     order_current_watermark = order_current_run["object_store_watermark"]
+    action_relations = {
+        (row["target_run_type"], row["relation"], row["metadata"].get("eventType"))
+        for row in action_detail["runRelations"]
+    }
+    materialization_relations = {
+        (row["target_run_type"], row["relation"], row["resource_id"]) for row in order_current_detail["runRelations"]
+    }
 
     assert action_log.version_id == action_log_versions[0]["id"]
     assert order_current.version_id == order_current_versions[0]["id"]
     assert action["status"] == "succeeded"
+    assert ("action_writeback", "writeback_attempt", None) in action_relations
+    assert ("outbox", "emitted", "action.run.committed") in action_relations
+    assert ("outbox", "emitted", order_current.version_id) in materialization_relations
     assert action_log.row_count == action_log_manifest["files"][0]["row_count"] == 1
     assert order_current.row_count == order_current_manifest["files"][0]["row_count"] == 3
     assert customer_risk.row_count == 2
@@ -525,6 +537,45 @@ def test_python_transform_cannot_access_raw_storage_path(tmp_path: Path) -> None
 
     with pytest.raises(NotFound):
         foundry.transforms.run("unsafe_python_transform", ctx=ctx)
+
+
+def test_transform_output_mode_fails_closed_without_changing_definition(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-mode"))
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.mode_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.mode_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.mode_orders", _csv(tmp_path, "mode_orders.csv", "O-1", 100), ctx=ctx)
+    sql_path = tmp_path / "mode_orders.sql"
+    sql_path.write_text("select order_id, amount from {{ input('raw.mode_orders') }}", encoding="utf-8")
+    foundry.transforms.register(
+        "mode_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.mode_orders"},
+        output_dataset_ref="clean.mode_orders",
+        ctx=ctx,
+    )
+
+    with pytest.raises(ValidationFailed, match="unsupported transform output mode") as exc_info:
+        foundry.transforms.register(
+            "mode_orders",
+            entrypoint=sql_path,
+            inputs={"orders": "raw.mode_orders"},
+            output_dataset_ref="clean.mode_orders",
+            mode="append",
+            ctx=ctx,
+        )
+
+    result = foundry.transforms.run("mode_orders", ctx=ctx)
+    output_rows = foundry.datasets.preview("clean.mode_orders", ctx=ctx, version=result.version_id)
+    transform_run = next(
+        run
+        for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"]
+        if run["output_version_id"] == result.version_id
+    )
+
+    assert exc_info.value.details == {"mode": "append", "supported_modes": ["snapshot"]}
+    assert [(row["order_id"], row["amount"]) for row in output_rows] == [("O-1", 100)]
+    assert transform_run["definition_snapshot"]["mode"] == "snapshot"
 
 
 class _BeforeExecuteTransformAdapter(DuckDBComputeAdapter):

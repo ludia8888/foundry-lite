@@ -39,10 +39,10 @@ from foundry_lite.application.ports import (
     TabularRow,
     TransformRetryResult,
 )
-from foundry_lite.application.ports.auth_provider import AuthProvider
+from foundry_lite.application.upload_limits import max_webhook_body_bytes
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import FoundryLiteError
-from foundry_lite.infrastructure.auth import AUTHORIZATION_HEADER, auth_provider_from_env
+from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
+from foundry_lite.infrastructure.auth import AUTHORIZATION_HEADER, AuthProvider, auth_provider_from_env
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.observability.metrics import prometheus_payload, record_http_request
 from foundry_lite.observability.tracing import (
@@ -50,7 +50,7 @@ from foundry_lite.observability.tracing import (
     instrument_fastapi_app,
     instrument_sqlalchemy_engine,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 configure_observability("foundry-lite-api")
 app = FastAPI(title="Foundry-lite API", version="0.1.0")
@@ -210,7 +210,7 @@ async def telemetry_middleware(request: Request, call_next: Callable[[Request], 
     finally:
         record_http_request(
             request.method,
-            request.url.path,
+            _metrics_route_path(request),
             status_code,
             time.perf_counter() - started_at,
         )
@@ -242,6 +242,14 @@ def _validation_errors(exc: RequestValidationError) -> list[ValidationErrorPaylo
         }
         for error in exc.errors()
     ]
+
+
+def _metrics_route_path(request: Request) -> str:
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    if isinstance(path, str) and path:
+        return path
+    return "__unmatched__"
 
 
 def _ctx(
@@ -849,14 +857,14 @@ async def ingest_webhook(
     request: Request,
     connector_name: str,
     resource_name: str,
-    payload: WebhookPayloadRequest,
     dataset_ref: str = Query(alias="datasetRef"),
     signature: str = Header(alias="X-Foundry-Lite-Signature"),
     signature_timestamp: str = Header(alias="X-Foundry-Lite-Timestamp"),
     event_id: str | None = Header(default=None, alias="X-Foundry-Lite-Event-ID"),
 ):
     try:
-        raw_body = await request.body()
+        raw_body = await _bounded_webhook_body(request)
+        payload = _webhook_payload_request(raw_body)
         ctx = _ctx(request)
         return foundry.datasets.ingest_webhook_event(
             dataset_ref,
@@ -893,6 +901,49 @@ def apply_action(
         )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
+
+
+async def _bounded_webhook_body(request: Request) -> bytes:
+    max_bytes = max_webhook_body_bytes()
+    content_length = _request_content_length(request)
+    if content_length is not None and content_length > max_bytes:
+        raise _webhook_body_too_large(content_length, max_bytes)
+    chunks: list[bytes] = []
+    size_bytes = 0
+    async for chunk in request.stream():
+        size_bytes += len(chunk)
+        if size_bytes > max_bytes:
+            raise _webhook_body_too_large(size_bytes, max_bytes)
+        if chunk:
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _request_content_length(request: Request) -> int | None:
+    value = request.headers.get("content-length")
+    if value is None:
+        return None
+    try:
+        content_length = int(value)
+    except ValueError as exc:
+        raise ValidationFailed("invalid content-length header", details={"header": "content-length"}) from exc
+    if content_length < 0:
+        raise ValidationFailed("invalid content-length header", details={"header": "content-length"})
+    return content_length
+
+
+def _webhook_body_too_large(size_bytes: int, max_bytes: int) -> ValidationFailed:
+    return ValidationFailed(
+        "webhook body exceeds configured size limit",
+        details={"size_bytes": size_bytes, "max_bytes": max_bytes},
+    )
+
+
+def _webhook_payload_request(raw_body: bytes) -> WebhookPayloadRequest:
+    try:
+        return WebhookPayloadRequest.model_validate_json(raw_body)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
 
 
 def _webhook_payload(value: WebhookPayloadRequest) -> JsonObject:

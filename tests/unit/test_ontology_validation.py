@@ -50,6 +50,56 @@ def test_ontology_definition_validation_rejects_missing_primary_key_column() -> 
     assert exc_info.value.details == {"column": "missing_order_id"}
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("type", "currency", "unsupported property type"),
+        ("source", "mirror", "unsupported property source"),
+        ("editPolicy", "last_write_wins", "unsupported edit policy"),
+        ("classification", "Finance", "unsupported classification"),
+    ],
+)
+def test_ontology_definition_validation_rejects_unknown_property_enums(
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    _status_property(definition)[field] = value
+
+    with pytest.raises(ValidationFailed, match=message) as exc_info:
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+    assert exc_info.value.details["property"] == "status"
+    assert value not in exc_info.value.details["allowed"]
+
+
+def test_ontology_definition_validation_rejects_unknown_link_cardinality() -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    definition["linkTypes"] = [
+        {
+            "apiName": "OrderCustomer",
+            "from": "Order",
+            "to": "Order",
+            "cardinality": "belongs_to",
+            "backing": {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "customer_id"},
+        }
+    ]
+
+    with pytest.raises(ValidationFailed, match="unsupported link cardinality") as exc_info:
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+    assert exc_info.value.details["linkType"] == "OrderCustomer"
+
+
+def test_ontology_definition_validation_rejects_unknown_backing_and_action_enums() -> None:
+    for mutation in (_set_object_backing_mode, _set_cdc_delete_policy, _set_action_parameter_type, _set_mutation_type):
+        definition = _yaml_definition(primary_key_column="order_id")
+        expected_message = mutation(definition)
+        with pytest.raises(ValidationFailed, match=expected_message):
+            validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+
 def test_ontology_apply_rejects_duplicate_object_api_name_before_persisting(
     foundry: FoundryLite,
     tmp_path: Path,
@@ -260,6 +310,59 @@ def _yaml_definition(primary_key_column: str) -> dict[str, object]:
             }
         ],
     }
+
+
+def _first_object_type(definition: dict[str, object]) -> dict[str, object]:
+    object_types = definition["objectTypes"]
+    assert isinstance(object_types, list)
+    item = object_types[0]
+    assert isinstance(item, dict)
+    return item
+
+
+def _status_property(definition: dict[str, object]) -> dict[str, object]:
+    properties = _first_object_type(definition)["properties"]
+    assert isinstance(properties, list)
+    item = properties[1]
+    assert isinstance(item, dict)
+    return item
+
+
+def _first_action(definition: dict[str, object]) -> dict[str, object]:
+    action_types = definition["actionTypes"]
+    assert isinstance(action_types, list)
+    item = action_types[0]
+    assert isinstance(item, dict)
+    return item
+
+
+def _set_object_backing_mode(definition: dict[str, object]) -> str:
+    backing = _first_object_type(definition)["backing"]
+    assert isinstance(backing, dict)
+    backing["mode"] = "streaming"
+    return "unsupported object backing mode"
+
+
+def _set_cdc_delete_policy(definition: dict[str, object]) -> str:
+    backing = _first_object_type(definition)["backing"]
+    assert isinstance(backing, dict)
+    backing["cdc"] = {"dataset": "clean.orders", "deletePolicy": "hard_delete"}
+    return "unsupported cdc delete policy"
+
+
+def _set_action_parameter_type(definition: dict[str, object]) -> str:
+    _first_action(definition)["parameters"] = [{"apiName": "reason", "type": "json"}]
+    return "unsupported action parameter type"
+
+
+def _set_mutation_type(definition: dict[str, object]) -> str:
+    action = _first_action(definition)
+    mutations = action["mutations"]
+    assert isinstance(mutations, list)
+    mutation = mutations[0]
+    assert isinstance(mutation, dict)
+    mutation["type"] = "increment"
+    return "unsupported action mutation type"
 
 
 def _object_type_row(api_name: str = "Order") -> ObjectTypeRow:

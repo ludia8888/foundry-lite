@@ -222,7 +222,7 @@ class DatasetRuntimeBoundary(Protocol):
         *,
         idempotency_key: str,
         correlation_id: str,
-    ) -> None: ...
+    ) -> str | None: ...
 
     def _error_payload(
         self,

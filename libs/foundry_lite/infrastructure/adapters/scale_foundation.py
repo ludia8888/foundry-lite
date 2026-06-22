@@ -21,6 +21,7 @@ from foundry_lite.application.ports.workflow_adapter import (
     WorkflowRun,
     WorkflowStartRequest,
     workflow_run_id,
+    workflow_run_id_matches_tenant,
 )
 
 
@@ -32,6 +33,7 @@ class LocalWorkflowAdapter:
     def __init__(self) -> None:
         self._runs_by_id: dict[str, WorkflowRun] = {}
         self._runs_by_idempotency: dict[str, WorkflowRun] = {}
+        self._run_tenants: dict[str, str] = {}
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -67,9 +69,14 @@ class LocalWorkflowAdapter:
         )
         self._runs_by_id[run.run_id] = run
         self._runs_by_idempotency[run_id] = run
+        self._run_tenants[run.run_id] = request.tenant_id
         return run
 
-    def workflow_run(self, run_id: str) -> WorkflowRun | None:
+    def workflow_run(self, tenant_id: str, run_id: str) -> WorkflowRun | None:
+        if not workflow_run_id_matches_tenant(tenant_id, run_id):
+            return None
+        if self._run_tenants.get(run_id) != tenant_id:
+            return None
         return self._runs_by_id.get(run_id)
 
 
@@ -223,12 +230,15 @@ class FakeSearchAdapter(LocalSearchAdapter):
     profile_name = "fake-search"
 
 
+ConnectorSnapshotKey = tuple[str, str, str]
+
+
 class LocalConnectorAdapter:
     """Configured in-memory connector boundary for local/demo execution."""
 
     profile_name = "local-connector"
 
-    def __init__(self, snapshots: Mapping[tuple[str, str], ConnectorSnapshot] | None = None) -> None:
+    def __init__(self, snapshots: Mapping[ConnectorSnapshotKey, ConnectorSnapshot] | None = None) -> None:
         self._snapshots = dict(snapshots or {})
 
     def failure_contract(self) -> AdapterFailureContract:
@@ -247,7 +257,7 @@ class LocalConnectorAdapter:
         )
 
     def snapshot(self, request: ConnectorSnapshotRequest) -> ConnectorSnapshot:
-        configured = self._snapshots.get((request.connector_name, request.resource_name))
+        configured = self._snapshots.get((request.tenant_id, request.connector_name, request.resource_name))
         if configured is not None:
             return configured
         return ConnectorSnapshot(

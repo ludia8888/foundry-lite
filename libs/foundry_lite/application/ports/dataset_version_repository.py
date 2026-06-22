@@ -43,6 +43,16 @@ class DatasetVersionRepository(Protocol):
         """Return a committed dataset version row by id inside the caller transaction."""
         ...
 
+    def version_by_dataset_id_and_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        dataset_id: str,
+        version_id: str,
+    ) -> DatasetVersionRow | None:
+        """Return a committed dataset version row by dataset id and version id."""
+        ...
+
     def list_versions(self, *, dataset_id: str) -> list[DatasetVersionRow]:
         """Return committed dataset versions in version order."""
         ...

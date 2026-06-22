@@ -115,8 +115,8 @@ class WorkflowAdapter(Protocol):
         """Start or idempotently return a workflow run."""
         ...
 
-    def workflow_run(self, run_id: str) -> WorkflowRun | None:
-        """Return a known workflow run, or None when the adapter has no record."""
+    def workflow_run(self, tenant_id: str, run_id: str) -> WorkflowRun | None:
+        """Return a tenant-scoped workflow run, or None when the adapter has no record."""
         ...
 
 
@@ -125,6 +125,13 @@ def workflow_run_id(request: WorkflowStartRequest) -> str:
     workflow = _stable_id_part(request.workflow_name)
     idempotency = _stable_id_part(request.idempotency_key)
     return f"flite:{tenant}:{workflow}:{idempotency}"
+
+
+def workflow_run_id_matches_tenant(tenant_id: str, run_id: str) -> bool:
+    parts = run_id.split(":")
+    if len(parts) != 4 or parts[0] != "flite":
+        return False
+    return parts[1] == _stable_id_part(tenant_id)
 
 
 def workflow_request_fingerprint(request: WorkflowStartRequest) -> str:

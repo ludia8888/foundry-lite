@@ -7,17 +7,22 @@ from foundry_lite.infrastructure import schema as db
 
 
 class SqlAlchemyMetadataRepository:
-    """SQLAlchemy implementation for bootstrap metadata lifecycle."""
+    """SQLAlchemy implementation for non-destructive metadata bootstrap."""
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, *, allow_schema_mutation: bool = True) -> None:
         self.engine = engine
+        self.allow_schema_mutation = allow_schema_mutation
 
     def initialize_schema(self) -> None:
+        self._require_schema_mutation_allowed("initialize_schema")
         db.create_database(self.engine)
 
-    def reset_schema(self) -> None:
-        db.metadata.drop_all(self.engine)
-        db.create_database(self.engine)
+    def _require_schema_mutation_allowed(self, operation: str) -> None:
+        if self.allow_schema_mutation:
+            return
+        raise SchemaMutationDisabledError(
+            f"metadata repository {operation} is disabled for this runtime profile; run Alembic migrations instead"
+        )
 
     def ensure_tenant(self, *, tenant_id: str, name: str, created_at: str) -> None:
         with self.engine.begin() as conn:
@@ -52,3 +57,28 @@ class SqlAlchemyMetadataRepository:
                         created_at=created_at,
                     )
                 )
+
+
+class SqlAlchemyDestructiveDevelopmentAdmin:
+    """SQLAlchemy implementation for explicit development-only schema reset."""
+
+    def __init__(self, engine: Engine, *, allow_schema_mutation: bool = True) -> None:
+        self.engine = engine
+        self.allow_schema_mutation = allow_schema_mutation
+
+    def reset_schema(self) -> None:
+        self._require_schema_mutation_allowed("reset_schema")
+        db.metadata.drop_all(self.engine)
+        db.create_database(self.engine)
+
+    def _require_schema_mutation_allowed(self, operation: str) -> None:
+        if self.allow_schema_mutation:
+            return
+        raise SchemaMutationDisabledError(
+            f"destructive development admin {operation} is disabled for this runtime profile; "
+            "run Alembic migrations instead"
+        )
+
+
+class SchemaMutationDisabledError(RuntimeError):
+    """Raised when app/runtime code tries to mutate schema outside dev/test."""

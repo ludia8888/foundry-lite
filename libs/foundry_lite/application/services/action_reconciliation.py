@@ -133,7 +133,8 @@ class ActionWritebackReconciliationWorkflow:
         now = _now()
         response = _reconciled_writeback_response(writeback, remote_status, remote_resource_id, now)
         if not self._try_mark_writeback_reconciled(conn, writeback, response, now):
-            return _already_reconciled_result(writeback, remote_status, remote_resource_id)
+            current = self._required_writeback(conn, ctx, writeback.writeback_id)
+            return _already_reconciled_result(current, remote_status, remote_resource_id)
         mutation = self._commit_reconciled_action(conn, ctx, action_run)
         self._audit_action_reconciled(conn, ctx, action_run["id"], writeback, response, mutation)
         return _reconciled_result(action_run["id"], writeback.writeback_id, remote_status, remote_resource_id, mutation)
@@ -162,12 +163,13 @@ class ActionWritebackReconciliationWorkflow:
         ctx: RequestContext,
         action_run: ActionRunRow,
     ) -> ActionApplyResponse:
-        action_type = self.ontology_service._active_action_type(conn, ctx, action_run["action_type_api_name"])
+        action_type = self.ontology_service._action_type_by_id(conn, ctx, action_run["action_type_id"])
         record = self.object_records_service._object_record(
             conn,
             ctx,
             action_run["target_object_type_api_name"],
             action_run["target_object_id"],
+            object_type_id=action_run["target_object_type_id"],
         )
         if record is None:
             raise NotFound("target object not found")
@@ -268,11 +270,12 @@ def _already_reconciled_result(
     remote_status: str,
     remote_resource_id: str,
 ) -> ActionWritebackReconciliationResult:
+    response = dict(writeback.response or {})
     return {
         "actionRunId": writeback.action_run_id,
         "writebackId": writeback.writeback_id,
         "status": "reconciled",
-        "remoteStatus": remote_status,
-        "remoteResourceId": remote_resource_id,
+        "remoteStatus": str(response.get("last_observed_status") or remote_status),
+        "remoteResourceId": str(response.get("remote_resource_id") or remote_resource_id),
         "alreadyReconciled": True,
     }

@@ -127,9 +127,11 @@ class DuckDBComputeAdapter:
                 return self._not_null_check(con, parquet_path, check)
             if check_type == "unique":
                 return self._unique_check(con, parquet_path, check)
+            if check_type == "unique_tuple":
+                return self._unique_tuple_check(con, parquet_path, check)
         finally:
             con.close()
-        return {"check": check_type, "status": "passed", "note": "unsupported check treated as noop"}
+        raise ValidationFailed("unsupported dataset quality check type", details={"check_type": check_type})
 
     def execute_transform(self, plan: TransformPlan) -> None:
         if not isinstance(plan, SqlTransformPlan):
@@ -205,6 +207,21 @@ class DuckDBComputeAdapter:
             "duplicate_groups": duplicate_count,
         }
 
+    def _unique_tuple_check(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        parquet_path: Path,
+        check: DatasetCheckConfig,
+    ) -> DatasetCheckResult:
+        columns = _check_columns(check)
+        duplicate_count = self._duplicate_tuple_group_count(con, parquet_path, columns)
+        return {
+            "check": str(check["type"]),
+            "status": "failed" if duplicate_count else "passed",
+            "columns": columns,
+            "duplicate_groups": duplicate_count,
+        }
+
     def _duplicate_group_count(self, con: duckdb.DuckDBPyConnection, parquet_path: Path, column: str) -> int:
         column_identifier = _sql_identifier(column)
         duplicate_check_sql = (
@@ -215,6 +232,23 @@ class DuckDBComputeAdapter:
         return _required_int_cell(
             con.execute(duplicate_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
             "unique health check",
+        )
+
+    def _duplicate_tuple_group_count(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        parquet_path: Path,
+        columns: list[str],
+    ) -> int:
+        column_identifiers = ", ".join(_sql_identifier(column) for column in columns)
+        duplicate_check_sql = (
+            "select count(*) from (select "  # nosec B608
+            f"{column_identifiers}, count(*) c from read_parquet(?) "
+            f"group by {column_identifiers} having c > 1)"
+        )
+        return _required_int_cell(
+            con.execute(duplicate_check_sql, [str(parquet_path)]).fetchone(),  # nosec B608
+            "unique tuple health check",
         )
 
 
@@ -241,3 +275,13 @@ def _required_int_cell(row: tuple[object, ...] | None, operation: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool):
         raise ValidationFailed(f"{operation} did not return an integer", details={"value": str(value)})
     return value
+
+
+def _check_columns(check: DatasetCheckConfig) -> list[str]:
+    raw_columns = check.get("columns")
+    if not isinstance(raw_columns, Sequence) or isinstance(raw_columns, str | bytes):
+        raise ValidationFailed("unique tuple check requires columns", details={"check": dict(check)})
+    columns = [column for column in raw_columns if isinstance(column, str)]
+    if not columns or len(columns) != len(raw_columns):
+        raise ValidationFailed("unique tuple check requires string columns", details={"check": dict(check)})
+    return columns

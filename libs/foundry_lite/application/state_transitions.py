@@ -50,7 +50,8 @@ def classify_transition_miss(
     return TransitionResult("stale_state", transition, current_status)
 
 
-DATASET_TRANSACTION_ABORT = StatusTransition(("OPEN",), "ABORTED")
+DATASET_TRANSACTION_ABORTING = StatusTransition(("OPEN",), "ABORTING")
+DATASET_TRANSACTION_ABORT = StatusTransition(("OPEN", "ABORTING"), "ABORTED")
 DATASET_TRANSACTION_COMMIT = StatusTransition(("OPEN",), "COMMITTED")
 SYNC_RUN_COMMITTED = StatusTransition(("EXTRACTING",), "COMMITTED")
 SYNC_RUN_FAILED = StatusTransition(("EXTRACTING",), "FAILED")

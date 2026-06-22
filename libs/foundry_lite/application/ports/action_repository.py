@@ -8,6 +8,7 @@ from foundry_lite.application.ports.transaction_context import StatusTransition,
 
 ActionParameters = Mapping[str, object]
 ActionErrorPayload = Mapping[str, object]
+ActionResultPayload = Mapping[str, object]
 ActionWritebackPayload = Mapping[str, object]
 ObjectProperties = Mapping[str, object]
 ObjectPatch = Mapping[str, object]
@@ -29,6 +30,7 @@ class ActionRunRow(TypedDict):
     status: str
     idempotency_key: str
     request_fingerprint: str
+    result: ActionResultPayload | None
     error: ActionErrorPayload | None
     created_at: str
     completed_at: str | None
@@ -49,6 +51,7 @@ class ActionRunRecord:
     status: str
     idempotency_key: str
     request_fingerprint: str
+    result: ActionResultPayload | None
     error: ActionErrorPayload | None
     created_at: str
     completed_at: str | None
@@ -150,6 +153,7 @@ class ActionRepository(Protocol):
         transition: StatusTransition,
         error: ActionErrorPayload | None,
         completed_at: str,
+        result: ActionResultPayload | None = None,
     ) -> bool:
         """CAS an action run from an allowed state into a terminal state."""
         ...

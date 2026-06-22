@@ -64,6 +64,7 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
         ctx: RequestContext | None = None,
     ) -> ObjectIndexRebuildResult:
         ctx = ctx or RequestContext()
+        self._require_object_index(ctx, "object_type", object_type_api_name)
         self.runtime_service._require_write_traffic_open(
             ctx,
             operation="index_rebuild",
@@ -100,6 +101,7 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
         expected_hash: str | None = None,
     ) -> ObjectIndexShadowRebuildResult:
         ctx = ctx or RequestContext()
+        self._require_object_index(ctx, "object_type", object_type_api_name)
         self.runtime_service._require_write_traffic_open(
             ctx,
             operation="index_shadow_rebuild",
@@ -136,6 +138,7 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
         ctx: RequestContext | None = None,
     ) -> ObjectIndexRebuildResult:
         ctx = ctx or RequestContext()
+        self._require_object_index(ctx, "index_run", index_run_id)
         self.runtime_service._require_or_audit(ctx, "operations:retry", "index_run", index_run_id)
         self.runtime_service._require_write_traffic_open(
             ctx,
@@ -162,6 +165,9 @@ class ObjectIndexingService(ObjectIndexingRebuildMixin, ObjectIndexingCdcMixin, 
             with self.engine.begin() as conn:
                 self._mark_index_run_failed(conn, ctx, plan.run_id, exc)
             raise
+
+    def _require_object_index(self, ctx: RequestContext, resource_type: str, resource_id: str) -> None:
+        self.runtime_service._require_or_audit(ctx, "object:index", resource_type, resource_id)
 
     def _read_index_source_rows(self, plan: ObjectIndexRebuildPlan) -> Sequence[TabularRow]:
         parquet_path = self.dataset_transaction_service._version_file_path(plan.dataset_version)

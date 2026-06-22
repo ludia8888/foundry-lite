@@ -7,7 +7,7 @@ from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import ObjectQueryItem, ObjectQueryResult, ObjectRecordRow
 from foundry_lite.application.services.object_store.set_members import collect_dynamic_object_set_members
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import NotFound, ValidationFailed
+from foundry_lite.domain.errors import NotFound, PermissionDenied, ValidationFailed
 from foundry_lite.infrastructure import schema as db
 
 from tests.conftest import prepare_indexed_demo
@@ -95,6 +95,31 @@ def test_static_object_set_rechecks_object_permission(foundry: FoundryLite) -> N
     assert payload["objectIds"] == ["O-1001"]
     assert item["objectId"] == "O-1001"
     assert item["properties"]["margin"] == "***MASKED***"
+
+
+def test_object_set_manage_permission_is_required_for_mutations(foundry: FoundryLite) -> None:
+    admin = prepare_indexed_demo(foundry)
+    viewer = RequestContext(actor_user_id="viewer-user", roles=("viewer",))
+    public_set = foundry.objects.create_set(
+        "Public Pending Orders",
+        "Order",
+        set_type="static",
+        object_ids=["O-1001"],
+        visibility="public",
+        ctx=admin,
+    )
+
+    assert foundry.objects.get_set(public_set["id"], ctx=viewer)["objectIds"] == ["O-1001"]
+    with pytest.raises(PermissionDenied):
+        foundry.objects.create_set(
+            "Viewer Mutation",
+            "Order",
+            set_type="static",
+            object_ids=["O-1001"],
+            ctx=viewer,
+        )
+    with pytest.raises(PermissionDenied):
+        foundry.objects.cleanup_expired_sets(ctx=viewer)
 
 
 class _PagedObjectQuery:

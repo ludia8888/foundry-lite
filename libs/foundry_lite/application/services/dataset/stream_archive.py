@@ -80,6 +80,8 @@ def prepare_stream_archive_batch(
     events: Sequence[StreamEvent],
     stream: StreamArchiveConfig,
     previous_metadata: Mapping[str, object] | None = None,
+    *,
+    expected_tenant_id: str | None = None,
 ) -> StreamArchivePreparedBatch:
     _validate_error_threshold(stream.max_record_error_ratio)
     validate_late_data_policy(stream)
@@ -88,6 +90,7 @@ def prepare_stream_archive_batch(
     for event in events:
         source_event_id = stream_event_id(event, stream)
         try:
+            _validate_event_tenant(event, expected_tenant_id)
             rows.append(stream_event_row(event, stream, previous_metadata))
         except ValidationFailed as exc:
             dead_letters.append(_dead_letter_stream_event(event, source_event_id, stream, exc))
@@ -212,6 +215,11 @@ def stream_event_row(
             "stream archive event is too late for source policy",
             details={"field": stream.event_time_field, "late_data_status": late_status},
         )
+    if late_status == "FUTURE_CLOCK_SKEW":
+        raise ValidationFailed(
+            "stream archive event time is too far in the future for source policy",
+            details={"field": stream.event_time_field, "late_data_status": late_status},
+        )
     row = {
         "event_id": stream_event_id(event, stream),
         "stream": event.stream_name,
@@ -334,12 +342,29 @@ def _validate_error_threshold(value: float) -> None:
 def _dead_letter_error_kind(exc: ValidationFailed) -> str:
     if exc.details.get("late_data_status") == "TOO_LATE":
         return "TOO_LATE"
+    if exc.details.get("late_data_status") == "FUTURE_CLOCK_SKEW":
+        return "FUTURE_CLOCK_SKEW"
     field = exc.details.get("field")
+    if field == "tenant_id":
+        return "TENANT_MISMATCH"
     if field == "pk":
         return "IDENTITY_ERROR"
     if field == "ordering":
         return "ORDERING_ERROR"
     return exc.code
+
+
+def _validate_event_tenant(event: StreamEvent, expected_tenant_id: str | None) -> None:
+    if expected_tenant_id is None or event.tenant_id == expected_tenant_id:
+        return
+    raise ValidationFailed(
+        "stream event tenant does not match request tenant",
+        details={
+            "field": "tenant_id",
+            "expected_tenant_id": expected_tenant_id,
+            "event_tenant_id": event.tenant_id,
+        },
+    )
 
 
 def _cdc_envelope_fields(payload: Mapping[str, object]) -> Mapping[str, object]:

@@ -44,11 +44,11 @@ class RetryableStartFailureWorkflowAdapter:
             error={"kind": "unavailable", "retryable": True},
         )
 
-    def workflow_run(self, run_id: str) -> WorkflowRun | None:
+    def workflow_run(self, tenant_id: str, run_id: str) -> WorkflowRun | None:
         return None
 
 
-def test_workflow_adapter_contract_starts_and_reads_run(adapter: WorkflowAdapter) -> None:
+def test_workflow_adapter_contract_starts_and_reads_tenant_scoped_run(adapter: WorkflowAdapter) -> None:
     request = WorkflowStartRequest(
         workflow_name="sync_orders",
         tenant_id="tenant-demo",
@@ -58,12 +58,14 @@ def test_workflow_adapter_contract_starts_and_reads_run(adapter: WorkflowAdapter
     )
 
     run = adapter.start_workflow(request)
-    fetched = adapter.workflow_run(run.run_id)
+    fetched = adapter.workflow_run(request.tenant_id, run.run_id)
+    cross_tenant = adapter.workflow_run("tenant-other", run.run_id)
 
     assert run.status == "succeeded"
     assert run.workflow_name == "sync_orders"
     assert run.output["request_id"] == "req-workflow-1"
     assert fetched == run
+    assert cross_tenant is None
 
 
 def test_workflow_adapter_contract_is_idempotent(adapter: WorkflowAdapter) -> None:
@@ -79,7 +81,7 @@ def test_workflow_adapter_contract_is_idempotent(adapter: WorkflowAdapter) -> No
     second = adapter.start_workflow(request)
 
     assert second == first
-    assert adapter.workflow_run("missing") is None
+    assert adapter.workflow_run(request.tenant_id, "missing") is None
 
 
 def test_workflow_adapter_contract_namespaces_idempotency_by_tenant_and_workflow(adapter: WorkflowAdapter) -> None:
@@ -110,6 +112,8 @@ def test_workflow_adapter_contract_namespaces_idempotency_by_tenant_and_workflow
     assert len({run.run_id for run in runs}) == 3
     assert all(run.run_id.startswith("flite:") for run in runs)
     assert all("daily-sync" not in run.run_id for run in runs)
+    assert adapter.workflow_run(base.tenant_id, runs[0].run_id) == runs[0]
+    assert adapter.workflow_run(other_tenant.tenant_id, runs[0].run_id) is None
 
 
 def test_product_workflow_operations_contract_starts_connector_sync_and_audits(
@@ -150,12 +154,17 @@ def test_product_workflow_operations_contract_starts_connector_sync_and_audits(
     assert duplicate["foundryRunId"] == run["foundryRunId"]
     workflow_runs = foundry.operations.query_runs(ctx=ctx, run_type="workflow")["workflowRuns"]
     detail = foundry.operations.run_detail("audit", str(run["foundryRunId"]), ctx=ctx)
+    workflow_detail = foundry.operations.run_detail("workflow", str(run["workflowRunId"]), ctx=ctx)
     audits = foundry.operations.query_runs(ctx=ctx, run_type="audit")["auditEvents"]
     workflow_audits = [event for event in audits if event["resource_id"] == run["workflowRunId"]]
     assert [row["id"] for row in workflow_runs] == [run["workflowRunId"]]
     assert workflow_runs[0]["status"] == "succeeded"
     assert detail["row"]["resource_id"] == run["workflowRunId"]
     assert detail["row"]["after_ref"]["workflowName"] == CONNECTOR_SYNC_WORKFLOW_NAME
+    assert any(
+        relation["target_run_id"] == run["foundryRunId"] and relation["relation"] == "audited_by"
+        for relation in workflow_detail["runRelations"]
+    )
     assert len(workflow_audits) == 1
 
 

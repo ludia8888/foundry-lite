@@ -236,6 +236,27 @@ class DatasetTransactionRepository(Protocol):
         """Return OPEN dataset transactions created before a cutoff for stale-tx recovery."""
         ...
 
+    def list_recoverable_transactions(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        created_before: str,
+    ) -> list[DatasetTransactionRow]:
+        """Return stale OPEN/ABORTING dataset transactions for watchdog recovery."""
+        ...
+
+    def claim_stale_open_transaction(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        transaction_id: str,
+        metadata: DatasetTransactionMetadata,
+    ) -> DatasetTransactionRow | None:
+        """CAS a stale OPEN transaction into ABORTING before staging cleanup."""
+        ...
+
     def abort_transaction(
         self,
         *,

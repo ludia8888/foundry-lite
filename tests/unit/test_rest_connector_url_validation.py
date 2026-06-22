@@ -1,0 +1,63 @@
+"""Unit tests for the REST connector SSRF / private-network URL guard.
+
+These exercise the pure validation/parsing helpers (no DNS): IP literals,
+legacy-encoded IPv4 forms, and private/local hostnames are all rejected before
+any network resolution, while public IP literals are accepted.
+"""
+
+from __future__ import annotations
+
+import pytest
+from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.infrastructure.adapters.rest_connector import _validated_http_url
+
+
+def test_accepts_public_ip_literal() -> None:
+    assert _validated_http_url("https://8.8.8.8/path") == "https://8.8.8.8/path"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ftp://example.com/x",  # non-http scheme
+        "https:///path",  # missing host
+    ],
+)
+def test_rejects_bad_scheme_or_missing_host(url: str) -> None:
+    with pytest.raises(ValidationFailed, match="http"):
+        _validated_http_url(url)
+
+
+def test_rejects_invalid_port() -> None:
+    with pytest.raises(ValidationFailed, match="port"):
+        _validated_http_url("https://8.8.8.8:notaport/x")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost/x",  # local hostname
+        "http://app.localhost/x",  # *.localhost
+        "http://metadata.google.internal/x",  # cloud metadata hostname
+        "http://service.internal/x",  # *.internal
+        "http://printer.local/x",  # *.local
+        "http://127.0.0.1/x",  # loopback literal
+        "http://[::1]/x",  # ipv6 loopback literal
+        "http://10.0.0.1/x",  # private
+        "http://192.168.1.1/x",  # private
+        "http://172.16.0.1/x",  # private
+        "http://169.254.169.254/x",  # link-local (cloud metadata IP)
+        "http://0.0.0.0/x",  # unspecified
+        "http://224.0.0.1/x",  # multicast
+        "http://2130706433/x",  # decimal-encoded 127.0.0.1
+        "http://0x7f.0x0.0x0.0x1/x",  # hex-encoded 127.0.0.1 octets
+        "http://0177.0.0.1/x",  # octal-encoded first octet (127)
+    ],
+)
+def test_rejects_private_or_local_targets(url: str) -> None:
+    with pytest.raises(ValidationFailed, match="private or local"):
+        _validated_http_url(url)
+
+
+def test_allows_private_when_explicitly_enabled() -> None:
+    assert _validated_http_url("http://127.0.0.1/x", allow_private_network=True) == "http://127.0.0.1/x"

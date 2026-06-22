@@ -34,6 +34,7 @@ class ActionRunWatermark(TypedDict):
 
 
 ObjectRecordVersionRow = Mapping[str, object]
+ActionLogSourceRow = Mapping[str, object]
 
 
 class MaterializationRow(TypedDict):
@@ -137,6 +138,17 @@ class MaterializationRepository(Protocol):
         tenant_id: str,
     ) -> ActionRunWatermark:
         """Return the latest completed action cursor for a tenant."""
+        ...
+
+    def action_log_rows_at_watermark(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        completed_at_lte: str | None,
+        action_run_id_lte: str | None,
+    ) -> list[ActionLogSourceRow]:
+        """Return succeeded action-log source rows bounded by a completed-action cursor."""
         ...
 
     def latest_object_record_watermark(

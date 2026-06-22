@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 from sqlalchemy import and_, func, insert, select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.dataset_quality_repository import (
@@ -85,18 +87,7 @@ class SqlAlchemyDatasetQualityRepository:
         return cast(DatasetCheckRow, dict(row)) if row else None
 
     def insert_check(self, *, transaction: Any, record: DatasetCheckRecord) -> None:
-        transaction.execute(
-            insert(db.dataset_checks).values(
-                id=record.check_id,
-                tenant_id=record.tenant_id,
-                dataset_id=record.dataset_id,
-                name=record.name,
-                check_type=record.check_type,
-                config=record.config,
-                severity=record.severity,
-                enabled=record.enabled,
-            )
-        )
+        transaction.execute(_dataset_check_insert_or_ignore(transaction, record))
 
     def insert_check_result(self, *, transaction: Any, record: DatasetCheckResultRecord) -> None:
         transaction.execute(
@@ -137,3 +128,28 @@ class SqlAlchemyDatasetQualityRepository:
             .all()
         )
         return [cast(DatasetCheckResultRow, dict(row)) for row in rows]
+
+
+def _dataset_check_insert_or_ignore(transaction: Any, record: DatasetCheckRecord) -> Any:
+    values = _dataset_check_values(record)
+    conflict_columns = ["tenant_id", "dataset_id", "name"]
+    if transaction.dialect.name == "postgresql":
+        return (
+            postgres_insert(db.dataset_checks).values(**values).on_conflict_do_nothing(index_elements=conflict_columns)
+        )
+    if transaction.dialect.name == "sqlite":
+        return sqlite_insert(db.dataset_checks).values(**values).on_conflict_do_nothing(index_elements=conflict_columns)
+    return insert(db.dataset_checks).values(**values)
+
+
+def _dataset_check_values(record: DatasetCheckRecord) -> dict[str, object]:
+    return {
+        "id": record.check_id,
+        "tenant_id": record.tenant_id,
+        "dataset_id": record.dataset_id,
+        "name": record.name,
+        "check_type": record.check_type,
+        "config": record.config,
+        "severity": record.severity,
+        "enabled": record.enabled,
+    }

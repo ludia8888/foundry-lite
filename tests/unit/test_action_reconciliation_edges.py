@@ -51,7 +51,16 @@ def test_reconciliation_results_include_mutation_and_idempotent_replay_evidence(
             "newObjectVersion": 3,
         },
     )
-    already = _already_reconciled_result(_writeback(), "succeeded", "remote-1")
+    already = _already_reconciled_result(
+        _writeback(
+            response={
+                "last_observed_status": "succeeded",
+                "remote_resource_id": "persisted-remote",
+            }
+        ),
+        "succeeded",
+        "caller-remote",
+    )
 
     assert reconciled["objectEditId"] == "edit-1"
     assert reconciled["newObjectVersion"] == 3
@@ -60,7 +69,7 @@ def test_reconciliation_results_include_mutation_and_idempotent_replay_evidence(
         "writebackId": "writeback-1",
         "status": "reconciled",
         "remoteStatus": "succeeded",
-        "remoteResourceId": "remote-1",
+        "remoteResourceId": "persisted-remote",
         "alreadyReconciled": True,
     }
 

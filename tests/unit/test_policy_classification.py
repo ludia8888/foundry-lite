@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+import pytest
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import PermissionDenied
 from foundry_lite.security.policy import PolicyService
 
 _ROWS: list[dict[str, object]] = [
@@ -72,8 +74,52 @@ def test_finance_and_admin_bypass_display_masking_but_audit_still_redacts() -> N
         assert policy.sensitive_property_names(ctx, "Customer") == {"ssn"}
 
 
-def test_unwired_policy_masks_nothing() -> None:
+def test_unwired_policy_fails_closed_by_default() -> None:
     policy = PolicyService()
     viewer = RequestContext(roles=("viewer",))
+
+    with pytest.raises(PermissionDenied, match="classification provider is not configured"):
+        policy.masked_property_names(viewer, "Order")
+
+
+def test_unwired_policy_can_be_explicitly_allowed_for_narrow_unit_tests() -> None:
+    policy = PolicyService(allow_unwired_classification_provider=True)
+    viewer = RequestContext(roles=("viewer",))
+
     assert policy.masked_property_names(viewer, "Order") == set()
     assert policy.masked_column_names(viewer) == set()
+
+
+def test_unknown_property_classification_fails_closed() -> None:
+    policy = _policy(
+        [
+            {
+                "object_type_api_name": "Order",
+                "property_api_name": "margin",
+                "column_name": "margin",
+                "classification": "Finance",
+            }
+        ]
+    )
+    viewer = RequestContext(roles=("viewer",))
+
+    with pytest.raises(PermissionDenied, match="unsupported property classification"):
+        policy.masked_property_names(viewer, "Order")
+
+
+def test_object_index_permission_is_operator_only() -> None:
+    policy = PolicyService()
+
+    assert policy.decide(RequestContext(roles=("data_engineer",)), "object:index").allowed is True
+    assert policy.decide(RequestContext(roles=("ops_manager",)), "object:index").allowed is True
+    assert policy.decide(RequestContext(roles=("viewer",)), "object:index").allowed is False
+    assert policy.decide(RequestContext(roles=("finance",)), "object:index").allowed is False
+
+
+def test_object_set_manage_permission_is_operator_only() -> None:
+    policy = PolicyService()
+
+    assert policy.decide(RequestContext(roles=("data_engineer",)), "object:set:manage").allowed is True
+    assert policy.decide(RequestContext(roles=("ops_manager",)), "object:set:manage").allowed is True
+    assert policy.decide(RequestContext(roles=("viewer",)), "object:set:manage").allowed is False
+    assert policy.decide(RequestContext(roles=("finance",)), "object:set:manage").allowed is False

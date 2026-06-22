@@ -91,6 +91,7 @@ ledger에 남아야 한다.
 | `docs/frontend-backend-surface-contract.md` | `source-of-truth` | Frontend/backend contract | 프론트는 named generated SDK를 통해서만 current API를 사용한다. |
 | `docs/quality-gate-roadmap.md` | `source-of-truth` | Gate roadmap and operational diagnostics | 각 gate가 막는 위험, release/runtime lane, operator evidence, diagnostics artifact 해석법을 함께 설명한다. |
 | `docs/commit-point-risk-register.md` | `risk-registry` | Commit-point risks | commit, idempotency, partial failure, cleanup 위험을 추적한다. |
+| `docs/backend-findings-crosscheck-2026-06-22.md` | `risk-registry` | Backend review finding cross-check | 외부 backend review finding을 현재 코드, tests, gates와 대조해 fixed/partial/still-valid 위험으로 분류한다. |
 | `foundry_lite_development_plan_ko_sprintified.md` | `source-of-truth` | Product and architecture plan | 장기 목표와 설계 방향의 가장 큰 원본이다. |
 | `foundry_lite_sprint_breakdown_ko.md` | `source-of-truth` | Sprint breakdown | 스프린트별 scope and status table을 관리한다. |
 | `foundry_lite_python_engineering_guidelines_ko.md` | `standard` | Python/backend engineering standards | 구현 방식, 테스트 기준, anti-pattern을 통제한다. |

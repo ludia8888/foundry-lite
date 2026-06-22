@@ -365,6 +365,19 @@ export type RuntimeRunLink = {
   status: string | null;
   operationPath: string;
 };
+export type RuntimeRunRelation = {
+  id: string;
+  tenant_id: string;
+  source_run_type: RuntimeRunType;
+  source_run_id: string;
+  target_run_type: RuntimeRunType;
+  target_run_id: string;
+  relation: string;
+  resource_type: string;
+  resource_id: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
 export type RuntimeRunQueryFilters = {
   runType?: RuntimeRunType | string;
   status?: string;
@@ -402,6 +415,7 @@ export type RuntimeRunDetail = {
   relatedAuditEvents: RuntimeRow[];
   relatedObjectEdits: RuntimeRow[];
   relatedActionWritebacks: RuntimeRow[];
+  runRelations: RuntimeRunRelation[];
   lineageEdges: RuntimeRow[];
   datasetTransaction?: RuntimeRow | null;
   lateData?: Record<string, unknown> | null;

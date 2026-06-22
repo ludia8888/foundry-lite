@@ -14,6 +14,8 @@ from foundry_lite.domain.errors import ValidationFailed
 CURSOR_PREFIX = "oqc1."
 CURSOR_SIGNING_KEY_ENV = "FOUNDRY_LITE_OBJECT_QUERY_CURSOR_SIGNING_KEY"
 DEFAULT_CURSOR_SIGNING_KEY = "foundry-lite-object-query-cursor-v1"
+RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
+PROTECTED_RUNTIME_PROFILES = frozenset({"production", "prod", "staging", "stage"})
 
 
 def encode_object_query_cursor(
@@ -99,8 +101,27 @@ def _require_valid_signature(payload: Mapping[str, object]) -> None:
 
 def _payload_signature(payload: Mapping[str, object]) -> str:
     raw = _canonical_payload(_unsigned_payload(payload)).encode("utf-8")
-    signing_key = os.getenv(CURSOR_SIGNING_KEY_ENV, DEFAULT_CURSOR_SIGNING_KEY).encode("utf-8")
+    signing_key = _cursor_signing_key(os.environ)
     return hmac.new(signing_key, raw, hashlib.sha256).hexdigest()[:32]
+
+
+def require_object_query_cursor_signing_key_for_runtime(environ: Mapping[str, str] | None = None) -> None:
+    env = os.environ if environ is None else environ
+    profile = str(env.get(RUNTIME_PROFILE_ENV, "local")).casefold()
+    signing_key = env.get(CURSOR_SIGNING_KEY_ENV)
+    if profile in PROTECTED_RUNTIME_PROFILES and not signing_key:
+        raise ValidationFailed(
+            "object query cursor signing key is required for protected runtime profiles",
+            details={
+                "env_var": CURSOR_SIGNING_KEY_ENV,
+                "runtime_profile": profile,
+            },
+        )
+
+
+def _cursor_signing_key(environ: Mapping[str, str]) -> bytes:
+    require_object_query_cursor_signing_key_for_runtime(environ)
+    return environ.get(CURSOR_SIGNING_KEY_ENV, DEFAULT_CURSOR_SIGNING_KEY).encode("utf-8")
 
 
 def _unsigned_payload(payload: Mapping[str, object]) -> dict[str, object]:

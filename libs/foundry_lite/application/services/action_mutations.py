@@ -53,6 +53,7 @@ class ActionMutationUnitOfWork:
         previous_values = dict(previous_action_values(record, patch))
         self._update_action_target(conn, record, patch)
         edit_id = self._insert_object_edit(conn, ctx, action_run_id, record, patch, previous_values, idempotency_key)
+        response = action_success_response(action_run_id, record, edit_id, patch)
         updated = self.action_repository.update_action_run_terminal(
             transaction=conn,
             tenant_id=ctx.tenant_id,
@@ -60,12 +61,13 @@ class ActionMutationUnitOfWork:
             transition=transition,
             error=None,
             completed_at=_now(),
+            result=response,
         )
         if not updated:
             raise ConflictDetected("action run terminal state changed concurrently")
         self._publish_action_commit_events(conn, ctx, action_run_id, record, edit_id)
         self._audit_action_commit(conn, ctx, action_run_id, record, previous_values, patch, edit_id)
-        return action_success_response(action_run_id, record, edit_id, patch)
+        return response
 
     def _update_action_target(
         self,
@@ -138,17 +140,47 @@ class ActionMutationUnitOfWork:
             "editId": edit_id,
         }
         for event_type in ["action.run.committed", "object.edit.committed", "object.changed"]:
-            aggregate_type = "action_run" if event_type == "action.run.committed" else "object"
-            aggregate_id = action_run_id if event_type == "action.run.committed" else record["object_id"]
-            self.runtime_service._outbox(
+            self._publish_commit_event(conn, ctx, action_run_id, record, edit_id, payload, event_type)
+
+    def _publish_commit_event(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        record: ObjectRecordRow,
+        edit_id: str,
+        payload: Mapping[str, object],
+        event_type: str,
+    ) -> None:
+        aggregate_type = "action_run" if event_type == "action.run.committed" else "object"
+        aggregate_id = action_run_id if event_type == "action.run.committed" else record["object_id"]
+        outbox_event_id = self.runtime_service._outbox(
+            conn,
+            ctx,
+            event_type,
+            aggregate_type,
+            aggregate_id,
+            payload,
+            idempotency_key=f"{event_type}:{action_run_id}",
+            correlation_id=action_run_id,
+        )
+        if outbox_event_id is not None:
+            self.runtime_service._run_relation(
                 conn,
                 ctx,
-                event_type,
-                aggregate_type,
-                aggregate_id,
-                payload,
-                idempotency_key=f"{event_type}:{action_run_id}",
-                correlation_id=action_run_id,
+                source_run_type="action",
+                source_run_id=action_run_id,
+                target_run_type="outbox",
+                target_run_id=outbox_event_id,
+                relation="emitted",
+                resource_type="outbox_event",
+                resource_id=outbox_event_id,
+                metadata={
+                    "eventType": event_type,
+                    "aggregateType": aggregate_type,
+                    "aggregateId": aggregate_id,
+                    "objectEditId": edit_id,
+                },
             )
 
     def _audit_action_commit(

@@ -71,7 +71,7 @@ class OntologyRuntimeBoundary(Protocol):
         *,
         idempotency_key: str,
         correlation_id: str,
-    ) -> None: ...
+    ) -> str | None: ...
 
 
 def require_ontology_write_open(

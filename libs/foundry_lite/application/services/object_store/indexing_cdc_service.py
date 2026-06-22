@@ -38,6 +38,7 @@ from foundry_lite.application.services.object_store.indexing_types import (
     object_index_cdc_response,
 )
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected
 
 
 class ObjectIndexingCdcMixin(ABC):
@@ -98,6 +99,9 @@ class ObjectIndexingCdcMixin(ABC):
         source_dataset_version_id: str,
     ) -> None: ...
 
+    @abstractmethod
+    def _require_object_index(self, ctx: RequestContext, resource_type: str, resource_id: str) -> None: ...
+
     def index_cdc_events(
         self,
         object_type_api_name: str,
@@ -106,6 +110,7 @@ class ObjectIndexingCdcMixin(ABC):
         ctx: RequestContext | None = None,
     ) -> ObjectIndexCdcResult:
         ctx = ctx or RequestContext()
+        self._require_object_index(ctx, "object_type", object_type_api_name)
         self.runtime_service._require_write_traffic_open(
             ctx,
             operation="index_cdc_events",
@@ -215,9 +220,9 @@ class ObjectIndexingCdcMixin(ABC):
         if existing is not None and cdc_event_should_skip(existing, event):
             return "skipped"
         if event.op == "d":
-            self._apply_cdc_delete(conn, ctx, object_type, event, existing)
-            return "deleted"
-        self._apply_cdc_upsert(conn, ctx, object_type, event, existing)
+            return "deleted" if self._apply_cdc_delete(conn, ctx, object_type, event, existing) else "skipped"
+        if not self._apply_cdc_upsert(conn, ctx, object_type, event, existing):
+            return "skipped"
         return "upserted"
 
     def _apply_cdc_upsert(
@@ -227,10 +232,10 @@ class ObjectIndexingCdcMixin(ABC):
         object_type: ObjectTypeRow,
         event: ObjectCdcEvent,
         existing: ObjectRecordRow | None,
-    ) -> None:
+    ) -> bool:
         if existing is None:
             self._insert_cdc_object_record(conn, ctx, object_type, event, deleted=False)
-            return
+            return True
         self._record_conflicts_for_base_update(
             conn,
             ctx,
@@ -240,7 +245,7 @@ class ObjectIndexingCdcMixin(ABC):
             event.base_patch,
             source_dataset_version_id=cdc_source_dataset_version_id(event),
         )
-        self._update_cdc_object_record(conn, ctx, object_type, event, existing, deleted=False)
+        return self._update_cdc_object_record(conn, ctx, object_type, event, existing, deleted=False)
 
     def _apply_cdc_delete(
         self,
@@ -249,11 +254,11 @@ class ObjectIndexingCdcMixin(ABC):
         object_type: ObjectTypeRow,
         event: ObjectCdcEvent,
         existing: ObjectRecordRow | None,
-    ) -> None:
+    ) -> bool:
         if existing is None:
             self._insert_cdc_object_record(conn, ctx, object_type, event, deleted=True)
-            return
-        self._update_cdc_object_record(conn, ctx, object_type, event, existing, deleted=True)
+            return True
+        return self._update_cdc_object_record(conn, ctx, object_type, event, existing, deleted=True)
 
     def _insert_cdc_object_record(
         self,
@@ -293,25 +298,21 @@ class ObjectIndexingCdcMixin(ABC):
         existing: ObjectRecordRow,
         *,
         deleted: bool,
-    ) -> None:
+    ) -> bool:
         base_patch = dict(event.base_patch or existing["base_properties"])
         current = dict(self._merge_properties(conn, object_type["id"], base_patch, existing["edit_properties"]))
-        self.object_index_repository.update_object_record_from_cdc(
+        updated = self.object_index_repository.update_object_record_from_cdc(
             transaction=conn,
-            record=ObjectRecordCdcUpdate(
-                record_id=existing["id"],
-                tenant_id=ctx.tenant_id,
-                properties=current,
-                base_properties=base_patch,
-                property_versions=cdc_property_versions(existing, event, current),
-                source_dataset_version_id=cdc_source_dataset_version_id(event),
-                source_hash=cdc_source_hash(event, base_patch),
-                object_version=existing["object_version"] + 1,
-                deleted=deleted,
-                deletion_reason=_cdc_deletion_reason(deleted),
-                updated_at=_now(),
-            ),
+            record=_build_cdc_object_record_update(existing, ctx, current, base_patch, event, deleted=deleted),
         )
+        if not updated:
+            refreshed = self.object_records_service._object_record(conn, ctx, object_type["api_name"], event.object_id)
+            if refreshed is not None and cdc_event_should_skip(refreshed, event):
+                return False
+            raise ConflictDetected(
+                "CDC object record changed during update",
+                details={"objectType": object_type["api_name"], "objectId": event.object_id},
+            )
         self._emit_object_changed(
             conn,
             ctx,
@@ -319,6 +320,7 @@ class ObjectIndexingCdcMixin(ABC):
             event.object_id,
             cdc_source_dataset_version_id(event),
         )
+        return True
 
     def _audit_cdc_index(
         self,
@@ -377,4 +379,30 @@ def _cdc_object_insert(
         updated_at=now,
         index_version=index_version,
         is_active=True,
+    )
+
+
+def _build_cdc_object_record_update(
+    existing: ObjectRecordRow,
+    ctx: RequestContext,
+    current: dict[str, object],
+    base_patch: dict[str, object],
+    event: ObjectCdcEvent,
+    *,
+    deleted: bool,
+) -> ObjectRecordCdcUpdate:
+    """Build the ObjectRecordCdcUpdate record for a CDC object update."""
+    return ObjectRecordCdcUpdate(
+        record_id=existing["id"],
+        tenant_id=ctx.tenant_id,
+        expected_object_version=existing["object_version"],
+        properties=current,
+        base_properties=base_patch,
+        property_versions=cdc_property_versions(existing, event, current),
+        source_dataset_version_id=cdc_source_dataset_version_id(event),
+        source_hash=cdc_source_hash(event, base_patch),
+        object_version=existing["object_version"] + 1,
+        deleted=deleted,
+        deletion_reason=_cdc_deletion_reason(deleted),
+        updated_at=_now(),
     )

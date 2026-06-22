@@ -33,7 +33,7 @@ class _AllowPolicy:
 
 class _OntologyLookup:
     def _active_object_type(self, *_args: object) -> dict[str, object]:
-        return {"id": "ot_order"}
+        return {"id": "ot_order", "config": {}, "api_name": "Order"}
 
     def _properties_for_object_type(self, *_args: object) -> list[dict[str, object]]:
         return [{"api_name": "amount"}, {"api_name": "status"}]
@@ -50,12 +50,14 @@ class _ObjectIndexRepository:
 class _PagedObjectRepository:
     def __init__(self) -> None:
         self.requested_limit: int | None = None
+        self.requested_property_object_type_id: object | None = None
 
     def active_object_rows(self, **_kwargs: object) -> list[ObjectRecordRow]:
         raise AssertionError("object query must not read the full row set")
 
     def query_active_object_rows(self, **kwargs: object) -> list[ObjectRecordRow]:
         self.requested_limit = int(kwargs["limit"])
+        self.requested_property_object_type_id = kwargs.get("property_object_type_id")
         return [_object_row("O-1", 10.0), _object_row("O-2", 9.0)]
 
 
@@ -85,6 +87,7 @@ def test_object_query_service_requests_db_keyset_page_with_one_row_lookahead() -
     )
 
     assert repository.requested_limit == 2
+    assert repository.requested_property_object_type_id == "ot_order"
     assert [item["objectId"] for item in result["items"]] == ["O-1"]
     assert result["nextCursor"] is not None
 

@@ -5,8 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from foundry_lite.application.ports import TransactionContext
-from foundry_lite.application.ports.ontology_repository import (
+from foundry_lite.application.ports import (
     ActionParameterSchema,
     ActionTypeRecord,
     ActionTypeRow,
@@ -21,16 +20,15 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyVersionRow,
     PropertyTypeRecord,
     PropertyTypeRow,
+    TransactionContext,
 )
-from foundry_lite.application.primitives import (
-    _new_id,
-    _now,
-)
+from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.ontology_migration import (
     OntologyMigrationPlan,
     plan_ontology_migration,
 )
+from foundry_lite.application.services.ontology_migration_types import object_type_serving_config
 from foundry_lite.application.services.ontology_protocols import (
     OntologyDatasetRegistry,
     OntologyDatasetVersions,
@@ -90,7 +88,7 @@ class OntologyService(CoreService):
             version_number = self._next_ontology_version(conn, ctx)
             ontology_version_id = _new_id("ont")
             self._insert_draft_ontology_version(conn, ctx, ontology_version_id, version_number)
-            object_map = self._import_object_types(conn, ctx, ontology_version_id, definition)
+            object_map = self._import_object_types(conn, ctx, ontology_version_id, definition, migration_plan)
             self._import_link_types(conn, ctx, ontology_version_id, definition, object_map)
             self._import_action_types(conn, ctx, ontology_version_id, definition, object_map)
             self._validate_ontology(conn, ctx, ontology_version_id)
@@ -235,12 +233,12 @@ class OntologyService(CoreService):
         ctx: RequestContext,
         ontology_version_id: str,
         definition: YamlObject,
+        migration_plan: OntologyMigrationPlan,
     ) -> dict[str, str]:
-        """Import object types and return their API-name to row-id map."""
         object_map: dict[str, str] = {}
         for item in mapping_sequence(definition, "objectTypes"):
             api_name = required_str(item, "apiName")
-            object_id = self._insert_object_type(conn, ctx, ontology_version_id, item)
+            object_id = self._insert_object_type(conn, ctx, ontology_version_id, item, migration_plan)
             object_map[api_name] = object_id
             self._import_properties_for_object_type(conn, ctx, object_id, item)
         return object_map
@@ -251,8 +249,8 @@ class OntologyService(CoreService):
         ctx: RequestContext,
         ontology_version_id: str,
         item: YamlObject,
+        migration_plan: OntologyMigrationPlan,
     ) -> str:
-        """Persist one ontology object type row and return its generated id."""
         object_id = _new_id("otype")
         api_name = required_str(item, "apiName")
         self.ontology_repository.insert_object_type(
@@ -266,7 +264,7 @@ class OntologyService(CoreService):
                 description=optional_str(item, "description"),
                 primary_key_property=required_str(item, "primaryKey"),
                 backing=object_type_backing(item),
-                config={},
+                config=object_type_serving_config(migration_plan, api_name),
             ),
         )
         return object_id
@@ -465,12 +463,7 @@ class OntologyService(CoreService):
             raise NotFound("active ontology not found")
         return row
 
-    def _active_object_type(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        api_name: str,
-    ) -> ObjectTypeRow:
+    def _active_object_type(self, conn: TransactionContext, ctx: RequestContext, api_name: str) -> ObjectTypeRow:
         active = self._active_ontology_version(conn, ctx)
         row = self.ontology_repository.object_type_for_version(
             transaction=conn,
@@ -482,12 +475,7 @@ class OntologyService(CoreService):
             raise NotFound("object type not found", details={"api_name": api_name})
         return row
 
-    def _active_action_type(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        api_name: str,
-    ) -> ActionTypeRow:
+    def _active_action_type(self, conn: TransactionContext, ctx: RequestContext, api_name: str) -> ActionTypeRow:
         active = self._active_ontology_version(conn, ctx)
         row = self.ontology_repository.enabled_action_type_for_version(
             transaction=conn,
@@ -497,4 +485,12 @@ class OntologyService(CoreService):
         )
         if row is None:
             raise NotFound("action type not found", details={"api_name": api_name})
+        return row
+
+    def _action_type_by_id(self, conn: TransactionContext, ctx: RequestContext, action_type_id: str) -> ActionTypeRow:
+        row = self.ontology_repository.action_type_by_id(
+            transaction=conn, tenant_id=ctx.tenant_id, action_type_id=action_type_id
+        )
+        if row is None:
+            raise NotFound("action type not found", details={"action_type_id": action_type_id})
         return row

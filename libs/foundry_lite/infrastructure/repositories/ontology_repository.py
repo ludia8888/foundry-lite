@@ -307,3 +307,21 @@ class SqlAlchemyOntologyRepository:
             .first()
         )
         return cast(ActionTypeRow, dict(row)) if row else None
+
+    def action_type_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        action_type_id: str,
+    ) -> ActionTypeRow | None:
+        row = (
+            transaction.execute(
+                select(db.action_types).where(
+                    and_(db.action_types.c.tenant_id == tenant_id, db.action_types.c.id == action_type_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(ActionTypeRow, dict(row)) if row else None

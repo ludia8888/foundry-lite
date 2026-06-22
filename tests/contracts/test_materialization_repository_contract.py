@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 import pytest
 from foundry_lite.application.ports.materialization_repository import (
+    ActionLogSourceRow,
     ActionRunWatermark,
     MaterializationRecord,
     MaterializationRepository,
@@ -35,7 +36,17 @@ class MaterializationHarness(Protocol):
 
     def materialization_run_rows(self) -> list[dict[str, Any]]: ...
 
-    def seed_action_run(self, *, run_id: str, created_at: str, completed_at: str | None = None) -> None: ...
+    def seed_action_run(
+        self,
+        *,
+        run_id: str,
+        created_at: str,
+        completed_at: str | None = None,
+        status: str = "succeeded",
+        tenant_id: str = "tenant-test",
+    ) -> None: ...
+
+    def seed_object_edit(self, *, edit_id: str, action_run_id: str, patch: Mapping[str, object]) -> None: ...
 
     def seed_object_record(
         self,
@@ -52,6 +63,8 @@ class FakeMaterializationRepository:
     materializations: list[MaterializationRow] = field(default_factory=list)
     materialization_runs: list[dict[str, Any]] = field(default_factory=list)
     action_run_watermarks: list[dict[str, str | None]] = field(default_factory=list)
+    action_log_rows: list[dict[str, object]] = field(default_factory=list)
+    object_edit_patches: dict[str, Mapping[str, object]] = field(default_factory=dict)
     object_record_watermarks: list[dict[str, object]] = field(default_factory=list)
     object_record_versions: list[dict[str, object]] = field(default_factory=list)
     active_index_versions: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -149,6 +162,36 @@ class FakeMaterializationRepository:
         latest = max(rows, key=lambda row: (str(row["completed_at"]), str(row["action_run_id"])))
         return {"completed_at": str(latest["completed_at"]), "action_run_id": str(latest["action_run_id"])}
 
+    def action_log_rows_at_watermark(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        completed_at_lte: str | None,
+        action_run_id_lte: str | None,
+    ) -> list[ActionLogSourceRow]:
+        del transaction
+        if completed_at_lte is None or action_run_id_lte is None:
+            return []
+        rows = [
+            {
+                **row,
+                "edit_patch": dict(self.object_edit_patches.get(str(row["action_run_id"]), {})),
+            }
+            for row in self.action_log_rows
+            if row["tenant_id"] == tenant_id
+            and row["status"] == "succeeded"
+            and isinstance(row["completed_at"], str)
+            and (str(row["completed_at"]), str(row["action_run_id"])) <= (completed_at_lte, action_run_id_lte)
+        ]
+        return [
+            dict(row)
+            for row in sorted(
+                rows,
+                key=lambda row: (str(row["completed_at"]), str(row["action_run_id"])),
+            )
+        ]
+
     def latest_object_record_watermark(
         self,
         *,
@@ -218,12 +261,35 @@ class FakeMaterializationHarness:
         assert isinstance(repository, FakeMaterializationRepository)
         return [dict(row) for row in repository.materialization_runs]
 
-    def seed_action_run(self, *, run_id: str, created_at: str, completed_at: str | None = None) -> None:
+    def seed_action_run(
+        self,
+        *,
+        run_id: str,
+        created_at: str,
+        completed_at: str | None = None,
+        status: str = "succeeded",
+        tenant_id: str = "tenant-test",
+    ) -> None:
         repository = self.repository
         assert isinstance(repository, FakeMaterializationRepository)
         repository.action_run_watermarks.append(
-            {"tenant_id": "tenant-test", "action_run_id": run_id, "completed_at": completed_at or created_at}
+            {"tenant_id": tenant_id, "action_run_id": run_id, "completed_at": completed_at or created_at}
         )
+        repository.action_log_rows.append(
+            _action_log_source_row(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                created_at=created_at,
+                completed_at=completed_at or created_at,
+                status=status,
+            )
+        )
+
+    def seed_object_edit(self, *, edit_id: str, action_run_id: str, patch: Mapping[str, object]) -> None:
+        del edit_id
+        repository = self.repository
+        assert isinstance(repository, FakeMaterializationRepository)
+        repository.object_edit_patches[action_run_id] = dict(patch)
 
     def seed_object_record(
         self,
@@ -291,12 +357,20 @@ class SqlAlchemyMaterializationHarness:
         with self.engine.begin() as conn:
             return [dict(row) for row in conn.execute(select(db.materialization_runs)).mappings().all()]
 
-    def seed_action_run(self, *, run_id: str, created_at: str, completed_at: str | None = None) -> None:
+    def seed_action_run(
+        self,
+        *,
+        run_id: str,
+        created_at: str,
+        completed_at: str | None = None,
+        status: str = "succeeded",
+        tenant_id: str = "tenant-test",
+    ) -> None:
         with self.engine.begin() as conn:
             conn.execute(
                 db.action_runs.insert().values(
                     id=run_id,
-                    tenant_id="tenant-test",
+                    tenant_id=tenant_id,
                     action_type_id="at_test",
                     action_type_api_name="TestAction",
                     actor_user_id="user-test",
@@ -305,12 +379,31 @@ class SqlAlchemyMaterializationHarness:
                     target_object_id="obj_test",
                     expected_object_version=1,
                     parameters={},
-                    status="succeeded",
+                    status=status,
                     idempotency_key=f"key-{run_id}",
                     request_fingerprint=f"fingerprint-{run_id}",
                     error=None,
                     created_at=created_at,
                     completed_at=completed_at or created_at,
+                )
+            )
+
+    def seed_object_edit(self, *, edit_id: str, action_run_id: str, patch: Mapping[str, object]) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                db.object_edits.insert().values(
+                    id=edit_id,
+                    tenant_id="tenant-test",
+                    action_run_id=action_run_id,
+                    object_type_id="ot_test",
+                    object_type_api_name="TestObject",
+                    object_id="obj_test",
+                    edit_type="set_property",
+                    patch=dict(patch),
+                    previous_values={},
+                    actor_user_id="user-test",
+                    idempotency_key=f"edit-{action_run_id}",
+                    created_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -391,6 +484,28 @@ def _materialization_run_record() -> MaterializationRunRecord:
         created_at="2025-01-01T00:00:00Z",
         completed_at=None,
     )
+
+
+def _action_log_source_row(
+    *,
+    run_id: str,
+    tenant_id: str,
+    created_at: str,
+    completed_at: str,
+    status: str,
+) -> dict[str, object]:
+    return {
+        "tenant_id": tenant_id,
+        "action_run_id": run_id,
+        "actor_user_id": "user-test",
+        "action_type_api_name": "TestAction",
+        "target_object_type_api_name": "TestObject",
+        "target_object_id": "obj_test",
+        "status": status,
+        "parameters": {},
+        "created_at": created_at,
+        "completed_at": completed_at,
+    }
 
 
 def _object_record_version_row(
@@ -609,6 +724,47 @@ def test_materialization_created_at_tie_does_not_skip_rows(harness: Materializat
         watermark = harness.repository.latest_action_run_watermark(transaction=txn, tenant_id="tenant-test")
 
     assert watermark == {"completed_at": "2025-01-02T00:00:00Z", "action_run_id": "ar_tie_b"}
+
+
+def test_action_log_rows_at_watermark_filters_successful_rows_and_joins_edits(
+    harness: MaterializationHarness,
+) -> None:
+    harness.seed_action_run(run_id="ar_a", created_at="2025-01-01T00:00:00Z")
+    harness.seed_action_run(run_id="ar_b", created_at="2025-01-02T00:00:00Z")
+    harness.seed_action_run(run_id="ar_c", created_at="2025-01-02T00:00:00Z")
+    harness.seed_action_run(run_id="ar_failed", created_at="2025-01-01T12:00:00Z", status="failed")
+    harness.seed_action_run(
+        run_id="ar_other_tenant",
+        created_at="2025-01-01T00:00:00Z",
+        tenant_id="tenant-other",
+    )
+    harness.seed_object_edit(edit_id="edit_a", action_run_id="ar_a", patch={"status": "APPROVED"})
+    harness.seed_object_edit(edit_id="edit_b", action_run_id="ar_b", patch={"status": "REVIEWED"})
+
+    with harness.transaction() as txn:
+        rows = harness.repository.action_log_rows_at_watermark(
+            transaction=txn,
+            tenant_id="tenant-test",
+            completed_at_lte="2025-01-02T00:00:00Z",
+            action_run_id_lte="ar_b",
+        )
+
+    assert [row["action_run_id"] for row in rows] == ["ar_a", "ar_b"]
+    assert [row["edit_patch"] for row in rows] == [{"status": "APPROVED"}, {"status": "REVIEWED"}]
+
+
+def test_action_log_rows_at_watermark_handles_empty_cursor(harness: MaterializationHarness) -> None:
+    harness.seed_action_run(run_id="ar_a", created_at="2025-01-01T00:00:00Z")
+
+    with harness.transaction() as txn:
+        rows = harness.repository.action_log_rows_at_watermark(
+            transaction=txn,
+            tenant_id="tenant-test",
+            completed_at_lte=None,
+            action_run_id_lte=None,
+        )
+
+    assert rows == []
 
 
 def test_latest_object_record_watermark_handles_empty(harness: MaterializationHarness) -> None:

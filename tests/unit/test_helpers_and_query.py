@@ -18,6 +18,11 @@ from foundry_lite.application.foundry import (
     _required_row,
 )
 from foundry_lite.application.safe_expression import evaluate_safe_expression
+from foundry_lite.application.upload_limits import (
+    DEFAULT_MAX_WEBHOOK_BODY_BYTES,
+    WEBHOOK_BODY_LIMIT_ENV,
+    max_webhook_body_bytes,
+)
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -31,6 +36,7 @@ from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.observability.logging import configure_logging, log_event
 from foundry_lite.transforms_sdk import Input, Output, transform
+from sqlalchemy import select
 
 from tests.conftest import prepare_indexed_demo
 
@@ -157,6 +163,11 @@ def test_dataset_not_found_duplicate_reset_preview_and_transform_update(
     committed = foundry.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
     assert foundry.datasets.preview("raw.crm_customers", ctx=ctx, version=committed.version_id)
     assert foundry.datasets.inspect("raw.crm_customers", ctx=ctx, version=committed.version_id)["manifest"]
+    foundry.datasets.ensure("raw.other_customers", ctx=ctx, primary_key=["customer_id"])
+    with pytest.raises(NotFound):
+        foundry.datasets.preview("raw.other_customers", ctx=ctx, version=committed.version_id)
+    with pytest.raises(NotFound):
+        foundry.datasets.inspect("raw.other_customers", ctx=ctx, version=committed.version_id)
     sql_path = tmp_path / "noop.sql"
     sql_path.write_text("select * from {{ input('raw.crm_customers') }}", encoding="utf-8")
     created = foundry.transforms.register(
@@ -222,6 +233,19 @@ def test_csv_upload_wraps_unexpected_internal_error(
     monkeypatch.setenv("FOUNDRY_LITE_MAX_CSV_UPLOAD_BYTES", "4")
     with pytest.raises(ValidationFailed, match="size limit"):
         normal_foundry.datasets.upload_csv("raw.wraps_error", csv_path, ctx=ctx)
+
+
+def test_webhook_body_limit_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(WEBHOOK_BODY_LIMIT_ENV, raising=False)
+    assert max_webhook_body_bytes() == DEFAULT_MAX_WEBHOOK_BODY_BYTES
+    monkeypatch.setenv(WEBHOOK_BODY_LIMIT_ENV, "7")
+    assert max_webhook_body_bytes() == 7
+    monkeypatch.setenv(WEBHOOK_BODY_LIMIT_ENV, "0")
+    with pytest.raises(ValidationFailed, match="must be positive"):
+        max_webhook_body_bytes()
+    monkeypatch.setenv(WEBHOOK_BODY_LIMIT_ENV, "not-an-integer")
+    with pytest.raises(ValidationFailed, match="must be an integer"):
+        max_webhook_body_bytes()
 
 
 def test_action_validation_not_found_and_precondition_paths(foundry: FoundryLite) -> None:
@@ -376,7 +400,8 @@ def test_transform_and_private_guard_failures(tmp_path: Path) -> None:
             dataset_versions._latest_version_by_dataset_id(conn, "missing")
         assert dataset_versions._latest_version_by_dataset_id(conn, "missing", allow_missing=True) is None
         version_path = dataset_transactions._version_file_path(dataset_versions._get_version_by_id(commit.version_id))
-        assert dataset_quality._execute_check(version_path, 1, {"type": "custom"})["status"] == "passed"
+        with pytest.raises(ValidationFailed, match="unsupported dataset quality check type"):
+            dataset_quality._execute_check(version_path, 1, {"type": "custom"})
 
     with pytest.raises(NotFound):
         dataset_versions._schema_for_version("missing", 1)
@@ -399,6 +424,9 @@ def test_ontology_import_validation_edges_and_missing_active_types(
         foundry.objects.reindex("Order", ctx=ctx)
 
     ctx = prepare_indexed_demo(foundry)
+    viewer = RequestContext(tenant_id=ctx.tenant_id, actor_user_id="viewer-user", roles=("viewer",))
+    with pytest.raises(PermissionDenied):
+        foundry.objects.reindex("Order", ctx=viewer)
     with pytest.raises(NotFound):
         foundry.objects.reindex("MissingType", ctx=ctx)
     with pytest.raises(NotFound):
@@ -482,6 +510,43 @@ def test_link_reverse_traverses_customer_to_orders(foundry: FoundryLite) -> None
     assert {link["from"]["objectId"] for link in links} == {"C-100"}
     assert {link["to"]["objectType"] for link in links} == {"Order"}
     assert {link["linkType"] for link in links} == {"OrderCustomer"}
+
+
+def test_full_reindex_tombstones_links_missing_from_source_snapshot(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    replacement = tmp_path / "clean_orders_without_o1003.csv"
+    replacement.write_text(
+        "\n".join(
+            [
+                "order_id,customer_id,source_status,amount,margin,order_ts,region,risk_score",
+                "O-1001,C-100,PENDING,1200.0,230.0,2026-06-09T10:00:00Z,NA,0.8",
+                "O-1002,C-101,REVIEW,800.0,80.0,2026-06-09T11:00:00Z,EU,0.3",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    foundry.datasets.upload_csv("clean.orders", str(replacement), ctx=ctx)
+
+    foundry.objects.reindex("Order", ctx=ctx)
+
+    links = foundry.objects.links("Customer", "C-100", "OrderCustomer", ctx=ctx)
+    assert {link["to"]["objectId"] for link in links} == {"O-1001"}
+    with foundry.engine.begin() as conn:
+        stale_link = (
+            conn.execute(
+                select(db.object_links).where(
+                    (db.object_links.c.from_object_id == "O-1003") & (db.object_links.c.to_object_id == "C-100")
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert stale_link["deleted"] is True
+    assert stale_link["deletion_reason"] == "source_missing"
 
 
 def test_transforms_sdk_decorator_and_logging(caplog) -> None:

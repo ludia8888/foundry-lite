@@ -3,7 +3,13 @@ from __future__ import annotations
 from contextlib import contextmanager
 
 import pytest
-from foundry_lite.application.ports import RuntimeRow, RuntimeRunPageCursor, RuntimeRunSnapshot, RuntimeRunType
+from foundry_lite.application.ports import (
+    RuntimeRow,
+    RuntimeRunPageCursor,
+    RuntimeRunRelationRow,
+    RuntimeRunSnapshot,
+    RuntimeRunType,
+)
 from foundry_lite.application.services.runtime_run_cursors import encode_runtime_run_cursor
 from foundry_lite.application.services.runtime_service import RuntimeService
 from foundry_lite.domain.context import RequestContext
@@ -105,10 +111,52 @@ class _SnapshotRuntimeRepository:
         return self.snapshot
 
 
+class _DetailRuntimeRepository:
+    def __init__(self) -> None:
+        self.relation_reads: list[tuple[str, RuntimeRunType, str]] = []
+
+    def list_runs(self, *, tenant_id: str) -> RuntimeRunSnapshot:
+        assert tenant_id == "tenant-demo"
+        snapshot = _empty_snapshot()
+        snapshot["actionRuns"].append(_runtime_row("action_run_1", "2026-06-10T00:00:01Z"))
+        return snapshot
+
+    def lineage_for_resource(self, *, tenant_id: str, resource_id: str) -> list[dict[str, object]]:
+        del tenant_id, resource_id
+        return []
+
+    def run_relations_for_run(
+        self,
+        *,
+        transaction: object,
+        tenant_id: str,
+        run_type: RuntimeRunType,
+        run_id: str,
+    ) -> list[RuntimeRunRelationRow]:
+        del transaction
+        self.relation_reads.append((tenant_id, run_type, run_id))
+        return [
+            {
+                "id": "run_relation_1",
+                "tenant_id": tenant_id,
+                "source_run_type": "action",
+                "source_run_id": run_id,
+                "target_run_type": "outbox",
+                "target_run_id": "outbox_1",
+                "relation": "emitted",
+                "resource_type": "object",
+                "resource_id": "Order:O-1",
+                "metadata": {"reason": "action commit outbox"},
+                "created_at": "2026-06-10T00:00:02Z",
+            }
+        ]
+
+
 class _RetryDeadLetterRepository:
     def __init__(self, update_result: dict[str, object] | None, *, deleted: bool = True) -> None:
         self.update_result = update_result
         self.deleted = deleted
+        self.relations: list[dict[str, object]] = []
 
     def rows_for_tenant(self, **kwargs: object) -> list[dict[str, object]]:
         table = kwargs["table"]
@@ -127,11 +175,27 @@ class _RetryDeadLetterRepository:
     def delete_dead_letter_event(self, **_kwargs: object) -> bool:
         return self.deleted
 
+    def insert_audit_event(self, **_kwargs: object) -> None:
+        return None
+
+    def insert_run_relation(self, **kwargs: object) -> bool:
+        record = kwargs["record"]
+        self.relations.append(
+            {
+                "source_run_type": record.source_run_type,
+                "source_run_id": record.source_run_id,
+                "target_run_type": record.target_run_type,
+                "target_run_id": record.target_run_id,
+                "relation": record.relation,
+            }
+        )
+        return True
+
 
 def _runtime_service(repository: object) -> RuntimeService:
     return RuntimeService(
         engine=_UnusedEngine(),
-        policy=PolicyService(),
+        policy=PolicyService(allow_unwired_classification_provider=True),
         runtime_repository=repository,
         dataset_transaction_repository=_UnusedDatasetTransactionRepository(),
         dataset_quality_repository=_UnusedDatasetQualityRepository(),
@@ -141,7 +205,7 @@ def _runtime_service(repository: object) -> RuntimeService:
 def _runtime_service_with_engine(repository: object) -> RuntimeService:
     return RuntimeService(
         engine=_BeginEngine(),
-        policy=PolicyService(),
+        policy=PolicyService(allow_unwired_classification_provider=True),
         runtime_repository=repository,
         dataset_transaction_repository=_UnusedDatasetTransactionRepository(),
         dataset_quality_repository=_UnusedDatasetQualityRepository(),
@@ -239,6 +303,17 @@ def test_runtime_service_observability_report_reads_tenant_snapshot() -> None:
     assert report["summary"] == {"active": 0, "suppressed": 0, "evaluatedDetectors": 0}
 
 
+def test_runtime_service_run_detail_exposes_durable_run_relations() -> None:
+    repository = _DetailRuntimeRepository()
+    service = _runtime_service_with_engine(repository)
+
+    detail = service.run_detail("action", "action_run_1", ctx=_OPERATOR)
+
+    assert repository.relation_reads == [("tenant-demo", "action", "action_run_1")]
+    assert [row["id"] for row in detail["runRelations"]] == ["run_relation_1"]
+    assert detail["runRelations"][0]["target_run_id"] == "outbox_1"
+
+
 def test_retry_dead_letter_event_rejects_outbox_retry_cas_miss() -> None:
     service = _runtime_service_with_engine(_RetryDeadLetterRepository(None))
 
@@ -252,6 +327,24 @@ def test_retry_dead_letter_event_rejects_dead_letter_delete_race() -> None:
 
     with pytest.raises(NotFound, match="dead-letter event not found"):
         service.retry_dead_letter_event("dlq-1", ctx=_OPERATOR)
+
+
+def test_retry_dead_letter_event_records_run_relation() -> None:
+    repository = _RetryDeadLetterRepository({"id": "outbox-1", "status": "pending"})
+    service = _runtime_service_with_engine(repository)
+
+    result = service.retry_dead_letter_event("dlq-1", ctx=_OPERATOR)
+
+    assert result["status"] == "pending"
+    assert repository.relations == [
+        {
+            "source_run_type": "dead_letter",
+            "source_run_id": "dlq-1",
+            "target_run_type": "outbox",
+            "target_run_id": "outbox-1",
+            "relation": "requeued",
+        }
+    ]
 
 
 def _empty_snapshot() -> RuntimeRunSnapshot:

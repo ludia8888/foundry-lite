@@ -62,7 +62,7 @@ class ObjectSetsService(CoreService):
         ttl_seconds: int | None = None,
     ) -> ObjectSetPayload:
         ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "object:read", "object_set", name)
+        self.runtime_service._require_or_audit(ctx, "object:set:manage", "object_set", name)
         require_write_open(self.runtime_service, ctx, "create_object_set", "object_set", name)
         normalized = self._normalize_object_set_definition(
             name,
@@ -179,7 +179,7 @@ class ObjectSetsService(CoreService):
 
     def cleanup_expired_object_sets(self, *, ctx: RequestContext | None = None) -> dict[str, int]:
         ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "object:read", "object_set", "expired")
+        self.runtime_service._require_or_audit(ctx, "object:set:manage", "object_set", "expired")
         require_write_open(self.runtime_service, ctx, "cleanup_expired_object_sets", "object_set", "expired")
         with self.engine.begin() as conn:
             rows = self.object_set_repository.object_sets(transaction=conn, tenant_id=ctx.tenant_id)

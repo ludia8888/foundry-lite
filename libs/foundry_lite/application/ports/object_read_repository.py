@@ -149,6 +149,7 @@ class ObjectReadRepository(Protocol):
         tenant_id: str,
         object_type_api_name: str,
         object_id: str,
+        object_type_id: str | None = None,
     ) -> ObjectRecordRow | None:
         """Return one object record for a tenant and object reference."""
         ...
@@ -159,6 +160,7 @@ class ObjectReadRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         object_type_api_name: str,
+        object_type_id: str | None = None,
     ) -> list[ObjectRecordRow]:
         """Return non-deleted object records for one object type, ordered by object id."""
         ...
@@ -173,6 +175,8 @@ class ObjectReadRepository(Protocol):
         order_by: Sequence[ObjectOrderBy],
         cursor: ObjectQueryCursor | None,
         limit: int,
+        object_type_id: str | None = None,
+        property_object_type_id: str | None = None,
     ) -> list[ObjectRecordRow]:
         """Return one DB-filtered, DB-sorted object page plus one lookahead row."""
         ...

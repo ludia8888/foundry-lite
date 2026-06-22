@@ -45,6 +45,7 @@ from foundry_lite.application.ports.workflow_adapter import (
     WorkflowStartRequest,
     WorkflowStatus,
     workflow_run_id,
+    workflow_run_id_matches_tenant,
 )
 
 
@@ -112,9 +113,9 @@ class TemporalWorkflowAdapter:
         """Start (or idempotently return) a workflow run, blocking until it settles."""
         return _run_blocking(lambda: self.start_workflow_async(request))
 
-    def workflow_run(self, run_id: str) -> WorkflowRun | None:
+    def workflow_run(self, tenant_id: str, run_id: str) -> WorkflowRun | None:
         """Return a known workflow run by id, or None when Temporal has no record."""
-        return _run_blocking(lambda: self.workflow_run_async(run_id))
+        return _run_blocking(lambda: self.workflow_run_async(tenant_id, run_id))
 
     # -- async core (exercised directly by the time-skipping tests) -------
 
@@ -144,8 +145,10 @@ class TemporalWorkflowAdapter:
             return self._start_failure_run(request, exc, workflow_id)
         return await self._resolve_run(handle, request, workflow_id)
 
-    async def workflow_run_async(self, run_id: str) -> WorkflowRun | None:
+    async def workflow_run_async(self, tenant_id: str, run_id: str) -> WorkflowRun | None:
         """Describe a known run by workflow id; None when Temporal has no record."""
+        if not workflow_run_id_matches_tenant(tenant_id, run_id):
+            return None
         try:
             client = await self._client_handle()
         except Exception as exc:  # noqa: BLE001 - normalized into typed adapter evidence

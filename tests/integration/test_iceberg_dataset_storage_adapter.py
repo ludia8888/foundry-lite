@@ -255,6 +255,29 @@ def test_iceberg_engine_and_s3_warehouse_end_to_end(
     assert _bucket_object_count(minio_server, bucket) > 0
 
 
+def test_iceberg_preview_reads_snapshot_files_without_full_materialization(
+    minio_server: MinioServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bucket = _make_bucket(minio_server)
+    adapter = _adapter(tmp_path, minio_server, bucket)
+    foundry = _foundry_with_storage(tmp_path, adapter)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    committed = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+
+    def fail_full_materialization(*args: object, **kwargs: object) -> Path:
+        del args, kwargs
+        raise AssertionError("preview must not materialize the full Iceberg snapshot")
+
+    monkeypatch.setattr(adapter, "_materialize_snapshot", fail_full_materialization)
+
+    preview = foundry.datasets.preview("raw.orders", ctx=ctx, version=committed.version_id, limit=1)
+
+    assert [(row["id"], row["amount"]) for row in preview] == [("O-1", 100)]
+
+
 def test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot(
     minio_server: MinioServer,
     tmp_path: Path,

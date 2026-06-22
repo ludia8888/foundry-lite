@@ -36,7 +36,11 @@ class DatasetVersionService(CoreService):
         with self.engine.begin() as conn:
             if version == "latest":
                 return self._latest_version_by_dataset_id(conn, dataset_id)
-            row = self.dataset_version_repository.version_by_id(transaction=conn, version_id=version)
+            row = self.dataset_version_repository.version_by_dataset_id_and_id(
+                transaction=conn,
+                dataset_id=dataset_id,
+                version_id=version,
+            )
             if row is None:
                 raise NotFound("dataset version not found", details={"version": version})
             if row["tenant_id"] != ctx.tenant_id:

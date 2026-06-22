@@ -6,7 +6,7 @@ from typing import Any, Protocol
 
 import pytest
 from foundry_lite.infrastructure import schema as db
-from foundry_lite.infrastructure.repositories import SqlAlchemyMetadataRepository
+from foundry_lite.infrastructure.repositories import SqlAlchemyDestructiveDevelopmentAdmin, SqlAlchemyMetadataRepository
 from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
@@ -26,11 +26,6 @@ class FakeMetadataRepository:
     initialized: bool = False
 
     def initialize_schema(self) -> None:
-        self.initialized = True
-
-    def reset_schema(self) -> None:
-        self.tenants.clear()
-        self.users.clear()
         self.initialized = True
 
     def ensure_tenant(self, *, tenant_id: str, name: str, created_at: str) -> None:
@@ -58,6 +53,16 @@ class FakeMetadataRepository:
 
 
 @dataclass
+class FakeDestructiveDevelopmentAdmin:
+    repository: FakeMetadataRepository
+
+    def reset_schema(self) -> None:
+        self.repository.tenants.clear()
+        self.repository.users.clear()
+        self.repository.initialized = True
+
+
+@dataclass
 class FakeMetadataRepositoryHarness:
     repository: FakeMetadataRepository
 
@@ -71,6 +76,7 @@ class FakeMetadataRepositoryHarness:
 @dataclass
 class SqlAlchemyMetadataRepositoryHarness:
     repository: SqlAlchemyMetadataRepository
+    destructive_admin: SqlAlchemyDestructiveDevelopmentAdmin
     engine: Engine
 
     def tenant_count(self) -> int:
@@ -92,12 +98,13 @@ def harness(request: pytest.FixtureRequest, tmp_path: Path) -> MetadataRepositor
         engine = create_engine(f"sqlite:///{tmp_path / 'metadata.db'}", future=True)
         repository = SqlAlchemyMetadataRepository(engine)
         repository.initialize_schema()
-        return SqlAlchemyMetadataRepositoryHarness(repository, engine)
+        return SqlAlchemyMetadataRepositoryHarness(repository, SqlAlchemyDestructiveDevelopmentAdmin(engine), engine)
     postgres_fixture = request.getfixturevalue("postgres_fixture")
     engine = postgres_fixture.engine
     repository = SqlAlchemyMetadataRepository(engine)
-    repository.reset_schema()
-    return SqlAlchemyMetadataRepositoryHarness(repository, engine)
+    destructive_admin = SqlAlchemyDestructiveDevelopmentAdmin(engine)
+    destructive_admin.reset_schema()
+    return SqlAlchemyMetadataRepositoryHarness(repository, destructive_admin, engine)
 
 
 def test_metadata_repository_contract_idempotent_tenant_and_user_bootstrap(
@@ -132,7 +139,13 @@ def test_metadata_repository_contract_idempotent_tenant_and_user_bootstrap(
     assert harness.user_count() == 1
 
 
-def test_metadata_repository_contract_reset_schema_clears_bootstrap_rows(
+def test_metadata_repository_contract_excludes_destructive_reset(
+    harness: MetadataRepositoryHarness,
+) -> None:
+    assert not hasattr(harness.repository, "reset_schema")
+
+
+def test_destructive_development_admin_contract_reset_schema_clears_bootstrap_rows(
     harness: MetadataRepositoryHarness,
 ) -> None:
     harness.repository.ensure_tenant(
@@ -148,7 +161,12 @@ def test_metadata_repository_contract_reset_schema_clears_bootstrap_rows(
         created_at="2026-06-11T00:00:00Z",
     )
 
-    harness.repository.reset_schema()
+    if isinstance(harness, FakeMetadataRepositoryHarness):
+        destructive_admin = FakeDestructiveDevelopmentAdmin(harness.repository)
+    else:
+        destructive_admin = harness.destructive_admin
+
+    destructive_admin.reset_schema()
 
     assert harness.tenant_count() == 0
     assert harness.user_count() == 0

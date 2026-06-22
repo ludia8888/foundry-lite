@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import pytest
 from foundry_lite.security.erasure import (
+    ErasureActionReceipt,
+    ErasureManifestAction,
+    ErasureReceiptStatus,
     ErasureRequest,
     ErasureResolution,
     ErasureResourceRef,
     ErasureRetentionPolicy,
+    build_erasure_certificate,
     build_erasure_manifest,
     is_erased_resource,
     resolve_erasure_subject,
@@ -63,6 +67,19 @@ def test_erasure_manifest_removes_subject_from_serving_surfaces_without_raw_valu
     }
     assert "ada@example.com" not in rendered
     assert request.subject_hash in rendered
+
+
+def test_erasure_subject_hash_is_secret_hmac_token() -> None:
+    request = _erasure_request()
+    replay = _erasure_request()
+    rotated = _erasure_request(subject_token_secret="new-secret", subject_token_key_id="erasure-key-2")
+
+    assert request.subject_hash == replay.subject_hash
+    assert request.subject_hash != rotated.subject_hash
+    assert request.subject_hash.startswith("hmac-sha256:erasure-key-1:")
+    assert "ada@example.com" not in repr(request.redacted_evidence())
+    with pytest.raises(ValueError, match="subject token secret is required"):
+        _ = _erasure_request(subject_token_secret="").subject_hash
 
 
 def test_erasure_resolution_is_tenant_scoped() -> None:
@@ -160,7 +177,45 @@ def test_search_rebuild_does_not_resurrect_erased_subject() -> None:
     assert not is_erased_resource(manifest, resource_type="search_document", resource_id="search_order_2")
 
 
-def _erasure_request() -> ErasureRequest:
+def test_erasure_certificate_requires_receipt_for_every_manifest_action() -> None:
+    request = _erasure_request()
+    retention_policy = _retention_policy()
+    resolution = resolve_erasure_subject(
+        request,
+        [_record("object_1", "object_record"), _record("search_1", "search_document")],
+        identity_fields=("email",),
+        resource_type="object_record",
+        surface="object_store",
+    )
+    manifest = build_erasure_manifest(request, (resolution,), retention_policy=retention_policy)
+    receipts = tuple(_receipt_for(action) for action in manifest.actions)
+
+    certificate = build_erasure_certificate(
+        manifest,
+        receipts,
+        certified_at="2026-07-20T00:00:00Z",
+        certified_by="privacy-officer",
+    )
+
+    rendered = repr(certificate.redacted_evidence())
+    assert certificate.status == "CERTIFIED"
+    assert certificate.subject_hash == request.subject_hash
+    assert certificate.subject_token_key_id == "erasure-key-1"
+    assert "ada@example.com" not in rendered
+    with pytest.raises(ValueError, match="missing receipt"):
+        build_erasure_certificate(
+            manifest,
+            receipts[:-1],
+            certified_at="2026-07-20T00:00:00Z",
+            certified_by="privacy-officer",
+        )
+
+
+def _erasure_request(
+    *,
+    subject_token_secret: str = "tenant-a-erasure-secret",
+    subject_token_key_id: str = "erasure-key-1",
+) -> ErasureRequest:
     return ErasureRequest(
         tenant_id="tenant-a",
         request_id="erase_req_1",
@@ -170,6 +225,8 @@ def _erasure_request() -> ErasureRequest:
         idempotency_key="erase-key-1",
         reason="user_request",
         requested_at="2026-06-19T00:00:00Z",
+        subject_token_secret=subject_token_secret,
+        subject_token_key_id=subject_token_key_id,
     )
 
 
@@ -193,3 +250,14 @@ def _record(
         "email": email,
         "surfaceKind": surface_kind,
     }
+
+
+def _receipt_for(action: ErasureManifestAction) -> ErasureActionReceipt:
+    status: ErasureReceiptStatus = "DEFERRED" if action.status == "DEFERRED" else "APPLIED"
+    return ErasureActionReceipt(
+        action_type=action.action_type,
+        resource=action.resource,
+        status=status,
+        completed_at="2026-07-20T00:00:00Z",
+        evidence={"executor": "unit-test", "subjectHash": _erasure_request().subject_hash},
+    )
