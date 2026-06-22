@@ -160,6 +160,26 @@ def test_iceberg_data_file_paths_skip_snapshot_when_partition_filter_has_no_matc
     assert reloaded["files"][0]["partition_values"] == {"bucket": "a"}
 
 
+def test_iceberg_data_file_paths_streams_single_file_without_full_materialization(
+    minio_server: MinioServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter(tmp_path, minio_server, _make_bucket(minio_server))
+    stored = _commit(adapter, _staged(adapter, tmp_path, ["O-1"], [100]), version_id="dsv_single")
+
+    def fail_full_materialization(*args: object, **kwargs: object) -> Path:
+        del args, kwargs
+        raise AssertionError("single-file read must not materialize the full Iceberg snapshot")
+
+    monkeypatch.setattr(adapter, "_materialize_snapshot", fail_full_materialization)
+
+    paths = adapter.data_file_paths(stored.manifest_uri)
+
+    assert len(paths) == 1
+    assert pq.read_table(paths[0]).to_pydict()["id"] == ["O-1"]
+
+
 def test_iceberg_duplicate_version_commit_is_rejected(minio_server: MinioServer, tmp_path: Path) -> None:
     adapter = _adapter(tmp_path, minio_server, _make_bucket(minio_server))
     _commit(adapter, _staged(adapter, tmp_path, ["O-1"], [100]), version_id="dsv_dup")
