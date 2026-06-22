@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 
 import pytest
+from foundry_lite.application.facades.erasure_gateway import ErasureGateway
 from foundry_lite.application.ports.erasure_repository import ErasureCertificateRecord, ErasureRequestRecord
 from foundry_lite.application.services.erasure_service import ErasureService
 from foundry_lite.domain.errors import InvariantViolation
@@ -144,9 +145,73 @@ def test_execute_erasure_rejects_action_without_executor() -> None:
         service.execute_erasure(request, resolutions, retention_policy=_retention_policy(), executors={})
 
 
+class _FakeSearchAdapter:
+    def __init__(self) -> None:
+        self.deleted: list[tuple[str, str, str]] = []
+
+    def delete_document(self, *, tenant_id: str, object_type: str, document_id: str) -> None:
+        self.deleted.append((tenant_id, object_type, document_id))
+
+
+class _FakeRuntimeRepository:
+    def __init__(self) -> None:
+        self.audits: list[object] = []
+
+    def insert_audit_event(self, *, transaction: object, record: object) -> None:
+        del transaction
+        self.audits.append(record)
+
+
+def test_run_erasure_via_gateway_deletes_search_documents_and_defers_backup() -> None:
+    repo = _FakeErasureRepository()
+    search = _FakeSearchAdapter()
+    runtime = _FakeRuntimeRepository()
+    service = ErasureService(
+        engine=_FakeEngine(), erasure_repository=repo, runtime_repository=runtime, search_adapter=search
+    )
+    gateway = ErasureGateway(service)
+    request = _request()
+    resolutions = (
+        resolve_erasure_subject(
+            request,
+            [{"id": "Order:O-1", "tenant_id": "tenant-a", "email": "ada@example.com"}],
+            identity_fields=("email",),
+            resource_type="search_document",
+            surface="Order",
+        ),
+        resolve_erasure_subject(
+            request,
+            [{"id": "nightly-2026-06", "tenant_id": "tenant-a", "email": "ada@example.com"}],
+            identity_fields=("email",),
+            resource_type="backup_snapshot",
+            surface="nightly_backup",
+        ),
+    )
+
+    certificate = gateway.run(request, resolutions, retention_policy=_retention_policy())
+
+    # The real search executor removed the subject's document from the serving projection,
+    # and the backup action is certified as deferred (crypto-shred at retention boundary).
+    assert ("tenant-a", "Order", "Order:O-1") in search.deleted
+    # The execution is audited (raw-value-free).
+    assert len(runtime.audits) == 1
+    assert "ada@example.com" not in repr(runtime.audits[0])
+    assert certificate.status == "CERTIFIED_WITH_DEFERRED_BACKUP"
+    persisted = gateway.certificate_for(tenant_id=request.tenant_id, request_id=request.request_id)
+    assert persisted is not None
+    executed = repo.request_by_id(transaction=None, tenant_id=request.tenant_id, request_id=request.request_id)
+    assert executed is not None and executed.status == "executed"
+
+
 def _service() -> tuple[ErasureService, _FakeErasureRepository]:
     repo = _FakeErasureRepository()
-    return ErasureService(engine=_FakeEngine(), erasure_repository=repo), repo
+    service = ErasureService(
+        engine=_FakeEngine(),
+        erasure_repository=repo,
+        runtime_repository=_FakeRuntimeRepository(),
+        search_adapter=_FakeSearchAdapter(),
+    )
+    return service, repo
 
 
 def _request() -> ErasureRequest:
