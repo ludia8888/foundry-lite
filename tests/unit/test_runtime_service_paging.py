@@ -108,8 +108,9 @@ class _SnapshotRuntimeRepository:
     def __init__(self, snapshot: RuntimeRunSnapshot) -> None:
         self.snapshot = snapshot
 
-    def list_runs(self, *, tenant_id: str) -> RuntimeRunSnapshot:
+    def list_runs(self, *, tenant_id: str, limit: int | None = None) -> RuntimeRunSnapshot:
         assert tenant_id == "tenant-demo"
+        del limit
         return self.snapshot
 
 

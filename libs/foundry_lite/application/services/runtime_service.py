@@ -128,7 +128,7 @@ class RuntimeService(CoreService):
     def list_runs(self, *, ctx: RequestContext | None = None) -> RuntimeRunSnapshot:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "operations:read:summary")
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id, limit=OPERATIONS_RUN_MAX_LIMIT)
         return cast(RuntimeRunSnapshot, _redact_sensitive(snapshot, self.policy.sensitive_column_names(ctx)))
 
     def query_runs(
@@ -167,7 +167,7 @@ class RuntimeService(CoreService):
     ) -> ObservabilityReport:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "operations:read:summary")
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id, limit=OPERATIONS_RUN_MAX_LIMIT)
         report = build_observability_report(
             snapshot,
             configs=configs,
