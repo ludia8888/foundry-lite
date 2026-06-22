@@ -6,8 +6,10 @@ from foundry_lite.application.ports.erasure_repository import (
     ErasureCertificateRecord,
     ErasureRequestRecord,
 )
-from foundry_lite.application.primitives import _now
+from foundry_lite.application.ports.runtime_repository import AuditEventRecord
+from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.erasure_executors import default_erasure_executors
 from foundry_lite.domain.errors import InvariantViolation
 from foundry_lite.security.erasure import (
     ErasureActionReceipt,
@@ -28,8 +30,20 @@ _CERTIFIED_BY = "erasure-service"
 class ErasureService(CoreService):
     """Persist erasure requests durably and execute + certify them idempotently."""
 
-    required_dependencies = ("engine", "erasure_repository")
+    required_dependencies = ("engine", "erasure_repository", "runtime_repository", "search_adapter")
     required_collaborators = ()
+
+    def run_erasure(
+        self,
+        request: ErasureRequest,
+        resolutions: Sequence[ErasureResolution],
+        *,
+        retention_policy: ErasureRetentionPolicy,
+    ) -> ErasureCertificate:
+        """Persist the request, then execute it with the production executor map and certify it."""
+        self.request_erasure(request)
+        executors = default_erasure_executors(search_adapter=self.search_adapter)
+        return self.execute_erasure(request, resolutions, retention_policy=retention_policy, executors=executors)
 
     def request_erasure(self, request: ErasureRequest) -> ErasureRequestRecord:
         """Persist a raw-value-free erasure request, returning the idempotent winner."""
@@ -77,6 +91,9 @@ class ErasureService(CoreService):
                 manifest_id=manifest.manifest_id,
                 executed_at=certified_at,
             )
+            self.runtime_repository.insert_audit_event(
+                transaction=conn, record=_audit_record(request, manifest.manifest_id, certificate, certified_at)
+            )
         return certificate
 
 
@@ -85,6 +102,29 @@ def _run_action(action: ErasureManifestAction, executors: Mapping[str, ErasureAc
     if executor is None:
         raise InvariantViolation("no erasure executor for action type", details={"actionType": action.action_type})
     return executor(action)
+
+
+def _audit_record(
+    request: ErasureRequest, manifest_id: str, certificate: ErasureCertificate, certified_at: str
+) -> AuditEventRecord:
+    # Raw-value-free audit proof of the erasure execution (subject_hash, never the value).
+    return AuditEventRecord(
+        event_id=_new_id("audit"),
+        tenant_id=request.tenant_id,
+        actor_user_id=request.requested_by,
+        event_type="privacy.erasure.executed",
+        resource_type="erasure_request",
+        resource_id=request.request_id,
+        action="erasure:execute",
+        decision="allow",
+        policy_decision={},
+        before_ref={"subjectHash": request.subject_hash},
+        after_ref={"certificateId": certificate.certificate_id, "status": certificate.status},
+        correlation_id=request.request_id,
+        request_id=request.request_id,
+        metadata={"manifestId": manifest_id},
+        created_at=certified_at,
+    )
 
 
 def _request_record(request: ErasureRequest) -> ErasureRequestRecord:
