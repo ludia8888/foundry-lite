@@ -333,8 +333,12 @@ class RuntimeRepository(Protocol):
         """Return lineage edges touching a resource for one tenant."""
         ...
 
-    def list_runs(self, *, tenant_id: str) -> RuntimeRunSnapshot:
-        """Return operational run, audit, and outbox rows for one tenant."""
+    def list_runs(self, *, tenant_id: str, limit: int | None = None) -> RuntimeRunSnapshot:
+        """Return operational run, audit, and outbox rows for one tenant.
+
+        When ``limit`` is set, each table is bounded to its most recent ``limit``
+        rows (a recency window); ``None`` returns the full per-tenant history.
+        """
         ...
 
     def query_run_rows(

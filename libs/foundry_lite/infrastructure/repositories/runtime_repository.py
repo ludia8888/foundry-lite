@@ -52,41 +52,36 @@ class SqlAlchemyRuntimeRepository:
             )
             return [cast(LineageEdgeRow, dict(row)) for row in rows]
 
-    def list_runs(self, *, tenant_id: str) -> RuntimeRunSnapshot:
+    def list_runs(self, *, tenant_id: str, limit: int | None = None) -> RuntimeRunSnapshot:
         with self.engine.begin() as transaction:
+
+            def window(table: RuntimeRowsTable) -> list[RuntimeRow]:
+                return self._rows_window(transaction=transaction, table=table, tenant_id=tenant_id, limit=limit)
+
             return {
-                "syncRuns": self.rows_for_tenant(transaction=transaction, table="sync_runs", tenant_id=tenant_id),
-                "transformRuns": self.rows_for_tenant(
-                    transaction=transaction, table="transform_runs", tenant_id=tenant_id
-                ),
-                "indexRuns": self.rows_for_tenant(transaction=transaction, table="index_runs", tenant_id=tenant_id),
-                "actionRuns": self.rows_for_tenant(transaction=transaction, table="action_runs", tenant_id=tenant_id),
-                "actionWritebacks": self.rows_for_tenant(
-                    transaction=transaction,
-                    table="action_writebacks",
-                    tenant_id=tenant_id,
-                ),
-                "materializationRuns": self.rows_for_tenant(
-                    transaction=transaction,
-                    table="materialization_runs",
-                    tenant_id=tenant_id,
-                ),
-                "outboxEvents": self.rows_for_tenant(
-                    transaction=transaction, table="outbox_events", tenant_id=tenant_id
-                ),
-                "deadLetterEvents": self.rows_for_tenant(
-                    transaction=transaction,
-                    table="dead_letter_events",
-                    tenant_id=tenant_id,
-                ),
-                "workflowRuns": self.rows_for_tenant(
-                    transaction=transaction,
-                    table="workflow_runs",
-                    tenant_id=tenant_id,
-                ),
-                "auditEvents": self.rows_for_tenant(transaction=transaction, table="audit_events", tenant_id=tenant_id),
-                "objectEdits": self.rows_for_tenant(transaction=transaction, table="object_edits", tenant_id=tenant_id),
+                "syncRuns": window("sync_runs"),
+                "transformRuns": window("transform_runs"),
+                "indexRuns": window("index_runs"),
+                "actionRuns": window("action_runs"),
+                "actionWritebacks": window("action_writebacks"),
+                "materializationRuns": window("materialization_runs"),
+                "outboxEvents": window("outbox_events"),
+                "deadLetterEvents": window("dead_letter_events"),
+                "workflowRuns": window("workflow_runs"),
+                "auditEvents": window("audit_events"),
+                "objectEdits": window("object_edits"),
             }
+
+    def _rows_window(
+        self, *, transaction: Any, table: RuntimeRowsTable, tenant_id: str, limit: int | None
+    ) -> list[RuntimeRow]:
+        runtime_table = _rows_table(table)
+        query = select(runtime_table).where(runtime_table.c.tenant_id == tenant_id)
+        if limit is not None:
+            timestamp = _rows_timestamp_column(table)
+            query = query.order_by(desc(timestamp), desc(runtime_table.c.id)).limit(limit)
+        rows = transaction.execute(query).mappings().all()
+        return [cast(RuntimeRow, dict(row)) for row in rows]
 
     def query_run_rows(
         self,
@@ -538,6 +533,13 @@ def _relation_columns(runtime_table: Any) -> list[Any]:
         for column in runtime_table.c
         if column.name != "tenant_id" and (column.name.endswith("_id") or column.name in {"id", "correlation_id"})
     ]
+
+
+def _rows_timestamp_column(table: RuntimeRowsTable) -> Any:
+    # Recency column used to window each table to its most recent rows.
+    if table == "dead_letter_events":
+        return db.dead_letter_events.c.failed_at
+    return _rows_table(table).c.created_at
 
 
 def _rows_table(table: RuntimeRowsTable) -> Any:

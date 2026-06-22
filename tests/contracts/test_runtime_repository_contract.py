@@ -74,31 +74,29 @@ class FakeRuntimeRepository:
             and (row["from_resource_id"] == resource_id or row["to_resource_id"] == resource_id)
         ]
 
-    def list_runs(self, *, tenant_id: str) -> RuntimeRunSnapshot:
+    def list_runs(self, *, tenant_id: str, limit: int | None = None) -> RuntimeRunSnapshot:
+        def window(table: RuntimeRowsTable) -> list[RuntimeRow]:
+            rows = self.rows_for_tenant(transaction=None, table=table, tenant_id=tenant_id)
+            if limit is None:
+                return rows
+            timestamp = "failed_at" if table == "dead_letter_events" else "created_at"
+            ordered = sorted(
+                rows, key=lambda row: (str(row.get(timestamp) or ""), str(row.get("id") or "")), reverse=True
+            )
+            return ordered[:limit]
+
         return {
-            "syncRuns": self.rows_for_tenant(transaction=None, table="sync_runs", tenant_id=tenant_id),
-            "transformRuns": self.rows_for_tenant(transaction=None, table="transform_runs", tenant_id=tenant_id),
-            "indexRuns": self.rows_for_tenant(transaction=None, table="index_runs", tenant_id=tenant_id),
-            "actionRuns": self.rows_for_tenant(transaction=None, table="action_runs", tenant_id=tenant_id),
-            "actionWritebacks": self.rows_for_tenant(
-                transaction=None,
-                table="action_writebacks",
-                tenant_id=tenant_id,
-            ),
-            "materializationRuns": self.rows_for_tenant(
-                transaction=None,
-                table="materialization_runs",
-                tenant_id=tenant_id,
-            ),
-            "outboxEvents": self.rows_for_tenant(transaction=None, table="outbox_events", tenant_id=tenant_id),
-            "deadLetterEvents": self.rows_for_tenant(
-                transaction=None,
-                table="dead_letter_events",
-                tenant_id=tenant_id,
-            ),
-            "workflowRuns": self.rows_for_tenant(transaction=None, table="workflow_runs", tenant_id=tenant_id),
-            "auditEvents": self.rows_for_tenant(transaction=None, table="audit_events", tenant_id=tenant_id),
-            "objectEdits": self.rows_for_tenant(transaction=None, table="object_edits", tenant_id=tenant_id),
+            "syncRuns": window("sync_runs"),
+            "transformRuns": window("transform_runs"),
+            "indexRuns": window("index_runs"),
+            "actionRuns": window("action_runs"),
+            "actionWritebacks": window("action_writebacks"),
+            "materializationRuns": window("materialization_runs"),
+            "outboxEvents": window("outbox_events"),
+            "deadLetterEvents": window("dead_letter_events"),
+            "workflowRuns": window("workflow_runs"),
+            "auditEvents": window("audit_events"),
+            "objectEdits": window("object_edits"),
         }
 
     def query_run_rows(
@@ -806,6 +804,22 @@ def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(
     assert [row["id"] for row in runs["auditEvents"]] == ["audit_1"]
     assert [row["id"] for row in runs["outboxEvents"]] == ["outbox_1"]
     assert [row["id"] for row in runs["deadLetterEvents"]] == ["dlq_1"]
+
+
+def test_runtime_repository_contract_list_runs_windows_to_recent_rows(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    harness.add_action_run(run_id="run-old", tenant_id="tenant-demo", created_at="2026-06-10T00:00:01Z")
+    harness.add_action_run(run_id="run-mid", tenant_id="tenant-demo", created_at="2026-06-10T00:00:02Z")
+    harness.add_action_run(run_id="run-new", tenant_id="tenant-demo", created_at="2026-06-10T00:00:03Z")
+
+    # A bounded window returns only the most recent rows, newest first.
+    windowed = harness.repository.list_runs(tenant_id="tenant-demo", limit=2)
+    assert [row["id"] for row in windowed["actionRuns"]] == ["run-new", "run-mid"]
+
+    # Without a limit the full per-tenant history is returned.
+    full = harness.repository.list_runs(tenant_id="tenant-demo")
+    assert {row["id"] for row in full["actionRuns"]} == {"run-old", "run-mid", "run-new"}
 
 
 def test_runtime_repository_contract_run_row_and_evidence_pushdown(
