@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 from foundry_lite.application.ports import (
     LineageEdgeRow,
@@ -12,7 +12,8 @@ from foundry_lite.application.ports import (
 )
 
 LineageLookup = Callable[[str], list[LineageEdgeRow]]
-RuntimeRunGroup = Literal["syncRuns", "transformRuns", "indexRuns", "materializationRuns"]
+# Resolves a run id to its (type, row) without loading the full run snapshot.
+RunResolver = Callable[[str], "tuple[RuntimeRunType, RuntimeRow] | None"]
 
 
 class _GraphParts(TypedDict):
@@ -66,12 +67,12 @@ def materialization_late_data_badge(detail: Mapping[str, object]) -> dict[str, o
 def downstream_impact_graph(
     row: RuntimeRow,
     dataset_transaction: RuntimeRow | None,
-    snapshot: RuntimeRunSnapshot,
+    run_resolver: RunResolver,
     lineage_lookup: LineageLookup,
 ) -> dict[str, object] | None:
     roots = _impact_roots(row, dataset_transaction)
     badges = _impact_badges(row, dataset_transaction)
-    graph = _lineage_graph(roots, snapshot, lineage_lookup)
+    graph = _lineage_graph(roots, run_resolver, lineage_lookup)
     if not roots and not badges and not graph["edges"]:
         return None
     affected_runs = [*graph["affectedRuns"], *_badge_run_links(row, badges)]
@@ -125,14 +126,14 @@ def _materialization_reopen_roots(reopen: Mapping[str, object]) -> list[dict[str
 
 def _lineage_graph(
     roots: Sequence[Mapping[str, object]],
-    snapshot: RuntimeRunSnapshot,
+    run_resolver: RunResolver,
     lineage_lookup: LineageLookup,
 ) -> _GraphParts:
     nodes = {_node_id(root): _node(root, is_root=True) for root in roots}
     edges: list[dict[str, object]] = []
     runs: list[RuntimeRunLink] = []
     queue = [(root["resourceId"], 0) for root in roots if root.get("resourceType") == "dataset_version"]
-    _walk_lineage(queue, nodes, edges, runs, snapshot, lineage_lookup)
+    _walk_lineage(queue, nodes, edges, runs, run_resolver, lineage_lookup)
     return {"nodes": list(nodes.values()), "edges": edges, "affectedRuns": _dedupe_run_links(runs)}
 
 
@@ -141,7 +142,7 @@ def _walk_lineage(
     nodes: dict[str, dict[str, object]],
     edges: list[dict[str, object]],
     runs: list[RuntimeRunLink],
-    snapshot: RuntimeRunSnapshot,
+    run_resolver: RunResolver,
     lineage_lookup: LineageLookup,
 ) -> None:
     visited: set[str] = set()
@@ -150,7 +151,7 @@ def _walk_lineage(
         if not isinstance(resource_id, str) or resource_id in visited or depth >= 5:
             continue
         visited.add(resource_id)
-        _extend_lineage(resource_id, depth, nodes, edges, runs, snapshot, lineage_lookup, queue)
+        _extend_lineage(resource_id, depth, nodes, edges, runs, run_resolver, lineage_lookup, queue)
 
 
 def _extend_lineage(
@@ -159,7 +160,7 @@ def _extend_lineage(
     nodes: dict[str, dict[str, object]],
     edges: list[dict[str, object]],
     runs: list[RuntimeRunLink],
-    snapshot: RuntimeRunSnapshot,
+    run_resolver: RunResolver,
     lineage_lookup: LineageLookup,
     queue: list[tuple[object, int]],
 ) -> None:
@@ -169,15 +170,16 @@ def _extend_lineage(
         target = {"resourceType": edge["to_resource_type"], "resourceId": edge["to_resource_id"]}
         nodes.setdefault(_node_id(target), _node(target, is_root=False))
         edges.append(_impact_edge(edge))
-        _append_run_link(runs, snapshot, edge)
+        _append_run_link(runs, run_resolver, edge)
         if edge["to_resource_type"] == "dataset_version":
             queue.append((edge["to_resource_id"], depth + 1))
 
 
-def _append_run_link(runs: list[RuntimeRunLink], snapshot: RuntimeRunSnapshot, edge: LineageEdgeRow) -> None:
-    run_type, row = _run_for_id(snapshot, edge["created_by_run_id"])
-    if run_type is None or row is None:
+def _append_run_link(runs: list[RuntimeRunLink], run_resolver: RunResolver, edge: LineageEdgeRow) -> None:
+    resolved = run_resolver(edge["created_by_run_id"])
+    if resolved is None:
         return
+    run_type, row = resolved
     runs.append(_run_link(run_type, row, edge["relation"], edge["to_resource_type"], edge["to_resource_id"]))
 
 
@@ -254,23 +256,6 @@ def _node_id(resource: Mapping[str, object]) -> str:
     return f"{resource.get('resourceType')}:{resource.get('resourceId')}"
 
 
-def _run_for_id(snapshot: RuntimeRunSnapshot, run_id: str) -> tuple[RuntimeRunType | None, RuntimeRow | None]:
-    for run_type, group in _run_groups():
-        row = next((item for item in _rows_for_run_group(snapshot, group) if item.get("id") == run_id), None)
-        if row is not None:
-            return run_type, row
-    return None, None
-
-
-def _run_groups() -> tuple[tuple[RuntimeRunType, RuntimeRunGroup], ...]:
-    return (
-        ("sync", "syncRuns"),
-        ("transform", "transformRuns"),
-        ("index", "indexRuns"),
-        ("materialization", "materializationRuns"),
-    )
-
-
 def _run_link(
     run_type: RuntimeRunType,
     row: RuntimeRow,
@@ -288,16 +273,6 @@ def _run_link(
         "status": _row_status(row),
         "operationPath": f"/api/operations/runs/{run_type}/{run_id}",
     }
-
-
-def _rows_for_run_group(snapshot: RuntimeRunSnapshot, group: RuntimeRunGroup) -> list[RuntimeRow]:
-    if group == "syncRuns":
-        return snapshot["syncRuns"]
-    if group == "transformRuns":
-        return snapshot["transformRuns"]
-    if group == "indexRuns":
-        return snapshot["indexRuns"]
-    return snapshot["materializationRuns"]
 
 
 def _row_status(row: RuntimeRow) -> str | None:

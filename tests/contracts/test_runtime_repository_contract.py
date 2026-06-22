@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +58,8 @@ class RuntimeRepositoryHarness(Protocol):
     ) -> None: ...
 
     def add_dead_letter_event(self, *, event_id: str, tenant_id: str) -> None: ...
+
+    def add_index_run(self, *, run_id: str, tenant_id: str) -> None: ...
 
 
 @dataclass
@@ -132,6 +134,30 @@ class FakeRuntimeRepository:
     def rows_for_tenant(self, *, transaction: Any, table: RuntimeRowsTable, tenant_id: str) -> list[RuntimeRow]:
         del transaction
         return [cast(RuntimeRow, dict(row)) for row in self.tables[table] if row["tenant_id"] == tenant_id]
+
+    def run_row(self, *, tenant_id: str, run_type: RuntimeRunType, run_id: str) -> RuntimeRow | None:
+        for row in self.tables[_run_table_name(run_type)]:
+            if row["tenant_id"] == tenant_id and row["id"] == run_id:
+                return cast(RuntimeRow, dict(row))
+        return None
+
+    def run_row_any_type(self, *, tenant_id: str, run_id: str) -> tuple[RuntimeRunType, RuntimeRow] | None:
+        for run_type in ("sync", "transform", "index", "materialization"):
+            row = self.run_row(tenant_id=tenant_id, run_type=cast(RuntimeRunType, run_type), run_id=run_id)
+            if row is not None:
+                return cast(RuntimeRunType, run_type), row
+        return None
+
+    def related_evidence_rows(
+        self, *, tenant_id: str, table: RuntimeRowsTable, relation_ids: Sequence[str], limit: int
+    ) -> list[RuntimeRow]:
+        ids = set(relation_ids)
+        matches = [
+            cast(RuntimeRow, dict(row))
+            for row in self.tables[table]
+            if row["tenant_id"] == tenant_id and _row_has_relation(row, ids)
+        ]
+        return matches[:limit]
 
     def update_outbox_event_for_retry(
         self,
@@ -321,6 +347,10 @@ class FakeRuntimeRepositoryHarness:
         assert isinstance(self.repository, FakeRuntimeRepository)
         self.repository.tables["dead_letter_events"].append(_dead_letter_row(event_id=event_id, tenant_id=tenant_id))
 
+    def add_index_run(self, *, run_id: str, tenant_id: str) -> None:
+        assert isinstance(self.repository, FakeRuntimeRepository)
+        self.repository.tables["index_runs"].append(_index_run_row(run_id=run_id, tenant_id=tenant_id))
+
 
 @dataclass
 class SqlAlchemyRuntimeRepositoryHarness:
@@ -364,6 +394,10 @@ class SqlAlchemyRuntimeRepositoryHarness:
             conn.execute(
                 insert(db.dead_letter_events).values(**_dead_letter_row(event_id=event_id, tenant_id=tenant_id))
             )
+
+    def add_index_run(self, *, run_id: str, tenant_id: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(insert(db.index_runs).values(**_index_run_row(run_id=run_id, tenant_id=tenant_id)))
 
 
 def _audit_record(*, event_id: str = "audit_1", tenant_id: str = "tenant-demo") -> AuditEventRecord:
@@ -608,6 +642,14 @@ def _dead_letter_row(*, event_id: str, tenant_id: str) -> dict[str, Any]:
     }
 
 
+def _row_has_relation(row: dict[str, Any], ids: set[str]) -> bool:
+    return any(
+        value in ids
+        for key, value in row.items()
+        if key != "tenant_id" and (key.endswith("_id") or key in {"id", "correlation_id"}) and isinstance(value, str)
+    )
+
+
 def _run_table_name(run_type: RuntimeRunType) -> str:
     return {
         "sync": "sync_runs",
@@ -710,6 +752,23 @@ def _action_run_row(
     }
 
 
+def _index_run_row(*, run_id: str, tenant_id: str, created_at: str = "2026-06-10T00:00:00Z") -> dict[str, Any]:
+    return {
+        "id": run_id,
+        "tenant_id": tenant_id,
+        "object_type_id": "ot_1",
+        "object_type_api_name": "Order",
+        "trigger_type": "manual",
+        "source_ref": {"dataset": "clean.orders"},
+        "status": "SUCCEEDED",
+        "rows_read": 0,
+        "objects_upserted": 0,
+        "objects_deleted": 0,
+        "links_upserted": 0,
+        "created_at": created_at,
+    }
+
+
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> RuntimeRepositoryHarness:
     if request.param == "fake":
@@ -747,6 +806,43 @@ def test_runtime_repository_contract_audit_outbox_idempotency_and_list_runs(
     assert [row["id"] for row in runs["auditEvents"]] == ["audit_1"]
     assert [row["id"] for row in runs["outboxEvents"]] == ["outbox_1"]
     assert [row["id"] for row in runs["deadLetterEvents"]] == ["dlq_1"]
+
+
+def test_runtime_repository_contract_run_row_and_evidence_pushdown(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    harness.add_action_run(run_id="action_run_1", tenant_id="tenant-demo")
+    harness.add_index_run(run_id="index_run_1", tenant_id="tenant-demo")
+    with harness.transaction() as transaction:
+        harness.repository.insert_audit_event(transaction=transaction, record=_audit_record())
+
+    found = harness.repository.run_row(tenant_id="tenant-demo", run_type="action", run_id="action_run_1")
+    assert found is not None and found["id"] == "action_run_1"
+    assert harness.repository.run_row(tenant_id="tenant-demo", run_type="action", run_id="missing") is None
+    assert harness.repository.run_row(tenant_id="tenant-other", run_type="action", run_id="action_run_1") is None
+
+    resolved = harness.repository.run_row_any_type(tenant_id="tenant-demo", run_id="index_run_1")
+    assert resolved is not None and resolved[0] == "index" and resolved[1]["id"] == "index_run_1"
+    # ``action`` is not a lineage-producing run table, so it never resolves here.
+    assert harness.repository.run_row_any_type(tenant_id="tenant-demo", run_id="action_run_1") is None
+
+    by_correlation = harness.repository.related_evidence_rows(
+        tenant_id="tenant-demo", table="audit_events", relation_ids=["req-demo"], limit=10
+    )
+    assert [row["id"] for row in by_correlation] == ["audit_1"]
+    # The tenant scope must never correlate evidence, even though every row shares it.
+    assert (
+        harness.repository.related_evidence_rows(
+            tenant_id="tenant-demo", table="audit_events", relation_ids=["tenant-demo"], limit=10
+        )
+        == []
+    )
+    assert (
+        harness.repository.related_evidence_rows(
+            tenant_id="tenant-demo", table="audit_events", relation_ids=[], limit=10
+        )
+        == []
+    )
 
 
 def test_runtime_repository_contract_outbox_reraises_unrelated_integrity_errors(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, cast
 
 from sqlalchemy import and_, delete, desc, false, func, insert, or_, select
@@ -108,6 +109,55 @@ class SqlAlchemyRuntimeRepository:
                     .where(and_(*conditions))
                     .order_by(desc(timestamp), desc(runtime_table.c.id))
                     .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+        return [cast(RuntimeRow, dict(row)) for row in rows]
+
+    def run_row(self, *, tenant_id: str, run_type: RuntimeRunType, run_id: str) -> RuntimeRow | None:
+        runtime_table = _run_table(run_type)
+        with self.engine.begin() as transaction:
+            row = (
+                transaction.execute(
+                    select(runtime_table).where(
+                        and_(runtime_table.c.tenant_id == tenant_id, runtime_table.c.id == run_id)
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        return cast(RuntimeRow, dict(row)) if row else None
+
+    def run_row_any_type(self, *, tenant_id: str, run_id: str) -> tuple[RuntimeRunType, RuntimeRow] | None:
+        with self.engine.begin() as transaction:
+            for run_type in _LINEAGE_RUN_TYPES:
+                runtime_table = _run_table(run_type)
+                row = (
+                    transaction.execute(
+                        select(runtime_table).where(
+                            and_(runtime_table.c.tenant_id == tenant_id, runtime_table.c.id == run_id)
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if row:
+                    return run_type, cast(RuntimeRow, dict(row))
+        return None
+
+    def related_evidence_rows(
+        self, *, tenant_id: str, table: RuntimeRowsTable, relation_ids: Sequence[str], limit: int
+    ) -> list[RuntimeRow]:
+        if not relation_ids:
+            return []
+        runtime_table = _rows_table(table)
+        ids = list(relation_ids)
+        match = or_(*(column.in_(ids) for column in _relation_columns(runtime_table)))
+        with self.engine.begin() as transaction:
+            rows = (
+                transaction.execute(
+                    select(runtime_table).where(and_(runtime_table.c.tenant_id == tenant_id, match)).limit(limit)
                 )
                 .mappings()
                 .all()
@@ -474,6 +524,20 @@ def _is_run_relation_duplicate(transaction: Any, record: RuntimeRunRelationRecor
         .first()
     )
     return row is not None
+
+
+# Run tables that lineage edges attribute work to (``created_by_run_id``).
+_LINEAGE_RUN_TYPES: tuple[RuntimeRunType, ...] = ("sync", "transform", "index", "materialization")
+
+
+def _relation_columns(runtime_table: Any) -> list[Any]:
+    # Mirror the correlation logic in runtime_run_queries._is_relation_key: match on
+    # *_id / id / correlation_id columns, but never the tenant_id scope column.
+    return [
+        column
+        for column in runtime_table.c
+        if column.name != "tenant_id" and (column.name.endswith("_id") or column.name in {"id", "correlation_id"})
+    ]
 
 
 def _rows_table(table: RuntimeRowsTable) -> Any:

@@ -33,6 +33,7 @@ from foundry_lite.application.services.runtime_detail_payload import (
     dataset_transaction_for_row,
     lineage_edges_for_row,
     quality_evidence_for_transaction,
+    related_evidence_for_row,
     run_relations_for_row,
     runtime_run_detail_payload,
 )
@@ -42,17 +43,16 @@ from foundry_lite.application.services.runtime_error_payloads import (
     require_write_traffic_open,
     runtime_error_payload,
 )
-from foundry_lite.application.services.runtime_run_paging import OPERATIONS_RUN_DEFAULT_LIMIT, query_runtime_run_page
+from foundry_lite.application.services.runtime_run_paging import (
+    OPERATIONS_RUN_DEFAULT_LIMIT,
+    OPERATIONS_RUN_MAX_LIMIT,
+    query_runtime_run_page,
+)
 from foundry_lite.application.services.runtime_run_queries import (
     downstream_impact_graph,
     object_late_data_badge,
     optional_run_type,
-    related_action_writebacks,
-    related_audit,
-    related_object_edits,
-    related_outbox,
     required_run_type,
-    row_for_detail,
     source_run_chain,
 )
 from foundry_lite.domain.context import RequestContext
@@ -180,12 +180,12 @@ class RuntimeService(CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "operations:read:detail")
         parsed_type = required_run_type(run_type)
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
-        row = row_for_detail(snapshot, parsed_type, run_id)
-        outbox_events = related_outbox(snapshot, row)
-        audit_events = related_audit(snapshot, row)
-        object_edits = related_object_edits(snapshot, row)
-        action_writebacks = related_action_writebacks(snapshot, row)
+        row = self.runtime_repository.run_row(tenant_id=ctx.tenant_id, run_type=parsed_type, run_id=run_id)
+        if row is None:
+            raise NotFound("operations run not found", details={"run_type": parsed_type, "run_id": run_id})
+        outbox_events, audit_events, object_edits, action_writebacks = related_evidence_for_row(
+            self.runtime_repository, tenant_id=ctx.tenant_id, run_row=row, limit=OPERATIONS_RUN_MAX_LIMIT
+        )
         lineage_edges = lineage_edges_for_row(self.runtime_repository, ctx, row)
         run_relations = run_relations_for_row(self.runtime_repository, self.engine, ctx, parsed_type, run_id)
         dataset_transaction = dataset_transaction_for_row(self.dataset_transaction_repository, self.engine, ctx, row)
@@ -207,7 +207,7 @@ class RuntimeService(CoreService):
             run_relations=run_relations,
             lineage_edges=lineage_edges,
             dataset_transaction=dataset_transaction,
-            downstream_impact=self._downstream_impact(ctx, row, dataset_transaction, snapshot),
+            downstream_impact=self._downstream_impact(ctx, row, dataset_transaction),
             quality_check_results=quality_check_results,
             quality_failed_row_samples=quality_failed_row_samples,
         )
@@ -321,12 +321,11 @@ class RuntimeService(CoreService):
         ctx: RequestContext,
         row: RuntimeRow,
         dataset_transaction: RuntimeRow | None,
-        snapshot: RuntimeRunSnapshot,
     ) -> RuntimeJsonObject | None:
         return downstream_impact_graph(
             row,
             dataset_transaction,
-            snapshot,
+            lambda run_id: self.runtime_repository.run_row_any_type(tenant_id=ctx.tenant_id, run_id=run_id),
             lambda resource_id: self.runtime_repository.lineage_for_resource(
                 tenant_id=ctx.tenant_id,
                 resource_id=resource_id,

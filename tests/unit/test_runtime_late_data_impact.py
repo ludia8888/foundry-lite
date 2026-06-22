@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
-from foundry_lite.application.ports import LineageEdgeRow, RuntimeRow, RuntimeRunSnapshot
+from foundry_lite.application.ports import LineageEdgeRow, RuntimeRow, RuntimeRunSnapshot, RuntimeRunType
 from foundry_lite.application.services.runtime_late_data_impact import (
     downstream_impact_graph,
     materialization_late_data_badge,
@@ -76,7 +76,7 @@ def test_downstream_impact_graph_returns_none_without_late_roots_or_badges() -> 
     impact = downstream_impact_graph(
         _run("mat-run", api_name="order_current"),
         None,
-        _snapshot(),
+        _run_resolver(_snapshot()),
         lambda _resource_id: [],
     )
 
@@ -117,7 +117,7 @@ def test_downstream_impact_graph_walks_lineage_and_dedupes_run_links() -> None:
     impact = downstream_impact_graph(
         materialization_run,
         dataset_transaction,
-        snapshot,
+        _run_resolver(snapshot),
         _lineage_lookup(
             [
                 _edge("edge-wrong-source", "other-v1", "ignored-v1", "sync-run"),
@@ -145,6 +145,57 @@ def test_downstream_impact_graph_walks_lineage_and_dedupes_run_links() -> None:
     assert ("materialization", "mat-run", "late_data_reprocessed") in run_links
     assert sum(1 for link in impact["affectedRuns"] if link["runId"] == "transform-run") == 1
     assert impact["lateDataBadges"][0]["runId"] == "mat-run"
+
+
+def test_downstream_impact_graph_handles_cycles_and_reopen_without_sources() -> None:
+    run = _run("mat-run", api_name="order_current")
+    dataset_transaction = _run(
+        "tx-cycle",
+        metadata={
+            "lateDataReprocessingPlan": {
+                "affectedClosedOutputs": [{"resourceType": "dataset_version", "resourceId": "ds-a"}],
+            },
+            # Reopen with no previous/source ids exercises the skip branches.
+            "materializationDetail": {"apiName": "order_current", "reopen": {"isReopened": True}},
+        },
+    )
+
+    impact = downstream_impact_graph(
+        run,
+        dataset_transaction,
+        _run_resolver(_snapshot()),
+        _lineage_lookup(
+            [
+                _edge("e-ab", "ds-a", "ds-b", "sync-run"),
+                _edge("e-ba", "ds-b", "ds-a", "sync-run"),  # cycles back to a visited resource
+            ]
+        ),
+    )
+
+    assert impact is not None
+    node_ids = {(node["resourceType"], node["resourceId"]) for node in impact["nodes"]}
+    assert ("dataset_version", "ds-a") in node_ids
+    assert ("dataset_version", "ds-b") in node_ids
+
+
+def _run_resolver(
+    snapshot: RuntimeRunSnapshot,
+) -> Callable[[str], tuple[RuntimeRunType, RuntimeRow] | None]:
+    groups: tuple[tuple[RuntimeRunType, str], ...] = (
+        ("sync", "syncRuns"),
+        ("transform", "transformRuns"),
+        ("index", "indexRuns"),
+        ("materialization", "materializationRuns"),
+    )
+
+    def resolve(run_id: str) -> tuple[RuntimeRunType, RuntimeRow] | None:
+        for run_type, key in groups:
+            for row in snapshot[key]:  # type: ignore[literal-required]
+                if row.get("id") == run_id:
+                    return run_type, row
+        return None
+
+    return resolve
 
 
 def _snapshot(
