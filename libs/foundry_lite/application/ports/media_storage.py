@@ -87,6 +87,7 @@ class MediaReadGrant:
     object_key: str
     expires_at: str | None = None
     stream: BinaryIO | None = None
+    url: str | None = None
 
 
 class MediaStorageAdapter(Protocol):

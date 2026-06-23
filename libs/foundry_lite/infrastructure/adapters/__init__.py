@@ -25,6 +25,10 @@ from foundry_lite.infrastructure.adapters.s3_dataset_storage import (
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
 )
+from foundry_lite.infrastructure.adapters.s3_media_storage import (
+    S3MediaStorageAdapter,
+    S3MediaStorageConfig,
+)
 from foundry_lite.infrastructure.adapters.scale_foundation import (
     FakeConnectorAdapter,
     FakeSearchAdapter,
@@ -64,6 +68,8 @@ __all__ = [
     "ElasticsearchAdapter",
     "ElasticsearchAdapterConfig",
     "RestPullConnectorAdapter",
+    "S3MediaStorageAdapter",
+    "S3MediaStorageConfig",
     "IcebergDatasetStorageAdapter",
     "IcebergDatasetStorageAdapterConfig",
     "S3DatasetStorageAdapter",
