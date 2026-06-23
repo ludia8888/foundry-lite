@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.dependencies import CoreDependencies
+from foundry_lite.application.ports.content_index import ContentIndexAdapter
 from foundry_lite.application.ports.dataset_storage import DatasetStorageAdapter
 from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
@@ -20,6 +21,7 @@ from foundry_lite.infrastructure.adapters import (
     DuckDBComputeAdapter,
     ElasticsearchAdapter,
     ElasticsearchAdapterConfig,
+    ElasticsearchContentIndexAdapter,
     FakeComputeAdapter,
     FakeConnectorAdapter,
     FakeDatasetStorageAdapter,
@@ -29,6 +31,7 @@ from foundry_lite.infrastructure.adapters import (
     IcebergDatasetStorageAdapter,
     IcebergDatasetStorageAdapterConfig,
     LocalConnectorAdapter,
+    LocalContentIndexAdapter,
     LocalDatasetStorageAdapter,
     LocalMediaStorageAdapter,
     LocalSearchAdapter,
@@ -105,6 +108,7 @@ def create_local_core_dependencies(
     storage_adapter = _dataset_storage_adapter(adapter_profile, object_storage_root)
     media_storage = _media_storage_adapter(adapter_profile, media_storage_root)
     media_processor = _media_processor_adapter(adapter_profile)
+    content_index_adapter = _content_index_adapter(adapter_profile)
     compute_adapter = _compute_adapter(adapter_profile)
     connector_adapter = _connector_adapter(adapter_profile)
     search_adapter = _search_adapter(adapter_profile)
@@ -148,6 +152,7 @@ def create_local_core_dependencies(
         media_processor=media_processor,
         dataset_storage=storage_adapter,
         media_storage=media_storage,
+        content_index_adapter=content_index_adapter,
         search_adapter=search_adapter,
         secret_provider=secret_provider_from_env(),
         stream_adapter=stream_adapter,
@@ -185,6 +190,18 @@ def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
     if processor_profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media", "pdf-pypdf"}:
         return PdfTextProcessorAdapter()
     raise ValueError(f"unknown media processor profile: {processor_profile}")
+
+
+def _content_index_adapter(adapter_profile: str) -> ContentIndexAdapter:
+    # Content search index is selectable independently; v1 default is the in-memory local
+    # projection. Elasticsearch is the production backend (lexical-first; dense/hybrid = M8).
+    index_profile = os.getenv("FOUNDRY_LITE_CONTENT_INDEX_PROFILE", adapter_profile)
+    if index_profile == "elasticsearch":
+        endpoint = os.getenv("FOUNDRY_LITE_ELASTICSEARCH_URL", "http://localhost:9200")
+        return ElasticsearchContentIndexAdapter(ElasticsearchAdapterConfig(endpoint=endpoint))
+    if index_profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media"}:
+        return LocalContentIndexAdapter()
+    raise ValueError(f"unknown content index profile: {index_profile}")
 
 
 def _s3_media_storage_config() -> S3MediaStorageConfig:

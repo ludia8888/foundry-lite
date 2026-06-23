@@ -9,6 +9,7 @@ from foundry_lite.infrastructure.adapters.debezium_cdc import (
     DebeziumPostgresSourceConfig,
     DebeziumPostgresStreamAdapter,
 )
+from foundry_lite.infrastructure.adapters.elasticsearch_content_index import ElasticsearchContentIndexAdapter
 from foundry_lite.infrastructure.adapters.elasticsearch_search import ElasticsearchAdapter, ElasticsearchAdapterConfig
 from foundry_lite.infrastructure.adapters.iceberg_dataset_storage import (
     IcebergDatasetStorageAdapter,
@@ -19,6 +20,7 @@ from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamAdapterConfig,
     KafkaStreamSubscription,
 )
+from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfTextProcessorAdapter
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
@@ -69,6 +71,8 @@ __all__ = [
     "PdfTextProcessorAdapter",
     "ElasticsearchAdapter",
     "ElasticsearchAdapterConfig",
+    "ElasticsearchContentIndexAdapter",
+    "LocalContentIndexAdapter",
     "RestPullConnectorAdapter",
     "S3MediaStorageAdapter",
     "S3MediaStorageConfig",

@@ -112,6 +112,33 @@ class SqlAlchemyMediaDerivativeRepository:
         )
         return [_content_unit_from_row(row) for row in rows]
 
+    def get_content_units_by_ids(self, *, transaction: Any, ids: list[str]) -> list[ContentUnitRecord]:
+        if not ids:
+            return []
+        rows = transaction.execute(select(db.content_units).where(db.content_units.c.id.in_(ids))).mappings().all()
+        return [_content_unit_from_row(row) for row in rows]
+
+    def get_committed_content_units_for_versions(
+        self, *, transaction: Any, tenant_id: str, source_media_item_version_ids: list[str]
+    ) -> list[ContentUnitRecord]:
+        if not source_media_item_version_ids:
+            return []
+        rows = (
+            transaction.execute(
+                select(db.content_units)
+                .where(
+                    and_(
+                        db.content_units.c.tenant_id == tenant_id,
+                        db.content_units.c.source_media_item_version_id.in_(source_media_item_version_ids),
+                    )
+                )
+                .order_by(db.content_units.c.source_media_item_version_id, db.content_units.c.ordinal)
+            )
+            .mappings()
+            .all()
+        )
+        return [_content_unit_from_row(row) for row in rows]
+
     def fetch_unreachable_staged_derivatives(
         self, *, transaction: Any, tenant_id: str, older_than: str
     ) -> list[MediaDerivativeRecord]:
