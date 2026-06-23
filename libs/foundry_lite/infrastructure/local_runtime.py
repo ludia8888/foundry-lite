@@ -54,6 +54,10 @@ from foundry_lite.infrastructure.adapters import (
     VideoProbeProcessorAdapter,
 )
 from foundry_lite.infrastructure.adapters.asr_processor import _faster_whisper_asr_engine
+from foundry_lite.infrastructure.adapters.local_embedding import (
+    FASTEMBED_MODEL_VERSION,
+    _fastembed_embedding_engine,
+)
 from foundry_lite.infrastructure.adapters.ocr_processor import _tesseract_ocr_engine
 from foundry_lite.infrastructure.adapters.video_probe_processor import _ffprobe_video_probe_runner
 from foundry_lite.infrastructure.repositories import (
@@ -121,7 +125,9 @@ def create_local_core_dependencies(
     media_storage = _media_storage_adapter(adapter_profile, media_storage_root)
     media_processor = _media_processor_adapter(adapter_profile)
     content_index_adapter = _content_index_adapter(adapter_profile)
-    embedding_model_adapter = LocalEmbeddingAdapter()
+    embedding_model_adapter = LocalEmbeddingAdapter(
+        embedding_engine=_fastembed_embedding_engine, model_version=FASTEMBED_MODEL_VERSION
+    )
     compute_adapter = _compute_adapter(adapter_profile)
     connector_adapter = _connector_adapter(adapter_profile)
     search_adapter = _search_adapter(adapter_profile)
