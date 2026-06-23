@@ -504,8 +504,20 @@ ratchet at a time, each adding at most one new external failure domain.
   than silently reusing), inherits the source security envelope, and fails closed on an
   undecodable image (validation) or a wall-clock timeout. Live OCR engine + active-covered
   family are deferred with M1–M4.
-- **M6 — FFmpeg image/audio/video:** process isolation + duration/resource failure
-  proofs first.
+- **M6 — image/video (processors shipped):** two families plug into the same
+  `MediaProcessingService`. An `ImageProcessorAdapter` (profile `image-pillow`) uses **real
+  Pillow** (a pure-Python wheel — no system binary, so the real engine runs in CI): it reads
+  image metadata (format/mode/dimensions) and a deterministic thumbnail spec into a
+  `thumbnail` derivative. A pixel-count cap is a decompression-bomb resource guard
+  (M-T3-001 → typed validation), an undecodable image is a typed validation failure, and a
+  hung decode fails closed on a wall-clock timeout (M-T3-002, `shutdown(wait=False)`). A
+  `VideoProbeProcessorAdapter` (profile `ffprobe`) probes container/stream metadata
+  (duration/codec/resolution) into a `video_probe` derivative via an **injectable probe
+  runner** — the default reports `probe_engine_unavailable` (a real profile injects a
+  subprocess runner that SIGTERMs its process group on timeout), so no ffprobe binary is
+  required to test. Each failure records FAILED durable evidence and commits no derivative —
+  nothing is ever partially visible. Real transcode/HLS/waveform/scene-frames + active-covered
+  family are deferred with M1–M5 (operator-evidence needs a media Operations surface).
 - **M7 — ASR:** Whisper/faster-whisper or managed provider (one family).
 - **M8 — Embedding + hybrid retrieval:** reuse Elasticsearch vector capability
   before adding a separate vector DB.

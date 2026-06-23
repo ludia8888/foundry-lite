@@ -30,6 +30,7 @@ from foundry_lite.infrastructure.adapters import (
     FakeWorkflowAdapter,
     IcebergDatasetStorageAdapter,
     IcebergDatasetStorageAdapterConfig,
+    ImageProcessorAdapter,
     LocalConnectorAdapter,
     LocalContentIndexAdapter,
     LocalDatasetStorageAdapter,
@@ -46,6 +47,7 @@ from foundry_lite.infrastructure.adapters import (
     SparkComputeAdapter,
     TemporalWorkflowAdapter,
     TemporalWorkflowAdapterConfig,
+    VideoProbeProcessorAdapter,
 )
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
@@ -190,6 +192,10 @@ def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
     # Media processing is selectable independently of storage; v1 ships the local PDF
     # raw-text processor (pypdf). External processors (OCR/ASR/FFmpeg) land in later ratchets.
     processor_profile = os.getenv("FOUNDRY_LITE_MEDIA_PROCESSOR_PROFILE", adapter_profile)
+    if processor_profile == "image-pillow":
+        return ImageProcessorAdapter()
+    if processor_profile == "ffprobe":
+        return VideoProbeProcessorAdapter()
     if processor_profile == "ocr-tesseract":
         return OcrProcessorAdapter()
     if processor_profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media", "pdf-pypdf"}:
