@@ -33,16 +33,15 @@ def _tombstone_object(
     action: ErasureManifestAction, runtime_repository: RuntimeRepository, engine: TransactionManager
 ) -> ErasureActionReceipt:
     resource = action.resource
-    redacted_at = _now()
     with engine.begin() as conn:
         tombstoned = runtime_repository.delete_object_record(
-            transaction=conn, tenant_id=resource.tenant_id, record_id=resource.resource_id, redacted_at=redacted_at
+            transaction=conn, tenant_id=resource.tenant_id, record_id=resource.resource_id
         )
     return ErasureActionReceipt(
         action_type=action.action_type,
         resource=resource,
         status="APPLIED",
-        completed_at=redacted_at,
+        completed_at=_now(),
         evidence={"executor": "runtime_repository.delete_object_record", "tombstoned": tombstoned},
     )
 

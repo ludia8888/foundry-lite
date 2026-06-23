@@ -168,8 +168,8 @@ class _FakeRuntimeRepository:
         self.deleted_dlq.append((tenant_id, event_id))
         return True
 
-    def delete_object_record(self, *, transaction: object, tenant_id: str, record_id: str, redacted_at: str) -> bool:
-        del transaction, redacted_at
+    def delete_object_record(self, *, transaction: object, tenant_id: str, record_id: str) -> bool:
+        del transaction
         self.tombstoned_objects.append((tenant_id, record_id))
         return True
 

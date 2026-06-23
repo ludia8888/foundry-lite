@@ -468,17 +468,8 @@ class RuntimeRepository(Protocol):
         """Delete a tenant-scoped dead-letter event after it is requeued."""
         ...
 
-    def delete_object_record(
-        self, *, transaction: TransactionContext, tenant_id: str, record_id: str, redacted_at: str
-    ) -> bool:
-        """Tombstone one tenant-scoped object record for subject erasure.
-
-        Marks the record deleted and clears its subject-bearing property payloads,
-        leaving a deletion tombstone so projections and lineage still resolve the
-        erased object instead of resurrecting it. Returns True when a live record
-        was tombstoned, False when it was already tombstoned or absent (idempotent
-        replay).
-        """
+    def delete_object_record(self, *, transaction: TransactionContext, tenant_id: str, record_id: str) -> bool:
+        """Tombstone a tenant-scoped object record for erasure; idempotent no-op on replay."""
         ...
 
     def insert_audit_event(self, *, transaction: TransactionContext, record: AuditEventRecord) -> None:

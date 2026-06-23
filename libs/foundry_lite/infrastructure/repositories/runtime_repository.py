@@ -413,7 +413,7 @@ class SqlAlchemyRuntimeRepository:
         )
         return result.rowcount == 1
 
-    def delete_object_record(self, *, transaction: Any, tenant_id: str, record_id: str, redacted_at: str) -> bool:
+    def delete_object_record(self, *, transaction: Any, tenant_id: str, record_id: str) -> bool:
         # Tombstone the record (keep the row so rebuilds do not resurrect it) and
         # clear the subject-bearing property payloads. The deleted=False predicate
         # makes the erasure idempotent: a replay touches no row and returns False.
@@ -434,7 +434,6 @@ class SqlAlchemyRuntimeRepository:
                 base_properties={},
                 edit_properties={},
                 property_versions={},
-                updated_at=redacted_at,
             )
         )
         return result.rowcount == 1

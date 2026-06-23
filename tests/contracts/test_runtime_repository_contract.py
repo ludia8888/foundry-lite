@@ -301,7 +301,7 @@ class FakeRuntimeRepository:
         ]
         return len(self.tables["dead_letter_events"]) == before_count - 1
 
-    def delete_object_record(self, *, transaction: Any, tenant_id: str, record_id: str, redacted_at: str) -> bool:
+    def delete_object_record(self, *, transaction: Any, tenant_id: str, record_id: str) -> bool:
         del transaction
         for row in self.tables["object_records"]:
             if row["tenant_id"] == tenant_id and row["id"] == record_id and not row["deleted"]:
@@ -313,7 +313,6 @@ class FakeRuntimeRepository:
                     base_properties={},
                     edit_properties={},
                     property_versions={},
-                    updated_at=redacted_at,
                 )
                 return True
         return False
@@ -1171,17 +1170,11 @@ def test_runtime_repository_contract_tombstones_object_record_idempotently(
 
     with harness.transaction() as transaction:
         tombstoned = harness.repository.delete_object_record(
-            transaction=transaction,
-            tenant_id="tenant-demo",
-            record_id="Order:O-1",
-            redacted_at="2026-06-23T00:00:00Z",
+            transaction=transaction, tenant_id="tenant-demo", record_id="Order:O-1"
         )
     with harness.transaction() as transaction:
         replay = harness.repository.delete_object_record(
-            transaction=transaction,
-            tenant_id="tenant-demo",
-            record_id="Order:O-1",
-            redacted_at="2026-06-23T00:00:01Z",
+            transaction=transaction, tenant_id="tenant-demo", record_id="Order:O-1"
         )
         rows = harness.repository.rows_for_tenant(
             transaction=transaction, table="object_records", tenant_id="tenant-demo"
@@ -1199,7 +1192,6 @@ def test_runtime_repository_contract_tombstones_object_record_idempotently(
     assert row["properties"] == {}
     assert row["base_properties"] == {}
     assert row["edit_properties"] == {}
-    assert row["updated_at"] == "2026-06-23T00:00:00Z"
     assert "ada@example.com" not in repr(row)
 
 
