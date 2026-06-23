@@ -15,18 +15,31 @@ def default_erasure_executors(
 ) -> Mapping[str, ErasureActionExecutor]:
     """Concrete executors for the serving/projection surfaces.
 
-    Surfaces that require richer source context (dataset-row redaction,
-    materialization rebuild) are added on top of this map as their executors
-    land; an unmapped action fails closed in the service rather than being
-    silently certified.
+    Materialization rebuild requires richer source context and is added on top of
+    this map as its executor lands; an unmapped action fails closed in the service
+    rather than being silently certified.
     """
     return {
         "remove_search_document": lambda action: _remove_search_document(action, search_adapter),
         "tombstone_object": lambda action: _tombstone_object(action, runtime_repository, engine),
+        "redact_dataset_row": _redact_dataset_row,
         "redact_dead_letter_payload": lambda action: _redact_dead_letter_payload(action, runtime_repository, engine),
         "minimize_audit_evidence": _minimize_audit_evidence,
         "defer_backup_expiration": _defer_backup_expiration,
     }
+
+
+def _redact_dataset_row(action: ErasureManifestAction) -> ErasureActionReceipt:
+    # Dataset rows live in immutable version files; the physical version rewrite and
+    # prior-version purge run in the redaction maintenance lane. The deferred receipt
+    # is the durable record of which tenant-scoped row must be redacted.
+    return ErasureActionReceipt(
+        action_type=action.action_type,
+        resource=action.resource,
+        status="DEFERRED",
+        completed_at=_now(),
+        evidence={"executor": "dataset_row_redaction", **dict(action.evidence)},
+    )
 
 
 def _tombstone_object(

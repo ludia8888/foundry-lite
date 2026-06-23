@@ -158,6 +158,30 @@ def test_backup_retention_exposes_pending_erasure_state() -> None:
     assert "ada@example.com" not in repr(manifest.redacted_evidence())
 
 
+def test_dataset_row_redaction_is_deferred_to_maintenance_lane() -> None:
+    request = _erasure_request()
+    retention_policy = _retention_policy()
+    resolution = resolve_erasure_subject(
+        request,
+        [_record("clean.orders:row-7", "dataset_row")],
+        identity_fields=("email",),
+        resource_type="dataset_row",
+        surface="clean.orders",
+    )
+
+    manifest = build_erasure_manifest(request, (resolution,), retention_policy=retention_policy)
+    dataset_action = next(action for action in manifest.actions if action.action_type == "redact_dataset_row")
+
+    # Dataset rows live in immutable version files, so the physical rewrite is deferred;
+    # the manifest still carries a raw-value-free durable record of the row to redact.
+    assert manifest.status == "PENDING_RETENTION"
+    assert dataset_action.status == "DEFERRED"
+    assert dataset_action.resource.resource_id == "clean.orders:row-7"
+    assert dataset_action.reason == "deferred_to_redaction_maintenance"
+    assert dataset_action.evidence["subjectHash"] == request.subject_hash
+    assert "ada@example.com" not in repr(manifest.redacted_evidence())
+
+
 def test_search_rebuild_does_not_resurrect_erased_subject() -> None:
     request = _erasure_request()
     retention_policy = _retention_policy()
