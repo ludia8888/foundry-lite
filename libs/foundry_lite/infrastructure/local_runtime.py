@@ -8,6 +8,7 @@ from sqlalchemy.engine import Engine
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports.dataset_storage import DatasetStorageAdapter
+from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.ontology_repository import PropertyClassificationRow
 from foundry_lite.application.ports.search_adapter import SearchAdapter
@@ -33,6 +34,7 @@ from foundry_lite.infrastructure.adapters import (
     LocalSearchAdapter,
     LocalStreamAdapter,
     LocalWorkflowAdapter,
+    PdfTextProcessorAdapter,
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
     S3MediaStorageAdapter,
@@ -51,6 +53,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyErasureRepository,
     SqlAlchemyInsightReviewRepository,
     SqlAlchemyMaterializationRepository,
+    SqlAlchemyMediaDerivativeRepository,
     SqlAlchemyMediaRepository,
     SqlAlchemyMetadataRepository,
     SqlAlchemyObjectIndexRepository,
@@ -101,6 +104,7 @@ def create_local_core_dependencies(
 
     storage_adapter = _dataset_storage_adapter(adapter_profile, object_storage_root)
     media_storage = _media_storage_adapter(adapter_profile, media_storage_root)
+    media_processor = _media_processor_adapter(adapter_profile)
     compute_adapter = _compute_adapter(adapter_profile)
     connector_adapter = _connector_adapter(adapter_profile)
     search_adapter = _search_adapter(adapter_profile)
@@ -140,6 +144,8 @@ def create_local_core_dependencies(
         runtime_repository=SqlAlchemyRuntimeRepository(engine),
         erasure_repository=SqlAlchemyErasureRepository(engine),
         media_repository=SqlAlchemyMediaRepository(engine),
+        media_derivative_repository=SqlAlchemyMediaDerivativeRepository(engine),
+        media_processor=media_processor,
         dataset_storage=storage_adapter,
         media_storage=media_storage,
         search_adapter=search_adapter,
@@ -170,6 +176,15 @@ def _media_storage_adapter(adapter_profile: str, media_storage_root: Path) -> Me
     if media_profile in {"local", "fake-storage", "s3-storage", "iceberg"}:
         return LocalMediaStorageAdapter(media_storage_root)
     raise ValueError(f"unknown media storage profile: {media_profile}")
+
+
+def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
+    # Media processing is selectable independently of storage; v1 ships the local PDF
+    # raw-text processor (pypdf). External processors (OCR/ASR/FFmpeg) land in later ratchets.
+    processor_profile = os.getenv("FOUNDRY_LITE_MEDIA_PROCESSOR_PROFILE", adapter_profile)
+    if processor_profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media", "pdf-pypdf"}:
+        return PdfTextProcessorAdapter()
+    raise ValueError(f"unknown media processor profile: {processor_profile}")
 
 
 def _s3_media_storage_config() -> S3MediaStorageConfig:

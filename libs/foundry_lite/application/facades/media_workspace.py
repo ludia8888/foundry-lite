@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from typing import BinaryIO
 
+from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRecord
+from foundry_lite.application.ports.media_processor import ProcessorSpec
 from foundry_lite.application.ports.media_repository import MediaSetRecord
 from foundry_lite.application.services.media.catalog import MediaSetSpec
+from foundry_lite.application.services.media.processing import ProcessingOutcome
 from foundry_lite.application.services.media.references import ResolvedMediaReference
 from foundry_lite.application.services.media.transactions import MediaCommitResult
 from foundry_lite.application.services.media.uploads import MediaUploadInput, StagedUpload
@@ -100,3 +103,12 @@ class MediaWorkspace:
 
     def resolve_reference(self, ctx: RequestContext, *, media_item_version_id: str) -> ResolvedMediaReference:
         return self._media.reference.resolve(ctx, media_item_version_id=media_item_version_id)
+
+    def process(self, ctx: RequestContext, *, media_item_version_id: str, spec: ProcessorSpec) -> ProcessingOutcome:
+        return self._media.processing.process(ctx, media_item_version_id=media_item_version_id, spec=spec)
+
+    def resolve_derivative(self, ctx: RequestContext, *, media_derivative_id: str) -> MediaDerivativeRecord:
+        return self._media.processing.resolve_derivative(ctx, media_derivative_id=media_derivative_id)
+
+    def sweep_orphan_derivatives(self, ctx: RequestContext, *, older_than: str) -> list[str]:
+        return self._media.processing.sweep_orphan_derivatives(ctx, older_than=older_than)

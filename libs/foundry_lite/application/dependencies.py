@@ -25,6 +25,8 @@ from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
+from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRepository
+from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
 from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.search_adapter import SearchAdapter
@@ -61,8 +63,10 @@ class CoreDependencies:
     runtime_repository: RuntimeRepository
     erasure_repository: ErasureRepository
     media_repository: MediaRepository
+    media_derivative_repository: MediaDerivativeRepository
     dataset_storage: DatasetStorageAdapter
     media_storage: MediaStorageAdapter
+    media_processor: MediaProcessorAdapter
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
     stream_adapter: StreamAdapter

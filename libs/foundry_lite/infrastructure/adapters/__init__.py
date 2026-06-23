@@ -20,6 +20,7 @@ from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamSubscription,
 )
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
+from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfTextProcessorAdapter
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
 from foundry_lite.infrastructure.adapters.s3_dataset_storage import (
     S3DatasetStorageAdapter,
@@ -65,6 +66,7 @@ __all__ = [
     "LocalSearchAdapter",
     "LocalStreamAdapter",
     "LocalWorkflowAdapter",
+    "PdfTextProcessorAdapter",
     "ElasticsearchAdapter",
     "ElasticsearchAdapterConfig",
     "RestPullConnectorAdapter",

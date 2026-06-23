@@ -24,22 +24,41 @@ class ProcessorSpec:
 
 @dataclass(frozen=True)
 class MediaProcessingRequest:
-    """One processing request bound to an exact media version + processing spec hash."""
+    """One processing request bound to an exact media version + processing spec hash.
+
+    ``source_path`` is a local sandbox file the application materialized for the processor
+    (doc §5.2: processors get a scoped grant or sandbox path, never raw storage credentials).
+    """
 
     tenant_id: str
     media_item_version_id: str
     blob_key: str
     spec: ProcessorSpec
     processing_spec_hash: str
+    source_path: str | None = None
+
+
+@dataclass(frozen=True)
+class ProcessedContentUnit:
+    """One normalized unit a processor extracted (e.g. a PDF page) with a verifiable hash."""
+
+    unit_kind: str
+    ordinal: int
+    text: str
+    text_hash: str
+    page_number: int | None = None
 
 
 @dataclass(frozen=True)
 class MediaProcessingResult:
-    """Result envelope for a processing run (derivative/content/metadata/embedding outputs)."""
+    """Result of one processing run: the derivative artifact identity + its content units."""
 
     media_item_version_id: str
     processing_spec_hash: str
-    outputs: tuple[object, ...] = ()
+    derivative_kind: str = ""
+    content_hash: str = ""
+    mime_type: str = "text/plain"
+    units: tuple[ProcessedContentUnit, ...] = ()
 
 
 class MediaProcessorAdapter(Protocol):
