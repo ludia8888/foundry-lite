@@ -26,6 +26,7 @@ from foundry_lite.application.ports import (
     WorkflowAdapter,
 )
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
+from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
 from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRepository
@@ -101,6 +102,7 @@ class CoreService:
     media_storage: MediaStorageAdapter
     media_processor: MediaProcessorAdapter
     content_index_adapter: ContentIndexAdapter
+    embedding_model_adapter: EmbeddingModelAdapter
     engine: TransactionManager
     policy: PolicyService
     action_repository: ActionRepository

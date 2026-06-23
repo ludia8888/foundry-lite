@@ -23,6 +23,7 @@ from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamSubscription,
 )
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
+from foundry_lite.infrastructure.adapters.local_embedding import LocalEmbeddingAdapter
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.ocr_processor import OcrProcessorAdapter
 from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfTextProcessorAdapter
@@ -81,6 +82,7 @@ __all__ = [
     "ElasticsearchAdapterConfig",
     "ElasticsearchContentIndexAdapter",
     "LocalContentIndexAdapter",
+    "LocalEmbeddingAdapter",
     "RestPullConnectorAdapter",
     "S3MediaStorageAdapter",
     "S3MediaStorageConfig",

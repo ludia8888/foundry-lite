@@ -18,11 +18,16 @@ class DefaultContentRetrievalService(CoreService):
     The query is forced to the caller's tenant so the index can never widen scope.
     """
 
-    required_dependencies = ("engine", "media_derivative_repository", "content_index_adapter")
+    required_dependencies = (
+        "engine",
+        "media_derivative_repository",
+        "content_index_adapter",
+        "embedding_model_adapter",
+    )
     required_collaborators = ()
 
     def search_content(self, ctx: RequestContext, *, query: HybridContentQuery) -> list[ContentSearchHit]:
-        scoped = replace(query, tenant_id=ctx.tenant_id)
+        scoped = self._with_query_vector(replace(query, tenant_id=ctx.tenant_id))
         hits = self.content_index_adapter.search(scoped)
         if not hits:
             return []
@@ -32,6 +37,12 @@ class DefaultContentRetrievalService(CoreService):
             )
         unit_by_id = {unit.content_unit_id: unit for unit in units}
         return [hit for hit in hits if _is_authoritative(hit, unit_by_id.get(hit.content_unit_id), ctx.tenant_id)]
+
+    def _with_query_vector(self, query: HybridContentQuery) -> HybridContentQuery:
+        if not self.embedding_model_adapter.is_available or not query.text:
+            return query
+        vector = self.embedding_model_adapter.embed([query.text])[0]
+        return replace(query, query_vector=vector, embedding_model_version=self.embedding_model_adapter.model_version)
 
 
 def _is_authoritative(hit: ContentSearchHit, unit: ContentUnitRecord | None, tenant_id: str) -> bool:

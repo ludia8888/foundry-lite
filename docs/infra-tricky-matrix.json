@@ -956,13 +956,11 @@
     },
     "embedding_artifact_pins_model_version_and_chunk_spec": {
       "description": "An embedding artifact pins its embedding model version and chunk spec; index mismatch fails closed.",
-      "status": "deferred",
-      "deferral": {
-        "reason": "Embeddings land in the hybrid-retrieval PR (M8).",
-        "riskTier": "T0",
-        "futureTest": "test_embedding_artifact_pins_model_and_chunk_spec",
-        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
-      }
+      "status": "enforced",
+      "tests": [
+        "test_embedding_artifact_pins_model_and_chunk_spec",
+        "test_hybrid_search_fails_closed_on_model_version_mismatch"
+      ]
     },
     "workflow_status_does_not_replace_domain_commit": {
       "description": "A Temporal workflow status is not a media domain commit; the DB COMMITTED version remains the only success signal.",

@@ -7,6 +7,7 @@ from foundry_lite.application.ports.content_index import (
     ContentIndexSchema,
     IndexedContentUnit,
 )
+from foundry_lite.application.ports.embedding_model import EmbeddingVector
 from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.media.protocols import MediaRuntimeBoundary
@@ -33,7 +34,12 @@ class MediaIndexingService(CoreService):
     purely from committed DB rows, proving the index is disposable.
     """
 
-    required_dependencies = ("engine", "media_derivative_repository", "content_index_adapter")
+    required_dependencies = (
+        "engine",
+        "media_derivative_repository",
+        "content_index_adapter",
+        "embedding_model_adapter",
+    )
     required_collaborators = ("runtime_service",)
     runtime_service: MediaRuntimeBoundary
 
@@ -85,10 +91,19 @@ class MediaIndexingService(CoreService):
             )
 
     def _project(self, generation: str, units: list[ContentUnitRecord]) -> IndexingOutcome:
-        self.content_index_adapter.configure_generation(ContentIndexSchema(generation=generation))
-        batch = ContentIndexBatch(generation=generation, units=tuple(_indexed(unit) for unit in units))
+        model_version = self.embedding_model_adapter.model_version if self.embedding_model_adapter.is_available else ""
+        self.content_index_adapter.configure_generation(
+            ContentIndexSchema(generation=generation, embedding_model_version=model_version)
+        )
+        batch = ContentIndexBatch(generation=generation, units=self._indexed_units(units, model_version))
         result = self.content_index_adapter.upsert_units(batch)
         return IndexingOutcome(generation=generation, indexed=result.indexed, failed=result.failed)
+
+    def _indexed_units(self, units: list[ContentUnitRecord], model_version: str) -> tuple[IndexedContentUnit, ...]:
+        if not self.embedding_model_adapter.is_available:
+            return tuple(_indexed(unit, (), "") for unit in units)
+        vectors = self.embedding_model_adapter.embed([unit.text for unit in units])
+        return tuple(_indexed(unit, tuple(vector), model_version) for unit, vector in zip(units, vectors, strict=False))
 
     def _audit_indexed(self, ctx: RequestContext, generation: str, resource_id: str, outcome: IndexingOutcome) -> None:
         with self.engine.begin() as conn:
@@ -114,7 +129,7 @@ class MediaIndexingService(CoreService):
             )
 
 
-def _indexed(unit: ContentUnitRecord) -> IndexedContentUnit:
+def _indexed(unit: ContentUnitRecord, embedding: EmbeddingVector, embedding_model_version: str) -> IndexedContentUnit:
     return IndexedContentUnit(
         tenant_id=unit.tenant_id,
         content_unit_id=unit.content_unit_id,
@@ -125,4 +140,7 @@ def _indexed(unit: ContentUnitRecord) -> IndexedContentUnit:
         page_number=unit.page_number,
         start_ms=unit.start_ms,
         end_ms=unit.end_ms,
+        chunk_spec_hash=unit.chunk_spec_hash,
+        embedding=embedding,
+        embedding_model_version=embedding_model_version,
     )

@@ -161,6 +161,9 @@ _MAPPINGS: Mapping[str, object] = {
         "page_number": {"type": "long"},
         "start_ms": {"type": "long"},
         "end_ms": {"type": "long"},
+        "chunk_spec_hash": {"type": "keyword"},
+        "embedding_model_version": {"type": "keyword"},
+        "embedding": {"type": "dense_vector"},
     }
 }
 
@@ -180,6 +183,9 @@ def _document_body(unit: IndexedContentUnit) -> Mapping[str, object]:
         "page_number": unit.page_number,
         "start_ms": unit.start_ms,
         "end_ms": unit.end_ms,
+        "chunk_spec_hash": unit.chunk_spec_hash,
+        "embedding_model_version": unit.embedding_model_version,
+        "embedding": list(unit.embedding),
     }
 
 
@@ -199,9 +205,27 @@ def _version_guarded_body(unit: IndexedContentUnit) -> Mapping[str, object]:
 
 
 def _search_body(query: HybridContentQuery) -> Mapping[str, object]:
-    filters = [{"term": {"tenant_id": query.tenant_id}}]
+    filters: list[Mapping[str, object]] = [{"term": {"tenant_id": query.tenant_id}}]
+    if query.query_vector is not None:
+        return _dense_search_body(query, filters)
     must = [{"match": {"text": query.text}}] if query.text else [{"match_all": {}}]
     return {"query": {"bool": {"filter": filters, "must": must}}, "size": query.top_k}
+
+
+def _dense_search_body(query: HybridContentQuery, filters: list[Mapping[str, object]]) -> Mapping[str, object]:
+    scoped = [*filters, {"term": {"embedding_model_version": query.embedding_model_version or ""}}]
+    return {
+        "query": {
+            "script_score": {
+                "query": {"bool": {"filter": scoped}},
+                "script": {
+                    "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                    "params": {"query_vector": list(query.query_vector or ())},
+                },
+            }
+        },
+        "size": query.top_k,
+    }
 
 
 def _raw_hits(response: Mapping[str, object]) -> list[Mapping[str, object]]:
