@@ -40,13 +40,19 @@ class MediaProcessingRequest:
 
 @dataclass(frozen=True)
 class ProcessedContentUnit:
-    """One normalized unit a processor extracted (e.g. a PDF page) with a verifiable hash."""
+    """One normalized unit a processor extracted (a PDF page, an OCR region, an audio segment)
+    with a verifiable hash. Time-coded fields are set by ASR/AV processors (doc §8.3); page-based
+    processors leave them ``None``."""
 
     unit_kind: str
     ordinal: int
     text: str
     text_hash: str
     page_number: int | None = None
+    start_ms: int | None = None
+    end_ms: int | None = None
+    speaker: str | None = None
+    language: str | None = None
 
 
 @dataclass(frozen=True)

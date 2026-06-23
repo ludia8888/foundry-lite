@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 from foundry_lite.infrastructure.adapters import (
+    AsrProcessorAdapter,
     ImageProcessorAdapter,
     OcrProcessorAdapter,
     PdfTextProcessorAdapter,
@@ -22,6 +23,7 @@ from foundry_lite.infrastructure.local_runtime import _media_processor_adapter
         ("image-pillow", ImageProcessorAdapter),
         ("ffprobe", VideoProbeProcessorAdapter),
         ("ocr-tesseract", OcrProcessorAdapter),
+        ("asr-whisper", AsrProcessorAdapter),
         ("pdf-pypdf", PdfTextProcessorAdapter),
     ],
 )
