@@ -81,7 +81,7 @@ jobs:
   quality_coverage:
     name: quality-coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -116,6 +116,15 @@ jobs:
 
       - name: Install Tesseract OCR
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
+      - name: Cache faster-whisper tiny model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-faster-whisper-tiny
+
+      - name: Pre-fetch faster-whisper tiny model
+        run: uv run python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"
 
       - name: Run coverage quality lane
         run: pnpm ci:gate:coverage
@@ -131,7 +140,7 @@ jobs:
   quality_flaky:
     name: quality-flaky
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -166,6 +175,15 @@ jobs:
 
       - name: Install Tesseract OCR
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
+      - name: Cache faster-whisper tiny model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-faster-whisper-tiny
+
+      - name: Pre-fetch faster-whisper tiny model
+        run: uv run python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"
 
       - name: Run flaky quality lane
         run: pnpm ci:gate:flaky
@@ -181,7 +199,7 @@ jobs:
   quality_runtime:
     name: quality-runtime
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -216,6 +234,15 @@ jobs:
 
       - name: Install Tesseract OCR
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
+      - name: Cache faster-whisper tiny model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-faster-whisper-tiny
+
+      - name: Pre-fetch faster-whisper tiny model
+        run: uv run python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"
 
       - name: Run runtime quality lane
         run: pnpm ci:gate:runtime

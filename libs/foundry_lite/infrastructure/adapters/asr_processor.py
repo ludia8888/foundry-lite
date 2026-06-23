@@ -3,12 +3,12 @@
 Automatic speech recognition is a SEPARATE processor family from PDF raw text and OCR:
 it produces a distinct ``asr_v1`` derivative (it never overwrites embedded text or OCR),
 and its output is model-pinned because transcription is nondeterministic across model
-versions. The ASR engine is injectable — the default raises ``asr_engine_unavailable``
-because no speech model is bundled (a real profile injects Whisper/faster-whisper; live ASR
-is deferred like live-OCR / live-ES), so tests inject a deterministic fake and need no model.
-Transcription runs in a worker thread bounded by a wall clock; a hung decode fails closed
-(typed timeout), and an unsupported/undecodable audio is a typed validation failure. Each
-segment carries its time code (``start_ms``/``end_ms``) and optional speaker/language.
+versions. The ASR engine is injectable — the ``asr-whisper`` profile injects the real
+faster-whisper engine (``_faster_whisper_asr_engine``, L2) while the in-process default
+still raises ``asr_engine_unavailable`` so deterministic unit tests inject a fake and need
+no model. Transcription runs in a worker thread bounded by a wall clock; a hung decode fails
+closed (typed timeout), and an unsupported/undecodable audio is a typed validation failure.
+Each segment carries its time code (``start_ms``/``end_ms``) and optional speaker/language.
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import dataclass
+from importlib import import_module
+from typing import Any
 
 from foundry_lite.application.ports.adapter_failure import (
     AdapterError,
@@ -59,11 +61,44 @@ class AsrDocumentError(Exception):
 
 
 def _default_asr_engine(source_path: str) -> list[TranscriptSegment]:
-    # No speech model is bundled (no Whisper weights in CI); a real profile injects one.
-    # Shipping the adapter + contract now and deferring the live engine mirrors the
-    # live-OCR / live-ES deferral — the injectable seam is what M7 proves.
+    # In-process default: no speech model is wired here, so deterministic unit tests inject a
+    # fake and the seam stays covered. The real ``asr-whisper`` profile injects
+    # ``_faster_whisper_asr_engine`` (L2) instead of relying on this default.
     del source_path
     raise AsrDocumentError("asr_engine_unavailable")
+
+
+_whisper_model: Any | None = None
+
+
+def _load_whisper_model() -> Any:
+    # Build the tiny CPU model lazily/once (module-level cache) so repeated calls don't reload
+    # the ~75MB weights. faster-whisper uses the ctranslate2 backend (no torch).
+    global _whisper_model
+    if _whisper_model is None:
+        whisper_module = import_module("faster_whisper")
+        _whisper_model = whisper_module.WhisperModel("tiny", device="cpu", compute_type="int8")
+    return _whisper_model
+
+
+def _faster_whisper_asr_engine(source_path: str) -> list[TranscriptSegment]:
+    # Real engine (L2): lazily import faster-whisper so the module has no import-time speech
+    # dependency. ``language="en"`` is pinned (auto-detect misclassifies short clips). A
+    # decode/load error is an undecodable-audio validation failure.
+    try:
+        model = _load_whisper_model()
+        segments, _info = model.transcribe(source_path, language="en")
+        return [
+            TranscriptSegment(
+                start_ms=round(segment.start * 1000),
+                end_ms=round(segment.end * 1000),
+                text=segment.text.strip(),
+                language="en",
+            )
+            for segment in segments
+        ]
+    except Exception as exc:  # noqa: BLE001 - any decode/load error is an undecodable-audio validation failure
+        raise AsrDocumentError("undecodable_audio") from exc
 
 
 class AsrProcessorAdapter:

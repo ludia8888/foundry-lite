@@ -593,6 +593,26 @@ missing proof surfaces into evidence, so the media families can finally be promo
   visible through `list_media_runs`/`media_run_detail`, with no derivative committed). No
   family promotion happens at L1 — `infra-tricky-matrix.json` is untouched; promotion is the
   L9 capstone.
+- **L2 — Real faster-whisper ASR (shipped):** the `AsrProcessorAdapter` injectable engine
+  seam now has a real implementation — `_faster_whisper_asr_engine` lazily imports
+  `faster_whisper`, builds a `WhisperModel("tiny", device="cpu", compute_type="int8")` once
+  (a module-level cache via `_load_whisper_model`, so repeated calls don't reload the ~75MB
+  weights), runs `transcribe(path, language="en")` (the language is pinned because auto-detect
+  misclassifies short clips), and maps each segment to a time-coded `TranscriptSegment`
+  (`start_ms`/`end_ms` rounded from seconds), so the `asr-whisper` profile in `local_runtime`
+  finally transcribes for real (the in-process default still raises `asr_engine_unavailable`
+  so the deterministic fake-injected unit tests stay covered). faster-whisper uses the
+  ctranslate2 backend (no torch — a pure-wheel install, no apt package). A decode/load error
+  becomes a typed `undecodable_audio` **validation** failure. `tests/integration/test_media_asr_live.py`
+  proves both shapes against the real Whisper `tiny` model (fetched/cached in the
+  `quality_coverage`/`quality_flaky`/`quality_runtime` CI jobs via an `actions/cache` keyed on
+  `~/.cache/huggingface` and invoked by `pnpm quality:media-live-asr`): the **normal path**
+  (a committed audio clip → `asr_v1` derivative + ordered time-coded `audio_segment` content
+  units commit with the transcribed text, a SUCCEEDED `media_processing_runs` row, then
+  projection + search returns the doc) and **operator evidence** (undecodable audio records a
+  FAILED run with `failure_kind == validation` visible through `list_media_runs`/`media_run_detail`,
+  with no derivative committed). No family promotion happens at L2 — `infra-tricky-matrix.json`
+  is untouched; promotion is the L9 capstone.
 
 Media processing will be the first product-driven Temporal use case (M2). A media
 family becomes `active-covered` only when its proof-class tests collect and it is
