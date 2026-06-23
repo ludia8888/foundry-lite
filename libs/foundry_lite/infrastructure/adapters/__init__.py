@@ -15,6 +15,7 @@ from foundry_lite.infrastructure.adapters.iceberg_dataset_storage import (
     IcebergDatasetStorageAdapter,
     IcebergDatasetStorageAdapterConfig,
 )
+from foundry_lite.infrastructure.adapters.image_processor import ImageProcessorAdapter
 from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamAdapter,
     KafkaStreamAdapterConfig,
@@ -48,6 +49,7 @@ from foundry_lite.infrastructure.adapters.temporal_workflow import (
     TemporalWorkflowAdapter,
     TemporalWorkflowAdapterConfig,
 )
+from foundry_lite.infrastructure.adapters.video_probe_processor import VideoProbeProcessorAdapter
 
 __all__ = [
     "DuckDBComputeAdapter",
@@ -69,8 +71,10 @@ __all__ = [
     "LocalSearchAdapter",
     "LocalStreamAdapter",
     "LocalWorkflowAdapter",
+    "ImageProcessorAdapter",
     "OcrProcessorAdapter",
     "PdfTextProcessorAdapter",
+    "VideoProbeProcessorAdapter",
     "ElasticsearchAdapter",
     "ElasticsearchAdapterConfig",
     "ElasticsearchContentIndexAdapter",
