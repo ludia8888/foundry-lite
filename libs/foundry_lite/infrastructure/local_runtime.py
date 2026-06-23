@@ -37,6 +37,7 @@ from foundry_lite.infrastructure.adapters import (
     LocalSearchAdapter,
     LocalStreamAdapter,
     LocalWorkflowAdapter,
+    OcrProcessorAdapter,
     PdfTextProcessorAdapter,
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
@@ -189,6 +190,8 @@ def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
     # Media processing is selectable independently of storage; v1 ships the local PDF
     # raw-text processor (pypdf). External processors (OCR/ASR/FFmpeg) land in later ratchets.
     processor_profile = os.getenv("FOUNDRY_LITE_MEDIA_PROCESSOR_PROFILE", adapter_profile)
+    if processor_profile == "ocr-tesseract":
+        return OcrProcessorAdapter()
     if processor_profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media", "pdf-pypdf"}:
         return PdfTextProcessorAdapter()
     raise ValueError(f"unknown media processor profile: {processor_profile}")
