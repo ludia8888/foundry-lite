@@ -157,6 +157,7 @@ class _FakeRuntimeRepository:
     def __init__(self) -> None:
         self.audits: list[object] = []
         self.deleted_dlq: list[tuple[str, str]] = []
+        self.tombstoned_objects: list[tuple[str, str]] = []
 
     def insert_audit_event(self, *, transaction: object, record: object) -> None:
         del transaction
@@ -165,6 +166,11 @@ class _FakeRuntimeRepository:
     def delete_dead_letter_event(self, *, transaction: object, tenant_id: str, event_id: str) -> bool:
         del transaction
         self.deleted_dlq.append((tenant_id, event_id))
+        return True
+
+    def delete_object_record(self, *, transaction: object, tenant_id: str, record_id: str, redacted_at: str) -> bool:
+        del transaction, redacted_at
+        self.tombstoned_objects.append((tenant_id, record_id))
         return True
 
 
@@ -199,6 +205,13 @@ def test_run_erasure_via_gateway_deletes_search_documents_and_defers_backup() ->
             resource_type="dead_letter_record",
             surface="record_dlq",
         ),
+        resolve_erasure_subject(
+            request,
+            [{"id": "Order:O-1", "tenant_id": "tenant-a", "email": "ada@example.com"}],
+            identity_fields=("email",),
+            resource_type="object_record",
+            surface="object_store",
+        ),
     )
 
     certificate = gateway.run(request, resolutions, retention_policy=_retention_policy())
@@ -208,6 +221,8 @@ def test_run_erasure_via_gateway_deletes_search_documents_and_defers_backup() ->
     assert ("tenant-a", "Order", "Order:O-1") in search.deleted
     # The dead-letter record carrying the subject is redacted/removed.
     assert ("tenant-a", "dlq-evt-1") in runtime.deleted_dlq
+    # The object record carrying the subject is tombstoned in the object store.
+    assert ("tenant-a", "Order:O-1") in runtime.tombstoned_objects
     # The execution is audited (raw-value-free).
     assert len(runtime.audits) == 1
     assert "ada@example.com" not in repr(runtime.audits[0])

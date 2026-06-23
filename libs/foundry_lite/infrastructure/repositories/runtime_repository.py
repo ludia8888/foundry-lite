@@ -413,6 +413,32 @@ class SqlAlchemyRuntimeRepository:
         )
         return result.rowcount == 1
 
+    def delete_object_record(self, *, transaction: Any, tenant_id: str, record_id: str, redacted_at: str) -> bool:
+        # Tombstone the record (keep the row so rebuilds do not resurrect it) and
+        # clear the subject-bearing property payloads. The deleted=False predicate
+        # makes the erasure idempotent: a replay touches no row and returns False.
+        result = transaction.execute(
+            db.object_records.update()
+            .where(
+                and_(
+                    db.object_records.c.tenant_id == tenant_id,
+                    db.object_records.c.id == record_id,
+                    db.object_records.c.deleted.is_(False),
+                )
+            )
+            .values(
+                deleted=True,
+                is_active=False,
+                deletion_reason="subject_erasure",
+                properties={},
+                base_properties={},
+                edit_properties={},
+                property_versions={},
+                updated_at=redacted_at,
+            )
+        )
+        return result.rowcount == 1
+
     def insert_audit_event(self, *, transaction: Any, record: AuditEventRecord) -> None:
         transaction.execute(
             insert(db.audit_events).values(
