@@ -1,11 +1,11 @@
-"""Local OCR processor (Media/Content Plane M5, doc §7.2/§8.2).
+"""Local OCR processor (Media/Content Plane M5, doc §7.2/§8.2; real engine L1).
 
 Optical character recognition is a SEPARATE processor family from PDF raw text: it
 produces a distinct ``ocr_v1`` derivative (it never overwrites embedded text), and its
 output is model-pinned because OCR is nondeterministic across engine versions. The OCR
-engine is injectable — the default raises ``ocr_engine_unavailable`` because no system OCR
-binary is bundled (a real profile injects one; live OCR is deferred like live-ES/live-S3),
-so tests inject a deterministic fake and need no system binary.
+engine is injectable — the ``ocr-tesseract`` profile injects the real Tesseract engine
+(``_tesseract_ocr_engine``, L1) while the in-process default still raises
+``ocr_engine_unavailable`` so deterministic unit tests inject a fake and need no binary.
 Extraction runs in a worker thread bounded by a wall clock; a hung/over-large image fails
 closed (typed timeout), and an undecodable image is a typed validation failure.
 """
@@ -16,6 +16,7 @@ import hashlib
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
+from importlib import import_module
 
 from foundry_lite.application.ports.adapter_failure import (
     AdapterError,
@@ -45,11 +46,25 @@ class OcrDocumentError(Exception):
 
 
 def _default_ocr_engine(source_path: str) -> list[str]:
-    # No OCR engine is bundled (no system Tesseract in CI); a real profile injects one.
-    # Shipping the adapter + contract now and deferring the live engine mirrors the
-    # live-ES / live-S3 deferral — the injectable seam is what M5 proves.
+    # In-process default: no OCR engine is wired here, so deterministic unit tests inject a
+    # fake and the seam stays covered. The real ``ocr-tesseract`` profile injects
+    # ``_tesseract_ocr_engine`` (L1) instead of relying on this default.
     del source_path
     raise OcrDocumentError("ocr_engine_unavailable")
+
+
+def _tesseract_ocr_engine(source_path: str) -> list[str]:
+    # Real engine (L1): lazily import the system-binary wrapper + Pillow so the module has
+    # no import-time dependency on tesseract. A decode/OCR error is an undecodable-image
+    # validation failure (the adapter classifies it as a typed ``validation`` failure).
+    pytesseract = import_module("pytesseract")
+    pil_image = import_module("PIL.Image")
+    try:
+        with pil_image.open(source_path) as image:
+            text = pytesseract.image_to_string(image)
+    except Exception as exc:  # noqa: BLE001 - any decode/OCR error is an undecodable-image validation failure
+        raise OcrDocumentError("undecodable_image") from exc
+    return [text.strip()]
 
 
 class OcrProcessorAdapter:

@@ -30,6 +30,7 @@ REQUIRED_SCENARIOS = {
 }
 ADDITIONAL_SCENARIOS = {
     "closed_loop_repeatability": "one-command closed-loop demo repeated twice from the same checkout",
+    "media-ocr": "real Tesseract OCR live: image -> ocr_v1 -> index -> search + FAILED run operator-evidence",
 }
 KNOWN_SCENARIOS = {**REQUIRED_SCENARIOS, **ADDITIONAL_SCENARIOS}
 
