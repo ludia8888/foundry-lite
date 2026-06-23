@@ -42,7 +42,9 @@ class ErasureService(CoreService):
     ) -> ErasureCertificate:
         """Persist the request, then execute it with the production executor map and certify it."""
         self.request_erasure(request)
-        executors = default_erasure_executors(search_adapter=self.search_adapter)
+        executors = default_erasure_executors(
+            search_adapter=self.search_adapter, runtime_repository=self.runtime_repository, engine=self.engine
+        )
         return self.execute_erasure(request, resolutions, retention_policy=retention_policy, executors=executors)
 
     def request_erasure(self, request: ErasureRequest) -> ErasureRequestRecord:
