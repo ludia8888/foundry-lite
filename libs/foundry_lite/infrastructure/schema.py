@@ -918,6 +918,30 @@ content_units = Table(
     ),
 )
 
+# An Ontology object property of type media_reference, bound to one immutable media version
+# (doc §1.6/§6.4). One binding per (object, property); the value pins media_item_version_id,
+# so a later head overwrite never changes what a previously read reference resolves to. The
+# security envelope is copied for read-time masking (object-query masking, §12.1).
+media_reference_bindings = Table(
+    "media_reference_bindings",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("holder_type", String, nullable=False),
+    Column("holder_id", String, nullable=False),
+    Column("property_name", String, nullable=False),
+    Column("media_set_id", String, nullable=False),
+    Column("media_item_id", String, nullable=False),
+    Column("media_item_version_id", String, nullable=False),
+    Column("logical_path", String, nullable=False),
+    Column("content_hash", String, nullable=False),
+    Column("security_envelope", JSON, nullable=False),
+    Column("idempotency_key", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "holder_type", "holder_id", "property_name", name="uq_media_reference_binding"),
+)
+
 
 def tenant_rls_tables() -> tuple[Table, ...]:
     return tuple(table for table in metadata.sorted_tables if "tenant_id" in table.c)

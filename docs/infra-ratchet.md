@@ -486,9 +486,16 @@ ratchet at a time, each adding at most one new external failure domain.
   source-unit dropping. `content_unit_artifact_is_truth_search_index_is_projection` is
   now `enforced`. Live-Elasticsearch round-trip + active-covered family (operator-evidence)
   are deferred with M1/M2 until a media Operations surface exists; dense/hybrid is M8.
-- **M4 — Ontology `MediaReference` + Action-bound upload:** type validation,
-  object-query masking, action-success atomic visibility, action-failure orphan,
-  same-idempotency-key/different-file fingerprint, old reference after overwrite.
+- **M4 — Ontology `MediaReference` + Action-bound upload (shipped):** the ontology gains a
+  `media_reference` object-property type (validated for an edit-layer `namespace.name` media-set
+  binding, doc §1.6). A `MediaReferenceBindingService` binds an immutable media version onto an
+  object property as one atomic unit of work — only a COMMITTED version binds, the binding row +
+  audit + outbox commit together, and a rejected bind writes nothing (the staged blob stays a
+  sweepable orphan). The bind is idempotent; a reused key with a different version conflicts; a
+  re-bind re-points the property while each prior reference stays pinned to its version; reads
+  mask the reference when the caller's clearance does not cover its classification (§12.1, no
+  ACL leakage). Tighter ActionService/object-record coupling + active-covered family are deferred
+  with M1–M3 (operator-evidence needs a media Operations surface).
 - **M5 — OCR:** Tesseract or managed OCR (one family only).
 - **M6 — FFmpeg image/audio/video:** process isolation + duration/resource failure
   proofs first.
