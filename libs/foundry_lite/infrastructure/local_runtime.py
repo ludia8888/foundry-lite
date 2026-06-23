@@ -18,6 +18,7 @@ from foundry_lite.application.services.object_store.query_cursor import (
     require_object_query_cursor_signing_key_for_runtime,
 )
 from foundry_lite.infrastructure.adapters import (
+    AsrProcessorAdapter,
     DuckDBComputeAdapter,
     ElasticsearchAdapter,
     ElasticsearchAdapterConfig,
@@ -198,6 +199,8 @@ def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
         return VideoProbeProcessorAdapter()
     if processor_profile == "ocr-tesseract":
         return OcrProcessorAdapter()
+    if processor_profile == "asr-whisper":
+        return AsrProcessorAdapter()
     if processor_profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media", "pdf-pypdf"}:
         return PdfTextProcessorAdapter()
     raise ValueError(f"unknown media processor profile: {processor_profile}")

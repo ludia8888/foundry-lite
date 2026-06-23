@@ -518,7 +518,17 @@ ratchet at a time, each adding at most one new external failure domain.
   required to test. Each failure records FAILED durable evidence and commits no derivative —
   nothing is ever partially visible. Real transcode/HLS/waveform/scene-frames + active-covered
   family are deferred with M1–M5 (operator-evidence needs a media Operations surface).
-- **M7 — ASR:** Whisper/faster-whisper or managed provider (one family).
+- **M7 — ASR (processor shipped):** one family — an `AsrProcessorAdapter` (profile
+  `asr-whisper`) with an **injectable speech engine** (the default raises
+  `asr_engine_unavailable`; a real profile injects Whisper/faster-whisper — live ASR is
+  deferred like live-OCR, so no speech model is required to test). Transcription is a distinct
+  `asr_v1` derivative family (it never overwrites `pdf_text`/`ocr_v1`) and pins the model
+  version (a model upgrade re-processes rather than silently reusing). Each transcript segment
+  becomes an `audio_segment` content unit carrying its time code (`start_ms`/`end_ms`) and
+  optional speaker/language (`ProcessedContentUnit` extended additively; page-based processors
+  leave these `None`), inherits the source security envelope, and fails closed on undecodable
+  audio (validation) or a wall-clock timeout. Live ASR engine + active-covered family are
+  deferred with M1–M6.
 - **M8 — Embedding + hybrid retrieval:** reuse Elasticsearch vector capability
   before adding a separate vector DB.
 - **M9 — Access patterns / virtual media sets:** on-demand preview cache and

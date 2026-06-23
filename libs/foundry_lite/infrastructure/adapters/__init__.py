@@ -1,5 +1,6 @@
 """Concrete infrastructure adapters."""
 
+from foundry_lite.infrastructure.adapters.asr_processor import AsrProcessorAdapter
 from foundry_lite.infrastructure.adapters.compute import DuckDBComputeAdapter, FakeComputeAdapter
 from foundry_lite.infrastructure.adapters.dataset_storage import (
     FakeDatasetStorageAdapter,
@@ -71,6 +72,7 @@ __all__ = [
     "LocalSearchAdapter",
     "LocalStreamAdapter",
     "LocalWorkflowAdapter",
+    "AsrProcessorAdapter",
     "ImageProcessorAdapter",
     "OcrProcessorAdapter",
     "PdfTextProcessorAdapter",
