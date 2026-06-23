@@ -614,6 +614,29 @@ missing proof surfaces into evidence, so the media families can finally be promo
   with no derivative committed). No family promotion happens at L2 — `infra-tricky-matrix.json`
   is untouched; promotion is the L9 capstone.
 
+- **L3 — Real FFmpeg/ffprobe video (shipped):** the `VideoProbeProcessorAdapter` injectable
+  probe-runner seam now has a real implementation — `_ffprobe_video_probe_runner` runs system
+  `ffprobe -v quiet -print_format json -show_format -show_streams <path>` via `subprocess.Popen`
+  with a **fixed arg list and no shell** and a wall-clock timeout; on timeout it SIGTERMs the
+  whole process group (`start_new_session=True` + `os.killpg(os.getpgid(pid), SIGTERM)`, the
+  documented M-T3-002 process-group-kill, so a hung ffprobe never leaks). It parses the JSON into
+  the existing `VideoProbe` (duration/container/video codec/width/height; a `has_audio` flag is
+  added so the probe records whether an audio track exists), so the `ffprobe` profile in
+  `local_runtime` finally probes for real (the in-process default still raises
+  `probe_engine_unavailable`, keeping the deterministic fake-injected unit tests covered). A
+  missing/corrupt file or non-zero ffprobe exit becomes a typed `unprobeable_media` **validation**
+  failure. `tests/integration/test_media_video_live.py` (`pnpm quality:media-live-video`, system
+  `ffmpeg` installed in the `quality_coverage`/`quality_flaky`/`quality_runtime` CI jobs) proves
+  three shapes against the real fixture: **real probe metadata** (a committed mp4 → `video_probe`
+  derivative carrying real duration ≈ 2.737s / `h264` / 320×240 / audio-present, a SUCCEEDED
+  `media_processing_runs` row), the **video → subtitles → searchable downstream flow** (the SAME
+  mp4 transcribed by the real `asr-whisper` engine — faster-whisper/PyAV decodes the video's audio
+  track directly — into `audio_segment` units containing "quick brown fox", then projected and
+  found by searching "fox"), and **operator evidence** (a corrupt video records a FAILED run with
+  `failure_kind == validation` visible through `list_media_runs`/`media_run_detail`, with no
+  derivative committed). No family promotion happens at L3 — `infra-tricky-matrix.json` is
+  untouched; promotion is the L9 capstone.
+
 Media processing will be the first product-driven Temporal use case (M2). A media
 family becomes `active-covered` only when its proof-class tests collect and it is
 registered in `infra-tricky-matrix.json` `families`/`activeStack`; until then it

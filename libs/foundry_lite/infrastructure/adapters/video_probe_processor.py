@@ -12,6 +12,10 @@ stream is a typed validation failure, never a partial result. Reads only a sandb
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import signal
+import subprocess  # nosec B404 - fixed ffprobe arg list, no shell, sandbox path only
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -42,6 +46,7 @@ class VideoProbe:
     video_codec: str
     width: int
     height: int
+    has_audio: bool = False
 
 
 # source_path -> probe (raises VideoProbeError when the stream is unreadable/unavailable).
@@ -61,6 +66,52 @@ def _default_probe_runner(source_path: str) -> VideoProbe:
     # SIGTERMs its process group on timeout. Live video probe is deferred like live OCR.
     del source_path
     raise VideoProbeError("probe_engine_unavailable")
+
+
+_FFPROBE_TIMEOUT_SECONDS = 25
+
+
+def _ffprobe_video_probe_runner(source_path: str) -> VideoProbe:
+    # Real engine (L3): run system ``ffprobe`` over a sandbox path with a fixed arg list
+    # (no shell) and a wall-clock timeout. On timeout the whole process group is SIGTERMed
+    # (M-T3-002 process-group-kill) so a hung ffprobe never leaks; a non-zero exit or
+    # unreadable stream is an unprobeable-media validation failure (the adapter types it).
+    output = _run_ffprobe(source_path)
+    return _parse_ffprobe_json(output)
+
+
+def _run_ffprobe(source_path: str) -> str:
+    args = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", source_path]
+    process = subprocess.Popen(  # nosec B603 B607 - fixed ffprobe arg list, no shell, sandbox path only
+        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
+    )
+    try:
+        stdout, _stderr = process.communicate(timeout=_FFPROBE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        process.wait()
+        raise VideoProbeError("probe_timed_out") from exc
+    if process.returncode != 0:
+        raise VideoProbeError("unprobeable_media")
+    return stdout.decode("utf-8", errors="replace")
+
+
+def _parse_ffprobe_json(output: str) -> VideoProbe:
+    try:
+        payload = json.loads(output)
+        streams = payload["streams"]
+        video = next(stream for stream in streams if stream.get("codec_type") == "video")
+        has_audio = any(stream.get("codec_type") == "audio" for stream in streams)
+        return VideoProbe(
+            duration_seconds=float(payload["format"]["duration"]),
+            container_format=str(payload["format"]["format_name"]),
+            video_codec=str(video["codec_name"]),
+            width=int(video["width"]),
+            height=int(video["height"]),
+            has_audio=has_audio,
+        )
+    except (json.JSONDecodeError, KeyError, StopIteration, TypeError, ValueError) as exc:
+        raise VideoProbeError("unprobeable_media") from exc
 
 
 class VideoProbeProcessorAdapter:
@@ -158,5 +209,6 @@ class VideoProbeProcessorAdapter:
 def _probe_text(probe: VideoProbe) -> str:
     return (
         f"container={probe.container_format} codec={probe.video_codec} "
-        f"duration={probe.duration_seconds} width={probe.width} height={probe.height}"
+        f"duration={probe.duration_seconds} width={probe.width} height={probe.height} "
+        f"has_audio={probe.has_audio}"
     )
