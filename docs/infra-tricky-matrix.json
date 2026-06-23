@@ -974,23 +974,20 @@
     },
     "access_pattern_cache_is_not_truth": {
       "description": "On-demand access-pattern derivatives (thumbnail/preview/waveform) are caches, never serving truth.",
-      "status": "deferred",
-      "deferral": {
-        "reason": "Access patterns land in M9; no cache exists yet.",
-        "riskTier": "T0",
-        "futureTest": "test_media_access_pattern_cache_is_not_truth",
-        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
-      }
+      "status": "enforced",
+      "tests": [
+        "test_access_pattern_cache_hit_does_not_recompute",
+        "test_access_pattern_cache_recomputes_on_stale_source",
+        "test_reference_resolve_never_reads_access_cache"
+      ]
     },
     "external_virtual_object_requires_version_or_mutable_marker": {
       "description": "A virtual external media item must record source version/etag or be marked mutable_external_reference; it must not silently read different bytes.",
-      "status": "deferred",
-      "deferral": {
-        "reason": "Virtual media sets land in M9; v1 is transactional ingest-copy only.",
-        "riskTier": "T0",
-        "futureTest": "test_virtual_media_requires_version_or_mutable_marker",
-        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
-      }
+      "status": "enforced",
+      "tests": [
+        "test_virtual_media_requires_version_or_mutable_marker",
+        "test_virtual_etag_drift_fails_closed"
+      ]
     },
     "retention_never_purges_reachable_or_legal_hold_version": {
       "description": "Retention purge never deletes a version still reachable by a MediaReference or under legal hold.",

@@ -782,6 +782,9 @@ media_sets = Table(
     Column("processing_profile", String, nullable=False),
     Column("classification", String, nullable=False),
     Column("retention_policy_id", String),
+    # A virtual media set reads from an external source without copying bytes (M9); its
+    # versions must pin an etag or be marked mutable_external_reference (source_ref).
+    Column("is_virtual", Boolean, nullable=False),
     Column("created_at", String, nullable=False),
     Column("updated_at", String, nullable=False),
     UniqueConstraint("tenant_id", "namespace", "name", name="uq_media_set_ref"),
@@ -922,6 +925,37 @@ content_units = Table(
 # (doc §1.6/§6.4). One binding per (object, property); the value pins media_item_version_id,
 # so a later head overwrite never changes what a previously read reference resolves to. The
 # security envelope is copied for read-time masking (object-query masking, §12.1).
+# On-demand access-pattern cache (thumbnail/preview/waveform), SEPARATE from media_derivatives:
+# a derivative is committed truth produced inside a transaction; a cache is TTL/evictable and
+# rebuildable from the committed source, NEVER serving truth (doc §M9, invariant
+# access_pattern_cache_is_not_truth). source_content_hash pins the source so a stale cache is
+# detectable and re-rendered; only the access-pattern service reads this table.
+media_access_caches = Table(
+    "media_access_caches",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("source_media_item_version_id", String, nullable=False),
+    Column("access_pattern", String, nullable=False),
+    Column("access_pattern_spec_hash", String, nullable=False),
+    Column("persistence_policy", String, nullable=False),
+    Column("source_content_hash", String, nullable=False),
+    Column("blob_key", String, nullable=False),
+    Column("content_hash", String, nullable=False),
+    Column("byte_size", Integer, nullable=False),
+    Column("mime_type", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("expires_at", String),
+    UniqueConstraint(
+        "tenant_id",
+        "source_media_item_version_id",
+        "access_pattern",
+        "access_pattern_spec_hash",
+        name="uq_media_access_cache_key",
+    ),
+)
+
+
 media_reference_bindings = Table(
     "media_reference_bindings",
     metadata,

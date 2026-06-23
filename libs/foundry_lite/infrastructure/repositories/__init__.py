@@ -10,6 +10,9 @@ from foundry_lite.infrastructure.repositories.dataset_version_repository import 
 from foundry_lite.infrastructure.repositories.erasure_repository import SqlAlchemyErasureRepository
 from foundry_lite.infrastructure.repositories.insight_review_repository import SqlAlchemyInsightReviewRepository
 from foundry_lite.infrastructure.repositories.materialization_repository import SqlAlchemyMaterializationRepository
+from foundry_lite.infrastructure.repositories.media_access_cache_repository import (
+    SqlAlchemyMediaAccessCacheRepository,
+)
 from foundry_lite.infrastructure.repositories.media_derivative_repository import SqlAlchemyMediaDerivativeRepository
 from foundry_lite.infrastructure.repositories.media_reference_binding_repository import (
     SqlAlchemyMediaReferenceBindingRepository,
@@ -35,6 +38,7 @@ __all__ = [
     "SqlAlchemyDatasetVersionRepository",
     "SqlAlchemyInsightReviewRepository",
     "SqlAlchemyMaterializationRepository",
+    "SqlAlchemyMediaAccessCacheRepository",
     "SqlAlchemyMediaDerivativeRepository",
     "SqlAlchemyMediaReferenceBindingRepository",
     "SqlAlchemyMediaRepository",

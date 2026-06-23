@@ -57,6 +57,7 @@ class MediaSetRecord:
     retention_policy_id: str | None
     created_at: str
     updated_at: str
+    is_virtual: bool = False
 
 
 @dataclass(frozen=True)

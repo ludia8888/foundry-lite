@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.base import CoreService, build_service
+from foundry_lite.application.services.media.access_patterns import MediaAccessPatternService
 from foundry_lite.application.services.media.binding import MediaReferenceBindingService
 from foundry_lite.application.services.media.catalog import MediaCatalogService
 from foundry_lite.application.services.media.indexing import MediaIndexingService
@@ -12,6 +13,7 @@ from foundry_lite.application.services.media.references import MediaReferenceSer
 from foundry_lite.application.services.media.retrieval import DefaultContentRetrievalService
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadService
+from foundry_lite.application.services.media.virtual_sets import VirtualMediaSetService
 
 
 @dataclass(frozen=True)
@@ -26,6 +28,8 @@ class MediaServices:
     indexing: MediaIndexingService
     retrieval: DefaultContentRetrievalService
     binding: MediaReferenceBindingService
+    access_pattern: MediaAccessPatternService
+    virtual_sets: VirtualMediaSetService
 
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> MediaServices:
@@ -38,6 +42,8 @@ class MediaServices:
             indexing=build_service(MediaIndexingService, dependencies),
             retrieval=build_service(DefaultContentRetrievalService, dependencies),
             binding=build_service(MediaReferenceBindingService, dependencies),
+            access_pattern=build_service(MediaAccessPatternService, dependencies),
+            virtual_sets=build_service(VirtualMediaSetService, dependencies),
         )
 
     def items(self) -> tuple[CoreService, ...]:
@@ -50,4 +56,6 @@ class MediaServices:
             self.indexing,
             self.retrieval,
             self.binding,
+            self.access_pattern,
+            self.virtual_sets,
         )
