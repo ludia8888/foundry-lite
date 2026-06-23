@@ -5,7 +5,8 @@ from typing import BinaryIO
 from foundry_lite.application.ports.content_index import ContentSearchHit, HybridContentQuery
 from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRecord
 from foundry_lite.application.ports.media_processor import ProcessorSpec
-from foundry_lite.application.ports.media_repository import MediaSetRecord
+from foundry_lite.application.ports.media_reference_binding_repository import MediaReferenceBindingRecord
+from foundry_lite.application.ports.media_repository import MediaReference, MediaSetRecord
 from foundry_lite.application.services.media.catalog import MediaSetSpec
 from foundry_lite.application.services.media.indexing import IndexingOutcome
 from foundry_lite.application.services.media.processing import ProcessingOutcome
@@ -135,3 +136,39 @@ class MediaWorkspace:
 
     def search_content(self, ctx: RequestContext, *, query: HybridContentQuery) -> list[ContentSearchHit]:
         return self._media.retrieval.search_content(ctx, query=query)
+
+    def bind_reference(
+        self,
+        ctx: RequestContext,
+        *,
+        holder_type: str,
+        holder_id: str,
+        property_name: str,
+        media_item_version_id: str,
+        idempotency_key: str,
+    ) -> MediaReferenceBindingRecord:
+        return self._media.binding.bind(
+            ctx,
+            holder_type=holder_type,
+            holder_id=holder_id,
+            property_name=property_name,
+            media_item_version_id=media_item_version_id,
+            idempotency_key=idempotency_key,
+        )
+
+    def resolve_bound_reference(
+        self,
+        ctx: RequestContext,
+        *,
+        holder_type: str,
+        holder_id: str,
+        property_name: str,
+        allowed_classifications: tuple[str, ...] | None = None,
+    ) -> MediaReference | None:
+        return self._media.binding.resolve(
+            ctx,
+            holder_type=holder_type,
+            holder_id=holder_id,
+            property_name=property_name,
+            allowed_classifications=allowed_classifications,
+        )

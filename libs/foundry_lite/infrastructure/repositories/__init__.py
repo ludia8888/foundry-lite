@@ -11,6 +11,9 @@ from foundry_lite.infrastructure.repositories.erasure_repository import SqlAlche
 from foundry_lite.infrastructure.repositories.insight_review_repository import SqlAlchemyInsightReviewRepository
 from foundry_lite.infrastructure.repositories.materialization_repository import SqlAlchemyMaterializationRepository
 from foundry_lite.infrastructure.repositories.media_derivative_repository import SqlAlchemyMediaDerivativeRepository
+from foundry_lite.infrastructure.repositories.media_reference_binding_repository import (
+    SqlAlchemyMediaReferenceBindingRepository,
+)
 from foundry_lite.infrastructure.repositories.media_repository import SqlAlchemyMediaRepository
 from foundry_lite.infrastructure.repositories.metadata_repository import (
     SchemaMutationDisabledError,
@@ -33,6 +36,7 @@ __all__ = [
     "SqlAlchemyInsightReviewRepository",
     "SqlAlchemyMaterializationRepository",
     "SqlAlchemyMediaDerivativeRepository",
+    "SqlAlchemyMediaReferenceBindingRepository",
     "SqlAlchemyMediaRepository",
     "SchemaMutationDisabledError",
     "SqlAlchemyDestructiveDevelopmentAdmin",

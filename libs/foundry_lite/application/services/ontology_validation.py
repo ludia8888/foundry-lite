@@ -41,6 +41,10 @@ DatasetColumnsLookup = Callable[
 ]
 
 PROPERTY_DATA_TYPES = frozenset({"boolean", "float", "integer", "string"})
+# Object properties may additionally hold an immutable media reference (doc §1.6): the
+# Ontology pins a media_item_version via a media_reference property, never a media-backed
+# object. Action *parameters* stay scalar — media is bound via an explicit edit, not a param.
+OBJECT_PROPERTY_DATA_TYPES = PROPERTY_DATA_TYPES | frozenset({"media_reference"})
 PROPERTY_SOURCES = frozenset({"dataset", "edit_layer"})
 PROPERTY_EDIT_POLICIES = frozenset({"conflict_requires_review", "edit_only", "edit_wins", "source_wins"})
 PROPERTY_CLASSIFICATIONS = frozenset({"finance", "pii", "public"})
@@ -238,7 +242,10 @@ def _validate_yaml_property_contracts(object_api_name: str, properties: Iterable
         details = {"objectType": object_api_name, "property": prop_api}
         source = optional_str(prop, "source", "dataset" if "column" in prop else "edit_layer")
         edit_default = "edit_only" if source == "edit_layer" else "source_wins"
-        _require_allowed(required_str(prop, "type"), PROPERTY_DATA_TYPES, "property type", details)
+        prop_type = required_str(prop, "type")
+        _require_allowed(prop_type, OBJECT_PROPERTY_DATA_TYPES, "property type", details)
+        if prop_type == "media_reference":
+            _validate_media_reference_property(prop, source, details)
         _require_allowed_optional(source, PROPERTY_SOURCES, "property source", details)
         _require_allowed_optional(
             optional_str(prop, "editPolicy", edit_default),
@@ -251,6 +258,19 @@ def _validate_yaml_property_contracts(object_api_name: str, properties: Iterable
             PROPERTY_CLASSIFICATIONS,
             "classification",
             details,
+        )
+
+
+def _validate_media_reference_property(prop: YamlObject, source: str | None, details: Mapping[str, object]) -> None:
+    """A media_reference property pins an edit-layer media set binding (doc §1.6)."""
+    if source == "dataset":
+        raise ValidationFailed("media_reference property must be edit-layer, not dataset-backed", details=dict(details))
+    media_set = required_str(prop, "mediaSet")
+    parts = media_set.split(".")
+    if len(parts) != 2 or not all(parts):
+        raise ValidationFailed(
+            "media_reference property requires a 'mediaSet' of the form 'namespace.name'",
+            details={**details, "mediaSet": media_set},
         )
 
 

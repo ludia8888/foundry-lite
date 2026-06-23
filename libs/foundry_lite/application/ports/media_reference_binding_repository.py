@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Protocol
+
+from foundry_lite.application.ports.transaction_context import TransactionContext
+
+
+@dataclass(frozen=True)
+class MediaReferenceBindingRecord:
+    """One Ontology object property bound to an immutable media version (doc §1.6/§6.4)."""
+
+    media_reference_binding_id: str
+    tenant_id: str
+    holder_type: str
+    holder_id: str
+    property_name: str
+    media_set_id: str
+    media_item_id: str
+    media_item_version_id: str
+    logical_path: str
+    content_hash: str
+    security_envelope: dict[str, object]
+    idempotency_key: str
+    created_at: str
+    updated_at: str
+
+
+class MediaReferenceBindingRepository(Protocol):
+    """DB boundary for media-reference bindings. CAS / uniqueness / durable-row only."""
+
+    def binding_by_holder(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        holder_type: str,
+        holder_id: str,
+        property_name: str,
+    ) -> MediaReferenceBindingRecord | None:
+        """Return the current binding for one (object, property), or None."""
+        ...
+
+    def create_binding(self, *, transaction: TransactionContext, record: MediaReferenceBindingRecord) -> None:
+        """Insert a new binding (uq tenant/holder_type/holder_id/property)."""
+        ...
+
+    def update_binding(self, *, transaction: TransactionContext, record: MediaReferenceBindingRecord) -> None:
+        """Re-point an existing binding to a new media version + idempotency key."""
+        ...

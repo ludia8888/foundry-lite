@@ -30,6 +30,7 @@ from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
 from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRepository
 from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
+from foundry_lite.application.ports.media_reference_binding_repository import MediaReferenceBindingRepository
 from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.search_adapter import SearchAdapter
@@ -96,6 +97,7 @@ class CoreService:
     dataset_storage: DatasetStorageAdapter
     media_repository: MediaRepository
     media_derivative_repository: MediaDerivativeRepository
+    media_reference_binding_repository: MediaReferenceBindingRepository
     media_storage: MediaStorageAdapter
     media_processor: MediaProcessorAdapter
     content_index_adapter: ContentIndexAdapter
