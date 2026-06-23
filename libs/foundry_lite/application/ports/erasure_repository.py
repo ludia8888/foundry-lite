@@ -38,6 +38,26 @@ class ErasureCertificateRecord:
     certified_at: str
 
 
+@dataclass(frozen=True)
+class ErasureRedactionExecutionRecord:
+    """Durable record that one deferred erasure resource was physically redacted.
+
+    The maintenance lane writes one row per resource it finishes (e.g. one dataset
+    row rewritten into a successor version), so a replay can skip already-redacted
+    resources idempotently.
+    """
+
+    execution_id: str
+    tenant_id: str
+    request_id: str
+    resource_type: str
+    resource_id: str
+    surface: str
+    status: str
+    new_version_id: str | None
+    executed_at: str
+
+
 class ErasureRepository(Protocol):
     """DB boundary for durable erasure requests and persisted certificates."""
 
@@ -69,4 +89,16 @@ class ErasureRepository(Protocol):
         self, *, transaction: TransactionContext, tenant_id: str, request_id: str
     ) -> ErasureCertificateRecord | None:
         """Return the persisted certificate for one request, if any."""
+        ...
+
+    def insert_redaction_execution_or_get_existing(
+        self, *, transaction: TransactionContext, record: ErasureRedactionExecutionRecord
+    ) -> ErasureRedactionExecutionRecord | None:
+        """Record one resource as physically redacted, returning the existing winner on conflict."""
+        ...
+
+    def redaction_executions_for_request(
+        self, *, transaction: TransactionContext, tenant_id: str, request_id: str
+    ) -> list[ErasureRedactionExecutionRecord]:
+        """Return the durable redaction-execution records already persisted for one request."""
         ...

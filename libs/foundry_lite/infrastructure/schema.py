@@ -743,6 +743,30 @@ erasure_certificates = Table(
 )
 
 
+erasure_redaction_executions = Table(
+    "erasure_redaction_executions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("request_id", String, nullable=False),
+    # The deferred resource the maintenance lane physically erased (e.g. one dataset row).
+    Column("resource_type", String, nullable=False),
+    Column("resource_id", String, nullable=False),
+    Column("surface", String, nullable=False),
+    Column("status", String, nullable=False),
+    # The successor dataset version produced by the rewrite, when one was committed.
+    Column("new_version_id", String),
+    Column("executed_at", String, nullable=False),
+    UniqueConstraint(
+        "tenant_id",
+        "request_id",
+        "resource_type",
+        "resource_id",
+        name="uq_erasure_redaction_execution_resource",
+    ),
+)
+
+
 def tenant_rls_tables() -> tuple[Table, ...]:
     return tuple(table for table in metadata.sorted_tables if "tenant_id" in table.c)
 

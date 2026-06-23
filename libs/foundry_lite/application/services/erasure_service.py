@@ -17,9 +17,11 @@ from foundry_lite.security.erasure import (
     ErasureManifestAction,
     ErasureRequest,
     ErasureResolution,
+    ErasureResourceRef,
     ErasureRetentionPolicy,
     build_erasure_certificate,
     build_erasure_manifest,
+    deferred_redaction_targets,
 )
 
 ErasureActionExecutor = Callable[[ErasureManifestAction], ErasureActionReceipt]
@@ -60,6 +62,29 @@ class ErasureService(CoreService):
             return self.erasure_repository.certificate_by_request(
                 transaction=conn, tenant_id=tenant_id, request_id=request_id
             )
+
+    def pending_dataset_redactions(self, *, tenant_id: str, request_id: str) -> tuple[ErasureResourceRef, ...]:
+        """Return the dataset rows whose deferred redaction the maintenance lane still owes.
+
+        Reads the persisted certificate's DEFERRED ``redact_dataset_row`` targets and
+        subtracts the resources already recorded as physically redacted — the discovery
+        primitive the dataset-row redaction maintenance lane consumes. Empty when the
+        request has no certificate yet or every target is already done.
+        """
+        with self.engine.begin() as conn:
+            record = self.erasure_repository.certificate_by_request(
+                transaction=conn, tenant_id=tenant_id, request_id=request_id
+            )
+            if record is None:
+                return ()
+            completed = {
+                (execution.resource_type, execution.resource_id)
+                for execution in self.erasure_repository.redaction_executions_for_request(
+                    transaction=conn, tenant_id=tenant_id, request_id=request_id
+                )
+            }
+        targets = deferred_redaction_targets(record.certificate, action_type="redact_dataset_row")
+        return tuple(target for target in targets if (target.resource_type, target.resource_id) not in completed)
 
     def execute_erasure(
         self,

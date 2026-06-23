@@ -5,7 +5,11 @@ from typing import Any, cast
 from sqlalchemy import and_, insert, select
 from sqlalchemy.engine import Engine
 
-from foundry_lite.application.ports.erasure_repository import ErasureCertificateRecord, ErasureRequestRecord
+from foundry_lite.application.ports.erasure_repository import (
+    ErasureCertificateRecord,
+    ErasureRedactionExecutionRecord,
+    ErasureRequestRecord,
+)
 from foundry_lite.application.ports.transaction_context import ERASURE_REQUEST_EXECUTED
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
@@ -85,6 +89,59 @@ class SqlAlchemyErasureRepository:
         )
         return _certificate_from_row(row) if row else None
 
+    def insert_redaction_execution_or_get_existing(
+        self, *, transaction: Any, record: ErasureRedactionExecutionRecord
+    ) -> ErasureRedactionExecutionRecord | None:
+        existing = self._redaction_execution_by_resource(
+            transaction, record.tenant_id, record.request_id, record.resource_type, record.resource_id
+        )
+        if existing is not None:
+            return existing
+        # The (tenant_id, request_id, resource_type, resource_id) unique constraint
+        # backstops a concurrent race so a resource is redacted at most once.
+        transaction.execute(
+            insert(db.erasure_redaction_executions).values(
+                tenant_id=record.tenant_id, **_redaction_execution_values(record)
+            )
+        )
+        return None
+
+    def redaction_executions_for_request(
+        self, *, transaction: Any, tenant_id: str, request_id: str
+    ) -> list[ErasureRedactionExecutionRecord]:
+        rows = (
+            transaction.execute(
+                select(db.erasure_redaction_executions).where(
+                    and_(
+                        db.erasure_redaction_executions.c.tenant_id == tenant_id,
+                        db.erasure_redaction_executions.c.request_id == request_id,
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_redaction_execution_from_row(row) for row in rows]
+
+    def _redaction_execution_by_resource(
+        self, transaction: Any, tenant_id: str, request_id: str, resource_type: str, resource_id: str
+    ) -> ErasureRedactionExecutionRecord | None:
+        row = (
+            transaction.execute(
+                select(db.erasure_redaction_executions).where(
+                    and_(
+                        db.erasure_redaction_executions.c.tenant_id == tenant_id,
+                        db.erasure_redaction_executions.c.request_id == request_id,
+                        db.erasure_redaction_executions.c.resource_type == resource_type,
+                        db.erasure_redaction_executions.c.resource_id == resource_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return _redaction_execution_from_row(row) if row else None
+
     def _request_by_idempotency(
         self, transaction: Any, tenant_id: str, idempotency_key: str
     ) -> ErasureRequestRecord | None:
@@ -154,4 +211,31 @@ def _certificate_from_row(row: Any) -> ErasureCertificateRecord:
         manifest_id=str(row["manifest_id"]),
         certificate=cast(dict[str, object], dict(row["certificate"])),
         certified_at=str(row["certified_at"]),
+    )
+
+
+def _redaction_execution_values(record: ErasureRedactionExecutionRecord) -> dict[str, object | None]:
+    return {
+        "id": record.execution_id,
+        "request_id": record.request_id,
+        "resource_type": record.resource_type,
+        "resource_id": record.resource_id,
+        "surface": record.surface,
+        "status": record.status,
+        "new_version_id": record.new_version_id,
+        "executed_at": record.executed_at,
+    }
+
+
+def _redaction_execution_from_row(row: Any) -> ErasureRedactionExecutionRecord:
+    return ErasureRedactionExecutionRecord(
+        execution_id=str(row["id"]),
+        tenant_id=str(row["tenant_id"]),
+        request_id=str(row["request_id"]),
+        resource_type=str(row["resource_type"]),
+        resource_id=str(row["resource_id"]),
+        surface=str(row["surface"]),
+        status=str(row["status"]),
+        new_version_id=str(row["new_version_id"]) if row["new_version_id"] is not None else None,
+        executed_at=str(row["executed_at"]),
     )

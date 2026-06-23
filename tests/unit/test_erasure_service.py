@@ -6,7 +6,11 @@ from dataclasses import replace
 
 import pytest
 from foundry_lite.application.facades.erasure_gateway import ErasureGateway
-from foundry_lite.application.ports.erasure_repository import ErasureCertificateRecord, ErasureRequestRecord
+from foundry_lite.application.ports.erasure_repository import (
+    ErasureCertificateRecord,
+    ErasureRedactionExecutionRecord,
+    ErasureRequestRecord,
+)
 from foundry_lite.application.services.erasure_service import ErasureService
 from foundry_lite.domain.errors import InvariantViolation
 from foundry_lite.security.erasure import (
@@ -41,6 +45,7 @@ class _FakeErasureRepository:
         self.by_idempotency: dict[tuple[str, str], ErasureRequestRecord] = {}
         self.by_id: dict[tuple[str, str], ErasureRequestRecord] = {}
         self.certificates: dict[tuple[str, str], ErasureCertificateRecord] = {}
+        self.redaction_executions: dict[tuple[str, str, str, str], ErasureRedactionExecutionRecord] = {}
 
     def insert_request_or_get_existing(
         self, *, transaction: object, record: ErasureRequestRecord
@@ -82,6 +87,26 @@ class _FakeErasureRepository:
     ) -> ErasureCertificateRecord | None:
         del transaction
         return self.certificates.get((tenant_id, request_id))
+
+    def insert_redaction_execution_or_get_existing(
+        self, *, transaction: object, record: ErasureRedactionExecutionRecord
+    ) -> ErasureRedactionExecutionRecord | None:
+        del transaction
+        key = (record.tenant_id, record.request_id, record.resource_type, record.resource_id)
+        if key in self.redaction_executions:
+            return self.redaction_executions[key]
+        self.redaction_executions[key] = record
+        return None
+
+    def redaction_executions_for_request(
+        self, *, transaction: object, tenant_id: str, request_id: str
+    ) -> list[ErasureRedactionExecutionRecord]:
+        del transaction
+        return [
+            record
+            for (rec_tenant, rec_request, _, _), record in self.redaction_executions.items()
+            if rec_tenant == tenant_id and rec_request == request_id
+        ]
 
 
 def test_request_erasure_persists_redacted_record_idempotently() -> None:
@@ -143,6 +168,53 @@ def test_execute_erasure_rejects_action_without_executor() -> None:
 
     with pytest.raises(InvariantViolation, match="no erasure executor"):
         service.execute_erasure(request, resolutions, retention_policy=_retention_policy(), executors={})
+
+
+def test_pending_dataset_redactions_lists_deferred_targets_from_certificate() -> None:
+    service, _ = _service()
+    request = _request()
+    service.request_erasure(request)
+    resolutions = (
+        resolve_erasure_subject(
+            request,
+            [_record("clean.orders:row-7")],
+            identity_fields=("email",),
+            resource_type="dataset_row",
+            surface="clean.orders",
+        ),
+    )
+
+    # No certificate yet -> nothing for the maintenance lane to do.
+    assert service.pending_dataset_redactions(tenant_id=request.tenant_id, request_id=request.request_id) == ()
+
+    service.execute_erasure(
+        request,
+        resolutions,
+        retention_policy=_retention_policy(),
+        executors={action_type: _receipt_for for action_type in _ALL_ACTION_TYPES},
+    )
+
+    targets = service.pending_dataset_redactions(tenant_id=request.tenant_id, request_id=request.request_id)
+    assert [target.resource_id for target in targets] == ["clean.orders:row-7"]
+    assert targets[0].surface == "clean.orders"
+
+    # Once the maintenance lane records the row as redacted, it drops out of the pending set.
+    with service.engine.begin() as conn:
+        service.erasure_repository.insert_redaction_execution_or_get_existing(
+            transaction=conn,
+            record=ErasureRedactionExecutionRecord(
+                execution_id="redaction_exec_1",
+                tenant_id=request.tenant_id,
+                request_id=request.request_id,
+                resource_type="dataset_row",
+                resource_id="clean.orders:row-7",
+                surface="clean.orders",
+                status="completed",
+                new_version_id="dsv_new",
+                executed_at="2026-07-21T00:00:00Z",
+            ),
+        )
+    assert service.pending_dataset_redactions(tenant_id=request.tenant_id, request_id=request.request_id) == ()
 
 
 class _FakeSearchAdapter:

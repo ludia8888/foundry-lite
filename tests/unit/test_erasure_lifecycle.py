@@ -11,6 +11,7 @@ from foundry_lite.security.erasure import (
     ErasureRetentionPolicy,
     build_erasure_certificate,
     build_erasure_manifest,
+    deferred_redaction_targets,
     is_erased_resource,
     resolve_erasure_subject,
 )
@@ -172,6 +173,52 @@ def test_dataset_row_redaction_is_deferred_to_maintenance_lane() -> None:
     assert dataset_action.reason == "deferred_to_redaction_maintenance"
     assert dataset_action.evidence["subjectHash"] == request.subject_hash
     assert "ada@example.com" not in repr(manifest.redacted_evidence())
+
+
+def test_deferred_redaction_targets_extracts_pending_work_from_certificate() -> None:
+    request = _erasure_request()
+    retention_policy = _retention_policy()
+    resolutions = (
+        resolve_erasure_subject(
+            request,
+            [_record("clean.orders:row-7", "dataset_row")],
+            identity_fields=("email",),
+            resource_type="dataset_row",
+            surface="clean.orders",
+        ),
+        resolve_erasure_subject(
+            request,
+            [_record("ops.customer_summary:row-3", "materialization_row")],
+            identity_fields=("email",),
+            resource_type="materialization_row",
+            surface="ops.customer_summary",
+        ),
+        resolve_erasure_subject(
+            request,
+            [_record("obj_1", "object_record")],
+            identity_fields=("email",),
+            resource_type="object_record",
+            surface="object_store",
+        ),
+    )
+    manifest = build_erasure_manifest(request, resolutions, retention_policy=retention_policy)
+    certificate = build_erasure_certificate(
+        manifest,
+        tuple(_receipt_for(action) for action in manifest.actions),
+        certified_at="2026-07-20T00:00:00Z",
+        certified_by="privacy-officer",
+    )
+    evidence = certificate.redacted_evidence()
+
+    dataset_targets = deferred_redaction_targets(evidence, action_type="redact_dataset_row")
+    materialization_targets = deferred_redaction_targets(evidence, action_type="rebuild_materialization")
+
+    assert [target.resource_id for target in dataset_targets] == ["clean.orders:row-7"]
+    assert dataset_targets[0].resource_type == "dataset_row"
+    assert dataset_targets[0].surface == "clean.orders"
+    assert [target.resource_id for target in materialization_targets] == ["ops.customer_summary:row-3"]
+    # An immediately-applied surface (object tombstone) is not pending deferred work.
+    assert deferred_redaction_targets(evidence, action_type="tombstone_object") == ()
 
 
 def test_materialization_rebuild_is_deferred_to_maintenance_lane() -> None:
