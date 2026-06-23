@@ -1,13 +1,7 @@
 {
   "schemaVersion": 1,
-  "activeStack": [
-    "s3-storage",
-    "iceberg",
-    "spark"
-  ],
-  "crossCuttingFlows": [
-    "debezium-cdc"
-  ],
+  "activeStack": ["s3-storage", "iceberg", "spark"],
+  "crossCuttingFlows": ["debezium-cdc"],
   "families": [
     {
       "id": "s3-storage",
@@ -15,13 +9,9 @@
       "status": "active-covered",
       "qualityScript": "quality:s3-storage",
       "ciCommand": "pnpm --silent quality:s3-storage",
-      "testPaths": [
-        "tests/integration/test_s3_dataset_storage_adapter.py"
-      ],
+      "testPaths": ["tests/integration/test_s3_dataset_storage_adapter.py"],
       "proofs": {
-        "adapter-contract": [
-          "test_s3_dataset_storage_adapter_contract"
-        ],
+        "adapter-contract": ["test_s3_dataset_storage_adapter_contract"],
         "normal-path": [
           "test_s3_composition_root_selects_adapter_from_profile_and_runs_full_cycle",
           "test_s3_api_end_to_end_preview_reads_through_s3_and_surfaces_corruption"
@@ -82,9 +72,7 @@
         },
         {
           "id": "T0-013",
-          "tests": [
-            "test_s3_abort_cleanup_never_deletes_committed_manifest"
-          ]
+          "tests": ["test_s3_abort_cleanup_never_deletes_committed_manifest"]
         },
         {
           "id": "A2",
@@ -100,27 +88,19 @@
         },
         {
           "id": "A5",
-          "tests": [
-            "test_s3_staging_cleanup_is_isolated_per_transaction"
-          ]
+          "tests": ["test_s3_staging_cleanup_is_isolated_per_transaction"]
         },
         {
           "id": "A6",
-          "tests": [
-            "test_s3_staging_cleanup_is_isolated_per_transaction"
-          ]
+          "tests": ["test_s3_staging_cleanup_is_isolated_per_transaction"]
         },
         {
           "id": "A7",
-          "tests": [
-            "test_s3_access_expiry_on_read_is_retryable_not_corruption"
-          ]
+          "tests": ["test_s3_access_expiry_on_read_is_retryable_not_corruption"]
         },
         {
           "id": "A8",
-          "tests": [
-            "test_s3_failed_commit_cleanup_uses_known_keys_not_listing"
-          ]
+          "tests": ["test_s3_failed_commit_cleanup_uses_known_keys_not_listing"]
         },
         {
           "id": "A9",
@@ -245,9 +225,7 @@
         },
         {
           "id": "AI5",
-          "tests": [
-            "test_iceberg_catalog_failure_is_visible_in_operations"
-          ]
+          "tests": ["test_iceberg_catalog_failure_is_visible_in_operations"]
         },
         {
           "id": "AI6",
@@ -264,9 +242,7 @@
         },
         {
           "id": "AI8",
-          "tests": [
-            "test_iceberg_compatible_schema_evolution_across_versions"
-          ]
+          "tests": ["test_iceberg_compatible_schema_evolution_across_versions"]
         },
         {
           "id": "AI9",
@@ -277,9 +253,7 @@
         },
         {
           "id": "AI10",
-          "tests": [
-            "test_iceberg_engine_and_s3_warehouse_end_to_end"
-          ]
+          "tests": ["test_iceberg_engine_and_s3_warehouse_end_to_end"]
         },
         {
           "id": "AI11",
@@ -340,13 +314,9 @@
       "status": "active-covered",
       "qualityScript": "quality:spark",
       "ciCommand": "pnpm --silent quality:spark",
-      "testPaths": [
-        "tests/integration/test_spark_compute_adapter.py"
-      ],
+      "testPaths": ["tests/integration/test_spark_compute_adapter.py"],
       "proofs": {
-        "adapter-contract": [
-          "test_spark_compute_adapter_contract_parity"
-        ],
+        "adapter-contract": ["test_spark_compute_adapter_contract_parity"],
         "normal-path": [
           "test_spark_transform_substitutes_inputs_and_writes_single_parquet_file",
           "test_spark_engine_transform_commits_with_lineage_and_health"
@@ -384,15 +354,11 @@
         },
         {
           "id": "C14",
-          "tests": [
-            "test_spark_and_duckdb_produce_equivalent_transform_output"
-          ]
+          "tests": ["test_spark_and_duckdb_produce_equivalent_transform_output"]
         },
         {
           "id": "CS1",
-          "tests": [
-            "test_spark_compute_adapter_contract_parity"
-          ]
+          "tests": ["test_spark_compute_adapter_contract_parity"]
         },
         {
           "id": "CS2",
@@ -402,9 +368,7 @@
         },
         {
           "id": "CS3",
-          "tests": [
-            "test_spark_and_duckdb_produce_equivalent_transform_output"
-          ]
+          "tests": ["test_spark_and_duckdb_produce_equivalent_transform_output"]
         },
         {
           "id": "CS4",
@@ -421,15 +385,11 @@
         },
         {
           "id": "CS6",
-          "tests": [
-            "test_spark_transform_failure_aborts_output_transaction"
-          ]
+          "tests": ["test_spark_transform_failure_aborts_output_transaction"]
         },
         {
           "id": "CS7",
-          "tests": [
-            "test_spark_concurrent_transforms_use_isolated_temp_views"
-          ]
+          "tests": ["test_spark_concurrent_transforms_use_isolated_temp_views"]
         }
       ],
       "sourceOfTruthRules": [
@@ -446,11 +406,7 @@
           "transformRuns[].error.adapterFailure.operation",
           "transformRuns[].error.adapterFailure.retryable"
         ],
-        "durableEvidenceCategories": [
-          "run",
-          "error",
-          "adapterFailure"
-        ],
+        "durableEvidenceCategories": ["run", "error", "adapterFailure"],
         "testAssertions": {
           "transformRuns[].status": [
             "test_spark_transform_failure_aborts_output_transaction"
@@ -478,12 +434,8 @@
         "tests/integration/test_temporal_workflow_ratchet.py"
       ],
       "proofs": {
-        "adapter-contract": [
-          "test_temporal_adapter_declares_failure_taxonomy"
-        ],
-        "normal-path": [
-          "test_start_workflow_returns_processed_output"
-        ],
+        "adapter-contract": ["test_temporal_adapter_declares_failure_taxonomy"],
+        "normal-path": ["test_start_workflow_returns_processed_output"],
         "failure-injection": [
           "test_business_failure_returns_durable_error_payload",
           "test_execution_timeout_is_reported_as_retryable_timeout",
@@ -499,9 +451,7 @@
           "test_flaky_activity_is_retried_until_success",
           "test_same_idempotency_key_returns_existing_run_without_duplicate"
         ],
-        "partial-success": [
-          "test_flaky_activity_is_retried_until_success"
-        ],
+        "partial-success": ["test_flaky_activity_is_retried_until_success"],
         "recovery-cleanup": [
           "test_same_idempotency_key_returns_existing_run_without_duplicate"
         ],
@@ -517,21 +467,15 @@
       "trickyItems": [
         {
           "id": "WF1",
-          "tests": [
-            "test_temporal_adapter_declares_failure_taxonomy"
-          ]
+          "tests": ["test_temporal_adapter_declares_failure_taxonomy"]
         },
         {
           "id": "WF2",
-          "tests": [
-            "test_start_workflow_returns_processed_output"
-          ]
+          "tests": ["test_start_workflow_returns_processed_output"]
         },
         {
           "id": "WF3",
-          "tests": [
-            "test_flaky_activity_is_retried_until_success"
-          ]
+          "tests": ["test_flaky_activity_is_retried_until_success"]
         },
         {
           "id": "WF4",
@@ -542,27 +486,19 @@
         },
         {
           "id": "WF5",
-          "tests": [
-            "test_concurrent_starts_on_one_key_produce_one_run"
-          ]
+          "tests": ["test_concurrent_starts_on_one_key_produce_one_run"]
         },
         {
           "id": "WF6",
-          "tests": [
-            "test_business_failure_returns_durable_error_payload"
-          ]
+          "tests": ["test_business_failure_returns_durable_error_payload"]
         },
         {
           "id": "WF7",
-          "tests": [
-            "test_execution_timeout_is_reported_as_retryable_timeout"
-          ]
+          "tests": ["test_execution_timeout_is_reported_as_retryable_timeout"]
         },
         {
           "id": "WF8",
-          "tests": [
-            "test_cancelled_workflow_is_reported_as_cancelled"
-          ]
+          "tests": ["test_cancelled_workflow_is_reported_as_cancelled"]
         },
         {
           "id": "WF9",
@@ -586,11 +522,7 @@
           "workflowRuns[].error.kind",
           "workflowRuns[].error.retryable"
         ],
-        "durableEvidenceCategories": [
-          "run",
-          "error",
-          "adapterFailure"
-        ],
+        "durableEvidenceCategories": ["run", "error", "adapterFailure"],
         "testAssertions": {
           "workflowRuns[].status": [
             "test_start_workflow_temporal_unavailable_returns_retryable_error_payload"
@@ -668,9 +600,7 @@
         },
         {
           "id": "ES2",
-          "tests": [
-            "test_elasticsearch_normal_path_indexes_and_searches"
-          ]
+          "tests": ["test_elasticsearch_normal_path_indexes_and_searches"]
         },
         {
           "id": "ES3",
@@ -718,9 +648,7 @@
           ]
         }
       ],
-      "sourceOfTruthRules": [
-        "search_index_is_projection_not_truth"
-      ],
+      "sourceOfTruthRules": ["search_index_is_projection_not_truth"],
       "operatorEvidence": {
         "runField": "indexRuns",
         "requiredPayloadPaths": [
@@ -819,9 +747,7 @@
       "trickyItems": [
         {
           "id": "T0-001",
-          "tests": [
-            "test_stream_offset_not_advanced_when_append_commit_fails"
-          ]
+          "tests": ["test_stream_offset_not_advanced_when_append_commit_fails"]
         },
         {
           "id": "T0-034",
@@ -837,9 +763,7 @@
         },
         {
           "id": "T0-036",
-          "tests": [
-            "test_cdc_pk_update_policy"
-          ]
+          "tests": ["test_cdc_pk_update_policy"]
         },
         {
           "id": "T0-037",
@@ -859,19 +783,14 @@
   "compositionProofs": [
     {
       "id": "s3+iceberg",
-      "members": [
-        "s3-storage",
-        "iceberg"
-      ],
+      "members": ["s3-storage", "iceberg"],
       "qualityScript": "quality:iceberg",
       "ciCommand": "pnpm --silent quality:iceberg",
       "proofs": {
         "composition-compatibility": [
           "test_iceberg_engine_and_s3_warehouse_end_to_end"
         ],
-        "normal-path": [
-          "test_iceberg_engine_and_s3_warehouse_end_to_end"
-        ],
+        "normal-path": ["test_iceberg_engine_and_s3_warehouse_end_to_end"],
         "failure-injection": [
           "test_iceberg_snapshot_committed_db_failure_cleans_up_orphan_snapshot"
         ],
@@ -892,9 +811,7 @@
       "trickyItems": [
         {
           "id": "AI10",
-          "tests": [
-            "test_iceberg_engine_and_s3_warehouse_end_to_end"
-          ]
+          "tests": ["test_iceberg_engine_and_s3_warehouse_end_to_end"]
         },
         {
           "id": "AI12",
@@ -906,11 +823,7 @@
     },
     {
       "id": "s3+iceberg+spark",
-      "members": [
-        "s3-storage",
-        "iceberg",
-        "spark"
-      ],
+      "members": ["s3-storage", "iceberg", "spark"],
       "qualityScript": "quality:infra-composition",
       "ciCommand": "pnpm --silent quality:infra-composition",
       "proofs": {
@@ -942,9 +855,7 @@
       "trickyItems": [
         {
           "id": "CS8",
-          "tests": [
-            "test_iceberg_s3_storage_with_spark_compute_end_to_end"
-          ]
+          "tests": ["test_iceberg_s3_storage_with_spark_compute_end_to_end"]
         },
         {
           "id": "CS9",
@@ -956,12 +867,7 @@
     },
     {
       "id": "s3+iceberg+spark+debezium-cdc",
-      "members": [
-        "s3-storage",
-        "iceberg",
-        "spark",
-        "debezium-cdc"
-      ],
+      "members": ["s3-storage", "iceberg", "spark", "debezium-cdc"],
       "qualityScript": "quality:infra-composition",
       "ciCommand": "pnpm --silent quality:infra-composition",
       "proofs": {
@@ -1002,6 +908,116 @@
     }
   ],
   "sourceOfTruthRules": {
+    "metadata_db_committed_media_version_is_serving_truth": {
+      "description": "Only a metadata DB COMMITTED media version is served; a stored blob alone is not truth.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "Media plane is contracts-only in PR1 (ADR-0001 / Ratchet M0); the local MediaSet transaction core that proves DB-committed serving truth lands in PR2.",
+        "riskTier": "T0",
+        "futureTest": "test_media_committed_version_is_serving_truth",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
+    "blob_existence_is_not_serving_truth": {
+      "description": "A blob in object storage with no COMMITTED media version row is an invisible orphan, never served.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "No media commit path exists until PR2; orphan-on-DB-commit-failure is proven by the local transaction core then.",
+        "riskTier": "T0",
+        "futureTest": "test_media_blob_without_db_commit_is_orphan",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
+    "media_reference_pins_immutable_version": {
+      "description": "A MediaReference pins an immutable mediaItemVersionId, not a logical path; a head overwrite never changes what it resolves to.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "Immutable version + reference resolution is implemented and tested in PR2 (local core).",
+        "riskTier": "T0",
+        "futureTest": "test_media_reference_pins_immutable_version",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
+    "logical_path_head_is_not_historical_reference": {
+      "description": "The logical-path head pointer is latest-lookup only; existing references keep resolving to their original bytes after overwrite.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "Path-overwrite head CAS keeping prior version bytes is proven in PR2.",
+        "riskTier": "T0",
+        "futureTest": "test_media_path_overwrite_keeps_old_reference_bytes",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
+    "derivatives_inherit_source_security": {
+      "description": "Every derivative, content unit, embedding, and index entry carries a security envelope no weaker than its source.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "No derivative producer exists until the processing PR; the MediaPolicyEvaluator contract anchors this rule in PR1.",
+        "riskTier": "T0",
+        "futureTest": "test_media_derivative_inherits_source_envelope",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
+    "content_unit_artifact_is_truth_search_index_is_projection": {
+      "description": "Committed content-unit artifacts are the truth; the content search index is a rebuildable projection.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "Content units and the content index land in the lexical-search PR (M3); the ContentRetrievalService/ContentIndexAdapter contracts anchor this rule in PR1.",
+        "riskTier": "T0",
+        "futureTest": "test_content_index_rebuilds_from_committed_artifacts",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
+    "embedding_artifact_pins_model_version_and_chunk_spec": {
+      "description": "An embedding artifact pins its embedding model version and chunk spec; index mismatch fails closed.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "Embeddings land in the hybrid-retrieval PR (M8).",
+        "riskTier": "T0",
+        "futureTest": "test_embedding_artifact_pins_model_and_chunk_spec",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
+    "workflow_status_does_not_replace_domain_commit": {
+      "description": "A Temporal workflow status is not a media domain commit; the DB COMMITTED version remains the only success signal.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "Media processing is the first product-driven Temporal use case (M2/PR4); no media workflow exists yet.",
+        "riskTier": "T0",
+        "futureTest": "test_media_workflow_status_does_not_imply_domain_commit",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
+    "access_pattern_cache_is_not_truth": {
+      "description": "On-demand access-pattern derivatives (thumbnail/preview/waveform) are caches, never serving truth.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "Access patterns land in M9; no cache exists yet.",
+        "riskTier": "T0",
+        "futureTest": "test_media_access_pattern_cache_is_not_truth",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
+    "external_virtual_object_requires_version_or_mutable_marker": {
+      "description": "A virtual external media item must record source version/etag or be marked mutable_external_reference; it must not silently read different bytes.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "Virtual media sets land in M9; v1 is transactional ingest-copy only.",
+        "riskTier": "T0",
+        "futureTest": "test_virtual_media_requires_version_or_mutable_marker",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
+    "retention_never_purges_reachable_or_legal_hold_version": {
+      "description": "Retention purge never deletes a version still reachable by a MediaReference or under legal hold.",
+      "status": "deferred",
+      "deferral": {
+        "reason": "Retention/legal-hold purge engine is a later ratchet; only logical delete exists in early slices.",
+        "riskTier": "T0",
+        "futureTest": "test_media_retention_skips_reachable_or_legal_hold",
+        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
+      }
+    },
     "metadata_db_committed_version_is_serving_truth": {
       "description": "Only a metadata DB COMMITTED dataset version is served; storage objects alone are not truth.",
       "status": "enforced",
@@ -1035,16 +1051,12 @@
     "runs_do_not_resolve_latest_during_execution": {
       "description": "A run pins input versions at planning; it must not silently re-resolve latest mid-execution.",
       "status": "enforced",
-      "tests": [
-        "test_transform_input_latest_is_pinned_to_version_id"
-      ]
+      "tests": ["test_transform_input_latest_is_pinned_to_version_id"]
     },
     "transform_input_version_is_pinned": {
       "description": "Transform input dataset versions are pinned by version_id for the whole run.",
       "status": "enforced",
-      "tests": [
-        "test_transform_input_latest_is_pinned_to_version_id"
-      ]
+      "tests": ["test_transform_input_latest_is_pinned_to_version_id"]
     },
     "materialized_output_not_truth_unless_pinned": {
       "description": "Downstream consumes the pinned materialized version_id, not implicit latest.",
@@ -1056,9 +1068,7 @@
     "external_side_effects_commit_atomically_or_via_outbox": {
       "description": "Side effects (lineage/outbox) commit atomically with the domain transaction, not before it.",
       "status": "enforced",
-      "tests": [
-        "test_transform_output_and_lineage_commit_atomically"
-      ]
+      "tests": ["test_transform_output_and_lineage_commit_atomically"]
     },
     "external_timeout_is_outcome_unknown_not_failure": {
       "description": "A timeout from an external system means outcome_unknown, not a guaranteed failure.",

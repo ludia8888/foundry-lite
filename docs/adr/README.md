@@ -1,0 +1,7 @@
+# Architecture Decision Records
+
+Each ADR captures one significant, hard-to-reverse architectural decision: its context, the decision, consequences, and non-goals. ADRs are append-only; supersede rather than rewrite.
+
+| ADR                                                   | Title                                    | Status   |
+| ----------------------------------------------------- | ---------------------------------------- | -------- |
+| [0001](0001-media-plane-parallel-to-dataset-plane.md) | Media Plane is parallel to Dataset Plane | Accepted |
