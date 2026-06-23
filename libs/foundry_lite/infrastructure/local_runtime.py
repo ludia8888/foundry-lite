@@ -55,6 +55,7 @@ from foundry_lite.infrastructure.adapters import (
 )
 from foundry_lite.infrastructure.adapters.asr_processor import _faster_whisper_asr_engine
 from foundry_lite.infrastructure.adapters.ocr_processor import _tesseract_ocr_engine
+from foundry_lite.infrastructure.adapters.video_probe_processor import _ffprobe_video_probe_runner
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
     SqlAlchemyDatasetQualityRepository,
@@ -207,7 +208,7 @@ def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
     if processor_profile == "image-pillow":
         return ImageProcessorAdapter()
     if processor_profile == "ffprobe":
-        return VideoProbeProcessorAdapter()
+        return VideoProbeProcessorAdapter(probe_runner=_ffprobe_video_probe_runner)
     if processor_profile == "ocr-tesseract":
         return OcrProcessorAdapter(ocr_engine=_tesseract_ocr_engine)
     if processor_profile == "asr-whisper":

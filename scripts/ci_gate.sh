@@ -346,6 +346,8 @@ run_runtime_gate() {
 
   run_runtime_step "Media live ASR ratchet" pnpm --silent quality:media-live-asr
 
+  run_runtime_step "Media live video ratchet" pnpm --silent quality:media-live-video
+
   run_runtime_step "S3 storage ratchet" pnpm --silent quality:s3-storage
 
   run_runtime_step "Iceberg storage ratchet" pnpm --silent quality:iceberg
