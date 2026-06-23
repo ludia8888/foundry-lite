@@ -1,31 +1,36 @@
-"""Contract for ``MediaRepository`` (ADR-0001 §4 / §5).
-
-This sprint ships only the Protocol + DTOs; the durable SQLAlchemy implementation
-and its sqlite/PostgreSQL behavioural suite land with PR2 (local transaction core).
-Here we lock the CAS / uniqueness shape against an in-memory fake so the repository
-boundary is interchangeable and batch-first (``get_*`` take id lists, never scalars).
-"""
-
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from foundry_lite.application.ports.media_repository import (
     MediaItemRecord,
     MediaItemVersionRecord,
-    MediaReference,
-    MediaRepository,
     MediaSetRecord,
     MediaTransactionRecord,
-    SecurityEnvelope,
 )
-from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories import SqlAlchemyMediaRepository
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 
 
-def _media_set() -> MediaSetRecord:
+@pytest.fixture(params=["sqlalchemy", "postgres"])
+def media_repo(request: pytest.FixtureRequest, tmp_path: Path) -> tuple[SqlAlchemyMediaRepository, Engine]:
+    if request.param == "sqlalchemy":
+        engine = create_engine(f"sqlite:///{tmp_path / 'media.db'}", future=True)
+        db.create_database(engine)
+        return SqlAlchemyMediaRepository(engine), engine
+    postgres_fixture = request.getfixturevalue("postgres_fixture")
+    return SqlAlchemyMediaRepository(postgres_fixture.engine), postgres_fixture.engine
+
+
+def _media_set(media_set_id: str = "ms-1", *, name: str = "contracts") -> MediaSetRecord:
     return MediaSetRecord(
-        media_set_id="ms-1",
-        tenant_id="t",
+        media_set_id=media_set_id,
+        tenant_id="tenant-demo",
         namespace="legal",
-        name="contracts",
+        name=name,
         schema_type="document",
         primary_format="pdf",
         allowed_input_formats=("pdf",),
@@ -39,138 +44,200 @@ def _media_set() -> MediaSetRecord:
     )
 
 
-def _item() -> MediaItemRecord:
-    return MediaItemRecord(
-        media_item_id="mi-1",
-        tenant_id="t",
+def _transaction(
+    transaction_id: str = "mtx-1", *, status: str = "OPEN", idempotency_key: str = "idem-1"
+) -> MediaTransactionRecord:
+    return MediaTransactionRecord(
+        media_transaction_id=transaction_id,
+        tenant_id="tenant-demo",
         media_set_id="ms-1",
-        logical_path="/a.pdf",
-        head_version_id=None,
+        status=status,
+        mode="APPEND",
+        idempotency_key=idempotency_key,
+        request_fingerprint="fp-1",
+        opened_at="2026-06-23T00:00:00Z",
+    )
+
+
+def _item(item_id: str = "mi-1", *, head_version_id: str | None = None) -> MediaItemRecord:
+    return MediaItemRecord(
+        media_item_id=item_id,
+        tenant_id="tenant-demo",
+        media_set_id="ms-1",
+        logical_path="/contracts/acme.pdf",
+        head_version_id=head_version_id,
         is_deleted=False,
         created_at="2026-06-23T00:00:00Z",
         updated_at="2026-06-23T00:00:00Z",
     )
 
 
-class _FakeMediaRepository:
-    """In-memory repository pinning the create-or-get-existing CAS contract."""
-
-    def __init__(self) -> None:
-        self._sets: dict[str, MediaSetRecord] = {}
-
-    def create_media_set_or_get_existing(
-        self, *, transaction: TransactionContext, record: MediaSetRecord
-    ) -> MediaSetRecord | None:
-        key = (record.tenant_id, record.namespace, record.name)
-        existing = next((s for s in self._sets.values() if (s.tenant_id, s.namespace, s.name) == key), None)
-        if existing is not None:
-            return existing
-        self._sets[record.media_set_id] = record
-        return None
-
-    def get_media_sets(self, *, transaction: TransactionContext, ids: list[str]) -> list[MediaSetRecord]:
-        return [self._sets[i] for i in ids if i in self._sets]
-
-    def media_set_by_ref(
-        self, *, transaction: TransactionContext, tenant_id: str, namespace: str, name: str
-    ) -> MediaSetRecord | None:
-        key = (tenant_id, namespace, name)
-        return next((s for s in self._sets.values() if (s.tenant_id, s.namespace, s.name) == key), None)
-
-    def create_open_transaction(
-        self, *, transaction: TransactionContext, record: MediaTransactionRecord
-    ) -> MediaTransactionRecord | None:
-        return None
-
-    def transaction_by_id(
-        self, *, transaction: TransactionContext, tenant_id: str, media_transaction_id: str
-    ) -> MediaTransactionRecord | None:
-        return None
-
-    def commit_transaction(
-        self, *, transaction: TransactionContext, tenant_id: str, media_transaction_id: str, committed_at: str
-    ) -> MediaTransactionRecord | None:
-        return None
-
-    def abort_transaction(
-        self,
-        *,
-        transaction: TransactionContext,
-        tenant_id: str,
-        media_transaction_id: str,
-        aborted_at: str,
-        error: dict[str, object] | None,
-    ) -> MediaTransactionRecord | None:
-        return None
-
-    def upsert_media_item(self, *, transaction: TransactionContext, record: MediaItemRecord) -> MediaItemRecord:
-        return record
-
-    def cas_item_head_version(
-        self,
-        *,
-        transaction: TransactionContext,
-        tenant_id: str,
-        media_item_id: str,
-        expected_head_version_id: str | None,
-        new_head_version_id: str,
-        updated_at: str,
-    ) -> MediaItemRecord | None:
-        return None
-
-    def insert_version(
-        self, *, transaction: TransactionContext, record: MediaItemVersionRecord
-    ) -> MediaItemVersionRecord | None:
-        return None
-
-    def media_item_version_by_id(
-        self, *, transaction: TransactionContext, tenant_id: str, media_item_version_id: str
-    ) -> MediaItemVersionRecord | None:
-        return None
-
-    def get_media_item_versions(
-        self, *, transaction: TransactionContext, ids: list[str]
-    ) -> list[MediaItemVersionRecord]:
-        return []
-
-    def next_version_number(self, *, transaction: TransactionContext, media_item_id: str) -> int:
-        return 1
-
-    def commit_staged_versions(
-        self, *, transaction: TransactionContext, tenant_id: str, media_transaction_id: str, committed_at: str
-    ) -> list[MediaItemVersionRecord]:
-        return []
-
-    def fetch_unreachable_staged_versions(
-        self, *, transaction: TransactionContext, tenant_id: str, older_than: str
-    ) -> list[MediaItemVersionRecord]:
-        return []
+def _version(
+    version_id: str,
+    *,
+    version_number: int,
+    blob_key: str,
+    content_hash: str,
+    transaction_id: str = "mtx-1",
+    status: str = "STAGED",
+    created_at: str = "2026-06-23T00:00:00Z",
+) -> MediaItemVersionRecord:
+    return MediaItemVersionRecord(
+        media_item_version_id=version_id,
+        tenant_id="tenant-demo",
+        media_item_id="mi-1",
+        media_transaction_id=transaction_id,
+        version_number=version_number,
+        blob_key=blob_key,
+        content_hash=content_hash,
+        byte_size=1024,
+        supplied_mime_type="application/pdf",
+        sniffed_mime_type="application/pdf",
+        schema_type="document",
+        format="pdf",
+        probe_metadata={"pages": 3},
+        security_envelope={"tenantId": "tenant-demo", "classification": "confidential"},
+        source_ref=None,
+        status=status,
+        created_at=created_at,
+    )
 
 
-def test_media_repository_create_media_set_is_idempotent() -> None:
-    repo: MediaRepository = _FakeMediaRepository()
-    handle: TransactionContext = object()  # type: ignore[assignment]
-
-    fresh = repo.create_media_set_or_get_existing(transaction=handle, record=_media_set())
-    replay = repo.create_media_set_or_get_existing(transaction=handle, record=_media_set())
+def test_media_set_create_is_idempotent_and_tenant_scoped(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        fresh = repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+        replay = repo.create_media_set_or_get_existing(transaction=conn, record=_media_set(media_set_id="ms-2"))
 
     assert fresh is None
     assert replay is not None and replay.media_set_id == "ms-1"
-    assert [s.media_set_id for s in repo.get_media_sets(transaction=handle, ids=["ms-1"])] == ["ms-1"]
-    assert repo.media_set_by_ref(transaction=handle, tenant_id="t", namespace="legal", name="contracts") is not None
-    assert repo.upsert_media_item(transaction=handle, record=_item()).media_item_id == "mi-1"
+    with engine.begin() as conn:
+        assert (
+            repo.media_set_by_ref(transaction=conn, tenant_id="tenant-demo", namespace="legal", name="contracts")
+            is not None
+        )
+        assert (
+            repo.media_set_by_ref(transaction=conn, tenant_id="tenant-other", namespace="legal", name="contracts")
+            is None
+        )
+        assert {record.media_set_id for record in repo.get_media_sets(transaction=conn, ids=["ms-1"])} == {"ms-1"}
 
 
-def test_media_reference_pins_immutable_version_and_envelope_carries_legal_hold() -> None:
-    reference = MediaReference(
-        media_set_id="ms-1",
-        media_item_id="mi-1",
-        media_item_version_id="miv-1",
-        logical_path="/a.pdf",
-        content_hash="h",
+def test_media_transaction_commit_is_cas_and_idempotent(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+        fresh = repo.create_open_transaction(transaction=conn, record=_transaction())
+        replay = repo.create_open_transaction(transaction=conn, record=_transaction(transaction_id="mtx-2"))
+        committed = repo.commit_transaction(
+            transaction=conn, tenant_id="tenant-demo", media_transaction_id="mtx-1", committed_at="2026-06-23T01:00:00Z"
+        )
+        recommit = repo.commit_transaction(
+            transaction=conn, tenant_id="tenant-demo", media_transaction_id="mtx-1", committed_at="2026-06-23T02:00:00Z"
+        )
+
+    assert fresh is None
+    assert replay is not None and replay.media_transaction_id == "mtx-1"
+    assert (
+        committed is not None and committed.status == "COMMITTED" and committed.committed_at == "2026-06-23T01:00:00Z"
     )
-    envelope = SecurityEnvelope(tenant_id="t", classification="confidential", policy_version="v1", has_legal_hold=True)
+    # Re-commit is a CAS no-op: the committed_at does not move to the second call.
+    assert recommit is not None and recommit.committed_at == "2026-06-23T01:00:00Z"
 
-    # A reference pins the version id, not the (mutable) head logical path.
-    assert reference.media_item_version_id == "miv-1"
-    assert envelope.has_legal_hold is True
+
+def test_media_item_head_cas_yields_single_winner(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+        repo.upsert_media_item(transaction=conn, record=_item())
+        # Two commits race from the same expected head (None): exactly one wins.
+        first = repo.cas_item_head_version(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_item_id="mi-1",
+            expected_head_version_id=None,
+            new_head_version_id="miv-1",
+            updated_at="2026-06-23T01:00:00Z",
+        )
+        lost = repo.cas_item_head_version(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_item_id="mi-1",
+            expected_head_version_id=None,
+            new_head_version_id="miv-2",
+            updated_at="2026-06-23T01:00:01Z",
+        )
+        # A correct compare-and-set from the new head succeeds.
+        advanced = repo.cas_item_head_version(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_item_id="mi-1",
+            expected_head_version_id="miv-1",
+            new_head_version_id="miv-2",
+            updated_at="2026-06-23T01:00:02Z",
+        )
+
+    assert first is not None and first.head_version_id == "miv-1"
+    assert lost is None
+    assert advanced is not None and advanced.head_version_id == "miv-2"
+
+
+def test_media_version_insert_dedups_and_commits_with_monotonic_numbers(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+        repo.create_open_transaction(transaction=conn, record=_transaction())
+        repo.upsert_media_item(transaction=conn, record=_item())
+        assert repo.next_version_number(transaction=conn, media_item_id="mi-1") == 1
+        fresh = repo.insert_version(
+            transaction=conn, record=_version("miv-1", version_number=1, blob_key="blob-1", content_hash="h1")
+        )
+        # Same blob (content_hash, byte_size, blob_key) resolves to the existing version.
+        replay = repo.insert_version(
+            transaction=conn, record=_version("miv-9", version_number=1, blob_key="blob-1", content_hash="h1")
+        )
+        assert repo.next_version_number(transaction=conn, media_item_id="mi-1") == 2
+        committed = repo.commit_staged_versions(
+            transaction=conn, tenant_id="tenant-demo", media_transaction_id="mtx-1", committed_at="2026-06-23T01:00:00Z"
+        )
+
+    assert fresh is None
+    assert replay is not None and replay.media_item_version_id == "miv-1"
+    assert [version.media_item_version_id for version in committed] == ["miv-1"]
+    assert committed[0].status == "COMMITTED" and committed[0].committed_at == "2026-06-23T01:00:00Z"
+
+
+def test_fetch_unreachable_staged_versions_finds_aborted_transaction_versions(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+        repo.create_open_transaction(transaction=conn, record=_transaction())
+        repo.upsert_media_item(transaction=conn, record=_item())
+        repo.insert_version(
+            transaction=conn,
+            record=_version(
+                "miv-1", version_number=1, blob_key="blob-1", content_hash="h1", created_at="2026-06-20T00:00:00Z"
+            ),
+        )
+        repo.abort_transaction(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_transaction_id="mtx-1",
+            aborted_at="2026-06-20T01:00:00Z",
+            error={"reason": "operator_abort"},
+        )
+        orphans = repo.fetch_unreachable_staged_versions(
+            transaction=conn, tenant_id="tenant-demo", older_than="2026-06-21T00:00:00Z"
+        )
+
+    assert [version.media_item_version_id for version in orphans] == ["miv-1"]

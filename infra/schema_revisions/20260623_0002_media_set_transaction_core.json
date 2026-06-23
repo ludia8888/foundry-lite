@@ -1,0 +1,3762 @@
+{
+  "description": "media set transaction core (sets/transactions/items/versions)",
+  "revision": "20260623_0002_media_set_transaction_core",
+  "schema": {
+    "tables": [
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "action_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "action_type_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "actor_user_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "target_object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "target_object_type_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "target_object_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "expected_object_version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "parameters",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "idempotency_key",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "request_fingerprint",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "result",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "error",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "completed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "action_runs",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "action_type_id",
+              "actor_user_id",
+              "idempotency_key"
+            ],
+            "name": "uq_action_idempotency"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "ontology_version_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "display_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "target_object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "target_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "parameter_schema",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "definition",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "enabled",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          }
+        ],
+        "name": "action_types",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "ontology_version_id",
+              "api_name"
+            ],
+            "name": "uq_action_type_api"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "action_run_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "mode",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "connector_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "request",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "response",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "idempotency_key",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "attempts",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "completed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "action_writebacks",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "actor_user_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "event_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "resource_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "resource_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "action",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "decision",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "policy_decision",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "before_ref",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "after_ref",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "correlation_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "request_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "metadata",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "audit_events",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "check_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "run_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "transaction_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "checked_manifest_hash",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "validated_against_schema_version_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "validated_against_schema_version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "details",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "dataset_check_results",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "dataset_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "check_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "config",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "severity",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "enabled",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          }
+        ],
+        "name": "dataset_checks",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "dataset_id",
+              "name"
+            ],
+            "name": "uq_dataset_check_name"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "dataset_version_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "uri",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Text"
+          },
+          {
+            "name": "format",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "row_count",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "byte_size",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "content_hash",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "partition_values",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          }
+        ],
+        "name": "dataset_files",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "dataset_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "schema_json",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "schema_hash",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "dataset_schemas",
+        "unique_constraints": [
+          {
+            "columns": [
+              "dataset_id",
+              "schema_hash"
+            ],
+            "name": "uq_dataset_schema_hash"
+          },
+          {
+            "columns": [
+              "dataset_id",
+              "version"
+            ],
+            "name": "uq_dataset_schema_version"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "dataset_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "branch",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "tx_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "base_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "committed_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "schema_version",
+            "nullable": true,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "created_by",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "committed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "metadata",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          }
+        ],
+        "name": "dataset_transactions",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "dataset_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "branch",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "version_number",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "transaction_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "schema_version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "manifest_uri",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Text"
+          },
+          {
+            "name": "row_count",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "byte_size",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "superseded_by_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "dataset_versions",
+        "unique_constraints": [
+          {
+            "columns": [
+              "dataset_id",
+              "branch",
+              "version_number"
+            ],
+            "name": "uq_dataset_version_number"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "namespace",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "description",
+            "nullable": true,
+            "primary_key": false,
+            "type": "Text"
+          },
+          {
+            "name": "storage_kind",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "storage_uri",
+            "nullable": true,
+            "primary_key": false,
+            "type": "Text"
+          },
+          {
+            "name": "owner_team",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "classification",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "primary_key",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "partition_spec",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "sort_order",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "target_file_size_bytes",
+            "nullable": true,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "datasets",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "namespace",
+              "name"
+            ],
+            "name": "uq_dataset_ref"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_event_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "event_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "payload",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "error",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "failed_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "retry_after",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "dead_letter_events",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_event_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_dataset_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_run_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "payload",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "payload_hash",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "schema_version",
+            "nullable": true,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "transform_version",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "error_kind",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "error_message",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Text"
+          },
+          {
+            "name": "event_time",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "ingested_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "first_failed_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "attempts",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "replay_status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "replay_run_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "replay_idempotency_key",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "replay_requested_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "replay_lease_token",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "replay_started_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "replay_lease_expires_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "discarded_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "backfill_plan",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "is_closed_partition_affected",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "metadata",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          }
+        ],
+        "name": "dead_letter_records",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "source_event_id",
+              "payload_hash"
+            ],
+            "name": "uq_dead_letter_record_source_payload"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "request_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "manifest_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "certificate",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "certified_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "erasure_certificates",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "request_id"
+            ],
+            "name": "uq_erasure_certificates_tenant_request"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "request_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "resource_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "resource_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "surface",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "new_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "executed_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "erasure_redaction_executions",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "request_id",
+              "resource_type",
+              "resource_id"
+            ],
+            "name": "uq_erasure_redaction_execution_resource"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "subject_kind",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "subject_hash",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "subject_token_key_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "requested_by",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "idempotency_key",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "reason",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "manifest_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "evidence",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "requested_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "executed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "erasure_requests",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "idempotency_key"
+            ],
+            "name": "uq_erasure_requests_tenant_idempotency"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "trigger_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_ref",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "cursor",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "rows_read",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "objects_upserted",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "objects_deleted",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "links_upserted",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "error",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "started_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "completed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "index_runs",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "claim_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "claim_text",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Text"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "priority",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "assignee_user_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "evidence_object_ids",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "evidence_refs",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "action_proposal",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "created_by_user_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_idempotency_key",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "assignment_idempotency_key",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "decision",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "decision_idempotency_key",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "review_metadata",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "insight_reviews",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "assignment_idempotency_key"
+            ],
+            "name": "uq_insight_review_assignment_idempotency"
+          },
+          {
+            "columns": [
+              "tenant_id",
+              "created_idempotency_key"
+            ],
+            "name": "uq_insight_review_create_idempotency"
+          },
+          {
+            "columns": [
+              "tenant_id",
+              "decision_idempotency_key"
+            ],
+            "name": "uq_insight_review_decision_idempotency"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "from_resource_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "from_resource_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "to_resource_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "to_resource_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "relation",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_by_run_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "lineage_edges",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "ontology_version_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "display_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "from_object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "from_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "to_object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "to_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "cardinality",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "backing",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          }
+        ],
+        "name": "link_types",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "ontology_version_id",
+              "api_name"
+            ],
+            "name": "uq_link_type_api"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "materialization_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_cursor",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "object_store_watermark",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "consistency_level",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "target_dataset_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "row_count",
+            "nullable": true,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "error",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "completed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "materialization_runs",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "materialization_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_ref",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "target_ref",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "trigger_config",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "enabled",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          }
+        ],
+        "name": "materializations",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "api_name"
+            ],
+            "name": "uq_materialization_api_name"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "media_item_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "media_transaction_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "version_number",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "blob_key",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "content_hash",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "byte_size",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "supplied_mime_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "sniffed_mime_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "schema_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "format",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "probe_metadata",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "security_envelope",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "source_ref",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "committed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "media_item_versions",
+        "unique_constraints": [
+          {
+            "columns": [
+              "media_item_id",
+              "version_number"
+            ],
+            "name": "uq_media_item_version_number"
+          },
+          {
+            "columns": [
+              "tenant_id",
+              "content_hash",
+              "byte_size",
+              "blob_key"
+            ],
+            "name": "uq_media_version_blob"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "media_set_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "logical_path",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "head_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "is_deleted",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "media_items",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "media_set_id",
+              "logical_path"
+            ],
+            "name": "uq_media_item_path"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "namespace",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "schema_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "primary_format",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "allowed_input_formats",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "transaction_policy",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "storage_profile",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "processing_profile",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "classification",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "retention_policy_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "media_sets",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "namespace",
+              "name"
+            ],
+            "name": "uq_media_set_ref"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "media_set_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "mode",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "idempotency_key",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "request_fingerprint",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "opened_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "committed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "aborted_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "error",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "trace",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          }
+        ],
+        "name": "media_transactions",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "media_set_id",
+              "idempotency_key"
+            ],
+            "name": "uq_media_transaction_idempotency"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "last_sequence",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          }
+        ],
+        "name": "object_change_counters",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "property_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_value",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "edit_value",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "source_dataset_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "edit_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "object_conflicts",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "action_run_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "edit_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "patch",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "previous_values",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "actor_user_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "idempotency_key",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "object_edits",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "active_index_version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "object_index_versions",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "object_type_id"
+            ],
+            "name": "uq_object_index_version_active"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "link_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "link_type_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "index_version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "is_active",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "from_object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "from_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "from_object_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "to_object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "to_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "to_object_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "properties",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "source_dataset_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "link_version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "deleted",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "deletion_reason",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "object_links",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "link_type_id",
+              "from_object_id",
+              "to_object_id",
+              "index_version"
+            ],
+            "name": "uq_link"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_record_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "index_version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "is_active",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "properties",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "base_properties",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "edit_properties",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "property_versions",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "source_dataset_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_hash",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "object_change_sequence",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "deleted",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "deletion_reason",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "object_record_versions",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "object_type_id",
+              "object_id",
+              "index_version",
+              "object_change_sequence"
+            ],
+            "name": "uq_object_record_version_sequence"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "index_version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "is_active",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "properties",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "base_properties",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "edit_properties",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "property_versions",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "source_dataset_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_hash",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_version",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "object_change_sequence",
+            "nullable": true,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "deleted",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "deletion_reason",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "updated_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "object_records",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "object_type_id",
+              "object_id",
+              "index_version"
+            ],
+            "name": "uq_object_record"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "set_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "definition",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "visibility",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "owner_user_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "expires_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "object_sets",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "ontology_version_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "display_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "description",
+            "nullable": true,
+            "primary_key": false,
+            "type": "Text"
+          },
+          {
+            "name": "primary_key_property",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "backing",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "config",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          }
+        ],
+        "name": "object_types",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "ontology_version_id",
+              "api_name"
+            ],
+            "name": "uq_object_type_api"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "version_number",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_by",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "activated_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "ontology_versions",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "event_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "aggregate_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "aggregate_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "payload",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "attempts",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "idempotency_key",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "correlation_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "published_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "outbox_events",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "event_type",
+              "idempotency_key"
+            ],
+            "name": "uq_outbox_idempotency"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "object_type_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "display_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "data_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "nullable",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "indexed",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "searchable",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "editable",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Boolean"
+          },
+          {
+            "name": "classification",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "column_name",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "edit_policy",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "derivation",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          }
+        ],
+        "name": "property_types",
+        "unique_constraints": [
+          {
+            "columns": [
+              "object_type_id",
+              "api_name"
+            ],
+            "name": "uq_property_api"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_run_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_run_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "target_run_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "target_run_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "relation",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "resource_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "resource_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "metadata",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "runtime_run_relations",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "source_run_type",
+              "source_run_id",
+              "target_run_type",
+              "target_run_id",
+              "relation",
+              "resource_type",
+              "resource_id"
+            ],
+            "name": "uq_runtime_run_relation"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "sync_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "source_type",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "output_dataset_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "transaction_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "committed_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "error",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "completed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "sync_runs",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "tenants",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "transform_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "input_versions",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "definition_snapshot",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "output_version_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "transaction_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "error",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "completed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "transform_runs",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "api_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "language",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "entrypoint",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Text"
+          },
+          {
+            "name": "mode",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "inputs",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "output_dataset_ref",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "checks",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          }
+        ],
+        "name": "transforms",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "api_name"
+            ],
+            "name": "uq_transform_api_name"
+          }
+        ]
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "email",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "roles",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "users",
+        "unique_constraints": []
+      },
+      {
+        "columns": [
+          {
+            "name": "id",
+            "nullable": false,
+            "primary_key": true,
+            "type": "String"
+          },
+          {
+            "name": "tenant_id",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "workflow_name",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "workflow_profile",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "status",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "idempotency_key",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "request_fingerprint",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "input",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "output",
+            "nullable": false,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "error",
+            "nullable": true,
+            "primary_key": false,
+            "type": "JSON"
+          },
+          {
+            "name": "dataset_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "audit_event_id",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "attempts",
+            "nullable": false,
+            "primary_key": false,
+            "type": "Integer"
+          },
+          {
+            "name": "created_at",
+            "nullable": false,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "started_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          },
+          {
+            "name": "completed_at",
+            "nullable": true,
+            "primary_key": false,
+            "type": "String"
+          }
+        ],
+        "name": "workflow_runs",
+        "unique_constraints": [
+          {
+            "columns": [
+              "tenant_id",
+              "workflow_name",
+              "idempotency_key"
+            ],
+            "name": "uq_workflow_run_idempotency"
+          }
+        ]
+      }
+    ]
+  },
+  "schema_fingerprint": "0250c8ee8a194ccd156e38dee8b078801c59ffc66054c8186db12791a2402034",
+  "summary": {
+    "column_count": 526,
+    "table_count": 45,
+    "table_names": [
+      "action_runs",
+      "action_types",
+      "action_writebacks",
+      "audit_events",
+      "dataset_check_results",
+      "dataset_checks",
+      "dataset_files",
+      "dataset_schemas",
+      "dataset_transactions",
+      "dataset_versions",
+      "datasets",
+      "dead_letter_events",
+      "dead_letter_records",
+      "erasure_certificates",
+      "erasure_redaction_executions",
+      "erasure_requests",
+      "index_runs",
+      "insight_reviews",
+      "lineage_edges",
+      "link_types",
+      "materialization_runs",
+      "materializations",
+      "media_item_versions",
+      "media_items",
+      "media_sets",
+      "media_transactions",
+      "object_change_counters",
+      "object_conflicts",
+      "object_edits",
+      "object_index_versions",
+      "object_links",
+      "object_record_versions",
+      "object_records",
+      "object_sets",
+      "object_types",
+      "ontology_versions",
+      "outbox_events",
+      "property_types",
+      "runtime_run_relations",
+      "sync_runs",
+      "tenants",
+      "transform_runs",
+      "transforms",
+      "users",
+      "workflow_runs"
+    ]
+  }
+}
