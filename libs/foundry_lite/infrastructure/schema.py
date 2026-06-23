@@ -849,6 +849,75 @@ media_item_versions = Table(
     UniqueConstraint("tenant_id", "content_hash", "byte_size", "blob_key", name="uq_media_version_blob"),
 )
 
+# A processing output pinned to (source version + processor spec). The unique key is the
+# media-processing idempotency anchor (doc §4.4): the same version + spec + model + params
+# resolves to the existing derivative, never a duplicate. model_version/params_hash are
+# stored as "" (not NULL) when absent so the uniqueness holds across backends.
+media_derivatives = Table(
+    "media_derivatives",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("source_media_item_version_id", String, nullable=False),
+    Column("derivative_kind", String, nullable=False),
+    Column("processor_spec_hash", String, nullable=False),
+    Column("processor_name", String, nullable=False),
+    Column("processor_version", String, nullable=False),
+    Column("model_name", String),
+    Column("model_version", String, nullable=False),
+    Column("params_hash", String, nullable=False),
+    Column("blob_key", String),
+    Column("content_hash", String),
+    Column("byte_size", Integer),
+    Column("mime_type", String),
+    # Security envelope copied from the source version; a derivative is never weaker.
+    Column("security_envelope", JSON, nullable=False),
+    Column("status", String, nullable=False),
+    Column("error", JSON),
+    Column("created_at", String, nullable=False),
+    Column("committed_at", String),
+    UniqueConstraint(
+        "source_media_item_version_id",
+        "derivative_kind",
+        "processor_spec_hash",
+        "model_version",
+        "params_hash",
+        name="uq_media_derivative_spec",
+    ),
+)
+
+# Normalized content extracted from a derivative (page/chunk/segment). Pins the exact
+# source version and the producing derivative; never re-resolves the logical-path head
+# (doc §4.5). text_hash makes a citation verifiable against the source.
+content_units = Table(
+    "content_units",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("source_media_item_version_id", String, nullable=False),
+    Column("derivative_id", String, nullable=False),
+    Column("unit_kind", String, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("page_number", Integer),
+    Column("start_ms", Integer),
+    Column("end_ms", Integer),
+    Column("bbox", JSON),
+    Column("speaker", String),
+    Column("language", String),
+    Column("text", String, nullable=False),
+    Column("text_hash", String, nullable=False),
+    Column("chunk_spec_hash", String, nullable=False),
+    Column("security_envelope", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint(
+        "source_media_item_version_id",
+        "unit_kind",
+        "ordinal",
+        "chunk_spec_hash",
+        name="uq_content_unit_ordinal",
+    ),
+)
+
 
 def tenant_rls_tables() -> tuple[Table, ...]:
     return tuple(table for table in metadata.sorted_tables if "tenant_id" in table.c)

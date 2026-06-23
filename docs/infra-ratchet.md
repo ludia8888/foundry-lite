@@ -467,9 +467,15 @@ ratchet at a time, each adding at most one new external failure domain.
   `build_s3_client` helper. The `infra-tricky-matrix` `active-covered` family
   promotion (operator-evidence proof class) is deferred until a media Operations/run
   surface exists.
-- **M2 — PDF raw-text processor:** local/container PyMuPDF/pypdf; encrypted/corrupt
-  PDF, page limit, process kill/timeout, deterministic page-text hash,
-  derivative-metadata-failure cleanup, duplicate workflow start.
+- **M2 — PDF raw-text processor (processor shipped):** local `pypdf` `PdfTextProcessorAdapter`
+  (profile `pdf-pypdf`) with encrypted/corrupt-PDF + page-limit validation failures, a
+  wall-clock timeout that fails closed, and deterministic per-page text hashes. The
+  `media_derivatives` + `content_units` schema, a `MediaProcessingService` that commits the
+  derivative + content units + audit + outbox atomically (DB COMMITTED is the only serving
+  truth), idempotency on the derivative spec key, inherited security envelopes, and staged-
+  orphan sweep all ship and are tested. The Temporal workflow wrapper + `infra-tricky-matrix`
+  active-covered family (operator-evidence proof) are deferred with M1 until a media
+  Operations/run surface exists; `derivatives_inherit_source_security` is now `enforced`.
 - **M3 — Content units + Elasticsearch lexical projection:** page/chunk build,
   version guard, partial bulk failure, rebuild-from-artifacts, stale source
   version, ACL leakage, citation integrity.

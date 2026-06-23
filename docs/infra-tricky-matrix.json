@@ -941,13 +941,10 @@
     },
     "derivatives_inherit_source_security": {
       "description": "Every derivative, content unit, embedding, and index entry carries a security envelope no weaker than its source.",
-      "status": "deferred",
-      "deferral": {
-        "reason": "No derivative producer exists until the processing PR; the MediaPolicyEvaluator contract anchors this rule in PR1.",
-        "riskTier": "T0",
-        "futureTest": "test_media_derivative_inherits_source_envelope",
-        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
-      }
+      "status": "enforced",
+      "tests": [
+        "test_process_commits_derivative_with_inherited_security_envelope"
+      ]
     },
     "content_unit_artifact_is_truth_search_index_is_projection": {
       "description": "Committed content-unit artifacts are the truth; the content search index is a rebuildable projection.",

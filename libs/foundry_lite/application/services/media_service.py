@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.base import CoreService, build_service
 from foundry_lite.application.services.media.catalog import MediaCatalogService
+from foundry_lite.application.services.media.processing import MediaProcessingService
 from foundry_lite.application.services.media.references import MediaReferenceService
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadService
@@ -18,6 +19,7 @@ class MediaServices:
     transaction: MediaTransactionService
     upload: MediaUploadService
     reference: MediaReferenceService
+    processing: MediaProcessingService
 
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> MediaServices:
@@ -26,7 +28,8 @@ class MediaServices:
             transaction=build_service(MediaTransactionService, dependencies),
             upload=build_service(MediaUploadService, dependencies),
             reference=build_service(MediaReferenceService, dependencies),
+            processing=build_service(MediaProcessingService, dependencies),
         )
 
     def items(self) -> tuple[CoreService, ...]:
-        return (self.catalog, self.transaction, self.upload, self.reference)
+        return (self.catalog, self.transaction, self.upload, self.reference, self.processing)

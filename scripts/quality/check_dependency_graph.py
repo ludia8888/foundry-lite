@@ -212,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
             "foundry_lite.application.dependencies",
             "foundry_lite.application.facades",
             "foundry_lite.infrastructure.local_runtime",
+            # The CoreService DI base type-annotates every injectable dependency, and a
+            # bounded-context facade aggregates that context's services + DTOs — both are
+            # aggregation points whose fan-out grows with the platform, by design.
+            "foundry_lite.application.services.base",
+            "foundry_lite.application.facades.media_workspace",
         ],
     )
     args = parser.parse_args(argv)

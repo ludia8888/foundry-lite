@@ -10,6 +10,7 @@ from foundry_lite.infrastructure.repositories.dataset_version_repository import 
 from foundry_lite.infrastructure.repositories.erasure_repository import SqlAlchemyErasureRepository
 from foundry_lite.infrastructure.repositories.insight_review_repository import SqlAlchemyInsightReviewRepository
 from foundry_lite.infrastructure.repositories.materialization_repository import SqlAlchemyMaterializationRepository
+from foundry_lite.infrastructure.repositories.media_derivative_repository import SqlAlchemyMediaDerivativeRepository
 from foundry_lite.infrastructure.repositories.media_repository import SqlAlchemyMediaRepository
 from foundry_lite.infrastructure.repositories.metadata_repository import (
     SchemaMutationDisabledError,
@@ -31,6 +32,7 @@ __all__ = [
     "SqlAlchemyDatasetVersionRepository",
     "SqlAlchemyInsightReviewRepository",
     "SqlAlchemyMaterializationRepository",
+    "SqlAlchemyMediaDerivativeRepository",
     "SqlAlchemyMediaRepository",
     "SchemaMutationDisabledError",
     "SqlAlchemyDestructiveDevelopmentAdmin",
