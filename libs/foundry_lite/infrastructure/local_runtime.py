@@ -53,6 +53,7 @@ from foundry_lite.infrastructure.adapters import (
     TemporalWorkflowAdapterConfig,
     VideoProbeProcessorAdapter,
 )
+from foundry_lite.infrastructure.adapters.asr_processor import _faster_whisper_asr_engine
 from foundry_lite.infrastructure.adapters.ocr_processor import _tesseract_ocr_engine
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
@@ -210,7 +211,7 @@ def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
     if processor_profile == "ocr-tesseract":
         return OcrProcessorAdapter(ocr_engine=_tesseract_ocr_engine)
     if processor_profile == "asr-whisper":
-        return AsrProcessorAdapter()
+        return AsrProcessorAdapter(asr_engine=_faster_whisper_asr_engine)
     if processor_profile in {"local", "fake-storage", "s3-storage", "iceberg", "s3-media", "pdf-pypdf"}:
         return PdfTextProcessorAdapter()
     raise ValueError(f"unknown media processor profile: {processor_profile}")

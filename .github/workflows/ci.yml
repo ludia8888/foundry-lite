@@ -117,6 +117,12 @@ jobs:
       - name: Install Tesseract OCR
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
 
+      - name: Cache faster-whisper tiny model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-faster-whisper-tiny
+
       - name: Run coverage quality lane
         run: pnpm ci:gate:coverage
 
@@ -167,6 +173,12 @@ jobs:
       - name: Install Tesseract OCR
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
 
+      - name: Cache faster-whisper tiny model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-faster-whisper-tiny
+
       - name: Run flaky quality lane
         run: pnpm ci:gate:flaky
 
@@ -216,6 +228,12 @@ jobs:
 
       - name: Install Tesseract OCR
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
+      - name: Cache faster-whisper tiny model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-faster-whisper-tiny
 
       - name: Run runtime quality lane
         run: pnpm ci:gate:runtime
