@@ -61,6 +61,8 @@ class RuntimeRepositoryHarness(Protocol):
 
     def add_index_run(self, *, run_id: str, tenant_id: str, object_type_api_name: str = "Order") -> None: ...
 
+    def add_object_record(self, *, record_id: str, tenant_id: str) -> None: ...
+
 
 @dataclass
 class FakeRuntimeRepository:
@@ -299,6 +301,22 @@ class FakeRuntimeRepository:
         ]
         return len(self.tables["dead_letter_events"]) == before_count - 1
 
+    def delete_object_record(self, *, transaction: Any, tenant_id: str, record_id: str) -> bool:
+        del transaction
+        for row in self.tables["object_records"]:
+            if row["tenant_id"] == tenant_id and row["id"] == record_id and not row["deleted"]:
+                row.update(
+                    deleted=True,
+                    is_active=False,
+                    deletion_reason="subject_erasure",
+                    properties={},
+                    base_properties={},
+                    edit_properties={},
+                    property_versions={},
+                )
+                return True
+        return False
+
     def insert_audit_event(self, *, transaction: Any, record: AuditEventRecord) -> None:
         del transaction
         self.tables["audit_events"].append(_audit_row(record))
@@ -390,6 +408,10 @@ class FakeRuntimeRepositoryHarness:
             _index_run_row(run_id=run_id, tenant_id=tenant_id, object_type_api_name=object_type_api_name)
         )
 
+    def add_object_record(self, *, record_id: str, tenant_id: str) -> None:
+        assert isinstance(self.repository, FakeRuntimeRepository)
+        self.repository.tables["object_records"].append(_object_record_row(record_id=record_id, tenant_id=tenant_id))
+
 
 @dataclass
 class SqlAlchemyRuntimeRepositoryHarness:
@@ -440,6 +462,12 @@ class SqlAlchemyRuntimeRepositoryHarness:
                 insert(db.index_runs).values(
                     **_index_run_row(run_id=run_id, tenant_id=tenant_id, object_type_api_name=object_type_api_name)
                 )
+            )
+
+    def add_object_record(self, *, record_id: str, tenant_id: str) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                insert(db.object_records).values(**_object_record_row(record_id=record_id, tenant_id=tenant_id))
             )
 
 
@@ -682,6 +710,30 @@ def _dead_letter_row(*, event_id: str, tenant_id: str) -> dict[str, Any]:
         "error": {"message": "publisher failed"},
         "failed_at": "2026-06-10T00:00:02Z",
         "retry_after": None,
+    }
+
+
+def _object_record_row(*, record_id: str, tenant_id: str) -> dict[str, Any]:
+    return {
+        "id": record_id,
+        "tenant_id": tenant_id,
+        "object_type_id": "ot_order",
+        "object_type_api_name": "Order",
+        "object_id": "O-1",
+        "index_version": "active",
+        "is_active": True,
+        "properties": {"email": "ada@example.com"},
+        "base_properties": {"email": "ada@example.com"},
+        "edit_properties": {"email": "ada@example.com"},
+        "property_versions": {"email": 1},
+        "source_dataset_version_id": "dsv_1",
+        "source_hash": "hash_1",
+        "object_version": 1,
+        "object_change_sequence": 1,
+        "deleted": False,
+        "deletion_reason": None,
+        "created_at": "2026-06-10T00:00:00Z",
+        "updated_at": "2026-06-10T00:00:00Z",
     }
 
 
@@ -1109,6 +1161,38 @@ def test_runtime_repository_contract_requeues_dead_letter_event(
     assert outbox["published_at"] is None
     assert deleted is True
     assert runs["deadLetterEvents"] == []
+
+
+def test_runtime_repository_contract_tombstones_object_record_idempotently(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    harness.add_object_record(record_id="Order:O-1", tenant_id="tenant-demo")
+
+    with harness.transaction() as transaction:
+        tombstoned = harness.repository.delete_object_record(
+            transaction=transaction, tenant_id="tenant-demo", record_id="Order:O-1"
+        )
+    with harness.transaction() as transaction:
+        replay = harness.repository.delete_object_record(
+            transaction=transaction, tenant_id="tenant-demo", record_id="Order:O-1"
+        )
+        rows = harness.repository.rows_for_tenant(
+            transaction=transaction, table="object_records", tenant_id="tenant-demo"
+        )
+
+    assert tombstoned is True
+    # A replay touches no live row and is reported as a no-op (idempotent erasure).
+    assert replay is False
+    row = next(row for row in rows if row["id"] == "Order:O-1")
+    # The tombstone stays so rebuilds do not resurrect the subject, but the
+    # subject-bearing payloads are cleared.
+    assert row["deleted"] is True
+    assert row["is_active"] is False
+    assert row["deletion_reason"] == "subject_erasure"
+    assert row["properties"] == {}
+    assert row["base_properties"] == {}
+    assert row["edit_properties"] == {}
+    assert "ada@example.com" not in repr(row)
 
 
 def test_runtime_repository_contract_workflow_run_ledger_status_cas(

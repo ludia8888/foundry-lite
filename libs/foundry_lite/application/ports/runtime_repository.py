@@ -468,6 +468,10 @@ class RuntimeRepository(Protocol):
         """Delete a tenant-scoped dead-letter event after it is requeued."""
         ...
 
+    def delete_object_record(self, *, transaction: TransactionContext, tenant_id: str, record_id: str) -> bool:
+        """Tombstone a tenant-scoped object record for erasure; idempotent no-op on replay."""
+        ...
+
     def insert_audit_event(self, *, transaction: TransactionContext, record: AuditEventRecord) -> None:
         """Persist an audit event inside the caller transaction."""
         ...

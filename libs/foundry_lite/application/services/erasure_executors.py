@@ -15,17 +15,35 @@ def default_erasure_executors(
 ) -> Mapping[str, ErasureActionExecutor]:
     """Concrete executors for the serving/projection surfaces.
 
-    Surfaces that require richer source context (dataset-row redaction, object
-    tombstones, materialization rebuild) are added on top of this map as their
-    executors land; an unmapped action fails closed in the service rather than
-    being silently certified.
+    Surfaces that require richer source context (dataset-row redaction,
+    materialization rebuild) are added on top of this map as their executors
+    land; an unmapped action fails closed in the service rather than being
+    silently certified.
     """
     return {
         "remove_search_document": lambda action: _remove_search_document(action, search_adapter),
+        "tombstone_object": lambda action: _tombstone_object(action, runtime_repository, engine),
         "redact_dead_letter_payload": lambda action: _redact_dead_letter_payload(action, runtime_repository, engine),
         "minimize_audit_evidence": _minimize_audit_evidence,
         "defer_backup_expiration": _defer_backup_expiration,
     }
+
+
+def _tombstone_object(
+    action: ErasureManifestAction, runtime_repository: RuntimeRepository, engine: TransactionManager
+) -> ErasureActionReceipt:
+    resource = action.resource
+    with engine.begin() as conn:
+        tombstoned = runtime_repository.delete_object_record(
+            transaction=conn, tenant_id=resource.tenant_id, record_id=resource.resource_id
+        )
+    return ErasureActionReceipt(
+        action_type=action.action_type,
+        resource=resource,
+        status="APPLIED",
+        completed_at=_now(),
+        evidence={"executor": "runtime_repository.delete_object_record", "tombstoned": tombstoned},
+    )
 
 
 def _redact_dead_letter_payload(
