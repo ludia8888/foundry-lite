@@ -767,6 +767,89 @@ erasure_redaction_executions = Table(
 )
 
 
+media_sets = Table(
+    "media_sets",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("namespace", String, nullable=False),
+    Column("name", String, nullable=False),
+    Column("schema_type", String, nullable=False),
+    Column("primary_format", String, nullable=False),
+    Column("allowed_input_formats", JSON, nullable=False),
+    Column("transaction_policy", String, nullable=False),
+    Column("storage_profile", String, nullable=False),
+    Column("processing_profile", String, nullable=False),
+    Column("classification", String, nullable=False),
+    Column("retention_policy_id", String),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "namespace", "name", name="uq_media_set_ref"),
+)
+
+
+media_transactions = Table(
+    "media_transactions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("media_set_id", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("mode", String, nullable=False),
+    Column("idempotency_key", String, nullable=False),
+    Column("request_fingerprint", String, nullable=False),
+    Column("opened_at", String, nullable=False),
+    Column("committed_at", String),
+    Column("aborted_at", String),
+    Column("error", JSON),
+    Column("trace", JSON),
+    UniqueConstraint("tenant_id", "media_set_id", "idempotency_key", name="uq_media_transaction_idempotency"),
+)
+
+
+media_items = Table(
+    "media_items",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("media_set_id", String, nullable=False),
+    Column("logical_path", String, nullable=False),
+    # Moving head pointer to the latest version; not a historical reference.
+    Column("head_version_id", String),
+    Column("is_deleted", Boolean, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "media_set_id", "logical_path", name="uq_media_item_path"),
+)
+
+
+media_item_versions = Table(
+    "media_item_versions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("media_item_id", String, nullable=False),
+    Column("media_transaction_id", String, nullable=False),
+    Column("version_number", Integer, nullable=False),
+    Column("blob_key", String, nullable=False),
+    Column("content_hash", String, nullable=False),
+    Column("byte_size", Integer, nullable=False),
+    Column("supplied_mime_type", String, nullable=False),
+    Column("sniffed_mime_type", String, nullable=False),
+    Column("schema_type", String, nullable=False),
+    Column("format", String, nullable=False),
+    Column("probe_metadata", JSON, nullable=False),
+    # Security envelope copied from the media set; derivatives must never be weaker.
+    Column("security_envelope", JSON, nullable=False),
+    Column("source_ref", JSON),
+    Column("status", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("committed_at", String),
+    UniqueConstraint("media_item_id", "version_number", name="uq_media_item_version_number"),
+    UniqueConstraint("tenant_id", "content_hash", "byte_size", "blob_key", name="uq_media_version_blob"),
+)
+
+
 def tenant_rls_tables() -> tuple[Table, ...]:
     return tuple(table for table in metadata.sorted_tables if "tenant_id" in table.c)
 

@@ -27,6 +27,8 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
+from foundry_lite.application.ports.media_repository import MediaRepository
+from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
 from foundry_lite.security.policy import PolicyService
@@ -89,6 +91,8 @@ class CoreService:
     stream_adapter: StreamAdapter
     workflow_adapter: WorkflowAdapter
     dataset_storage: DatasetStorageAdapter
+    media_repository: MediaRepository
+    media_storage: MediaStorageAdapter
     engine: TransactionManager
     policy: PolicyService
     action_repository: ActionRepository

@@ -10,6 +10,7 @@ from foundry_lite.application.facades import (
     ErasureGateway,
     InsightReviewWorkspace,
     MaterializationRunner,
+    MediaWorkspace,
     ObjectStore,
     OntologyRegistry,
     OperationsConsole,
@@ -81,6 +82,7 @@ class FoundryLite:
         self.actions = ActionGateway(services.action)
         self.materialization = MaterializationRunner(services.materialization)
         self.insights = InsightReviewWorkspace(services.insight_review)
+        self.media = MediaWorkspace(services.media)
         self.erasure = ErasureGateway(services.erasure)
         self.operations = OperationsConsole(
             services.action,

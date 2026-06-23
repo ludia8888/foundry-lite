@@ -98,13 +98,13 @@ tests against the currently active stack.
 
 ## Active Ratchet Queue
 
-| Order | Infrastructure                   | Status         | Why this order                                                                                                                | Cannot advance until                                                                                                                                                                                                                                                                                                                                                                   |
-| ----- | -------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1     | MinIO/S3 DatasetStorageAdapter   | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet.                                                                                                                                                                                                                                                                   |
-| 2     | Iceberg Catalog/TableAdapter     | active-covered | Iceberg adds a table metadata/catalog commit point on top of object storage.                                                  | `quality:iceberg` stays green in CI; each dataset version pins an exact Iceberg snapshot id and the DB COMMITTED version remains the serving source of truth.                                                                                                                                                                                                                          |
-| 3     | Spark ComputeAdapter             | active-covered | Spark should consume the same Dataset API and pinned versions without knowing storage internals.                              | `quality:spark` and `quality:infra-composition` stay green in CI; Spark runs transforms on local parquet materialized from pinned versions and the composition gate proves Iceberg-on-S3 input/output.                                                                                                                                                                                 |
-| 4     | Temporal WorkflowAdapter         | active-covered | Durable workflow execution changes retry/time semantics for long-running operations.                                          | `quality:temporal` stays green in CI; workflow start is idempotent by tenant/workflow/idempotency namespace and a workflow failure/timeout/cancel surfaces in a durable run error payload, proven on the time-skipping test server. S52 now uses this boundary for the `ConnectorSyncWorkflow` control-plane start/status/audit path, while full connector data-plane workflow execution remains a later slice. It is still a standalone family, not part of the S3+Iceberg+Spark composition stack.                   |
-| 5     | Managed Elasticsearch deployment | active-covered | The adapter/projection proof existed; this ratchet adds live cluster failure evidence and the projection-rebuild contract.    | `quality:elasticsearch` stays green in CI; a cluster outage surfaces as a typed AdapterError (timeout/unavailable/rate_limited/validation), search stays a rebuildable projection, and the version guard holds under concurrent writers. Orthogonal projection (not a storage/compute commit point), so it is a standalone family, not part of the S3+Iceberg+Spark composition stack. |
+| Order | Infrastructure                   | Status         | Why this order                                                                                                                | Cannot advance until                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----- | -------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | MinIO/S3 DatasetStorageAdapter   | active-covered | Storage is the base layer for ingest, transform output, materialization output, stream archive, Iceberg, backup, and restore. | `quality:s3-storage` stays green in CI and S3 remains the only active production-style infra family in this ratchet.                                                                                                                                                                                                                                                                                                                                                                                 |
+| 2     | Iceberg Catalog/TableAdapter     | active-covered | Iceberg adds a table metadata/catalog commit point on top of object storage.                                                  | `quality:iceberg` stays green in CI; each dataset version pins an exact Iceberg snapshot id and the DB COMMITTED version remains the serving source of truth.                                                                                                                                                                                                                                                                                                                                        |
+| 3     | Spark ComputeAdapter             | active-covered | Spark should consume the same Dataset API and pinned versions without knowing storage internals.                              | `quality:spark` and `quality:infra-composition` stay green in CI; Spark runs transforms on local parquet materialized from pinned versions and the composition gate proves Iceberg-on-S3 input/output.                                                                                                                                                                                                                                                                                               |
+| 4     | Temporal WorkflowAdapter         | active-covered | Durable workflow execution changes retry/time semantics for long-running operations.                                          | `quality:temporal` stays green in CI; workflow start is idempotent by tenant/workflow/idempotency namespace and a workflow failure/timeout/cancel surfaces in a durable run error payload, proven on the time-skipping test server. S52 now uses this boundary for the `ConnectorSyncWorkflow` control-plane start/status/audit path, while full connector data-plane workflow execution remains a later slice. It is still a standalone family, not part of the S3+Iceberg+Spark composition stack. |
+| 5     | Managed Elasticsearch deployment | active-covered | The adapter/projection proof existed; this ratchet adds live cluster failure evidence and the projection-rebuild contract.    | `quality:elasticsearch` stays green in CI; a cluster outage surfaces as a typed AdapterError (timeout/unavailable/rate_limited/validation), search stays a rebuildable projection, and the version guard holds under concurrent writers. Orthogonal projection (not a storage/compute commit point), so it is a standalone family, not part of the S3+Iceberg+Spark composition stack.                                                                                                               |
 
 ## Active Ratchet: MinIO/S3 DatasetStorageAdapter
 
@@ -355,7 +355,7 @@ plus JSON + Markdown artifacts (and a GitHub step summary):
 | ------------------ | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Proof matrix       | `pnpm quality:proof-matrix`       | every active infra maps all proof classes to tests that exist; focused gate is in `package.json` and wired into `ci_gate.sh`; matrix agrees with `docs/infra-ratchet.md` and `package.json`. |
 | Source of truth    | `pnpm quality:source-of-truth`    | every serving-truth rule is enforced (named, existing test) or explicitly deferred (reason, risk tier, future test, owning doc).                                                             |
-| Operator evidence  | `pnpm quality:operator-evidence`  | every active infra declares durable payload paths, a run surface, and `testAssertions` mapping each path to collected operator-evidence tests — logs-only evidence is not enough.             |
+| Operator evidence  | `pnpm quality:operator-evidence`  | every active infra declares durable payload paths, a run surface, and `testAssertions` mapping each path to collected operator-evidence tests — logs-only evidence is not enough.            |
 | Root-cause summary | `pnpm quality:runtime-root-cause` | aggregates the above plus the failed runtime lane step marker into one step summary with suggested files.                                                                                    |
 
 **Source-of-truth rules** (the DB COMMITTED version is serving truth; object/snapshot
@@ -447,3 +447,40 @@ Every infrastructure ratchet PR must include:
 - A projection or external system becoming the source of truth without a
   replay path.
 - A broad "infra integration" PR that makes failures harder to localize.
+
+## Media/Content Plane Ratchet (M0–M9)
+
+The Media/Content Plane (ADR-0001) is added as a separate bounded context, one
+ratchet at a time, each adding at most one new external failure domain.
+
+- **M0 — Contract/schema/local (done):** media domain types, ports
+  (`media_storage`, `media_repository`, `media_processor`, `content_index`,
+  `media_policy`, `content_retrieval`), SQLAlchemy schema/repositories, local
+  filesystem adapter, the atomic metadata-pointer transaction protocol, and the
+  serving-truth `sourceOfTruthRules` proven by the local core (now `enforced`).
+  No new external infra. PR1 = ADR + contracts; PR2 = local MediaSet transaction core.
+- **M1 — S3 `MediaStorageAdapter`:** direct/multipart upload, range read, signed
+  grant, interrupted-multipart and lost-complete recovery, DB-commit-after-upload
+  failure, same-upload retry, concurrent same-path commits, orphan cleanup.
+- **M2 — PDF raw-text processor:** local/container PyMuPDF/pypdf; encrypted/corrupt
+  PDF, page limit, process kill/timeout, deterministic page-text hash,
+  derivative-metadata-failure cleanup, duplicate workflow start.
+- **M3 — Content units + Elasticsearch lexical projection:** page/chunk build,
+  version guard, partial bulk failure, rebuild-from-artifacts, stale source
+  version, ACL leakage, citation integrity.
+- **M4 — Ontology `MediaReference` + Action-bound upload:** type validation,
+  object-query masking, action-success atomic visibility, action-failure orphan,
+  same-idempotency-key/different-file fingerprint, old reference after overwrite.
+- **M5 — OCR:** Tesseract or managed OCR (one family only).
+- **M6 — FFmpeg image/audio/video:** process isolation + duration/resource failure
+  proofs first.
+- **M7 — ASR:** Whisper/faster-whisper or managed provider (one family).
+- **M8 — Embedding + hybrid retrieval:** reuse Elasticsearch vector capability
+  before adding a separate vector DB.
+- **M9 — Access patterns / virtual media sets:** on-demand preview cache and
+  external-reference freshness/immutability.
+
+Media processing will be the first product-driven Temporal use case (M2). A media
+family becomes `active-covered` only when its proof-class tests collect and it is
+registered in `infra-tricky-matrix.json` `families`/`activeStack`; until then it
+stays in this queue and as `sourceOfTruthRules` deferrals only.

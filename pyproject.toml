@@ -103,13 +103,14 @@ exclude_also = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["mutants", "migrations/versions"]
+extend-exclude = ["mutants", "migrations/versions", "scripts/vulture_allowlist.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.mypy]
 python_version = "3.12"
+exclude = ['scripts/vulture_allowlist\.py']
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -126,6 +127,7 @@ exclude = [
   ".pytest_cache",
   ".ruff_cache",
   "mutants",
+  "scripts/vulture_allowlist.py",
 ]
 pythonVersion = "3.12"
 typeCheckingMode = "basic"

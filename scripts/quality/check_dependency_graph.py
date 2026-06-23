@@ -205,6 +205,13 @@ def main(argv: list[str] | None = None) -> int:
             "foundry_lite.application.ports",
             "foundry_lite.infrastructure.repositories",
             "foundry_lite.infrastructure.adapters",
+            # Composition roots wire every bounded context together; their fan-out grows
+            # by one per new context (e.g. the Media/Content Plane) and is coupling by
+            # design, not by accident — bounded by the higher aggregation budget, not exempt.
+            "foundry_lite.application.core_services",
+            "foundry_lite.application.dependencies",
+            "foundry_lite.application.facades",
+            "foundry_lite.infrastructure.local_runtime",
         ],
     )
     args = parser.parse_args(argv)

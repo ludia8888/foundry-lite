@@ -267,9 +267,10 @@ run_static_gate() {
   echo "== Static: Vulture dead code (80% confidence baseline) =="
   # Vulture finds unreachable functions/variables/imports. We start at the
   # 80% confidence threshold because lower confidence levels report Protocol
-  # methods and public API surfaces. Future P10 work narrows this with
-  # per-file allowlist as the project shrinks.
-  uv run vulture libs/foundry_lite --min-confidence 80
+  # methods and public API surfaces. scripts/vulture_allowlist.py whitelists
+  # intentional contract-only API surface (media ports whose implementations
+  # land in later PRs); each entry is removed when its implementation lands.
+  uv run vulture libs/foundry_lite scripts/vulture_allowlist.py --min-confidence 80
 
   echo "== Static: Interrogate docstring coverage (baseline 25%) =="
   # Interrogate enforces a minimum docstring coverage. We pin the current
