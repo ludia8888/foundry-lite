@@ -120,7 +120,7 @@ def test_execute_erasure_runs_executors_and_persists_certificate() -> None:
         executors={action_type: _receipt_for for action_type in _ALL_ACTION_TYPES},
     )
 
-    assert certificate.status in {"CERTIFIED", "CERTIFIED_WITH_DEFERRED_BACKUP"}
+    assert certificate.status in {"CERTIFIED", "CERTIFIED_WITH_DEFERRED_WORK"}
     persisted = service.certificate_for(tenant_id=request.tenant_id, request_id=request.request_id)
     assert persisted is not None and persisted.manifest_id == certificate.manifest_id
     executed = repo.request_by_id(transaction=None, tenant_id=request.tenant_id, request_id=request.request_id)
@@ -212,6 +212,13 @@ def test_run_erasure_via_gateway_deletes_search_documents_and_defers_backup() ->
             resource_type="object_record",
             surface="object_store",
         ),
+        resolve_erasure_subject(
+            request,
+            [{"id": "clean.orders:row-7", "tenant_id": "tenant-a", "email": "ada@example.com"}],
+            identity_fields=("email",),
+            resource_type="dataset_row",
+            surface="clean.orders",
+        ),
     )
 
     certificate = gateway.run(request, resolutions, retention_policy=_retention_policy())
@@ -226,7 +233,11 @@ def test_run_erasure_via_gateway_deletes_search_documents_and_defers_backup() ->
     # The execution is audited (raw-value-free).
     assert len(runtime.audits) == 1
     assert "ada@example.com" not in repr(runtime.audits[0])
-    assert certificate.status == "CERTIFIED_WITH_DEFERRED_BACKUP"
+    # The dataset row is recorded as deferred redaction work (rewrite runs in the maintenance lane).
+    dataset_receipt = next(r for r in certificate.receipts if r.action_type == "redact_dataset_row")
+    assert dataset_receipt.status == "DEFERRED"
+    assert dataset_receipt.resource.resource_id == "clean.orders:row-7"
+    assert certificate.status == "CERTIFIED_WITH_DEFERRED_WORK"
     persisted = gateway.certificate_for(tenant_id=request.tenant_id, request_id=request.request_id)
     assert persisted is not None
     executed = repo.request_by_id(transaction=None, tenant_id=request.tenant_id, request_id=request.request_id)

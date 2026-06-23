@@ -31,7 +31,7 @@ ErasureActionType = Literal[
 ErasureActionStatus = Literal["READY", "DEFERRED"]
 ErasureManifestStatus = Literal["READY_TO_APPLY", "PENDING_RETENTION"]
 ErasureReceiptStatus = Literal["APPLIED", "DEFERRED"]
-ErasureCertificateStatus = Literal["CERTIFIED", "CERTIFIED_WITH_DEFERRED_BACKUP"]
+ErasureCertificateStatus = Literal["CERTIFIED", "CERTIFIED_WITH_DEFERRED_WORK"]
 
 _ERASURE_MANIFEST_NAMESPACE: Final = uuid.UUID("a8019d04-44b6-41d6-b9f8-a42e833e3878")
 _PROTECTED_VALUE: Final = "***PROTECTED***"
@@ -300,7 +300,7 @@ def build_erasure_certificate(
     sorted_receipts = tuple(sorted(receipts, key=_receipt_sort_key))
     _validate_action_receipts(manifest.actions, sorted_receipts)
     status: ErasureCertificateStatus = (
-        "CERTIFIED_WITH_DEFERRED_BACKUP"
+        "CERTIFIED_WITH_DEFERRED_WORK"
         if any(receipt.status == "DEFERRED" for receipt in sorted_receipts)
         else "CERTIFIED"
     )
@@ -372,6 +372,8 @@ def _action_for_resource(
 
     if resource.resource_type == "backup_snapshot":
         return _backup_deferred_action(request, resource, retention_policy=retention_policy)
+    if resource.resource_type == "dataset_row":
+        return _dataset_row_deferred_action(request, resource)
     return ErasureManifestAction(
         action_type=_action_type(resource.resource_type),
         resource=resource,
@@ -404,6 +406,28 @@ def _backup_deferred_action(
             "subjectTokenKeyId": request.subject_token_key_id,
             "retentionUntil": retention_policy.backup_retention_until,
             "cryptoShreddingKeyRef": retention_policy.crypto_shredding_key_ref,
+        },
+    )
+
+
+def _dataset_row_deferred_action(request: ErasureRequest, resource: ErasureResourceRef) -> ErasureManifestAction:
+    """Defer the physical dataset-row rewrite to the redaction maintenance lane.
+
+    Dataset rows live in immutable version files, so erasing one requires a version
+    rewrite plus a purge of the prior version's data. That work runs in a separate
+    maintenance lane; the deferred action is the raw-value-free durable record of
+    which tenant-scoped row must be redacted.
+    """
+
+    return ErasureManifestAction(
+        action_type="redact_dataset_row",
+        resource=resource,
+        status="DEFERRED",
+        reason="deferred_to_redaction_maintenance",
+        evidence={
+            "requestId": request.request_id,
+            "subjectHash": request.subject_hash,
+            "subjectTokenKeyId": request.subject_token_key_id,
         },
     )
 
