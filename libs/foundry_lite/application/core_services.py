@@ -8,6 +8,7 @@ from foundry_lite.application.services.base import CoreService, build_service, c
 from foundry_lite.application.services.dataset_service import DatasetServices
 from foundry_lite.application.services.demo_service import DemoService
 from foundry_lite.application.services.materialization_service import MaterializationService
+from foundry_lite.application.services.media_service import MediaServices
 from foundry_lite.application.services.object_service import ObjectServices
 from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.application.services.runtime_bundle import (
@@ -31,6 +32,7 @@ __all__ = [
     "DatasetServices",
     "IcebergMaintenanceService",
     "MaterializationService",
+    "MediaServices",
     "ObjectServices",
     "OntologyService",
     "RecordDlqService",
@@ -57,6 +59,7 @@ class CoreServices:
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
     materialization: MaterializationService
+    media: MediaServices
     object_store: ObjectServices
     ontology: OntologyService
     record_dlq: RecordDlqService
@@ -80,6 +83,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     iceberg_maintenance = build_service(IcebergMaintenanceService, dependencies)
     insight_review = build_service(InsightReviewService, dependencies)
     materialization = build_service(MaterializationService, dependencies)
+    media = MediaServices.create(dependencies)
     object_store = ObjectServices.create(dependencies)
     ontology = build_service(OntologyService, dependencies)
     record_dlq = build_service(RecordDlqService, dependencies)
@@ -95,6 +99,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         iceberg_maintenance=iceberg_maintenance,
         insight_review=insight_review,
         materialization=materialization,
+        media=media,
         object_store=object_store,
         ontology=ontology,
         record_dlq=record_dlq,
@@ -114,6 +119,7 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
         services.iceberg_maintenance,
         services.insight_review,
         services.materialization,
+        *services.media.items(),
         *services.object_store.items(),
         services.ontology,
         services.record_dlq,

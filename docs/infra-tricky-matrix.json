@@ -910,43 +910,34 @@
   "sourceOfTruthRules": {
     "metadata_db_committed_media_version_is_serving_truth": {
       "description": "Only a metadata DB COMMITTED media version is served; a stored blob alone is not truth.",
-      "status": "deferred",
-      "deferral": {
-        "reason": "Media plane is contracts-only in PR1 (ADR-0001 / Ratchet M0); the local MediaSet transaction core that proves DB-committed serving truth lands in PR2.",
-        "riskTier": "T0",
-        "futureTest": "test_media_committed_version_is_serving_truth",
-        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
-      }
+      "status": "enforced",
+      "tests": [
+        "test_staged_version_is_not_visible_until_commit",
+        "test_resolve_hard_fails_when_committed_blob_is_missing",
+        "test_resolve_hard_fails_when_committed_blob_is_corrupt"
+      ]
     },
     "blob_existence_is_not_serving_truth": {
       "description": "A blob in object storage with no COMMITTED media version row is an invisible orphan, never served.",
-      "status": "deferred",
-      "deferral": {
-        "reason": "No media commit path exists until PR2; orphan-on-DB-commit-failure is proven by the local transaction core then.",
-        "riskTier": "T0",
-        "futureTest": "test_media_blob_without_db_commit_is_orphan",
-        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
-      }
+      "status": "enforced",
+      "tests": [
+        "test_commit_failure_leaves_nothing_visible_and_leaves_orphan_evidence"
+      ]
     },
     "media_reference_pins_immutable_version": {
       "description": "A MediaReference pins an immutable mediaItemVersionId, not a logical path; a head overwrite never changes what it resolves to.",
-      "status": "deferred",
-      "deferral": {
-        "reason": "Immutable version + reference resolution is implemented and tested in PR2 (local core).",
-        "riskTier": "T0",
-        "futureTest": "test_media_reference_pins_immutable_version",
-        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
-      }
+      "status": "enforced",
+      "tests": [
+        "test_reference_pins_immutable_version_after_same_path_overwrite"
+      ]
     },
     "logical_path_head_is_not_historical_reference": {
       "description": "The logical-path head pointer is latest-lookup only; existing references keep resolving to their original bytes after overwrite.",
-      "status": "deferred",
-      "deferral": {
-        "reason": "Path-overwrite head CAS keeping prior version bytes is proven in PR2.",
-        "riskTier": "T0",
-        "futureTest": "test_media_path_overwrite_keeps_old_reference_bytes",
-        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
-      }
+      "status": "enforced",
+      "tests": [
+        "test_reference_pins_immutable_version_after_same_path_overwrite",
+        "test_concurrent_same_path_commits_keep_both_versions"
+      ]
     },
     "derivatives_inherit_source_security": {
       "description": "Every derivative, content unit, embedding, and index entry carries a security envelope no weaker than its source.",

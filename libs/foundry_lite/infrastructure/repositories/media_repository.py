@@ -39,7 +39,7 @@ class SqlAlchemyMediaRepository:
         if existing is not None:
             return existing
         # The (tenant_id, namespace, name) unique constraint backstops a concurrent race.
-        transaction.execute(insert(db.media_sets).values(**_media_set_values(record)))
+        transaction.execute(insert(db.media_sets).values(tenant_id=record.tenant_id, **_media_set_values(record)))
         return None
 
     def get_media_sets(self, *, transaction: Any, ids: list[str]) -> list[MediaSetRecord]:
@@ -74,7 +74,9 @@ class SqlAlchemyMediaRepository:
         )
         if existing is not None:
             return existing
-        transaction.execute(insert(db.media_transactions).values(**_media_transaction_values(record)))
+        transaction.execute(
+            insert(db.media_transactions).values(tenant_id=record.tenant_id, **_media_transaction_values(record))
+        )
         return None
 
     def transaction_by_id(
@@ -136,8 +138,11 @@ class SqlAlchemyMediaRepository:
         existing = self._media_item_by_path(transaction, record.tenant_id, record.media_set_id, record.logical_path)
         if existing is not None:
             return existing
-        transaction.execute(insert(db.media_items).values(**_media_item_values(record)))
+        transaction.execute(insert(db.media_items).values(tenant_id=record.tenant_id, **_media_item_values(record)))
         return record
+
+    def media_item_by_id(self, *, transaction: Any, tenant_id: str, media_item_id: str) -> MediaItemRecord | None:
+        return self._media_item_by_id(transaction, tenant_id, media_item_id)
 
     def cas_item_head_version(
         self,
@@ -178,7 +183,9 @@ class SqlAlchemyMediaRepository:
             return existing
         # uq(media_item_id, version_number) and uq(tenant, content_hash, byte_size, blob_key)
         # backstop concurrent inserts; the caller retries on a conflicting version number.
-        transaction.execute(insert(db.media_item_versions).values(**_media_version_values(record)))
+        transaction.execute(
+            insert(db.media_item_versions).values(tenant_id=record.tenant_id, **_media_version_values(record))
+        )
         return None
 
     def media_item_version_by_id(
@@ -336,7 +343,6 @@ class SqlAlchemyMediaRepository:
 def _media_set_values(record: MediaSetRecord) -> dict[str, object]:
     return {
         "id": record.media_set_id,
-        "tenant_id": record.tenant_id,
         "namespace": record.namespace,
         "name": record.name,
         "schema_type": record.schema_type,
@@ -374,7 +380,6 @@ def _media_set_from_row(row: Any) -> MediaSetRecord:
 def _media_transaction_values(record: MediaTransactionRecord) -> dict[str, object | None]:
     return {
         "id": record.media_transaction_id,
-        "tenant_id": record.tenant_id,
         "media_set_id": record.media_set_id,
         "status": record.status,
         "mode": record.mode,
@@ -408,7 +413,6 @@ def _media_transaction_from_row(row: Any) -> MediaTransactionRecord:
 def _media_item_values(record: MediaItemRecord) -> dict[str, object | None]:
     return {
         "id": record.media_item_id,
-        "tenant_id": record.tenant_id,
         "media_set_id": record.media_set_id,
         "logical_path": record.logical_path,
         "head_version_id": record.head_version_id,
@@ -434,7 +438,6 @@ def _media_item_from_row(row: Any) -> MediaItemRecord:
 def _media_version_values(record: MediaItemVersionRecord) -> dict[str, object | None]:
     return {
         "id": record.media_item_version_id,
-        "tenant_id": record.tenant_id,
         "media_item_id": record.media_item_id,
         "media_transaction_id": record.media_transaction_id,
         "version_number": record.version_number,

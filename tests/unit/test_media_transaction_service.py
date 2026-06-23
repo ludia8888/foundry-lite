@@ -1,0 +1,290 @@
+"""M-T0 transaction-core invariants for the local Media/Content Plane (ADR-0001).
+
+These assemble the media services directly over a real SQLite engine + local storage
+adapter, binding a fake runtime so a commit-time audit/outbox failure can be injected.
+That proves the metadata-pointer commit is atomic: a failure leaves nothing visible and
+the staged blobs become sweepable orphans.
+"""
+
+from __future__ import annotations
+
+import io
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
+from foundry_lite.application.ports import TransactionContext
+from foundry_lite.application.services.media.catalog import MediaCatalogService, MediaSetSpec
+from foundry_lite.application.services.media.references import MediaReferenceService
+from foundry_lite.application.services.media.transactions import MediaTransactionService
+from foundry_lite.application.services.media.uploads import MediaUploadInput, MediaUploadService, StagedUpload
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
+from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
+from foundry_lite.infrastructure.repositories import SqlAlchemyMediaRepository
+from sqlalchemy import create_engine
+
+_FUTURE = "2099-01-01T00:00:00Z"
+
+
+class _FakeRuntime:
+    """Records audit/outbox writes; ``fail_outbox`` injects a commit-time failure."""
+
+    def __init__(self) -> None:
+        self.audits: list[str] = []
+        self.outboxes: list[str] = []
+        self.fail_outbox = False
+
+    def _audit(self, conn: TransactionContext, ctx: RequestContext, *, event_type: str, **_: object) -> None:
+        self.audits.append(event_type)
+
+    def _outbox(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        event_type: str,
+        aggregate_type: str,
+        aggregate_id: str,
+        payload: Mapping[str, object],
+        *,
+        idempotency_key: str,
+        correlation_id: str,
+    ) -> str | None:
+        if self.fail_outbox:
+            raise RuntimeError("injected outbox failure")
+        self.outboxes.append(event_type)
+        return event_type
+
+
+@dataclass(frozen=True)
+class _MediaEnv:
+    ctx: RequestContext
+    catalog: MediaCatalogService
+    upload: MediaUploadService
+    transaction: MediaTransactionService
+    reference: MediaReferenceService
+    runtime: _FakeRuntime
+    media_set_id: str
+
+    def open_tx(self, idempotency_key: str) -> str:
+        return self.transaction.open(self.ctx, media_set_id=self.media_set_id, idempotency_key=idempotency_key)
+
+    def _inputs(self, tx_id: str, logical_path: str) -> MediaUploadInput:
+        return MediaUploadInput(
+            media_set_id=self.media_set_id,
+            media_transaction_id=tx_id,
+            logical_path=logical_path,
+            supplied_mime_type="application/pdf",
+            schema_type="document",
+            format="pdf",
+            security_envelope={"tenantId": self.ctx.tenant_id, "classification": "confidential"},
+        )
+
+    def stage(self, tx_id: str, *, logical_path: str, body: bytes) -> StagedUpload:
+        session = self.upload.initiate(
+            self.ctx, media_set_id=self.media_set_id, logical_path=logical_path, supplied_mime_type="application/pdf"
+        )
+        return self.upload.complete(
+            self.ctx, inputs=self._inputs(tx_id, logical_path), upload=session, source=io.BytesIO(body)
+        )
+
+
+@pytest.fixture
+def media(tmp_path: Path) -> _MediaEnv:
+    engine = create_engine(f"sqlite:///{tmp_path / 'media.db'}", future=True)
+    db.create_database(engine)
+    repo = SqlAlchemyMediaRepository(engine)
+    storage = LocalMediaStorageAdapter(tmp_path / "media-storage")
+    runtime = _FakeRuntime()
+    catalog = MediaCatalogService(engine=engine, media_repository=repo)
+    catalog.bind_collaborators({"runtime_service": runtime})
+    upload = MediaUploadService(engine=engine, media_repository=repo, media_storage=storage)
+    transaction = MediaTransactionService(engine=engine, media_repository=repo, media_storage=storage)
+    transaction.bind_collaborators({"runtime_service": runtime})
+    reference = MediaReferenceService(engine=engine, media_repository=repo, media_storage=storage)
+    ctx = RequestContext()
+    media_set = catalog.create_media_set(
+        ctx,
+        MediaSetSpec(
+            namespace="legal",
+            name="contracts",
+            schema_type="document",
+            primary_format="pdf",
+            allowed_input_formats=("pdf",),
+            classification="confidential",
+        ),
+    )
+    return _MediaEnv(
+        ctx=ctx,
+        catalog=catalog,
+        upload=upload,
+        transaction=transaction,
+        reference=reference,
+        runtime=runtime,
+        media_set_id=media_set.media_set_id,
+    )
+
+
+def test_staged_version_is_not_visible_until_commit(media: _MediaEnv) -> None:
+    # M-T0-006: a STAGED version is not a resolvable reference; commit makes it visible.
+    tx = media.open_tx("idem-1")
+    staged = media.stage(tx, logical_path="/contracts/a.pdf", body=b"%PDF-1.4 a")
+
+    with pytest.raises(NotFound):
+        media.reference.resolve(media.ctx, media_item_version_id=staged.media_item_version_id)
+
+    media.transaction.commit(media.ctx, media_transaction_id=tx)
+    resolved = media.reference.resolve(media.ctx, media_item_version_id=staged.media_item_version_id)
+    assert resolved.version.status == "COMMITTED"
+
+
+def test_commit_failure_leaves_nothing_visible_and_leaves_orphan_evidence(media: _MediaEnv) -> None:
+    # M-T0-001: blob written, DB commit fails -> not visible; staged blob is a sweepable orphan.
+    tx = media.open_tx("idem-1")
+    staged = media.stage(tx, logical_path="/contracts/a.pdf", body=b"%PDF-1.4 a")
+
+    media.runtime.fail_outbox = True
+    with pytest.raises(RuntimeError):
+        media.transaction.commit(media.ctx, media_transaction_id=tx)
+
+    # The whole commit rolled back: still STAGED, still not resolvable.
+    with pytest.raises(NotFound):
+        media.reference.resolve(media.ctx, media_item_version_id=staged.media_item_version_id)
+    assert media.runtime.outboxes == []
+
+    media.transaction.abort(media.ctx, media_transaction_id=tx, error={"reason": "commit_failed"})
+    cleaned = media.transaction.sweep_orphans(media.ctx, older_than=_FUTURE)
+    assert staged.blob_key in cleaned
+
+
+def test_commit_after_failure_can_succeed_on_retry(media: _MediaEnv) -> None:
+    tx = media.open_tx("idem-1")
+    staged = media.stage(tx, logical_path="/contracts/a.pdf", body=b"%PDF-1.4 a")
+
+    media.runtime.fail_outbox = True
+    with pytest.raises(RuntimeError):
+        media.transaction.commit(media.ctx, media_transaction_id=tx)
+
+    media.runtime.fail_outbox = False
+    result = media.transaction.commit(media.ctx, media_transaction_id=tx)
+    assert result.committed_version_ids == (staged.media_item_version_id,)
+
+
+def test_retry_upload_is_idempotent_single_version(media: _MediaEnv) -> None:
+    # M-T0-004: replaying complete for one upload session resolves to the same version.
+    tx = media.open_tx("idem-1")
+    session = media.upload.initiate(
+        media.ctx,
+        media_set_id=media.media_set_id,
+        logical_path="/contracts/a.pdf",
+        supplied_mime_type="application/pdf",
+    )
+
+    def _complete() -> StagedUpload:
+        return media.upload.complete(
+            media.ctx, inputs=media._inputs(tx, "/contracts/a.pdf"), upload=session, source=io.BytesIO(b"%PDF-1.4 a")
+        )
+
+    first = _complete()
+    replay = _complete()
+    assert first.is_duplicate is False
+    assert replay.is_duplicate is True
+    assert replay.media_item_version_id == first.media_item_version_id
+
+    result = media.transaction.commit(media.ctx, media_transaction_id=tx)
+    assert result.committed_version_ids == (first.media_item_version_id,)
+
+
+def test_batch_commit_is_all_or_nothing(media: _MediaEnv) -> None:
+    # M-T0-005: a transaction with two versions commits both or neither.
+    tx = media.open_tx("idem-1")
+    one = media.stage(tx, logical_path="/contracts/a.pdf", body=b"%PDF-1.4 a")
+    two = media.stage(tx, logical_path="/contracts/b.pdf", body=b"%PDF-1.4 b")
+
+    media.runtime.fail_outbox = True
+    with pytest.raises(RuntimeError):
+        media.transaction.commit(media.ctx, media_transaction_id=tx)
+    for staged in (one, two):
+        with pytest.raises(NotFound):
+            media.reference.resolve(media.ctx, media_item_version_id=staged.media_item_version_id)
+
+    media.runtime.fail_outbox = False
+    result = media.transaction.commit(media.ctx, media_transaction_id=tx)
+    assert set(result.committed_version_ids) == {one.media_item_version_id, two.media_item_version_id}
+    for staged in (one, two):
+        assert media.reference.resolve(
+            media.ctx, media_item_version_id=staged.media_item_version_id
+        ).version.status == ("COMMITTED")
+
+
+def test_concurrent_same_path_commits_keep_both_versions(media: _MediaEnv) -> None:
+    # M-T0-003: two transactions writing the same path keep both versions; head CAS picks one.
+    tx1 = media.open_tx("idem-1")
+    tx2 = media.open_tx("idem-2")
+    v1 = media.stage(tx1, logical_path="/contracts/a.pdf", body=b"%PDF-1.4 first")
+    v2 = media.stage(tx2, logical_path="/contracts/a.pdf", body=b"%PDF-1.4 second")
+    assert v1.media_item_id == v2.media_item_id
+    assert v2.version_number == v1.version_number + 1
+
+    media.transaction.commit(media.ctx, media_transaction_id=tx1)
+    second = media.transaction.commit(media.ctx, media_transaction_id=tx2)
+
+    # Neither version is lost: both resolve as COMMITTED with their own immutable bytes.
+    first_resolved = media.reference.resolve(media.ctx, media_item_version_id=v1.media_item_version_id)
+    second_resolved = media.reference.resolve(media.ctx, media_item_version_id=v2.media_item_version_id)
+    assert first_resolved.version.content_hash != second_resolved.version.content_hash
+    assert second.head_version_id_by_item[v2.media_item_id] == v2.media_item_version_id
+
+
+def test_commit_is_idempotent_when_already_committed(media: _MediaEnv) -> None:
+    tx = media.open_tx("idem-1")
+    staged = media.stage(tx, logical_path="/contracts/a.pdf", body=b"%PDF-1.4 a")
+    first = media.transaction.commit(media.ctx, media_transaction_id=tx)
+    media.runtime.outboxes.clear()
+
+    replay = media.transaction.commit(media.ctx, media_transaction_id=tx)
+    assert replay.committed_version_ids == first.committed_version_ids == (staged.media_item_version_id,)
+    # A replay of an already-committed transaction re-emits no events.
+    assert media.runtime.outboxes == []
+
+
+def test_commit_unknown_transaction_raises_not_found(media: _MediaEnv) -> None:
+    with pytest.raises(NotFound):
+        media.transaction.commit(media.ctx, media_transaction_id="mtx-missing")
+
+
+def test_abort_unknown_transaction_raises_conflict(media: _MediaEnv) -> None:
+    with pytest.raises(ConflictDetected):
+        media.transaction.abort(media.ctx, media_transaction_id="mtx-missing", error={"reason": "x"})
+
+
+def test_sweep_with_no_orphans_returns_empty(media: _MediaEnv) -> None:
+    assert media.transaction.sweep_orphans(media.ctx, older_than=_FUTURE) == []
+
+
+def test_resolve_unknown_version_raises_not_found(media: _MediaEnv) -> None:
+    with pytest.raises(NotFound):
+        media.reference.resolve(media.ctx, media_item_version_id="mver-missing")
+
+
+def test_create_media_set_rejects_non_transactional_policy(media: _MediaEnv) -> None:
+    with pytest.raises(ValidationFailed):
+        media.catalog.create_media_set(
+            media.ctx,
+            MediaSetSpec(
+                namespace="legal",
+                name="ledger",
+                schema_type="document",
+                primary_format="pdf",
+                allowed_input_formats=("pdf",),
+                classification="confidential",
+                transaction_policy="transactionless",
+            ),
+        )
+
+
+def test_get_media_set_unknown_raises_not_found(media: _MediaEnv) -> None:
+    with pytest.raises(NotFound):
+        media.catalog.get_media_set(media.ctx, media_set_id="mset-missing")

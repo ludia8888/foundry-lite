@@ -28,6 +28,9 @@ from foundry_lite.application.ports.media_storage import (
 class _FakeMediaStorage:
     """Minimal in-memory adapter that satisfies the MediaStorageAdapter contract."""
 
+    def __init__(self) -> None:
+        self._blobs: dict[str, bytes] = {}
+
     @property
     def profile_name(self) -> str:
         return "fake-local"
@@ -35,25 +38,42 @@ class _FakeMediaStorage:
     def initiate_upload(self, request: InitiateMediaUpload) -> UploadSession:
         return UploadSession(upload_id="up-1", staged_object_key=f"staged/{request.logical_path}")
 
+    def write_staged(self, staged_object_key: str, source: BinaryIO) -> None:
+        self._blobs[staged_object_key] = source.read()
+
     def complete_staged_upload(self, request: CompleteMediaUpload) -> StagedMediaObject:
+        body = self._blobs[request.staged_object_key]
         return StagedMediaObject(
-            object_key=request.staged_object_key, byte_size=4, content_hash="h", sniffed_mime_type="application/pdf"
+            object_key=request.staged_object_key,
+            byte_size=len(body),
+            content_hash=f"h{len(body)}",
+            sniffed_mime_type="application/pdf",
         )
 
     def stat(self, object_key: str) -> MediaObjectStat:
-        return MediaObjectStat(object_key=object_key, byte_size=4, content_hash="h", is_present=True)
+        body = self._blobs.get(object_key)
+        return MediaObjectStat(
+            object_key=object_key,
+            byte_size=len(body) if body is not None else 0,
+            content_hash=f"h{len(body)}" if body is not None else "",
+            is_present=body is not None,
+        )
 
     def open_stream(self, object_key: str, byte_range: ByteRange | None = None) -> BinaryIO:
-        return io.BytesIO(b"data")
+        return io.BytesIO(self._blobs[object_key])
 
     def commit_reference(self, staged_key: str, committed_key: str) -> CommittedMediaObject:
-        return CommittedMediaObject(object_key=committed_key, byte_size=4, content_hash="h")
+        body = self._blobs.pop(staged_key)
+        self._blobs[committed_key] = body
+        return CommittedMediaObject(object_key=committed_key, byte_size=len(body), content_hash=f"h{len(body)}")
 
     def delete_uncommitted(self, object_key: str) -> None:
-        return None
+        self._blobs.pop(object_key, None)
 
     def issue_read_grant(self, request: MediaReadGrantRequest) -> MediaReadGrant:
-        return MediaReadGrant(grant_kind="inline", object_key=request.object_key, stream=io.BytesIO(b"data"))
+        return MediaReadGrant(
+            grant_kind="inline", object_key=request.object_key, stream=io.BytesIO(self._blobs[request.object_key])
+        )
 
 
 def test_media_storage_adapter_shape_is_satisfiable() -> None:
@@ -63,6 +83,7 @@ def test_media_storage_adapter_shape_is_satisfiable() -> None:
             tenant_id="t", media_set_id="ms", logical_path="/a.pdf", supplied_mime_type="application/pdf"
         )
     )
+    adapter.write_staged(session.staged_object_key, io.BytesIO(b"data"))
     staged = adapter.complete_staged_upload(
         CompleteMediaUpload(upload_id=session.upload_id, staged_object_key=session.staged_object_key)
     )
@@ -73,6 +94,7 @@ def test_media_storage_adapter_shape_is_satisfiable() -> None:
     )
 
     assert adapter.profile_name == "fake-local"
-    assert stat.is_present is True
+    assert stat.is_present is True and stat.byte_size == 4
+    assert committed.object_key == "committed/a.pdf"
     assert grant.object_key == "committed/a.pdf"
     assert adapter.open_stream(committed.object_key, ByteRange(start=0, end=1)).read() == b"data"

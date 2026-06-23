@@ -453,12 +453,12 @@ Every infrastructure ratchet PR must include:
 The Media/Content Plane (ADR-0001) is added as a separate bounded context, one
 ratchet at a time, each adding at most one new external failure domain.
 
-- **M0 — Contract/schema/local (in progress):** media domain types, ports
+- **M0 — Contract/schema/local (done):** media domain types, ports
   (`media_storage`, `media_repository`, `media_processor`, `content_index`,
   `media_policy`, `content_retrieval`), SQLAlchemy schema/repositories, local
-  filesystem adapter, transaction protocol, `sourceOfTruthRules` (recorded as
-  `deferred` until proven), and the security threat model. No new external infra.
-  PR1 = ADR + contracts; PR2 = local MediaSet transaction core.
+  filesystem adapter, the atomic metadata-pointer transaction protocol, and the
+  serving-truth `sourceOfTruthRules` proven by the local core (now `enforced`).
+  No new external infra. PR1 = ADR + contracts; PR2 = local MediaSet transaction core.
 - **M1 — S3 `MediaStorageAdapter`:** direct/multipart upload, range read, signed
   grant, interrupted-multipart and lost-complete recovery, DB-commit-after-upload
   failure, same-upload retry, concurrent same-path commits, orphan cleanup.

@@ -8,6 +8,7 @@ from sqlalchemy.engine import Engine
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports.dataset_storage import DatasetStorageAdapter
+from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.ontology_repository import PropertyClassificationRow
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
@@ -28,6 +29,7 @@ from foundry_lite.infrastructure.adapters import (
     IcebergDatasetStorageAdapterConfig,
     LocalConnectorAdapter,
     LocalDatasetStorageAdapter,
+    LocalMediaStorageAdapter,
     LocalSearchAdapter,
     LocalStreamAdapter,
     LocalWorkflowAdapter,
@@ -47,6 +49,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyErasureRepository,
     SqlAlchemyInsightReviewRepository,
     SqlAlchemyMaterializationRepository,
+    SqlAlchemyMediaRepository,
     SqlAlchemyMetadataRepository,
     SqlAlchemyObjectIndexRepository,
     SqlAlchemyObjectReadRepository,
@@ -91,8 +94,11 @@ def create_local_core_dependencies(
     root.mkdir(parents=True, exist_ok=True)
     object_storage_root = root / "object-storage"
     object_storage_root.mkdir(parents=True, exist_ok=True)
+    media_storage_root = root / "media-storage"
+    media_storage_root.mkdir(parents=True, exist_ok=True)
 
     storage_adapter = _dataset_storage_adapter(adapter_profile, object_storage_root)
+    media_storage = _media_storage_adapter(adapter_profile, media_storage_root)
     compute_adapter = _compute_adapter(adapter_profile)
     connector_adapter = _connector_adapter(adapter_profile)
     search_adapter = _search_adapter(adapter_profile)
@@ -131,7 +137,9 @@ def create_local_core_dependencies(
         object_set_repository=SqlAlchemyObjectSetRepository(engine),
         runtime_repository=SqlAlchemyRuntimeRepository(engine),
         erasure_repository=SqlAlchemyErasureRepository(engine),
+        media_repository=SqlAlchemyMediaRepository(engine),
         dataset_storage=storage_adapter,
+        media_storage=media_storage,
         search_adapter=search_adapter,
         secret_provider=secret_provider_from_env(),
         stream_adapter=stream_adapter,
@@ -149,6 +157,15 @@ def _dataset_storage_adapter(adapter_profile: str, object_storage_root: Path) ->
     if adapter_profile == "iceberg":
         return IcebergDatasetStorageAdapter(_iceberg_storage_config(object_storage_root))
     raise ValueError(f"unknown adapter profile: {adapter_profile}")
+
+
+def _media_storage_adapter(adapter_profile: str, media_storage_root: Path) -> MediaStorageAdapter:
+    # Media storage is selectable independently of dataset storage; v1 ships local only
+    # (the S3 media profile lands with the media S3 ratchet, doc §6.1 direct upload).
+    media_profile = os.getenv("FOUNDRY_LITE_MEDIA_STORAGE_PROFILE", adapter_profile)
+    if media_profile in {"local", "fake-storage", "s3-storage", "iceberg"}:
+        return LocalMediaStorageAdapter(media_storage_root)
+    raise ValueError(f"unknown media storage profile: {media_profile}")
 
 
 def _compute_adapter(adapter_profile: str) -> DuckDBComputeAdapter:

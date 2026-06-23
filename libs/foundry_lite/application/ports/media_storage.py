@@ -105,6 +105,14 @@ class MediaStorageAdapter(Protocol):
         """Allocate an immutable staged object key and start an upload session."""
         ...
 
+    def write_staged(self, staged_object_key: str, source: BinaryIO) -> None:
+        """Land raw bytes for a staged object.
+
+        This is the local/test body-upload path (doc §6.1 step 3 run in-process). An S3
+        profile instead hands the client presigned ``upload_targets`` and leaves this a guard.
+        """
+        ...
+
     def complete_staged_upload(self, request: CompleteMediaUpload) -> StagedMediaObject:
         """Finalize staged bytes and return measured size, content hash, and sniffed MIME."""
         ...

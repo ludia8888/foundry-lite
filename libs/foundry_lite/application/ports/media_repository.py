@@ -172,6 +172,12 @@ class MediaRepository(Protocol):
         """Insert a logical-path item or return the existing one (uq tenant/set/path)."""
         ...
 
+    def media_item_by_id(
+        self, *, transaction: TransactionContext, tenant_id: str, media_item_id: str
+    ) -> MediaItemRecord | None:
+        """Return one tenant-scoped logical-path item (head pointer + identity) by id."""
+        ...
+
     def cas_item_head_version(
         self,
         *,
