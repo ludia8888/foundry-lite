@@ -496,7 +496,14 @@ ratchet at a time, each adding at most one new external failure domain.
   mask the reference when the caller's clearance does not cover its classification (§12.1, no
   ACL leakage). Tighter ActionService/object-record coupling + active-covered family are deferred
   with M1–M3 (operator-evidence needs a media Operations surface).
-- **M5 — OCR:** Tesseract or managed OCR (one family only).
+- **M5 — OCR (processor shipped):** one family — an `OcrProcessorAdapter` (profile
+  `ocr-tesseract`) with an **injectable OCR engine** (the default lazily imports the real
+  engine but is never invoked in CI; tests inject a fake), so no system OCR binary is
+  required to test. OCR is a distinct `ocr_v1` derivative family (it never overwrites
+  embedded `pdf_text`), pins the OCR model version (a model upgrade re-processes rather
+  than silently reusing), inherits the source security envelope, and fails closed on an
+  undecodable image (validation) or a wall-clock timeout. Live OCR engine + active-covered
+  family are deferred with M1–M4.
 - **M6 — FFmpeg image/audio/video:** process isolation + duration/resource failure
   proofs first.
 - **M7 — ASR:** Whisper/faster-whisper or managed provider (one family).
