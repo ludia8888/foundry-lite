@@ -57,7 +57,7 @@ class MediaObjectStat:
     object_key: str
     byte_size: int
     content_hash: str
-    exists: bool
+    is_present: bool
 
 
 @dataclass(frozen=True)

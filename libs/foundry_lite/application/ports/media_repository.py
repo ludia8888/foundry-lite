@@ -21,7 +21,7 @@ class SecurityEnvelope:
     classification: str
     policy_version: str
     allowed_principal_set_id: str | None = None
-    legal_hold: bool = False
+    has_legal_hold: bool = False
 
 
 @dataclass(frozen=True)
