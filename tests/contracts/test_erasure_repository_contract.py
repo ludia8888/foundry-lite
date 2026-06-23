@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from foundry_lite.application.ports.erasure_repository import ErasureCertificateRecord, ErasureRequestRecord
+from foundry_lite.application.ports.erasure_repository import (
+    ErasureCertificateRecord,
+    ErasureRedactionExecutionRecord,
+    ErasureRequestRecord,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyErasureRepository
 from sqlalchemy import create_engine
@@ -95,3 +99,42 @@ def test_erasure_repository_certificate_persist_is_idempotent_and_marks_executed
         executed = repo.request_by_id(transaction=conn, tenant_id="tenant-demo", request_id="req-1")
         assert executed is not None and executed.status == "executed" and executed.manifest_id == "man-1"
         assert repo.certificate_by_request(transaction=conn, tenant_id="tenant-other", request_id="req-1") is None
+
+
+def test_erasure_repository_redaction_execution_insert_is_idempotent_per_resource(
+    erasure_repo: tuple[SqlAlchemyErasureRepository, Engine],
+) -> None:
+    repo, engine = erasure_repo
+
+    def _execution(execution_id: str, *, resource_id: str = "clean.orders:row-7") -> ErasureRedactionExecutionRecord:
+        return ErasureRedactionExecutionRecord(
+            execution_id=execution_id,
+            tenant_id="tenant-demo",
+            request_id="req-1",
+            resource_type="dataset_row",
+            resource_id=resource_id,
+            surface="clean.orders",
+            status="completed",
+            new_version_id="dsv-new",
+            executed_at="2026-06-23T01:00:00Z",
+        )
+
+    with engine.begin() as conn:
+        fresh = repo.insert_redaction_execution_or_get_existing(transaction=conn, record=_execution("exec-1"))
+        # A replay for the same resource resolves to the first persisted record (idempotent).
+        replay = repo.insert_redaction_execution_or_get_existing(transaction=conn, record=_execution("exec-2"))
+        repo.insert_redaction_execution_or_get_existing(
+            transaction=conn, record=_execution("exec-3", resource_id="clean.orders:row-9")
+        )
+
+    assert fresh is None
+    assert replay is not None and replay.execution_id == "exec-1"
+
+    with engine.begin() as conn:
+        executions = repo.redaction_executions_for_request(
+            transaction=conn, tenant_id="tenant-demo", request_id="req-1"
+        )
+        assert {execution.resource_id for execution in executions} == {"clean.orders:row-7", "clean.orders:row-9"}
+        assert (
+            repo.redaction_executions_for_request(transaction=conn, tenant_id="tenant-other", request_id="req-1") == []
+        )

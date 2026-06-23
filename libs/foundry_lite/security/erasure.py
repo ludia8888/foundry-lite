@@ -8,7 +8,7 @@ import json
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 ErasureResourceType = Literal[
     "dataset_row",
@@ -330,6 +330,44 @@ def is_erased_resource(
         action.resource.resource_type == resource_type and action.resource.resource_id == resource_id
         for action in manifest.actions
         if action.action_type != "minimize_audit_evidence"
+    )
+
+
+def deferred_redaction_targets(
+    certificate_evidence: Mapping[str, object],
+    *,
+    action_type: ErasureActionType,
+) -> tuple[ErasureResourceRef, ...]:
+    """Return the resources a maintenance lane still owes physical erasure for.
+
+    A persisted certificate records deferred surfaces (dataset-row redaction,
+    materialization rebuild) as DEFERRED receipts; their physical work runs later
+    in a maintenance lane. This reads one certificate's raw-value-free evidence and
+    returns the tenant-scoped resources for one deferred ``action_type``.
+    """
+
+    receipts = certificate_evidence.get("receipts")
+    if not isinstance(receipts, list):
+        return ()
+    targets: list[ErasureResourceRef] = []
+    for entry in cast("list[object]", receipts):
+        if not isinstance(entry, Mapping):
+            continue
+        receipt = cast("Mapping[str, object]", entry)
+        if receipt.get("actionType") != action_type or receipt.get("status") != "DEFERRED":
+            continue
+        resource = receipt.get("resource")
+        if isinstance(resource, Mapping):
+            targets.append(_resource_ref_from_payload(cast("Mapping[str, object]", resource)))
+    return tuple(targets)
+
+
+def _resource_ref_from_payload(payload: Mapping[str, object]) -> ErasureResourceRef:
+    return ErasureResourceRef(
+        tenant_id=str(payload["tenantId"]),
+        resource_type=cast(ErasureResourceType, payload["resourceType"]),
+        resource_id=str(payload["resourceId"]),
+        surface=str(payload["surface"]),
     )
 
 
