@@ -77,6 +77,8 @@ class _FakeES:
         real = self.alias_to_index.get(index, index)
         if real not in self.docs and real not in self.indices_set:
             raise _FakeNotFound()
+        if "script_score" in body["query"]:
+            return self._dense_search(real, body)
         bool_q = body["query"]["bool"]
         tenant = bool_q["filter"][0]["term"]["tenant_id"]
         must = bool_q["must"][0]
@@ -86,6 +88,21 @@ class _FakeES:
             for doc in self.docs.get(real, {}).values()
             if doc.get("tenant_id") == tenant and _text_match(doc.get("text", ""), text)
         ]
+        return {"hits": {"hits": hits[: body.get("size", 10)]}}
+
+    def _dense_search(self, real: str, body: Any) -> dict[str, object]:
+        script = body["query"]["script_score"]
+        filters = script["query"]["bool"]["filter"]
+        tenant = filters[0]["term"]["tenant_id"]
+        model = filters[1]["term"]["embedding_model_version"]
+        query_vector = script["script"]["params"]["query_vector"]
+        matched = [
+            (_cosine(doc.get("embedding", []), query_vector), doc)
+            for doc in self.docs.get(real, {}).values()
+            if doc.get("tenant_id") == tenant and doc.get("embedding_model_version") == model
+        ]
+        matched.sort(key=lambda pair: -pair[0])
+        hits = [{"_index": real, "_source": doc} for _, doc in matched]
         return {"hits": {"hits": hits[: body.get("size", 10)]}}
 
     def delete_by_query(self, *, index: str, body: Any, **_options: Any) -> None:
@@ -106,6 +123,13 @@ def _text_match(haystack: str, text: str | None) -> bool:
     return all(token in low for token in text.casefold().split())
 
 
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(y * y for y in b) ** 0.5
+    return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
+
+
 def _adapter(client: Any | None = None) -> ElasticsearchContentIndexAdapter:
     return ElasticsearchContentIndexAdapter(
         ElasticsearchAdapterConfig(endpoint="http://fake:9200", index_prefix="flite"),
@@ -114,7 +138,14 @@ def _adapter(client: Any | None = None) -> ElasticsearchContentIndexAdapter:
 
 
 def _unit(
-    content_unit_id: str, text: str, *, version: int = 1, tenant: str = "t", source: str = "miv-1"
+    content_unit_id: str,
+    text: str,
+    *,
+    version: int = 1,
+    tenant: str = "t",
+    source: str = "miv-1",
+    embedding: tuple[float, ...] = (),
+    embedding_model_version: str = "",
 ) -> IndexedContentUnit:
     return IndexedContentUnit(
         tenant_id=tenant,
@@ -124,6 +155,8 @@ def _unit(
         text_hash=f"h-{content_unit_id}",
         version=version,
         page_number=1,
+        embedding=embedding,
+        embedding_model_version=embedding_model_version,
     )
 
 
@@ -211,6 +244,24 @@ def test_transport_error_is_classified() -> None:
         adapter.upsert_units(ContentIndexBatch(generation="g1", units=(_unit("cu-1", "x"),)))
     assert excinfo.value.failure.kind == "unavailable"
     assert excinfo.value.failure.is_retryable is True
+
+
+def test_dense_vector_search_ranks_by_similarity() -> None:
+    adapter = _adapter()
+    _activate(adapter, "g1")
+    adapter.upsert_units(
+        ContentIndexBatch(
+            generation="g1",
+            units=(
+                _unit("cu-a", "alpha", embedding=(1.0, 0.0, 0.0), embedding_model_version="m1"),
+                _unit("cu-b", "beta", embedding=(0.0, 0.0, 1.0), embedding_model_version="m1"),
+            ),
+        )
+    )
+    hits = adapter.search(
+        HybridContentQuery(tenant_id="t", query_vector=(0.0, 0.0, 1.0), embedding_model_version="m1", top_k=10)
+    )
+    assert hits[0].content_unit_id == "cu-b"  # ranked first by cosine similarity
 
 
 def test_failure_contract_declares_modes() -> None:

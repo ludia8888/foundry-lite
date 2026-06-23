@@ -25,6 +25,7 @@ from foundry_lite.application.services.media.retrieval import DefaultContentRetr
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
+from foundry_lite.infrastructure.adapters.local_embedding import LocalEmbeddingAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository
 from sqlalchemy import create_engine
 
@@ -114,10 +115,13 @@ def env(tmp_path: Path) -> _Env:
     repo = SqlAlchemyMediaDerivativeRepository(engine)
     index = LocalContentIndexAdapter()
     runtime = _FakeRuntime()
-    indexing = MediaIndexingService(engine=engine, media_derivative_repository=repo, content_index_adapter=index)
+    embedding = LocalEmbeddingAdapter()
+    indexing = MediaIndexingService(
+        engine=engine, media_derivative_repository=repo, content_index_adapter=index, embedding_model_adapter=embedding
+    )
     indexing.bind_collaborators({"runtime_service": runtime})
     retrieval = DefaultContentRetrievalService(
-        engine=engine, media_derivative_repository=repo, content_index_adapter=index
+        engine=engine, media_derivative_repository=repo, content_index_adapter=index, embedding_model_adapter=embedding
     )
     return _Env(RequestContext(), engine, repo, index, indexing, retrieval)
 
@@ -170,7 +174,10 @@ def test_retrieval_filters_cross_tenant_acl_leakage(tmp_path: Path) -> None:
         source_media_item_version_id=_SOURCE, content_unit_id="cu-secret", index_generation="g1", text_hash="hs"
     )
     retrieval = DefaultContentRetrievalService(
-        engine=engine, media_derivative_repository=repo, content_index_adapter=_StubIndex([leaked])
+        engine=engine,
+        media_derivative_repository=repo,
+        content_index_adapter=_StubIndex([leaked]),
+        embedding_model_adapter=LocalEmbeddingAdapter(),
     )
     env = _Env(RequestContext(), engine, repo, LocalContentIndexAdapter(), None, retrieval)  # type: ignore[arg-type]
     env.seed([("cu-secret", "other tenant secret", "hs")], tenant="tenant-other")
@@ -188,7 +195,10 @@ def test_retrieval_drops_stale_source_unit(tmp_path: Path) -> None:
         source_media_item_version_id=_SOURCE, content_unit_id="cu-ghost", index_generation="g1", text_hash="hg"
     )
     retrieval = DefaultContentRetrievalService(
-        engine=engine, media_derivative_repository=repo, content_index_adapter=_StubIndex([ghost])
+        engine=engine,
+        media_derivative_repository=repo,
+        content_index_adapter=_StubIndex([ghost]),
+        embedding_model_adapter=LocalEmbeddingAdapter(),
     )
     hits = retrieval.search_content(RequestContext(), query=HybridContentQuery(tenant_id="tenant-demo", text="x"))
     assert hits == []

@@ -24,6 +24,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
 from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
+from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
 from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRepository
@@ -71,6 +72,7 @@ class CoreDependencies:
     media_storage: MediaStorageAdapter
     media_processor: MediaProcessorAdapter
     content_index_adapter: ContentIndexAdapter
+    embedding_model_adapter: EmbeddingModelAdapter
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
     stream_adapter: StreamAdapter

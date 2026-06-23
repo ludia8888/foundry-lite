@@ -529,8 +529,19 @@ ratchet at a time, each adding at most one new external failure domain.
   leave these `None`), inherits the source security envelope, and fails closed on undecodable
   audio (validation) or a wall-clock timeout. Live ASR engine + active-covered family are
   deferred with M1–M6.
-- **M8 — Embedding + hybrid retrieval:** reuse Elasticsearch vector capability
-  before adding a separate vector DB.
+- **M8 — Embedding + hybrid retrieval (shipped):** an `EmbeddingModelAdapter` port +
+  `LocalEmbeddingAdapter` with an **injectable embedding engine** (the default raises
+  `embedding_model_unavailable`; a real profile injects sentence-transformers / a managed
+  provider — live embeddings deferred like live-OCR, so no heavy ML dependency enters CI).
+  An embedding is a derived **projection** of a content unit's text, not a separate truth:
+  vectors ride the existing content index (no new schema/table), and `MediaIndexingService`
+  attaches them at projection time, pinning the embedding model version + chunk spec onto each
+  indexed unit. Retrieval embeds the query and fuses lexical + cosine-kNN ranks with Reciprocal
+  Rank Fusion; a query whose embedding model version does not match the generation's **fails
+  closed** (no silent mixing of vector spaces — `embedding_artifact_pins_model_version_and_chunk_spec`
+  now `enforced`). Elasticsearch reuses its `dense_vector` + `script_score` (no separate vector
+  DB); the local adapter does pure-Python cosine + RRF. Live embeddings + active-covered family
+  deferred with M1–M7.
 - **M9 — Access patterns / virtual media sets:** on-demand preview cache and
   external-reference freshness/immutability.
 

@@ -195,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-aggregation-fan-out",
         type=int,
-        default=20,
+        default=21,
         help="Higher fan-out budget for explicit aggregation roots (ports/repositories __init__).",
     )
     parser.add_argument(

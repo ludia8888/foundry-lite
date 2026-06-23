@@ -14,3 +14,4 @@ expected_active  # unused variable (libs/foundry_lite/application/ports/content_
 shadow  # unused variable (libs/foundry_lite/application/ports/content_index.py:76)
 envelope  # unused variable (libs/foundry_lite/application/ports/media_policy.py:29)
 principal_id  # unused variable (libs/foundry_lite/application/ports/media_policy.py:29)
+texts  # unused variable (libs/foundry_lite/application/ports/embedding_model.py)

@@ -35,6 +35,7 @@ from foundry_lite.infrastructure.adapters import (
     LocalConnectorAdapter,
     LocalContentIndexAdapter,
     LocalDatasetStorageAdapter,
+    LocalEmbeddingAdapter,
     LocalMediaStorageAdapter,
     LocalSearchAdapter,
     LocalStreamAdapter,
@@ -114,6 +115,7 @@ def create_local_core_dependencies(
     media_storage = _media_storage_adapter(adapter_profile, media_storage_root)
     media_processor = _media_processor_adapter(adapter_profile)
     content_index_adapter = _content_index_adapter(adapter_profile)
+    embedding_model_adapter = LocalEmbeddingAdapter()
     compute_adapter = _compute_adapter(adapter_profile)
     connector_adapter = _connector_adapter(adapter_profile)
     search_adapter = _search_adapter(adapter_profile)
@@ -159,6 +161,7 @@ def create_local_core_dependencies(
         dataset_storage=storage_adapter,
         media_storage=media_storage,
         content_index_adapter=content_index_adapter,
+        embedding_model_adapter=embedding_model_adapter,
         search_adapter=search_adapter,
         secret_provider=secret_provider_from_env(),
         stream_adapter=stream_adapter,

@@ -3,13 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from foundry_lite.application.ports.embedding_model import EmbeddingVector
+
 
 @dataclass(frozen=True)
 class ContentIndexSchema:
-    """Generation-scoped index schema (lexical first; dense-vector fields added later)."""
+    """Generation-scoped index schema. ``embedding_model_version`` pins the dense space of
+    the generation (empty for a lexical-only generation)."""
 
     generation: str
     fields: tuple[str, ...] = ()
+    embedding_model_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -30,6 +34,9 @@ class IndexedContentUnit:
     page_number: int | None = None
     start_ms: int | None = None
     end_ms: int | None = None
+    chunk_spec_hash: str = ""
+    embedding: EmbeddingVector = ()
+    embedding_model_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -55,6 +62,8 @@ class HybridContentQuery:
     tenant_id: str
     text: str | None = None
     top_k: int = 10
+    query_vector: EmbeddingVector | None = None
+    embedding_model_version: str | None = None
 
 
 @dataclass(frozen=True)
