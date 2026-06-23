@@ -39,13 +39,6 @@ def test_erasure_manifest_removes_subject_from_serving_surfaces_without_raw_valu
         ),
         resolve_erasure_subject(
             request,
-            [_record("mat_row_1", "materialization_row")],
-            identity_fields=("email",),
-            resource_type="materialization_row",
-            surface="ops.customer_summary",
-        ),
-        resolve_erasure_subject(
-            request,
             [_record("dlq_1", "dead_letter_record")],
             identity_fields=("email",),
             resource_type="dead_letter_record",
@@ -61,7 +54,6 @@ def test_erasure_manifest_removes_subject_from_serving_surfaces_without_raw_valu
     assert action_types == {
         "minimize_audit_evidence",
         "redact_dead_letter_payload",
-        "rebuild_materialization",
         "remove_search_document",
         "tombstone_object",
     }
@@ -179,6 +171,30 @@ def test_dataset_row_redaction_is_deferred_to_maintenance_lane() -> None:
     assert dataset_action.resource.resource_id == "clean.orders:row-7"
     assert dataset_action.reason == "deferred_to_redaction_maintenance"
     assert dataset_action.evidence["subjectHash"] == request.subject_hash
+    assert "ada@example.com" not in repr(manifest.redacted_evidence())
+
+
+def test_materialization_rebuild_is_deferred_to_maintenance_lane() -> None:
+    request = _erasure_request()
+    retention_policy = _retention_policy()
+    resolution = resolve_erasure_subject(
+        request,
+        [_record("ops.customer_summary:row-3", "materialization_row")],
+        identity_fields=("email",),
+        resource_type="materialization_row",
+        surface="ops.customer_summary",
+    )
+
+    manifest = build_erasure_manifest(request, (resolution,), retention_policy=retention_policy)
+    rebuild_action = next(action for action in manifest.actions if action.action_type == "rebuild_materialization")
+
+    # A materialization is a derived projection, so the rebuild is deferred; the manifest
+    # still carries a raw-value-free durable record of the row the rebuild must exclude.
+    assert manifest.status == "PENDING_RETENTION"
+    assert rebuild_action.status == "DEFERRED"
+    assert rebuild_action.resource.resource_id == "ops.customer_summary:row-3"
+    assert rebuild_action.reason == "deferred_to_rebuild_maintenance"
+    assert rebuild_action.evidence["subjectHash"] == request.subject_hash
     assert "ada@example.com" not in repr(manifest.redacted_evidence())
 
 

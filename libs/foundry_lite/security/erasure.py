@@ -374,6 +374,8 @@ def _action_for_resource(
         return _backup_deferred_action(request, resource, retention_policy=retention_policy)
     if resource.resource_type == "dataset_row":
         return _dataset_row_deferred_action(request, resource)
+    if resource.resource_type == "materialization_row":
+        return _materialization_deferred_action(request, resource)
     return ErasureManifestAction(
         action_type=_action_type(resource.resource_type),
         resource=resource,
@@ -424,6 +426,28 @@ def _dataset_row_deferred_action(request: ErasureRequest, resource: ErasureResou
         resource=resource,
         status="DEFERRED",
         reason="deferred_to_redaction_maintenance",
+        evidence={
+            "requestId": request.request_id,
+            "subjectHash": request.subject_hash,
+            "subjectTokenKeyId": request.subject_token_key_id,
+        },
+    )
+
+
+def _materialization_deferred_action(request: ErasureRequest, resource: ErasureResourceRef) -> ErasureManifestAction:
+    """Defer the materialization rebuild to the rebuild maintenance lane.
+
+    A materialization is a derived projection, so erasing a subject's row requires
+    recomputing the whole projection with the subject excluded. That rebuild runs in
+    a separate maintenance lane; the deferred action is the raw-value-free durable
+    record of which tenant-scoped row the rebuild must exclude.
+    """
+
+    return ErasureManifestAction(
+        action_type="rebuild_materialization",
+        resource=resource,
+        status="DEFERRED",
+        reason="deferred_to_rebuild_maintenance",
         evidence={
             "requestId": request.request_id,
             "subjectHash": request.subject_hash,

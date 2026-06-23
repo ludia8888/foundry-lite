@@ -219,6 +219,13 @@ def test_run_erasure_via_gateway_deletes_search_documents_and_defers_backup() ->
             resource_type="dataset_row",
             surface="clean.orders",
         ),
+        resolve_erasure_subject(
+            request,
+            [{"id": "ops.customer_summary:row-3", "tenant_id": "tenant-a", "email": "ada@example.com"}],
+            identity_fields=("email",),
+            resource_type="materialization_row",
+            surface="ops.customer_summary",
+        ),
     )
 
     certificate = gateway.run(request, resolutions, retention_policy=_retention_policy())
@@ -237,6 +244,10 @@ def test_run_erasure_via_gateway_deletes_search_documents_and_defers_backup() ->
     dataset_receipt = next(r for r in certificate.receipts if r.action_type == "redact_dataset_row")
     assert dataset_receipt.status == "DEFERRED"
     assert dataset_receipt.resource.resource_id == "clean.orders:row-7"
+    # The materialization row is recorded as deferred rebuild work (rebuild runs in the maintenance lane).
+    materialization_receipt = next(r for r in certificate.receipts if r.action_type == "rebuild_materialization")
+    assert materialization_receipt.status == "DEFERRED"
+    assert materialization_receipt.resource.resource_id == "ops.customer_summary:row-3"
     assert certificate.status == "CERTIFIED_WITH_DEFERRED_WORK"
     persisted = gateway.certificate_for(tenant_id=request.tenant_id, request_id=request.request_id)
     assert persisted is not None

@@ -13,20 +13,36 @@ ErasureActionExecutor = Callable[[ErasureManifestAction], ErasureActionReceipt]
 def default_erasure_executors(
     *, search_adapter: SearchAdapter, runtime_repository: RuntimeRepository, engine: TransactionManager
 ) -> Mapping[str, ErasureActionExecutor]:
-    """Concrete executors for the serving/projection surfaces.
+    """Concrete executors for every erasure manifest surface.
 
-    Materialization rebuild requires richer source context and is added on top of
-    this map as its executor lands; an unmapped action fails closed in the service
-    rather than being silently certified.
+    Immediate surfaces (search, object, dead-letter, audit) are applied inline;
+    surfaces whose physical erasure is heavy or operates on immutable storage
+    (dataset-row redaction, materialization rebuild, backup expiration) are
+    certified as DEFERRED and finished by their maintenance lanes. An unmapped
+    action still fails closed in the service rather than being silently certified.
     """
     return {
         "remove_search_document": lambda action: _remove_search_document(action, search_adapter),
         "tombstone_object": lambda action: _tombstone_object(action, runtime_repository, engine),
         "redact_dataset_row": _redact_dataset_row,
+        "rebuild_materialization": _rebuild_materialization,
         "redact_dead_letter_payload": lambda action: _redact_dead_letter_payload(action, runtime_repository, engine),
         "minimize_audit_evidence": _minimize_audit_evidence,
         "defer_backup_expiration": _defer_backup_expiration,
     }
+
+
+def _rebuild_materialization(action: ErasureManifestAction) -> ErasureActionReceipt:
+    # A materialization is a derived projection; erasing a subject requires recomputing
+    # the whole projection with the subject excluded. That rebuild runs in the rebuild
+    # maintenance lane. The deferred receipt is the durable record of which row to exclude.
+    return ErasureActionReceipt(
+        action_type=action.action_type,
+        resource=action.resource,
+        status="DEFERRED",
+        completed_at=_now(),
+        evidence={"executor": "materialization_rebuild", **dict(action.evidence)},
+    )
 
 
 def _redact_dataset_row(action: ErasureManifestAction) -> ErasureActionReceipt:
