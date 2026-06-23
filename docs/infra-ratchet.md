@@ -459,9 +459,14 @@ ratchet at a time, each adding at most one new external failure domain.
   filesystem adapter, the atomic metadata-pointer transaction protocol, and the
   serving-truth `sourceOfTruthRules` proven by the local core (now `enforced`).
   No new external infra. PR1 = ADR + contracts; PR2 = local MediaSet transaction core.
-- **M1 — S3 `MediaStorageAdapter`:** direct/multipart upload, range read, signed
-  grant, interrupted-multipart and lost-complete recovery, DB-commit-after-upload
-  failure, same-upload retry, concurrent same-path commits, orphan cleanup.
+- **M1 — S3 `MediaStorageAdapter` (adapter shipped):** direct + multipart upload,
+  range read, tenant/version-scoped expiring read grant, interrupted-multipart
+  cleanup, typed retryable upload failure, concurrent same-path uploads, orphan
+  cleanup — all proven on MinIO (`tests/integration/test_s3_media_storage_adapter.py`),
+  reachable via `FOUNDRY_LITE_MEDIA_STORAGE_PROFILE=s3-media` and the shared
+  `build_s3_client` helper. The `infra-tricky-matrix` `active-covered` family
+  promotion (operator-evidence proof class) is deferred until a media Operations/run
+  surface exists.
 - **M2 — PDF raw-text processor:** local/container PyMuPDF/pypdf; encrypted/corrupt
   PDF, page limit, process kill/timeout, deterministic page-text hash,
   derivative-metadata-failure cleanup, duplicate workflow start.

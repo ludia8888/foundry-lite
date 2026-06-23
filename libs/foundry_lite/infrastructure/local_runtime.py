@@ -35,6 +35,8 @@ from foundry_lite.infrastructure.adapters import (
     LocalWorkflowAdapter,
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
+    S3MediaStorageAdapter,
+    S3MediaStorageConfig,
     SparkComputeAdapter,
     TemporalWorkflowAdapter,
     TemporalWorkflowAdapterConfig,
@@ -163,9 +165,24 @@ def _media_storage_adapter(adapter_profile: str, media_storage_root: Path) -> Me
     # Media storage is selectable independently of dataset storage; v1 ships local only
     # (the S3 media profile lands with the media S3 ratchet, doc §6.1 direct upload).
     media_profile = os.getenv("FOUNDRY_LITE_MEDIA_STORAGE_PROFILE", adapter_profile)
+    if media_profile == "s3-media":
+        return S3MediaStorageAdapter(_s3_media_storage_config())
     if media_profile in {"local", "fake-storage", "s3-storage", "iceberg"}:
         return LocalMediaStorageAdapter(media_storage_root)
     raise ValueError(f"unknown media storage profile: {media_profile}")
+
+
+def _s3_media_storage_config() -> S3MediaStorageConfig:
+    # Reuse the dataset S3 connection env with a dedicated media key sub-namespace.
+    return S3MediaStorageConfig(
+        bucket=os.environ["FOUNDRY_LITE_S3_BUCKET"],
+        endpoint_url=os.getenv("FOUNDRY_LITE_S3_ENDPOINT_URL"),
+        access_key_id=os.getenv("FOUNDRY_LITE_S3_ACCESS_KEY_ID"),
+        secret_access_key=os.getenv("FOUNDRY_LITE_S3_SECRET_ACCESS_KEY"),
+        region_name=os.getenv("FOUNDRY_LITE_S3_REGION", "us-east-1"),
+        prefix=f"{os.getenv('FOUNDRY_LITE_S3_PREFIX', 'foundry-lite')}/media",
+        should_create_bucket_if_missing=os.getenv("FOUNDRY_LITE_S3_CREATE_BUCKET", "1") != "0",
+    )
 
 
 def _compute_adapter(adapter_profile: str) -> DuckDBComputeAdapter:

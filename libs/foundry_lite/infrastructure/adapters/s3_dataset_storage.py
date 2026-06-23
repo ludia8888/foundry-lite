@@ -4,7 +4,6 @@ import json
 import shutil
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,6 +16,7 @@ from foundry_lite.application.ports.adapter_failure import (
     AdapterFailureMode,
 )
 from foundry_lite.application.primitives import _file_hash
+from foundry_lite.infrastructure.adapters.s3_client import build_s3_client, is_not_found_error, join_key
 
 
 @dataclass(frozen=True)
@@ -397,32 +397,15 @@ class S3DatasetStorageAdapter:
 
 
 def _boto3_s3_client(config: S3DatasetStorageAdapterConfig) -> Any:
-    boto3 = import_module("boto3")
-    botocore_config = import_module("botocore.config")
-    return boto3.client(
-        "s3",
+    return build_s3_client(
         endpoint_url=config.endpoint_url,
-        aws_access_key_id=config.access_key_id,
-        aws_secret_access_key=config.secret_access_key,
+        access_key_id=config.access_key_id,
+        secret_access_key=config.secret_access_key,
         region_name=config.region_name,
-        config=botocore_config.Config(s3={"addressing_style": "path"}),
     )
 
 
-_NOT_FOUND_ERROR_CODES = {"NoSuchKey", "NoSuchBucket", "NoSuchUpload", "404", "NotFound"}
-
-
-def _is_not_found_error(exc: Exception) -> bool:
-    """Classify a boto3/botocore error as a genuine missing-object (vs transient)."""
-    if isinstance(exc, FileNotFoundError):
-        return True
-    response = getattr(exc, "response", None)
-    if isinstance(response, dict):
-        code = str((response.get("Error") or {}).get("Code", ""))
-        status = (response.get("ResponseMetadata") or {}).get("HTTPStatusCode")
-        if code in _NOT_FOUND_ERROR_CODES or status == 404:
-            return True
-    return False
+_is_not_found_error = is_not_found_error
 
 
 def _matches_partition_filter(
@@ -433,5 +416,4 @@ def _matches_partition_filter(
     return all(partition_values.get(key) == value for key, value in partition_filter.items())
 
 
-def _join_key(*parts: str) -> str:
-    return "/".join(part.strip("/") for part in parts if part.strip("/"))
+_join_key = join_key
