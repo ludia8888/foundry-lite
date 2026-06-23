@@ -542,8 +542,24 @@ ratchet at a time, each adding at most one new external failure domain.
   now `enforced`). Elasticsearch reuses its `dense_vector` + `script_score` (no separate vector
   DB); the local adapter does pure-Python cosine + RRF. Live embeddings + active-covered family
   deferred with M1–M7.
-- **M9 — Access patterns / virtual media sets:** on-demand preview cache and
-  external-reference freshness/immutability.
+- **M9 — Access patterns / virtual media sets (shipped):** two halves on the media plane.
+  (a) An on-demand **preview cache** — a `MediaAccessPatternService` renders a thumbnail/preview
+  via an injectable `MediaPreviewRendererAdapter` (image thumbnails use real Pillow, so the
+  render path runs in CI; audio/video patterns report `preview_renderer_unavailable` because
+  FFmpeg is a deferred system binary). The cache (`media_access_caches`) is **never serving
+  truth**: every preview verifies the COMMITTED source first, serves a cache hit only when it is
+  unexpired AND its pinned `source_content_hash` still matches AND its blob is present, and
+  otherwise re-renders from the source; references/retrieval read the source, never the cache; an
+  unrenderable source fails closed (`access_pattern_cache_is_not_truth` promoted to `enforced`).
+  (b) **Virtual media sets** — a `media_sets.is_virtual` set whose external versions reuse
+  `media_item_versions.source_ref`. A `VirtualMediaSetService` rejects an external version that
+  neither pins an etag/version nor is marked `is_mutable_external_reference`; an etag-pinned
+  version is re-validated on resolve through an injectable `ExternalMediaReader` (a drift fails
+  closed), while a mutable reference surfaces freshness rather than failing
+  (`external_virtual_object_requires_version_or_mutable_marker` promoted to `enforced`). The real
+  preview engine + external connector are deferred (no new env vars). `workflow_status_does_not_
+replace_domain_commit`, retention purge, and external-writeback compensation stay deferred —
+  their proof surfaces (a media Temporal workflow / purge engine / real connector) do not exist yet.
 
 Media processing will be the first product-driven Temporal use case (M2). A media
 family becomes `active-covered` only when its proof-class tests collect and it is

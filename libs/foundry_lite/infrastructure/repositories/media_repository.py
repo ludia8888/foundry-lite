@@ -353,6 +353,7 @@ def _media_set_values(record: MediaSetRecord) -> dict[str, object]:
         "processing_profile": record.processing_profile,
         "classification": record.classification,
         "retention_policy_id": record.retention_policy_id,
+        "is_virtual": record.is_virtual,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
@@ -372,6 +373,7 @@ def _media_set_from_row(row: Any) -> MediaSetRecord:
         processing_profile=str(row["processing_profile"]),
         classification=str(row["classification"]),
         retention_policy_id=str(row["retention_policy_id"]) if row["retention_policy_id"] is not None else None,
+        is_virtual=bool(row["is_virtual"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )

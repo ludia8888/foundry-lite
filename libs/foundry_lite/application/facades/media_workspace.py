@@ -6,13 +6,15 @@ from foundry_lite.application.ports.content_index import ContentSearchHit, Hybri
 from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRecord
 from foundry_lite.application.ports.media_processor import ProcessorSpec
 from foundry_lite.application.ports.media_reference_binding_repository import MediaReferenceBindingRecord
-from foundry_lite.application.ports.media_repository import MediaReference, MediaSetRecord
+from foundry_lite.application.ports.media_repository import MediaItemVersionRecord, MediaReference, MediaSetRecord
+from foundry_lite.application.ports.media_storage import MediaReadGrant
 from foundry_lite.application.services.media.catalog import MediaSetSpec
 from foundry_lite.application.services.media.indexing import IndexingOutcome
 from foundry_lite.application.services.media.processing import ProcessingOutcome
 from foundry_lite.application.services.media.references import ResolvedMediaReference
 from foundry_lite.application.services.media.transactions import MediaCommitResult
 from foundry_lite.application.services.media.uploads import MediaUploadInput, StagedUpload
+from foundry_lite.application.services.media.virtual_sets import ExternalResolution
 from foundry_lite.application.services.media_service import MediaServices
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.observability.tracing import trace_public_methods
@@ -172,3 +174,40 @@ class MediaWorkspace:
             property_name=property_name,
             allowed_classifications=allowed_classifications,
         )
+
+    def preview(
+        self,
+        ctx: RequestContext,
+        *,
+        media_item_version_id: str,
+        access_pattern: str,
+        spec: dict[str, object] | None = None,
+        persistence_policy: str = "persist",
+        ttl_seconds: int | None = None,
+    ) -> MediaReadGrant:
+        return self._media.access_pattern.preview(
+            ctx,
+            media_item_version_id=media_item_version_id,
+            access_pattern=access_pattern,
+            spec=spec,
+            persistence_policy=persistence_policy,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def purge_access_caches(self, ctx: RequestContext, *, media_item_version_id: str) -> list[str]:
+        return self._media.access_pattern.purge_access_caches(ctx, media_item_version_id=media_item_version_id)
+
+    def register_external_version(
+        self,
+        ctx: RequestContext,
+        *,
+        media_set_id: str,
+        logical_path: str,
+        source_ref: dict[str, object],
+    ) -> MediaItemVersionRecord:
+        return self._media.virtual_sets.register_external_version(
+            ctx, media_set_id=media_set_id, logical_path=logical_path, source_ref=source_ref
+        )
+
+    def resolve_external_version(self, ctx: RequestContext, *, media_item_version_id: str) -> ExternalResolution:
+        return self._media.virtual_sets.resolve_external_version(ctx, media_item_version_id=media_item_version_id)

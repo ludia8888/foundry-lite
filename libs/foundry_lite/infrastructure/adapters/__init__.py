@@ -24,7 +24,9 @@ from foundry_lite.infrastructure.adapters.kafka_stream import (
 )
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_embedding import LocalEmbeddingAdapter
+from foundry_lite.infrastructure.adapters.local_external_media_reader import LocalExternalMediaReader
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
+from foundry_lite.infrastructure.adapters.local_preview_renderer import LocalPreviewRendererAdapter
 from foundry_lite.infrastructure.adapters.ocr_processor import OcrProcessorAdapter
 from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfTextProcessorAdapter
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
@@ -69,7 +71,9 @@ __all__ = [
     "KafkaStreamSubscription",
     "LocalConnectorAdapter",
     "LocalDatasetStorageAdapter",
+    "LocalExternalMediaReader",
     "LocalMediaStorageAdapter",
+    "LocalPreviewRendererAdapter",
     "LocalSearchAdapter",
     "LocalStreamAdapter",
     "LocalWorkflowAdapter",

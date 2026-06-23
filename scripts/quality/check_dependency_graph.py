@@ -195,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-aggregation-fan-out",
         type=int,
-        default=21,
+        default=23,
         help="Higher fan-out budget for explicit aggregation roots (ports/repositories __init__).",
     )
     parser.add_argument(
@@ -217,6 +217,9 @@ def main(argv: list[str] | None = None) -> int:
             # aggregation points whose fan-out grows with the platform, by design.
             "foundry_lite.application.services.base",
             "foundry_lite.application.facades.media_workspace",
+            # The MediaServices group composes every media bounded-context service; its
+            # fan-out grows by one per new media capability (e.g. M9 access patterns), by design.
+            "foundry_lite.application.services.media_service",
         ],
     )
     args = parser.parse_args(argv)
