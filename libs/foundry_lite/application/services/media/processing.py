@@ -8,7 +8,11 @@ from pathlib import Path
 
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.adapter_failure import AdapterError
-from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord, MediaDerivativeRecord
+from foundry_lite.application.ports.media_derivative_repository import (
+    ContentUnitRecord,
+    MediaDerivativeRecord,
+    MediaProcessingRunRecord,
+)
 from foundry_lite.application.ports.media_processor import (
     MediaProcessingRequest,
     MediaProcessingResult,
@@ -68,10 +72,50 @@ class MediaProcessingService(CoreService):
                 details={"media_item_version_id": media_item_version_id, "status": version.status},
             )
         envelope = dict(version.security_envelope)
+        run_id = self._open_run(ctx, media_item_version_id, spec, spec_hash)
         result = self._run_processor(ctx, version.blob_key, spec, spec_hash, media_item_version_id)
         if isinstance(result, AdapterError):
-            return self._record_failure(ctx, media_item_version_id, spec, spec_hash, envelope, result)
-        return self._commit_derivative(ctx, media_item_version_id, spec, spec_hash, envelope, result)
+            return self._record_failure(ctx, media_item_version_id, spec, spec_hash, envelope, result, run_id)
+        return self._commit_derivative(ctx, media_item_version_id, spec, spec_hash, envelope, result, run_id)
+
+    def list_media_runs(
+        self, ctx: RequestContext, *, source_media_item_version_id: str | None = None, limit: int = 50
+    ) -> list[MediaProcessingRunRecord]:
+        """Operations surface: tenant-scoped processing runs newest-first (a failed attempt is visible)."""
+        with self.engine.begin() as conn:
+            return self.media_derivative_repository.list_media_runs(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                source_media_item_version_id=source_media_item_version_id,
+                limit=limit,
+            )
+
+    def media_run_detail(self, ctx: RequestContext, *, media_processing_run_id: str) -> MediaProcessingRunRecord:
+        with self.engine.begin() as conn:
+            runs = self.media_derivative_repository.get_media_runs(transaction=conn, ids=[media_processing_run_id])
+        run = next((candidate for candidate in runs if candidate.tenant_id == ctx.tenant_id), None)
+        if run is None:
+            raise NotFound(
+                "media processing run not found", details={"media_processing_run_id": media_processing_run_id}
+            )
+        return run
+
+    def _open_run(self, ctx: RequestContext, version_id: str, spec: ProcessorSpec, spec_hash: str) -> str:
+        now = _now()
+        record = MediaProcessingRunRecord(
+            media_processing_run_id=_new_id("mrun"),
+            tenant_id=ctx.tenant_id,
+            source_media_item_version_id=version_id,
+            processor_name=spec.processor,
+            derivative_kind=spec.processor,
+            processing_spec_hash=spec_hash,
+            status="RUNNING",
+            started_at=now,
+            created_at=now,
+        )
+        with self.engine.begin() as conn:
+            self.media_derivative_repository.create_media_run(transaction=conn, record=record)
+        return record.media_processing_run_id
 
     def resolve_derivative(self, ctx: RequestContext, *, media_derivative_id: str) -> MediaDerivativeRecord:
         with self.engine.begin() as conn:
@@ -136,6 +180,7 @@ class MediaProcessingService(CoreService):
         spec_hash: str,
         envelope: dict[str, object],
         result: MediaProcessingResult,
+        run_id: str,
     ) -> ProcessingOutcome:
         record = _derivative_record(ctx, version_id, spec, spec_hash, envelope, result, status="STAGED")
         with self.engine.begin() as conn:
@@ -143,6 +188,9 @@ class MediaProcessingService(CoreService):
                 transaction=conn, record=record
             )
             if existing is not None and existing.status == "COMMITTED":
+                self._finish_run(
+                    conn, ctx, run_id, status="SUCCEEDED", media_derivative_id=existing.media_derivative_id
+                )
                 return ProcessingOutcome(existing.media_derivative_id, "committed", 0, is_duplicate=True)
             derivative_id = existing.media_derivative_id if existing is not None else record.media_derivative_id
             committed = self.media_derivative_repository.commit_derivative(
@@ -153,6 +201,7 @@ class MediaProcessingService(CoreService):
             units = _content_unit_records(ctx, version_id, derivative_id, spec_hash, envelope, result)
             self.media_derivative_repository.insert_content_units(transaction=conn, records=units)
             self._emit_events(conn, ctx, derivative_id, version_id, result)
+            self._finish_run(conn, ctx, run_id, status="SUCCEEDED", media_derivative_id=derivative_id)
             return ProcessingOutcome(derivative_id, "committed", len(units), is_duplicate=existing is not None)
 
     def _record_failure(
@@ -163,6 +212,7 @@ class MediaProcessingService(CoreService):
         spec_hash: str,
         envelope: dict[str, object],
         error: AdapterError,
+        run_id: str,
     ) -> ProcessingOutcome:
         payload = error.failure.to_payload()
         record = _derivative_record(ctx, version_id, spec, spec_hash, envelope, None, status="FAILED", error=payload)
@@ -182,7 +232,39 @@ class MediaProcessingService(CoreService):
                 after_ref={"error": payload},
                 correlation_id=ctx.request_id,
             )
+            self._finish_run(
+                conn,
+                ctx,
+                run_id,
+                status="FAILED",
+                failure_kind=error.failure.kind,
+                failure_reason=error.failure.operator_message,
+            )
         return ProcessingOutcome(derivative_id, "failed", 0, error=payload)
+
+    def _finish_run(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        run_id: str,
+        *,
+        status: str,
+        media_derivative_id: str | None = None,
+        failure_kind: str | None = None,
+        failure_reason: str | None = None,
+    ) -> None:
+        # The run is operations evidence committed alongside the domain outcome; it never
+        # substitutes for it (the COMMITTED derivative is the only serving truth).
+        self.media_derivative_repository.complete_media_run(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            media_processing_run_id=run_id,
+            status=status,
+            finished_at=_now(),
+            media_derivative_id=media_derivative_id,
+            failure_kind=failure_kind,
+            failure_reason=failure_reason,
+        )
 
     def _emit_events(
         self,

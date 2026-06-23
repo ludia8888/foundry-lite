@@ -2,11 +2,20 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, insert, select
+from sqlalchemy import and_, desc, insert, select
 from sqlalchemy.engine import Engine
 
-from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord, MediaDerivativeRecord
-from foundry_lite.application.state_transitions import MEDIA_DERIVATIVE_COMMITTED, MEDIA_DERIVATIVE_FAILED
+from foundry_lite.application.ports.media_derivative_repository import (
+    ContentUnitRecord,
+    MediaDerivativeRecord,
+    MediaProcessingRunRecord,
+)
+from foundry_lite.application.state_transitions import (
+    MEDIA_DERIVATIVE_COMMITTED,
+    MEDIA_DERIVATIVE_FAILED,
+    MEDIA_RUN_FAILED,
+    MEDIA_RUN_SUCCEEDED,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
@@ -56,6 +65,80 @@ class SqlAlchemyMediaDerivativeRepository:
             transaction.execute(select(db.media_derivatives).where(db.media_derivatives.c.id.in_(ids))).mappings().all()
         )
         return [_derivative_from_row(row) for row in rows]
+
+    # -- processing runs (L0 Operations surface) -------------------------------
+
+    def create_media_run(self, *, transaction: Any, record: MediaProcessingRunRecord) -> MediaProcessingRunRecord:
+        transaction.execute(insert(db.media_processing_runs).values(tenant_id=record.tenant_id, **_run_values(record)))
+        return record
+
+    def complete_media_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        media_processing_run_id: str,
+        status: str,
+        finished_at: str,
+        media_derivative_id: str | None = None,
+        failure_kind: str | None = None,
+        failure_reason: str | None = None,
+    ) -> MediaProcessingRunRecord | None:
+        transition = MEDIA_RUN_SUCCEEDED if status == "SUCCEEDED" else MEDIA_RUN_FAILED
+        cas_status_update(
+            transaction,
+            db.media_processing_runs,
+            tenant_id=tenant_id,
+            row_id=media_processing_run_id,
+            transition=transition,
+            values={
+                "finished_at": finished_at,
+                "media_derivative_id": media_derivative_id,
+                "failure_kind": failure_kind,
+                "failure_reason": failure_reason,
+            },
+        )
+        return self._run_by_id(transaction, tenant_id, media_processing_run_id)
+
+    def get_media_runs(self, *, transaction: Any, ids: list[str]) -> list[MediaProcessingRunRecord]:
+        if not ids:
+            return []
+        rows = (
+            transaction.execute(select(db.media_processing_runs).where(db.media_processing_runs.c.id.in_(ids)))
+            .mappings()
+            .all()
+        )
+        return [_run_from_row(row) for row in rows]
+
+    def list_media_runs(
+        self, *, transaction: Any, tenant_id: str, source_media_item_version_id: str | None = None, limit: int = 50
+    ) -> list[MediaProcessingRunRecord]:
+        conditions = [db.media_processing_runs.c.tenant_id == tenant_id]
+        if source_media_item_version_id is not None:
+            conditions.append(db.media_processing_runs.c.source_media_item_version_id == source_media_item_version_id)
+        rows = (
+            transaction.execute(
+                select(db.media_processing_runs)
+                .where(and_(*conditions))
+                .order_by(desc(db.media_processing_runs.c.created_at), desc(db.media_processing_runs.c.id))
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [_run_from_row(row) for row in rows]
+
+    def _run_by_id(self, transaction: Any, tenant_id: str, run_id: str) -> MediaProcessingRunRecord | None:
+        row = (
+            transaction.execute(
+                select(db.media_processing_runs).where(
+                    and_(db.media_processing_runs.c.tenant_id == tenant_id, db.media_processing_runs.c.id == run_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return _run_from_row(row) if row else None
 
     def commit_derivative(
         self, *, transaction: Any, tenant_id: str, media_derivative_id: str, committed_at: str
@@ -191,6 +274,41 @@ class SqlAlchemyMediaDerivativeRepository:
             .first()
         )
         return row is not None
+
+
+def _run_values(record: MediaProcessingRunRecord) -> dict[str, object | None]:
+    return {
+        "id": record.media_processing_run_id,
+        "source_media_item_version_id": record.source_media_item_version_id,
+        "processor_name": record.processor_name,
+        "derivative_kind": record.derivative_kind,
+        "processing_spec_hash": record.processing_spec_hash,
+        "status": record.status,
+        "media_derivative_id": record.media_derivative_id,
+        "failure_kind": record.failure_kind,
+        "failure_reason": record.failure_reason,
+        "started_at": record.started_at,
+        "finished_at": record.finished_at,
+        "created_at": record.created_at,
+    }
+
+
+def _run_from_row(row: Any) -> MediaProcessingRunRecord:
+    return MediaProcessingRunRecord(
+        media_processing_run_id=str(row["id"]),
+        tenant_id=str(row["tenant_id"]),
+        source_media_item_version_id=str(row["source_media_item_version_id"]),
+        processor_name=str(row["processor_name"]),
+        derivative_kind=str(row["derivative_kind"]),
+        processing_spec_hash=str(row["processing_spec_hash"]),
+        status=str(row["status"]),
+        media_derivative_id=str(row["media_derivative_id"]) if row["media_derivative_id"] is not None else None,
+        failure_kind=str(row["failure_kind"]) if row["failure_kind"] is not None else None,
+        failure_reason=str(row["failure_reason"]) if row["failure_reason"] is not None else None,
+        started_at=str(row["started_at"]),
+        finished_at=str(row["finished_at"]) if row["finished_at"] is not None else None,
+        created_at=str(row["created_at"]),
+    )
 
 
 def _derivative_values(record: MediaDerivativeRecord) -> dict[str, object | None]:

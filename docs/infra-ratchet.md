@@ -561,6 +561,23 @@ ratchet at a time, each adding at most one new external failure domain.
 replace_domain_commit`, retention purge, and external-writeback compensation stay deferred —
   their proof surfaces (a media Temporal workflow / purge engine / real connector) do not exist yet.
 
+The **L-series** closes those deferrals — turning the seams into real engines and the
+missing proof surfaces into evidence, so the media families can finally be promoted to
+`active-covered`:
+
+- **L0 — Media Operations / run surface (shipped):** a `media_processing_runs` table +
+  repository (on the existing `MediaDerivativeRepository`) record every processing attempt as
+  RUNNING → SUCCEEDED/FAILED, with the typed `failure_kind`/`failure_reason` as durable
+  **operator evidence**; `MediaProcessingService` opens the run, then marks it SUCCEEDED (with the
+  committed derivative id) or FAILED **in the same transaction as the derivative/audit outcome**,
+  and exposes `list_media_runs` / `media_run_detail` on the `MediaWorkspace` facade so a failed
+  attempt is visible to an operator. The run row is operations evidence, **never serving truth** —
+  a FAILED/RUNNING run never makes an uncommitted derivative resolvable, and run status never
+  substitutes for the COMMITTED derivative (this is the surface the deferred
+  `workflow_status_does_not_replace_domain_commit` rule will be proven against once the media
+  Temporal workflow lands at L5). This is the foundation for the `operator-evidence` proof class
+  that active-covered promotion requires.
+
 Media processing will be the first product-driven Temporal use case (M2). A media
 family becomes `active-covered` only when its proof-class tests collect and it is
 registered in `infra-tricky-matrix.json` `families`/`activeStack`; until then it

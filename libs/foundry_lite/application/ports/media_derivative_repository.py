@@ -58,8 +58,69 @@ class ContentUnitRecord:
     created_at: str = ""
 
 
+@dataclass(frozen=True)
+class MediaProcessingRunRecord:
+    """One media-processing attempt as durable operator evidence (L0 Operations surface).
+
+    ``status`` is RUNNING -> SUCCEEDED/FAILED. This row records that an attempt happened and
+    how it ended; it is NEVER serving truth — only a COMMITTED derivative is (invariant
+    ``workflow_status_does_not_replace_domain_commit``). On success it points at the committed
+    derivative; on failure it carries the typed failure_kind/reason an operator can act on.
+    """
+
+    media_processing_run_id: str
+    tenant_id: str
+    source_media_item_version_id: str
+    processor_name: str
+    derivative_kind: str
+    processing_spec_hash: str
+    status: str
+    started_at: str
+    created_at: str
+    media_derivative_id: str | None = None
+    failure_kind: str | None = None
+    failure_reason: str | None = None
+    finished_at: str | None = None
+
+
 class MediaDerivativeRepository(Protocol):
     """DB boundary for media derivatives + content units. CAS / uniqueness / durable-row only."""
+
+    def create_media_run(
+        self, *, transaction: TransactionContext, record: MediaProcessingRunRecord
+    ) -> MediaProcessingRunRecord:
+        """Insert a RUNNING processing-run row (operator evidence)."""
+        ...
+
+    def complete_media_run(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        media_processing_run_id: str,
+        status: str,
+        finished_at: str,
+        media_derivative_id: str | None = None,
+        failure_kind: str | None = None,
+        failure_reason: str | None = None,
+    ) -> MediaProcessingRunRecord | None:
+        """Transition a run RUNNING -> SUCCEEDED/FAILED with its outcome evidence."""
+        ...
+
+    def get_media_runs(self, *, transaction: TransactionContext, ids: list[str]) -> list[MediaProcessingRunRecord]:
+        """Return processing-run rows for the given ids (batch-first)."""
+        ...
+
+    def list_media_runs(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        source_media_item_version_id: str | None = None,
+        limit: int = 50,
+    ) -> list[MediaProcessingRunRecord]:
+        """Return tenant-scoped processing runs newest-first (bounded), for the Operations surface."""
+        ...
 
     def create_derivative_or_get_existing(
         self, *, transaction: TransactionContext, record: MediaDerivativeRecord
