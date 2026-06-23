@@ -977,6 +977,31 @@ media_reference_bindings = Table(
 )
 
 
+# Operations/run surface for media processing (L0). One row per processing attempt:
+# RUNNING -> SUCCEEDED/FAILED, carrying typed failure evidence so an operator can see a
+# failed attempt (the operator-evidence proof class). This row is orchestration/operations
+# evidence, NEVER serving truth — the COMMITTED derivative + DB remain the only success
+# signal (invariant workflow_status_does_not_replace_domain_commit); a FAILED/RUNNING run
+# never makes an uncommitted derivative visible. Mirrors index_runs / transform_runs.
+media_processing_runs = Table(
+    "media_processing_runs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("source_media_item_version_id", String, nullable=False),
+    Column("processor_name", String, nullable=False),
+    Column("derivative_kind", String, nullable=False),
+    Column("processing_spec_hash", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("media_derivative_id", String),
+    Column("failure_kind", String),
+    Column("failure_reason", String),
+    Column("started_at", String, nullable=False),
+    Column("finished_at", String),
+    Column("created_at", String, nullable=False),
+)
+
+
 def tenant_rls_tables() -> tuple[Table, ...]:
     return tuple(table for table in metadata.sorted_tables if "tenant_id" in table.c)
 

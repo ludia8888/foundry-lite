@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import BinaryIO
 
 from foundry_lite.application.ports.content_index import ContentSearchHit, HybridContentQuery
-from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRecord
+from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRecord, MediaProcessingRunRecord
 from foundry_lite.application.ports.media_processor import ProcessorSpec
 from foundry_lite.application.ports.media_reference_binding_repository import MediaReferenceBindingRecord
 from foundry_lite.application.ports.media_repository import MediaItemVersionRecord, MediaReference, MediaSetRecord
@@ -117,6 +117,16 @@ class MediaWorkspace:
 
     def sweep_orphan_derivatives(self, ctx: RequestContext, *, older_than: str) -> list[str]:
         return self._media.processing.sweep_orphan_derivatives(ctx, older_than=older_than)
+
+    def list_media_runs(
+        self, ctx: RequestContext, *, source_media_item_version_id: str | None = None, limit: int = 50
+    ) -> list[MediaProcessingRunRecord]:
+        return self._media.processing.list_media_runs(
+            ctx, source_media_item_version_id=source_media_item_version_id, limit=limit
+        )
+
+    def media_run_detail(self, ctx: RequestContext, *, media_processing_run_id: str) -> MediaProcessingRunRecord:
+        return self._media.processing.media_run_detail(ctx, media_processing_run_id=media_processing_run_id)
 
     def configure_content_generation(self, ctx: RequestContext, *, generation: str) -> None:
         self._media.indexing.configure(ctx, generation=generation)

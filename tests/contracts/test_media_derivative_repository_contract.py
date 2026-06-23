@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord, MediaDerivativeRecord
+from foundry_lite.application.ports.media_derivative_repository import (
+    ContentUnitRecord,
+    MediaDerivativeRecord,
+    MediaProcessingRunRecord,
+)
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository
 from sqlalchemy import create_engine
@@ -117,6 +121,68 @@ def test_content_units_insert_dedups_and_reads_in_order(
     assert inserted == 2
     assert replay == 0
     assert [unit.ordinal for unit in units] == [0, 1]
+
+
+def _run(
+    run_id: str, *, version_id: str = "miv-1", created_at: str = "2026-06-24T00:00:00Z"
+) -> MediaProcessingRunRecord:
+    return MediaProcessingRunRecord(
+        media_processing_run_id=run_id,
+        tenant_id="tenant-demo",
+        source_media_item_version_id=version_id,
+        processor_name="ocr_v1",
+        derivative_kind="ocr_v1",
+        processing_spec_hash="spec-1",
+        status="RUNNING",
+        started_at=created_at,
+        created_at=created_at,
+    )
+
+
+def test_media_run_lifecycle_create_complete_and_list(
+    derivative_repo: tuple[SqlAlchemyMediaDerivativeRepository, Engine],
+) -> None:
+    repo, engine = derivative_repo
+    with engine.begin() as conn:
+        repo.create_media_run(transaction=conn, record=_run("mrun-1", created_at="2026-06-24T00:00:00Z"))
+        repo.create_media_run(transaction=conn, record=_run("mrun-2", created_at="2026-06-24T01:00:00Z"))
+        done = repo.complete_media_run(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_processing_run_id="mrun-1",
+            status="SUCCEEDED",
+            finished_at="2026-06-24T00:05:00Z",
+            media_derivative_id="mder-1",
+        )
+        failed = repo.complete_media_run(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_processing_run_id="mrun-2",
+            status="FAILED",
+            finished_at="2026-06-24T01:05:00Z",
+            failure_kind="validation",
+            failure_reason="encrypted_pdf",
+        )
+        listed = repo.list_media_runs(transaction=conn, tenant_id="tenant-demo")
+        fetched = repo.get_media_runs(transaction=conn, ids=["mrun-1"])
+
+    assert done is not None and done.status == "SUCCEEDED" and done.media_derivative_id == "mder-1"
+    assert failed is not None and failed.failure_kind == "validation" and failed.failure_reason == "encrypted_pdf"
+    # newest-first by created_at
+    assert [run.media_processing_run_id for run in listed] == ["mrun-2", "mrun-1"]
+    assert [run.media_processing_run_id for run in fetched] == ["mrun-1"]
+
+
+def test_list_media_runs_filters_by_version_and_tenant(
+    derivative_repo: tuple[SqlAlchemyMediaDerivativeRepository, Engine],
+) -> None:
+    repo, engine = derivative_repo
+    with engine.begin() as conn:
+        repo.create_media_run(transaction=conn, record=_run("mrun-a", version_id="miv-1"))
+        repo.create_media_run(transaction=conn, record=_run("mrun-b", version_id="miv-2"))
+        scoped = repo.list_media_runs(transaction=conn, tenant_id="tenant-demo", source_media_item_version_id="miv-2")
+
+    assert [run.media_processing_run_id for run in scoped] == ["mrun-b"]
 
 
 def test_fetch_unreachable_staged_derivatives_finds_old_staged(
