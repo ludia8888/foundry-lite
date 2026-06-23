@@ -342,6 +342,8 @@ run_runtime_gate() {
 
   run_runtime_step "Debezium live CDC ratchet" pnpm --silent quality:cdc-live-debezium
 
+  run_runtime_step "Media live OCR ratchet" pnpm --silent quality:media-live-ocr
+
   run_runtime_step "S3 storage ratchet" pnpm --silent quality:s3-storage
 
   run_runtime_step "Iceberg storage ratchet" pnpm --silent quality:iceberg

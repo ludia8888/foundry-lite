@@ -578,6 +578,22 @@ missing proof surfaces into evidence, so the media families can finally be promo
   Temporal workflow lands at L5). This is the foundation for the `operator-evidence` proof class
   that active-covered promotion requires.
 
+- **L1 — Real Tesseract OCR (shipped):** the `OcrProcessorAdapter` injectable engine seam now
+  has a real implementation — `_tesseract_ocr_engine` lazily imports `pytesseract` + Pillow,
+  opens the image, and runs `image_to_string`, so the `ocr-tesseract` profile in
+  `local_runtime` finally OCRs for real (the in-process default still raises
+  `ocr_engine_unavailable` so the deterministic fake-injected unit tests stay covered). A
+  PIL/Tesseract decode error becomes a typed `undecodable_image` **validation** failure.
+  `tests/integration/test_media_ocr_live.py` proves both shapes against a system Tesseract
+  binary (installed in the `quality_coverage`/`quality_flaky`/`quality_runtime` CI jobs and
+  invoked by `pnpm quality:media-live-ocr`): the **normal path** (a rendered "HELLO FOUNDRY"
+  PNG → `ocr_v1` derivative + content units commit with the recognized text, a SUCCEEDED
+  `media_processing_runs` row, then projection + search returns the doc) and **operator
+  evidence** (an undecodable image records a FAILED run with `failure_kind == validation`
+  visible through `list_media_runs`/`media_run_detail`, with no derivative committed). No
+  family promotion happens at L1 — `infra-tricky-matrix.json` is untouched; promotion is the
+  L9 capstone.
+
 Media processing will be the first product-driven Temporal use case (M2). A media
 family becomes `active-covered` only when its proof-class tests collect and it is
 registered in `infra-tricky-matrix.json` `families`/`activeStack`; until then it
