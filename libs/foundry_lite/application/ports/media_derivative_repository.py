@@ -105,6 +105,16 @@ class MediaDerivativeRepository(Protocol):
         """Return the content units a derivative produced, ordered by ordinal."""
         ...
 
+    def get_content_units_by_ids(self, *, transaction: TransactionContext, ids: list[str]) -> list[ContentUnitRecord]:
+        """Return content units for the given ids (batch-first; authoritative truth re-read)."""
+        ...
+
+    def get_committed_content_units_for_versions(
+        self, *, transaction: TransactionContext, tenant_id: str, source_media_item_version_ids: list[str]
+    ) -> list[ContentUnitRecord]:
+        """Return committed content units for the given source versions (rebuild-from-truth)."""
+        ...
+
     def fetch_unreachable_staged_derivatives(
         self, *, transaction: TransactionContext, tenant_id: str, older_than: str
     ) -> list[MediaDerivativeRecord]:

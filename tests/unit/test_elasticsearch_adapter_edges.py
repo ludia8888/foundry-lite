@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import foundry_lite.infrastructure.adapters.elasticsearch_search as elasticsearch_module
+import foundry_lite.infrastructure.adapters.es_client as es_client_module
 import pytest
 from foundry_lite.application.ports.search_adapter import SearchIndexMapping, SearchQuery
 from foundry_lite.infrastructure.adapters import ElasticsearchAdapter, ElasticsearchAdapterConfig
@@ -43,7 +44,7 @@ def test_elasticsearch_lazy_client_uses_configured_auth_and_timeout(monkeypatch:
             calls.append(kwargs)
 
     monkeypatch.setattr(
-        elasticsearch_module.importlib,
+        es_client_module.importlib,
         "import_module",
         lambda name: SimpleNamespace(Elasticsearch=FakeElasticsearch),
     )

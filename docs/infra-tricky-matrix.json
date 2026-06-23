@@ -948,13 +948,11 @@
     },
     "content_unit_artifact_is_truth_search_index_is_projection": {
       "description": "Committed content-unit artifacts are the truth; the content search index is a rebuildable projection.",
-      "status": "deferred",
-      "deferral": {
-        "reason": "Content units and the content index land in the lexical-search PR (M3); the ContentRetrievalService/ContentIndexAdapter contracts anchor this rule in PR1.",
-        "riskTier": "T0",
-        "futureTest": "test_content_index_rebuilds_from_committed_artifacts",
-        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
-      }
+      "status": "enforced",
+      "tests": [
+        "test_content_index_rebuilds_from_committed_artifacts",
+        "test_retrieval_drops_citation_hash_mismatch"
+      ]
     },
     "embedding_artifact_pins_model_version_and_chunk_spec": {
       "description": "An embedding artifact pins its embedding model version and chunk spec; index mismatch fails closed.",

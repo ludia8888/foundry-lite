@@ -22,6 +22,7 @@ from foundry_lite.application.ports import (
     TransformRepository,
 )
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
+from foundry_lite.application.ports.content_index import ContentIndexAdapter
 from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
@@ -67,6 +68,7 @@ class CoreDependencies:
     dataset_storage: DatasetStorageAdapter
     media_storage: MediaStorageAdapter
     media_processor: MediaProcessorAdapter
+    content_index_adapter: ContentIndexAdapter
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
     stream_adapter: StreamAdapter

@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-import importlib
 import re
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Protocol, cast
 
 from foundry_lite.application.ports.adapter_failure import (
     AdapterError,
-    AdapterFailure,
     AdapterFailureContract,
-    AdapterFailureKind,
     AdapterFailureMode,
 )
 from foundry_lite.application.ports.search_adapter import (
@@ -23,6 +20,7 @@ from foundry_lite.application.ports.search_adapter import (
     SearchIndexMapping,
     SearchQuery,
 )
+from foundry_lite.infrastructure.adapters.es_client import build_es_client, classify_es_error
 
 INDEX_TOKEN_PATTERN = re.compile(r"[^a-z0-9_-]+")
 _RESOURCE_ALREADY_EXISTS = "resource_already_exists_exception"
@@ -177,17 +175,16 @@ class ElasticsearchAdapter:
 
 
 def _build_client(config: ElasticsearchAdapterConfig) -> ElasticsearchClientLike:
-    module = importlib.import_module("elasticsearch")
-    client_type = cast(Callable[..., object], module.Elasticsearch)
-    auth = (config.username, config.password) if config.username and config.password else None
-    client = client_type(
-        hosts=[config.endpoint],
-        basic_auth=auth,
-        request_timeout=config.request_timeout_seconds,
-        retry_on_timeout=True,
-        max_retries=config.max_retries,
+    return cast(
+        ElasticsearchClientLike,
+        build_es_client(
+            endpoint=config.endpoint,
+            username=config.username,
+            password=config.password,
+            request_timeout_seconds=config.request_timeout_seconds,
+            max_retries=config.max_retries,
+        ),
     )
-    return cast(ElasticsearchClientLike, client)
 
 
 def _is_already_exists(exc: Exception) -> bool:
@@ -195,46 +192,7 @@ def _is_already_exists(exc: Exception) -> bool:
     return _RESOURCE_ALREADY_EXISTS in str(getattr(exc, "body", "")) or _RESOURCE_ALREADY_EXISTS in str(exc)
 
 
-def _classify_es_error(profile: str, operation: str, exc: Exception) -> AdapterError:
-    """Map an Elasticsearch transport/API exception to a typed, classified AdapterError."""
-    transport = importlib.import_module("elastic_transport")
-    kind, retryable, timeout = _es_failure_kind(transport, exc)
-    return AdapterError(
-        AdapterFailure(
-            adapter_profile=profile,
-            operation=operation,
-            kind=kind,
-            is_retryable=retryable,
-            operator_message=f"Elasticsearch {operation} failed ({kind}): {exc}",
-            timeout_seconds=timeout,
-            details={"exceptionType": type(exc).__name__},
-        )
-    )
-
-
-def _es_failure_kind(transport: object, exc: Exception) -> tuple[AdapterFailureKind, bool, int | None]:
-    connection_timeout = getattr(transport, "ConnectionTimeout", ())
-    connection_error = getattr(transport, "ConnectionError", ())
-    api_error = getattr(transport, "ApiError", ())
-    if isinstance(exc, connection_timeout):
-        return "timeout", True, 30
-    if isinstance(exc, api_error):
-        return _api_error_kind(exc)
-    if isinstance(exc, connection_error):
-        # Connection refused / DNS / TLS — the cluster is unreachable, not wrong.
-        return "unavailable", True, None
-    return "unknown", False, None
-
-
-def _api_error_kind(exc: Exception) -> tuple[AdapterFailureKind, bool, int | None]:
-    status = getattr(getattr(exc, "meta", None), "status", None)
-    if status == 429:
-        return "rate_limited", True, None
-    if isinstance(status, int) and status >= 500:
-        return "unavailable", True, None
-    if status == 409:
-        return "conflict", False, None
-    return "validation", False, None
+_classify_es_error = classify_es_error
 
 
 def _index_token(value: str) -> str:

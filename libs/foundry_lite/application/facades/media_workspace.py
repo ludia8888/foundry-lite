@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import BinaryIO
 
+from foundry_lite.application.ports.content_index import ContentSearchHit, HybridContentQuery
 from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRecord
 from foundry_lite.application.ports.media_processor import ProcessorSpec
 from foundry_lite.application.ports.media_repository import MediaSetRecord
 from foundry_lite.application.services.media.catalog import MediaSetSpec
+from foundry_lite.application.services.media.indexing import IndexingOutcome
 from foundry_lite.application.services.media.processing import ProcessingOutcome
 from foundry_lite.application.services.media.references import ResolvedMediaReference
 from foundry_lite.application.services.media.transactions import MediaCommitResult
@@ -112,3 +114,24 @@ class MediaWorkspace:
 
     def sweep_orphan_derivatives(self, ctx: RequestContext, *, older_than: str) -> list[str]:
         return self._media.processing.sweep_orphan_derivatives(ctx, older_than=older_than)
+
+    def configure_content_generation(self, ctx: RequestContext, *, generation: str) -> None:
+        self._media.indexing.configure(ctx, generation=generation)
+
+    def index_derivative(self, ctx: RequestContext, *, media_derivative_id: str, generation: str) -> IndexingOutcome:
+        return self._media.indexing.index_derivative(
+            ctx, media_derivative_id=media_derivative_id, generation=generation
+        )
+
+    def rebuild_content_index(
+        self, ctx: RequestContext, *, generation: str, source_media_item_version_ids: list[str]
+    ) -> IndexingOutcome:
+        return self._media.indexing.rebuild(
+            ctx, generation=generation, source_media_item_version_ids=source_media_item_version_ids
+        )
+
+    def promote_content_generation(self, ctx: RequestContext, *, expected_active: str, generation: str) -> None:
+        self._media.indexing.promote(ctx, expected_active=expected_active, generation=generation)
+
+    def search_content(self, ctx: RequestContext, *, query: HybridContentQuery) -> list[ContentSearchHit]:
+        return self._media.retrieval.search_content(ctx, query=query)

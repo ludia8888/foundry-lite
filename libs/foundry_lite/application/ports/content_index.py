@@ -13,11 +13,31 @@ class ContentIndexSchema:
 
 
 @dataclass(frozen=True)
+class IndexedContentUnit:
+    """One content unit projected into the index, with the citation it must return.
+
+    ``version`` is monotonic per source version so a stale re-index never overwrites a
+    newer projection (version-guarded upsert). The index stores only the projection; the
+    DB content_units row remains the authoritative truth re-read at retrieval time.
+    """
+
+    tenant_id: str
+    content_unit_id: str
+    source_media_item_version_id: str
+    text: str
+    text_hash: str
+    version: int = 0
+    page_number: int | None = None
+    start_ms: int | None = None
+    end_ms: int | None = None
+
+
+@dataclass(frozen=True)
 class ContentIndexBatch:
     """A batch of content units to upsert into one index generation."""
 
     generation: str
-    units: tuple[object, ...] = ()
+    units: tuple[IndexedContentUnit, ...] = ()
 
 
 @dataclass(frozen=True)

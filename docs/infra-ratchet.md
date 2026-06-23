@@ -476,9 +476,16 @@ ratchet at a time, each adding at most one new external failure domain.
   orphan sweep all ship and are tested. The Temporal workflow wrapper + `infra-tricky-matrix`
   active-covered family (operator-evidence proof) are deferred with M1 until a media
   Operations/run surface exists; `derivatives_inherit_source_security` is now `enforced`.
-- **M3 — Content units + Elasticsearch lexical projection:** page/chunk build,
-  version guard, partial bulk failure, rebuild-from-artifacts, stale source
-  version, ACL leakage, citation integrity.
+- **M3 — Content units + Elasticsearch lexical projection (shipped):** a
+  `ContentIndexAdapter` (in-memory local + Elasticsearch, lexical-first) with
+  generation-scoped indexes, version-guarded upserts, partial-bulk-failure reporting,
+  and shadow-then-switch alias promotion; a `MediaIndexingService` that projects
+  committed content units (and rebuilds purely from DB truth); and a
+  `DefaultContentRetrievalService` that re-reads authoritative content units to enforce
+  citation integrity (text_hash match), tenant ACL (no cross-tenant leakage), and stale-
+  source-unit dropping. `content_unit_artifact_is_truth_search_index_is_projection` is
+  now `enforced`. Live-Elasticsearch round-trip + active-covered family (operator-evidence)
+  are deferred with M1/M2 until a media Operations surface exists; dense/hybrid is M8.
 - **M4 — Ontology `MediaReference` + Action-bound upload:** type validation,
   object-query masking, action-success atomic visibility, action-failure orphan,
   same-idempotency-key/different-file fingerprint, old reference after overwrite.
