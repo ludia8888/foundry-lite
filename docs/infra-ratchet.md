@@ -636,6 +636,31 @@ missing proof surfaces into evidence, so the media families can finally be promo
   `failure_kind == validation` visible through `list_media_runs`/`media_run_detail`, with no
   derivative committed). No family promotion happens at L3 — `infra-tricky-matrix.json` is
   untouched; promotion is the L9 capstone.
+- **L4 — Real embeddings + semantic/hybrid search (shipped):** the M8 `LocalEmbeddingAdapter`
+  injectable embedding-engine seam now has a real implementation — `_fastembed_embedding_engine`
+  builds a fastembed `TextEmbedding("BAAI/bge-small-en-v1.5")` ONNX model once (module-level
+  cache, onnxruntime — **no torch**) and returns one 384-dim `EmbeddingVector` per text. fastembed
+  downloads the model to `~/.cache/huggingface` on first use (cached/pre-fetched in CI like the
+  Whisper model), so the in-process default still raises `embedding_model_unavailable`, keeping
+  the M8 deterministic fake-injected unit tests covered. `local_runtime` now wires
+  `LocalEmbeddingAdapter(embedding_engine=_fastembed_embedding_engine, model_version="bge-small-en-v1.5")`
+  so the composed runtime does REAL dense + hybrid retrieval (`is_available` True), with the model
+  version pinned into each index generation (a model upgrade re-projects rather than silently
+  mixing vector spaces — the same `nearestNeighbors(...)`-with-pinned-model contract Palantir
+  Foundry "Text → Embeddings" uses, reusing the Elasticsearch vector capability).
+  `tests/integration/test_media_embeddings_live.py` (`pnpm quality:media-live-embeddings`, model
+  pre-fetched in the `quality_coverage`/`quality_flaky`/`quality_runtime` CI jobs) proves three
+  shapes with the real model: **real semantic ranking** (three committed docs — dog/car/plant —
+  projected via the real `MediaIndexingService`; the query "puppy and canine pets" — which shares
+  NO lexical token with "A golden retriever is a friendly dog breed." — ranks the dog doc FIRST
+  through `DefaultContentRetrievalService`, so only the dense path can drive it; cosine ≈ 0.718 dog
+  vs ≈ 0.43/0.49 car/plant), **model-version pinning fail-closed** (a real query vector carrying a
+  different `embedding_model_version` raises a typed `conflict`, no silent vector-space mix), and
+  **live Elasticsearch dense_vector** (the real-embedding content units are indexed into a LIVE
+  Elasticsearch `dense_vector` index via testcontainers and the same semantic query ranks the dog
+  doc first through `ElasticsearchContentIndexAdapter`'s real `script_score` cosine similarity). No
+  family promotion happens at L4 — `infra-tricky-matrix.json` is untouched; promotion is the L9
+  capstone.
 
 Media processing will be the first product-driven Temporal use case (M2). A media
 family becomes `active-covered` only when its proof-class tests collect and it is

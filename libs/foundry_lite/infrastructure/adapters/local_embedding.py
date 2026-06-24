@@ -11,6 +11,8 @@ is False the indexing/retrieval services stay lexical-only.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from importlib import import_module
+from typing import Any
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.embedding_model import (
@@ -20,13 +22,38 @@ from foundry_lite.application.ports.embedding_model import (
 )
 
 _DEFAULT_MODEL_VERSION = "local-v0"
+# Real engine (L4): the fastembed BAAI/bge-small-en-v1.5 ONNX model (384-dim, no torch).
+# The version string is pinned into the index generation so a model upgrade re-projects.
+_FASTEMBED_MODEL_NAME = "BAAI/bge-small-en-v1.5"
+FASTEMBED_MODEL_VERSION = "bge-small-en-v1.5"
 
 
 def _default_embedding_engine(texts: Sequence[str]) -> Sequence[EmbeddingVector]:
-    # No embedding model is bundled; a real profile injects one (live embeddings deferred,
-    # mirroring the live-OCR / live-ES deferral). The injectable seam is what M8 proves.
+    # No embedding model is bundled by default; a real profile injects one. The injectable
+    # seam is what M8 proves; L4 wires `_fastembed_embedding_engine` into the composed runtime.
     del texts
     raise EmbeddingModelError("embedding_model_unavailable")
+
+
+_fastembed_model: Any | None = None
+
+
+def _load_fastembed_model() -> Any:
+    # Build the ONNX model lazily/once (module-level cache) so repeated calls don't reload
+    # the weights. fastembed downloads the model from HuggingFace on first use (cached in
+    # ~/.cache/huggingface), like faster-whisper, and uses onnxruntime (no torch).
+    global _fastembed_model
+    if _fastembed_model is None:
+        fastembed_module = import_module("fastembed")
+        _fastembed_model = fastembed_module.TextEmbedding(_FASTEMBED_MODEL_NAME)
+    return _fastembed_model
+
+
+def _fastembed_embedding_engine(texts: Sequence[str]) -> list[EmbeddingVector]:
+    # Real engine (L4): lazily import fastembed so the module has no import-time ML dependency.
+    # Returns one 384-dim vector per text, in order, as an `EmbeddingVector` (tuple[float, ...]).
+    model = _load_fastembed_model()
+    return [tuple(vector.tolist()) for vector in model.embed(list(texts))]
 
 
 class LocalEmbeddingAdapter:

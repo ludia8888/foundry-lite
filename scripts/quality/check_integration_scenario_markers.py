@@ -33,6 +33,7 @@ ADDITIONAL_SCENARIOS = {
     "media-ocr": "real Tesseract OCR live: image -> ocr_v1 -> index -> search + FAILED run operator-evidence",
     "media-asr": "real faster-whisper ASR live: audio -> asr_v1 -> index -> search + FAILED run operator-evidence",
     "media-video": "real ffprobe video live: video -> video_probe metadata + audio -> asr_v1 -> search + FAILED run",
+    "media-embeddings": "real fastembed embeddings: semantic query ranks via dense vectors (local + ES) + fail-closed",
 }
 KNOWN_SCENARIOS = {**REQUIRED_SCENARIOS, **ADDITIONAL_SCENARIOS}
 
