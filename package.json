@@ -12,6 +12,7 @@
     "ci:gate:e2e": "bash scripts/ci_gate.sh e2e",
     "ci:gate:release": "bash scripts/ci_gate.sh release",
     "dev": "PYTHONPATH=.:libs:apps/api:apps/cli uv run python -m foundry_lite_api.main",
+    "demo:media-multimodal": "PYTHONPATH=.:libs uv run python examples/media-multimodal-demo/run.py",
     "demo:supply-chain": "PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m foundry_lite_cli.main demo run-supply-chain",
     "demo:supply-chain:fake-storage": "rm -rf .foundry-lite-fake-smoke && FOUNDRY_LITE_HOME=.foundry-lite-fake-smoke PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m foundry_lite_cli.main --adapter-profile fake-storage demo run-supply-chain",
     "sdk:generate": "uv run python scripts/generate_sdk_ts.py",
