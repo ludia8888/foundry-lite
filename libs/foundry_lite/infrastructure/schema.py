@@ -846,6 +846,11 @@ media_item_versions = Table(
     Column("security_envelope", JSON, nullable=False),
     Column("source_ref", JSON),
     Column("status", String, nullable=False),
+    # Retention mark (L7): when a retention policy marks this version as a sweep candidate.
+    # A marked version is purged only after the grace period AND only if it is neither
+    # reachable by a MediaReference binding nor under legal hold (fail-safe).
+    Column("retention_marked_at", String),
+    Column("legal_hold", Boolean, nullable=False, server_default=text("false")),
     Column("created_at", String, nullable=False),
     Column("committed_at", String),
     UniqueConstraint("media_item_id", "version_number", name="uq_media_item_version_number"),

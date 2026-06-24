@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from typing import BinaryIO
 
 from foundry_lite.application.ports.content_index import ContentSearchHit, HybridContentQuery
@@ -12,6 +13,7 @@ from foundry_lite.application.services.media.catalog import MediaSetSpec
 from foundry_lite.application.services.media.indexing import IndexingOutcome
 from foundry_lite.application.services.media.processing import ProcessingOutcome
 from foundry_lite.application.services.media.references import ResolvedMediaReference
+from foundry_lite.application.services.media.retention import RetentionPurgeSummary
 from foundry_lite.application.services.media.transactions import MediaCommitResult
 from foundry_lite.application.services.media.uploads import MediaUploadInput, StagedUpload
 from foundry_lite.application.services.media.virtual_sets import ExternalResolution
@@ -221,3 +223,21 @@ class MediaWorkspace:
 
     def resolve_external_version(self, ctx: RequestContext, *, media_item_version_id: str) -> ExternalResolution:
         return self._media.virtual_sets.resolve_external_version(ctx, media_item_version_id=media_item_version_id)
+
+    def mark_media_versions_for_retention(
+        self, ctx: RequestContext, *, media_item_version_ids: list[str], now: datetime
+    ) -> int:
+        return self._media.retention.mark_media_versions_for_retention(
+            ctx, media_item_version_ids=media_item_version_ids, now=now
+        )
+
+    def place_legal_hold(self, ctx: RequestContext, *, media_item_version_id: str) -> None:
+        self._media.retention.place_legal_hold(ctx, media_item_version_id=media_item_version_id)
+
+    def release_legal_hold(self, ctx: RequestContext, *, media_item_version_id: str) -> None:
+        self._media.retention.release_legal_hold(ctx, media_item_version_id=media_item_version_id)
+
+    def purge_marked_media_versions(
+        self, ctx: RequestContext, *, now: datetime, grace: timedelta
+    ) -> RetentionPurgeSummary:
+        return self._media.retention.purge_marked_media_versions(ctx, now=now, grace=grace)

@@ -10,6 +10,7 @@ from foundry_lite.application.services.media.catalog import MediaCatalogService
 from foundry_lite.application.services.media.indexing import MediaIndexingService
 from foundry_lite.application.services.media.processing import MediaProcessingService
 from foundry_lite.application.services.media.references import MediaReferenceService
+from foundry_lite.application.services.media.retention import MediaRetentionService
 from foundry_lite.application.services.media.retrieval import DefaultContentRetrievalService
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadService
@@ -30,6 +31,7 @@ class MediaServices:
     binding: MediaReferenceBindingService
     access_pattern: MediaAccessPatternService
     virtual_sets: VirtualMediaSetService
+    retention: MediaRetentionService
 
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> MediaServices:
@@ -44,6 +46,7 @@ class MediaServices:
             binding=build_service(MediaReferenceBindingService, dependencies),
             access_pattern=build_service(MediaAccessPatternService, dependencies),
             virtual_sets=build_service(VirtualMediaSetService, dependencies),
+            retention=build_service(MediaRetentionService, dependencies),
         )
 
     def items(self) -> tuple[CoreService, ...]:
@@ -58,4 +61,5 @@ class MediaServices:
             self.binding,
             self.access_pattern,
             self.virtual_sets,
+            self.retention,
         )

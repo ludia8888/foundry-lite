@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, func, insert, select, update
+from sqlalchemy import and_, delete, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.media_repository import (
@@ -270,6 +270,97 @@ class SqlAlchemyMediaRepository:
         )
         return [_media_version_from_row(row) for row in rows]
 
+    # -- L7 retention / legal hold / purge -------------------------------------
+
+    def mark_versions_for_retention(
+        self, *, transaction: Any, tenant_id: str, media_item_version_ids: list[str], marked_at: str
+    ) -> int:
+        if not media_item_version_ids:
+            return 0
+        result = transaction.execute(
+            update(db.media_item_versions)
+            .where(
+                and_(
+                    db.media_item_versions.c.tenant_id == tenant_id,
+                    db.media_item_versions.c.id.in_(media_item_version_ids),
+                )
+            )
+            .values(retention_marked_at=marked_at)
+        )
+        return int(result.rowcount)
+
+    def set_version_legal_hold(
+        self, *, transaction: Any, tenant_id: str, media_item_version_id: str, has_legal_hold: bool
+    ) -> MediaItemVersionRecord | None:
+        transaction.execute(
+            update(db.media_item_versions)
+            .where(
+                and_(
+                    db.media_item_versions.c.tenant_id == tenant_id,
+                    db.media_item_versions.c.id == media_item_version_id,
+                )
+            )
+            .values(legal_hold=has_legal_hold)
+        )
+        return self.media_item_version_by_id(
+            transaction=transaction, tenant_id=tenant_id, media_item_version_id=media_item_version_id
+        )
+
+    def fetch_retention_marked_versions(
+        self, *, transaction: Any, tenant_id: str, marked_before: str
+    ) -> list[MediaItemVersionRecord]:
+        rows = (
+            transaction.execute(
+                select(db.media_item_versions).where(
+                    and_(
+                        db.media_item_versions.c.tenant_id == tenant_id,
+                        db.media_item_versions.c.retention_marked_at.is_not(None),
+                        db.media_item_versions.c.retention_marked_at <= marked_before,
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_media_version_from_row(row) for row in rows]
+
+    def has_reference_binding(self, *, transaction: Any, tenant_id: str, media_item_version_id: str) -> bool:
+        row = (
+            transaction.execute(
+                select(db.media_reference_bindings.c.id).where(
+                    and_(
+                        db.media_reference_bindings.c.tenant_id == tenant_id,
+                        db.media_reference_bindings.c.media_item_version_id == media_item_version_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return row is not None
+
+    def purge_version(self, *, transaction: Any, tenant_id: str, media_item_version_id: str) -> None:
+        # Physical delete of one version's whole derived-data footprint, in the caller's
+        # transaction. Bindings are NOT deleted here — the service refuses to purge a
+        # reachable version, so a bound version never reaches this method.
+        for table in (db.content_units, db.media_derivatives, db.media_access_caches):
+            transaction.execute(
+                delete(table).where(
+                    and_(
+                        table.c.tenant_id == tenant_id,
+                        table.c.source_media_item_version_id == media_item_version_id,
+                    )
+                )
+            )
+        transaction.execute(
+            delete(db.media_item_versions).where(
+                and_(
+                    db.media_item_versions.c.tenant_id == tenant_id,
+                    db.media_item_versions.c.id == media_item_version_id,
+                )
+            )
+        )
+
     # -- private lookups -------------------------------------------------------
 
     def _transaction_by_idempotency(
@@ -454,6 +545,8 @@ def _media_version_values(record: MediaItemVersionRecord) -> dict[str, object | 
         "security_envelope": dict(record.security_envelope),
         "source_ref": dict(record.source_ref) if record.source_ref is not None else None,
         "status": record.status,
+        "retention_marked_at": record.retention_marked_at,
+        "legal_hold": record.has_legal_hold,
         "created_at": record.created_at,
         "committed_at": record.committed_at,
     }
@@ -477,6 +570,8 @@ def _media_version_from_row(row: Any) -> MediaItemVersionRecord:
         security_envelope=cast("dict[str, object]", dict(row["security_envelope"])),
         source_ref=cast("dict[str, object]", dict(row["source_ref"])) if row["source_ref"] is not None else None,
         status=str(row["status"]),
+        retention_marked_at=str(row["retention_marked_at"]) if row["retention_marked_at"] is not None else None,
+        has_legal_hold=bool(row["legal_hold"]),
         created_at=str(row["created_at"]),
         committed_at=str(row["committed_at"]) if row["committed_at"] is not None else None,
     )
