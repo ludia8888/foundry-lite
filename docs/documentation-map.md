@@ -99,6 +99,7 @@ ledger에 남아야 한다.
 | `foundry_lite_python_engineering_guidelines_ko.md`       | `standard`         | Python/backend engineering standards           | 구현 방식, 테스트 기준, anti-pattern을 통제한다.                                                                                                           |
 | `deep-research-report.md`                                | `reference`        | Research context                               | 제품/시장/아키텍처 배경 참고 자료다.                                                                                                                       |
 | `examples/supply-chain-demo/README.md`                   | `example`          | Demo guide                                     | 공급망 데모 실행과 예제 흐름을 설명한다.                                                                                                                   |
+| `examples/media-multimodal-demo/README.md`               | `example`          | Demo guide                                     | 미디어 멀티모달(OCR/ASR/영상/의미검색) 실엔진 데모 실행을 설명한다.                                                                                        |
 
 ## Cross-Check Commands
 
