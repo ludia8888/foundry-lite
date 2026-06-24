@@ -911,3 +911,36 @@ Media/Content Plane (standalone family, not in `activeStack`).
   here (consistent with prior sections). No family promotion happens at L12a; object search stays in the
   existing `elasticsearch` family (`infra-tricky-matrix.json` `families` unchanged except the new
   normal-path proof and the reused rule's test list).
+
+- **L12b — Ontology-anchored unified search (OAG, shipped):** L12a left structured-object search and
+  unstructured-media-content search as two disconnected surfaces; L12b joins them into ONE
+  ontology-anchored unified search that mirrors Palantir's **Ontology-Augmented Generation (OAG)** — a
+  single natural-language query returns ranked **ontology objects** (the result unit is the OBJECT, "OAG
+  retrieves the objects and the data that define them," not a bag of text). `OntologySearchService.search`
+  composes: (a) the object's OWN keyword/structured + L12a semantic match via `ObjectQueryService`
+  (`.filter()` + `.nearestNeighbors().orderByRelevance()` — the documented Object-Set composition), and
+  (b) the unstructured-media match — bge text (L4) + best-effort CLIP visual (L11) over content_units —
+  each carrying its `source_media_item_version_id`. A new reverse media-reference lookup
+  (`MediaReferenceBindingRepository.bindings_for_media_versions`, batched/N+1-safe, tenant-scoped) is the
+  media→object edge: each content hit is **lifted to its owning object** (chunk-object → owning object);
+  a media hit no object references is dropped (the object is the result unit). The two ranked lists fuse
+  via **reciprocal rank fusion** (`score = Σ 1/(RRF_K + rank)`, the documented OAG hybrid technique), so
+  an object matched BOTH by its own properties AND its bound media ranks higher. **Permission is anchored
+  at the object**: every surfaced object is re-read through the object query ACL (`object:read` + masking)
+  and a media hit only lifts to an object the caller may read — cross-tenant content never leaks (the
+  media-content retrieval already re-reads DB truth for text_hash citation + tenant ACL). The
+  embeddings/index stay DERIVED projections; the committed object/media version remains serving truth.
+  This is ADDITIVE — existing object query (keyword/semantic/structured) and media `search_content`/
+  `search_visual` are unchanged. No new env var, no new model (reuses the already-wired bge + CLIP), and
+  **no new source-of-truth rule**: the object-as-truth/permission unit + projection invariants already
+  cover it, and the model-pinned embedding REUSES the enforced
+  `embedding_artifact_pins_model_version_and_chunk_spec` rule. Deterministic unit tests
+  (`tests/unit/test_ontology_unified_search.py`) prove RRF ranking, the both-signals-outrank-one ordering,
+  the unbound-media drop, the unreadable-owner exclusion, and the pure-object / pure-media paths with a
+  reverse-lookup contract test (`tests/contracts/...binding_repository_contract.py`, sqlite + Postgres). A
+  real end-to-end test (`tests/integration/test_ontology_unified_search_live.py`, scenario
+  `ontology-unified-search`) seeds two Orders + a real PDF bound to one Order, processes (pypdf) + projects
+  its content with real fastembed bge, and a single query "cold chain refrigerated truck" returns the
+  OWNING object lifted through the media edge (carrying the content citation) alongside the object matched
+  by its own semantic note. No family change in `infra-tricky-matrix.json` (object/media search stay in
+  their existing families); the new live scenario is registered in the integration-scenario gate.

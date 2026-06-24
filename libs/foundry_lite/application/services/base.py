@@ -47,6 +47,8 @@ CollaboratorMap = Mapping[str, object]
 SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_service": "ActionService",
     "backup_restore_service": "BackupRestoreService",
+    "content_retrieval_service": "DefaultContentRetrievalService",
+    "media_visual_search_service": "MediaVisualSearchService",
     "dataset_ingest_service": "DatasetIngestService",
     "dataset_quality_service": "DatasetQualityService",
     "dataset_registry_service": "DatasetRegistryService",

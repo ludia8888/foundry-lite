@@ -88,7 +88,10 @@ class MediaVisualSearchService(CoreService):
 
     def search_visual(self, ctx: RequestContext, *, text: str, top_k: int = 10) -> list[ContentSearchHit]:
         # Embed the query with the CLIP TEXT tower; match only the dense path (text=None) so a
-        # frame's descriptor never lexically biases the visual ranking.
+        # frame's descriptor never lexically biases the visual ranking. With no CLIP model wired
+        # the path degrades to no hits (default-off), so unified/visual callers stay keyword-safe.
+        if not self.vision_embedding_model_adapter.is_available:
+            return []
         query_vector = self.vision_embedding_model_adapter.embed_query(text)
         query = HybridContentQuery(
             tenant_id=ctx.tenant_id,

@@ -34,6 +34,25 @@ class SqlAlchemyMediaReferenceBindingRepository:
         )
         return _binding_from_row(row) if row else None
 
+    def bindings_for_media_versions(
+        self, *, transaction: Any, tenant_id: str, media_item_version_ids: list[str]
+    ) -> list[MediaReferenceBindingRecord]:
+        if not media_item_version_ids:
+            return []
+        rows = (
+            transaction.execute(
+                select(db.media_reference_bindings).where(
+                    and_(
+                        db.media_reference_bindings.c.tenant_id == tenant_id,
+                        db.media_reference_bindings.c.media_item_version_id.in_(media_item_version_ids),
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_binding_from_row(row) for row in rows]
+
     def create_binding(self, *, transaction: Any, record: MediaReferenceBindingRecord) -> None:
         transaction.execute(
             insert(db.media_reference_bindings).values(tenant_id=record.tenant_id, **_binding_values(record))

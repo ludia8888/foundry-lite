@@ -13,6 +13,7 @@ from foundry_lite.application.ports import (
     ObjectSetQueryResult,
 )
 from foundry_lite.application.services.object_service import ObjectServices
+from foundry_lite.application.services.ontology_search import OntologySearchService, UnifiedSearchHit
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.observability.tracing import trace_public_methods
 
@@ -21,8 +22,23 @@ from foundry_lite.observability.tracing import trace_public_methods
 class ObjectStore:
     """Object bounded context: read, query, link, set, index, and search ontology objects."""
 
-    def __init__(self, objects: ObjectServices) -> None:
+    def __init__(self, objects: ObjectServices, ontology_search: OntologySearchService) -> None:
         self._objects = objects
+        self._ontology_search = ontology_search
+
+    def unified_search(
+        self,
+        ctx: RequestContext,
+        *,
+        query_text: str,
+        object_type: str,
+        filters: Mapping[str, object] | None = None,
+        limit: int = 20,
+    ) -> list[UnifiedSearchHit]:
+        """OAG unified search: ranked ontology objects fusing own + bound-media matches (L12b)."""
+        return self._ontology_search.unified_search(
+            ctx, query_text=query_text, object_type=object_type, filters=filters, limit=limit
+        )
 
     def reindex(self, object_type_api_name: str, *, ctx: RequestContext | None = None) -> ObjectIndexRebuildResult:
         return self._objects.indexing.index_rebuild(object_type_api_name, ctx=ctx)

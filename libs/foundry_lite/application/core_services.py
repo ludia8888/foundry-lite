@@ -10,6 +10,7 @@ from foundry_lite.application.services.demo_service import DemoService
 from foundry_lite.application.services.materialization_service import MaterializationService
 from foundry_lite.application.services.media_service import MediaServices
 from foundry_lite.application.services.object_service import ObjectServices
+from foundry_lite.application.services.ontology_search import OntologySearchService
 from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.application.services.runtime_bundle import (
     BackupRestoreService,
@@ -34,6 +35,7 @@ __all__ = [
     "MaterializationService",
     "MediaServices",
     "ObjectServices",
+    "OntologySearchService",
     "OntologyService",
     "RecordDlqService",
     "RuntimeService",
@@ -62,6 +64,7 @@ class CoreServices:
     media: MediaServices
     object_store: ObjectServices
     ontology: OntologyService
+    ontology_search: OntologySearchService
     record_dlq: RecordDlqService
     runtime: RuntimeService
     transform: TransformService
@@ -86,6 +89,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     media = MediaServices.create(dependencies)
     object_store = ObjectServices.create(dependencies)
     ontology = build_service(OntologyService, dependencies)
+    ontology_search = build_service(OntologySearchService, dependencies)
     record_dlq = build_service(RecordDlqService, dependencies)
     runtime = build_service(RuntimeService, dependencies)
     transform = build_service(TransformService, dependencies)
@@ -102,6 +106,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         media=media,
         object_store=object_store,
         ontology=ontology,
+        ontology_search=ontology_search,
         record_dlq=record_dlq,
         runtime=runtime,
         transform=transform,
@@ -122,6 +127,7 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
         *services.media.items(),
         *services.object_store.items(),
         services.ontology,
+        services.ontology_search,
         services.record_dlq,
         services.runtime,
         services.transform,
@@ -134,6 +140,7 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
         services.demo,
         services.iceberg_maintenance,
         services.materialization,
+        services.media,
         services.object_store,
         services.ontology,
         services.record_dlq,
@@ -152,6 +159,7 @@ def _collaborator_map(
     demo: DemoService,
     iceberg_maintenance: IcebergMaintenanceService,
     materialization: MaterializationService,
+    media: MediaServices,
     object_store: ObjectServices,
     ontology: OntologyService,
     record_dlq: RecordDlqService,
@@ -162,6 +170,8 @@ def _collaborator_map(
     return {
         "action_service": action,
         "backup_restore_service": backup_restore,
+        "content_retrieval_service": media.retrieval,
+        "media_visual_search_service": media.visual_search,
         "dataset_ingest_service": dataset.ingest,
         "dataset_quality_service": dataset.quality,
         "dataset_registry_service": dataset.registry,
