@@ -362,6 +362,8 @@ run_runtime_gate() {
 
   run_runtime_step "Temporal engine integration ratchet" pnpm --silent quality:temporal-engine-integration
 
+  run_runtime_step "Media workflow Temporal ratchet" pnpm --silent quality:media-workflow-temporal
+
   run_runtime_step "External writeback outcome ratchet" pnpm --silent quality:external-writeback
 
   run_runtime_step "Saga reconciliation ratchet" pnpm --silent quality:saga-reconciliation

@@ -14,6 +14,7 @@ result. Activities run outside the sandbox, so real work belongs there.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
@@ -36,6 +37,12 @@ FOUNDRY_WORKFLOW_NAME = "FoundryWorkflow"
 
 #: First product workflow type used by S52 Temporal engine integration.
 CONNECTOR_SYNC_WORKFLOW_NAME = "ConnectorSyncWorkflow"
+
+#: Media processing product workflow type (L5: the first product-driven Temporal use case).
+MEDIA_PROCESSING_WORKFLOW_NAME = "MediaProcessingWorkflow"
+
+#: Activity name the media workflow runs; a worker binds it to a real processing driver.
+MEDIA_PROCESSING_ACTIVITY_NAME = "run_media_processing_step"
 
 #: Bounded activity retry so a permanent failure surfaces instead of looping
 #: forever (a timeout with unbounded retries never completes the workflow).
@@ -92,3 +99,44 @@ class ConnectorSyncWorkflow:
             start_to_close_timeout=timedelta(seconds=60),
             retry_policy=_ACTIVITY_RETRY,
         )
+
+
+@workflow.defn(name=MEDIA_PROCESSING_WORKFLOW_NAME)
+class MediaProcessingWorkflow:
+    """Product workflow that orchestrates one media processing run (L5).
+
+    It only *drives* the work: the activity triggers ``MediaProcessingService.process``,
+    whose atomic DB commit is the sole success signal. This workflow's status is
+    orchestration state — a "completed" workflow never makes an uncommitted derivative
+    resolvable, and a later failed/timed-out workflow never un-commits one
+    (invariant ``workflow_status_does_not_replace_domain_commit``).
+    """
+
+    @workflow.run
+    async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Run the media processing step through Temporal by activity name."""
+        return await workflow.execute_activity(
+            MEDIA_PROCESSING_ACTIVITY_NAME,
+            payload,
+            start_to_close_timeout=timedelta(seconds=120),
+            retry_policy=_ACTIVITY_RETRY,
+        )
+
+
+class MediaProcessingActivities:
+    """Worker-side activity that drives real media processing.
+
+    The activity runs outside the deterministic sandbox, so it may call into the
+    application. A worker constructs this with a ``driver`` that performs one
+    ``MediaProcessingService.process`` for the payload and returns the orchestration
+    result. The returned mapping is workflow output only — never a serving-truth
+    substitute for the DB COMMITTED derivative.
+    """
+
+    def __init__(self, driver: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+        self._driver = driver
+
+    @activity.defn(name=MEDIA_PROCESSING_ACTIVITY_NAME)
+    async def run_media_processing_step(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Trigger media processing for the payload and return the orchestration result."""
+        return self._driver(payload)

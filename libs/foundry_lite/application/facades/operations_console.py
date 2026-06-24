@@ -305,6 +305,21 @@ class OperationsConsole:
             sync_name=sync_name,
         )
 
+    def start_media_processing_workflow(
+        self,
+        *,
+        media_item_version_id: str,
+        processor_spec: Mapping[str, object],
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> ProductWorkflowRun:
+        return self._workflow.start_media_processing_workflow(
+            media_item_version_id=media_item_version_id,
+            processor_spec=processor_spec,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
     def product_workflow_run(
         self,
         workflow_run_id: str,
