@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
+from foundry_lite.application.ports.embedding_model import EmbeddingVector
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
 
@@ -55,6 +56,7 @@ class ContentUnitRecord:
     bbox: dict[str, object] | None = None
     speaker: str | None = None
     language: str | None = None
+    embedding: EmbeddingVector = field(default_factory=tuple)
     created_at: str = ""
 
 

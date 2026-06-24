@@ -15,6 +15,7 @@ from foundry_lite.application.services.media.retrieval import DefaultContentRetr
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadService
 from foundry_lite.application.services.media.virtual_sets import VirtualMediaSetService
+from foundry_lite.application.services.media.visual_search import MediaVisualSearchService
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class MediaServices:
     processing: MediaProcessingService
     indexing: MediaIndexingService
     retrieval: DefaultContentRetrievalService
+    visual_search: MediaVisualSearchService
     binding: MediaReferenceBindingService
     access_pattern: MediaAccessPatternService
     virtual_sets: VirtualMediaSetService
@@ -43,6 +45,7 @@ class MediaServices:
             processing=build_service(MediaProcessingService, dependencies),
             indexing=build_service(MediaIndexingService, dependencies),
             retrieval=build_service(DefaultContentRetrievalService, dependencies),
+            visual_search=build_service(MediaVisualSearchService, dependencies),
             binding=build_service(MediaReferenceBindingService, dependencies),
             access_pattern=build_service(MediaAccessPatternService, dependencies),
             virtual_sets=build_service(VirtualMediaSetService, dependencies),
@@ -58,6 +61,7 @@ class MediaServices:
             self.processing,
             self.indexing,
             self.retrieval,
+            self.visual_search,
             self.binding,
             self.access_pattern,
             self.virtual_sets,

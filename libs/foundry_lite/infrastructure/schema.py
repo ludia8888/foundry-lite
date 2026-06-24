@@ -912,6 +912,9 @@ content_units = Table(
     Column("bbox", JSON),
     Column("speaker", String),
     Column("language", String),
+    # L11: a vision unit's CLIP frame embedding (list[float]); null for text units, which embed
+    # at index time. Persisting it makes the visual index rebuildable from committed truth.
+    Column("embedding", JSON),
     Column("text", String, nullable=False),
     Column("text_hash", String, nullable=False),
     Column("chunk_spec_hash", String, nullable=False),

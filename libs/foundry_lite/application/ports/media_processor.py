@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
+from foundry_lite.application.ports.embedding_model import EmbeddingVector
 
 
 def _empty_parameters() -> Mapping[str, object]:
@@ -42,7 +43,9 @@ class MediaProcessingRequest:
 class ProcessedContentUnit:
     """One normalized unit a processor extracted (a PDF page, an OCR region, an audio segment)
     with a verifiable hash. Time-coded fields are set by ASR/AV processors (doc §8.3); page-based
-    processors leave them ``None``."""
+    processors leave them ``None``. A vision processor (L11) attaches an ``embedding`` computed
+    from the unit's IMAGE (a CLIP frame vector) — for those units the vector, not text, is the
+    searchable content, so it is persisted on the unit and projected as-is at index time."""
 
     unit_kind: str
     ordinal: int
@@ -53,6 +56,7 @@ class ProcessedContentUnit:
     end_ms: int | None = None
     speaker: str | None = None
     language: str | None = None
+    embedding: EmbeddingVector = ()
 
 
 @dataclass(frozen=True)

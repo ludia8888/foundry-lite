@@ -13,7 +13,9 @@ from foundry_lite.infrastructure.adapters import (
     OcrProcessorAdapter,
     PdfTextProcessorAdapter,
     VideoProbeProcessorAdapter,
+    VideoSceneVisionProcessorAdapter,
 )
+from foundry_lite.infrastructure.adapters.local_vision_embedding import LocalVisionEmbeddingAdapter
 from foundry_lite.infrastructure.local_runtime import _media_processor_adapter
 
 
@@ -22,6 +24,7 @@ from foundry_lite.infrastructure.local_runtime import _media_processor_adapter
     [
         ("image-pillow", ImageProcessorAdapter),
         ("ffprobe", VideoProbeProcessorAdapter),
+        ("video-scene-vision", VideoSceneVisionProcessorAdapter),
         ("ocr-tesseract", OcrProcessorAdapter),
         ("asr-whisper", AsrProcessorAdapter),
         ("pdf-pypdf", PdfTextProcessorAdapter),
@@ -29,4 +32,4 @@ from foundry_lite.infrastructure.local_runtime import _media_processor_adapter
 )
 def test_profile_selects_processor_adapter(monkeypatch: pytest.MonkeyPatch, profile: str, adapter_type: type) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_MEDIA_PROCESSOR_PROFILE", profile)
-    assert isinstance(_media_processor_adapter("local"), adapter_type)
+    assert isinstance(_media_processor_adapter("local", LocalVisionEmbeddingAdapter()), adapter_type)

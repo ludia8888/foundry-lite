@@ -60,6 +60,7 @@ from foundry_lite.infrastructure.adapters.temporal_workflow import (
 from foundry_lite.infrastructure.adapters.video_probe_processor import (
     VideoProbeProcessorAdapter,
     VideoSceneFrameProcessorAdapter,
+    VideoSceneVisionProcessorAdapter,
 )
 
 __all__ = [
@@ -90,6 +91,7 @@ __all__ = [
     "PdfTextProcessorAdapter",
     "VideoProbeProcessorAdapter",
     "VideoSceneFrameProcessorAdapter",
+    "VideoSceneVisionProcessorAdapter",
     "ElasticsearchAdapter",
     "ElasticsearchAdapterConfig",
     "ElasticsearchContentIndexAdapter",

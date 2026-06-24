@@ -74,9 +74,15 @@ class LocalContentIndexAdapter:
         candidates = [unit for unit in generation.values() if unit.tenant_id == query.tenant_id]
         if query.query_vector is None:
             ranked = _lexical_rank(candidates, query.text)
-        else:
+        elif query.text:
             self._guard_model_version(query)
             ranked = _fuse(_lexical_rank(candidates, query.text), _dense_rank(candidates, query.query_vector))
+        else:
+            # Pure kNN: a vector with no query text (e.g. a visual frame query) ranks by cosine
+            # alone — fusing a tokenless lexical pass that matches every unit equally would let an
+            # arbitrary tiebreak override the dense order.
+            self._guard_model_version(query)
+            ranked = _dense_rank(candidates, query.query_vector)
         return [_hit(unit, self._active) for unit in ranked[: query.top_k]]
 
     def _guard_model_version(self, query: HybridContentQuery) -> None:
