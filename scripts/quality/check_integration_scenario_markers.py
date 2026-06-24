@@ -36,6 +36,11 @@ ADDITIONAL_SCENARIOS = {
     "media-embeddings": "real fastembed embeddings: semantic query ranks via dense vectors (local + ES) + fail-closed",
     "media-workflow-temporal": "media Temporal workflow drives processing -> DB COMMITTED derivative",
     "media-external": "real s3-external connector: virtual media set HEADs live S3 object, drift fails closed",
+    "media-golden-pipeline": (
+        "GOLDEN end-to-end media plane: raw upload (live MinIO) -> real OCR/ASR -> content_units + SUCCEEDED "
+        "media_processing_runs -> ontology media_reference binding -> live Elasticsearch index -> real hybrid/"
+        "semantic search (cited text_hash + ACL) -> real Pillow preview cache; one version threads upstream->downstream"
+    ),
     "action-external-writeback-live": (
         "real action external writeback to live MinIO: write timeout -> outcome_unknown + idempotent "
         "replay; external success + local failure -> compensation_required resolved by real remote_lookup"

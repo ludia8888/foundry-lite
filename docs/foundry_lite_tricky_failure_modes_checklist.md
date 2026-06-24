@@ -1103,6 +1103,20 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 - [x] ES8. operator-evidence: 실패가 로그 한 줄이나 adapter exception에만 남지 않고 operations의 failed indexRuns + related audit에 내구성 있는 분류 payload(adapterProfile/operation/kind/retryable/trace)로 표면화된다. (`test_elasticsearch_rebuild_failure_is_visible_in_index_run_operations`, `test_elasticsearch_object_change_failure_is_visible_in_index_run_operations`, `test_elasticsearch_consistency_failure_is_visible_in_index_run_operations`)
 - [x] ES9. live-cluster: 실 testcontainers ES에 대해 round-trip(색인/검색/full-text)·version-guard(실 painless script)·실 클러스터 정지→타입화된 retryable AdapterError가 동작한다. ES 데이터 디렉터리를 tmpfs로 올려 vz virtiofs 느린 디스크를 우회(로컬+CI 안정). (`test_elasticsearch_live_round_trip_indexes_and_searches`, `test_elasticsearch_live_version_guard_rejects_stale_writer`, `test_elasticsearch_live_cluster_outage_is_typed_adapter_error`)
 
+### C-MEDIA. Media/Content Plane (standalone active-covered family, profiles `s3-media` + `local-*` engines)
+
+비정형 미디어를 1급 plane으로 다룬다(Palantir Foundry의 media set/transform/ontology media-reference/semantic search 미러). 단일 불변식 위에 선다: DB COMMITTED 미디어 버전만 serving truth이고, blob/index/embedding/preview cache/workflow status는 truth가 아니다. L0~L8(라이브 엔진·operations·workflow·external connector·retention·writeback 보상)을 거쳐 모든 미디어 source-of-truth rule이 `enforced`(deferred 0). L9는 raw→derivative→content_unit→ontology binding→ES index→search→preview가 같은 `media_item_version_id`로 일관되게 흐름을 증명하는 GOLDEN end-to-end 라이브 파이프라인(실 MinIO + 실 Elasticsearch testcontainers + 실 tesseract/whisper/fastembed/Pillow)을 추가한다. 직교 plane이라 독립 family — S3/Iceberg/Spark composition stack에 들어가지 않는다(elasticsearch/temporal과 동일).
+
+- [x] M1. adapter-contract: MediaStorageAdapter port shape(write_staged/stat/open_stream/issue_read_grant + failure_contract)가 만족 가능하게 선언된다. (`test_media_storage_adapter_shape_is_satisfiable`)
+- [x] M2. normal-path + operator-evidence: raw 업로드(실 MinIO)→실 OCR→content_units+SUCCEEDED `media_processing_runs`→ontology media_reference binding→실 Elasticsearch index→실 hybrid/semantic search(cited text_hash + ACL)→실 Pillow preview cache까지 하나의 `media_item_version_id`가 upstream→downstream으로 일관되게 흐른다. (`test_media_golden_pipeline_threads_one_version_upstream_to_downstream`)
+- [x] M3. derivatives-inherit-security: 처리된 derivative와 content unit이 source 버전보다 약하지 않은 security envelope를 상속한다. (`test_process_commits_derivative_with_inherited_security_envelope`)
+- [x] M4. retry-idempotency: 같은 (source version + spec)로 재처리해도 derivative는 하나만 남는다(멱등). (`test_process_is_idempotent_duplicate_yields_one_derivative`)
+- [x] M5. partial-success: 과대 이미지 처리 실패는 FAILED 증거만 기록하고 어떤 derivative도 commit하지 않는다(부분 commit 금지). (`test_oversized_image_records_failed_evidence_and_commits_nothing`)
+- [x] M6. operator-evidence: 처리 실패가 로그가 아니라 FAILED `media_processing_runs`(failure_kind=validation/failure_reason)로 표면화되고, 그 status는 절대 COMMITTED derivative를 대체하지 않는다. (`test_failure_records_a_failed_run_and_no_committed_derivative_is_visible`)
+- [x] M7. recovery-cleanup: 콘텐츠 검색 인덱스는 재구축 가능한 projection이다 — COMMITTED content artifact에서 재색인하면 인덱스가 복원된다(index는 truth가 아니다). (`test_content_index_rebuilds_from_committed_artifacts`)
+- [x] M8. citation-integrity: 인덱스 text_hash가 DB content unit과 불일치하면 retrieval이 그 hit을 버린다(검색은 출처를 위조하지 않는다). (`test_retrieval_drops_citation_hash_mismatch`)
+- [x] M9. normal-path(audio): 커밋된 WAV가 실 faster-whisper ASR로 `audio_segment` content units가 되어 같은 버전으로 라이브 ES 검색에 표면화된다. (`test_media_golden_pipeline_threads_committed_audio_through_real_asr_to_search`)
+
 ## D. Ontology / Schema / SDK
 
 - [ ] D1. draft import partial failure가 rollback된다.
