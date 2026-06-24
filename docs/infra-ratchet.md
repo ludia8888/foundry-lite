@@ -682,6 +682,29 @@ replace_domain_commit` is now `enforced`: the Temporal `workflow_runs` status an
   wired into the `ci_gate.sh` runtime lane). No media _family_ promotion happens at L5 — that is the L9
   capstone; only the deferred source-of-truth rule is promoted.
 
+- **L6 — Real S3 external connector for virtual media sets (shipped):** M9 shipped the virtual
+  media set contract + the `external_virtual_object_requires_version_or_mutable_marker` invariant
+  with the connector deferred (the default `LocalExternalMediaReader` reports
+  `external_reader_unavailable`). L6 ships the first **real** connector: `S3ExternalMediaReader`
+  (profile `s3-external`, selected via the existing adapter profile, reusing the existing
+  `FOUNDRY_LITE_S3_*` connection env — no new env var) HEADs a real `s3://<bucket>/<key>` object and
+  returns its current `ETag` (quotes stripped) + `ContentLength` as an `ExternalObjectStat` **without
+  copying the bytes into Foundry** — a virtual media set stays a pointer to the external source, exactly
+  like a Palantir virtual table/media set. A missing object reports `is_present=False` (so a mutable
+  reference can surface `is_stale`); a real connection/credentials error fails closed as a typed
+  `ExternalReadError`. The default profile still raises (`local-external`), keeping the connector seam
+  injectable. Because a virtual set "is not aware of source updates/deletions", `resolve_external_version`
+  re-validates the pinned ETag on every read and a drift fails closed
+  (`virtual_external_version_etag_drifted`); a mutable reference surfaces freshness instead. Proven live
+  against MinIO by `tests/integration/test_media_external_connector_live.py`
+  (`pnpm quality:media-live-external`, wired into the `ci_gate.sh` runtime lane after embeddings): a real
+  object is HEAD'd + its ETag pinned (resolve returns the matching ETag, no byte copy), an overwrite
+  (new ETag) under a pinned version fails closed, a mutable reference resolves fresh while present and
+  surfaces `is_stale` after delete, and an unversioned register is rejected. This strengthens the already-
+  `enforced` `external_virtual_object_requires_version_or_mutable_marker` rule with live-path tests (its
+  status is unchanged). The L8 external-writeback rules (`external_timeout_is_outcome_unknown_not_failure`
+  - compensation) stay `deferred`.
+
 Media processing is the first product-driven Temporal use case (the L5 media workflow). A media
 family becomes `active-covered` only when its proof-class tests collect and it is
 registered in `infra-tricky-matrix.json` `families`/`activeStack`; until then it

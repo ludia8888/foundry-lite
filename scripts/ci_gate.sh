@@ -350,6 +350,8 @@ run_runtime_gate() {
 
   run_runtime_step "Media live embeddings ratchet" pnpm --silent quality:media-live-embeddings
 
+  run_runtime_step "Media live external connector ratchet" pnpm --silent quality:media-live-external
+
   run_runtime_step "S3 storage ratchet" pnpm --silent quality:s3-storage
 
   run_runtime_step "Iceberg storage ratchet" pnpm --silent quality:iceberg

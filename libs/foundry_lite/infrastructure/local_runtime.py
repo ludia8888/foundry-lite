@@ -9,6 +9,7 @@ from sqlalchemy.engine import Engine
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
 from foundry_lite.application.ports.dataset_storage import DatasetStorageAdapter
+from foundry_lite.application.ports.external_media_reader import ExternalMediaReader
 from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.ontology_repository import PropertyClassificationRow
@@ -46,6 +47,8 @@ from foundry_lite.infrastructure.adapters import (
     PdfTextProcessorAdapter,
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
+    S3ExternalMediaReader,
+    S3ExternalMediaReaderConfig,
     S3MediaStorageAdapter,
     S3MediaStorageConfig,
     SparkComputeAdapter,
@@ -172,7 +175,7 @@ def create_local_core_dependencies(
         media_access_cache_repository=SqlAlchemyMediaAccessCacheRepository(engine),
         media_processor=media_processor,
         media_preview_renderer=LocalPreviewRendererAdapter(),
-        external_media_reader=LocalExternalMediaReader(),
+        external_media_reader=_external_media_reader(adapter_profile),
         dataset_storage=storage_adapter,
         media_storage=media_storage,
         content_index_adapter=content_index_adapter,
@@ -205,6 +208,25 @@ def _media_storage_adapter(adapter_profile: str, media_storage_root: Path) -> Me
     if media_profile in {"local", "fake-storage", "s3-storage", "iceberg"}:
         return LocalMediaStorageAdapter(media_storage_root)
     raise ValueError(f"unknown media storage profile: {media_profile}")
+
+
+def _external_media_reader(adapter_profile: str) -> ExternalMediaReader:
+    # Virtual media sets are pointers to an external source (no byte copy). The default reader
+    # has no connector bundled (reports external_reader_unavailable); the s3-external profile
+    # reaches out to a real S3/MinIO source via HEAD, reusing the dataset S3 connection env.
+    # Selected via the existing adapter profile (no dedicated env var).
+    if adapter_profile == "s3-external":
+        return S3ExternalMediaReader(_s3_external_media_reader_config())
+    return LocalExternalMediaReader()
+
+
+def _s3_external_media_reader_config() -> S3ExternalMediaReaderConfig:
+    return S3ExternalMediaReaderConfig(
+        endpoint_url=os.getenv("FOUNDRY_LITE_S3_ENDPOINT_URL"),
+        access_key_id=os.getenv("FOUNDRY_LITE_S3_ACCESS_KEY_ID"),
+        secret_access_key=os.getenv("FOUNDRY_LITE_S3_SECRET_ACCESS_KEY"),
+        region_name=os.getenv("FOUNDRY_LITE_S3_REGION", "us-east-1"),
+    )
 
 
 def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
