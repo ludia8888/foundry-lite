@@ -790,6 +790,41 @@ driver still requires an operator/automation to call `reconcile_action_writeback
   data flows consistently upstream→downstream on the invariant that the DB COMMITTED version is the
   only serving truth. Wired into the `ci_gate.sh` runtime lane via `pnpm quality:media-active-covered`.
 
+- **L10 — Real FFmpeg scene-frame + Tesseract OCR for video (shipped):** today video yields only
+  ffprobe metadata (L3) + an audio-track transcript (L2); L10 adds the VISUAL text — on-screen text
+  in a video becomes searchable content. A `VideoSceneFrameProcessorAdapter` (profile
+  `video-scene-frames`, processor `video_frames_v1`, derivative kind `video_scene_frames`, housed in
+  `video_probe_processor.py` to stay within the adapters-barrel fan-out budget) extracts **scene
+  frames** (Foundry's video→media `extract_scene_frames` primitive: a media→media transform producing
+  a derived image set, each frame pinned to the immutable source version + carrying a timestamp /
+  sceneScore — palantir.com/docs/foundry/transforms-python/media-set-transforms-api,
+  /pipeline-builder/transforms-transform-media) and OCRs each frame (`imageOcrV1`, media→tabular —
+  /pb-functions-expression/imageOcrV1). The frame extraction is an injectable seam
+  (`scene_frame_extractor: (str) -> list[(start_ms, ocr_text)]`) whose default raises
+  `frame_extractor_unavailable` (mirroring the L1–L3 default-raise so unit tests inject a fake and
+  need no binary). The real `_ffmpeg_scene_frame_extractor` runs system `ffmpeg -hide_banner -i <video>
+-vf "select='eq(n,0)+gt(scene,T)',showinfo" -vsync vfr f_%03d.png` into a `tempfile.TemporaryDirectory`
+  (fixed arg list, no shell, `start_new_session=True` + `os.killpg(...SIGTERM)` on timeout, the
+  M-T3-002 process-group-kill), parses the per-frame `pts_time:<seconds>` timecodes from the `showinfo`
+  filter's STDERR (so the info log level is kept — never `-loglevel error`), OCRs each PNG by reusing
+  the existing `_tesseract_ocr_engine`, and returns `(round(pts*1000), text)` for frames with
+  recognized text. `scene_sensitivity` (MORE_SENSITIVE≈0.1 / STANDARD≈0.3 / LESS_SENSITIVE≈0.5) maps to
+  the ffmpeg scene threshold. Each scene frame is a time-coded `video_frame` content unit
+  (`start_ms`, `text`, sha256 `text_hash`); a corrupt/undecodable video is a typed
+  `unprocessable_video` validation failure and a hung extraction fails closed as a typed timeout, both
+  recording FAILED durable evidence with no derivative. The derived frames live off the immutable
+  source version (never the source) and inherit the source security envelope.
+  `tests/integration/test_media_video_frame_ocr_live.py` (scenario `media-video-frame-ocr`, `pnpm
+quality:media-live-video-frames`, system `ffmpeg` + `tesseract-ocr` installed in CI) proves the
+  normal video→frame→OCR→`video_scene_frames`→content-index→search path on a committed mp4 whose three
+  on-screen cards ("INVOICE 2026" / "TOTAL 4242 USD" / "NET 30 DAYS") are extracted at ordered
+  timecodes and found by searching "invoice"/"4242", plus the operator-evidence path (a corrupt video
+  records a FAILED `media_processing_runs` row with `failure_kind == validation` and commits no
+  derivative). No new source-of-truth rule (scene-frame OCR is covered by the already-enforced
+  `derivatives_inherit_source_security` + `content_unit_artifact_is_truth_search_index_is_projection`);
+  the `media-plane` family stays `active-covered`, strengthened with the new live test in its
+  normal-path + operator-evidence proofs and testPaths.
+
 Media processing is the first product-driven Temporal use case (the L5 media workflow). A media
 family becomes `active-covered` only when its proof-class tests collect and it is
 registered in `infra-tricky-matrix.json` `families`/`activeStack`; until then it

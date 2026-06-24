@@ -33,6 +33,10 @@ ADDITIONAL_SCENARIOS = {
     "media-ocr": "real Tesseract OCR live: image -> ocr_v1 -> index -> search + FAILED run operator-evidence",
     "media-asr": "real faster-whisper ASR live: audio -> asr_v1 -> index -> search + FAILED run operator-evidence",
     "media-video": "real ffprobe video live: video -> video_probe metadata + audio -> asr_v1 -> search + FAILED run",
+    "media-video-frame-ocr": (
+        "real ffmpeg scene-frame + Tesseract OCR live: video -> scene frames -> OCR -> video_scene_frames "
+        "-> index -> search on-screen text + FAILED run operator-evidence"
+    ),
     "media-embeddings": "real fastembed embeddings: semantic query ranks via dense vectors (local + ES) + fail-closed",
     "media-workflow-temporal": "media Temporal workflow drives processing -> DB COMMITTED derivative",
     "media-external": "real s3-external connector: virtual media set HEADs live S3 object, drift fails closed",
