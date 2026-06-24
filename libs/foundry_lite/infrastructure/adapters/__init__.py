@@ -57,7 +57,10 @@ from foundry_lite.infrastructure.adapters.temporal_workflow import (
     TemporalWorkflowAdapter,
     TemporalWorkflowAdapterConfig,
 )
-from foundry_lite.infrastructure.adapters.video_probe_processor import VideoProbeProcessorAdapter
+from foundry_lite.infrastructure.adapters.video_probe_processor import (
+    VideoProbeProcessorAdapter,
+    VideoSceneFrameProcessorAdapter,
+)
 
 __all__ = [
     "DuckDBComputeAdapter",
@@ -86,6 +89,7 @@ __all__ = [
     "OcrProcessorAdapter",
     "PdfTextProcessorAdapter",
     "VideoProbeProcessorAdapter",
+    "VideoSceneFrameProcessorAdapter",
     "ElasticsearchAdapter",
     "ElasticsearchAdapterConfig",
     "ElasticsearchContentIndexAdapter",

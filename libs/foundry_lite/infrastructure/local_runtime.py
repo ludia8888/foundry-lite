@@ -55,6 +55,7 @@ from foundry_lite.infrastructure.adapters import (
     TemporalWorkflowAdapter,
     TemporalWorkflowAdapterConfig,
     VideoProbeProcessorAdapter,
+    VideoSceneFrameProcessorAdapter,
 )
 from foundry_lite.infrastructure.adapters.asr_processor import _faster_whisper_asr_engine
 from foundry_lite.infrastructure.adapters.local_embedding import (
@@ -62,7 +63,10 @@ from foundry_lite.infrastructure.adapters.local_embedding import (
     _fastembed_embedding_engine,
 )
 from foundry_lite.infrastructure.adapters.ocr_processor import _tesseract_ocr_engine
-from foundry_lite.infrastructure.adapters.video_probe_processor import _ffprobe_video_probe_runner
+from foundry_lite.infrastructure.adapters.video_probe_processor import (
+    _ffmpeg_scene_frame_extractor,
+    _ffprobe_video_probe_runner,
+)
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
     SqlAlchemyDatasetQualityRepository,
@@ -237,6 +241,8 @@ def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
         return ImageProcessorAdapter()
     if processor_profile == "ffprobe":
         return VideoProbeProcessorAdapter(probe_runner=_ffprobe_video_probe_runner)
+    if processor_profile == "video-scene-frames":
+        return VideoSceneFrameProcessorAdapter(scene_frame_extractor=_ffmpeg_scene_frame_extractor)
     if processor_profile == "ocr-tesseract":
         return OcrProcessorAdapter(ocr_engine=_tesseract_ocr_engine)
     if processor_profile == "asr-whisper":
