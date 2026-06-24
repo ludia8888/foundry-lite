@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 
-from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
+from foundry_lite.application.ports.adapter_failure import (
+    AdapterError,
+    AdapterFailure,
+    AdapterFailureContract,
+    AdapterFailureMode,
+)
 from foundry_lite.application.ports.connector_adapter import (
     ConnectorAdapter,
     ConnectorSnapshot,
     ConnectorSnapshotRequest,
 )
+from foundry_lite.application.ports.embedding_model import EmbeddingVector
 from foundry_lite.application.ports.search_adapter import (
     SearchAdapter,
     SearchDocument,
@@ -192,24 +199,60 @@ class LocalSearchAdapter:
         )
 
     def search(self, query: SearchQuery) -> list[SearchHit]:
+        scoped = [
+            document
+            for key, document in sorted(self._documents.items())
+            if key[0] == query.tenant_id and key[1] == query.object_type and _matches_terms(document, query)
+        ]
+        if query.query_vector is not None:
+            return self._nearest_neighbors(scoped, query)
+        mapping = self._mappings.get((query.tenant_id, query.object_type))
         matches = [
             SearchHit(document_id=document.document_id, score=1.0, document=document)
-            for key, document in sorted(self._documents.items())
-            if self._matches_query(key, document, query)
+            for document in scoped
+            if _matches_full_text(document, query, mapping)
         ]
         return matches[: query.limit]
 
-    def _matches_query(self, key: tuple[str, str, str], document: SearchDocument, query: SearchQuery) -> bool:
-        tenant_id, object_type, _ = key
-        if tenant_id != query.tenant_id or object_type != query.object_type:
-            return False
-        return _matches_terms(document, query) and _matches_full_text(
-            document, query, self._mappings.get((query.tenant_id, query.object_type))
-        )
+    def _nearest_neighbors(self, scoped: list[SearchDocument], query: SearchQuery) -> list[SearchHit]:
+        """Cosine kNN over the model-pinned object vectors (Palantir nearestNeighbors)."""
+        embedded = [document for document in scoped if document.embedding]
+        _guard_search_model_version(self.profile_name, embedded, query.embedding_model_version)
+        scored = [(_cosine(document.embedding, query.query_vector or ()), document) for document in embedded]
+        ranked = [(score, document) for score, document in scored if score > 0.0]
+        ranked.sort(key=lambda pair: (-pair[0], pair[1].document_id))
+        return [
+            SearchHit(document_id=document.document_id, score=score, document=document) for score, document in ranked
+        ][: query.limit]
 
 
 def _matches_terms(document: SearchDocument, query: SearchQuery) -> bool:
     return all(document.properties.get(name) == value for name, value in query.terms.items())
+
+
+def _guard_search_model_version(profile: str, documents: list[SearchDocument], query_model_version: str) -> None:
+    """Fail closed when a query vector's model differs from an indexed object vector's."""
+    for document in documents:
+        if document.embedding_model_version != query_model_version:
+            raise AdapterError(
+                AdapterFailure(
+                    profile,
+                    "search",
+                    "conflict",
+                    False,
+                    "object search embedding model mismatch "
+                    f"(index {document.embedding_model_version!r}, query {query_model_version!r})",
+                )
+            )
+
+
+def _cosine(a: EmbeddingVector, b: EmbeddingVector) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
 
 
 def _matches_full_text(

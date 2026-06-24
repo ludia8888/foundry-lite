@@ -152,15 +152,16 @@ class ObjectQueryService(CoreService):
         limit: int = 50,
         cursor: str | None = None,
         search_text: str | None = None,
+        semantic_text: str | None = None,
     ) -> ObjectQueryResult:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
         query_limit = _query_limit(limit)
-        if search_text:
-            _validate_search_planner_shape(filter_ast, order_by, cursor)
-            return self.object_search_service.search_objects(
-                object_type_api_name, ctx=ctx, search_text=search_text, limit=query_limit
-            )
+        routed = self._search_route(
+            object_type_api_name, ctx, search_text, semantic_text, query_limit, filter_ast, order_by, cursor
+        )
+        if routed is not None:
+            return routed
         normalized_order_by = _normalized_order_by(order_by)
         if filter_ast:
             validate_filter_ast(filter_ast)
@@ -177,6 +178,31 @@ class ObjectQueryService(CoreService):
             "items": [self._object_query_item(ctx, object_type_api_name, row) for row in page],
             "nextCursor": _next_cursor(records, page, normalized_order_by, filter_ast, active_index_version),
         }
+
+    def _search_route(
+        self,
+        object_type_api_name: str,
+        ctx: RequestContext,
+        search_text: str | None,
+        semantic_text: str | None,
+        query_limit: int,
+        filter_ast: Mapping[str, object] | None,
+        order_by: Sequence[Mapping[str, str]] | None,
+        cursor: str | None,
+    ) -> ObjectQueryResult | None:
+        """Route keyword/semantic searches to the planner; return None for the structured path."""
+        if search_text and semantic_text:
+            raise ValidationFailed("object query cannot combine keyword search with semantic search")
+        if not search_text and not semantic_text:
+            return None
+        _validate_search_planner_shape(filter_ast, order_by, cursor)
+        if semantic_text:
+            return self.object_search_service.search_objects_semantic(
+                object_type_api_name, ctx=ctx, semantic_text=semantic_text, limit=query_limit
+            )
+        return self.object_search_service.search_objects(
+            object_type_api_name, ctx=ctx, search_text=str(search_text), limit=query_limit
+        )
 
     def _query_active_records(
         self,

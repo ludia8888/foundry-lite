@@ -15,6 +15,7 @@ from foundry_lite.application.ports.search_adapter import SearchDocument, Search
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.adapters.local_embedding import FASTEMBED_MODEL_VERSION
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from sqlalchemy import func, select
 
@@ -261,6 +262,41 @@ def test_masked_property_cannot_filter_sort_search(tmp_path: Path) -> None:
         foundry.objects.query("Order", ctx=viewer, filter_ast={"property": "margin", "op": "gte", "value": 1.0})
     with pytest.raises(ValidationFailed, match="masked property"):
         foundry.objects.query("Order", ctx=viewer, order_by=[{"property": "margin", "direction": "desc"}])
+
+
+def test_real_bge_semantic_object_search_ranks_closest_object_first(tmp_path: Path) -> None:
+    # L12a: the composed runtime wires the real fastembed bge engine, so object vectors and the
+    # query vector come from the SAME pinned model. "cold chain logistics" shares no token with
+    # "a refrigerated truck delivery", so only the dense nearestNeighbors path can rank it first.
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    assert dependencies.embedding_model_adapter.is_available is True
+    assert dependencies.embedding_model_adapter.model_version == FASTEMBED_MODEL_VERSION
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = prepare_indexed_demo(foundry)
+    _approve_order_with_note(foundry, ctx, "O-1001", "a refrigerated truck delivery")
+    _approve_order_with_note(foundry, ctx, "O-1002", "an invoice dispute")
+    foundry.objects.rebuild_search("Order", ctx=ctx)
+
+    page = foundry.objects.query("Order", ctx=ctx, semantic_text="cold chain logistics", limit=5)
+
+    assert page["items"], "real-bge nearestNeighbors returned an empty Object Set"
+    assert page["items"][0]["objectId"] == "O-1001"
+    # Keyword search for the same phrase finds nothing (no lexical overlap) — only semantic does.
+    keyword_page = foundry.objects.query("Order", ctx=ctx, search_text="cold chain logistics", limit=5)
+    assert keyword_page["items"] == []
+
+
+def _approve_order_with_note(foundry: FoundryLite, ctx: RequestContext, object_id: str, note: str) -> None:
+    order = foundry.objects.get("Order", object_id, ctx=ctx)
+    foundry.actions.apply(
+        "ApproveOrder",
+        object_type="Order",
+        object_id=object_id,
+        expected_object_version=order["objectVersion"],
+        params={"reason": note},
+        idempotency_key=f"semantic-{object_id}",
+        ctx=ctx,
+    )
 
 
 def _approve_order(foundry: FoundryLite, ctx: RequestContext) -> str:

@@ -559,7 +559,8 @@
         ],
         "normal-path": [
           "test_elasticsearch_normal_path_indexes_and_searches",
-          "test_elasticsearch_live_round_trip_indexes_and_searches"
+          "test_elasticsearch_live_round_trip_indexes_and_searches",
+          "test_real_bge_semantic_object_search_ranks_closest_object_first"
         ],
         "failure-injection": [
           "test_elasticsearch_cluster_failures_map_to_typed_adapter_error",
@@ -1104,11 +1105,13 @@
       ]
     },
     "embedding_artifact_pins_model_version_and_chunk_spec": {
-      "description": "An embedding artifact pins its embedding model version and chunk spec; index mismatch fails closed.",
+      "description": "An embedding artifact pins its embedding model version and chunk spec; index mismatch fails closed. L12a reuses this rule for object Vector properties: an object embedding pins its model version and a nearestNeighbors query in a different vector space fails closed.",
       "status": "enforced",
       "tests": [
         "test_embedding_artifact_pins_model_and_chunk_spec",
-        "test_hybrid_search_fails_closed_on_model_version_mismatch"
+        "test_hybrid_search_fails_closed_on_model_version_mismatch",
+        "test_object_embedding_pins_model_version_when_adapter_available",
+        "test_nearest_neighbors_fails_closed_on_model_version_mismatch"
       ]
     },
     "workflow_status_does_not_replace_domain_commit": {

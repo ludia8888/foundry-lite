@@ -228,18 +228,28 @@ def _index_mappings(mapping: SearchIndexMapping) -> Mapping[str, object]:
             "object_id": {"type": "keyword"},
             "version": {"type": "long"},
             "properties": {"properties": field_mappings},
+            # L12a Vector property: model-pinned dense projection of searchable text. Mapped
+            # additively so keyword/structured search is unchanged when no embedding is wired.
+            "embedding_model_version": {"type": "keyword"},
+            "embedding": {"type": "dense_vector"},
         }
     }
 
 
 def _document_body(document: SearchDocument) -> Mapping[str, object]:
-    return {
+    body: dict[str, object] = {
         "tenant_id": document.tenant_id,
         "object_type": document.object_type,
         "object_id": document.document_id,
         "version": document.version,
         "properties": dict(document.properties),
+        "embedding_model_version": document.embedding_model_version,
     }
+    # Omit the dense_vector field entirely for keyword-only documents: sending an
+    # empty list would make Elasticsearch infer a 0-dimension mapping and reject it.
+    if document.embedding:
+        body["embedding"] = list(document.embedding)
+    return body
 
 
 def _version_guarded_update_body(document: SearchDocument) -> Mapping[str, object]:
@@ -258,13 +268,33 @@ def _version_guarded_update_body(document: SearchDocument) -> Mapping[str, objec
 
 
 def _search_body(query: SearchQuery) -> Mapping[str, object]:
-    filters = [
+    filters: list[Mapping[str, object]] = [
         {"term": {"tenant_id": query.tenant_id}},
         {"term": {"object_type": query.object_type}},
         *({"term": {f"properties.{name}": value}} for name, value in query.terms.items()),
     ]
+    if query.query_vector is not None:
+        return _dense_search_body(query, filters)
     must = [_full_text_query(query)] if query.text else [{"match_all": {}}]
     return {"query": {"bool": {"filter": filters, "must": must}}, "size": query.limit}
+
+
+def _dense_search_body(query: SearchQuery, filters: list[Mapping[str, object]]) -> Mapping[str, object]:
+    # nearestNeighbors: cosine over the model-pinned dense_vector. The model-version term keeps
+    # the kNN scoped to one vector space (index-time = query-time model pinning, fail-closed).
+    scoped = [*filters, {"term": {"embedding_model_version": query.embedding_model_version or ""}}]
+    return {
+        "query": {
+            "script_score": {
+                "query": {"bool": {"filter": scoped}},
+                "script": {
+                    "source": "cosineSimilarity(params.query_vector, 'embedding') + 1.0",
+                    "params": {"query_vector": list(query.query_vector or ())},
+                },
+            }
+        },
+        "size": query.limit,
+    }
 
 
 def _full_text_query(query: SearchQuery) -> Mapping[str, object]:
@@ -301,8 +331,22 @@ def _search_hit(hit: Mapping[str, object], query: SearchQuery) -> SearchHit:
         document_id=_hit_document_id(hit),
         version=_hit_version(source),
         properties=properties if isinstance(properties, Mapping) else {},
+        embedding=_hit_embedding(source),
+        embedding_model_version=_hit_embedding_model_version(source),
     )
     return SearchHit(document_id=document.document_id, score=_score(hit), document=document)
+
+
+def _hit_embedding(source: Mapping[str, object]) -> tuple[float, ...]:
+    embedding = source.get("embedding")
+    if not isinstance(embedding, Sequence) or isinstance(embedding, str):
+        return ()
+    return tuple(float(value) for value in embedding if isinstance(value, int | float) and not isinstance(value, bool))
+
+
+def _hit_embedding_model_version(source: Mapping[str, object]) -> str:
+    value = source.get("embedding_model_version")
+    return value if isinstance(value, str) else ""
 
 
 def _hit_version(source: Mapping[str, object]) -> int:
