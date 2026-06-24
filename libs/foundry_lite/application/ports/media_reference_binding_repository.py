@@ -41,6 +41,21 @@ class MediaReferenceBindingRepository(Protocol):
         """Return the current binding for one (object, property), or None."""
         ...
 
+    def bindings_for_media_versions(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        media_item_version_ids: list[str],
+    ) -> list[MediaReferenceBindingRecord]:
+        """Reverse lookup (media version -> owning object), batched to stay N+1-safe.
+
+        Returns every tenant-scoped binding whose ``media_item_version_id`` is in the input
+        set, so a content/media search hit can be lifted to the holder object(s) that
+        reference it (L12b OAG: the result unit is the object, reached via the media edge).
+        """
+        ...
+
     def create_binding(self, *, transaction: TransactionContext, record: MediaReferenceBindingRecord) -> None:
         """Insert a new binding (uq tenant/holder_type/holder_id/property)."""
         ...

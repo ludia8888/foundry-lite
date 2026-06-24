@@ -53,6 +53,11 @@ ADDITIONAL_SCENARIOS = {
         "real action external writeback to live MinIO: write timeout -> outcome_unknown + idempotent "
         "replay; external success + local failure -> compensation_required resolved by real remote_lookup"
     ),
+    "ontology-unified-search": (
+        "L12b OAG unified search: real bge object + content embeddings -> one NL query returns ranked "
+        "ontology OBJECTS, fusing an object's own semantic match and a bound-media content match (lifted "
+        "through the media-reference edge) via RRF; object is the result unit, ACL anchored at the object"
+    ),
 }
 KNOWN_SCENARIOS = {**REQUIRED_SCENARIOS, **ADDITIONAL_SCENARIOS}
 

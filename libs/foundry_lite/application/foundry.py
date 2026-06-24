@@ -78,7 +78,7 @@ class FoundryLite:
         self.datasets = DatasetWorkspace(services.dataset)
         self.transforms = TransformPipeline(services.transform)
         self.ontology = OntologyRegistry(services.ontology)
-        self.objects = ObjectStore(services.object_store)
+        self.objects = ObjectStore(services.object_store, services.ontology_search)
         self.actions = ActionGateway(services.action)
         self.materialization = MaterializationRunner(services.materialization)
         self.insights = InsightReviewWorkspace(services.insight_review)
