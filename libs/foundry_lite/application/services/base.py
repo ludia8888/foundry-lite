@@ -38,6 +38,7 @@ from foundry_lite.application.ports.media_reference_binding_repository import Me
 from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.search_adapter import SearchAdapter
+from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
 from foundry_lite.security.policy import PolicyService
 
@@ -109,6 +110,7 @@ class CoreService:
     external_media_reader: ExternalMediaReader
     content_index_adapter: ContentIndexAdapter
     embedding_model_adapter: EmbeddingModelAdapter
+    vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     engine: TransactionManager
     policy: PolicyService
     action_repository: ActionRepository

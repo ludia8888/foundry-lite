@@ -38,6 +38,7 @@ from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
+from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.security.policy import PolicyService
 
@@ -79,6 +80,7 @@ class CoreDependencies:
     external_media_reader: ExternalMediaReader
     content_index_adapter: ContentIndexAdapter
     embedding_model_adapter: EmbeddingModelAdapter
+    vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
     stream_adapter: StreamAdapter

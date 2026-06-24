@@ -825,6 +825,49 @@ quality:media-live-video-frames`, system `ffmpeg` + `tesseract-ocr` installed in
   the `media-plane` family stays `active-covered`, strengthened with the new live test in its
   normal-path + operator-evidence proofs and testPaths.
 
+- **L11 — Real CLIP scene-frame VISUAL search for video (shipped):** L10 makes on-screen _text_
+  searchable; L11 adds VISUAL understanding — "is there a car in this video?" answered zero-shot,
+  open-vocabulary, with no object labels. This mirrors Foundry's documented embedding/semantic-search
+  vision mode exactly: video → `extract_scene_frames`
+  ([transforms-python/media-set-transforms-api](https://www.palantir.com/docs/foundry/transforms-python/media-set-transforms-api/))
+  → per-frame `imageToEmbeddingsV1` ("Image to embeddings",
+  [pb-functions-expression/imageToEmbeddingsV1](https://www.palantir.com/docs/foundry/pb-functions-expression/imageToEmbeddingsV1/))
+  producing a Vector property → semantic search via
+  `nearestNeighbors(o => o.embeddings.near(v,{kValue})).orderByRelevance()`
+  ([ontology/using-palantir-provided-models-to-create-a-semantic-search-workflow](https://www.palantir.com/docs/foundry/ontology/using-palantir-provided-models-to-create-a-semantic-search-workflow/)),
+  with the index-time and query-time embedding model PINNED to the same contrastive model (cross-modal
+  text→image only works inside one model's shared space). Palantir's provided image-embedding model is
+  SigLIP2; we use the open-source equivalent **CLIP via fastembed** (ONNX, no torch) — same mechanism. A
+  `VideoSceneVisionProcessorAdapter` (profile `FOUNDRY_LITE_MEDIA_PROCESSOR_PROFILE=video-scene-vision`,
+  processor `video_vision_v1`, derivative kind `video_scene_vision`, housed in `video_probe_processor.py`
+  to stay within the adapters-barrel fan-out budget) reuses the L10 ffmpeg scene-select extraction
+  (`_ffmpeg_scene_frame_paths` returns frame image paths + `pts_time` timecodes instead of OCR) and
+  computes a CLIP IMAGE embedding per frame via an injected `VisionEmbeddingModelAdapter`
+  (`LocalVisionEmbeddingAdapter`: `Qdrant/clip-ViT-B-32-vision` image tower +
+  `Qdrant/clip-ViT-B-32-text` text tower, a matched pair sharing ONE 512-dim space; the default engines
+  raise `vision_model_unavailable` so deterministic unit tests inject a fake and need no model download).
+  Each scene frame is a time-coded `video_frame_visual` content unit carrying its CLIP vector (the vector,
+  not text, is the searchable content — persisted on the unit so the visual index is rebuildable from
+  committed truth). A `MediaVisualSearchService` projects those vectors AS-IS into a CLIP-pinned index
+  generation (`embedding_model_version = "clip-ViT-B-32"`, separate from the bge text generation) and
+  answers a natural-language query by embedding it with the CLIP **text** tower and running the existing
+  dense kNN — the content index's model-version guard fails closed against a bge-pinned generation (and
+  vice-versa), so the two vector spaces never mix; the bge text/hybrid retrieval path is untouched. A
+  corrupt/undecodable video is a typed `unprocessable_video` validation failure and a hung extraction
+  fails closed as a typed timeout, both recording FAILED evidence with no derivative.
+  `tests/integration/test_media_video_vision_live.py` (scenario `media-video-vision`,
+  `pnpm quality:media-live-video-vision`, system `ffmpeg` in CI + the CLIP model pre-fetched/cached on
+  `~/.cache/huggingface`) proves the normal video→scene-frames→CLIP-image→`video_scene_vision`→visual-kNN
+  path on the committed `video_scenes.mp4` (a car / a tree / a dog scene at 0/1/2s): a real CLIP-text
+  query "a photo of a car" ranks the CAR frame first and "a photo of a dog" ranks the DOG frame first
+  (real cross-modal visual understanding, not labels), plus the operator-evidence FAILED-run path. No new
+  source-of-truth rule (covered by the already-enforced `derivatives_inherit_source_security` +
+  `content_unit_artifact_is_truth_search_index_is_projection` + `embedding_artifact_pins_model_version_and_chunk_spec`);
+  the `media-plane` family stays `active-covered`, strengthened with the new live test in its normal-path
+  - operator-evidence proofs and testPaths. This is the embedding/semantic-search vision mode only;
+    object-detection (counts/bounding boxes) via a custom CV model or a VLM (`useLlmV3`) is a DIFFERENT
+    Foundry mode and a separate future ratchet (a possible L11b).
+
 Media processing is the first product-driven Temporal use case (the L5 media workflow). A media
 family becomes `active-covered` only when its proof-class tests collect and it is
 registered in `infra-tricky-matrix.json` `families`/`activeStack`; until then it

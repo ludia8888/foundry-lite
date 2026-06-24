@@ -38,6 +38,10 @@ ADDITIONAL_SCENARIOS = {
         "-> index -> search on-screen text + FAILED run operator-evidence"
     ),
     "media-embeddings": "real fastembed embeddings: semantic query ranks via dense vectors (local + ES) + fail-closed",
+    "media-video-vision": (
+        "real ffmpeg scene-frame + CLIP image/text live: video -> scene frames -> CLIP image embeddings -> "
+        "video_scene_vision -> open-vocabulary visual query ranks the car/dog frame first + FAILED run evidence"
+    ),
     "media-workflow-temporal": "media Temporal workflow drives processing -> DB COMMITTED derivative",
     "media-external": "real s3-external connector: virtual media set HEADs live S3 object, drift fails closed",
     "media-golden-pipeline": (

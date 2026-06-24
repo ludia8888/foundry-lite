@@ -705,10 +705,12 @@
         "tests/integration/test_media_ocr_live.py",
         "tests/integration/test_media_asr_live.py",
         "tests/integration/test_media_video_frame_ocr_live.py",
+        "tests/integration/test_media_video_vision_live.py",
         "tests/integration/test_media_embeddings_live.py",
         "tests/unit/test_media_processing_runs.py",
         "tests/unit/test_media_processing_service.py",
         "tests/unit/test_media_content_search.py",
+        "tests/unit/test_media_video_vision.py",
         "tests/unit/test_media_retention_purge.py",
         "tests/contracts/test_media_storage_contract.py"
       ],
@@ -720,7 +722,8 @@
         "normal-path": [
           "test_media_golden_pipeline_threads_one_version_upstream_to_downstream",
           "test_real_ocr_recognizes_rendered_text_through_to_search",
-          "test_real_scene_frame_ocr_makes_on_screen_text_searchable"
+          "test_real_scene_frame_ocr_makes_on_screen_text_searchable",
+          "test_real_clip_visual_search_finds_the_car_frame_in_the_video"
         ],
         "failure-injection": [
           "test_real_ocr_failure_is_visible_as_operator_evidence",
@@ -744,7 +747,8 @@
         "operator-evidence": [
           "test_failure_records_a_failed_run_and_no_committed_derivative_is_visible",
           "test_media_golden_pipeline_threads_one_version_upstream_to_downstream",
-          "test_real_scene_frame_failure_is_visible_as_operator_evidence"
+          "test_real_scene_frame_failure_is_visible_as_operator_evidence",
+          "test_real_scene_vision_failure_is_visible_as_operator_evidence"
         ],
         "docs-sync": [
           "test_infra_tricky_matrix_gate_passes_current_docs_and_ci",

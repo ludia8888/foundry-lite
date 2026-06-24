@@ -42,11 +42,13 @@ from foundry_lite.application.ports.adapter_failure import (
     AdapterFailureContract,
     AdapterFailureMode,
 )
+from foundry_lite.application.ports.embedding_model import EmbeddingVector
 from foundry_lite.application.ports.media_processor import (
     MediaProcessingRequest,
     MediaProcessingResult,
     ProcessedContentUnit,
 )
+from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.infrastructure.adapters.ocr_processor import _tesseract_ocr_engine
 
 _DERIVATIVE_KIND = "video_probe"
@@ -240,6 +242,9 @@ _DEFAULT_SENSITIVITY = "STANDARD"
 
 # source_path -> one (start_ms, ocr_text) per scene frame with recognized text.
 SceneFrameExtractor = Callable[[str], list[tuple[int, str]]]
+# (source_path, outdir) -> one (start_ms, frame_image_path) per scene frame written into outdir
+# (L11 visual embedding input). The caller owns outdir so frames outlive extraction for embedding.
+SceneFramePathExtractor = Callable[[str, str], list[tuple[int, str]]]
 
 
 class VideoFrameError(Exception):
@@ -401,3 +406,144 @@ def _content_hash(units: tuple[ProcessedContentUnit, ...]) -> str:
         digest.update(unit.text_hash.encode("utf-8"))
         digest.update(b"\x00")
     return digest.hexdigest()
+
+
+_SCENE_VISION_DERIVATIVE = "video_scene_vision"
+_VISION_PROCESSOR = "video_vision_v1"
+
+
+def _default_scene_frame_path_extractor(source_path: str, outdir: str) -> list[tuple[int, str]]:
+    # No ffmpeg is wired in-process; deterministic unit tests inject a fake. The real
+    # ``video-scene-vision`` profile injects the ffmpeg path extractor.
+    del source_path, outdir
+    raise VideoFrameError("frame_extractor_unavailable")
+
+
+def _ffmpeg_scene_frame_paths(
+    source_path: str, outdir: str, *, scene_sensitivity: str = "MORE_SENSITIVE"
+) -> list[tuple[int, str]]:
+    # Real engine (L11): extract scene frames with the SAME ffmpeg scene-select as L10 (one PNG
+    # per scene frame, ``pts_time`` timecodes from showinfo stderr) into ``outdir``, but return the
+    # frame IMAGE paths (not OCR) so a CLIP image embedding can be computed per frame.
+    threshold = _scene_threshold(scene_sensitivity)
+    timecodes = _run_ffmpeg_scene_select(source_path, threshold, outdir)
+    frames = sorted(Path(outdir).glob("f_*.png"))
+    return [
+        (round((timecodes[index] if index < len(timecodes) else 0.0) * 1000), str(frame))
+        for index, frame in enumerate(frames)
+    ]
+
+
+class VideoSceneVisionProcessorAdapter:
+    """``MediaProcessorAdapter`` that CLIP-embeds a video's scene frames (profile ``video-scene-vision``).
+
+    The L10 sibling OCRs frames into text; this projects each frame into a CLIP IMAGE embedding so a
+    natural-language query ("a photo of a car") can find the frame by visual content — Foundry's
+    ``extract_scene_frames`` -> ``imageToEmbeddingsV1`` -> Vector property mode. Each ``video_frame_visual``
+    unit carries the CLIP vector + its timecode; the vector (not text) is the searchable content, pinned
+    to the vision model version so it only matches inside a vision-model-pinned index generation.
+    """
+
+    profile_name = "video-scene-vision"
+
+    def __init__(
+        self,
+        vision_embedding_model: VisionEmbeddingModelAdapter,
+        *,
+        timeout_seconds: int = _FRAME_TIMEOUT_SECONDS,
+        scene_frame_path_extractor: SceneFramePathExtractor | None = None,
+    ) -> None:
+        self._vision_embedding_model = vision_embedding_model
+        self._timeout_seconds = timeout_seconds
+        self._scene_frame_path_extractor = scene_frame_path_extractor or _default_scene_frame_path_extractor
+
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode(
+                    "process",
+                    "validation",
+                    False,
+                    "Video is unprocessable or no frame/vision engine is available; frames cannot be embedded.",
+                ),
+                AdapterFailureMode(
+                    "process",
+                    "timeout",
+                    True,
+                    "Scene-frame vision extraction exceeded its budget; the process is killed and retry is bounded.",
+                    timeout_seconds=_FRAME_TIMEOUT_SECONDS,
+                ),
+            ),
+        )
+
+    def supports(self, request: MediaProcessingRequest) -> bool:
+        return request.spec.processor == _VISION_PROCESSOR
+
+    def process(self, request: MediaProcessingRequest) -> MediaProcessingResult:
+        if request.source_path is None:
+            raise self._error("validation", "scene-frame vision requires a source_path", request, is_retryable=False)
+        frames = self._embed_within_timeout(request)
+        units = tuple(
+            ProcessedContentUnit(
+                unit_kind="video_frame_visual",
+                ordinal=index,
+                start_ms=start_ms,
+                text=text,
+                text_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                embedding=embedding,
+            )
+            for index, (start_ms, text, embedding) in enumerate(frames)
+        )
+        return MediaProcessingResult(
+            media_item_version_id=request.media_item_version_id,
+            processing_spec_hash=request.processing_spec_hash,
+            derivative_kind=_SCENE_VISION_DERIVATIVE,
+            content_hash=_content_hash(units),
+            mime_type="application/json",
+            units=units,
+        )
+
+    def _embed_within_timeout(self, request: MediaProcessingRequest) -> list[tuple[int, str, EmbeddingVector]]:
+        assert request.source_path is not None
+        pool = ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(self._extract_and_embed, request.source_path)
+        try:
+            result = future.result(timeout=self._timeout_seconds)
+            pool.shutdown(wait=True)
+            return result
+        except FuturesTimeoutError as exc:
+            pool.shutdown(wait=False)
+            raise self._error("timeout", "scene-frame vision timed out", request, is_retryable=True) from exc
+        except VideoFrameError as exc:
+            pool.shutdown(wait=False)
+            raise self._error("validation", exc.reason, request, is_retryable=False) from exc
+
+    def _extract_and_embed(self, source_path: str) -> list[tuple[int, str, EmbeddingVector]]:
+        # Extraction + embedding share one tempdir scope so frame files outlive extraction.
+        with tempfile.TemporaryDirectory() as outdir:
+            frames = self._scene_frame_path_extractor(source_path, outdir)
+            if not frames:
+                return []
+            embeddings = self._vision_embedding_model.embed_images([path for _, path in frames])
+            return [
+                (start_ms, f"frame@{start_ms}ms", embedding)
+                for (start_ms, _path), embedding in zip(frames, embeddings, strict=False)
+            ]
+
+    def _error(self, kind: str, reason: str, request: MediaProcessingRequest, *, is_retryable: bool) -> AdapterError:
+        return AdapterError(
+            AdapterFailure(
+                self.profile_name,
+                "process",
+                kind,  # type: ignore[arg-type]
+                is_retryable,
+                f"Scene-frame vision failed: {reason}",
+                timeout_seconds=_FRAME_TIMEOUT_SECONDS if kind == "timeout" else None,
+                details={
+                    "mediaItemVersionId": request.media_item_version_id,
+                    "processorSpecHash": request.processing_spec_hash,
+                    "reason": reason,
+                },
+            )
+        )

@@ -370,6 +370,7 @@ def _content_unit_records(
             end_ms=unit.end_ms,
             speaker=unit.speaker,
             language=unit.language,
+            embedding=unit.embedding,
             text=unit.text,
             text_hash=unit.text_hash,
             chunk_spec_hash=spec_hash,

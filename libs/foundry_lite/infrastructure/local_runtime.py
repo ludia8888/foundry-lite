@@ -14,6 +14,7 @@ from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.ontology_repository import PropertyClassificationRow
 from foundry_lite.application.ports.search_adapter import SearchAdapter
+from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.services.object_store.query_cursor import (
     require_object_query_cursor_signing_key_for_runtime,
@@ -56,15 +57,23 @@ from foundry_lite.infrastructure.adapters import (
     TemporalWorkflowAdapterConfig,
     VideoProbeProcessorAdapter,
     VideoSceneFrameProcessorAdapter,
+    VideoSceneVisionProcessorAdapter,
 )
 from foundry_lite.infrastructure.adapters.asr_processor import _faster_whisper_asr_engine
 from foundry_lite.infrastructure.adapters.local_embedding import (
     FASTEMBED_MODEL_VERSION,
     _fastembed_embedding_engine,
 )
+from foundry_lite.infrastructure.adapters.local_vision_embedding import (
+    CLIP_MODEL_VERSION,
+    LocalVisionEmbeddingAdapter,
+    _fastembed_clip_image_engine,
+    _fastembed_clip_text_engine,
+)
 from foundry_lite.infrastructure.adapters.ocr_processor import _tesseract_ocr_engine
 from foundry_lite.infrastructure.adapters.video_probe_processor import (
     _ffmpeg_scene_frame_extractor,
+    _ffmpeg_scene_frame_paths,
     _ffprobe_video_probe_runner,
 )
 from foundry_lite.infrastructure.repositories import (
@@ -130,7 +139,12 @@ def create_local_core_dependencies(
 
     storage_adapter = _dataset_storage_adapter(adapter_profile, object_storage_root)
     media_storage = _media_storage_adapter(adapter_profile, media_storage_root)
-    media_processor = _media_processor_adapter(adapter_profile)
+    vision_embedding_model_adapter = LocalVisionEmbeddingAdapter(
+        image_engine=_fastembed_clip_image_engine,
+        text_engine=_fastembed_clip_text_engine,
+        model_version=CLIP_MODEL_VERSION,
+    )
+    media_processor = _media_processor_adapter(adapter_profile, vision_embedding_model_adapter)
     content_index_adapter = _content_index_adapter(adapter_profile)
     embedding_model_adapter = LocalEmbeddingAdapter(
         embedding_engine=_fastembed_embedding_engine, model_version=FASTEMBED_MODEL_VERSION
@@ -184,6 +198,7 @@ def create_local_core_dependencies(
         media_storage=media_storage,
         content_index_adapter=content_index_adapter,
         embedding_model_adapter=embedding_model_adapter,
+        vision_embedding_model_adapter=vision_embedding_model_adapter,
         search_adapter=search_adapter,
         secret_provider=secret_provider_from_env(),
         stream_adapter=stream_adapter,
@@ -233,7 +248,9 @@ def _s3_external_media_reader_config() -> S3ExternalMediaReaderConfig:
     )
 
 
-def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
+def _media_processor_adapter(
+    adapter_profile: str, vision_embedding_model: VisionEmbeddingModelAdapter
+) -> MediaProcessorAdapter:
     # Media processing is selectable independently of storage; v1 ships the local PDF
     # raw-text processor (pypdf). External processors (OCR/ASR/FFmpeg) land in later ratchets.
     processor_profile = os.getenv("FOUNDRY_LITE_MEDIA_PROCESSOR_PROFILE", adapter_profile)
@@ -243,6 +260,10 @@ def _media_processor_adapter(adapter_profile: str) -> MediaProcessorAdapter:
         return VideoProbeProcessorAdapter(probe_runner=_ffprobe_video_probe_runner)
     if processor_profile == "video-scene-frames":
         return VideoSceneFrameProcessorAdapter(scene_frame_extractor=_ffmpeg_scene_frame_extractor)
+    if processor_profile == "video-scene-vision":
+        return VideoSceneVisionProcessorAdapter(
+            vision_embedding_model, scene_frame_path_extractor=_ffmpeg_scene_frame_paths
+        )
     if processor_profile == "ocr-tesseract":
         return OcrProcessorAdapter(ocr_engine=_tesseract_ocr_engine)
     if processor_profile == "asr-whisper":

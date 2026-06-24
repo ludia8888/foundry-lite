@@ -350,6 +350,8 @@ run_runtime_gate() {
 
   run_runtime_step "Media live video-frame OCR ratchet" pnpm --silent quality:media-live-video-frames
 
+  run_runtime_step "Media live video-vision ratchet" pnpm --silent quality:media-live-video-vision
+
   run_runtime_step "Media live embeddings ratchet" pnpm --silent quality:media-live-embeddings
 
   run_runtime_step "Media live external connector ratchet" pnpm --silent quality:media-live-external
