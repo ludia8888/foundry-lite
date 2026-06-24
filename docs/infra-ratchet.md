@@ -560,7 +560,7 @@ ratchet at a time, each adding at most one new external failure domain.
   preview engine + external connector are deferred (no new env vars). At M9 `workflow_status_does_not_
 replace_domain_commit` (now closed by L5), retention purge, and external-writeback compensation were
   deferred because their proof surfaces (a media Temporal workflow / purge engine / real connector) did
-  not exist yet; retention purge and external-writeback compensation remain deferred.
+  not exist yet; retention purge is now closed by L7, and external-writeback compensation remains deferred.
 
 The **L-series** closes those deferrals — turning the seams into real engines and the
 missing proof surfaces into evidence, so the media families can finally be promoted to
@@ -704,6 +704,33 @@ replace_domain_commit` is now `enforced`: the Temporal `workflow_runs` status an
   `enforced` `external_virtual_object_requires_version_or_mutable_marker` rule with live-path tests (its
   status is unchanged). The L8 external-writeback rules (`external_timeout_is_outcome_unknown_not_failure`
   - compensation) stay `deferred`.
+
+- **L7 — Media retention / legal-hold purge engine (shipped):** M0–M9 deferred
+  `retention_never_purges_reachable_or_legal_hold_version` because only logical delete existed —
+  there was no purge engine to prove it against. L7 builds that engine, mirroring Palantir Foundry
+  retention (**mark → grace → sweep**, an irreversible physical delete) plus the two protections
+  that make a sweep fail-safe. Two columns land on `media_item_versions` (migration `b3d5f7a9c1e2`):
+  `retention_marked_at` (set when a policy marks a version as a sweep candidate) and `legal_hold`
+  (positive boolean, default false). A `MediaRetentionService` (composed into `MediaServices` +
+  the `MediaWorkspace` facade) exposes `mark_media_versions_for_retention` (audited),
+  `place_legal_hold`/`release_legal_hold` (audited), and the sweep
+  `purge_marked_media_versions(now, grace)`. The sweep fetches versions whose
+  `retention_marked_at <= now - grace` and, for each, **NEVER purges** a version under `legal_hold`
+  OR still reachable by a `media_reference_bindings` row targeting it (the reachability source) —
+  exactly like Foundry refusing to delete a still-referenced view. An eligible version is purged
+  physically in one transaction: its `media_derivatives` + `content_units` + `media_access_caches`
+  rows are hard-deleted, the blob is removed via the storage adapter, the `media_item_versions` row
+  is deleted, and the purge is audited; the engine returns a summary (purged + skipped-reachable +
+  skipped-held). The clock is injected (`now`/`grace`) — never read inside — so the sweep is
+  deterministic (no `time.sleep`). Fail-safe: any inability to determine reachability rolls the
+  transaction back, so nothing is purged on doubt. Proven by
+  `tests/unit/test_media_retention_purge.py` (`test_media_retention_skips_reachable_or_legal_hold`
+  sets up A reachable / B held / C eligible and asserts only C is purged with its whole footprint +
+  blob while A/B survive untouched, plus the not-past-grace and audited-purge cases) and the new
+  `MediaRepository` retention-contract tests (sqlite + Postgres). This promotes
+  `retention_never_purges_reachable_or_legal_hold_version` `deferred → enforced`. (The L8 external-
+  writeback compensation rules stay `deferred`; promoting a media family to `active-covered` remains
+  the L9 capstone.)
 
 Media processing is the first product-driven Temporal use case (the L5 media workflow). A media
 family becomes `active-covered` only when its proof-class tests collect and it is

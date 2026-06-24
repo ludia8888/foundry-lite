@@ -114,6 +114,10 @@ class MediaItemVersionRecord:
     status: str
     created_at: str
     committed_at: str | None = None
+    # L7 retention: set when a retention policy marks this version as a sweep candidate.
+    retention_marked_at: str | None = None
+    # L7 legal hold: a held version is never purged, even past its retention grace.
+    has_legal_hold: bool = False
 
 
 class MediaRepository(Protocol):
@@ -224,4 +228,34 @@ class MediaRepository(Protocol):
         self, *, transaction: TransactionContext, tenant_id: str, older_than: str
     ) -> list[MediaItemVersionRecord]:
         """Return STAGED versions whose transaction aborted or never committed, for orphan sweep."""
+        ...
+
+    # -- L7 retention / legal hold / purge -------------------------------------
+
+    def mark_versions_for_retention(
+        self, *, transaction: TransactionContext, tenant_id: str, media_item_version_ids: list[str], marked_at: str
+    ) -> int:
+        """Set ``retention_marked_at`` on the given versions (sweep candidates). Returns rows marked."""
+        ...
+
+    def set_version_legal_hold(
+        self, *, transaction: TransactionContext, tenant_id: str, media_item_version_id: str, has_legal_hold: bool
+    ) -> MediaItemVersionRecord | None:
+        """Toggle the legal hold flag on one version; a held version is never purged."""
+        ...
+
+    def fetch_retention_marked_versions(
+        self, *, transaction: TransactionContext, tenant_id: str, marked_before: str
+    ) -> list[MediaItemVersionRecord]:
+        """Return versions whose ``retention_marked_at`` is at or before the grace cutoff."""
+        ...
+
+    def has_reference_binding(
+        self, *, transaction: TransactionContext, tenant_id: str, media_item_version_id: str
+    ) -> bool:
+        """True if any MediaReference binding targets this version (reachability source)."""
+        ...
+
+    def purge_version(self, *, transaction: TransactionContext, tenant_id: str, media_item_version_id: str) -> None:
+        """Physically delete one version and its derivatives, content units, and access caches."""
         ...

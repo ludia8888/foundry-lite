@@ -241,3 +241,108 @@ def test_fetch_unreachable_staged_versions_finds_aborted_transaction_versions(
         )
 
     assert [version.media_item_version_id for version in orphans] == ["miv-1"]
+
+
+def _binding_values(version_id: str, *, binding_id: str = "mrb-1") -> dict[str, object]:
+    return {
+        "id": binding_id,
+        "tenant_id": "tenant-demo",
+        "holder_type": "Order",
+        "holder_id": "order-1",
+        "property_name": "doc",
+        "media_set_id": "ms-1",
+        "media_item_id": "mi-1",
+        "media_item_version_id": version_id,
+        "logical_path": "/contracts/acme.pdf",
+        "content_hash": "h1",
+        "security_envelope": {"tenantId": "tenant-demo", "classification": "confidential"},
+        "idempotency_key": "bind-1",
+        "created_at": "2026-06-23T00:00:00Z",
+        "updated_at": "2026-06-23T00:00:00Z",
+    }
+
+
+def _seed_version(repo: SqlAlchemyMediaRepository, conn: object, version_id: str, *, version_number: int) -> None:
+    repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+    repo.create_open_transaction(transaction=conn, record=_transaction())
+    repo.upsert_media_item(transaction=conn, record=_item())
+    repo.insert_version(
+        transaction=conn,
+        record=_version(version_id, version_number=version_number, blob_key=f"blob-{version_id}", content_hash="h1"),
+    )
+
+
+def test_mark_and_fetch_retention_marked_versions_is_grace_bounded(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        _seed_version(repo, conn, "miv-1", version_number=1)
+        marked = repo.mark_versions_for_retention(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            media_item_version_ids=["miv-1"],
+            marked_at="2026-06-01T00:00:00Z",
+        )
+        before_grace = repo.fetch_retention_marked_versions(
+            transaction=conn, tenant_id="tenant-demo", marked_before="2026-05-01T00:00:00Z"
+        )
+        past_grace = repo.fetch_retention_marked_versions(
+            transaction=conn, tenant_id="tenant-demo", marked_before="2026-06-10T00:00:00Z"
+        )
+
+    assert marked == 1
+    assert before_grace == []
+    assert [version.media_item_version_id for version in past_grace] == ["miv-1"]
+
+
+def test_legal_hold_toggle_and_reference_reachability(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        _seed_version(repo, conn, "miv-1", version_number=1)
+        held = repo.set_version_legal_hold(
+            transaction=conn, tenant_id="tenant-demo", media_item_version_id="miv-1", has_legal_hold=True
+        )
+        unreachable = repo.has_reference_binding(
+            transaction=conn, tenant_id="tenant-demo", media_item_version_id="miv-1"
+        )
+        conn.execute(db.media_reference_bindings.insert().values(**_binding_values("miv-1")))
+        reachable = repo.has_reference_binding(transaction=conn, tenant_id="tenant-demo", media_item_version_id="miv-1")
+
+    assert held is not None and held.has_legal_hold is True
+    assert unreachable is False
+    assert reachable is True
+
+
+def test_purge_version_removes_version_and_derived_footprint(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        _seed_version(repo, conn, "miv-1", version_number=1)
+        conn.execute(
+            db.media_access_caches.insert().values(
+                id="mac-1",
+                tenant_id="tenant-demo",
+                source_media_item_version_id="miv-1",
+                access_pattern="thumbnail",
+                access_pattern_spec_hash="spec",
+                persistence_policy="persist",
+                source_content_hash="h1",
+                blob_key="cache/miv-1",
+                content_hash="h1",
+                byte_size=1,
+                mime_type="image/png",
+                created_at="2026-06-23T00:00:00Z",
+            )
+        )
+        repo.purge_version(transaction=conn, tenant_id="tenant-demo", media_item_version_id="miv-1")
+        gone = repo.media_item_version_by_id(transaction=conn, tenant_id="tenant-demo", media_item_version_id="miv-1")
+        caches = conn.execute(
+            db.media_access_caches.select().where(db.media_access_caches.c.source_media_item_version_id == "miv-1")
+        ).all()
+
+    assert gone is None
+    assert caches == []
