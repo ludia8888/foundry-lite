@@ -693,6 +693,148 @@
           ]
         }
       }
+    },
+    {
+      "id": "media-plane",
+      "name": "Media/Content Plane",
+      "status": "active-covered",
+      "qualityScript": "quality:media-active-covered",
+      "ciCommand": "pnpm --silent quality:media-active-covered",
+      "testPaths": [
+        "tests/integration/test_media_golden_pipeline_live.py",
+        "tests/integration/test_media_ocr_live.py",
+        "tests/integration/test_media_asr_live.py",
+        "tests/integration/test_media_embeddings_live.py",
+        "tests/unit/test_media_processing_runs.py",
+        "tests/unit/test_media_processing_service.py",
+        "tests/unit/test_media_content_search.py",
+        "tests/unit/test_media_retention_purge.py",
+        "tests/contracts/test_media_storage_contract.py"
+      ],
+      "proofs": {
+        "adapter-contract": [
+          "test_media_storage_adapter_shape_is_satisfiable",
+          "test_media_processor_pins_spec_hash_and_reports_support"
+        ],
+        "normal-path": [
+          "test_media_golden_pipeline_threads_one_version_upstream_to_downstream",
+          "test_real_ocr_recognizes_rendered_text_through_to_search"
+        ],
+        "failure-injection": [
+          "test_real_ocr_failure_is_visible_as_operator_evidence",
+          "test_real_asr_failure_is_visible_as_operator_evidence"
+        ],
+        "concurrency-race": [
+          "test_concurrent_same_path_commits_keep_both_versions"
+        ],
+        "retry-idempotency": [
+          "test_process_is_idempotent_duplicate_yields_one_derivative",
+          "test_ocr_is_idempotent_but_model_upgrade_reprocesses"
+        ],
+        "partial-success": [
+          "test_oversized_image_records_failed_evidence_and_commits_nothing",
+          "test_indexing_surfaces_partial_failure"
+        ],
+        "recovery-cleanup": [
+          "test_media_retention_skips_reachable_or_legal_hold",
+          "test_content_index_rebuilds_from_committed_artifacts"
+        ],
+        "operator-evidence": [
+          "test_failure_records_a_failed_run_and_no_committed_derivative_is_visible",
+          "test_media_golden_pipeline_threads_one_version_upstream_to_downstream"
+        ],
+        "docs-sync": [
+          "test_infra_tricky_matrix_gate_passes_current_docs_and_ci",
+          "test_infra_ratchet_gate_passes_current_docs_and_ci"
+        ]
+      },
+      "trickyItems": [
+        {
+          "id": "M1",
+          "tests": ["test_media_storage_adapter_shape_is_satisfiable"]
+        },
+        {
+          "id": "M2",
+          "tests": [
+            "test_media_golden_pipeline_threads_one_version_upstream_to_downstream"
+          ]
+        },
+        {
+          "id": "M3",
+          "tests": [
+            "test_process_commits_derivative_with_inherited_security_envelope"
+          ]
+        },
+        {
+          "id": "M4",
+          "tests": [
+            "test_process_is_idempotent_duplicate_yields_one_derivative"
+          ]
+        },
+        {
+          "id": "M5",
+          "tests": [
+            "test_oversized_image_records_failed_evidence_and_commits_nothing"
+          ]
+        },
+        {
+          "id": "M6",
+          "tests": [
+            "test_failure_records_a_failed_run_and_no_committed_derivative_is_visible"
+          ]
+        },
+        {
+          "id": "M7",
+          "tests": ["test_content_index_rebuilds_from_committed_artifacts"]
+        },
+        {
+          "id": "M8",
+          "tests": ["test_retrieval_drops_citation_hash_mismatch"]
+        },
+        {
+          "id": "M9",
+          "tests": [
+            "test_media_golden_pipeline_threads_committed_audio_through_real_asr_to_search"
+          ]
+        }
+      ],
+      "sourceOfTruthRules": [
+        "metadata_db_committed_media_version_is_serving_truth",
+        "blob_existence_is_not_serving_truth",
+        "media_reference_pins_immutable_version",
+        "logical_path_head_is_not_historical_reference",
+        "derivatives_inherit_source_security",
+        "content_unit_artifact_is_truth_search_index_is_projection",
+        "embedding_artifact_pins_model_version_and_chunk_spec",
+        "access_pattern_cache_is_not_truth",
+        "external_virtual_object_requires_version_or_mutable_marker",
+        "workflow_status_does_not_replace_domain_commit",
+        "retention_never_purges_reachable_or_legal_hold_version"
+      ],
+      "operatorEvidence": {
+        "runField": "mediaProcessingRuns",
+        "requiredPayloadPaths": [
+          "mediaProcessingRuns[].status",
+          "mediaProcessingRuns[].failureKind",
+          "mediaProcessingRuns[].failureReason",
+          "mediaProcessingRuns[].mediaDerivativeId"
+        ],
+        "durableEvidenceCategories": ["run", "error", "audit"],
+        "testAssertions": {
+          "mediaProcessingRuns[].status": [
+            "test_failure_records_a_failed_run_and_no_committed_derivative_is_visible"
+          ],
+          "mediaProcessingRuns[].failureKind": [
+            "test_failure_records_a_failed_run_and_no_committed_derivative_is_visible"
+          ],
+          "mediaProcessingRuns[].failureReason": [
+            "test_failure_records_a_failed_run_and_no_committed_derivative_is_visible"
+          ],
+          "mediaProcessingRuns[].mediaDerivativeId": [
+            "test_failure_records_a_failed_run_and_no_committed_derivative_is_visible"
+          ]
+        }
+      }
     }
   ],
   "crossCuttingFlowProofs": [
