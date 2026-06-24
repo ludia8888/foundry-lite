@@ -984,7 +984,11 @@
       "status": "enforced",
       "tests": [
         "test_virtual_media_requires_version_or_mutable_marker",
-        "test_virtual_etag_drift_fails_closed"
+        "test_virtual_etag_drift_fails_closed",
+        "test_external_pinned_etag_resolves_against_live_object",
+        "test_external_etag_drift_fails_closed_when_source_overwritten",
+        "test_external_mutable_reference_surfaces_freshness_on_delete",
+        "test_external_unversioned_register_is_rejected"
       ]
     },
     "retention_never_purges_reachable_or_legal_hold_version": {

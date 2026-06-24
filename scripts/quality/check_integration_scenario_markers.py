@@ -35,6 +35,7 @@ ADDITIONAL_SCENARIOS = {
     "media-video": "real ffprobe video live: video -> video_probe metadata + audio -> asr_v1 -> search + FAILED run",
     "media-embeddings": "real fastembed embeddings: semantic query ranks via dense vectors (local + ES) + fail-closed",
     "media-workflow-temporal": "media Temporal workflow drives processing -> DB COMMITTED derivative",
+    "media-external": "real s3-external connector: virtual media set HEADs live S3 object, drift fails closed",
 }
 KNOWN_SCENARIOS = {**REQUIRED_SCENARIOS, **ADDITIONAL_SCENARIOS}
 

@@ -24,7 +24,11 @@ from foundry_lite.infrastructure.adapters.kafka_stream import (
 )
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_embedding import LocalEmbeddingAdapter
-from foundry_lite.infrastructure.adapters.local_external_media_reader import LocalExternalMediaReader
+from foundry_lite.infrastructure.adapters.local_external_media_reader import (
+    LocalExternalMediaReader,
+    S3ExternalMediaReader,
+    S3ExternalMediaReaderConfig,
+)
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.adapters.local_preview_renderer import LocalPreviewRendererAdapter
 from foundry_lite.infrastructure.adapters.ocr_processor import OcrProcessorAdapter
@@ -90,6 +94,8 @@ __all__ = [
     "RestPullConnectorAdapter",
     "S3MediaStorageAdapter",
     "S3MediaStorageConfig",
+    "S3ExternalMediaReader",
+    "S3ExternalMediaReaderConfig",
     "IcebergDatasetStorageAdapter",
     "IcebergDatasetStorageAdapterConfig",
     "S3DatasetStorageAdapter",
