@@ -98,7 +98,12 @@ def test_operator_evidence_rejects_assertion_test_outside_operator_proof(
 
 def test_source_of_truth_fails_when_deferred_rule_missing_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     matrix = _matrix()
-    matrix["sourceOfTruthRules"]["external_timeout_is_outcome_unknown_not_failure"]["deferral"].pop("reason", None)
+    # A synthetic deferred rule missing its `reason` field (all real rules are now enforced).
+    matrix["sourceOfTruthRules"]["synthetic_deferred_rule"] = {
+        "description": "A rule whose proof surface is not built yet.",
+        "status": "deferred",
+        "deferral": {"riskTier": "T0", "futureTest": "test_synthetic_future", "owningDoc": "docs/x.md"},
+    }
     monkeypatch.setattr(sot_gate, "load_matrix", lambda: matrix)
 
     findings = sot_gate.collect_findings()

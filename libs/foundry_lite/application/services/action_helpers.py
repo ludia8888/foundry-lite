@@ -88,6 +88,7 @@ def action_command(
     simulate_writeback_failure: bool,
     simulate_writeback_outcome_unknown: bool,
     simulate_writeback_compensation_required: bool,
+    external_writeback_uri: str | None = None,
 ) -> ActionApplyCommand:
     if not idempotency_key:
         raise ValidationFailed("idempotency key is required")
@@ -112,6 +113,7 @@ def action_command(
         simulate_writeback_failure=simulate_writeback_failure,
         simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
         simulate_writeback_compensation_required=simulate_writeback_compensation_required,
+        external_writeback_uri=external_writeback_uri,
     )
 
 
@@ -193,13 +195,15 @@ def writeback_error_payload(
     error: ExternalSystemError,
     ctx: RequestContext,
     action_run_id: str,
+    *,
+    connector_id: str = MOCK_WRITEBACK_CONNECTOR,
 ) -> ActionErrorPayload:
     return runtime_service._error_payload(
         error,
         ctx,
         run_id=action_run_id,
         correlation_id=action_run_id,
-        adapter=MOCK_WRITEBACK_CONNECTOR,
+        adapter=connector_id,
     )
 
 

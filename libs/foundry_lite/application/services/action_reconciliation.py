@@ -15,6 +15,11 @@ from foundry_lite.application.ports.action_repository import (
     ActionWritebackReconciliation,
     ActionWritebackRecord,
 )
+from foundry_lite.application.ports.external_writeback_adapter import (
+    ExternalWritebackAdapter,
+    ExternalWriteTarget,
+    RemoteOutcomeStatus,
+)
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.action_mutations import ActionMutationUnitOfWork
 from foundry_lite.application.services.action_protocols import (
@@ -37,21 +42,26 @@ class ActionWritebackReconciliationWorkflow:
     object_records_service: ActionObjectRecordLookup
     ontology_service: ActionOntologyLookup
     runtime_service: ActionRuntimeBoundary
+    external_writeback_adapter: ExternalWritebackAdapter | None = None
 
     def reconcile(
         self,
         writeback_id: str,
         *,
-        remote_status: str,
-        remote_resource_id: str,
+        remote_status: str | None = None,
+        remote_resource_id: str | None = None,
+        external_writeback_uri: str | None = None,
         ctx: RequestContext,
     ) -> ActionWritebackReconciliationResult:
         self._require_operations_retry(ctx, writeback_id)
-        _validate_remote_success(remote_status, remote_resource_id)
+        status, resource_id = self._resolve_remote_outcome(
+            remote_status, remote_resource_id, external_writeback_uri, writeback_id, ctx
+        )
+        _validate_remote_success(status, resource_id)
         with self.engine.begin() as conn:
             writeback = self._required_writeback(conn, ctx, writeback_id)
             if writeback.status == "reconciled":
-                return _already_reconciled_result(writeback, remote_status, remote_resource_id)
+                return _already_reconciled_result(writeback, status, resource_id)
             action_run = self._required_action_run(conn, ctx, writeback.action_run_id)
             self._require_outcome_unknown(writeback, action_run)
             return self._reconcile_outcome_unknown(
@@ -59,9 +69,47 @@ class ActionWritebackReconciliationWorkflow:
                 ctx,
                 writeback=writeback,
                 action_run=action_run,
-                remote_status=remote_status,
-                remote_resource_id=remote_resource_id,
+                remote_status=status,
+                remote_resource_id=resource_id,
             )
+
+    def _resolve_remote_outcome(
+        self,
+        remote_status: str | None,
+        remote_resource_id: str | None,
+        external_writeback_uri: str | None,
+        writeback_id: str,
+        ctx: RequestContext,
+    ) -> tuple[str, str]:
+        """Operator-provided remote_status wins; otherwise HEAD the real external system."""
+        if remote_status is not None:
+            return remote_status, remote_resource_id or ""
+        if external_writeback_uri is None or self.external_writeback_adapter is None:
+            raise ValidationFailed(
+                "reconciliation requires an operator remote_status or a real external writeback lookup",
+                details={"writeback_id": writeback_id},
+            )
+        return self._lookup_remote_outcome(external_writeback_uri, writeback_id, ctx)
+
+    def _lookup_remote_outcome(
+        self,
+        external_writeback_uri: str,
+        writeback_id: str,
+        ctx: RequestContext,
+    ) -> tuple[str, str]:
+        adapter = self.external_writeback_adapter
+        assert adapter is not None  # guaranteed by caller  # nosec B101
+        with self.engine.begin() as conn:
+            writeback = self._required_writeback(conn, ctx, writeback_id)
+        outcome = adapter.remote_lookup(
+            ExternalWriteTarget(uri=external_writeback_uri, idempotency_key=writeback.idempotency_key)
+        )
+        if outcome.status is not RemoteOutcomeStatus.LANDED:
+            raise ValidationFailed(
+                "real remote lookup did not find the external write landed",
+                details={"writeback_id": writeback_id, "remote_status": outcome.status.value},
+            )
+        return "succeeded", outcome.remote_resource_id or ""
 
     def _require_operations_retry(self, ctx: RequestContext, writeback_id: str) -> None:
         try:
@@ -110,9 +158,13 @@ class ActionWritebackReconciliationWorkflow:
         return action_run
 
     def _require_outcome_unknown(self, writeback: ActionWritebackRecord, action_run: ActionRunRow) -> None:
-        if writeback.status != "outcome_unknown" or action_run["status"] != "outcome_unknown":
+        # Both an outcome_unknown writeback (a timeout that may have landed) and a compensation_required
+        # writeback (external success + local failure) are unresolved before-commit external side effects
+        # that a remote-success reconciliation drives forward to a committed local mutation.
+        resolvable = {"outcome_unknown", "compensation_required"}
+        if writeback.status not in resolvable or action_run["status"] not in resolvable:
             raise ValidationFailed(
-                "action writeback is not outcome-unknown",
+                "action writeback is not resolvable by reconciliation",
                 details={
                     "writeback_id": writeback.writeback_id,
                     "writeback_status": writeback.status,
@@ -202,7 +254,7 @@ class ActionWritebackReconciliationWorkflow:
             resource_type="action_run",
             resource_id=action_run_id,
             action="reconcile",
-            before_ref={"writebackStatus": "outcome_unknown", "writebackId": writeback.writeback_id},
+            before_ref={"writebackStatus": writeback.status, "writebackId": writeback.writeback_id},
             after_ref={**dict(response), "objectEditId": mutation.get("objectEditId")},
             correlation_id=action_run_id,
         )

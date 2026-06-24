@@ -41,8 +41,9 @@ class ActionWritebackReconciler(Protocol):
         self,
         writeback_id: str,
         *,
-        remote_status: str,
-        remote_resource_id: str,
+        remote_status: str | None = None,
+        remote_resource_id: str | None = None,
+        external_writeback_uri: str | None = None,
         ctx: RequestContext | None = None,
     ) -> Mapping[str, object]: ...
 
@@ -332,14 +333,16 @@ class OperationsConsole:
         self,
         writeback_id: str,
         *,
-        remote_status: str,
-        remote_resource_id: str,
+        remote_status: str | None = None,
+        remote_resource_id: str | None = None,
+        external_writeback_uri: str | None = None,
         ctx: RequestContext | None = None,
     ) -> Mapping[str, object]:
         return self._action.reconcile_action_writeback(
             writeback_id,
             remote_status=remote_status,
             remote_resource_id=remote_resource_id,
+            external_writeback_uri=external_writeback_uri,
             ctx=ctx,
         )
 
