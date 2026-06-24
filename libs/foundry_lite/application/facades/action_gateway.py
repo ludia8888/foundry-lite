@@ -28,6 +28,7 @@ class ActionGateway:
         simulate_writeback_failure: bool = False,
         simulate_writeback_outcome_unknown: bool = False,
         simulate_writeback_compensation_required: bool = False,
+        external_writeback_uri: str | None = None,
     ) -> ActionApplyResponse:
         return self._action.apply_action(
             action_api_name,
@@ -40,4 +41,5 @@ class ActionGateway:
             simulate_writeback_failure=simulate_writeback_failure,
             simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
             simulate_writeback_compensation_required=simulate_writeback_compensation_required,
+            external_writeback_uri=external_writeback_uri,
         )

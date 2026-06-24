@@ -38,6 +38,7 @@ class ActionApplyCommand:
     simulate_writeback_failure: bool
     simulate_writeback_outcome_unknown: bool
     simulate_writeback_compensation_required: bool
+    external_writeback_uri: str | None = None
 
 
 @dataclass(frozen=True)

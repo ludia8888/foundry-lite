@@ -41,7 +41,7 @@ Explicitly deferred beyond the v1 core:
 - PostgreSQL JSONB production object store and PostgreSQL snapshot connector implementation.
 - Multi-step Alembic upgrade/rollback workflows and production migration runbooks beyond the current parity/safety gates.
 - Real CEL or JSON Logic evaluator.
-- Real external ERP/webhook writeback and vendor remote lookup/compensation worker execution.
+- Autonomous compensation/manual-review queue worker for unresolved action writebacks. The real external writeback itself is now shipped (L8): the `ExternalWritebackAdapter` port + `S3ExternalWritebackAdapter` (profile `s3-external-writeback`, reusing `FOUNDRY_LITE_S3_*`) make the before-commit action side effect a real PUT/HEAD against live MinIO — a write timeout records `outcome_unknown` (idempotent replay, not a guaranteed failure), a real write that lands followed by a local failure records `compensation_required` (not a silent local rollback), and `reconcile_action_writeback` resolves either by a real `remote_lookup` (HEAD) or an operator-provided remote_status, promoting both `external_timeout_is_outcome_unknown_not_failure` and `external_failure_requires_compensation_not_silent_local_rollback` to enforced (`quality:action-writeback-live`). Still deferred: a standing review-queue/dashboard and an autonomous worker that drives reconciliation without an operator call.
 - Continuously running Kafka/Redpanda stream workers, CDC object-indexing workers, and deployment-specific broker/CDC packaging.
 - Managed Elasticsearch deployment and operations beyond the current adapter/projection/live-cluster proof.
 - Iceberg maintenance execution, production catalog operations, and managed retention/compaction beyond the current planning/storage ratchet.

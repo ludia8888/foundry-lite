@@ -703,7 +703,7 @@ replace_domain_commit` is now `enforced`: the Temporal `workflow_runs` status an
   surfaces `is_stale` after delete, and an unversioned register is rejected. This strengthens the already-
   `enforced` `external_virtual_object_requires_version_or_mutable_marker` rule with live-path tests (its
   status is unchanged). The L8 external-writeback rules (`external_timeout_is_outcome_unknown_not_failure`
-  - compensation) stay `deferred`.
+  - compensation) are now closed by L8 below.
 
 - **L7 — Media retention / legal-hold purge engine (shipped):** M0–M9 deferred
   `retention_never_purges_reachable_or_legal_hold_version` because only logical delete existed —
@@ -729,8 +729,38 @@ replace_domain_commit` is now `enforced`: the Temporal `workflow_runs` status an
   blob while A/B survive untouched, plus the not-past-grace and audited-purge cases) and the new
   `MediaRepository` retention-contract tests (sqlite + Postgres). This promotes
   `retention_never_purges_reachable_or_legal_hold_version` `deferred → enforced`. (The L8 external-
-  writeback compensation rules stay `deferred`; promoting a media family to `active-covered` remains
+  writeback rules are closed by L8 below; promoting a media family to `active-covered` remains
   the L9 capstone.)
+
+- **L8 — Real external writeback + compensation for ontology actions (shipped):** The action
+  external-writeback surface (S53) already implemented outcome*unknown + compensation semantics, but
+  only ever through the `simulate_writeback*_`flags — the two matrix rules`external*timeout_is_outcome_unknown_not_failure`and`external_failure_requires_compensation_not_silent_local_rollback`stayed`deferred`waiting for a
+real external system. L8 makes the before-commit writeback **real** against live MinIO and promotes
+both rules to`enforced`. A new application port `ExternalWritebackAdapter`
+(`write(target, payload) -> WriteReceipt`, `remote_lookup(target) -> RemoteOutcome`) models the three
+reach-out shapes (LANDED / AMBIGUOUS / ABSENT); the default `UnavailableExternalWritebackAdapter`
+raises (no vendor bundled), so the simulated path stays the only one exercised until a real adapter is
+injected (`ActionService.set_external_writeback_adapter`). The first real adapter,
+`S3ExternalWritebackAdapter`(profile`s3-external-writeback`, reusing the existing `FOUNDRY_LITE_S3*_`connection through`build*s3_client`+`is_not_found_error`— no new env var, mirroring`S3ExternalMediaReader`), PUTs the writeback payload to `s3://<bucket>/external-writebacks/<idempotency_key>`(so a replay PUTs the same object — idempotent, not a blind new write); a connection/read timeout maps
+to an AMBIGUOUS receipt and`remote_lookup`HEADs the same key (present → LANDED, real 404 → ABSENT).
+When an action carries a real`external_writeback_uri`, the service routes through the real adapter
+additively (the `simulate*\*`flags still work): a real timeout → the existing`outcome_unknown`recording path (NOT failure, idempotent replay); a real write that LANDED followed by a local-mutation
+failure → the transaction rolls back and`compensation_required`is recorded in a fresh transaction
+(never a silent local-only rollback).`reconcile_action_writeback`now resolves an unresolved writeback
+(outcome_unknown **or** compensation_required) either by an operator-provided`remote_status`(kept) or
+by a real`remote_lookup`when given an`external_writeback_uri`(HEAD finds the landed object →`succeeded`); the `ACTION_RUN_RECONCILED`/`ACTION_WRITEBACK_RECONCILED`transitions were broadened to
+accept`compensation_required`as well as`outcome_unknown`. Proven live against MinIO by
+`tests/integration/test_action_external_writeback_live.py`
+(`test_action_external_timeout_is_outcome_unknown_not_failed`: a dead-endpoint write times out →
+outcome_unknown + idempotent replay; `test_action_external_success_local_failure_requires_real_compensation`:
+a real write LANDS in MinIO, the local commit fails → compensation_required, then a real HEAD remote_lookup
+resolves it to a committed object edit), the per-port contract
+`tests/contracts/test_external_writeback_adapter_contract.py`, and the new
+`pnpm quality:action-writeback-live`runtime lane (after`quality:saga-reconciliation`). This promotes
+both `external_timeout_is_outcome_unknown_not_failure`and`external_failure_requires_compensation_not_silent_local_rollback` `deferred → enforced`. **Deferred
+remainder:** a standing **manual-review queue / dashboard** for unresolved compensations (a reconciliation
+driver still requires an operator/automation to call `reconcile_action_writeback`); the writeback path is
+  closed, but no autonomous review-queue worker ships in L8.
 
 Media processing is the first product-driven Temporal use case (the L5 media workflow). A media
 family becomes `active-covered` only when its proof-class tests collect and it is

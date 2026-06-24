@@ -36,6 +36,10 @@ ADDITIONAL_SCENARIOS = {
     "media-embeddings": "real fastembed embeddings: semantic query ranks via dense vectors (local + ES) + fail-closed",
     "media-workflow-temporal": "media Temporal workflow drives processing -> DB COMMITTED derivative",
     "media-external": "real s3-external connector: virtual media set HEADs live S3 object, drift fails closed",
+    "action-external-writeback-live": (
+        "real action external writeback to live MinIO: write timeout -> outcome_unknown + idempotent "
+        "replay; external success + local failure -> compensation_required resolved by real remote_lookup"
+    ),
 }
 KNOWN_SCENARIOS = {**REQUIRED_SCENARIOS, **ADDITIONAL_SCENARIOS}
 

@@ -370,6 +370,8 @@ run_runtime_gate() {
 
   run_runtime_step "Saga reconciliation ratchet" pnpm --silent quality:saga-reconciliation
 
+  run_runtime_step "Action external writeback live ratchet" pnpm --silent quality:action-writeback-live
+
   run_runtime_step "Data quality contract ratchet" pnpm --silent quality:data-contracts
 
   run_runtime_step "Dataset schema evolution ratchet" pnpm --silent quality:schema-evolution
