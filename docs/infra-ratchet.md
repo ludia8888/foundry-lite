@@ -557,9 +557,10 @@ ratchet at a time, each adding at most one new external failure domain.
   version is re-validated on resolve through an injectable `ExternalMediaReader` (a drift fails
   closed), while a mutable reference surfaces freshness rather than failing
   (`external_virtual_object_requires_version_or_mutable_marker` promoted to `enforced`). The real
-  preview engine + external connector are deferred (no new env vars). `workflow_status_does_not_
-replace_domain_commit`, retention purge, and external-writeback compensation stay deferred —
-  their proof surfaces (a media Temporal workflow / purge engine / real connector) do not exist yet.
+  preview engine + external connector are deferred (no new env vars). At M9 `workflow_status_does_not_
+replace_domain_commit` (now closed by L5), retention purge, and external-writeback compensation were
+  deferred because their proof surfaces (a media Temporal workflow / purge engine / real connector) did
+  not exist yet; retention purge and external-writeback compensation remain deferred.
 
 The **L-series** closes those deferrals — turning the seams into real engines and the
 missing proof surfaces into evidence, so the media families can finally be promoted to
@@ -661,8 +662,27 @@ missing proof surfaces into evidence, so the media families can finally be promo
   doc first through `ElasticsearchContentIndexAdapter`'s real `script_score` cosine similarity). No
   family promotion happens at L4 — `infra-tricky-matrix.json` is untouched; promotion is the L9
   capstone.
+- **L5 — Media Temporal workflow + the workflow-status invariant (shipped):** the first
+  product-driven Temporal use case. A `MediaProcessingWorkflow` (`@workflow.defn`, registered
+  alongside `ConnectorSyncWorkflow`/`FoundryWorkflow` on the worker + sandbox runner) runs a single
+  `run_media_processing_step` activity that drives a real `MediaProcessingService.process`;
+  `WorkflowOrchestrationService.start_media_processing_workflow` (surfaced on `foundry.operations`)
+  mirrors `start_connector_sync_workflow` — validate permission, fingerprint the request, idempotent-
+  insert a `workflow_runs` ledger row (replay/concurrent-start returns the same run), start/await via
+  the `workflow_adapter`, audit through `runtime_service`. The invariant `workflow_status_does_not_
+replace_domain_commit` is now `enforced`: the Temporal `workflow_runs` status and the L0
+  `media_processing_runs` status are orchestration/operations evidence and do NOT gate
+  `resolve_derivative` (which returns only a COMMITTED derivative). This mirrors Palantir Foundry
+  Builds, where a Build/Job-Status check "succeeds if the target dataset successfully builds" — the
+  committed dataset/transaction is the success signal and the build/schedule status merely orchestrates
+  it. Proven by `test_media_workflow_status_does_not_replace_domain_commit` (deterministic: a workflow
+  run marked succeeded never makes a failed-processing derivative resolvable; a committed derivative is
+  still served when the workflow status is failed/unknown — the DB commit wins) and the time-skipping
+  `test_media_processing_workflow_runs_through_temporal_and_commits` (`pnpm quality:media-workflow-temporal`,
+  wired into the `ci_gate.sh` runtime lane). No media _family_ promotion happens at L5 — that is the L9
+  capstone; only the deferred source-of-truth rule is promoted.
 
-Media processing will be the first product-driven Temporal use case (M2). A media
+Media processing is the first product-driven Temporal use case (the L5 media workflow). A media
 family becomes `active-covered` only when its proof-class tests collect and it is
 registered in `infra-tricky-matrix.json` `families`/`activeStack`; until then it
 stays in this queue and as `sourceOfTruthRules` deferrals only.

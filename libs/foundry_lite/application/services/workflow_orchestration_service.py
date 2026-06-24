@@ -33,6 +33,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
 
 CONNECTOR_SYNC_WORKFLOW_NAME = "ConnectorSyncWorkflow"
+MEDIA_PROCESSING_WORKFLOW_NAME = "MediaProcessingWorkflow"
 
 
 class WorkflowOrchestrationService(CoreService):
@@ -63,6 +64,20 @@ class WorkflowOrchestrationService(CoreService):
         row = self._ensure_workflow_intent(ctx, request, dataset_id=str(dataset["id"]))
         return self._start_or_replay(ctx, request, row)
 
+    def start_media_processing_workflow(
+        self,
+        *,
+        media_item_version_id: str,
+        processor_spec: Mapping[str, object],
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> ProductWorkflowRun:
+        ctx = ctx or RequestContext()
+        self._require_media_workflow_start(ctx, media_item_version_id)
+        request = _media_processing_request(ctx, media_item_version_id, processor_spec, idempotency_key)
+        row = self._ensure_workflow_intent(ctx, request, dataset_id=None)
+        return self._start_or_replay(ctx, request, row)
+
     def product_workflow_run(self, workflow_run_id: str, *, ctx: RequestContext | None = None) -> ProductWorkflowRun:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "operations:read:detail", "product_workflow", workflow_run_id)
@@ -85,12 +100,21 @@ class WorkflowOrchestrationService(CoreService):
             resource_id=dataset_ref,
         )
 
+    def _require_media_workflow_start(self, ctx: RequestContext, media_item_version_id: str) -> None:
+        self.runtime_service._require_or_audit(ctx, "dataset:write", "media_item_version", media_item_version_id)
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation="start_media_processing_workflow",
+            resource_type="media_item_version",
+            resource_id=media_item_version_id,
+        )
+
     def _ensure_workflow_intent(
         self,
         ctx: RequestContext,
         request: WorkflowStartRequest,
         *,
-        dataset_id: str,
+        dataset_id: str | None,
     ) -> WorkflowRunRow:
         with self.engine.begin() as conn:
             existing = self.runtime_repository.insert_workflow_run_or_get_existing(
@@ -229,11 +253,37 @@ def _connector_sync_input(
     }
 
 
+def _media_processing_request(
+    ctx: RequestContext,
+    media_item_version_id: str,
+    processor_spec: Mapping[str, object],
+    idempotency_key: str,
+) -> WorkflowStartRequest:
+    return WorkflowStartRequest(
+        workflow_name=MEDIA_PROCESSING_WORKFLOW_NAME,
+        tenant_id=ctx.tenant_id,
+        request_id=ctx.request_id,
+        idempotency_key=idempotency_key,
+        input=_media_processing_input(media_item_version_id, processor_spec),
+    )
+
+
+def _media_processing_input(
+    media_item_version_id: str,
+    processor_spec: Mapping[str, object],
+) -> Mapping[str, object]:
+    return {
+        "workflowKind": "media_processing",
+        "mediaItemVersionId": media_item_version_id,
+        "processorSpec": dict(processor_spec),
+    }
+
+
 def _workflow_record(
     ctx: RequestContext,
     request: WorkflowStartRequest,
     workflow_profile: str,
-    dataset_id: str,
+    dataset_id: str | None,
 ) -> WorkflowRunRecord:
     return WorkflowRunRecord(
         workflow_run_id=workflow_run_id(request),

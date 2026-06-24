@@ -34,6 +34,7 @@ ADDITIONAL_SCENARIOS = {
     "media-asr": "real faster-whisper ASR live: audio -> asr_v1 -> index -> search + FAILED run operator-evidence",
     "media-video": "real ffprobe video live: video -> video_probe metadata + audio -> asr_v1 -> search + FAILED run",
     "media-embeddings": "real fastembed embeddings: semantic query ranks via dense vectors (local + ES) + fail-closed",
+    "media-workflow-temporal": "media Temporal workflow drives processing -> DB COMMITTED derivative",
 }
 KNOWN_SCENARIOS = {**REQUIRED_SCENARIOS, **ADDITIONAL_SCENARIOS}
 

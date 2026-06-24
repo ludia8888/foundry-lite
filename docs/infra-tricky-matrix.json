@@ -964,13 +964,11 @@
     },
     "workflow_status_does_not_replace_domain_commit": {
       "description": "A Temporal workflow status is not a media domain commit; the DB COMMITTED version remains the only success signal.",
-      "status": "deferred",
-      "deferral": {
-        "reason": "Media processing is the first product-driven Temporal use case (M2/PR4); no media workflow exists yet.",
-        "riskTier": "T0",
-        "futureTest": "test_media_workflow_status_does_not_imply_domain_commit",
-        "owningDoc": "docs/adr/0001-media-plane-parallel-to-dataset-plane.md"
-      }
+      "status": "enforced",
+      "tests": [
+        "test_media_workflow_status_does_not_replace_domain_commit",
+        "test_media_processing_workflow_runs_through_temporal_and_commits"
+      ]
     },
     "access_pattern_cache_is_not_truth": {
       "description": "On-demand access-pattern derivatives (thumbnail/preview/waveform) are caches, never serving truth.",
