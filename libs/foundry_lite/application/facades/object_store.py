@@ -97,6 +97,7 @@ class ObjectStore:
         limit: int = 50,
         cursor: str | None = None,
         search_text: str | None = None,
+        semantic_text: str | None = None,
     ) -> ObjectQueryResult:
         return self._objects.query.query_objects(
             object_type_api_name,
@@ -106,6 +107,7 @@ class ObjectStore:
             limit=limit,
             cursor=cursor,
             search_text=search_text,
+            semantic_text=semantic_text,
         )
 
     def create_set(

@@ -14,11 +14,9 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.ports.search_adapter import (
-    SearchDocument,
     SearchHit,
     SearchIndexAdapter,
     SearchIndexMapping,
-    SearchQuery,
 )
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.object_store.search_projection_context import (
@@ -30,12 +28,18 @@ from foundry_lite.application.services.object_store.search_runs import (
     succeed_search_object_change,
     succeed_search_rebuild,
 )
+from foundry_lite.application.services.object_store.semantic_search import (
+    EmbeddingModelAdapter,
+    keyword_search_query,
+    require_semantic_model,
+    search_document,
+    search_limit,
+    semantic_search_query,
+)
 from foundry_lite.application.services.object_store.serving_contract import record_scope_object_type_id
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.security.policy import PolicyService
-
-SEARCH_INDEX_MAX_LIMIT = 500
 
 
 class ObjectSearchOntologyLookup(Protocol):
@@ -92,11 +96,19 @@ class ObjectSearchRuntimeBoundary(Protocol):
 class ObjectSearchService(CoreService):
     """Keep object search as a rebuildable projection, not the source of truth."""
 
-    required_dependencies = ("engine", "policy", "object_index_repository", "object_read_repository", "search_adapter")
+    required_dependencies = (
+        "engine",
+        "policy",
+        "object_index_repository",
+        "object_read_repository",
+        "search_adapter",
+        "embedding_model_adapter",
+    )
     required_collaborators = ("ontology_service", "runtime_service")
     ontology_service: ObjectSearchOntologyLookup
     runtime_service: ObjectSearchRuntimeBoundary
     search_adapter: SearchIndexAdapter
+    embedding_model_adapter: EmbeddingModelAdapter
 
     def search_objects(
         self,
@@ -108,10 +120,36 @@ class ObjectSearchService(CoreService):
     ) -> ObjectQueryResult:
         """Search via the adapter, then re-read active objects for policy masking."""
         self.policy.require(ctx, "object:read")
-        query_limit = _search_limit(limit)
+        query_limit = search_limit(limit)
         mapping = self._search_mapping(ctx, object_type_api_name)
         _require_searchable_properties(mapping)
-        hits = self.search_adapter.search(_search_query(ctx, object_type_api_name, search_text, mapping, query_limit))
+        hits = self.search_adapter.search(
+            keyword_search_query(ctx, object_type_api_name, search_text, mapping, query_limit)
+        )
+        items = self._items_for_hits(ctx, object_type_api_name, hits)
+        return {"items": items, "nextCursor": None}
+
+    def search_objects_semantic(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext,
+        semantic_text: str,
+        limit: int,
+    ) -> ObjectQueryResult:
+        """nearestNeighbors object search: embed the query, rank by model-pinned cosine.
+
+        Returns a relevance-ordered Object Set; the adapter fails closed on a model mismatch.
+        """
+        self.policy.require(ctx, "object:read")
+        require_semantic_model(self.embedding_model_adapter)
+        query_limit = search_limit(limit)
+        mapping = self._search_mapping(ctx, object_type_api_name)
+        _require_searchable_properties(mapping)
+        query = semantic_search_query(
+            ctx, object_type_api_name, semantic_text, mapping, query_limit, self.embedding_model_adapter
+        )
+        hits = self.search_adapter.search(query)
         items = self._items_for_hits(ctx, object_type_api_name, hits)
         return {"items": items, "nextCursor": None}
 
@@ -137,7 +175,9 @@ class ObjectSearchService(CoreService):
             rows = self._active_rows(ctx, object_type_api_name, object_type)
             self.search_adapter.configure_index(mapping)
             for row in rows:
-                self.search_adapter.upsert_document(_search_document(ctx, object_type_api_name, row, mapping))
+                self.search_adapter.upsert_document(
+                    search_document(ctx, object_type_api_name, row, mapping, self.embedding_model_adapter)
+                )
             result = self._consistency_result(ctx, object_type_api_name, rows)
         except Exception as exc:
             self._fail_search_run(ctx, run_id, object_type_api_name, "rebuild_search_index", exc)
@@ -327,7 +367,9 @@ class ObjectSearchService(CoreService):
                 document_id=object_id,
             )
             return {"objectType": object_type_api_name, "objectId": object_id, "status": "deleted"}
-        self.search_adapter.upsert_document(_search_document(ctx, object_type_api_name, record, mapping))
+        self.search_adapter.upsert_document(
+            search_document(ctx, object_type_api_name, record, mapping, self.embedding_model_adapter)
+        )
         return {"objectType": object_type_api_name, "objectId": object_id, "status": "indexed"}
 
     def _consistency_result(
@@ -396,19 +438,6 @@ class ObjectSearchService(CoreService):
             )
 
 
-def _search_limit(limit: int) -> int:
-    """Validate the public search limit before calling the adapter."""
-
-    if limit < 1:
-        raise ValidationFailed("search query limit must be positive", details={"limit": limit})
-    if limit > SEARCH_INDEX_MAX_LIMIT:
-        raise ValidationFailed(
-            "search query limit exceeds maximum",
-            details={"limit": limit, "max_limit": SEARCH_INDEX_MAX_LIMIT},
-        )
-    return limit
-
-
 def _search_mapping(
     ctx: RequestContext,
     object_type_api_name: str,
@@ -437,45 +466,6 @@ def _require_searchable_properties(mapping: SearchIndexMapping) -> None:
 
     if not mapping.searchable_properties:
         raise ValidationFailed("object type has no searchable properties", details={"object_type": mapping.object_type})
-
-
-def _search_query(
-    ctx: RequestContext,
-    object_type_api_name: str,
-    search_text: str,
-    mapping: SearchIndexMapping,
-    limit: int,
-) -> SearchQuery:
-    """Create the vendor-neutral query sent through the search port."""
-
-    return SearchQuery(
-        tenant_id=ctx.tenant_id,
-        object_type=object_type_api_name,
-        terms={},
-        text=search_text,
-        searchable_properties=mapping.searchable_properties,
-        limit=limit,
-    )
-
-
-def _search_document(
-    ctx: RequestContext,
-    object_type_api_name: str,
-    row: ObjectRecordRow,
-    mapping: SearchIndexMapping,
-) -> SearchDocument:
-    return SearchDocument(
-        tenant_id=ctx.tenant_id,
-        object_type=object_type_api_name,
-        document_id=row["object_id"],
-        version=row["object_version"],
-        properties=_indexed_document_properties(row, mapping),
-    )
-
-
-def _indexed_document_properties(row: ObjectRecordRow, mapping: SearchIndexMapping) -> Mapping[str, object]:
-    names = set(mapping.indexed_properties) | set(mapping.searchable_properties)
-    return {name: row["properties"][name] for name in sorted(names) if name in row["properties"]}
 
 
 def _object_query_item(

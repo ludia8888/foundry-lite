@@ -5,17 +5,27 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
+from foundry_lite.application.ports.embedding_model import EmbeddingVector
 
 
 @dataclass(frozen=True)
 class SearchDocument:
-    """Search-indexable object document."""
+    """Search-indexable object document.
+
+    ``embedding`` mirrors Palantir's ``Vector`` object base type (L12a): an optional,
+    model-pinned dense projection of the object's own ``searchable_properties`` text. It
+    defaults empty so an object type with no embedding model wired indexes keyword-only,
+    exactly as before. ``embedding_model_version`` pins the model that produced the vector
+    so a query in a different vector space fails closed (never silently comparable).
+    """
 
     tenant_id: str
     object_type: str
     document_id: str
     version: int
     properties: Mapping[str, object]
+    embedding: EmbeddingVector = ()
+    embedding_model_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -30,7 +40,13 @@ class SearchIndexMapping:
 
 @dataclass(frozen=True)
 class SearchQuery:
-    """Vendor-neutral object search query used by local and Elasticsearch adapters."""
+    """Vendor-neutral object search query used by local and Elasticsearch adapters.
+
+    When ``query_vector`` is set the adapter runs a ``nearestNeighbors`` semantic pass
+    (Palantir ``Objects.search().nearestNeighbors(...).orderByRelevance()``) instead of the
+    keyword/structured path. ``embedding_model_version`` must match the indexed generation's
+    model or the adapter fails closed — index-time and query-time model pinning.
+    """
 
     tenant_id: str
     object_type: str
@@ -38,6 +54,8 @@ class SearchQuery:
     text: str | None = None
     searchable_properties: tuple[str, ...] = ()
     limit: int = 20
+    query_vector: EmbeddingVector | None = None
+    embedding_model_version: str = ""
 
 
 @dataclass(frozen=True)

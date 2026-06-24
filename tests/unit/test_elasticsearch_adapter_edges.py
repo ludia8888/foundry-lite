@@ -6,7 +6,7 @@ from typing import cast
 import foundry_lite.infrastructure.adapters.elasticsearch_search as elasticsearch_module
 import foundry_lite.infrastructure.adapters.es_client as es_client_module
 import pytest
-from foundry_lite.application.ports.search_adapter import SearchIndexMapping, SearchQuery
+from foundry_lite.application.ports.search_adapter import SearchDocument, SearchIndexMapping, SearchQuery
 from foundry_lite.infrastructure.adapters import ElasticsearchAdapter, ElasticsearchAdapterConfig
 from foundry_lite.infrastructure.adapters.elasticsearch_search import ElasticsearchClientLike
 
@@ -88,3 +88,42 @@ def test_elasticsearch_search_hit_defaults_malformed_score_to_zero() -> None:
 
     assert hit.score == 0.0
     assert hit.document_id == "O-1"
+
+
+def test_elasticsearch_object_dense_search_round_trips_embedding() -> None:
+    # L12a object semantic search: a document indexed WITH a model-pinned embedding is
+    # upserted (the dense_vector field is present) and a nearestNeighbors query
+    # (query_vector + matching model version) returns it with its embedding reconstructed.
+    client = FakeElasticsearchClient()
+    adapter = ElasticsearchAdapter(
+        ElasticsearchAdapterConfig(endpoint="http://search:9200"),
+        client=cast(ElasticsearchClientLike, client),
+    )
+    adapter.configure_index(
+        SearchIndexMapping("tenant-demo", "Order", indexed_properties=("status",), searchable_properties=("note",))
+    )
+    adapter.upsert_document(
+        SearchDocument(
+            tenant_id="tenant-demo",
+            object_type="Order",
+            document_id="O-1001",
+            version=1,
+            properties={"status": "PENDING", "note": "a refrigerated truck delivery"},
+            embedding=(0.1, 0.2, 0.3),
+            embedding_model_version="bge-small-en-v1.5",
+        )
+    )
+
+    hits = adapter.search(
+        SearchQuery(
+            tenant_id="tenant-demo",
+            object_type="Order",
+            terms={},
+            query_vector=(0.1, 0.2, 0.3),
+            embedding_model_version="bge-small-en-v1.5",
+        )
+    )
+
+    assert [hit.document_id for hit in hits] == ["O-1001"]
+    assert hits[0].document.embedding == (0.1, 0.2, 0.3)
+    assert hits[0].document.embedding_model_version == "bge-small-en-v1.5"

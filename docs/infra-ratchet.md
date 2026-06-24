@@ -873,3 +873,41 @@ family becomes `active-covered` only when its proof-class tests collect and it i
 registered in `infra-tricky-matrix.json` `families`/`activeStack`; until then it
 stays in this queue and as `sourceOfTruthRules` deferrals only. L9 closes this for the
 Media/Content Plane (standalone family, not in `activeStack`).
+
+## Object Semantic Search (L12a)
+
+- **L12a — Object semantic search (`Vector` object property, shipped):** the OBJECT-STORE core
+  (not the media plane) gains semantic search, mirroring Palantir's `Vector` property on object
+  types + `Objects.search().nearestNeighbors(o => o.embeddings.near(v,{kValue:k})).orderByRelevance()`.
+  It REUSES the existing media bge embedding engine (`LocalEmbeddingAdapter` /
+  `_fastembed_embedding_engine`, `bge-small-en-v1.5`, 384-dim ONNX, no torch) — no new model and no new
+  env var — by injecting the SAME composed `embedding_model_adapter` into `ObjectSearchService`. The
+  vendor-neutral `SearchDocument`/`SearchQuery` gain optional `embedding`/`embedding_model_version` and
+  `query_vector`/`embedding_model_version` (defaulting empty → pure keyword/structured exactly as before;
+  default-off when no model is wired). At index time, when the adapter `is_available`, the object's OWN
+  `searchable_properties` text (not media) is concatenated and embedded into the projection document with
+  the model version pinned; the `LocalSearchAdapter` adds a pure-python cosine `nearestNeighbors` path and
+  the `ElasticsearchAdapter` adds the `dense_vector` + `script_score` cosine path mirroring the
+  content-index ES adapter. A query whose `embedding_model_version` differs from an indexed object vector's
+  FAILS CLOSED (typed `AdapterError` `conflict`) — index-time = query-time model pinning, never silently
+  mixing vector spaces. `ObjectQueryService.query_objects(..., semantic_text=...)` embeds the query with
+  the same model, runs nearestNeighbors, and returns a relevance-ordered Object Set; ACL/policy/masking
+  are enforced exactly as the existing object query (the index re-reads the committed object record —
+  object = unit of truth + permission). The object embedding + search index are DERIVED projections; the
+  committed object version stays the serving truth and the index rebuilds from committed records. This is
+  additive: keyword `search_text` and structured `.filter`/`orderBy`/cursor are unchanged, and a semantic
+  query cannot combine with a keyword query in one call. No new source-of-truth rule — the object vector is
+  model-pinned the same way as the media embedding, so this REUSES the already-enforced
+  `embedding_artifact_pins_model_version_and_chunk_spec` rule (its `tests` now also list
+  `test_object_embedding_pins_model_version_when_adapter_available` +
+  `test_nearest_neighbors_fails_closed_on_model_version_mismatch`). Deterministic unit tests
+  (`tests/unit/test_object_semantic_search.py`) inject a fake bge adapter; a real-bge integration test
+  (`test_real_bge_semantic_object_search_ranks_closest_object_first`, added to the `elasticsearch` family's
+  normal-path proofs) proves real retrieval — two orders described "a refrigerated truck delivery" vs
+  "an invoice dispute" with the query "cold chain logistics" (no lexical overlap) rank the truck order
+  first via real fastembed, while keyword search for the same phrase finds nothing.
+  STRUCTURED-FILTER + SEMANTIC-ORDERING fusion (the Palantir hybrid Object-Set pipeline) and a live ES
+  object dense_vector round-trip are deferred to L12b; object semantic search is local-cosine + ES-dense
+  here (consistent with prior sections). No family promotion happens at L12a; object search stays in the
+  existing `elasticsearch` family (`infra-tricky-matrix.json` `families` unchanged except the new
+  normal-path proof and the reused rule's test list).

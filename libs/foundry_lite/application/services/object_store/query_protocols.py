@@ -76,3 +76,12 @@ class ObjectSearchQueryPlanner(Protocol):
         search_text: str,
         limit: int,
     ) -> ObjectQueryResult: ...
+
+    def search_objects_semantic(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext,
+        semantic_text: str,
+        limit: int,
+    ) -> ObjectQueryResult: ...
