@@ -1639,8 +1639,8 @@ P0c의 현재 slice는 full AIP trace UI가 아니라 AI 실행 장부의 DB/저
 `quality:ai-ledger`는 정본 §10.2 컬럼 목록, message client idempotency, event sequence
 idempotency, tenant scoping, PostgreSQL RLS migration DDL, SQLite/PostgreSQL round-trip, and
 runtime-lane wiring을 검증한다.
-ModelGateway 자동 기록, encrypted prompt artifact store, ToolBroker execution, trace UI, and
-public API/SDK surfaces는 후속 AIP slice다.
+P0i는 이 장부의 첫 Operations API/SDK read surface를 추가했다. ModelGateway 자동 기록,
+encrypted prompt artifact store, ToolBroker execution, and full trace UI는 후속 AIP slice다.
 
 | 게이트                 | 명령                | Root cause                                                                                                                                                                           |
 | ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -1728,6 +1728,22 @@ fingerprint를 다시 검증한다. 실행은 proposal fingerprint를 action ide
 | 게이트                       | 명령                         | Root cause                                                                                                                                                      |
 | ---------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Approval execution ratchet   | `quality:approval-execution` | 승인되지 않은 review나 변조/만료/stale proposal이 action으로 실행되거나, 승인 retry가 중복 action run을 만들거나, review와 action run 사이 운영 추적이 끊기는 문제 차단 |
+
+### AIP P0i — AI Operations Ratchet
+
+P0i의 현재 slice는 full visual trace explorer가 아니라, 이미 저장된 canonical AI run ledger를
+Operations 목록/상세/API/SDK에서 안전하게 볼 수 있게 하는 operator-facing surface다.
+`RuntimeRunType`은 `ai`를 허용하고, run list는 `aiRuns`를 반환하며,
+`GET /api/operations/runs/{run_type}/{run_id}` detail은 `run_type=ai`일 때 `ai` field에 run refs/hashes,
+ordered events, model-call token/latency accounting, selected/omitted context metadata,
+tool-call hashes/status, citations, usage/cost summary, and lightweight timeline을 담는다.
+raw prompt, raw tool result, provider response body, authorization-bearing JSON 값은 detail payload에
+노출하지 않는다. Source-chain lookup은 `ai_execution_runs`처럼 `created_at` 대신 `started_at`을
+쓰는 runtime table도 안전하게 정렬해야 한다.
+
+| 게이트                  | 명령                    | Root cause                                                                                                                                                     |
+| ----------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AI operations ratchet   | `quality:ai-operations` | AI 실행 장부가 DB에만 있고 운영자가 목록/상세/API/SDK에서 찾지 못하거나, trace/detail 화면이 raw prompt/tool/provider/authorization payload를 그대로 노출하거나, AI run source-chain 조회가 잘못된 timestamp 컬럼 가정으로 깨지는 문제 차단 |
 
 ### S60 — AI Evidence Lineage Ratchet
 

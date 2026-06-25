@@ -62,6 +62,8 @@ class RuntimeRepositoryHarness(Protocol):
 
     def add_index_run(self, *, run_id: str, tenant_id: str, object_type_api_name: str = "Order") -> None: ...
 
+    def add_ai_run(self, *, run_id: str, tenant_id: str, started_at: str = "2026-06-10T00:00:00Z") -> None: ...
+
     def add_object_record(self, *, record_id: str, tenant_id: str) -> None: ...
 
 
@@ -98,6 +100,7 @@ class FakeRuntimeRepository:
             "outboxEvents": window("outbox_events"),
             "deadLetterEvents": window("dead_letter_events"),
             "workflowRuns": window("workflow_runs"),
+            "aiRuns": window("ai_execution_runs"),
             "auditEvents": window("audit_events"),
             "objectEdits": window("object_edits"),
         }
@@ -154,8 +157,9 @@ class FakeRuntimeRepository:
                 for row in self.tables[table]
                 if row["tenant_id"] == tenant_id and (predicate(row) or row.get("id") in runids)
             ]
+            timestamp = _runtime_rows_timestamp(table)
             ordered = sorted(
-                matched, key=lambda row: (str(row.get("created_at") or ""), str(row.get("id") or "")), reverse=True
+                matched, key=lambda row: (str(row.get(timestamp) or ""), str(row.get("id") or "")), reverse=True
             )
             return [cast(RuntimeRow, dict(row)) for row in ordered[:limit]]
 
@@ -171,6 +175,7 @@ class FakeRuntimeRepository:
             "outboxEvents": [],
             "deadLetterEvents": [],
             "workflowRuns": scoped("workflow_runs", lambda _row: False),
+            "aiRuns": scoped("ai_execution_runs", lambda _row: False),
             "auditEvents": [],
             "objectEdits": [],
         }
@@ -182,10 +187,11 @@ class FakeRuntimeRepository:
         return None
 
     def run_row_any_type(self, *, tenant_id: str, run_id: str) -> tuple[RuntimeRunType, RuntimeRow] | None:
-        for run_type in ("sync", "transform", "index", "materialization", "ai"):
-            row = self.run_row(tenant_id=tenant_id, run_type=cast(RuntimeRunType, run_type), run_id=run_id)
+        run_types: tuple[RuntimeRunType, ...] = ("sync", "transform", "index", "materialization", "ai")
+        for run_type in run_types:
+            row = self.run_row(tenant_id=tenant_id, run_type=run_type, run_id=run_id)
             if row is not None:
-                return cast(RuntimeRunType, run_type), row
+                return run_type, row
         return None
 
     def related_evidence_rows(
@@ -409,6 +415,12 @@ class FakeRuntimeRepositoryHarness:
             _index_run_row(run_id=run_id, tenant_id=tenant_id, object_type_api_name=object_type_api_name)
         )
 
+    def add_ai_run(self, *, run_id: str, tenant_id: str, started_at: str = "2026-06-10T00:00:00Z") -> None:
+        assert isinstance(self.repository, FakeRuntimeRepository)
+        self.repository.tables["ai_execution_runs"].append(
+            _ai_run_row(run_id=run_id, tenant_id=tenant_id, started_at=started_at)
+        )
+
     def add_object_record(self, *, record_id: str, tenant_id: str) -> None:
         assert isinstance(self.repository, FakeRuntimeRepository)
         self.repository.tables["object_records"].append(_object_record_row(record_id=record_id, tenant_id=tenant_id))
@@ -462,6 +474,14 @@ class SqlAlchemyRuntimeRepositoryHarness:
             conn.execute(
                 insert(db.index_runs).values(
                     **_index_run_row(run_id=run_id, tenant_id=tenant_id, object_type_api_name=object_type_api_name)
+                )
+            )
+
+    def add_ai_run(self, *, run_id: str, tenant_id: str, started_at: str = "2026-06-10T00:00:00Z") -> None:
+        with self.engine.begin() as conn:
+            conn.execute(
+                insert(db.ai_execution_runs).values(
+                    **_ai_run_row(run_id=run_id, tenant_id=tenant_id, started_at=started_at)
                 )
             )
 
@@ -699,6 +719,34 @@ def _workflow_key_matches(row: dict[str, Any], tenant_id: str, workflow_name: st
         and row["workflow_name"] == workflow_name
         and row["idempotency_key"] == idempotency_key
     )
+
+
+def _ai_run_row(*, run_id: str, tenant_id: str, started_at: str) -> dict[str, Any]:
+    return {
+        "id": run_id,
+        "tenant_id": tenant_id,
+        "session_id": "ai-session-1",
+        "agent_version_id": "agent-v1",
+        "actor_user_id": "ops-user",
+        "request_id": "request-1",
+        "trace_id": "trace-1",
+        "status": "succeeded",
+        "ontology_version_id": "ontology-v1",
+        "model_alias_version": "alias-v1",
+        "resolved_model_id": "model-1",
+        "resolved_model_revision": "revision-1",
+        "prompt_version_id": "prompt-v1",
+        "compiled_prompt_hash": "sha256:compiled",
+        "tool_manifest_hash": "sha256:tools",
+        "context_manifest_hash": "sha256:context",
+        "state_snapshot_hash": "sha256:state",
+        "policy_snapshot_hash": "sha256:policy",
+        "budget_json": {"maxInputTokens": 1024},
+        "usage_json": {"inputTokens": 12},
+        "error_json": None,
+        "started_at": started_at,
+        "completed_at": started_at,
+    }
 
 
 def _dead_letter_row(*, event_id: str, tenant_id: str) -> dict[str, Any]:
@@ -943,12 +991,13 @@ def test_runtime_repository_contract_runs_for_source_chain_scopes_rows(
     harness.add_index_run(run_id="idx-order", tenant_id="tenant-demo", object_type_api_name="Order")
     harness.add_index_run(run_id="idx-prod", tenant_id="tenant-demo", object_type_api_name="Product")
     harness.add_index_run(run_id="idx-other", tenant_id="tenant-other", object_type_api_name="Order")
+    harness.add_ai_run(run_id="ai-run-source", tenant_id="tenant-demo", started_at="2026-06-10T00:00:03Z")
 
     scoped = harness.repository.runs_for_source_chain(
         tenant_id="tenant-demo",
         object_type_api_name="Order",
         resource_ids=["dataset-version-1"],
-        run_ids=["idx-prod"],
+        run_ids=["idx-prod", "ai-run-source"],
         limit=50,
     )
 
@@ -960,6 +1009,7 @@ def test_runtime_repository_contract_runs_for_source_chain_scopes_rows(
     # Producer/lineage tables resolve (no matching rows here) and unrelated tables stay empty.
     assert scoped["syncRuns"] == []
     assert scoped["workflowRuns"] == []
+    assert [row["id"] for row in scoped["aiRuns"]] == ["ai-run-source"]
     assert scoped["auditEvents"] == []
     assert scoped["outboxEvents"] == []
 

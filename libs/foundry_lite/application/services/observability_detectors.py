@@ -293,25 +293,8 @@ def _matching_rows(snapshot: RuntimeRunSnapshot, config: ObservabilityDetectorCo
 
 
 def _rows_for_run_type(snapshot: RuntimeRunSnapshot, run_type: RuntimeRunType) -> list[RuntimeRow]:
-    if run_type == "sync":
-        return list(snapshot["syncRuns"])
-    if run_type == "transform":
-        return list(snapshot["transformRuns"])
-    if run_type == "index":
-        return list(snapshot["indexRuns"])
-    if run_type == "action":
-        return list(snapshot["actionRuns"])
-    if run_type == "action_writeback":
-        return list(snapshot["actionWritebacks"])
-    if run_type == "materialization":
-        return list(snapshot["materializationRuns"])
-    if run_type == "outbox":
-        return list(snapshot["outboxEvents"])
-    if run_type == "dead_letter":
-        return list(snapshot["deadLetterEvents"])
-    if run_type == "workflow":
-        return list(snapshot["workflowRuns"])
-    return list(snapshot["auditEvents"])
+    rows_by_group = cast(Mapping[str, Sequence[RuntimeRow]], snapshot)
+    return list(rows_by_group[RUN_GROUPS[run_type]])
 
 
 def _row_has_resource(row: RuntimeRow, resource_id: str) -> bool:

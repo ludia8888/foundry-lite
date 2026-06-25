@@ -221,6 +221,7 @@ def _snapshot() -> RuntimeRunSnapshot:
         "outboxEvents": [{"id": "outbox_1", "event_type": "action.run.committed", "correlation_id": "action_run_1"}],
         "deadLetterEvents": [],
         "workflowRuns": [],
+        "aiRuns": [],
         "auditEvents": [{"id": "audit_1", "event_type": "action.run.committed", "resource_id": "action_run_1"}],
         "objectEdits": [{"id": "edit_1", "action_run_id": "action_run_1"}],
     }

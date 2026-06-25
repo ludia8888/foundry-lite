@@ -945,13 +945,31 @@ def test_ai_evidence_gate_runs_after_ai_ledger_gate() -> None:
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     ai_ledger_step = "pnpm --silent quality:ai-ledger"
+    ai_operations_step = "pnpm --silent quality:ai-operations"
     ai_evidence_step = "pnpm --silent quality:ai-evidence"
     insight_review_step = "pnpm --silent quality:insight-review"
     assert ai_evidence_step in script
-    assert script.index(ai_ledger_step) < script.index(ai_evidence_step) < script.index(insight_review_step)
+    assert script.index(ai_ledger_step) < script.index(ai_operations_step) < script.index(ai_evidence_step)
+    assert script.index(ai_evidence_step) < script.index(insight_review_step)
     assert '"quality:ai-evidence"' in package_json
     assert "tests/unit/test_ai_evidence.py" in package_json
     assert "object_property_lineage" in package_json
+
+
+def test_ai_operations_gate_runs_after_approval_execution_gate() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    approval_execution_step = "pnpm --silent quality:approval-execution"
+    ai_operations_step = "pnpm --silent quality:ai-operations"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert ai_operations_step in script
+    assert script.index(approval_execution_step) < script.index(ai_operations_step) < script.index(ai_evidence_step)
+    assert '"quality:ai-operations"' in package_json
+    assert "tests/unit/test_ai_operations_detail.py" in package_json
+    assert "tests/smoke/test_interfaces.py" in package_json
+    assert "test_ai_operations_run_list_and_detail_expose_safe_ledger_trace" in package_json
+    assert "api_ai_operations" in package_json
 
 
 def test_insight_review_gate_runs_after_ai_evidence_gate() -> None:

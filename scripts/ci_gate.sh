@@ -408,6 +408,8 @@ run_runtime_gate() {
 
   run_runtime_step "AIP approval execution ratchet" pnpm --silent quality:approval-execution
 
+  run_runtime_step "AIP AI operations ratchet" pnpm --silent quality:ai-operations
+
   run_runtime_step "AI evidence lineage ratchet" pnpm --silent quality:ai-evidence
 
   run_runtime_step "Insight review workspace ratchet" pnpm --silent quality:insight-review

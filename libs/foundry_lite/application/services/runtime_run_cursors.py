@@ -73,7 +73,7 @@ def _shape_checksum(*, run_type: RuntimeRunType, status: str | None, since: str 
 
 
 def _row_timestamp(row: RuntimeRow) -> str:
-    for key in ("created_at", "failed_at", "completed_at", "published_at", "updated_at"):
+    for key in ("created_at", "started_at", "failed_at", "completed_at", "published_at", "updated_at"):
         value = row.get(key)
         if isinstance(value, str) and value:
             return value

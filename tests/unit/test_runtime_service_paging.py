@@ -104,6 +104,11 @@ class _UnusedDatasetQualityRepository:
         raise AssertionError("query_runs must not read dataset quality results")
 
 
+class _UnusedAiRunRepository:
+    def ledger_for_run(self, **_kwargs: object) -> object:
+        raise AssertionError("non-AI operations should not read the AI ledger")
+
+
 class _SnapshotRuntimeRepository:
     def __init__(self, snapshot: RuntimeRunSnapshot) -> None:
         self.snapshot = snapshot
@@ -210,6 +215,7 @@ def _runtime_service(repository: object) -> RuntimeService:
         engine=_UnusedEngine(),
         policy=PolicyService(allow_unwired_classification_provider=True),
         runtime_repository=repository,
+        ai_run_repository=_UnusedAiRunRepository(),
         dataset_transaction_repository=_UnusedDatasetTransactionRepository(),
         dataset_quality_repository=_UnusedDatasetQualityRepository(),
     )
@@ -220,6 +226,7 @@ def _runtime_service_with_engine(repository: object) -> RuntimeService:
         engine=_BeginEngine(),
         policy=PolicyService(allow_unwired_classification_provider=True),
         runtime_repository=repository,
+        ai_run_repository=_UnusedAiRunRepository(),
         dataset_transaction_repository=_UnusedDatasetTransactionRepository(),
         dataset_quality_repository=_UnusedDatasetQualityRepository(),
     )
@@ -264,6 +271,7 @@ def test_runtime_service_query_runs_builds_group_next_cursors() -> None:
     assert [row["id"] for row in result["outboxEvents"]] == ["outbox_b"]
     assert [row["id"] for row in result["deadLetterEvents"]] == ["dead_letter_b"]
     assert [row["id"] for row in result["workflowRuns"]] == ["workflow_b"]
+    assert [row["id"] for row in result["aiRuns"]] == ["ai_b"]
     assert [row["id"] for row in result["auditEvents"]] == ["audit_b"]
     assert set(result["nextCursors"]) == set(repository.requested_types)
 
@@ -378,6 +386,7 @@ def _empty_snapshot() -> RuntimeRunSnapshot:
         "outboxEvents": [],
         "deadLetterEvents": [],
         "workflowRuns": [],
+        "aiRuns": [],
         "auditEvents": [],
         "objectEdits": [],
     }

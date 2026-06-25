@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import cast
 
 from foundry_lite.application.ports import (
     RuntimeRepository,
@@ -117,32 +118,14 @@ def _empty_run_query_result() -> RuntimeRunQueryResult:
         "outboxEvents": [],
         "deadLetterEvents": [],
         "workflowRuns": [],
+        "aiRuns": [],
         "auditEvents": [],
         "objectEdits": [],
     }
 
 
 def _set_run_group(result: RuntimeRunQueryResult, run_type: RuntimeRunType, rows: list[RuntimeRow]) -> None:
-    if run_type == "sync":
-        result["syncRuns"] = rows
-    elif run_type == "transform":
-        result["transformRuns"] = rows
-    elif run_type == "index":
-        result["indexRuns"] = rows
-    elif run_type == "action":
-        result["actionRuns"] = rows
-    elif run_type == "action_writeback":
-        result["actionWritebacks"] = rows
-    elif run_type == "materialization":
-        result["materializationRuns"] = rows
-    elif run_type == "outbox":
-        result["outboxEvents"] = rows
-    elif run_type == "dead_letter":
-        result["deadLetterEvents"] = rows
-    elif run_type == "workflow":
-        result["workflowRuns"] = rows
-    else:
-        result["auditEvents"] = rows
+    cast(dict[str, object], result)[RUN_GROUPS[run_type]] = rows
 
 
 def _next_run_cursor(

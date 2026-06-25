@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import cast
+from typing import NoReturn, Protocol, cast
 
 from foundry_lite.application.ports import (
+    AiRunRepository,
     DatasetCheckResultRow,
     DatasetQualityRepository,
     DatasetTransactionRepository,
@@ -18,6 +19,10 @@ from foundry_lite.application.ports import (
     RuntimeRunType,
     TransactionManager,
 )
+from foundry_lite.application.services.ai_operations_payload import (
+    ai_operations_payload as ai_operations_payload,
+)
+from foundry_lite.application.services.ai_operations_payload import safe_ai_run_row as safe_ai_run_row
 from foundry_lite.application.services.runtime_quality_report import quality_report_for_transaction
 from foundry_lite.application.services.runtime_run_paging import OPERATIONS_RUN_MAX_LIMIT
 from foundry_lite.application.services.runtime_run_queries import (
@@ -27,11 +32,18 @@ from foundry_lite.application.services.runtime_run_queries import (
     materialization_detail,
     relation_ids,
     resource_ids_for_lineage,
+    row_error,
     row_references,
     row_status,
     run_investigation,
 )
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import NotFound
+
+
+class RuntimeDetailDependencies(Protocol):
+    runtime_repository: RuntimeRepository
+    engine: TransactionManager
 
 
 def runtime_run_detail_payload(
@@ -55,8 +67,8 @@ def runtime_run_detail_payload(
         "runId": run_id,
         "row": row,
         "status": row_status(row),
-        "errorMessage": error_message(row.get("error")),
-        "error": row.get("error"),
+        "errorMessage": error_message(row_error(row)),
+        "error": row_error(row),
         "correlationId": correlation_id(row),
         "references": row_references(row),
         "investigation": _detail_investigation(
@@ -92,6 +104,29 @@ def scoped_source_runs(
         run_ids=run_ids,
         limit=OPERATIONS_RUN_MAX_LIMIT,
     )
+
+
+def runtime_detail_row_and_ai_payload(
+    dependencies: RuntimeDetailDependencies,
+    ai_run_repository: AiRunRepository,
+    ctx: RequestContext,
+    parsed_type: RuntimeRunType,
+    run_id: str,
+) -> tuple[RuntimeRow, RuntimeJsonObject | None]:
+    if parsed_type == "ai":
+        with dependencies.engine.begin() as conn:
+            ledger = ai_run_repository.ledger_for_run(transaction=conn, tenant_id=ctx.tenant_id, ai_run_id=run_id)
+        if ledger is None:
+            _raise_run_not_found(parsed_type, run_id)
+        return safe_ai_run_row(ledger["run"]), ai_operations_payload(ledger)
+    row = dependencies.runtime_repository.run_row(tenant_id=ctx.tenant_id, run_type=parsed_type, run_id=run_id)
+    if row is None:
+        _raise_run_not_found(parsed_type, run_id)
+    return row, None
+
+
+def _raise_run_not_found(run_type: RuntimeRunType, run_id: str) -> NoReturn:
+    raise NotFound("operations run not found", details={"run_type": run_type, "run_id": run_id})
 
 
 def related_evidence_for_row(

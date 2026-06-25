@@ -351,6 +351,7 @@ export type RuntimeRunType =
   | "outbox"
   | "dead_letter"
   | "workflow"
+  | "ai"
   | "audit";
 export type RuntimeRow = Record<string, unknown>;
 export type LineageEdge = {
@@ -404,6 +405,7 @@ export type RuntimeRunQueryResult = {
   outboxEvents: RuntimeRow[];
   deadLetterEvents: RuntimeRow[];
   workflowRuns: RuntimeRow[];
+  aiRuns: RuntimeRow[];
   auditEvents: RuntimeRow[];
   objectEdits: RuntimeRow[];
   nextCursor?: string | null;
@@ -430,6 +432,7 @@ export type RuntimeRunDetail = {
   materialization?: Record<string, unknown> | null;
   downstreamImpact?: Record<string, unknown> | null;
   quality?: Record<string, unknown> | null;
+  ai?: Record<string, unknown> | null;
 };
 export type RuntimeRetryResult = {
   deadLetterEventId: string;

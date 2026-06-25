@@ -89,6 +89,9 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "runs: {" in generated
     assert "list(filters?: RuntimeRunQueryFilters): Promise<RuntimeRunQueryResult>;" in generated
     assert "detail(runType: string, runId: string): Promise<RuntimeRunDetail>;" in generated
+    assert '  | "ai"' in generated
+    assert "  aiRuns: RuntimeRow[];" in generated
+    assert "  ai?: Record<string, unknown> | null;" in generated
     assert "planReadOnly(datasetRef: string, options?: IcebergMaintenancePlanOptions)" in generated
     assert "export type LineageEdge = {" in generated
     assert "lineage: {" in generated

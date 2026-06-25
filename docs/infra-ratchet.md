@@ -1077,8 +1077,9 @@ Media/Content Plane (standalone family, not in `activeStack`).
   `quality:ai-ledger` proves exact canonical columns, `UNIQUE(tenant_id, session_id, client_message_id)`,
   `UNIQUE(ai_run_id, sequence)`, PostgreSQL RLS DDL in the Alembic upgrade path, SQLite + PostgreSQL
   round-trip behavior, message retry idempotency, event sequence idempotency, tenant scoping, and
-  runtime-lane wiring. ModelGateway auto-recording, prompt artifact encryption, full trace UI,
-  ToolBroker execution, and generated API/SDK surfaces remain later AIP slices.
+  runtime-lane wiring. P0i now adds the first generated Operations API/SDK read surface for these
+  rows; ModelGateway auto-recording, prompt artifact encryption, full trace UI, and ToolBroker
+  execution remain later AIP slices.
 
 - **P0d — Context compiler + retrieval context contract (shipped as the first prompt assembly slice):**
   `ContextProvider` and `RetrievedContextItem` now define the authorized retrieval boundary that hands
@@ -1176,3 +1177,20 @@ Media/Content Plane (standalone family, not in `activeStack`).
   after execution, durable review-to-action linkage, and CI runtime-lane wiring. Public API/SDK routes,
   a visual evidence/proposal review workspace, Temporal-backed long-running human approval, and broader
   external side-effect compensation UI remain later AIP slices.
+
+- **P0i — AI Operations run/detail surface (shipped as the first operator-facing AI trace slice):**
+  Operations now treats canonical AI executions as first-class run rows. `RuntimeRunType` and generated
+  SDK types include `ai`, `RuntimeRunQueryResult` includes `aiRuns`, and
+  `GET /api/operations/runs/{run_type}/{run_id}` returns an `ai` detail field for `run_type=ai` built from
+  `AiRunRepository.ledger_for_run(...)`. The payload exposes run refs and hashes, ordered events,
+  model-call request/response hashes plus token and latency accounting, selected/omitted context
+  metadata, tool-call argument/result hashes and status, citations, usage/cost rows, derived summary
+  totals, and a lightweight timeline. It does not expose raw prompt text, raw tool results, provider
+  response bodies, or authorization-bearing JSON values; the detail payload masks those values if they
+  are accidentally present in JSON evidence. This mirrors the documented Palantir AIP observability
+  pattern of run history, trace view, metrics, and access-controlled logs while keeping Foundry-lite's
+  canonical §9.7 privacy boundary: the general DB/API surface carries refs, hashes, redacted previews,
+  counts, and ids, not raw prompt artifacts. `quality:ai-operations` proves SQL-backed list/detail,
+  API smoke behavior, raw AI payload non-leakage, generated SDK type drift, and CI runtime-lane wiring.
+  A full visual trace explorer, separate encrypted prompt artifact access, log-access/marking
+  administration, and live provider usage dashboards remain later AIP slices.

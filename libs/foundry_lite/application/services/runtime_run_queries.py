@@ -35,6 +35,7 @@ RUN_GROUPS: Mapping[RuntimeRunType, str] = {
     "outbox": "outboxEvents",
     "dead_letter": "deadLetterEvents",
     "workflow": "workflowRuns",
+    "ai": "aiRuns",
     "audit": "auditEvents",
 }
 
@@ -74,6 +75,7 @@ def filtered_snapshot(
         "outboxEvents": _filtered_rows(snapshot["outboxEvents"], run_type, "outbox", status, since, until),
         "deadLetterEvents": _filtered_rows(snapshot["deadLetterEvents"], run_type, "dead_letter", status, since, until),
         "workflowRuns": _filtered_rows(snapshot["workflowRuns"], run_type, "workflow", status, since, until),
+        "aiRuns": _filtered_rows(snapshot["aiRuns"], run_type, "ai", status, since, until),
         "auditEvents": _filtered_rows(snapshot["auditEvents"], run_type, "audit", status, since, until),
         "objectEdits": _filtered_support_rows(snapshot["objectEdits"], run_type, status, since, until),
     }
@@ -89,7 +91,7 @@ def row_status(row: RuntimeRow, run_type: RuntimeRunType | None = None) -> str:
 
 
 def correlation_id(row: RuntimeRow) -> str | None:
-    for key in ("correlation_id", "id", "action_run_id", "run_id", "transaction_id"):
+    for key in ("correlation_id", "trace_id", "request_id", "id", "action_run_id", "run_id", "transaction_id"):
         value = row.get(key)
         if isinstance(value, str) and value:
             return value
@@ -151,8 +153,27 @@ def error_message(error: object) -> str | None:
     return str(error)
 
 
+def row_error(row: RuntimeRow) -> object | None:
+    return row.get("error") if "error" in row else row.get("error_json")
+
+
 def row_references(row: RuntimeRow) -> dict[str, object]:
     keys = (
+        "session_id",
+        "agent_version_id",
+        "actor_user_id",
+        "request_id",
+        "trace_id",
+        "ontology_version_id",
+        "model_alias_version",
+        "resolved_model_id",
+        "resolved_model_revision",
+        "prompt_version_id",
+        "compiled_prompt_hash",
+        "tool_manifest_hash",
+        "context_manifest_hash",
+        "state_snapshot_hash",
+        "policy_snapshot_hash",
         "transaction_id",
         "committed_version_id",
         "output_version_id",
@@ -188,7 +209,7 @@ def run_investigation(
     lineage_edge_count: int,
 ) -> RuntimeRunInvestigation:
     status = row_status(row, run_type)
-    message = error_message(row.get("error"))
+    message = error_message(row_error(row))
     refs = row_references(row)
     return {
         "summary": _investigation_summary(run_type, str(row["id"]), status, message),
@@ -417,6 +438,7 @@ def _lineage_run_groups(snapshot: RuntimeRunSnapshot) -> tuple[tuple[RuntimeRunT
         ("index", snapshot["indexRuns"]),
         ("materialization", snapshot["materializationRuns"]),
         ("workflow", snapshot["workflowRuns"]),
+        ("ai", snapshot["aiRuns"]),
     )
 
 

@@ -275,7 +275,7 @@ AiRunRepository, ContextProvider, ToolExecutor, UsageMeter`.
 
 Add granular gates: `quality:ai-contracts, quality:model-gateway, quality:ai-ledger,
 quality:retrieval-security, quality:context-compiler, quality:tool-broker, quality:action-proposal,
-quality:approval-execution, quality:ai-evals, quality:ai-release`. Release gate splits static / unit /
+quality:approval-execution, quality:ai-operations, quality:ai-evals, quality:ai-release`. Release gate splits static / unit /
 integration / **live provider smoke** (live smoke = separate lane needing credentials + cost).
 
 ## Operational failure semantics (§16.3)

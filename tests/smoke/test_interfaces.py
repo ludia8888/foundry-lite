@@ -790,6 +790,65 @@ def test_api_operations_runs_cursor_pages_action_runs(foundry, monkeypatch) -> N
     assert bad_cursor.status_code == 400
 
 
+def test_api_ai_operations_run_detail_returns_safe_ledger_payload(monkeypatch) -> None:
+    class AiOperations:
+        def run_detail(self, run_type: str, run_id: str, **kwargs: object) -> dict[str, object]:
+            ctx = kwargs["ctx"]
+            assert run_type == "ai"
+            assert run_id == "ai-run-ops"
+            assert "ops_manager" in ctx.roles
+            return {
+                "runType": "ai",
+                "runId": run_id,
+                "row": {"id": run_id, "status": "succeeded"},
+                "status": "succeeded",
+                "errorMessage": None,
+                "error": None,
+                "correlationId": "trace-ops",
+                "references": {"compiled_prompt_hash": "sha256:compiled-prompt"},
+                "investigation": {
+                    "summary": "ai run ai-run-ops is succeeded",
+                    "status": "succeeded",
+                    "errorMessage": None,
+                    "correlationId": "trace-ops",
+                    "references": {"compiled_prompt_hash": "sha256:compiled-prompt"},
+                    "relatedCounts": {
+                        "outboxEvents": 0,
+                        "auditEvents": 0,
+                        "objectEdits": 0,
+                        "actionWritebacks": 0,
+                        "lineageEdges": 0,
+                    },
+                    "suggestedActions": [],
+                },
+                "relatedOutboxEvents": [],
+                "relatedAuditEvents": [],
+                "relatedObjectEdits": [],
+                "relatedActionWritebacks": [],
+                "runRelations": [],
+                "lineageEdges": [],
+                "ai": {
+                    "summary": {"eventCount": 2, "inputTokens": 128, "estimatedCost": 0.0123},
+                    "trace": {"traceId": "trace-ops", "timeline": [{"kind": "event"}]},
+                },
+            }
+
+    class AiFoundry:
+        operations = AiOperations()
+
+    monkeypatch.setattr(api_main, "foundry", AiFoundry())
+    response = TestClient(app).get(
+        "/api/operations/runs/ai/ai-run-ops",
+        headers={"X-User-ID": "ops-user", "X-Roles": "ops_manager"},
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["runType"] == "ai"
+    assert body["ai"]["summary"]["eventCount"] == 2
+    assert body["ai"]["trace"]["traceId"] == "trace-ops"
+
+
 def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
     monkeypatch.setattr(api_main, "foundry", foundry)

@@ -228,7 +228,7 @@
       "productArea": "operations-console",
       "sdkSurface": "operations.runs.list",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Operations run list contains grouped run/audit/outbox/DLQ evidence and cursor metadata.",
+      "operatorEvidence": "Operations run list contains grouped run/audit/outbox/DLQ/AI evidence and cursor metadata, including aiRuns for canonical AI execution ledger rows.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -312,7 +312,7 @@
       "productArea": "operations-console",
       "sdkSurface": "operations.runs.detail",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Run detail returns investigation, normalized error, related audit/outbox/object edit, lineage, and quality evidence.",
+      "operatorEvidence": "Run detail returns investigation, normalized error, related audit/outbox/object edit, lineage, quality evidence, and for runType=ai a safe AI ledger detail with events, model/tool/context/citation/usage summary and trace metadata.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
