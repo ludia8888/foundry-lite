@@ -1210,3 +1210,23 @@ Media/Content Plane (standalone family, not in `activeStack`).
   proposal creation with no `action_runs` side effect, cycle rejection, and CI runtime-lane wiring.
   Temporal async start/signal/cancel/query, crash-safe pause/resume, schedule/event triggers, model-call
   blocks, visual DAG authoring, and workflow-status-vs-domain-commit proofs remain later AIP slices.
+
+- **P0k — AI Evals + Release Guard evidence (shipped as the first eval/release slice):**
+  `EvalService` records deterministic eval evidence before a candidate agent version can be promoted to
+  an operational release channel. The new tenant-scoped `ai_eval_suites`, `ai_eval_cases`,
+  `ai_eval_runs`, `ai_eval_results`, and `ai_agent_releases` tables capture suite/case definitions,
+  per-case input/expected/actual/result `sha256:` hashes, run summaries, and eval-backed promotion
+  decisions. The scoring slice is deliberately local and mutation-free: exact-subset observations prove
+  whether expected safety/action/answer/tool outcomes appeared, repeated runs of the same case must keep
+  the same actual hash, and suite/case definition drift without a version bump fails closed. Promotion
+  to a release channel requires a passed eval run for the same agent version and channel; `stable`
+  additionally requires passing Security and Action axes plus zero repeated-run variance. This mirrors
+  Palantir AIP Evals' test-case/evaluator/run-result pattern and the documented practice of evaluating
+  action-affecting logic in simulation rather than mutating production Ontology data, while keeping
+  Foundry-lite's release gate local and inspectable. The Alembic upgrade path applies PostgreSQL
+  `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL SECURITY`, and tenant policies to all new eval/release
+  tables. `quality:ai-evals` and `quality:ai-release` prove repository round-trip, migration RLS DDL,
+  failed-eval release rejection, stable Security+Action gate, repeated-run variance rejection,
+  case-definition version drift rejection, matching-channel enforcement, and CI runtime-lane wiring.
+  Visual eval workbench, generated eval datasets, LLM-as-judge scoring, baseline diff dashboards,
+  Apollo rollout/rollback integration, and live-provider eval smoke remain later AIP slices.

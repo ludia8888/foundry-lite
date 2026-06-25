@@ -5,6 +5,7 @@ from pathlib import Path
 
 from foundry_lite.application.ports import (
     ActionRepository,
+    AiEvalRepository,
     AiRunRepository,
     ComputeAdapter,
     DatasetQualityRepository,
@@ -58,6 +59,7 @@ class CoreDependencies:
     engine: TransactionManager
     policy: PolicyService
     action_repository: ActionRepository
+    ai_eval_repository: AiEvalRepository
     ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository
     transform_repository: TransformRepository

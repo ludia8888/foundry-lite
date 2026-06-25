@@ -82,6 +82,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
 )
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
+    SqlAlchemyAiEvalRepository,
     SqlAlchemyAiRunRepository,
     SqlAlchemyDatasetQualityRepository,
     SqlAlchemyDatasetRepository,
@@ -173,6 +174,7 @@ def create_local_core_dependencies(
         engine=engine,
         policy=PolicyService(classification_provider=_classification_provider(engine, ontology_repository)),
         action_repository=SqlAlchemyActionRepository(engine),
+        ai_eval_repository=SqlAlchemyAiEvalRepository(engine),
         ai_run_repository=SqlAlchemyAiRunRepository(engine),
         ontology_repository=ontology_repository,
         transform_repository=SqlAlchemyTransformRepository(engine),

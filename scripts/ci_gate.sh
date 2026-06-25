@@ -412,6 +412,10 @@ run_runtime_gate() {
 
   run_runtime_step "AIP Logic Runtime ratchet" pnpm --silent quality:logic-runtime
 
+  run_runtime_step "AIP evals ratchet" pnpm --silent quality:ai-evals
+
+  run_runtime_step "AIP release guard ratchet" pnpm --silent quality:ai-release
+
   run_runtime_step "AI evidence lineage ratchet" pnpm --silent quality:ai-evidence
 
   run_runtime_step "Insight review workspace ratchet" pnpm --silent quality:insight-review

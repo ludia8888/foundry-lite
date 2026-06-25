@@ -12,6 +12,14 @@ from foundry_lite.application.services.aip.approval_execution import (
     ApprovalExecutionResult,
     ApprovalExecutionService,
 )
+from foundry_lite.application.services.aip.eval_service import (
+    EvalCaseInput,
+    EvalRunRequest,
+    EvalRunResult,
+    EvalService,
+    ReleasePromotionRequest,
+    ReleasePromotionResult,
+)
 from foundry_lite.application.services.aip.logic_runtime import (
     LogicBlock,
     LogicRunRequest,
@@ -30,10 +38,12 @@ class AipWorkspace:
         action_proposal: ActionProposalService,
         approval_execution: ApprovalExecutionService,
         logic_runtime: LogicRuntimeService,
+        evals: EvalService,
     ) -> None:
         self._action_proposal = action_proposal
         self._approval_execution = approval_execution
         self._logic_runtime = logic_runtime
+        self._evals = evals
 
     def propose_action(
         self,
@@ -117,5 +127,53 @@ class AipWorkspace:
                 model_allowed_classifications=model_allowed_classifications,
                 policy_version=policy_version,
                 max_blocks=max_blocks,
+            ),
+        )
+
+    def run_eval(
+        self,
+        *,
+        eval_run_id: str,
+        suite_api_name: str,
+        suite_version: str,
+        suite_description: str,
+        agent_version_id: str,
+        candidate_release_channel: str,
+        cases: tuple[EvalCaseInput, ...],
+        ctx: RequestContext | None = None,
+        min_score: float = 1.0,
+        required_axes: tuple[str, ...] = (),
+    ) -> EvalRunResult:
+        return self._evals.run_eval(
+            ctx or RequestContext(),
+            EvalRunRequest(
+                eval_run_id=eval_run_id,
+                suite_api_name=suite_api_name,
+                suite_version=suite_version,
+                suite_description=suite_description,
+                agent_version_id=agent_version_id,
+                candidate_release_channel=candidate_release_channel,
+                cases=cases,
+                min_score=min_score,
+                required_axes=required_axes,
+            ),
+        )
+
+    def promote_agent_release(
+        self,
+        *,
+        agent_version_id: str,
+        target_release_channel: str,
+        eval_run_id: str,
+        ctx: RequestContext | None = None,
+        policy_version: str = "release-policy-v1",
+    ) -> ReleasePromotionResult:
+        return self._evals.promote_release(
+            ctx or RequestContext(),
+            ReleasePromotionRequest(
+                agent_version_id=agent_version_id,
+                target_release_channel=target_release_channel,
+                eval_run_id=eval_run_id,
+                policy_version=policy_version,
             ),
         )

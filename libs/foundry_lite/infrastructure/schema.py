@@ -1254,6 +1254,91 @@ ai_usage_ledger = Table(
     Column("recorded_at", String, nullable=False),
 )
 
+# AIP-lite P0k — eval evidence and release promotion guard (§8.12/§15).
+# These rows are the local proof that an agent/model/prompt candidate passed a
+# deterministic eval gate before being promoted to an operational release channel.
+ai_eval_suites = Table(
+    "ai_eval_suites",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("suite_api_name", String, nullable=False),
+    Column("version", String, nullable=False),
+    Column("description", String, nullable=False),
+    Column("axes_json", JSON, nullable=False),
+    Column("status", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "suite_api_name", "version", name="uq_ai_eval_suite_version"),
+)
+
+ai_eval_cases = Table(
+    "ai_eval_cases",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("suite_id", String, nullable=False),
+    Column("case_api_name", String, nullable=False),
+    Column("axis", String, nullable=False),
+    Column("input_json", JSON, nullable=False),
+    Column("expected_json", JSON, nullable=False),
+    Column("rubric_json", JSON, nullable=False),
+    Column("tags_json", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "suite_id", "case_api_name", name="uq_ai_eval_case_name"),
+)
+
+ai_eval_runs = Table(
+    "ai_eval_runs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("suite_id", String, nullable=False),
+    Column("agent_version_id", String, nullable=False),
+    Column("candidate_release_channel", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("min_score", Float, nullable=False),
+    Column("passed", Boolean, nullable=False),
+    Column("summary_json", JSON, nullable=False),
+    Column("started_at", String, nullable=False),
+    Column("completed_at", String),
+)
+
+ai_eval_results = Table(
+    "ai_eval_results",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("eval_run_id", String, nullable=False),
+    Column("case_id", String, nullable=False),
+    Column("sample_index", Integer, nullable=False),
+    Column("axis", String, nullable=False),
+    Column("score", Float, nullable=False),
+    Column("passed", Boolean, nullable=False),
+    Column("evaluator", String, nullable=False),
+    Column("input_hash", String, nullable=False),
+    Column("expected_hash", String, nullable=False),
+    Column("actual_hash", String, nullable=False),
+    Column("result_json", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("eval_run_id", "case_id", "sample_index", "axis", name="uq_ai_eval_result_sample"),
+)
+
+ai_agent_releases = Table(
+    "ai_agent_releases",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("agent_version_id", String, nullable=False),
+    Column("release_channel", String, nullable=False),
+    Column("eval_run_id", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("policy_version", String, nullable=False),
+    Column("promoted_by", String, nullable=False),
+    Column("promoted_at", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "agent_version_id", "release_channel", name="uq_ai_agent_release_channel"),
+)
+
 
 def tenant_rls_tables() -> tuple[Table, ...]:
     return tuple(table for table in metadata.sorted_tables if "tenant_id" in table.c)

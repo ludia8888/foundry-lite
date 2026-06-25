@@ -20,6 +20,7 @@ from foundry_lite.application.ports.adapter_failure import (
     AdapterFailureKind,
     AdapterFailureMode,
 )
+from foundry_lite.application.ports.ai_eval_repository import AiEvalRepository as AiEvalRepository
 from foundry_lite.application.ports.ai_run_repository import (
     AiCitationRecord,
     AiContextItemRecord,
@@ -95,10 +96,7 @@ from foundry_lite.application.ports.dataset_transaction_repository import (
     SyncRunRecord,
     SyncRunRow,
 )
-from foundry_lite.application.ports.dataset_version_repository import (
-    DatasetVersionRepository,
-    DatasetVersionRow,
-)
+from foundry_lite.application.ports.dataset_version_repository import DatasetVersionRepository, DatasetVersionRow
 from foundry_lite.application.ports.materialization_repository import (
     MaterializationRecord,
     MaterializationReplayResult,

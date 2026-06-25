@@ -45,7 +45,8 @@ from foundry_lite.infrastructure.adapters.local_embedding import (
 )
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository
 from sqlalchemy import create_engine
-from testcontainers.elasticsearch import ElasticSearchContainer
+
+from tests.integration.elasticsearch_live_lock import live_elasticsearch_container, live_elasticsearch_lock
 
 _DOG = ("cu-dog", "A golden retriever is a friendly dog breed.")
 _CAR = ("cu-car", "The sedan has a powerful petrol engine.")
@@ -198,20 +199,21 @@ def test_real_embedding_query_fails_closed_on_model_version_mismatch(env: _Env) 
 
 @pytest.fixture(scope="module")
 def es_url() -> Iterator[str]:
-    container = (
-        ElasticSearchContainer(_ES_IMAGE)
-        .with_env("xpack.security.enabled", "false")
-        .with_env("discovery.type", "single-node")
-        .with_env("ES_JAVA_OPTS", "-Xms1g -Xmx1g")
-        # tmpfs data dir: ES refresh fsync on the vz virtiofs disk is slow enough to exceed
-        # client timeouts; a memory-backed data dir keeps writes fast (same as the live cluster).
-        .with_kwargs(tmpfs={"/usr/share/elasticsearch/data": "rw,size=1g"})
-    )
-    container.start()
-    try:
-        yield f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9200)}"
-    finally:
-        container.stop()
+    with live_elasticsearch_lock():
+        container = (
+            live_elasticsearch_container(_ES_IMAGE)
+            .with_env("xpack.security.enabled", "false")
+            .with_env("discovery.type", "single-node")
+            .with_env("ES_JAVA_OPTS", "-Xms1g -Xmx1g")
+            # tmpfs data dir: ES refresh fsync on the vz virtiofs disk is slow enough to exceed
+            # client timeouts; a memory-backed data dir keeps writes fast (same as the live cluster).
+            .with_kwargs(tmpfs={"/usr/share/elasticsearch/data": "rw,size=1g"})
+        )
+        container.start()
+        try:
+            yield f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9200)}"
+        finally:
+            container.stop()
 
 
 @pytest.mark.integration_scenario("media-embeddings")

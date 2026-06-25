@@ -60,7 +60,16 @@ status, created_at`
 - **ai_agent_versions**: `id, agent_api_name, version, status, model_alias_version, prompt_version_id,
 tool_manifest_hash, context_policy, output_schema, budget, risk_policy, ontology_compatibility,
 release_channel, created_at`
-- **ai*eval*\***: `ai_eval_suites, ai_eval_cases, ai_eval_runs, ai_eval_results`
+- **ai_eval_suites**: `id, tenant_id, suite_api_name, version, description, axes_json, status,
+created_at`
+- **ai_eval_cases**: `id, tenant_id, suite_id, case_api_name, axis, input_json, expected_json,
+rubric_json, tags_json, created_at`
+- **ai_eval_runs**: `id, tenant_id, suite_id, agent_version_id, candidate_release_channel, status,
+min_score, passed, summary_json, started_at, completed_at`
+- **ai_eval_results**: `id, tenant_id, eval_run_id, case_id, sample_index, axis, score, passed,
+evaluator, input_hash, expected_hash, actual_hash, result_json, created_at`
+- **ai_agent_releases** (local first release-guard ledger): `id, tenant_id, agent_version_id,
+release_channel, eval_run_id, status, policy_version, promoted_by, promoted_at, created_at`
 
 ### Runtime Plane (§10.2)
 

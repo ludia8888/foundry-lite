@@ -7,6 +7,7 @@ from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
 from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionService
 from foundry_lite.application.services.aip.citation_service import CitationService
+from foundry_lite.application.services.aip.eval_service import EvalService
 from foundry_lite.application.services.aip.logic_runtime import LogicRuntimeService
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerService
@@ -37,6 +38,7 @@ __all__ = [
     "BackupRestoreService",
     "DemoService",
     "ErasureService",
+    "EvalService",
     "InsightReviewService",
     "DatasetServices",
     "IcebergMaintenanceService",
@@ -72,6 +74,7 @@ class CoreServices:
     dataset: DatasetServices
     demo: DemoService
     erasure: ErasureService
+    evals: EvalService
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
     materialization: MaterializationService
@@ -110,7 +113,6 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     record_dlq = build_service(RecordDlqService, dependencies)
     runtime = build_service(RuntimeService, dependencies)
     transform = build_service(TransformService, dependencies)
-    workflow = build_service(WorkflowOrchestrationService, dependencies)
     return service_type(
         action=build_service(ActionService, dependencies),
         action_proposal=build_service(ActionProposalService, dependencies),
@@ -119,6 +121,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         dataset=dataset,
         demo=demo,
         erasure=erasure,
+        evals=build_service(EvalService, dependencies),
         iceberg_maintenance=iceberg_maintenance,
         insight_review=insight_review,
         materialization=materialization,
@@ -133,7 +136,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         record_dlq=record_dlq,
         runtime=runtime,
         transform=transform,
-        workflow=workflow,
+        workflow=build_service(WorkflowOrchestrationService, dependencies),
     )
 
 
@@ -152,6 +155,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         *services.dataset.items(),
         services.demo,
         services.erasure,
+        services.evals,
         services.iceberg_maintenance,
         services.insight_review,
         services.materialization,

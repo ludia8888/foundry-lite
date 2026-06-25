@@ -7,6 +7,7 @@ from typing import ClassVar
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports import (
     ActionRepository,
+    AiEvalRepository,
     AiRunRepository,
     ComputeAdapter,
     ConnectorAdapter,
@@ -134,6 +135,7 @@ class CoreService:
     policy: PolicyService
     insight_review_service: object
     action_repository: ActionRepository
+    ai_eval_repository: AiEvalRepository
     ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository
     transform_repository: TransformRepository

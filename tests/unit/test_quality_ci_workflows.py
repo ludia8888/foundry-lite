@@ -980,11 +980,29 @@ def test_logic_runtime_gate_runs_after_ai_operations_before_ai_evidence() -> Non
 
     ai_operations_step = "pnpm --silent quality:ai-operations"
     logic_runtime_step = "pnpm --silent quality:logic-runtime"
-    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    ai_evals_step = "pnpm --silent quality:ai-evals"
     assert logic_runtime_step in script
-    assert script.index(ai_operations_step) < script.index(logic_runtime_step) < script.index(ai_evidence_step)
+    assert script.index(ai_operations_step) < script.index(logic_runtime_step) < script.index(ai_evals_step)
     assert '"quality:logic-runtime"' in package_json
     assert "tests/unit/test_logic_runtime.py" in package_json
+
+
+def test_ai_evals_and_release_gates_run_after_logic_runtime_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    logic_runtime_step = "pnpm --silent quality:logic-runtime"
+    ai_evals_step = "pnpm --silent quality:ai-evals"
+    ai_release_step = "pnpm --silent quality:ai-release"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert ai_evals_step in script
+    assert ai_release_step in script
+    assert script.index(logic_runtime_step) < script.index(ai_evals_step) < script.index(ai_release_step)
+    assert script.index(ai_release_step) < script.index(ai_evidence_step)
+    assert '"quality:ai-evals"' in package_json
+    assert '"quality:ai-release"' in package_json
+    assert "tests/contracts/test_ai_eval_repository_contract.py" in package_json
+    assert "tests/unit/test_ai_eval_service.py" in package_json
 
 
 def test_insight_review_gate_runs_after_ai_evidence_gate() -> None:

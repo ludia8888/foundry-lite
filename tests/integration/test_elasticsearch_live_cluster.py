@@ -25,12 +25,14 @@ from foundry_lite.application.ports.search_adapter import SearchDocument, Search
 from foundry_lite.infrastructure.adapters import ElasticsearchAdapter, ElasticsearchAdapterConfig
 from testcontainers.elasticsearch import ElasticSearchContainer
 
+from tests.integration.elasticsearch_live_lock import live_elasticsearch_container, live_elasticsearch_lock
+
 _IMAGE = "docker.elastic.co/elasticsearch/elasticsearch:9.0.0"
 
 
 def _container() -> ElasticSearchContainer:
     return (
-        ElasticSearchContainer(_IMAGE)
+        live_elasticsearch_container(_IMAGE)
         .with_env("xpack.security.enabled", "false")
         .with_env("discovery.type", "single-node")
         .with_env("ES_JAVA_OPTS", "-Xms1g -Xmx1g")
@@ -73,12 +75,13 @@ def _query(**terms: str) -> SearchQuery:
 
 @pytest.fixture(scope="module")
 def live_url() -> Iterator[str]:
-    container = _container()
-    container.start()
-    try:
-        yield f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9200)}"
-    finally:
-        container.stop()
+    with live_elasticsearch_lock():
+        container = _container()
+        container.start()
+        try:
+            yield f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9200)}"
+        finally:
+            container.stop()
 
 
 def test_elasticsearch_live_round_trip_indexes_and_searches(live_url: str) -> None:

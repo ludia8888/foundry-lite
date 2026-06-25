@@ -1763,6 +1763,22 @@ deterministic replay proof로 고정된다.
 | ----------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Logic runtime ratchet   | `quality:logic-runtime` | Logic DAG가 cycle/무제한 loop/직접 Action 실행/ToolBroker 우회로 이어지거나, read tool/proposal 실행 흔적이 AI ledger에 남지 않는 문제 차단 |
 
+### AIP P0k — AI Evals + Release Guard Ratchet
+
+P0k의 현재 slice는 full eval workbench/Apollo release automation이 아니라, AI agent candidate를
+운영 release channel로 올리기 전에 deterministic eval evidence를 요구하는 첫 guard다.
+`EvalService`는 `ai_eval_suites`, `ai_eval_cases`, `ai_eval_runs`, `ai_eval_results`에
+suite/case/run/result 장부를 남기고, 입력/기대값/실제값/result를 `sha256:` hash로 고정한다.
+동일 case의 repeated-run actual hash가 흔들리거나, required axis가 빠지거나, suite/case
+definition이 version bump 없이 바뀌면 fail closed한다. `promote_agent_release(...)`는 같은
+agent version + target channel의 passed eval run이 있어야 `ai_agent_releases`를 쓸 수 있고,
+`stable`은 Security + Action axis 통과와 zero variance를 추가로 요구한다.
+
+| 게이트                    | 명령                 | Root cause                                                                                                                                               |
+| ------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AI eval evidence ratchet  | `quality:ai-evals`   | agent/model/prompt 후보가 deterministic eval evidence 없이 운영 승격 후보가 되거나, eval suite/case drift가 version bump 없이 조용히 바뀌는 문제 차단 |
+| AI release guard ratchet  | `quality:ai-release` | failed/mismatched/variance-bearing eval run으로 stable/canary release promotion 장부가 쓰이는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와
