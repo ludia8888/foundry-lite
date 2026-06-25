@@ -57,6 +57,7 @@ RuntimeRunType = Literal[
     "outbox",
     "dead_letter",
     "workflow",
+    "insight_review",
     "ai",
     "audit",
 ]
@@ -495,6 +496,4 @@ class RuntimeRepository(Protocol):
         tenant_id: str,
         run_type: RuntimeRunType,
         run_id: str,
-    ) -> list[RuntimeRunRelationRow]:
-        """Return durable relations touching one Operations run."""
-        ...
+    ) -> list[RuntimeRunRelationRow]: ...

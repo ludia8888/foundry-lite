@@ -90,7 +90,16 @@ class ActionProposalService(CoreService):
             action = self._action_type(transaction, ctx, request)
             self._target_record(transaction, ctx, action, request)
             evidence_refs = _evidence_refs(request.evidence_context_ids, ledger["contextItems"])
-            fingerprint = _proposal_fingerprint(request, ledger["run"], evidence_refs)
+            fingerprint = compute_action_proposal_fingerprint(
+                action_type=request.action_type,
+                target_object_type=request.target_object_type,
+                target_object_id=request.target_object_id,
+                expected_object_version=request.expected_object_version,
+                parameters=request.parameters,
+                evidence_refs=evidence_refs,
+                agent_version_id=_required_str(ledger["run"], "agent_version_id"),
+                policy_version=request.policy_version,
+            )
         proposal = _action_proposal_payload(request, evidence_refs, fingerprint)
         review = self._create_review(ctx, request, evidence_refs, fingerprint, proposal)
         return ActionProposalResult(
@@ -214,19 +223,29 @@ def _evidence_ref(item: AiLedgerRow) -> dict[str, object]:
     }
 
 
-def _proposal_fingerprint(request: ActionProposalRequest, run: AiLedgerRow, evidence_refs: Sequence[JsonObject]) -> str:
+def compute_action_proposal_fingerprint(
+    *,
+    action_type: str,
+    target_object_type: str,
+    target_object_id: str,
+    expected_object_version: int,
+    parameters: Mapping[str, object],
+    evidence_refs: Sequence[JsonObject],
+    agent_version_id: str,
+    policy_version: str,
+) -> str:
     return _hash_json(
         {
             "version": 1,
             "proposalType": _PROPOSAL_TYPE,
-            "actionType": request.action_type,
-            "targetObjectType": request.target_object_type,
-            "targetObjectId": request.target_object_id,
-            "expectedObjectVersion": request.expected_object_version,
-            "parameters": dict(request.parameters),
+            "actionType": action_type,
+            "targetObjectType": target_object_type,
+            "targetObjectId": target_object_id,
+            "expectedObjectVersion": expected_object_version,
+            "parameters": dict(parameters),
             "evidenceRefs": [dict(ref) for ref in evidence_refs],
-            "agentVersionId": _required_str(run, "agent_version_id"),
-            "policyVersion": request.policy_version,
+            "agentVersionId": agent_version_id,
+            "policyVersion": policy_version,
         }
     )
 

@@ -1151,11 +1151,28 @@ Media/Content Plane (standalone family, not in `activeStack`).
   (palantir.com/docs/foundry/logic/aip-logic-integration-automate). It also follows Palantir Action
   Type semantics: an Action is the transaction that changes Ontology objects/properties/links, and
   applying an Action depends on action permissions/submission criteria
-  (palantir.com/docs/foundry/action-types/overview, /action-types/permissions). OUR current slice stops
-  before execution: `ApprovalExecutionService`, reviewer-time fingerprint/object-version/source-access
-  rechecks, linking to `ActionService.apply_action`, public API/SDK action-proposal routes, and the
-  visual proposal review workspace remain later AIP slices. `quality:action-proposal` proves user-facing
+  (palantir.com/docs/foundry/action-types/overview, /action-types/permissions). P0g stops before
+  execution; the Approval-to-Action bridge is the next slice. Public API/SDK action-proposal routes and
+  the visual proposal review workspace remain later AIP slices. `quality:action-proposal` proves user-facing
   `foundry.aip.propose_action(...)`, local runtime composition, selected-evidence enforcement, forged
   context rejection before review creation, policy/agent/object-version fail-closed checks, exact retry
   replay, changed-fingerprint new review creation, no `action_runs` side effect, and CI runtime-lane
   wiring.
+
+- **P0h — Approval Execution Service + approved-as action linkage (shipped as the Approval-to-Action
+  bridge):** `ApprovalExecutionService` executes only an already-approved action proposal review through
+  `foundry.aip.execute_approved_action(...)`. The service requires reviewer permission, requires
+  `action:execute:<ActionType>`, re-checks source evidence access, re-loads the originating AI run ledger
+  and recomputes the canonical proposal fingerprint, rejects expired reviews, re-reads the active action
+  definition, and re-reads the current target object version before claiming execution. Execution then
+  calls `ActionService.apply_action(...)` with the proposal fingerprint as the action idempotency key, so
+  the existing action transaction, object mutation, outbox, audit, and optimistic-concurrency guarantees
+  remain the write path. After success, `insight_reviews.execution_status` moves to `executed`,
+  `approved_action_run_id` is filled, and `runtime_run_relations` records
+  `insight_review --approved_as--> action`. This mirrors Palantir's documented proposal review flow where
+  accepting a proposal executes the generated Action, while still enforcing Foundry Action permissions and
+  submission-time checks. `quality:approval-execution` proves approved-only execution, fingerprint
+  mismatch rejection, expired-review rejection, reviewer-time object-version recheck, exactly-once replay
+  after execution, durable review-to-action linkage, and CI runtime-lane wiring. Public API/SDK routes,
+  a visual evidence/proposal review workspace, Temporal-backed long-running human approval, and broader
+  external side-effect compensation UI remain later AIP slices.

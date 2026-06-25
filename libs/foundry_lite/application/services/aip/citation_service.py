@@ -19,21 +19,13 @@ from typing import cast
 
 from foundry_lite.application.ports.ai_run_repository import AiCitationRecord, AiLedgerRow
 from foundry_lite.application.ports.citation_source import CitationSourceVerificationRequest
+from foundry_lite.application.services.aip.source_permissions import source_permission_for_type
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied
 from foundry_lite.security.policy import PolicyService
 
 _NAV_SIGNING_CREDENTIAL_REF = "aip_citation_navigation_signer"
-_SOURCE_PERMISSION_BY_TYPE = {
-    "object": "object:read",
-    "document": "object:read",
-    "media_item_version": "object:read",
-    "content_unit": "object:read",
-    "dataset": "dataset:read",
-    "dataset_version": "dataset:read",
-    "function": "ontology:read",
-}
 
 
 @dataclass(frozen=True)
@@ -187,7 +179,7 @@ def _require_source_access(ctx: RequestContext, policy: PolicyService, item: AiL
 
 def _permission_for_source(item: AiLedgerRow) -> str:
     resource_type = _required_str(item, "source_resource_type")
-    return _SOURCE_PERMISSION_BY_TYPE.get(resource_type, "object:read")
+    return source_permission_for_type(resource_type)
 
 
 def _source_request(item: AiLedgerRow) -> CitationSourceVerificationRequest:

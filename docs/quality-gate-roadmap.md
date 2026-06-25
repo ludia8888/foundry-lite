@@ -1713,6 +1713,22 @@ review create idempotency key로 사용한다. 같은 fingerprint retry는 같�
 | ------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Action proposal ratchet   | `quality:action-proposal` | LLM이 action을 직접 실행하거나, forged/unselected evidence로 review를 만들거나, agent allowlist/user permission/object version re-read 없이 approval queue에 action proposal을 넣는 문제 차단 |
 
+### AIP P0h — Approval Execution Ratchet
+
+P0h의 현재 slice는 visual proposal review workspace가 아니라, 이미 승인된 action proposal review를
+실제 `ActionService.apply_action(...)` 호출로 연결하는 서버-side bridge다.
+`ApprovalExecutionService`는 review가 approved 상태인지 확인하고, reviewer permission,
+action execution permission, source evidence access, restore/write traffic gate, active action
+definition, current object version, expiry, 그리고 originating AI run ledger로 재계산한 proposal
+fingerprint를 다시 검증한다. 실행은 proposal fingerprint를 action idempotency key로 사용하므로
+같은 승인 실행 retry가 새 action run을 만들지 않는다. 성공하면 review의 `execution_status`와
+`approved_action_run_id`를 갱신하고, Operations가 따라갈 수 있도록
+`runtime_run_relations`에 `insight_review --approved_as--> action` 링크를 남긴다.
+
+| 게이트                       | 명령                         | Root cause                                                                                                                                                      |
+| ---------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Approval execution ratchet   | `quality:approval-execution` | 승인되지 않은 review나 변조/만료/stale proposal이 action으로 실행되거나, 승인 retry가 중복 action run을 만들거나, review와 action run 사이 운영 추적이 끊기는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와

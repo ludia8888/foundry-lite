@@ -18,7 +18,8 @@ from sqlalchemy.engine import Engine
 class InsightReviewHarness:
     repository: InsightReviewRepository
 
-    def transaction(self) -> AbstractContextManager[Any]: ...
+    def transaction(self) -> AbstractContextManager[Any]:
+        raise NotImplementedError
 
 
 @dataclass
@@ -136,6 +137,58 @@ def test_insight_review_assignment_does_not_mutate_terminal_review() -> None:
     assert current["assignment_idempotency_key"] is None
 
 
+def test_insight_review_execution_status_links_action_once() -> None:
+    harness = _sqlalchemy_harness()
+    with harness.transaction() as transaction:
+        harness.repository.insert_review_or_get_existing(
+            transaction=transaction,
+            record=_record("review_1", create_key="create-1", execution_status="pending_review"),
+        )
+        harness.repository.decide_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            status="approved",
+            decision={"decision": "approved"},
+            decision_idempotency_key="decision-1",
+            updated_at="2026-06-19T00:00:01Z",
+        )
+        started = harness.repository.mark_execution_started(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            updated_at="2026-06-19T00:00:02Z",
+        )
+        duplicate_start = harness.repository.mark_execution_started(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            updated_at="2026-06-19T00:00:03Z",
+        )
+        succeeded = harness.repository.mark_execution_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            action_run_id="action_run_1",
+            updated_at="2026-06-19T00:00:04Z",
+        )
+        late_failure = harness.repository.mark_execution_failed(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            error={"message": "late"},
+            updated_at="2026-06-19T00:00:05Z",
+        )
+
+    assert started is not None
+    assert started["execution_status"] == "executing"
+    assert duplicate_start is None
+    assert succeeded is not None
+    assert succeeded["execution_status"] == "executed"
+    assert succeeded["approved_action_run_id"] == "action_run_1"
+    assert late_failure is None
+
+
 def _sqlalchemy_harness() -> SqlAlchemyInsightReviewHarness:
     engine = create_engine("sqlite:///:memory:", future=True)
     db.metadata.create_all(engine)
@@ -147,6 +200,7 @@ def _record(
     *,
     create_key: str,
     assignee_user_id: str | None = None,
+    execution_status: str | None = None,
 ) -> InsightReviewRecord:
     return InsightReviewRecord(
         review_id=review_id,
@@ -159,14 +213,14 @@ def _record(
         evidence_object_ids=["evidence-1"],
         evidence_refs=[{"evidenceId": "evidence-1"}],
         action_proposal={"actionApiName": "ApproveOrder"},
-        proposal_type=None,
-        proposal_fingerprint=None,
-        originating_ai_run_id=None,
+        proposal_type="ontology_action" if execution_status else None,
+        proposal_fingerprint="sha256:proposal" if execution_status else None,
+        originating_ai_run_id="ai-run-1" if execution_status else None,
         originating_tool_call_id=None,
         expires_at=None,
-        execution_status=None,
+        execution_status=execution_status,
         approved_action_run_id=None,
-        approval_policy_version=None,
+        approval_policy_version="policy-v1" if execution_status else None,
         created_by_user_id="creator",
         created_idempotency_key=create_key,
         assignment_idempotency_key=None,

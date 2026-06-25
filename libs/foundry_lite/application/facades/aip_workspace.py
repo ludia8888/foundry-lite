@@ -7,14 +7,20 @@ from foundry_lite.application.services.aip.action_proposal import (
     ActionProposalResult,
     ActionProposalService,
 )
+from foundry_lite.application.services.aip.approval_execution import (
+    ApprovalExecutionRequest,
+    ApprovalExecutionResult,
+    ApprovalExecutionService,
+)
 from foundry_lite.domain.context import RequestContext
 
 
 class AipWorkspace:
     """Facade for governed AI proposal workflows."""
 
-    def __init__(self, action_proposal: ActionProposalService) -> None:
+    def __init__(self, action_proposal: ActionProposalService, approval_execution: ApprovalExecutionService) -> None:
         self._action_proposal = action_proposal
+        self._approval_execution = approval_execution
 
     def propose_action(
         self,
@@ -52,5 +58,20 @@ class AipWorkspace:
                 originating_tool_call_id=originating_tool_call_id,
                 priority=priority,
                 assignee_user_id=assignee_user_id,
+            ),
+        )
+
+    def execute_approved_action(
+        self,
+        *,
+        review_id: str,
+        expected_proposal_fingerprint: str,
+        ctx: RequestContext | None = None,
+    ) -> ApprovalExecutionResult:
+        return self._approval_execution.execute(
+            ctx or RequestContext(),
+            ApprovalExecutionRequest(
+                review_id=review_id,
+                expected_proposal_fingerprint=expected_proposal_fingerprint,
             ),
         )

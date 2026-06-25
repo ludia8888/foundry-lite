@@ -133,3 +133,38 @@ class InsightReviewRepository(Protocol):
     ) -> InsightReviewRow | None:
         """Approve or reject a pending review if this caller wins the race."""
         ...
+
+    def mark_execution_started(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        review_id: str,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        """Move an approved action proposal review into executing state."""
+        ...
+
+    def mark_execution_succeeded(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        review_id: str,
+        action_run_id: str,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        """Link an approved review to the action run it produced."""
+        ...
+
+    def mark_execution_failed(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        review_id: str,
+        error: InsightReviewJson,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        """Record that approval execution failed after the execution claim was taken."""
+        ...

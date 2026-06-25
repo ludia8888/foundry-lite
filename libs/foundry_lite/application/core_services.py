@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
+from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionService
 from foundry_lite.application.services.aip.citation_service import CitationService
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerService
@@ -31,6 +32,7 @@ __all__ = [
     "CoreServices",
     "ActionService",
     "ActionProposalService",
+    "ApprovalExecutionService",
     "BackupRestoreService",
     "DemoService",
     "ErasureService",
@@ -63,6 +65,7 @@ class CoreServices:
 
     action: ActionService
     action_proposal: ActionProposalService
+    approval_execution: ApprovalExecutionService
     backup_restore: BackupRestoreService
     dataset: DatasetServices
     demo: DemoService
@@ -109,6 +112,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     return service_type(
         action=action,
         action_proposal=build_service(ActionProposalService, dependencies),
+        approval_execution=build_service(ApprovalExecutionService, dependencies),
         backup_restore=backup_restore,
         dataset=dataset,
         demo=demo,
@@ -140,6 +144,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
     return [
         services.action,
         services.action_proposal,
+        services.approval_execution,
         services.backup_restore,
         *services.dataset.items(),
         services.demo,
@@ -165,6 +170,7 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
         "action_service": services.action,
         "action_proposal_service": services.action_proposal,
+        "approval_execution_service": services.approval_execution,
         "backup_restore_service": services.backup_restore,
         "content_retrieval_service": services.media.retrieval,
         "media_visual_search_service": services.media.visual_search,

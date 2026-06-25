@@ -81,7 +81,7 @@ class FoundryLite:
         self.ontology = OntologyRegistry(services.ontology)
         self.objects = ObjectStore(services.object_store, services.ontology_search)
         self.actions = ActionGateway(services.action)
-        self.aip = AipWorkspace(services.action_proposal)
+        self.aip = AipWorkspace(services.action_proposal, services.approval_execution)
         self.materialization = MaterializationRunner(services.materialization)
         self.insights = InsightReviewWorkspace(services.insight_review)
         self.media = MediaWorkspace(services.media)
