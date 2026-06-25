@@ -25,6 +25,7 @@ from foundry_lite.application.ports import (
     TransformRepository,
     WorkflowAdapter,
 )
+from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
 from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
@@ -112,6 +113,7 @@ class CoreService:
     external_media_reader: ExternalMediaReader
     content_index_adapter: ContentIndexAdapter
     embedding_model_adapter: EmbeddingModelAdapter
+    completion_model_adapter: CompletionModelAdapter
     vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     engine: TransactionManager
     policy: PolicyService

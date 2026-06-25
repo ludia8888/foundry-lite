@@ -55,6 +55,7 @@ from foundry_lite.infrastructure.adapters.asr_processor import AsrProcessorAdapt
 from foundry_lite.infrastructure.adapters.elasticsearch_content_index import ElasticsearchContentIndexAdapter
 from foundry_lite.infrastructure.adapters.elasticsearch_search import ElasticsearchAdapterConfig
 from foundry_lite.infrastructure.adapters.es_client import build_es_client
+from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_embedding import (
     FASTEMBED_MODEL_VERSION,
     LocalEmbeddingAdapter,
@@ -256,11 +257,18 @@ def plane(minio_server: MinioServer, es_url: str, tmp_path: Path) -> _Plane:
     transaction = MediaTransactionService(engine=engine, media_repository=repo, media_storage=storage)
     transaction.bind_collaborators({"runtime_service": runtime})
     indexing = MediaIndexingService(
-        engine=engine, media_derivative_repository=deriv, content_index_adapter=index, embedding_model_adapter=embedding
+        engine=engine,
+        media_derivative_repository=deriv,
+        content_index_adapter=index,
+        embedding_model_adapter=embedding,
     )
     indexing.bind_collaborators({"runtime_service": runtime})
     retrieval = DefaultContentRetrievalService(
-        engine=engine, media_derivative_repository=deriv, content_index_adapter=index, embedding_model_adapter=embedding
+        engine=engine,
+        media_derivative_repository=deriv,
+        content_index_adapter=index,
+        embedding_model_adapter=embedding,
+        completion_model_adapter=LocalCompletionAdapter(),
     )
     binding = MediaReferenceBindingService(
         engine=engine, media_repository=repo, media_reference_binding_repository=binding_repo

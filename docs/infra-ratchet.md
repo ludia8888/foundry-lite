@@ -944,3 +944,37 @@ Media/Content Plane (standalone family, not in `activeStack`).
   OWNING object lifted through the media edge (carrying the content citation) alongside the object matched
   by its own semantic note. No family change in `infra-tricky-matrix.json` (object/media search stay in
   their existing families); the new live scenario is registered in the integration-scenario gate.
+
+- **L13 — Query-side HyDE + query distillation (OAG query-side, shipped):** prior sections gave us hybrid
+  lexical+dense retrieval fused with **reciprocal rank fusion** — which IS Palantir's documented
+  "reranking" (the OAG page's fused output is literally `rerankedResults`; Palantir ships NO cross-encoder
+  reranker, so a post-retrieval cross-encoder is intentionally **beyond-Palantir BYO and not built**). The
+  Palantir-faithful retrieval-quality techniques we still lacked are the **query-side LLM** ones, both from
+  the OAG page (`palantir.com/docs/foundry/ontology/ontology-augmented-generation`): **HyDE (Hypothetical
+  Document Embeddings)** — "instead of embedding the query directly, you first ask an LLM to produce a
+  hypothetical chunk that answers this question, which you then embed" (the hypothetical is _search-bait_;
+  real citations still come from the retrieved real chunks) — and **query distillation** — "injecting an LLM
+  step between the user query and what is passed to the keyword search allows the possibility of distilling
+  the query" (e.g. extract the key user actions, drop stop words). Both run QUERY-SIDE, before retrieval; RRF
+  stays the fusion step. A new injectable `CompletionModelAdapter` port (`complete(prompt) -> str`,
+  `model_version`/`is_available`/`failure_contract()`, mirroring the embedding/vision ports) + a
+  `LocalCompletionAdapter` whose default engine raises `completion_model_unavailable` is the seam — the **real
+  local LLM is DEFERRED** (much heavier than bge/whisper; a live quality proof needs it), exactly like
+  live-OCR / live-ASR were contract-first then made live. A small `QueryEnrichmentService` helper
+  (`enrich_query`) returns `(dense_text, keyword_text)`: when a completion model is wired it embeds the LLM
+  hypothetical answer (HyDE) as the dense `query_vector` via the existing pinned **bge** embedder (the HyDE
+  vector is still bge-pinned — only the text fed to the embedder changes) and feeds the distilled terms to the
+  lexical leg; when NOT wired it returns the raw query, so `DefaultContentRetrievalService._with_query_vector`
+  is **byte-for-byte unchanged** (default-off — `LocalCompletionAdapter()` is unavailable until a real engine
+  is injected, no behaviour change anywhere). This is ADDITIVE; no new env var, **no new model in CI** (the
+  completion default raises; bge is already cached). Deterministic unit tests (`tests/unit/test_query_enrichment.py`)
+  with a FAKE completion engine prove HyDE embeds the hypothetical (not the raw query), distillation feeds the
+  cleaned keyword text, the default adapter is the raw query (regression guard), and the default engine raises
+  `completion_model_unavailable`; a **REAL fastembed bge + fake-LLM** improvement test proves HyDE measurably
+  ranks the cold-chain target higher than the short raw question (bge: raw scores the target 0.619 / margin
+  0.145; the HyDE hypothetical scores it 0.919 / margin 0.394 — target ranks first). A contract test
+  (`tests/contracts/test_completion_model_contract.py`) locks the new port. **No new source-of-truth rule**:
+  the projection-is-derived invariant + the enforced `embedding_artifact_pins_model_version_and_chunk_spec`
+  rule already cover it (HyDE re-uses the pinned bge space). No family change in `infra-tricky-matrix.json`
+  (media/object search stay in their existing families); the bge improvement test rides the existing
+  `media-embeddings` scenario.

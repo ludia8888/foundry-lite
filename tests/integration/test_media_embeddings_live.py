@@ -36,6 +36,7 @@ from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.elasticsearch_content_index import ElasticsearchContentIndexAdapter
 from foundry_lite.infrastructure.adapters.elasticsearch_search import ElasticsearchAdapterConfig
 from foundry_lite.infrastructure.adapters.es_client import build_es_client
+from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_embedding import (
     FASTEMBED_MODEL_VERSION,
@@ -136,11 +137,18 @@ def env(tmp_path: Path) -> _Env:
     runtime = _FakeRuntime()
     embedding = _real_embedding()
     indexing = MediaIndexingService(
-        engine=engine, media_derivative_repository=repo, content_index_adapter=index, embedding_model_adapter=embedding
+        engine=engine,
+        media_derivative_repository=repo,
+        content_index_adapter=index,
+        embedding_model_adapter=embedding,
     )
     indexing.bind_collaborators({"runtime_service": runtime})
     retrieval = DefaultContentRetrievalService(
-        engine=engine, media_derivative_repository=repo, content_index_adapter=index, embedding_model_adapter=embedding
+        engine=engine,
+        media_derivative_repository=repo,
+        content_index_adapter=index,
+        embedding_model_adapter=embedding,
+        completion_model_adapter=LocalCompletionAdapter(),
     )
     return _Env(RequestContext(), engine, repo, embedding, index, indexing, retrieval)
 
@@ -228,6 +236,7 @@ def test_real_embeddings_rank_semantic_match_through_live_elasticsearch_dense_ve
         media_derivative_repository=env.repo,
         content_index_adapter=es_index,
         embedding_model_adapter=env.embedding,
+        completion_model_adapter=LocalCompletionAdapter(),
     )
 
     es_indexing.index_derivative(env.ctx, media_derivative_id=derivative_id, generation="g1")

@@ -195,7 +195,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-aggregation-fan-out",
         type=int,
-        default=23,
+        # 24: the `infrastructure.adapters` aggregation root grows by one per new adapter; L13
+        # adds `LocalCompletionAdapter` (the query-side HyDE/distillation completion seam), which
+        # is coupling by design at an explicit aggregation point, not accidental fan-out.
+        default=24,
         help="Higher fan-out budget for explicit aggregation roots (ports/repositories __init__).",
     )
     parser.add_argument(
