@@ -1493,7 +1493,10 @@ DB lock으로 같은 위험을 재현한다. 세 번째 S55 slice인 expand-cont
 `release_compatibility`를 선언해야 하고, expand 단계는 `old_and_new_app` window에서
 compatible add/table/index/backfill SQL만 허용하며 기본값 없는 새 `NOT NULL` 컬럼을
 막는다. contract 단계는 `new_app_only` window라도 old-writer reject와 release
-window proof가 생기기 전까지 fail-closed로 차단된다. 다음 S55 slice는
+window proof가 생기기 전까지 fail-closed로 차단된다. 같은 gate는 `tenant_id`를 가진
+새 `ai_` 테이블이 PostgreSQL `ENABLE/FORCE ROW LEVEL SECURITY`와 tenant policy 없이
+추가되는 것도 차단해, `create_database()` bootstrap과 Alembic upgrade 경로의 tenant
+isolation drift를 막는다. 다음 S55 slice는
 `quality:schema-evolution`으로 Dataset commit 직전 schema change를 compatible,
 warning, blocked로 분류한다. Rename/drop/type narrowing/primary-key change는 blocking
 change로 남고, numeric widening/deprecated field/non-null default backfill은 warning
@@ -1516,6 +1519,7 @@ password-masked JSON artifact로 남기게 해 operator가 실패 revision, lock
 | Schema migration singleton runner      | `quality:schema-migration-runner` | API/worker/app startup 여러 개가 동시에 migration을 실행해 schema lock, partial migration, app/schema mismatch를 만드는 문제 차단                                                    |
 | Schema migration expand-contract guard | `quality:schema-migrations`       | expand 단계에서 old app/write path를 깨는 drop/alter/rename, 기본값 없는 NOT NULL 컬럼, 검토 불가능한 SQL, 준비 안 된 contract cleanup이 들어오는 문제 차단                          |
 | Schema migration release-window guard  | `quality:schema-migrations`       | migration phase와 rolling-deploy compatibility window가 어긋나 old/new app 공존 기간을 리뷰할 기준이 사라지는 문제 차단                                                              |
+| AI tenant RLS migration guard          | `quality:schema-migrations`       | 기존 DB가 Alembic upgrade로 새 AI tenant table을 받는 경로에서 PostgreSQL RLS/tenant policy 없이 테이블만 생성되어 tenant isolation 방어 밖에 남는 문제 차단                          |
 | Schema migration operator evidence     | `quality:schema-migration-runner` | migration 실패가 traceback으로만 사라져 어떤 revision/lock/error 상태였는지 운영자가 재현하지 못하는 문제 차단                                                                       |
 | Dataset schema evolution ratchet       | `quality:schema-evolution`        | Dataset schema rename/drop/narrowing 같은 consumer-breaking 변경이 단순 schema drift 실패로만 보이거나, widening/backfill 영향이 transaction metadata 없이 merge되는 문제 차단       |
 | Ontology migration ratchet             | `quality:ontology-migrations`     | Ontology property/object/link/action parameter 변경이 기존 object/query/action/generated SDK 소비자를 조용히 깨거나, reindex 필요성이 audit/outbox evidence 없이 merge되는 문제 차단 |

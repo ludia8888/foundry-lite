@@ -1032,7 +1032,10 @@ Media/Content Plane (standalone family, not in `activeStack`).
   alias whose `status` is not `enabled` fails typed rather than swapping in another model, (4) calls the wired
   adapter with credentials referenced by NAME/version via `SecretProvider` (raw key never in app
   logic/response/trace), and (5) returns the response with provider/resolved id+revision + per-call
-  `model_hash`/`prompt_hash` (raw prompt never logged). `FakeLanguageModel` (deterministic echo) is
+  `model_hash`/`prompt_hash` (raw prompt never logged). The model-registry Alembic upgrade path now
+  applies PostgreSQL `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL SECURITY`, and tenant policies to
+  `ai_model_providers`/`ai_models`/`ai_model_aliases`, so existing DBs upgraded by Alembic match the
+  `create_database()` bootstrap RLS path. `FakeLanguageModel` (deterministic echo) is
   the SAFE composition default — no Foundry token, no network, existing tests unaffected;
   `ProviderCompatibleLanguageModel` is the real provider-compatible-proxy adapter whose default
   raises `language_model_unavailable` (real provider DEFERRED, mirroring the deferred-engine

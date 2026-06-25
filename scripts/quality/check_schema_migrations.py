@@ -60,6 +60,8 @@ class OperationCall:
     line: int
     sql_statement: str | None = None
     has_not_null_column_without_default: bool = False
+    table_name: str | None = None
+    has_tenant_column: bool = False
 
 
 def _repo_relative(path: Path) -> str:
@@ -138,6 +140,8 @@ def _operation_calls(function: ast.FunctionDef | None) -> tuple[OperationCall, .
                         line=node.lineno,
                         sql_statement=_execute_sql_statement(name, node),
                         has_not_null_column_without_default=_has_not_null_add_column_without_default(name, node),
+                        table_name=_create_table_name(name, node),
+                        has_tenant_column=_has_tenant_column(name, node),
                     )
                 )
     return tuple(sorted(calls, key=lambda item: (item.line, item.name)))
@@ -163,6 +167,32 @@ def _has_not_null_add_column_without_default(name: str, call: ast.Call) -> bool:
     if not _keyword_is_false(column_call, "nullable"):
         return False
     return not _has_keyword_value(column_call, {"default", "server_default"})
+
+
+def _create_table_name(name: str, call: ast.Call) -> str | None:
+    if name != "op.create_table" or not call.args:
+        return None
+    table_arg = call.args[0]
+    if isinstance(table_arg, ast.Constant) and isinstance(table_arg.value, str):
+        return table_arg.value
+    return None
+
+
+def _has_tenant_column(name: str, call: ast.Call) -> bool:
+    if name != "op.create_table":
+        return False
+    return any(_column_name(arg) == "tenant_id" for arg in call.args[1:])
+
+
+def _column_name(node: ast.AST) -> str | None:
+    if not isinstance(node, ast.Call):
+        return None
+    if not _call_name(node).endswith("Column") or not node.args:
+        return None
+    column_arg = node.args[0]
+    if isinstance(column_arg, ast.Constant) and isinstance(column_arg.value, str):
+        return column_arg.value
+    return None
 
 
 def _add_column_call(name: str, call: ast.Call) -> ast.Call | None:
@@ -375,7 +405,56 @@ def _expand_phase_findings(revision: MigrationRevision, path: str) -> list[Migra
         if operation.has_not_null_column_without_default:
             findings.append(_expand_not_null_finding(operation, path))
         findings.extend(_expand_sql_findings(operation, path))
+    findings.extend(_ai_tenant_rls_findings(revision, path))
     return findings
+
+
+def _ai_tenant_rls_findings(revision: MigrationRevision, path: str) -> list[MigrationFinding]:
+    statements = tuple(operation.sql_statement or "" for operation in revision.upgrade_op_calls)
+    findings: list[MigrationFinding] = []
+    for operation in revision.upgrade_op_calls:
+        table_name = operation.table_name
+        if table_name is None or not _requires_ai_tenant_rls(operation, table_name):
+            continue
+        missing = _missing_ai_tenant_rls(table_name, statements)
+        if missing:
+            findings.append(
+                MigrationFinding(
+                    "migration_ai_tenant_rls_missing",
+                    "AI tables with tenant_id must enable/force Postgres RLS and create a tenant policy",
+                    path=path,
+                    expected="ENABLE RLS, FORCE RLS, tenant policy",
+                    actual=f"{table_name}: missing {','.join(missing)}",
+                )
+            )
+    return findings
+
+
+def _requires_ai_tenant_rls(operation: OperationCall, table_name: str) -> bool:
+    return operation.name == "op.create_table" and operation.has_tenant_column and table_name.startswith("ai_")
+
+
+def _missing_ai_tenant_rls(table_name: str, statements: tuple[str, ...]) -> list[str]:
+    normalized = tuple(" ".join(statement.split()).upper() for statement in statements)
+    table = table_name.upper()
+    missing: list[str] = []
+    if not _contains_sql(normalized, f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"):
+        missing.append("enable")
+    if not _contains_sql(normalized, f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY"):
+        missing.append("force")
+    if not _has_tenant_policy(table, normalized):
+        missing.append("policy")
+    return missing
+
+
+def _contains_sql(statements: tuple[str, ...], needle: str) -> bool:
+    return any(needle in statement for statement in statements)
+
+
+def _has_tenant_policy(table_name: str, statements: tuple[str, ...]) -> bool:
+    policy_name = f"CREATE POLICY {table_name}_TENANT_ISOLATION ON {table_name}"
+    setting = "CURRENT_SETTING('FOUNDRY_LITE.TENANT_ID', TRUE)"
+    return any(policy_name in statement and setting in statement for statement in statements)
 
 
 def _expand_operation_finding(operation: OperationCall, path: str) -> MigrationFinding:

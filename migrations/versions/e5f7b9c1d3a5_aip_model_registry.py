@@ -9,7 +9,7 @@ Create Date: 2026-06-25 00:00:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 # revision identifiers, used by Alembic.
 revision: str = "e5f7b9c1d3a5"
@@ -72,6 +72,34 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("tenant_id", "alias", "environment", name="uq_ai_model_alias"),
     )
+    if context.get_context().dialect.name == "postgresql":
+        op.execute("ALTER TABLE ai_model_providers ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_model_providers FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_model_providers_tenant_isolation ON ai_model_providers
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_models ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_models FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_models_tenant_isolation ON ai_models
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_model_aliases ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_model_aliases FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_model_aliases_tenant_isolation ON ai_model_aliases
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
 
 
 def downgrade() -> None:
