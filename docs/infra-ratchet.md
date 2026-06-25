@@ -978,3 +978,41 @@ Media/Content Plane (standalone family, not in `activeStack`).
   rule already cover it (HyDE re-uses the pinned bge space). No family change in `infra-tricky-matrix.json`
   (media/object search stay in their existing families); the bge improvement test rides the existing
   `media-embeddings` scenario.
+
+## AIP P0 (LLM-egress security)
+
+- **P0a — Content search classification PRE-filter (shipped):** before any AIP/LLM egress, the
+  content/media search path must enforce classification security AT RETRIEVAL — it previously did
+  not. The content_units row carries a `security_envelope` with a `classification`, but the search
+  CONTRACT (`IndexedContentUnit`, `HybridContentQuery`) did not, and `search_content` only re-validated
+  tenant + text_hash — so a unit classified above the caller's clearance could be retrieved, ranked, and
+  (later) fed to an LLM. P0a closes this, mirroring Palantir exactly: **one model, per-request,
+  as-the-user** — every access path re-evaluates the same access model; the index/embeddings are DERIVED
+  projections, never an independent authority (palantir.com/docs/foundry/object-backend/overview,
+  /aip/aip-security). **Mandatory control property** — `IndexedContentUnit` gains `classification: str = ""`,
+  copied at projection time from the source content_unit's `security_envelope` and stored AS a required
+  gate property ON the indexed record (palantir.com/.../mandatory-control-properties). **Granular policy →
+  query template (PRE-filter)** — `HybridContentQuery` gains `allowed_classifications: tuple[str, ...] | None`;
+  the security predicate is compiled into the query so the engine "returns only" permitted rows. Both index
+  adapters PRE-filter: `LocalContentIndexAdapter.search` drops uncleared candidates BEFORE lexical/dense
+  ranking + RRF; `ElasticsearchContentIndexAdapter` adds a `terms` classification filter to the query body
+  (lexical + dense paths). Unauthorized candidates are NEVER retrieved, so they cannot influence the
+  kNN/ranking or reach an LLM — this **closes the ranking/count side-channel**
+  (palantir.com/.../platform-security-management/manage-granular-policies, /security/restricted-views).
+  **Re-apply at the authoritative re-read** — `DefaultContentRetrievalService._is_authoritative` re-applies
+  the SAME classification gate against the committed DB row (defense-in-depth: even a stale/over-broad index
+  hit is dropped), keeping the existing tenant + text_hash checks
+  (palantir.com/.../object-permissioning/object-security-policies). The single classification-access rule
+  (`is_classification_cleared`) is REUSED across both adapters and the re-read, mirroring the established
+  media-plane `MediaReferenceBindingService.resolve(..., allowed_classifications=...)` mechanism — `None`
+  = full clearance, so empty-classification rows and uncleared callers are byte-for-byte unchanged (additive,
+  no schema change — classification already lives on `content_units.security_envelope`; no new env var, no
+  new model). New enforced source-of-truth rule
+  `content_search_pre_filters_by_classification_not_post_filter` names the deterministic tests:
+  `test_pre_filter_excludes_over_classified_unit_from_ranking` (local index: the over-classified unit that
+  would otherwise be the TOP lexical hit never enters the scored set),
+  `test_search_pre_filters_over_classified_unit_end_to_end` + `test_search_returns_unit_when_caller_is_cleared`
+  (service end-to-end), `test_search_pre_filters_by_classification_term` (ES terms PRE-filter),
+  `test_authoritative_re_read_drops_over_classified_leaked_by_stale_index` (defense-in-depth re-read), and
+  `test_empty_classification_back_compat_unchanged` (back-compat). No family change in
+  `infra-tricky-matrix.json` (content search stays in its existing family).

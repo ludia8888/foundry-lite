@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from foundry_lite.application.ports.content_index import ContentSearchHit, HybridContentQuery
+from foundry_lite.application.ports.content_index import (
+    ContentSearchHit,
+    HybridContentQuery,
+    is_classification_cleared,
+)
 from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.media.query_enrichment import enrich_query
@@ -38,7 +42,13 @@ class DefaultContentRetrievalService(CoreService):
                 transaction=conn, ids=[hit.content_unit_id for hit in hits]
             )
         unit_by_id = {unit.content_unit_id: unit for unit in units}
-        return [hit for hit in hits if _is_authoritative(hit, unit_by_id.get(hit.content_unit_id), ctx.tenant_id)]
+        return [
+            hit
+            for hit in hits
+            if _is_authoritative(
+                hit, unit_by_id.get(hit.content_unit_id), ctx.tenant_id, scoped.allowed_classifications
+            )
+        ]
 
     def _with_query_vector(self, query: HybridContentQuery) -> HybridContentQuery:
         if not self.embedding_model_adapter.is_available or not query.text:
@@ -56,9 +66,18 @@ class DefaultContentRetrievalService(CoreService):
         )
 
 
-def _is_authoritative(hit: ContentSearchHit, unit: ContentUnitRecord | None, tenant_id: str) -> bool:
+def _is_authoritative(
+    hit: ContentSearchHit,
+    unit: ContentUnitRecord | None,
+    tenant_id: str,
+    allowed_classifications: tuple[str, ...] | None,
+) -> bool:
     if unit is None:
         return False  # stale: the source content unit no longer exists
     if unit.tenant_id != tenant_id or str(unit.security_envelope.get("tenantId", unit.tenant_id)) != tenant_id:
         return False  # ACL: never leak another tenant's content
+    # AIP P0a defense-in-depth: re-apply the classification gate against the authoritative DB row,
+    # so even a stale/over-broad index that leaked an over-classified unit is dropped here.
+    if not is_classification_cleared(str(unit.security_envelope.get("classification", "")), allowed_classifications):
+        return False
     return hit.text_hash == unit.text_hash  # citation integrity: index must match the truth

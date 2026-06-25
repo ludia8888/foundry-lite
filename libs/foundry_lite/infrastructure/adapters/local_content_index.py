@@ -22,6 +22,7 @@ from foundry_lite.application.ports.content_index import (
     ContentSearchHit,
     HybridContentQuery,
     IndexedContentUnit,
+    is_classification_cleared,
 )
 from foundry_lite.application.ports.embedding_model import EmbeddingVector
 
@@ -71,7 +72,12 @@ class LocalContentIndexAdapter:
         generation = self._generations.get(self._active)
         if not generation:
             return []
-        candidates = [unit for unit in generation.values() if unit.tenant_id == query.tenant_id]
+        candidates = [
+            unit
+            for unit in generation.values()
+            if unit.tenant_id == query.tenant_id
+            and is_classification_cleared(unit.classification, query.allowed_classifications)
+        ]
         if query.query_vector is None:
             ranked = _lexical_rank(candidates, query.text)
         elif query.text:

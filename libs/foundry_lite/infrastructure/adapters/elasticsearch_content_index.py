@@ -162,6 +162,7 @@ _MAPPINGS: Mapping[str, object] = {
         "start_ms": {"type": "long"},
         "end_ms": {"type": "long"},
         "chunk_spec_hash": {"type": "keyword"},
+        "classification": {"type": "keyword"},
         "embedding_model_version": {"type": "keyword"},
         "embedding": {"type": "dense_vector"},
     }
@@ -184,6 +185,7 @@ def _document_body(unit: IndexedContentUnit) -> Mapping[str, object]:
         "start_ms": unit.start_ms,
         "end_ms": unit.end_ms,
         "chunk_spec_hash": unit.chunk_spec_hash,
+        "classification": unit.classification,
         "embedding_model_version": unit.embedding_model_version,
         "embedding": list(unit.embedding),
     }
@@ -206,6 +208,11 @@ def _version_guarded_body(unit: IndexedContentUnit) -> Mapping[str, object]:
 
 def _search_body(query: HybridContentQuery) -> Mapping[str, object]:
     filters: list[Mapping[str, object]] = [{"term": {"tenant_id": query.tenant_id}}]
+    # AIP P0a: compile the caller's allowed-classification set into the query as a PRE-filter so
+    # the engine "returns only" permitted units — over-classified candidates never enter the kNN
+    # or the lexical/score pass. ``None`` = full clearance, so no term is added (back-compat).
+    if query.allowed_classifications is not None:
+        filters.append({"terms": {"classification": list(query.allowed_classifications)}})
     if query.query_vector is not None:
         return _dense_search_body(query, filters)
     must = [{"match": {"text": query.text}}] if query.text else [{"match_all": {}}]
