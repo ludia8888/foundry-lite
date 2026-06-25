@@ -1104,6 +1104,16 @@
         "test_retrieval_drops_citation_hash_mismatch"
       ]
     },
+    "content_search_pre_filters_by_classification_not_post_filter": {
+      "description": "AIP P0a: content search compiles the caller's allowed-classification set into the query as a PRE-filter in both index adapters, so an over-classified unit never enters the kNN/ranking (closing the ranking/count side-channel) and never reaches an LLM; the authoritative DB re-read re-applies the same classification gate as defense-in-depth. None = full clearance, so empty-classification rows and uncleared callers are unchanged. Reuses the existing media-plane classification-access rule (allowed_classifications, mirroring MediaReferenceBindingService.resolve).",
+      "status": "enforced",
+      "tests": [
+        "test_pre_filter_excludes_over_classified_unit_from_ranking",
+        "test_search_pre_filters_over_classified_unit_end_to_end",
+        "test_search_pre_filters_by_classification_term",
+        "test_authoritative_re_read_drops_over_classified_leaked_by_stale_index"
+      ]
+    },
     "embedding_artifact_pins_model_version_and_chunk_spec": {
       "description": "An embedding artifact pins its embedding model version and chunk spec; index mismatch fails closed. L12a reuses this rule for object Vector properties: an object embedding pins its model version and a nearestNeighbors query in a different vector space fails closed.",
       "status": "enforced",

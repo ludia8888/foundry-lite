@@ -27,6 +27,7 @@ def _unit(
     source: str = "miv-1",
     text_hash: str | None = None,
     page_number: int = 1,
+    classification: str = "",
 ) -> IndexedContentUnit:
     return IndexedContentUnit(
         tenant_id=tenant_id,
@@ -36,6 +37,7 @@ def _unit(
         text_hash=text_hash if text_hash is not None else f"h-{content_unit_id}",
         version=version,
         page_number=page_number,
+        classification=classification,
     )
 
 
@@ -60,6 +62,44 @@ def test_upsert_search_returns_tenant_scoped_citations() -> None:
     hits = adapter.search(HybridContentQuery(tenant_id="tenant-demo", text="payment", top_k=10))
     assert [hit.content_unit_id for hit in hits] == ["cu-2"]
     assert hits[0].page_number == 2 and hits[0].text_hash == "h-cu-2" and hits[0].index_generation == "g1"
+
+
+def test_pre_filter_excludes_over_classified_unit_from_ranking() -> None:
+    # AIP P0a ranking side-channel: an over-classified unit that would otherwise be the TOP
+    # lexical hit (it repeats the query token more) must never enter the scored/ranked set when
+    # the caller's allowed set does not cover it — only the cleared unit is returned.
+    adapter = LocalContentIndexAdapter()
+    _activate(adapter, "g1")
+    adapter.upsert_units(
+        ContentIndexBatch(
+            generation="g1",
+            units=(
+                _unit("cu-secret", "payment payment payment top secret", classification="secret"),
+                _unit("cu-public", "payment terms", classification="public", page_number=2),
+            ),
+        )
+    )
+    hits = adapter.search(
+        HybridContentQuery(tenant_id="tenant-demo", text="payment", top_k=10, allowed_classifications=("public",))
+    )
+    assert [hit.content_unit_id for hit in hits] == ["cu-public"]
+
+
+def test_full_clearance_when_allowed_classifications_is_none() -> None:
+    # Back-compat: allowed_classifications=None means every classification passes (unchanged).
+    adapter = LocalContentIndexAdapter()
+    _activate(adapter, "g1")
+    adapter.upsert_units(
+        ContentIndexBatch(
+            generation="g1",
+            units=(
+                _unit("cu-secret", "payment one", classification="secret"),
+                _unit("cu-public", "payment two", classification="public"),
+            ),
+        )
+    )
+    hits = adapter.search(HybridContentQuery(tenant_id="tenant-demo", text="payment", top_k=10))
+    assert {hit.content_unit_id for hit in hits} == {"cu-secret", "cu-public"}
 
 
 def test_upsert_reports_partial_failure_for_malformed_units() -> None:

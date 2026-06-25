@@ -143,4 +143,8 @@ def _indexed(unit: ContentUnitRecord, embedding: EmbeddingVector, embedding_mode
         chunk_spec_hash=unit.chunk_spec_hash,
         embedding=embedding,
         embedding_model_version=embedding_model_version,
+        # AIP P0a: pin the unit's classification onto the projection from its source content_unit's
+        # security_envelope. The index is derived from truth; it carries the mandatory control
+        # property so retrieval can PRE-filter by classification before ranking.
+        classification=str(unit.security_envelope.get("classification", "")),
     )

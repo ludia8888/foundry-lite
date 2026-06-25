@@ -81,12 +81,15 @@ class _FakeES:
             return self._dense_search(real, body)
         bool_q = body["query"]["bool"]
         tenant = bool_q["filter"][0]["term"]["tenant_id"]
+        allowed = _allowed_classifications(bool_q["filter"])
         must = bool_q["must"][0]
         text = must["match"]["text"] if "match" in must else None
         hits = [
             {"_index": real, "_source": doc}
             for doc in self.docs.get(real, {}).values()
-            if doc.get("tenant_id") == tenant and _text_match(doc.get("text", ""), text)
+            if doc.get("tenant_id") == tenant
+            and _text_match(doc.get("text", ""), text)
+            and _classification_allowed(doc, allowed)
         ]
         return {"hits": {"hits": hits[: body.get("size", 10)]}}
 
@@ -94,12 +97,17 @@ class _FakeES:
         script = body["query"]["script_score"]
         filters = script["query"]["bool"]["filter"]
         tenant = filters[0]["term"]["tenant_id"]
-        model = filters[1]["term"]["embedding_model_version"]
+        model = next(
+            f["term"]["embedding_model_version"] for f in filters if "embedding_model_version" in f.get("term", {})
+        )
+        allowed = _allowed_classifications(filters)
         query_vector = script["script"]["params"]["query_vector"]
         matched = [
             (_cosine(doc.get("embedding", []), query_vector), doc)
             for doc in self.docs.get(real, {}).values()
-            if doc.get("tenant_id") == tenant and doc.get("embedding_model_version") == model
+            if doc.get("tenant_id") == tenant
+            and doc.get("embedding_model_version") == model
+            and _classification_allowed(doc, allowed)
         ]
         matched.sort(key=lambda pair: -pair[0])
         hits = [{"_index": real, "_source": doc} for _, doc in matched]
@@ -114,6 +122,18 @@ class _FakeES:
                 continue
             for doc_id in [doc_id for doc_id, doc in store.items() if doc.get(field) == value]:
                 del store[doc_id]
+
+
+def _allowed_classifications(filters: list[dict[str, Any]]) -> list[str] | None:
+    for clause in filters:
+        terms = clause.get("terms", {})
+        if "classification" in terms:
+            return list(terms["classification"])
+    return None
+
+
+def _classification_allowed(doc: dict[str, Any], allowed: list[str] | None) -> bool:
+    return allowed is None or doc.get("classification", "") in allowed
 
 
 def _text_match(haystack: str, text: str | None) -> bool:
@@ -146,6 +166,7 @@ def _unit(
     source: str = "miv-1",
     embedding: tuple[float, ...] = (),
     embedding_model_version: str = "",
+    classification: str = "",
 ) -> IndexedContentUnit:
     return IndexedContentUnit(
         tenant_id=tenant,
@@ -157,6 +178,7 @@ def _unit(
         page_number=1,
         embedding=embedding,
         embedding_model_version=embedding_model_version,
+        classification=classification,
     )
 
 
@@ -175,6 +197,36 @@ def test_configure_upsert_search_round_trip() -> None:
     hits = adapter.search(HybridContentQuery(tenant_id="t", text="payment", top_k=10))
     assert [hit.content_unit_id for hit in hits] == ["cu-1"]
     assert hits[0].text_hash == "h-cu-1"
+
+
+def test_search_pre_filters_by_classification_term() -> None:
+    # AIP P0a: the allowed-classification set compiles into a terms filter so the engine returns
+    # ONLY cleared units; the over-classified one never enters the result/score set (PRE-filter).
+    adapter = _adapter()
+    _activate(adapter, "g1")
+    adapter.upsert_units(
+        ContentIndexBatch(
+            generation="g1",
+            units=(
+                _unit("cu-public", "acme payment terms", classification="public"),
+                _unit("cu-secret", "acme payment secret", classification="secret"),
+            ),
+        )
+    )
+    hits = adapter.search(
+        HybridContentQuery(tenant_id="t", text="payment", top_k=10, allowed_classifications=("public",))
+    )
+    assert [hit.content_unit_id for hit in hits] == ["cu-public"]
+
+
+def test_search_without_allowed_classifications_adds_no_term() -> None:
+    # Back-compat: allowed_classifications=None -> no classification term, empty-classification
+    # docs (the prior default mapping) still match — the new filter never breaks existing docs.
+    adapter = _adapter()
+    _activate(adapter, "g1")
+    adapter.upsert_units(ContentIndexBatch(generation="g1", units=(_unit("cu-1", "acme payment terms"),)))
+    hits = adapter.search(HybridContentQuery(tenant_id="t", text="payment", top_k=10))
+    assert [hit.content_unit_id for hit in hits] == ["cu-1"]
 
 
 def test_upsert_partial_failure_for_malformed() -> None:

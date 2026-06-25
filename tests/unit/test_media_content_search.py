@@ -62,11 +62,18 @@ class _Env:
     indexing: MediaIndexingService
     retrieval: DefaultContentRetrievalService
 
-    def seed(self, units: list[tuple[str, str, str]], *, tenant: str | None = None, source: str = _SOURCE) -> str:
+    def seed(
+        self,
+        units: list[tuple[str, str, str]],
+        *,
+        tenant: str | None = None,
+        source: str = _SOURCE,
+        classification: str = "confidential",
+    ) -> str:
         """Insert a COMMITTED derivative + content units. units = (id, text, text_hash)."""
         tenant_id = tenant or self.ctx.tenant_id
         derivative_id = f"mder-{source}"
-        envelope: Mapping[str, object] = {"tenantId": tenant_id, "classification": "confidential"}
+        envelope: Mapping[str, object] = {"tenantId": tenant_id, "classification": classification}
         with self.engine.begin() as conn:  # type: ignore[attr-defined]
             self.repo.create_derivative_or_get_existing(
                 transaction=conn,
@@ -219,6 +226,78 @@ def test_indexing_surfaces_partial_failure(env: _Env) -> None:
     derivative_id = env.seed([("cu-1", "good", "h1"), ("cu-2", "bad", "")])
     outcome = env.indexing.index_derivative(env.ctx, media_derivative_id=derivative_id, generation="g1")
     assert outcome.indexed == 1 and outcome.failed == 1
+
+
+def test_search_pre_filters_over_classified_unit_end_to_end(env: _Env) -> None:
+    # AIP P0a: two same-tenant sources at different classifications. A caller cleared only for
+    # "public" must never get the "secret" unit back from search_content (PRE-filter end-to-end).
+    pub = env.seed([("cu-public", "quarterly payment summary", "hp")], source="miv-pub", classification="public")
+    env.seed([("cu-secret", "secret payment leak", "hs")], source="miv-secret", classification="secret")
+    env.indexing.index_derivative(env.ctx, media_derivative_id=pub, generation="g1")
+    env.indexing.index_derivative(env.ctx, media_derivative_id="mder-miv-secret", generation="g1")
+    env.indexing.promote(env.ctx, expected_active="", generation="g1")
+
+    hits = env.retrieval.search_content(
+        env.ctx,
+        query=HybridContentQuery(tenant_id=env.ctx.tenant_id, text="payment", allowed_classifications=("public",)),
+    )
+    assert [hit.content_unit_id for hit in hits] == ["cu-public"]
+
+
+def test_search_returns_unit_when_caller_is_cleared(env: _Env) -> None:
+    # The SAME secret unit is returned once the caller's allowed set covers its classification.
+    secret = env.seed([("cu-secret", "secret payment leak", "hs")], source="miv-secret", classification="secret")
+    env.indexing.index_derivative(env.ctx, media_derivative_id=secret, generation="g1")
+    env.indexing.promote(env.ctx, expected_active="", generation="g1")
+
+    hits = env.retrieval.search_content(
+        env.ctx,
+        query=HybridContentQuery(
+            tenant_id=env.ctx.tenant_id, text="payment", allowed_classifications=("public", "secret")
+        ),
+    )
+    assert [hit.content_unit_id for hit in hits] == ["cu-secret"]
+
+
+def test_authoritative_re_read_drops_over_classified_leaked_by_stale_index(tmp_path: Path) -> None:
+    # Defense-in-depth: even if a stale/over-broad index leaks an over-classified hit, the DB
+    # re-read drops it because the authoritative content_unit's classification is not cleared.
+    engine = create_engine(f"sqlite:///{tmp_path / 'm3class.db'}", future=True)
+    db.create_database(engine)
+    repo = SqlAlchemyMediaDerivativeRepository(engine)
+    leaked = ContentSearchHit(
+        source_media_item_version_id=_SOURCE, content_unit_id="cu-secret", index_generation="g1", text_hash="hs"
+    )
+    retrieval = DefaultContentRetrievalService(
+        engine=engine,
+        media_derivative_repository=repo,
+        content_index_adapter=_StubIndex([leaked]),
+        embedding_model_adapter=LocalEmbeddingAdapter(),
+        completion_model_adapter=LocalCompletionAdapter(),
+    )
+    env = _Env(RequestContext(), engine, repo, LocalContentIndexAdapter(), None, retrieval)  # type: ignore[arg-type]
+    env.seed([("cu-secret", "secret payment leak", "hs")], classification="secret")
+
+    hits = retrieval.search_content(
+        RequestContext(),
+        query=HybridContentQuery(tenant_id="tenant-demo", text="payment", allowed_classifications=("public",)),
+    )
+    assert hits == []
+
+
+def test_empty_classification_back_compat_unchanged(env: _Env) -> None:
+    # A unit whose envelope carries no classification (empty) projects classification="" and is
+    # still returned under an allowed set — empty is treated as the unclassified, always-visible
+    # baseline, so existing rows are unaffected.
+    derivative_id = env.seed([("cu-1", "open payment note", "h1")], classification="")
+    env.indexing.index_derivative(env.ctx, media_derivative_id=derivative_id, generation="g1")
+    env.indexing.promote(env.ctx, expected_active="", generation="g1")
+
+    hits = env.retrieval.search_content(
+        env.ctx,
+        query=HybridContentQuery(tenant_id=env.ctx.tenant_id, text="payment", allowed_classifications=("",)),
+    )
+    assert [hit.content_unit_id for hit in hits] == ["cu-1"]
 
 
 def _batch(generation: str, *units: IndexedContentUnit):

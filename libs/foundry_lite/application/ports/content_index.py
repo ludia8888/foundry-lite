@@ -37,6 +37,11 @@ class IndexedContentUnit:
     chunk_spec_hash: str = ""
     embedding: EmbeddingVector = ()
     embedding_model_version: str = ""
+    # AIP P0a: the unit's classification, copied from its source content_unit's security_envelope
+    # (a derived, model-pinned projection — never an independent authority). Stored AS a mandatory
+    # control property ON the indexed record so the security predicate can be PRE-applied in the
+    # query, before lexical/dense ranking. Empty for back-compat (unclassified projections).
+    classification: str = ""
 
 
 @dataclass(frozen=True)
@@ -64,6 +69,25 @@ class HybridContentQuery:
     top_k: int = 10
     query_vector: EmbeddingVector | None = None
     embedding_model_version: str | None = None
+    # AIP P0a: the caller's allowed-classification set, compiled into the query as a PRE-filter
+    # (granular-policy → query template). ``None`` means full clearance — every classification is
+    # permitted and behaviour is unchanged (back-compat). Otherwise the index returns ONLY units
+    # whose classification is in this set, so over-classified candidates never enter the kNN/ranking
+    # and cannot reach an LLM. Mirrors MediaReferenceBindingService.resolve's allowed_classifications.
+    allowed_classifications: tuple[str, ...] | None = None
+
+
+def is_classification_cleared(classification: str, allowed_classifications: tuple[str, ...] | None) -> bool:
+    """The single content-plane classification-access rule (mirrors binding.resolve).
+
+    ``None`` allowed-set = full clearance: every classification passes (back-compat — unchanged).
+    Otherwise the unit's classification must be a member of the caller's allowed set. Reused by
+    both index adapters (PRE-filter) and the authoritative re-read (defense-in-depth) so the
+    predicate is defined in exactly one place.
+    """
+    if allowed_classifications is None:
+        return True
+    return classification in allowed_classifications
 
 
 @dataclass(frozen=True)
