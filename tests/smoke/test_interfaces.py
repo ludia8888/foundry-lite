@@ -906,6 +906,112 @@ def test_api_aip_builder_validate_returns_read_only_release_preflight(foundry, m
     assert body["releaseReady"] is True
 
 
+def test_api_aip_builder_run_executes_logic_and_links_operations_detail(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    headers = {
+        "X-Tenant-ID": "tenant-demo",
+        "X-User-ID": "ops-user",
+        "X-Roles": "admin,data_engineer,ops_manager",
+    }
+
+    response = TestClient(app).post(
+        "/api/aip/builder/run",
+        headers=headers,
+        json={
+            "logicRunId": "logic-api-builder-run-1",
+            "agentVersionId": "agent.order-ops.v1",
+            "releaseChannel": "dev",
+            "modelAliasVersion": "gpt-governed@v1",
+            "promptVersionId": "prompt-order-copilot@v1",
+            "contextSources": [
+                {
+                    "sourceId": "ctx-order-ops",
+                    "kind": "ontology.object_set",
+                    "securityPartition": "tenant-demo:internal",
+                    "selectedProperties": ["orderId", "status", "priority", "customerId"],
+                }
+            ],
+            "toolManifest": [
+                {
+                    "toolId": "ontology.get_object",
+                    "version": "2026-06-25",
+                    "effect": "READ",
+                    "requiredPermission": "object:read",
+                    "confirmationPolicy": "NONE",
+                    "objectTypeAllowlist": ["Order"],
+                    "propertyAllowlist": ["orderId", "status", "priority", "customerId"],
+                    "inputSchema": {
+                        "type": "object",
+                        "required": ["object_type", "object_id"],
+                        "properties": {
+                            "object_type": {"type": "string"},
+                            "object_id": {"type": "string"},
+                            "property_names": {"type": "array"},
+                        },
+                    },
+                    "outputSchema": {"type": "object"},
+                }
+            ],
+            "logicBlocks": [
+                {"blockId": "input", "kind": "Input", "inputs": {"objectId": "O-1001"}},
+                {
+                    "blockId": "retrieve",
+                    "kind": "CallFunction",
+                    "inputs": {
+                        "toolId": "ontology.get_object",
+                        "version": "2026-06-25",
+                        "arguments": {
+                            "object_type": "Order",
+                            "object_id": "O-1001",
+                            "property_names": ["orderId", "status", "priority", "customerId"],
+                        },
+                    },
+                    "dependsOn": ["input"],
+                },
+                {
+                    "blockId": "proposal",
+                    "kind": "CreateActionProposal",
+                    "inputs": {
+                        "actionType": "ApproveOrder",
+                        "targetObjectType": "Order",
+                        "targetObjectId": "O-1001",
+                        "expectedObjectVersion": order["objectVersion"],
+                        "parameters": {"reason": "Inventory confirmed"},
+                        "evidenceContextIds": ["ctx-order-ops"],
+                        "expiresAt": "2026-06-26T00:10:00Z",
+                        "claimText": "Approve O-1001 based on selected AIP evidence.",
+                        "originatingToolCallId": "logic-api-builder-run-1-retrieve",
+                    },
+                    "dependsOn": ["retrieve"],
+                },
+                {"blockId": "output", "kind": "Output", "inputs": {"fromBlock": "proposal"}, "dependsOn": ["proposal"]},
+            ],
+            "evalAxes": ["retrieval", "answer", "citation", "tool", "action", "security"],
+            "agentAllowedTools": ["ontology.get_object"],
+            "agentAllowedActions": ["ApproveOrder"],
+            "modelAllowedClassifications": ["public", "internal"],
+            "inputJson": {"objectType": "Order", "objectId": "O-1001"},
+        },
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["validation"]["validationStatus"] == "ready"
+    assert body["runStatus"] == "succeeded"
+    assert body["logic"]["output"]["status"] == "pending"
+    assert body["operations"]["runType"] == "ai"
+
+    detail = TestClient(app).get(f"/api/operations/runs/ai/{body['aiRunId']}", headers=headers)
+    detail_body = detail.json()
+    assert detail.status_code == 200
+    assert detail_body["ai"]["summary"]["contextItemCount"] == 1
+    assert detail_body["ai"]["summary"]["toolCallCount"] == 1
+    assert detail_body["ai"]["summary"]["status"] == "succeeded"
+    assert detail_body["ai"]["toolCalls"][0]["tool_id"] == "ontology.get_object"
+
+
 def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
     monkeypatch.setattr(api_main, "foundry", foundry)

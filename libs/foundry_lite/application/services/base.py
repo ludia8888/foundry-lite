@@ -56,6 +56,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_service": "ActionService",
     "action_proposal_service": "ActionProposalService",
     "backup_restore_service": "BackupRestoreService",
+    "builder_runtime_service": "BuilderRuntimeService",
     "content_retrieval_service": "DefaultContentRetrievalService",
     "media_visual_search_service": "MediaVisualSearchService",
     "dataset_ingest_service": "DatasetIngestService",
@@ -79,6 +80,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "runtime_service": "RuntimeService",
     "tool_broker_service": "ToolBrokerService",
     "transform_service": "TransformService",
+    "visual_builder_service": "VisualBuilderService",
     "workflow_orchestration_service": "WorkflowOrchestrationService",
 }
 

@@ -411,6 +411,7 @@
                   <option value="materialization">Materialization</option>
                   <option value="outbox">Outbox</option>
                   <option value="dead_letter">DLQ</option>
+                  <option value="ai">AI</option>
                   <option value="audit">Audit</option>
                 </select>
               </label>
@@ -497,6 +498,7 @@
               <button id="bulkReplayRecordDlqBtn" type="button" class="secondary">Bulk Replay Records</button>
               <button id="discardRecordDlqBtn" type="button" class="secondary">Discard Record</button>
               <button id="aipBuilderValidateBtn" type="button" class="secondary">Validate AIP Builder</button>
+              <button id="aipBuilderRunBtn" type="button" class="secondary">Run AIP Builder</button>
             </div>
           </div>
         </aside>
@@ -853,6 +855,7 @@
           "actionWritebacks",
           "materializationRuns",
           "workflowRuns",
+          "aiRuns",
         ];
         const failedRuns = runGroups
           .flatMap((key) => value[key] ?? [])
@@ -897,11 +900,12 @@
 
       function showAipBuilder(value) {
         value = displayValue(value);
+        const validation = value.validation ?? value;
         aipBuilderResult.textContent = JSON.stringify(value, null, 2);
-        metricAipBuilderStatus.textContent = value.validationStatus ?? "-";
-        metricAipBuilderNodes.textContent = value.nodeCount ?? "-";
-        metricAipBuilderIssues.textContent = (value.blockingIssues ?? []).length;
-        renderBuilderGraph(builderDraft().logicBlocks, value);
+        metricAipBuilderStatus.textContent = value.runStatus ?? validation.validationStatus ?? "-";
+        metricAipBuilderNodes.textContent = validation.nodeCount ?? "-";
+        metricAipBuilderIssues.textContent = (validation.blockingIssues ?? []).length;
+        renderBuilderGraph(builderDraft().logicBlocks, validation);
       }
 
       function renderBuilderGraph(blocks, result = {}) {
@@ -952,7 +956,7 @@
           toolId: "ontology.get_object",
           version: "2026-06-25",
           effect: "READ",
-          requiredPermission: "objects:read",
+          requiredPermission: "object:read",
           confirmationPolicy: "NONE",
           objectTypeAllowlist: ["Order"],
           propertyAllowlist: ["orderId", "status", "priority", "customerId"],
@@ -1012,6 +1016,32 @@
         }
         const validation = await sdkClient().aip.builder.validate(builderDraft());
         showAipBuilder(validation);
+      }
+
+      function builderRuntimePayload() {
+        const runToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        return {
+          ...builderDraft(),
+          logicRunId: `web-builder-${runToken}`,
+          inputJson: { objectType: objectType.value, objectId: objectId.value },
+          userMessage: `Run ${aipBuilderAgentVersion.value} for ${objectType.value} ${objectId.value}`,
+          agentAllowedTools: ["ontology.get_object"],
+          modelAllowedClassifications: ["public", "internal"],
+          policyVersion: "policy-v1",
+        };
+      }
+
+      async function runAipBuilder() {
+        if (!currentObject) {
+          await loadObject();
+        }
+        const result = await sdkClient().aip.builder.run(builderRuntimePayload());
+        showAipBuilder(result);
+        if (result.aiRunId) {
+          operationType.value = "ai";
+          operationRunId.value = result.aiRunId;
+          await loadRunDetail();
+        }
       }
 
       function operationFilters(overrides = {}) {
@@ -1339,6 +1369,7 @@
       document
         .querySelector("#aipBuilderValidateBtn")
         .addEventListener("click", () => validateAipBuilder().catch(showAipBuilder));
+      document.querySelector("#aipBuilderRunBtn").addEventListener("click", () => runAipBuilder().catch(showAipBuilder));
       restoreFromServer();
     </script>
   </body>

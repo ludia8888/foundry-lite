@@ -13,6 +13,14 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await page.locator("#aipBuilderValidateBtn").click();
   await expect(page.locator("#aipBuilderResult")).toContainText('"validationStatus": "ready"');
   await expect((await generatedSdkBuilder).headers()["x-tenant-id"]).toBe("tenant-demo");
+  const generatedSdkBuilderRun = page.waitForRequest((request) => {
+    return request.method() === "POST" && request.url().includes("/api/aip/builder/run");
+  });
+  await page.locator("#aipBuilderRunBtn").click();
+  await expect(page.locator("#aipBuilderResult")).toContainText('"runStatus": "waiting_human_review"');
+  await expect(page.locator("#runResult")).toContainText('"runType": "ai"');
+  await expect(page.locator("#runResult")).toContainText('"status": "succeeded"');
+  await expect((await generatedSdkBuilderRun).headers()["x-tenant-id"]).toBe("tenant-demo");
   await expect(page.locator("#datasetResult")).toContainText('"dataset": "clean.orders"');
   await expect(page.locator("#datasetResult")).toContainText('"version_number": 1');
   await expect(page.locator("#datasetResult")).toContainText('"order_id": "O-1001"');

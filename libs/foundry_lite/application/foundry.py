@@ -84,6 +84,7 @@ class FoundryLite:
         self.aip = AipWorkspace(
             services.action_proposal,
             services.approval_execution,
+            services.builder_runtime,
             services.logic_runtime,
             services.evals,
             services.visual_builder,

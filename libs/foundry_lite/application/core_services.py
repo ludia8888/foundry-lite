@@ -6,6 +6,7 @@ from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
 from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionService
+from foundry_lite.application.services.aip.builder_runtime import BuilderRuntimeService
 from foundry_lite.application.services.aip.citation_service import CitationService
 from foundry_lite.application.services.aip.eval_service import EvalService
 from foundry_lite.application.services.aip.logic_runtime import LogicRuntimeService
@@ -37,6 +38,7 @@ __all__ = [
     "ActionProposalService",
     "ApprovalExecutionService",
     "BackupRestoreService",
+    "BuilderRuntimeService",
     "DemoService",
     "ErasureService",
     "EvalService",
@@ -73,6 +75,7 @@ class CoreServices:
     action_proposal: ActionProposalService
     approval_execution: ApprovalExecutionService
     backup_restore: BackupRestoreService
+    builder_runtime: BuilderRuntimeService
     dataset: DatasetServices
     demo: DemoService
     erasure: ErasureService
@@ -114,12 +117,12 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     ontology = build_service(OntologyService, dependencies)
     ontology_search = build_service(OntologySearchService, dependencies)
     record_dlq = build_service(RecordDlqService, dependencies)
-    runtime = build_service(RuntimeService, dependencies)
     return service_type(
         action=build_service(ActionService, dependencies),
         action_proposal=build_service(ActionProposalService, dependencies),
         approval_execution=build_service(ApprovalExecutionService, dependencies),
         backup_restore=backup_restore,
+        builder_runtime=build_service(BuilderRuntimeService, dependencies),
         dataset=dataset,
         demo=demo,
         erasure=erasure,
@@ -137,7 +140,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         ontology=ontology,
         ontology_search=ontology_search,
         record_dlq=record_dlq,
-        runtime=runtime,
+        runtime=build_service(RuntimeService, dependencies),
         transform=build_service(TransformService, dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies),
     )
@@ -155,6 +158,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.action_proposal,
         services.approval_execution,
         services.backup_restore,
+        services.builder_runtime,
         *services.dataset.items(),
         services.demo,
         services.erasure,
@@ -184,6 +188,7 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "action_proposal_service": services.action_proposal,
         "approval_execution_service": services.approval_execution,
         "backup_restore_service": services.backup_restore,
+        "builder_runtime_service": services.builder_runtime,
         "content_retrieval_service": services.media.retrieval,
         "media_visual_search_service": services.media.visual_search,
         "dataset_ingest_service": services.dataset.ingest,
@@ -207,5 +212,6 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "runtime_service": services.runtime,
         "tool_broker_service": services.tool_broker,
         "transform_service": services.transform,
+        "visual_builder_service": services.visual_builder,
         "workflow_orchestration_service": services.workflow,
     }

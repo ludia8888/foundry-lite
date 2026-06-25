@@ -244,6 +244,91 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "aip.builder.run",
+  () =>
+    client.aip.builder.run({
+      logicRunId: "logic-web-1",
+      agentVersionId: "agent-demo:v1",
+      releaseChannel: "dev",
+      modelAliasVersion: "support-assistant@1",
+      promptVersionId: "prompt-v1",
+      contextSources: [
+        {
+          sourceId: "ctx-orders",
+          kind: "object_set",
+          securityPartition: "tenant-a:orders",
+          selectedProperties: ["status", "riskScore"],
+          tokenBudget: 1200,
+        },
+      ],
+      toolManifest: [
+        {
+          toolId: "read_order",
+          version: "1",
+          effect: "READ",
+          confirmationPolicy: "NONE",
+          status: "published",
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+        },
+      ],
+      logicBlocks: [
+        { blockId: "load-order", kind: "CallFunction", inputs: { toolId: "read_order" } },
+        { blockId: "answer", kind: "Output", inputs: { fromBlock: "load-order" }, dependsOn: ["load-order"] },
+      ],
+      evalAxes: ["Quality", "Security"],
+      agentAllowedTools: ["read_order"],
+      agentAllowedActions: ["ApproveOrder"],
+      modelAllowedClassifications: ["public"],
+      inputJson: { objectId: "O-1" },
+      userMessage: "Run the draft",
+      maxLogicBlocks: 8,
+    }),
+  {
+    path: "/api/aip/builder/run",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      logicRunId: "logic-web-1",
+      agentVersionId: "agent-demo:v1",
+      releaseChannel: "dev",
+      modelAliasVersion: "support-assistant@1",
+      promptVersionId: "prompt-v1",
+      contextSources: [
+        {
+          sourceId: "ctx-orders",
+          kind: "object_set",
+          securityPartition: "tenant-a:orders",
+          selectedProperties: ["status", "riskScore"],
+          tokenBudget: 1200,
+        },
+      ],
+      toolManifest: [
+        {
+          toolId: "read_order",
+          version: "1",
+          effect: "READ",
+          confirmationPolicy: "NONE",
+          status: "published",
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+        },
+      ],
+      logicBlocks: [
+        { blockId: "load-order", kind: "CallFunction", inputs: { toolId: "read_order" } },
+        { blockId: "answer", kind: "Output", inputs: { fromBlock: "load-order" }, dependsOn: ["load-order"] },
+      ],
+      evalAxes: ["Quality", "Security"],
+      agentAllowedTools: ["read_order"],
+      agentAllowedActions: ["ApproveOrder"],
+      modelAllowedClassifications: ["public"],
+      inputJson: { objectId: "O-1" },
+      userMessage: "Run the draft",
+      maxLogicBlocks: 8,
+    },
+  },
+);
+await expectSdkCall(
   "insights.reviews.list",
   () => client.insights.reviews.list({ status: "pending", assigneeUserId: "ops/1", limit: 15 }),
   {

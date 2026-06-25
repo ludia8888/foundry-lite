@@ -167,7 +167,7 @@ class AipBuilderToolSpecRequest(BaseModel):
     input_schema: JsonObject = Field(default_factory=dict, alias="inputSchema")
     output_schema: JsonObject = Field(default_factory=dict, alias="outputSchema")
     effect: str = "READ"
-    required_permission: str = Field(default="objects:read", alias="requiredPermission")
+    required_permission: str = Field(default="object:read", alias="requiredPermission")
     confirmation_policy: str = Field(default="NONE", alias="confirmationPolicy")
     object_type_allowlist: list[str] = Field(default_factory=list, alias="objectTypeAllowlist")
     property_allowlist: list[str] = Field(default_factory=list, alias="propertyAllowlist")
@@ -199,6 +199,20 @@ class AipBuilderValidateRequest(BaseModel):
     eval_axes: list[str] = Field(alias="evalAxes")
     agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
     max_logic_blocks: int = Field(default=25, alias="maxLogicBlocks")
+
+
+class AipBuilderRunRequest(AipBuilderValidateRequest):
+    logic_run_id: str = Field(alias="logicRunId")
+    ai_run_id: str | None = Field(default=None, alias="aiRunId")
+    session_id: str | None = Field(default=None, alias="sessionId")
+    input_json: JsonObject = Field(default_factory=dict, alias="inputJson")
+    user_message: str = Field(default="", alias="userMessage")
+    agent_allowed_tools: list[str] = Field(default_factory=list, alias="agentAllowedTools")
+    model_allowed_classifications: list[str] = Field(
+        default_factory=lambda: ["public", "internal"],
+        alias="modelAllowedClassifications",
+    )
+    policy_version: str = Field(default="policy-v1", alias="policyVersion")
 
 
 class DeadLetterBulkRetryRequest(BaseModel):
@@ -433,6 +447,15 @@ def validate_ontology(request: Request, payload: OntologyValidateRequest) -> Ont
 @app.post("/api/aip/builder/validate")
 def validate_aip_builder(request: Request, payload: AipBuilderValidateRequest) -> JsonObject:
     result = foundry.aip.validate_builder_payload(
+        payload=payload.model_dump(by_alias=True),
+        ctx=_ctx(request),
+    )
+    return result.to_payload()
+
+
+@app.post("/api/aip/builder/run")
+def run_aip_builder(request: Request, payload: AipBuilderRunRequest) -> JsonObject:
+    result = foundry.aip.run_builder_payload(
         payload=payload.model_dump(by_alias=True),
         ctx=_ctx(request),
     )

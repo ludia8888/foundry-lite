@@ -1795,6 +1795,24 @@ SDK-only path로 사용한다.
 | ----------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Visual builder ratchet  | `quality:visual-builder` | visual authoring 화면이 ToolBroker/ActionProposal/Eval/Release guard 경계를 우회하거나, 위험한 Logic/tool/action draft를 release-ready처럼 보여주는 문제 차단 |
 
+### AIP P0m — Builder Runtime Execution Ratchet
+
+P0m의 현재 slice는 full Agent Studio나 autonomous AgentRuntime이 아니라, P0l의 read-only
+Builder preflight를 실제 bounded Logic 실행으로 연결하는 첫 product path다.
+`BuilderRuntimeService`는 draft를 먼저 `VisualBuilderService`로 검증하고, 통과한 경우에만
+tenant-scoped AI run ledger를 생성한다. 선택된 Builder context source는 AI run manifest에
+selected context item으로 기록되므로 `CreateActionProposal`이 forged evidence 없이 같은
+ledger를 재검증할 수 있다. `CallFunction`은 계속 ToolBroker를 통과하고, `CreateActionProposal`
+은 pending Insight Review만 만들며, direct action side effect는 만들지 않는다. API/SDK/Web은
+`POST /api/aip/builder/run`과 `client.aip.builder.run(...)`으로 이 흐름을 사용하고,
+반환값은 Operations AI run detail로 바로 이어진다.
+Full retrieval orchestration, model-call AgentRuntime loop, persisted multi-user Builder drafts,
+drag-and-drop editing, visual debugger, eval workbench, and release dashboards는 후속 AIP slice다.
+
+| 게이트                            | 명령                      | Root cause                                                                                                                                                       |
+| --------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Builder runtime execution ratchet | `quality:builder-runtime` | Builder 화면이 validate만 통과한 draft를 런타임 장부 없이 실행하거나, ToolBroker/ActionProposal guard를 우회하거나, 실행 후 Operations trace로 돌아가지 못하는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와
@@ -1829,7 +1847,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 43개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 44개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 12개 SDK helper의 retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

@@ -14,6 +14,11 @@ from foundry_lite.application.services.aip.approval_execution import (
     ApprovalExecutionResult,
     ApprovalExecutionService,
 )
+from foundry_lite.application.services.aip.builder_runtime import (
+    BuilderRuntimeRequest,
+    BuilderRuntimeResult,
+    BuilderRuntimeService,
+)
 from foundry_lite.application.services.aip.eval_service import (
     EvalCaseInput,
     EvalRunRequest,
@@ -45,12 +50,14 @@ class AipWorkspace:
         self,
         action_proposal: ActionProposalService,
         approval_execution: ApprovalExecutionService,
+        builder_runtime: BuilderRuntimeService,
         logic_runtime: LogicRuntimeService,
         evals: EvalService,
         visual_builder: VisualBuilderService,
     ) -> None:
         self._action_proposal = action_proposal
         self._approval_execution = approval_execution
+        self._builder_runtime = builder_runtime
         self._logic_runtime = logic_runtime
         self._evals = evals
         self._visual_builder = visual_builder
@@ -227,6 +234,14 @@ class AipWorkspace:
     ) -> VisualBuilderValidationResult:
         return self._visual_builder.validate_draft(ctx or RequestContext(), _builder_request_from_payload(payload))
 
+    def run_builder_payload(
+        self,
+        *,
+        payload: Mapping[str, object],
+        ctx: RequestContext | None = None,
+    ) -> BuilderRuntimeResult:
+        return self._builder_runtime.run(ctx or RequestContext(), _builder_runtime_request_from_payload(payload))
+
 
 def _builder_request_from_payload(payload: Mapping[str, object]) -> VisualBuilderDraftRequest:
     return VisualBuilderDraftRequest(
@@ -240,6 +255,24 @@ def _builder_request_from_payload(payload: Mapping[str, object]) -> VisualBuilde
         eval_axes=_text_items(payload, "evalAxes"),
         agent_allowed_actions=_text_items(payload, "agentAllowedActions"),
         max_logic_blocks=_int(payload, "maxLogicBlocks"),
+    )
+
+
+def _builder_runtime_request_from_payload(payload: Mapping[str, object]) -> BuilderRuntimeRequest:
+    draft = _builder_request_from_payload(payload)
+    logic_run_id = _text(payload, "logicRunId")
+    return BuilderRuntimeRequest(
+        logic_run_id=logic_run_id,
+        ai_run_id=_optional_text(payload, "aiRunId"),
+        session_id=_optional_text(payload, "sessionId"),
+        draft=draft,
+        input_json=_mapping(payload, "inputJson"),
+        user_message=_text_default(payload, "userMessage", ""),
+        agent_allowed_tools=_text_items(payload, "agentAllowedTools"),
+        model_allowed_classifications=_text_items_default(
+            payload, "modelAllowedClassifications", ("public", "internal")
+        ),
+        policy_version=_text_default(payload, "policyVersion", "policy-v1"),
     )
 
 
@@ -260,14 +293,14 @@ def _builder_tool_spec(payload: Mapping[str, object]) -> ToolSpec:
         input_schema=_mapping(payload, "inputSchema"),
         output_schema=_mapping(payload, "outputSchema"),
         effect=cast(ToolEffect, _text(payload, "effect")),
-        required_permission=_text(payload, "requiredPermission"),
+        required_permission=_text_default(payload, "requiredPermission", "object:read"),
         confirmation_policy=cast(ConfirmationPolicy, _text(payload, "confirmationPolicy")),
         object_type_allowlist=_text_items(payload, "objectTypeAllowlist"),
         property_allowlist=_text_items(payload, "propertyAllowlist"),
-        timeout_seconds=_int(payload, "timeoutSeconds"),
-        max_result_items=_int(payload, "maxResultItems"),
-        result_classification=_text(payload, "resultClassification"),
-        status=_text(payload, "status"),
+        timeout_seconds=_int_default(payload, "timeoutSeconds", 30),
+        max_result_items=_int_default(payload, "maxResultItems", 50),
+        result_classification=_text_default(payload, "resultClassification", "public"),
+        status=_text_default(payload, "status", "published"),
     )
 
 
@@ -288,6 +321,12 @@ def _text_items(payload: Mapping[str, object], key: str) -> tuple[str, ...]:
     return tuple(cast(Sequence[str], payload.get(key, ())))
 
 
+def _text_items_default(payload: Mapping[str, object], key: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    if key not in payload:
+        return default
+    return _text_items(payload, key)
+
+
 def _mapping(payload: Mapping[str, object], key: str) -> Mapping[str, object]:
     return cast(Mapping[str, object], payload.get(key, {}))
 
@@ -296,5 +335,20 @@ def _text(payload: Mapping[str, object], key: str) -> str:
     return cast(str, payload[key])
 
 
+def _optional_text(payload: Mapping[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def _text_default(payload: Mapping[str, object], key: str, default: str) -> str:
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else default
+
+
 def _int(payload: Mapping[str, object], key: str) -> int:
     return cast(int, payload[key])
+
+
+def _int_default(payload: Mapping[str, object], key: str, default: int) -> int:
+    value = payload.get(key)
+    return value if isinstance(value, int) and not isinstance(value, bool) else default

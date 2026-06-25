@@ -100,6 +100,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "aip.builder.run",
+      "route": "POST /api/aip/builder/run",
+      "productArea": "aip-builder",
+      "sdkSurface": "aip.builder.run",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AIP Builder drafts are validated before runtime execution, then linked to an AI Operations run detail with context/tool/proposal evidence instead of bypassing ToolBroker or Approval-to-Action guards.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "insights.reviews.list",
       "route": "GET /api/insights/reviews",
       "productArea": "insight-action-workspace",
