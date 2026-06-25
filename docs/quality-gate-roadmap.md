@@ -1664,6 +1664,23 @@ API/SDK surfaces는 후속 AIP slice다.
 | ------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Context compiler ratchet  | `quality:context-compiler` | 검색 결과나 application state가 임의 순서로 prompt에 섞이거나, retrieved document 안의 delimiter/prompt-injection 문장이 system instruction처럼 승격되거나, 같은 tenant 안의 비허용 security partition이 섞이거나, context/tool/state/policy hash 없이 AI run ledger가 생성되는 문제 차단 |
 
+### AIP P0e — Tool Broker Ratchet
+
+P0e의 현재 slice는 full Agent Runtime이나 실제 ontology/content/action tool adapter가 아니라,
+모델이 요청한 tool call을 제품 서버가 안전하게 심사하는 관문이다. `ToolExecutor`는 승인된
+도구 실행 포트이고, `ToolBrokerService`는 agent allowlist, published tool version, input JSON
+schema, invoking-user permission, object/property scope, masked property, model egress compatibility,
+timeout/result budgets, and confirmation/review requirement를 통과한 read-only call만 executor에
+넘긴다. 출력은 모델로 돌아가기 전에 masking/size limit을 거치고, argument/result는 `sha256:`
+hash와 redacted preview, `AiToolCallRecord`로 남는다. 기본 로컬 executor는 fake라서 network,
+SQL, shell, provider SDK를 열지 않는다.
+AgentRuntime loop, real ontology/content/state/action adapters, CitationService verification,
+approval bridge, public API/SDK surfaces는 후속 AIP slice다.
+
+| 게이트              | 명령                  | Root cause                                                                                                                                                                                                                          |
+| ------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tool broker ratchet | `quality:tool-broker` | LLM이 generic SQL/shell/HTTP executor를 직접 호출하거나, agent manifest에 없는 도구를 실행하거나, 권한/마스킹/egress/예산/confirmation 검사를 건너뛰거나, raw tool result를 모델/장부에 그대로 돌려주는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와

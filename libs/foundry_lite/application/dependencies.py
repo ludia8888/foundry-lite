@@ -41,6 +41,7 @@ from foundry_lite.application.ports.model_registry_repository import ModelRegist
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
+from foundry_lite.application.ports.tool_executor import ToolExecutor
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.security.policy import PolicyService
@@ -90,4 +91,5 @@ class CoreDependencies:
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
     stream_adapter: StreamAdapter
+    tool_executor: ToolExecutor
     workflow_adapter: WorkflowAdapter

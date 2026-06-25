@@ -164,11 +164,26 @@ def test_context_compiler_gate_runs_after_ai_ledger_before_ai_evidence() -> None
 
     ledger_step = "pnpm --silent quality:ai-ledger"
     context_step = "pnpm --silent quality:context-compiler"
+    tool_broker_step = "pnpm --silent quality:tool-broker"
     evidence_step = "pnpm --silent quality:ai-evidence"
     assert context_step in script
     assert script.index(ledger_step) < script.index(context_step)
-    assert script.index(context_step) < script.index(evidence_step)
+    assert script.index(context_step) < script.index(tool_broker_step) < script.index(evidence_step)
     assert '"quality:context-compiler"' in package_json
+
+
+def test_tool_broker_gate_runs_after_context_compiler_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    context_step = "pnpm --silent quality:context-compiler"
+    tool_broker_step = "pnpm --silent quality:tool-broker"
+    evidence_step = "pnpm --silent quality:ai-evidence"
+    assert tool_broker_step in script
+    assert script.index(context_step) < script.index(tool_broker_step) < script.index(evidence_step)
+    assert '"quality:tool-broker"' in package_json
+    assert "tests/contracts/test_tool_executor_contract.py" in package_json
+    assert "tests/unit/test_tool_broker.py" in package_json
 
 
 def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None:

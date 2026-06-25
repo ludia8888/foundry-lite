@@ -1094,3 +1094,25 @@ Media/Content Plane (standalone family, not in `activeStack`).
   fail-closed hash/partition checks, and runtime-lane wiring. Retrieval orchestration, ToolBroker
   execution, CitationService verification, AgentRuntime looping, public API/SDK surfaces, and the visual
   trace UI remain later AIP slices.
+
+- **P0e — read-only Tool Broker + executor port (shipped as the first tool-execution slice):**
+  the LLM still does **not** execute tools directly. `ToolBrokerService` treats a model-requested
+  tool call as untrusted input and validates the canonical §8.8/§9.5 broker chain before any
+  server-side executor is reached: agent allowlist, published `ToolSpec` version, input JSON schema,
+  invoking-user permission, object/property allowlists, masked-property rejection, model-egress
+  compatibility, timeout/result budgets, and confirmation/review requirement for non-read effects.
+  `ToolExecutor` is the product boundary that runs the approved call with the same `RequestContext`
+  as the caller; `FakeToolExecutor` is the safe local default and never opens network, SQL, shell, or
+  provider SDK paths. The broker returns only masked/bounded output, `sha256:` argument/result hashes,
+  a redacted preview, and an `AiToolCallRecord` ready for the P0c ledger. This mirrors Palantir's
+  documented tool model: AIP Logic/Chatbot tools let an LLM ask for ontology reads/actions/functions,
+  but the platform executes those calls within the invoking user's permissions and write actions can
+  be configured for user confirmation or review (palantir.com/docs/foundry/logic/blocks,
+  /chatbot-studio/tools, /logic/execution-mode-settings, /action-types/permissions). New enforced
+  source-of-truth rule `tool_calls_are_brokered_as_user_scoped_bounded_requests` names the contract
+  and unit tests proving invoking-user execution, generic executor deny, no pre-check executor call,
+  non-read confirmation fail-closed, egress incompatibility, output masking, result limits, ledger
+  hashes, local runtime composition, and CI runtime-lane wiring through `quality:tool-broker`.
+  AgentRuntime looping, actual ontology/content/state/action tool adapters, approval bridge,
+  CitationService verification, public API/SDK surfaces, and the visual trace UI remain later AIP
+  slices.

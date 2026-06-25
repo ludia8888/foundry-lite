@@ -41,6 +41,7 @@ from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
+from foundry_lite.application.ports.tool_executor import ToolExecutor
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
 from foundry_lite.security.policy import PolicyService
@@ -119,6 +120,7 @@ class CoreService:
     vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     language_model_adapter: LanguageModelAdapter
     model_registry_repository: ModelRegistryRepository
+    tool_executor: ToolExecutor
     engine: TransactionManager
     policy: PolicyService
     action_repository: ActionRepository
