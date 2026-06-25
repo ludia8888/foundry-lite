@@ -12,15 +12,28 @@ from foundry_lite.application.services.aip.approval_execution import (
     ApprovalExecutionResult,
     ApprovalExecutionService,
 )
+from foundry_lite.application.services.aip.logic_runtime import (
+    LogicBlock,
+    LogicRunRequest,
+    LogicRunResult,
+    LogicRuntimeService,
+)
+from foundry_lite.application.services.aip.tool_broker import ToolSpec
 from foundry_lite.domain.context import RequestContext
 
 
 class AipWorkspace:
     """Facade for governed AI proposal workflows."""
 
-    def __init__(self, action_proposal: ActionProposalService, approval_execution: ApprovalExecutionService) -> None:
+    def __init__(
+        self,
+        action_proposal: ActionProposalService,
+        approval_execution: ApprovalExecutionService,
+        logic_runtime: LogicRuntimeService,
+    ) -> None:
         self._action_proposal = action_proposal
         self._approval_execution = approval_execution
+        self._logic_runtime = logic_runtime
 
     def propose_action(
         self,
@@ -73,5 +86,36 @@ class AipWorkspace:
             ApprovalExecutionRequest(
                 review_id=review_id,
                 expected_proposal_fingerprint=expected_proposal_fingerprint,
+            ),
+        )
+
+    def run_logic(
+        self,
+        *,
+        logic_run_id: str,
+        ai_run_id: str,
+        blocks: tuple[LogicBlock, ...],
+        input_json: Mapping[str, object],
+        ctx: RequestContext | None = None,
+        tool_manifest: tuple[ToolSpec, ...] = (),
+        agent_allowed_tools: tuple[str, ...] = (),
+        agent_allowed_actions: tuple[str, ...] = (),
+        model_allowed_classifications: tuple[str, ...] = ("public",),
+        policy_version: str = "policy-v1",
+        max_blocks: int = 25,
+    ) -> LogicRunResult:
+        return self._logic_runtime.run(
+            ctx or RequestContext(),
+            LogicRunRequest(
+                logic_run_id=logic_run_id,
+                ai_run_id=ai_run_id,
+                blocks=blocks,
+                input_json=input_json,
+                tool_manifest=tool_manifest,
+                agent_allowed_tools=agent_allowed_tools,
+                agent_allowed_actions=agent_allowed_actions,
+                model_allowed_classifications=model_allowed_classifications,
+                policy_version=policy_version,
+                max_blocks=max_blocks,
             ),
         )

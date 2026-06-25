@@ -7,6 +7,7 @@ from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
 from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionService
 from foundry_lite.application.services.aip.citation_service import CitationService
+from foundry_lite.application.services.aip.logic_runtime import LogicRuntimeService
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerService
 from foundry_lite.application.services.base import CoreService, build_service, collaborator_kwargs
@@ -42,6 +43,7 @@ __all__ = [
     "MaterializationService",
     "MediaServices",
     "CitationService",
+    "LogicRuntimeService",
     "ModelGatewayService",
     "ToolBrokerService",
     "ObjectServices",
@@ -75,6 +77,7 @@ class CoreServices:
     materialization: MaterializationService
     media: MediaServices
     citation: CitationService
+    logic_runtime: LogicRuntimeService
     model_gateway: ModelGatewayService
     tool_broker: ToolBrokerService
     object_store: ObjectServices
@@ -93,7 +96,6 @@ class CoreServices:
 
 
 def _new_core_services(service_type: type[CoreServices], dependencies: CoreDependencies) -> CoreServices:
-    action = build_service(ActionService, dependencies)
     backup_restore = build_service(BackupRestoreService, dependencies)
     dataset = DatasetServices.create(dependencies)
     demo = build_service(DemoService, dependencies)
@@ -110,7 +112,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     transform = build_service(TransformService, dependencies)
     workflow = build_service(WorkflowOrchestrationService, dependencies)
     return service_type(
-        action=action,
+        action=build_service(ActionService, dependencies),
         action_proposal=build_service(ActionProposalService, dependencies),
         approval_execution=build_service(ApprovalExecutionService, dependencies),
         backup_restore=backup_restore,
@@ -122,6 +124,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         materialization=materialization,
         media=media,
         citation=build_service(CitationService, dependencies),
+        logic_runtime=build_service(LogicRuntimeService, dependencies),
         model_gateway=build_service(ModelGatewayService, dependencies),
         tool_broker=build_service(ToolBrokerService, dependencies),
         object_store=object_store,
@@ -154,6 +157,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.materialization,
         *services.media.items(),
         services.citation,
+        services.logic_runtime,
         services.model_gateway,
         services.tool_broker,
         *services.object_store.items(),
@@ -182,6 +186,7 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "demo_service": services.demo,
         "iceberg_maintenance_service": services.iceberg_maintenance,
         "insight_review_service": services.insight_review,
+        "logic_runtime_service": services.logic_runtime,
         "materialization_service": services.materialization,
         "object_indexing_service": services.object_store.indexing,
         "object_links_service": services.object_store.links,
@@ -192,6 +197,7 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "ontology_service": services.ontology,
         "record_dlq_service": services.record_dlq,
         "runtime_service": services.runtime,
+        "tool_broker_service": services.tool_broker,
         "transform_service": services.transform,
         "workflow_orchestration_service": services.workflow,
     }

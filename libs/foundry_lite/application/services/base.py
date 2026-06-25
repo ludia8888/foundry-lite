@@ -53,6 +53,7 @@ CollaboratorMap = Mapping[str, object]
 
 SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_service": "ActionService",
+    "action_proposal_service": "ActionProposalService",
     "backup_restore_service": "BackupRestoreService",
     "content_retrieval_service": "DefaultContentRetrievalService",
     "media_visual_search_service": "MediaVisualSearchService",
@@ -64,6 +65,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "demo_service": "DemoService",
     "iceberg_maintenance_service": "IcebergMaintenanceService",
     "insight_review_service": "InsightReviewService",
+    "logic_runtime_service": "LogicRuntimeService",
     "materialization_service": "MaterializationService",
     "object_indexing_service": "ObjectIndexingService",
     "object_links_service": "ObjectLinksService",
@@ -74,6 +76,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "ontology_service": "OntologyService",
     "record_dlq_service": "RecordDlqService",
     "runtime_service": "RuntimeService",
+    "tool_broker_service": "ToolBrokerService",
     "transform_service": "TransformService",
     "workflow_orchestration_service": "WorkflowOrchestrationService",
 }

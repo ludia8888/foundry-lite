@@ -1194,3 +1194,19 @@ Media/Content Plane (standalone family, not in `activeStack`).
   API smoke behavior, raw AI payload non-leakage, generated SDK type drift, and CI runtime-lane wiring.
   A full visual trace explorer, separate encrypted prompt artifact access, log-access/marking
   administration, and live provider usage dashboards remain later AIP slices.
+
+- **P0j — Logic Runtime typed DAG + safe boundary execution (shipped as the first Logic slice):**
+  `LogicRuntimeService` validates a typed, bounded AIP Logic DAG before any block runs. Duplicate block
+  ids, missing dependencies, cycles, unsupported block kinds, and max-block budget violations fail closed.
+  The first executable blocks are deliberately narrow: `CallFunction` delegates to `ToolBrokerService`
+  and records the returned `AiToolCallRecord`, while `CreateActionProposal` delegates to
+  `ActionProposalService` so write intent becomes a pending human-review proposal instead of an action
+  side effect. `ApplyAction` is rejected until a later approved-proposal signal path exists. Logic
+  start/completed/failed evidence is appended to `ai_execution_events` with payload refs, `sha256:`
+  hashes, and redacted previews, and same-graph replay keeps the same graph/result hash. This mirrors
+  Palantir AIP Logic's block-oriented execution model while preserving Foundry-lite's AIP invariant that
+  tools and writes must pass through the governed broker/proposal boundaries. `quality:logic-runtime`
+  proves brokered read-tool execution, deterministic replay hashing, direct action rejection, review-queue
+  proposal creation with no `action_runs` side effect, cycle rejection, and CI runtime-lane wiring.
+  Temporal async start/signal/cancel/query, crash-safe pause/resume, schedule/event triggers, model-call
+  blocks, visual DAG authoring, and workflow-status-vs-domain-commit proofs remain later AIP slices.

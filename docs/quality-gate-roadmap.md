@@ -1745,6 +1745,24 @@ raw prompt, raw tool result, provider response body, authorization-bearing JSON 
 | ----------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | AI operations ratchet   | `quality:ai-operations` | AI 실행 장부가 DB에만 있고 운영자가 목록/상세/API/SDK에서 찾지 못하거나, trace/detail 화면이 raw prompt/tool/provider/authorization payload를 그대로 노출하거나, AI run source-chain 조회가 잘못된 timestamp 컬럼 가정으로 깨지는 문제 차단 |
 
+### AIP P0j — Logic Runtime Ratchet
+
+P0j의 현재 slice는 full Temporal-backed Logic engine이나 visual DAG builder가 아니라, AIP Logic
+블록 그래프를 typed/bounded DAG로 검증하고 안전한 기존 경계를 통해 실행하는 첫 runtime surface다.
+`LogicRuntimeService`는 `Input`, `CallFunction`, `Condition`, `CreateActionProposal`,
+`HumanApproval`, `ApplyAction`, `Output` block id/kind/dependency를 검증하고, duplicate id,
+missing dependency, cycle, max block budget을 fail closed한다. `CallFunction`은 직접 executor를
+부르지 않고 `ToolBrokerService`를 통과하며, tool call ledger row를 기록한다.
+`CreateActionProposal`은 직접 Action을 실행하지 않고 `ActionProposalService`를 통해
+`insight_reviews` pending proposal을 만든다. `ApplyAction`은 approved proposal signal이 없는
+interactive Logic run에서 fail closed한다. Logic run start/completed/failed evidence는 기존
+`ai_execution_events`에 ref/hash/redacted preview로 남기며, 같은 graph/input의 result hash는
+deterministic replay proof로 고정된다.
+
+| 게이트                  | 명령                    | Root cause                                                                                                                                           |
+| ----------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Logic runtime ratchet   | `quality:logic-runtime` | Logic DAG가 cycle/무제한 loop/직접 Action 실행/ToolBroker 우회로 이어지거나, read tool/proposal 실행 흔적이 AI ledger에 남지 않는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와
