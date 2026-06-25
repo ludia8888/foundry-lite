@@ -23,6 +23,7 @@ from foundry_lite.application.services.media.indexing import MediaIndexingServic
 from foundry_lite.application.services.media.retrieval import DefaultContentRetrievalService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_embedding import LocalEmbeddingAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository
@@ -115,11 +116,18 @@ def env(tmp_path: Path) -> _Env:
     index = LocalContentIndexAdapter()
     embedding = LocalEmbeddingAdapter(embedding_engine=_fake_engine, model_version=_MODEL)
     indexing = MediaIndexingService(
-        engine=engine, media_derivative_repository=repo, content_index_adapter=index, embedding_model_adapter=embedding
+        engine=engine,
+        media_derivative_repository=repo,
+        content_index_adapter=index,
+        embedding_model_adapter=embedding,
     )
     indexing.bind_collaborators({"runtime_service": _FakeRuntime()})
     retrieval = DefaultContentRetrievalService(
-        engine=engine, media_derivative_repository=repo, content_index_adapter=index, embedding_model_adapter=embedding
+        engine=engine,
+        media_derivative_repository=repo,
+        content_index_adapter=index,
+        embedding_model_adapter=embedding,
+        completion_model_adapter=LocalCompletionAdapter(),
     )
     return _Env(RequestContext(), engine, index, indexing, retrieval)
 

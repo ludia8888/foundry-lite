@@ -21,6 +21,7 @@ from foundry_lite.application.ports import (
     TransactionManager,
     TransformRepository,
 )
+from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
 from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
@@ -80,6 +81,7 @@ class CoreDependencies:
     external_media_reader: ExternalMediaReader
     content_index_adapter: ContentIndexAdapter
     embedding_model_adapter: EmbeddingModelAdapter
+    completion_model_adapter: CompletionModelAdapter
     vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     search_adapter: SearchAdapter
     secret_provider: SecretProvider

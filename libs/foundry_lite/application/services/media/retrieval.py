@@ -5,6 +5,7 @@ from dataclasses import replace
 from foundry_lite.application.ports.content_index import ContentSearchHit, HybridContentQuery
 from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.media.query_enrichment import enrich_query
 from foundry_lite.domain.context import RequestContext
 
 
@@ -23,6 +24,7 @@ class DefaultContentRetrievalService(CoreService):
         "media_derivative_repository",
         "content_index_adapter",
         "embedding_model_adapter",
+        "completion_model_adapter",
     )
     required_collaborators = ()
 
@@ -41,8 +43,17 @@ class DefaultContentRetrievalService(CoreService):
     def _with_query_vector(self, query: HybridContentQuery) -> HybridContentQuery:
         if not self.embedding_model_adapter.is_available or not query.text:
             return query
-        vector = self.embedding_model_adapter.embed([query.text])[0]
-        return replace(query, query_vector=vector, embedding_model_version=self.embedding_model_adapter.model_version)
+        # Query-side L13: HyDE embeds an LLM hypothetical answer (search-bait) instead of the raw
+        # question, and distillation cleans the keyword leg. Default-off — when no completion model
+        # is wired ``enriched`` is the raw query, so this stays byte-for-byte as before.
+        enriched = enrich_query(query.text, self.completion_model_adapter)
+        vector = self.embedding_model_adapter.embed([enriched.dense_text])[0]
+        return replace(
+            query,
+            text=enriched.keyword_text,
+            query_vector=vector,
+            embedding_model_version=self.embedding_model_adapter.model_version,
+        )
 
 
 def _is_authoritative(hit: ContentSearchHit, unit: ContentUnitRecord | None, tenant_id: str) -> bool:

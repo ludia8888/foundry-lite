@@ -34,6 +34,7 @@ from foundry_lite.infrastructure.adapters import (
     IcebergDatasetStorageAdapter,
     IcebergDatasetStorageAdapterConfig,
     ImageProcessorAdapter,
+    LocalCompletionAdapter,
     LocalConnectorAdapter,
     LocalContentIndexAdapter,
     LocalDatasetStorageAdapter,
@@ -149,6 +150,9 @@ def create_local_core_dependencies(
     embedding_model_adapter = LocalEmbeddingAdapter(
         embedding_engine=_fastembed_embedding_engine, model_version=FASTEMBED_MODEL_VERSION
     )
+    # Query-side L13 (HyDE + distillation): no LLM bundled, so the default is unavailable and
+    # retrieval stays byte-for-byte unchanged. A real local-LLM engine is a future deferred section.
+    completion_model_adapter = LocalCompletionAdapter()
     compute_adapter = _compute_adapter(adapter_profile)
     connector_adapter = _connector_adapter(adapter_profile)
     search_adapter = _search_adapter(adapter_profile)
@@ -198,6 +202,7 @@ def create_local_core_dependencies(
         media_storage=media_storage,
         content_index_adapter=content_index_adapter,
         embedding_model_adapter=embedding_model_adapter,
+        completion_model_adapter=completion_model_adapter,
         vision_embedding_model_adapter=vision_embedding_model_adapter,
         search_adapter=search_adapter,
         secret_provider=secret_provider_from_env(),
