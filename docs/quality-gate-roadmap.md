@@ -1633,13 +1633,14 @@ P0c의 현재 slice는 full AIP trace UI가 아니라 AI 실행 장부의 DB/저
 `AiRunRepository`는 session/message/run/event/model-call/context/tool/citation/usage row를
 저장하되, raw prompt나 raw tool result를 일반 DB에 넣지 않고 ref/hash/redacted preview로 남긴다.
 `quality:ai-ledger`는 정본 §10.2 컬럼 목록, message client idempotency, event sequence
-idempotency, tenant scoping, SQLite/PostgreSQL round-trip, and runtime-lane wiring을 검증한다.
+idempotency, tenant scoping, PostgreSQL RLS migration DDL, SQLite/PostgreSQL round-trip, and
+runtime-lane wiring을 검증한다.
 ModelGateway 자동 기록, encrypted prompt artifact store, ToolBroker execution, trace UI, and
 public API/SDK surfaces는 후속 AIP slice다.
 
 | 게이트                 | 명령                | Root cause                                                                                                                                                                           |
 | ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| AI run ledger ratchet  | `quality:ai-ledger` | AI 실행이 provider call 이후에만 휘발성 로그로 남거나, retry가 message/event를 중복 생성하거나, raw prompt/tool payload가 일반 DB/audit row에 저장되거나, Postgres와 SQLite 동작이 갈라지는 문제 차단 |
+| AI run ledger ratchet  | `quality:ai-ledger` | AI 실행이 provider call 이후에만 휘발성 로그로 남거나, retry가 message/event를 중복 생성하거나, raw prompt/tool payload가 일반 DB/audit row에 저장되거나, 기존 DB migration 경로에서 새 AI 테이블이 PostgreSQL RLS 밖에 남거나, Postgres와 SQLite 동작이 갈라지는 문제 차단 |
 
 ### AIP P0d — Context Compiler Ratchet
 
@@ -1649,14 +1650,15 @@ source/version/hash/security partition과 함께 넘긴다. `ContextCompilerServ
 platform safety policy, agent instruction, application state, tool definitions, retrieved context,
 citation mapping, output schema, user message를 묶고 `compiled_prompt_hash`,
 `context_manifest_hash`, `tool_manifest_hash`, `state_snapshot_hash`, `policy_snapshot_hash`를 만든다.
-검색 문맥은 `BEGIN_UNTRUSTED_CONTEXT` / `END_UNTRUSTED_CONTEXT`로 fence 처리되며, duplicate
-context id, cross-tenant partition, context hash mismatch는 provider call 전에 fail closed된다.
+검색 문맥은 raw delimiter fence가 아니라 JSON string data로 인코딩되어 delimiter-like 문자열이
+prompt section boundary로 승격되지 못하며, duplicate context id, non-allowlisted partition,
+context hash mismatch는 provider call 전에 fail closed된다.
 RetrievalOrchestrator, ToolBroker execution, CitationService verification, AgentRuntime loop, public
 API/SDK surfaces는 후속 AIP slice다.
 
 | 게이트                    | 명령                       | Root cause                                                                                                                                                                                                    |
 | ------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Context compiler ratchet  | `quality:context-compiler` | 검색 결과나 application state가 임의 순서로 prompt에 섞이거나, retrieved document 안의 prompt-injection 문장이 system instruction처럼 승격되거나, context/tool/state/policy hash 없이 AI run ledger가 생성되는 문제 차단 |
+| Context compiler ratchet  | `quality:context-compiler` | 검색 결과나 application state가 임의 순서로 prompt에 섞이거나, retrieved document 안의 delimiter/prompt-injection 문장이 system instruction처럼 승격되거나, 같은 tenant 안의 비허용 security partition이 섞이거나, context/tool/state/policy hash 없이 AI run ledger가 생성되는 문제 차단 |
 
 ### S60 — AI Evidence Lineage Ratchet
 

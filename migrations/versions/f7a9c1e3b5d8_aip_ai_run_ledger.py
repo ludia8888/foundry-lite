@@ -9,7 +9,7 @@ Create Date: 2026-06-25 00:00:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 # revision identifiers, used by Alembic.
 revision: str = "f7a9c1e3b5d8"
@@ -182,6 +182,97 @@ def upgrade() -> None:
         sa.Column("recorded_at", sa.String(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
+    if context.get_context().dialect.name == "postgresql":
+        op.execute("ALTER TABLE ai_sessions ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_sessions FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_sessions_tenant_isolation ON ai_sessions
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_session_state_versions ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_session_state_versions FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_session_state_versions_tenant_isolation ON ai_session_state_versions
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_messages ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_messages FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_messages_tenant_isolation ON ai_messages
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_execution_runs ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_execution_runs FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_execution_runs_tenant_isolation ON ai_execution_runs
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_execution_events ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_execution_events FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_execution_events_tenant_isolation ON ai_execution_events
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_model_calls ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_model_calls FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_model_calls_tenant_isolation ON ai_model_calls
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_context_items ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_context_items FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_context_items_tenant_isolation ON ai_context_items
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_tool_calls ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_tool_calls FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_tool_calls_tenant_isolation ON ai_tool_calls
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_citations ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_citations FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_citations_tenant_isolation ON ai_citations
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
+        op.execute("ALTER TABLE ai_usage_ledger ENABLE ROW LEVEL SECURITY")
+        op.execute("ALTER TABLE ai_usage_ledger FORCE ROW LEVEL SECURITY")
+        op.execute(
+            """
+            CREATE POLICY ai_usage_ledger_tenant_isolation ON ai_usage_ledger
+            USING (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))
+            """
+        )
 
 
 def downgrade() -> None:

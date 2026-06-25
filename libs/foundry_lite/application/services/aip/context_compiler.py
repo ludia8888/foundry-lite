@@ -53,6 +53,7 @@ class ContextCompileRequest:
     user_message: str
     state_json: dict[str, object]
     retrieved_context: tuple[RetrievedContextItem, ...]
+    allowed_security_partitions: tuple[str, ...]
     tool_definitions: tuple[ToolDefinition, ...] = ()
     output_schema: dict[str, object] | None = None
     platform_safety_policy: str = (
@@ -81,7 +82,7 @@ class ContextCompilerService(CoreService):
     required_collaborators = ()
 
     def compile(self, ctx: RequestContext, request: ContextCompileRequest) -> CompiledContext:
-        self._validate_context_items(ctx, request.retrieved_context)
+        self._validate_context_items(ctx, request)
         system_content = _compile_system_content(request)
         messages = (
             ModelMessage(role="system", content=system_content),
@@ -97,16 +98,28 @@ class ContextCompilerService(CoreService):
             context_ids=tuple(item.context_id for item in request.retrieved_context),
         )
 
-    def _validate_context_items(self, ctx: RequestContext, items: tuple[RetrievedContextItem, ...]) -> None:
+    def _validate_context_items(self, ctx: RequestContext, request: ContextCompileRequest) -> None:
+        allowed_partitions = frozenset(request.allowed_security_partitions)
+        if not allowed_partitions:
+            raise ContextCompilationError(
+                "missing_security_partition_allowlist",
+                "context compilation requires an explicit security partition allowlist",
+            )
+        for partition in allowed_partitions:
+            if not partition.startswith(f"{ctx.tenant_id}:"):
+                raise ContextCompilationError(
+                    "security_partition_mismatch",
+                    f"allowed partition {partition} is outside tenant partition",
+                )
         seen: set[str] = set()
-        for item in items:
+        for item in request.retrieved_context:
             if item.context_id in seen:
                 raise ContextCompilationError("duplicate_context_id", f"context id {item.context_id} is duplicated")
             seen.add(item.context_id)
-            if not item.security_partition.startswith(f"{ctx.tenant_id}:"):
+            if item.security_partition not in allowed_partitions:
                 raise ContextCompilationError(
                     "security_partition_mismatch",
-                    f"context id {item.context_id} is outside tenant partition",
+                    f"context id {item.context_id} is outside the allowed security partitions",
                 )
             if item.content_hash != _hash_text(item.text):
                 raise ContextCompilationError("context_hash_mismatch", f"context id {item.context_id} hash mismatch")
@@ -146,21 +159,19 @@ def _tool_section(tools: tuple[ToolDefinition, ...]) -> str:
 def _context_section(items: tuple[RetrievedContextItem, ...]) -> str:
     if not items:
         return "[]"
-    blocks = []
-    for item in items:
-        blocks.append(
-            "\n".join(
-                (
-                    f"BEGIN_UNTRUSTED_CONTEXT {item.context_id}",
-                    f"kind={item.kind}",
-                    f"source_version={item.source_version}",
-                    f"content_hash={item.content_hash}",
-                    item.text,
-                    f"END_UNTRUSTED_CONTEXT {item.context_id}",
-                )
-            )
-        )
-    return "\n\n".join(blocks)
+    rows = [
+        {
+            "context_id": item.context_id,
+            "kind": item.kind,
+            "source_version": item.source_version,
+            "content_hash": item.content_hash,
+            "text_format": "json_string",
+            "text_treatment": "untrusted_data",
+            "text": item.text,
+        }
+        for item in items
+    ]
+    return _json_block({"untrusted_context": rows})
 
 
 def _citation_mapping_section(items: tuple[RetrievedContextItem, ...]) -> str:
@@ -222,4 +233,4 @@ def _hash_json(value: object) -> str:
 
 
 def _hash_text(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
+    return f"sha256:{hashlib.sha256(value.encode()).hexdigest()}"

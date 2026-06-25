@@ -164,6 +164,36 @@ def test_expand_phase_blocks_destructive_upgrade(tmp_path: Path) -> None:
     assert any(finding.code == "migration_expand_operation_not_allowed" for finding in findings)
 
 
+def test_expand_phase_allows_safe_rls_upgrade_sql(tmp_path: Path) -> None:
+    versions_dir = tmp_path / "migrations" / "versions"
+    _write_migration(versions_dir, "aaa111_root.py", revision="aaa111", down_revision=None)
+    _write_migration(
+        versions_dir,
+        "bbb222_child.py",
+        revision="bbb222",
+        down_revision="aaa111",
+        upgrade_body='op.execute("ALTER TABLE ai_sessions ENABLE ROW LEVEL SECURITY")',
+    )
+
+    assert gate.collect_findings(versions_dir=versions_dir) == []
+
+
+def test_expand_phase_blocks_destructive_upgrade_sql(tmp_path: Path) -> None:
+    versions_dir = tmp_path / "migrations" / "versions"
+    _write_migration(versions_dir, "aaa111_root.py", revision="aaa111", down_revision=None)
+    _write_migration(
+        versions_dir,
+        "bbb222_child.py",
+        revision="bbb222",
+        down_revision="aaa111",
+        upgrade_body='op.execute("ALTER TABLE orders DROP COLUMN legacy_status")',
+    )
+
+    findings = gate.collect_findings(versions_dir=versions_dir)
+
+    assert any(finding.code == "migration_expand_execute_destructive_sql" for finding in findings)
+
+
 def test_expand_phase_requires_default_for_not_null_column(tmp_path: Path) -> None:
     versions_dir = tmp_path / "migrations" / "versions"
     _write_migration(versions_dir, "aaa111_root.py", revision="aaa111", down_revision=None)

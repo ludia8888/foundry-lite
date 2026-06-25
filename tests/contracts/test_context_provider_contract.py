@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 
 from foundry_lite.application.ports.context_provider import (
@@ -54,13 +55,14 @@ def _request() -> ContextRetrievalRequest:
 
 
 def _item() -> RetrievedContextItem:
+    text = "PO-1042 is delayed because shipment SH-77 missed port cutoff."
     return RetrievedContextItem(
         context_id="ctx-1",
         kind="object",
-        text="PO-1042 is delayed because shipment SH-77 missed port cutoff.",
+        text=text,
         source_ref="object://Order/PO-1042",
         source_version="object-version-7",
-        content_hash="3f8917892a2af00dac5854f5c725a6d09cb57f70e859d7df7fef60a2595f2a63",
+        content_hash=f"sha256:{hashlib.sha256(text.encode()).hexdigest()}",
         relevance_score=0.97,
         retrieval_method="authoritative_reread",
         security_partition="tenant-demo:internal",

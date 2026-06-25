@@ -411,6 +411,8 @@ def _expand_sql_findings(operation: OperationCall, path: str) -> list[MigrationF
             )
         ]
     statement = operation.sql_statement.lstrip().upper()
+    if _is_safe_rls_statement(statement):
+        return []
     if not statement.startswith(DESTRUCTIVE_SQL_PREFIXES):
         return []
     return [
@@ -421,6 +423,13 @@ def _expand_sql_findings(operation: OperationCall, path: str) -> list[MigrationF
             actual=f"line {operation.line}",
         )
     ]
+
+
+def _is_safe_rls_statement(statement: str) -> bool:
+    normalized = " ".join(statement.split())
+    return normalized.startswith("ALTER TABLE ") and normalized.endswith(
+        (" ENABLE ROW LEVEL SECURITY", " FORCE ROW LEVEL SECURITY")
+    )
 
 
 def _graph_findings(revisions: list[MigrationRevision]) -> list[MigrationFinding]:
