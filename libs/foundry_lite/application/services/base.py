@@ -30,6 +30,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.ports.citation_source import CitationSourceVerifier
 from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
+from foundry_lite.application.ports.context_provider import ContextProvider
 from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.external_media_reader import ExternalMediaReader
@@ -54,9 +55,11 @@ CollaboratorMap = Mapping[str, object]
 
 SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_service": "ActionService",
+    "agent_runtime_service": "AgentRuntimeService",
     "action_proposal_service": "ActionProposalService",
     "backup_restore_service": "BackupRestoreService",
     "builder_runtime_service": "BuilderRuntimeService",
+    "context_compiler_service": "ContextCompilerService",
     "content_retrieval_service": "DefaultContentRetrievalService",
     "media_visual_search_service": "MediaVisualSearchService",
     "dataset_ingest_service": "DatasetIngestService",
@@ -68,6 +71,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "iceberg_maintenance_service": "IcebergMaintenanceService",
     "insight_review_service": "InsightReviewService",
     "logic_runtime_service": "LogicRuntimeService",
+    "model_gateway_service": "ModelGatewayService",
     "materialization_service": "MaterializationService",
     "object_indexing_service": "ObjectIndexingService",
     "object_links_service": "ObjectLinksService",
@@ -130,6 +134,7 @@ class CoreService:
     vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     language_model_adapter: LanguageModelAdapter
     model_registry_repository: ModelRegistryRepository
+    context_provider: ContextProvider
     citation_source_verifier: CitationSourceVerifier
     secret_provider: SecretProvider
     tool_executor: ToolExecutor

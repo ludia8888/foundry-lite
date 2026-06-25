@@ -1033,6 +1033,20 @@ def test_builder_runtime_gate_runs_after_visual_builder_before_ai_evidence() -> 
     assert "api_aip_builder_run" in package_json
 
 
+def test_agent_runtime_gate_runs_after_builder_runtime_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    builder_runtime_step = "pnpm --silent quality:builder-runtime"
+    agent_runtime_step = "pnpm --silent quality:agent-runtime"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert agent_runtime_step in script
+    assert script.index(builder_runtime_step) < script.index(agent_runtime_step) < script.index(ai_evidence_step)
+    assert '"quality:agent-runtime"' in package_json
+    assert "tests/unit/test_agent_runtime.py" in package_json
+    assert "api_aip_agent_run" in package_json
+
+
 def test_insight_review_gate_runs_after_ai_evidence_gate() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

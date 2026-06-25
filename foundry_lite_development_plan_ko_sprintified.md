@@ -2908,7 +2908,7 @@ Actions:
 | Streaming / CDC post-MVP proof | 부분 완료. REST/Webhook, Kafka-compatible stream archive, live broker proof, Debezium archive/live topic, CDC object indexing proof가 있다. | continuously running workers, rebalance/commit-unknown failure injection, production deployment packaging |
 | Search post-MVP proof | 부분 완료. Elasticsearch-compatible adapter/projection/rebuild/orphan drift proof가 있다. | managed live Elasticsearch cluster deployment |
 | Scale hardening | 일부 proof. active index pointer, shadow swap, PostgreSQL contract coverage, RLS contract proof, S3/Iceberg/Spark/infra-composition ratchet이 있다. | Kubernetes/Helm, backup/restore, managed operations, real cluster/cloud/chaos evidence |
-| Frontend/API/SDK product surface | 부분 완료. S61 generated SDK request/error/request-id foundation, 44 route-surface request contract, 12 helper-surface contract, frontend/backend surface lock, S62 Dataset Explorer backend/API/SDK start point, S63 Insight Review durable queue/API/SDK가 있다. | full visual dataset browser, lineage graph UX, insight evidence panel, approval policy UI, action orchestration workspace |
+| Frontend/API/SDK product surface | 부분 완료. S61 generated SDK request/error/request-id foundation, 45 route-surface request contract, 12 helper-surface contract, frontend/backend surface lock, S62 Dataset Explorer backend/API/SDK start point, S63 Insight Review durable queue/API/SDK가 있다. | full visual dataset browser, lineage graph UX, insight evidence panel, approval policy UI, action orchestration workspace |
 
 ## 22. Performance targets
 

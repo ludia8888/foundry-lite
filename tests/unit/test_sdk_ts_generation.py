@@ -57,9 +57,12 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type AipBuilderRunRequest = AipBuilderValidateRequest & {" in generated
     assert "export type AipBuilderValidationResult = {" in generated
     assert "export type AipBuilderRunResult = {" in generated
+    assert "export type AipAgentRunRequest = {" in generated
+    assert "export type AipAgentRunResult = {" in generated
     assert "aip: {" in generated
     assert "validate(payload: AipBuilderValidateRequest): Promise<AipBuilderValidationResult>;" in generated
     assert "run(payload: AipBuilderRunRequest): Promise<AipBuilderRunResult>;" in generated
+    assert "run(payload: AipAgentRunRequest): Promise<AipAgentRunResult>;" in generated
     assert "sdkClient().aip.builder.validate" not in generated
     assert "insights: {" in generated
     assert "export type InsightReviewPayload = {" in generated
@@ -154,7 +157,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["system"] == ["health"]
     assert ts_surface["datasets"] == ["list", "versions", "preview", "inspect"]
     assert ts_surface["ontology"] == ["catalog", "validate"]
-    assert ts_surface["aip"] == {"builder": ["validate", "run"]}
+    assert ts_surface["aip"] == {"builder": ["validate", "run"], "agent": ["run"]}
     assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide"]}
     objects_surface = cast(dict[str, object], ts_surface["objects"])
     assert objects_surface["generic"] == ["get", "query", "links"]
@@ -205,6 +208,8 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "builder: {",
         "validate: (payload) => request(`/api/aip/builder/validate`, {",
         "run: (payload) => request(`/api/aip/builder/run`, {",
+        "agent: {",
+        "run: (payload) => request(`/api/aip/agent/run`, {",
         "export function classifyFoundryLiteError(error)",
         "export function actionLockKey(actionName, objectId)",
         "export function createInFlightActionLock()",

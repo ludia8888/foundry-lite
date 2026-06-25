@@ -329,6 +329,49 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "aip.agent.run",
+  () =>
+    client.aip.agent.run({
+      agentRunId: "agent-web-1",
+      agentVersionId: "agent-demo:v1",
+      modelAlias: "support-assistant",
+      promptVersionId: "prompt-v1",
+      userMessage: "Explain O-1",
+      agentInstruction: "Answer with authorized context only.",
+      securityPartition: "tenant-a:orders",
+      allowedSecurityPartitions: ["tenant-a:orders"],
+      stateJson: { objectId: "O-1" },
+      outputSchema: { type: "object" },
+      dataClassification: "internal",
+      maxContextItems: 4,
+      maxContextTokens: 1200,
+      maxModelCalls: 1,
+      maxLoopIterations: 1,
+    }),
+  {
+    path: "/api/aip/agent/run",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      agentRunId: "agent-web-1",
+      agentVersionId: "agent-demo:v1",
+      modelAlias: "support-assistant",
+      promptVersionId: "prompt-v1",
+      userMessage: "Explain O-1",
+      agentInstruction: "Answer with authorized context only.",
+      securityPartition: "tenant-a:orders",
+      allowedSecurityPartitions: ["tenant-a:orders"],
+      stateJson: { objectId: "O-1" },
+      outputSchema: { type: "object" },
+      dataClassification: "internal",
+      maxContextItems: 4,
+      maxContextTokens: 1200,
+      maxModelCalls: 1,
+      maxLoopIterations: 1,
+    },
+  },
+);
+await expectSdkCall(
   "insights.reviews.list",
   () => client.insights.reviews.list({ status: "pending", assigneeUserId: "ops/1", limit: 15 }),
   {

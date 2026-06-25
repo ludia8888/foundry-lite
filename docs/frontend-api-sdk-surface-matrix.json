@@ -112,6 +112,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "aip.agent.run",
+      "route": "POST /api/aip/agent/run",
+      "productArea": "aip-agent-runtime",
+      "sdkSurface": "aip.agent.run",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AIP Agent Runtime retrieves authorized context, compiles a governed prompt, calls Model Gateway, and links the read-only model turn to an AI Operations run detail with context/model/usage evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "insights.reviews.list",
       "route": "GET /api/insights/reviews",
       "productArea": "insight-action-workspace",

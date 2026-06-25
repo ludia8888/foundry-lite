@@ -1813,6 +1813,20 @@ drag-and-drop editing, visual debugger, eval workbench, and release dashboards�
 | --------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Builder runtime execution ratchet | `quality:builder-runtime` | Builder 화면이 validate만 통과한 draft를 런타임 장부 없이 실행하거나, ToolBroker/ActionProposal guard를 우회하거나, 실행 후 Operations trace로 돌아가지 못하는 문제 차단 |
 
+### AIP P0n — Agent Runtime Readonly Ratchet
+
+P0n의 현재 slice는 full autonomous multi-tool AgentRuntime이 아니라, 한 번의 사용자 메시지를
+authorized context retrieval, deterministic context compiler, governed Model Gateway call, AI run
+ledger, Operations trace로 연결하는 read-only runtime path다. 모델이 tool call을 반환해도 이
+slice에서는 실행하지 않고 fail closed 한다.
+
+아직 RetrievalOrchestrator ranking/fusion, multi-iteration tool loop, citation rendering, visual
+debugger, eval workbench, persisted Agent Studio definitions는 후속 slice다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Agent runtime readonly ratchet | `quality:agent-runtime` | Agent Runtime 화면/API가 ContextCompiler/ModelGateway/AI ledger를 우회하거나, 비허용 security partition을 모델 prompt에 넣거나, 모델 호출 뒤 Operations trace 없이 답변을 반환하거나, read-only slice에서 tool call을 실행하는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와
@@ -1847,7 +1861,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 44개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 45개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 12개 SDK helper의 retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

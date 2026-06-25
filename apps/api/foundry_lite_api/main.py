@@ -215,6 +215,35 @@ class AipBuilderRunRequest(AipBuilderValidateRequest):
     policy_version: str = Field(default="policy-v1", alias="policyVersion")
 
 
+class AipAgentRunRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_run_id: str = Field(default="agent-run-default", alias="agentRunId")
+    agent_version_id: str = Field(alias="agentVersionId")
+    model_alias: str = Field(default="default-completion", alias="modelAlias")
+    prompt_version_id: str = Field(alias="promptVersionId")
+    user_message: str = Field(alias="userMessage")
+    agent_instruction: str = Field(
+        default="Answer the operator using cited context.",
+        alias="agentInstruction",
+    )
+    security_partition: str = Field(alias="securityPartition")
+    allowed_security_partitions: list[str] = Field(alias="allowedSecurityPartitions")
+    state_json: JsonObject = Field(default_factory=dict, alias="stateJson")
+    output_schema: JsonObject | None = Field(default=None, alias="outputSchema")
+    ai_run_id: str | None = Field(default=None, alias="aiRunId")
+    session_id: str | None = Field(default=None, alias="sessionId")
+    ontology_version_id: str = Field(default="active-ontology", alias="ontologyVersionId")
+    data_classification: str = Field(default="internal", alias="dataClassification")
+    region_requirement: str | None = Field(default=None, alias="regionRequirement")
+    max_context_items: int = Field(default=4, alias="maxContextItems")
+    max_context_tokens: int = Field(default=1200, alias="maxContextTokens")
+    max_model_calls: int = Field(default=1, alias="maxModelCalls")
+    max_loop_iterations: int = Field(default=1, alias="maxLoopIterations")
+    max_output_tokens: int = Field(default=512, alias="maxOutputTokens")
+    policy_version: str = Field(default="policy-v1", alias="policyVersion")
+
+
 class DeadLetterBulkRetryRequest(BaseModel):
     ids: list[str]
 
@@ -456,6 +485,15 @@ def validate_aip_builder(request: Request, payload: AipBuilderValidateRequest) -
 @app.post("/api/aip/builder/run")
 def run_aip_builder(request: Request, payload: AipBuilderRunRequest) -> JsonObject:
     result = foundry.aip.run_builder_payload(
+        payload=payload.model_dump(by_alias=True),
+        ctx=_ctx(request),
+    )
+    return result.to_payload()
+
+
+@app.post("/api/aip/agent/run")
+def run_aip_agent(request: Request, payload: AipAgentRunRequest) -> JsonObject:
+    result = foundry.aip.run_agent_payload(
         payload=payload.model_dump(by_alias=True),
         ctx=_ctx(request),
     )

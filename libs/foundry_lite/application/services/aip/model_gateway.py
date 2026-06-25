@@ -25,7 +25,7 @@ One boundary for all LLM access. ``invoke``:
 from __future__ import annotations
 
 import hashlib
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure, AdapterFailureKind
 from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse
@@ -40,6 +40,15 @@ from foundry_lite.domain.context import RequestContext
 _GATEWAY_PROFILE = "model-gateway"
 _NON_SERVING_LIFECYCLES = frozenset({"sunset", "deprecated"})
 _SERVING_ALIAS_STATUS = "enabled"
+
+
+@dataclass(frozen=True)
+class ModelResolution:
+    """Alias resolution facts that may be recorded before provider execution."""
+
+    provider: str
+    model_id: str
+    revision: str
 
 
 class ModelGatewayService(CoreService):
@@ -61,6 +70,16 @@ class ModelGatewayService(CoreService):
             resolved_model_revision=revision,
             model_hash=_model_hash(model.model_id, revision),
             prompt_hash=_prompt_hash(request),
+        )
+
+    def resolve_model(self, ctx: RequestContext, model_alias: str) -> ModelResolution:
+        """Resolve a serving alias without making a provider call."""
+        alias, model, provider = self._resolve(ctx, model_alias)
+        self._guard_serving(alias, model)
+        return ModelResolution(
+            provider=provider.provider_type,
+            model_id=model.model_id,
+            revision=alias.version or model.revision,
         )
 
     def _resolve(

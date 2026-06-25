@@ -9,6 +9,11 @@ from foundry_lite.application.services.aip.action_proposal import (
     ActionProposalResult,
     ActionProposalService,
 )
+from foundry_lite.application.services.aip.agent_runtime import (
+    AgentRuntimeRequest,
+    AgentRuntimeResult,
+    AgentRuntimeService,
+)
 from foundry_lite.application.services.aip.approval_execution import (
     ApprovalExecutionRequest,
     ApprovalExecutionResult,
@@ -48,6 +53,7 @@ class AipWorkspace:
 
     def __init__(
         self,
+        agent_runtime: AgentRuntimeService,
         action_proposal: ActionProposalService,
         approval_execution: ApprovalExecutionService,
         builder_runtime: BuilderRuntimeService,
@@ -55,6 +61,7 @@ class AipWorkspace:
         evals: EvalService,
         visual_builder: VisualBuilderService,
     ) -> None:
+        self._agent_runtime = agent_runtime
         self._action_proposal = action_proposal
         self._approval_execution = approval_execution
         self._builder_runtime = builder_runtime
@@ -242,6 +249,14 @@ class AipWorkspace:
     ) -> BuilderRuntimeResult:
         return self._builder_runtime.run(ctx or RequestContext(), _builder_runtime_request_from_payload(payload))
 
+    def run_agent_payload(
+        self,
+        *,
+        payload: Mapping[str, object],
+        ctx: RequestContext | None = None,
+    ) -> AgentRuntimeResult:
+        return self._agent_runtime.run(ctx or RequestContext(), _agent_runtime_request_from_payload(payload))
+
 
 def _builder_request_from_payload(payload: Mapping[str, object]) -> VisualBuilderDraftRequest:
     return VisualBuilderDraftRequest(
@@ -274,6 +289,41 @@ def _builder_runtime_request_from_payload(payload: Mapping[str, object]) -> Buil
         ),
         policy_version=_text_default(payload, "policyVersion", "policy-v1"),
     )
+
+
+def _agent_runtime_request_from_payload(payload: Mapping[str, object]) -> AgentRuntimeRequest:
+    return AgentRuntimeRequest(
+        agent_run_id=_text_default(payload, "agentRunId", "agent-run-default"),
+        agent_version_id=_text(payload, "agentVersionId"),
+        model_alias=_text_default(payload, "modelAlias", _model_alias_from_version(payload)),
+        prompt_version_id=_text(payload, "promptVersionId"),
+        user_message=_text(payload, "userMessage"),
+        agent_instruction=_text_default(payload, "agentInstruction", "Answer the operator using cited context."),
+        security_partition=_text(payload, "securityPartition"),
+        allowed_security_partitions=_text_items_default(
+            payload,
+            "allowedSecurityPartitions",
+            (_text(payload, "securityPartition"),),
+        ),
+        state_json=_mapping(payload, "stateJson"),
+        output_schema=_optional_mapping(payload, "outputSchema"),
+        ai_run_id=_optional_text(payload, "aiRunId"),
+        session_id=_optional_text(payload, "sessionId"),
+        ontology_version_id=_text_default(payload, "ontologyVersionId", "active-ontology"),
+        data_classification=_text_default(payload, "dataClassification", "internal"),
+        region_requirement=_optional_text(payload, "regionRequirement"),
+        max_context_items=_int_default(payload, "maxContextItems", 4),
+        max_context_tokens=_int_default(payload, "maxContextTokens", 1200),
+        max_model_calls=_int_default(payload, "maxModelCalls", 1),
+        max_loop_iterations=_int_default(payload, "maxLoopIterations", 1),
+        max_output_tokens=_int_default(payload, "maxOutputTokens", 512),
+        policy_version=_text_default(payload, "policyVersion", "policy-v1"),
+    )
+
+
+def _model_alias_from_version(payload: Mapping[str, object]) -> str:
+    alias_version = _text_default(payload, "modelAliasVersion", "default-completion")
+    return alias_version.split("@", maxsplit=1)[0]
 
 
 def _builder_context_source(payload: Mapping[str, object]) -> VisualBuilderContextSource:
@@ -329,6 +379,11 @@ def _text_items_default(payload: Mapping[str, object], key: str, default: tuple[
 
 def _mapping(payload: Mapping[str, object], key: str) -> Mapping[str, object]:
     return cast(Mapping[str, object], payload.get(key, {}))
+
+
+def _optional_mapping(payload: Mapping[str, object], key: str) -> Mapping[str, object] | None:
+    value = payload.get(key)
+    return cast(Mapping[str, object], value) if isinstance(value, Mapping) else None
 
 
 def _text(payload: Mapping[str, object], key: str) -> str:

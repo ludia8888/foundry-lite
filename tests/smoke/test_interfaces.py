@@ -1012,6 +1012,51 @@ def test_api_aip_builder_run_executes_logic_and_links_operations_detail(foundry,
     assert detail_body["ai"]["toolCalls"][0]["tool_id"] == "ontology.get_object"
 
 
+def test_api_aip_agent_run_calls_model_and_links_operations_detail(foundry, monkeypatch) -> None:
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    headers = {
+        "X-Tenant-ID": "tenant-demo",
+        "X-User-ID": "ops-user",
+        "X-Roles": "admin,data_engineer,ops_manager",
+    }
+
+    response = TestClient(app).post(
+        "/api/aip/agent/run",
+        headers=headers,
+        json={
+            "agentRunId": "agent-api-runtime-1",
+            "agentVersionId": "agent.order-ops.v1",
+            "modelAlias": "default-completion",
+            "promptVersionId": "prompt-order-copilot@v1",
+            "userMessage": "Explain Order O-1001 for the operator.",
+            "agentInstruction": "Answer as the Order Operations Copilot. Do not execute tools.",
+            "securityPartition": "tenant-demo:internal",
+            "allowedSecurityPartitions": ["tenant-demo:internal"],
+            "stateJson": {"objectType": "Order", "objectId": "O-1001"},
+            "outputSchema": {"type": "object"},
+            "dataClassification": "internal",
+            "maxContextItems": 4,
+            "maxContextTokens": 1200,
+            "maxModelCalls": 1,
+            "maxLoopIterations": 1,
+        },
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["runStatus"] == "succeeded"
+    assert body["answer"] == "echo: Explain Order O-1001 for the operator."
+    assert body["operations"]["runType"] == "ai"
+    assert len(body["contextIds"]) == 1
+
+    detail = TestClient(app).get(f"/api/operations/runs/ai/{body['aiRunId']}", headers=headers)
+    detail_body = detail.json()
+    assert detail.status_code == 200
+    assert detail_body["ai"]["summary"]["modelCallCount"] == 1
+    assert detail_body["ai"]["summary"]["contextItemCount"] == 1
+    assert detail_body["ai"]["summary"]["toolCallCount"] == 0
+
+
 def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
     monkeypatch.setattr(api_main, "foundry", foundry)

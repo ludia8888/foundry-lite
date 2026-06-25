@@ -45,6 +45,7 @@ from foundry_lite.application.ports.connector_adapter import (
     RestPaginationConfig,
     RestSourceConfig,
 )
+from foundry_lite.application.ports.context_provider import ContextProvider
 from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckConfig,
     DatasetCheckRecord,
@@ -308,6 +309,7 @@ __all__ = [
     "ConnectorRateLimitedError",
     "ConnectorSnapshot",
     "ConnectorSnapshotRequest",
+    "ContextProvider",
     "DeadLetterRecord",
     "DeadLetterRecordBackfillPlan",
     "DeadLetterRecordBulkRetryFailure",

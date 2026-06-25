@@ -499,6 +499,7 @@
               <button id="discardRecordDlqBtn" type="button" class="secondary">Discard Record</button>
               <button id="aipBuilderValidateBtn" type="button" class="secondary">Validate AIP Builder</button>
               <button id="aipBuilderRunBtn" type="button" class="secondary">Run AIP Builder</button>
+              <button id="aipAgentRunBtn" type="button" class="secondary">Run AIP Agent</button>
             </div>
           </div>
         </aside>
@@ -579,6 +580,21 @@
             </div>
           </div>
 
+          <div class="metric-strip">
+            <div class="metric">
+              <span>AIP Agent</span>
+              <strong id="metricAipAgentStatus">-</strong>
+            </div>
+            <div class="metric">
+              <span>AI Context</span>
+              <strong id="metricAipAgentContext">-</strong>
+            </div>
+            <div class="metric">
+              <span>AI Tokens</span>
+              <strong id="metricAipAgentTokens">-</strong>
+            </div>
+          </div>
+
           <div class="panel">
             <header>
               <h2>AIP Builder</h2>
@@ -588,6 +604,15 @@
                 <div id="aipBuilderGraph" class="builder-canvas"></div>
                 <pre id="aipBuilderResult" class="result compact">{}</pre>
               </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <header>
+              <h2>AIP Agent</h2>
+            </header>
+            <div class="panel-body">
+              <pre id="aipAgentResult" class="result compact">{}</pre>
             </div>
           </div>
 
@@ -726,6 +751,7 @@
       const recordDlqResult = document.querySelector("#recordDlqResult");
       const aipBuilderGraph = document.querySelector("#aipBuilderGraph");
       const aipBuilderResult = document.querySelector("#aipBuilderResult");
+      const aipAgentResult = document.querySelector("#aipAgentResult");
       const metricObject = document.querySelector("#metricObject");
       const metricVersion = document.querySelector("#metricVersion");
       const metricStatus = document.querySelector("#metricStatus");
@@ -741,6 +767,9 @@
       const metricAipBuilderStatus = document.querySelector("#metricAipBuilderStatus");
       const metricAipBuilderNodes = document.querySelector("#metricAipBuilderNodes");
       const metricAipBuilderIssues = document.querySelector("#metricAipBuilderIssues");
+      const metricAipAgentStatus = document.querySelector("#metricAipAgentStatus");
+      const metricAipAgentContext = document.querySelector("#metricAipAgentContext");
+      const metricAipAgentTokens = document.querySelector("#metricAipAgentTokens");
       const recordDlqOpen = document.querySelector("#recordDlqOpen");
       const recordDlqClosed = document.querySelector("#recordDlqClosed");
       const recordDlqTopError = document.querySelector("#recordDlqTopError");
@@ -908,6 +937,15 @@
         renderBuilderGraph(builderDraft().logicBlocks, validation);
       }
 
+      function showAipAgent(value) {
+        value = displayValue(value);
+        aipAgentResult.textContent = JSON.stringify(value, null, 2);
+        metricAipAgentStatus.textContent = value.runStatus ?? "-";
+        metricAipAgentContext.textContent = Array.isArray(value.contextIds) ? value.contextIds.length : "-";
+        const usage = value.usage ?? {};
+        metricAipAgentTokens.textContent = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || "-";
+      }
+
       function renderBuilderGraph(blocks, result = {}) {
         const blockingCodes = new Set((result.blockingIssues ?? []).map((issue) => issue.code));
         aipBuilderGraph.innerHTML = "";
@@ -1037,6 +1075,42 @@
         }
         const result = await sdkClient().aip.builder.run(builderRuntimePayload());
         showAipBuilder(result);
+        if (result.aiRunId) {
+          operationType.value = "ai";
+          operationRunId.value = result.aiRunId;
+          await loadRunDetail();
+        }
+      }
+
+      function agentRuntimePayload() {
+        const runToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        return {
+          agentRunId: `web-agent-${runToken}`,
+          agentVersionId: aipBuilderAgentVersion.value,
+          modelAlias: aipBuilderModelAlias.value.split("@")[0],
+          promptVersionId: aipBuilderPromptVersion.value,
+          userMessage: `Explain ${objectType.value} ${objectId.value} for the operator.`,
+          agentInstruction: "Answer as the Order Operations Copilot. Do not execute tools.",
+          securityPartition: `${demoContext.tenantId}:internal`,
+          allowedSecurityPartitions: [`${demoContext.tenantId}:internal`],
+          stateJson: { objectType: objectType.value, objectId: objectId.value },
+          outputSchema: { type: "object", properties: { answer: { type: "string" } } },
+          dataClassification: "internal",
+          maxContextItems: 4,
+          maxContextTokens: 1200,
+          maxModelCalls: 1,
+          maxLoopIterations: 1,
+          maxOutputTokens: 512,
+          policyVersion: "policy-v1",
+        };
+      }
+
+      async function runAipAgent() {
+        if (!currentObject) {
+          await loadObject();
+        }
+        const result = await sdkClient().aip.agent.run(agentRuntimePayload());
+        showAipAgent(result);
         if (result.aiRunId) {
           operationType.value = "ai";
           operationRunId.value = result.aiRunId;
@@ -1370,6 +1444,7 @@
         .querySelector("#aipBuilderValidateBtn")
         .addEventListener("click", () => validateAipBuilder().catch(showAipBuilder));
       document.querySelector("#aipBuilderRunBtn").addEventListener("click", () => runAipBuilder().catch(showAipBuilder));
+      document.querySelector("#aipAgentRunBtn").addEventListener("click", () => runAipAgent().catch(showAipAgent));
       restoreFromServer();
     </script>
   </body>

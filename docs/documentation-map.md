@@ -148,7 +148,7 @@ backend/API/SDK/audit evidence를 함께 확인한다.
 - `check_data_platform_sprint_status.py`는 S46-S64 status table과 README/roadmap/status 문서의
   high-level boundary가 서로 달라지지 않게 막는다. 현재 잠긴 의미는 S46 complete, S47-S63
   partial, S59/S64 proposed/future다.
-- S61은 더 이상 단순 request wrapper만이 아니다. 현재는 named SDK namespaces, 43개 route
+- S61은 더 이상 단순 request wrapper만이 아니다. 현재는 named SDK namespaces, 45개 route
   surface, `requiresIdempotencyKey` mutation marker, 12개 matrix-locked safety helpers, browser
   request/helper contract, documentation count-claim guard, and Web named-SDK-only rule까지 포함하는
   partial frontend foundation이다.

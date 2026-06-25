@@ -63,6 +63,7 @@ from foundry_lite.infrastructure.adapters import (
 )
 from foundry_lite.infrastructure.adapters.asr_processor import _faster_whisper_asr_engine
 from foundry_lite.infrastructure.adapters.fake_citation_source_verifier import FakeCitationSourceVerifier
+from foundry_lite.infrastructure.adapters.fake_context_provider import FakeContextProvider
 from foundry_lite.infrastructure.adapters.fake_tool_executor import FakeToolExecutor
 from foundry_lite.infrastructure.adapters.local_embedding import (
     FASTEMBED_MODEL_VERSION,
@@ -216,6 +217,7 @@ def create_local_core_dependencies(
         # network) so existing tests are unaffected; a real profile injects the proxy adapter.
         language_model_adapter=FakeLanguageModel(),
         model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
+        context_provider=FakeContextProvider(),
         search_adapter=search_adapter,
         secret_provider=secret_provider_from_env(),
         citation_source_verifier=FakeCitationSourceVerifier(),

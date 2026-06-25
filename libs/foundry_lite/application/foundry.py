@@ -18,6 +18,12 @@ from foundry_lite.application.facades import (
     SupplyChainDemo,
     TransformPipeline,
 )
+from foundry_lite.application.ports.model_registry_repository import (
+    ModelAliasRecord,
+    ModelProviderRecord,
+    ModelRecord,
+)
+from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.application.primitives import (
     CommitResult,
     StagedFileStats,
@@ -33,6 +39,8 @@ from foundry_lite.observability.tracing import trace_public_methods
 
 __all__ = ["CommitResult", "FoundryLite", "StagedFileStats", "_dataset_ref_parts"]
 __all__ += ["_json_ready", "_normalize_duckdb_type", "_required_row"]
+
+_LOCAL_FAKE_CREDENTIAL_REF = "local-fake-credential-ref"
 
 
 @trace_public_methods
@@ -74,6 +82,7 @@ class FoundryLite:
         self.runtime_repository = dependencies.runtime_repository
         self.dataset_storage = dependencies.dataset_storage
         self.secret_provider = dependencies.secret_provider
+        self.model_registry_repository = dependencies.model_registry_repository
 
     def _attach_facades(self, services: CoreServices) -> None:
         self.datasets = DatasetWorkspace(services.dataset)
@@ -82,6 +91,7 @@ class FoundryLite:
         self.objects = ObjectStore(services.object_store, services.ontology_search)
         self.actions = ActionGateway(services.action)
         self.aip = AipWorkspace(
+            services.agent_runtime,
             services.action_proposal,
             services.approval_execution,
             services.builder_runtime,
@@ -127,3 +137,81 @@ class FoundryLite:
             roles=["admin", "data_engineer", "ops_manager", "finance"],
             created_at=now,
         )
+        try:
+            self._ensure_demo_model_registry(now)
+        except Exception:
+            return
+
+    def _ensure_demo_model_registry(self, now: str) -> None:
+        with self.engine.begin() as transaction:
+            self._create_demo_model_registry_rows(transaction, now)
+
+    def _create_demo_model_registry_rows(self, transaction: TransactionContext, now: str) -> None:
+        if not self.model_registry_repository.get_providers(
+            transaction=transaction,
+            tenant_id=DEFAULT_TENANT_ID,
+            provider_ids=["local-fake-provider"],
+        ):
+            self.model_registry_repository.create_provider(transaction=transaction, record=_demo_provider_record(now))
+        if not self.model_registry_repository.get_models(
+            transaction=transaction,
+            tenant_id=DEFAULT_TENANT_ID,
+            model_ids=["local-fake-model"],
+        ):
+            self.model_registry_repository.create_model(transaction=transaction, record=_demo_model_record(now))
+        existing = self.model_registry_repository.get_aliases(
+            transaction=transaction,
+            tenant_id=DEFAULT_TENANT_ID,
+            aliases=["default-completion", "gpt-governed"],
+        )
+        for alias in sorted({"default-completion", "gpt-governed"} - {row.alias for row in existing}):
+            self.model_registry_repository.create_alias(
+                transaction=transaction,
+                record=_demo_alias_record(alias, now),
+            )
+
+
+def _demo_provider_record(now: str) -> ModelProviderRecord:
+    return ModelProviderRecord(
+        provider_id="local-fake-provider",
+        tenant_scope=DEFAULT_TENANT_ID,
+        provider_type="local-fake",
+        profile_name="local-fake",
+        region="us-east-1",
+        secret_ref=_LOCAL_FAKE_CREDENTIAL_REF,
+        retention_policy="zero_retention",
+        training_policy="no_train",
+        status="active",
+        created_at=now,
+    )
+
+
+def _demo_model_record(now: str) -> ModelRecord:
+    return ModelRecord(
+        model_id="local-fake-model",
+        tenant_scope=DEFAULT_TENANT_ID,
+        provider_id="local-fake-provider",
+        provider_model_id="local-fake-echo",
+        revision="2026-06-25",
+        lifecycle="stable",
+        capabilities_json={"streaming": True, "native_tools": False},
+        context_limit=8192,
+        output_limit=1024,
+        pricing_json={"input_per_1k": 0.0, "currency": "USD"},
+        allowed_classifications=("public", "internal"),
+        created_at=now,
+    )
+
+
+def _demo_alias_record(alias: str, now: str) -> ModelAliasRecord:
+    return ModelAliasRecord(
+        alias=alias,
+        tenant_scope=DEFAULT_TENANT_ID,
+        environment="dev",
+        model_id="local-fake-model",
+        version="2026-06-25",
+        status="enabled",
+        eval_run_id=None,
+        effective_at=now,
+        retired_at=None,
+    )

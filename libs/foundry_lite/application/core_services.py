@@ -5,9 +5,11 @@ from dataclasses import dataclass
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
+from foundry_lite.application.services.aip.agent_runtime import AgentRuntimeService
 from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionService
 from foundry_lite.application.services.aip.builder_runtime import BuilderRuntimeService
 from foundry_lite.application.services.aip.citation_service import CitationService
+from foundry_lite.application.services.aip.context_compiler import ContextCompilerService
 from foundry_lite.application.services.aip.eval_service import EvalService
 from foundry_lite.application.services.aip.logic_runtime import LogicRuntimeService
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
@@ -35,10 +37,12 @@ from foundry_lite.application.services.transform_service import TransformService
 __all__ = [
     "CoreServices",
     "ActionService",
+    "AgentRuntimeService",
     "ActionProposalService",
     "ApprovalExecutionService",
     "BackupRestoreService",
     "BuilderRuntimeService",
+    "ContextCompilerService",
     "DemoService",
     "ErasureService",
     "EvalService",
@@ -72,10 +76,12 @@ class CoreServices:
     """
 
     action: ActionService
+    agent_runtime: AgentRuntimeService
     action_proposal: ActionProposalService
     approval_execution: ApprovalExecutionService
     backup_restore: BackupRestoreService
     builder_runtime: BuilderRuntimeService
+    context_compiler: ContextCompilerService
     dataset: DatasetServices
     demo: DemoService
     erasure: ErasureService
@@ -107,11 +113,8 @@ class CoreServices:
 def _new_core_services(service_type: type[CoreServices], dependencies: CoreDependencies) -> CoreServices:
     backup_restore = build_service(BackupRestoreService, dependencies)
     dataset = DatasetServices.create(dependencies)
-    demo = build_service(DemoService, dependencies)
-    erasure = build_service(ErasureService, dependencies)
     iceberg_maintenance = build_service(IcebergMaintenanceService, dependencies)
     insight_review = build_service(InsightReviewService, dependencies)
-    materialization = build_service(MaterializationService, dependencies)
     media = MediaServices.create(dependencies)
     object_store = ObjectServices.create(dependencies)
     ontology = build_service(OntologyService, dependencies)
@@ -119,17 +122,19 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     record_dlq = build_service(RecordDlqService, dependencies)
     return service_type(
         action=build_service(ActionService, dependencies),
+        agent_runtime=build_service(AgentRuntimeService, dependencies),
         action_proposal=build_service(ActionProposalService, dependencies),
         approval_execution=build_service(ApprovalExecutionService, dependencies),
         backup_restore=backup_restore,
         builder_runtime=build_service(BuilderRuntimeService, dependencies),
+        context_compiler=build_service(ContextCompilerService, dependencies),
         dataset=dataset,
-        demo=demo,
-        erasure=erasure,
+        demo=build_service(DemoService, dependencies),
+        erasure=build_service(ErasureService, dependencies),
         evals=build_service(EvalService, dependencies),
         iceberg_maintenance=iceberg_maintenance,
         insight_review=insight_review,
-        materialization=materialization,
+        materialization=build_service(MaterializationService, dependencies),
         media=media,
         citation=build_service(CitationService, dependencies),
         logic_runtime=build_service(LogicRuntimeService, dependencies),
@@ -155,10 +160,12 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
 def _core_service_items(services: CoreServices) -> list[CoreService]:
     return [
         services.action,
+        services.agent_runtime,
         services.action_proposal,
         services.approval_execution,
         services.backup_restore,
         services.builder_runtime,
+        services.context_compiler,
         *services.dataset.items(),
         services.demo,
         services.erasure,
@@ -185,10 +192,12 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
 def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
         "action_service": services.action,
+        "agent_runtime_service": services.agent_runtime,
         "action_proposal_service": services.action_proposal,
         "approval_execution_service": services.approval_execution,
         "backup_restore_service": services.backup_restore,
         "builder_runtime_service": services.builder_runtime,
+        "context_compiler_service": services.context_compiler,
         "content_retrieval_service": services.media.retrieval,
         "media_visual_search_service": services.media.visual_search,
         "dataset_ingest_service": services.dataset.ingest,
@@ -200,6 +209,7 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "iceberg_maintenance_service": services.iceberg_maintenance,
         "insight_review_service": services.insight_review,
         "logic_runtime_service": services.logic_runtime,
+        "model_gateway_service": services.model_gateway,
         "materialization_service": services.materialization,
         "object_indexing_service": services.object_store.indexing,
         "object_links_service": services.object_store.links,

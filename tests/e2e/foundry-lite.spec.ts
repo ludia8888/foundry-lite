@@ -21,6 +21,14 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await expect(page.locator("#runResult")).toContainText('"runType": "ai"');
   await expect(page.locator("#runResult")).toContainText('"status": "succeeded"');
   await expect((await generatedSdkBuilderRun).headers()["x-tenant-id"]).toBe("tenant-demo");
+  const generatedSdkAgentRun = page.waitForRequest((request) => {
+    return request.method() === "POST" && request.url().includes("/api/aip/agent/run");
+  });
+  await page.locator("#aipAgentRunBtn").click();
+  await expect(page.locator("#aipAgentResult")).toContainText('"runStatus": "succeeded"');
+  await expect(page.locator("#aipAgentResult")).toContainText('"answer": "echo: Explain Order O-1001 for the operator."');
+  await expect(page.locator("#runResult")).toContainText('"modelCallCount": 1');
+  await expect((await generatedSdkAgentRun).headers()["x-tenant-id"]).toBe("tenant-demo");
   await expect(page.locator("#datasetResult")).toContainText('"dataset": "clean.orders"');
   await expect(page.locator("#datasetResult")).toContainText('"version_number": 1');
   await expect(page.locator("#datasetResult")).toContainText('"order_id": "O-1001"');

@@ -8,6 +8,7 @@ from foundry_lite.application.ports import (
     AiEvalRepository,
     AiRunRepository,
     ComputeAdapter,
+    ContextProvider,
     DatasetQualityRepository,
     DatasetRepository,
     DatasetStorageAdapter,
@@ -93,6 +94,7 @@ class CoreDependencies:
     vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     language_model_adapter: LanguageModelAdapter
     model_registry_repository: ModelRegistryRepository
+    context_provider: ContextProvider
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
     citation_source_verifier: CitationSourceVerifier
