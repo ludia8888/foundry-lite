@@ -9,7 +9,8 @@ fail-closed validation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 from foundry_lite.domain.context import RequestContext
@@ -26,6 +27,19 @@ class ContextCompilationError(Exception):
         self.detail = detail
 
 
+class ContextRetrievalError(Exception):
+    """Raised when retrieval cannot safely produce authorized context."""
+
+    def __init__(self, reason: str, detail: str) -> None:
+        super().__init__(detail)
+        self.reason = reason
+        self.detail = detail
+
+
+def _empty_state_json() -> dict[str, object]:
+    return {}
+
+
 @dataclass(frozen=True)
 class ContextRetrievalRequest:
     """Inputs used to retrieve context for one user turn."""
@@ -38,6 +52,7 @@ class ContextRetrievalRequest:
     max_context_items: int
     max_context_tokens: int
     security_partition: str
+    state_json: Mapping[str, object] = field(default_factory=_empty_state_json)
 
 
 @dataclass(frozen=True)

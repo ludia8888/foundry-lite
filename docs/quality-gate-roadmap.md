@@ -1820,12 +1820,32 @@ authorized context retrieval, deterministic context compiler, governed Model Gat
 ledger, Operations trace로 연결하는 read-only runtime path다. 모델이 tool call을 반환해도 이
 slice에서는 실행하지 않고 fail closed 한다.
 
-아직 RetrievalOrchestrator ranking/fusion, multi-iteration tool loop, citation rendering, visual
-debugger, eval workbench, persisted Agent Studio definitions는 후속 slice다.
+아직 multi-iteration tool loop, citation rendering, visual debugger, eval workbench,
+persisted Agent Studio definitions는 후속 slice다.
 
 | Gate | Command | Blocks |
 |---|---|---|
 | Agent runtime readonly ratchet | `quality:agent-runtime` | Agent Runtime 화면/API가 ContextCompiler/ModelGateway/AI ledger를 우회하거나, 비허용 security partition을 모델 prompt에 넣거나, 모델 호출 뒤 Operations trace 없이 답변을 반환하거나, read-only slice에서 tool call을 실행하는 문제 차단 |
+
+### AIP P0o — Retrieval Orchestrator Object Context Ratchet
+
+P0o의 현재 slice는 full document/vector/reranking RetrievalOrchestrator가 아니라,
+Agent Runtime의 첫 실제 컨텍스트 경로를 fake provider에서 object-authoritative re-read로
+교체하는 baseline이다. `RetrievalOrchestrator`는 request tenant/actor/security partition을
+fail closed로 확인하고, Agent Runtime state의 `objectType`/`objectId`가 있으면
+`ObjectQueryService.get_object(...)`를 통해 권한/마스킹이 적용된 committed object를 다시 읽어
+`RetrievedContextItem`으로 만든다. objectId가 없는 objectType query path도 검색 hit text를
+그대로 쓰지 않고 hit의 object id를 다시 읽은 payload만 context text로 만든다. 각 item은
+source ref/version, `sha256:` content hash, retrieval method, security partition, token estimate를
+담고, max item/token budget에 맞게 dedupe/packing된다.
+
+Beyond current P0o, AIP-specific document context packing, already-covered ontology/media
+retrieval outputs를 Agent context로 묶는 dense+lexical fusion, optional reranking, citation
+rendering, visual retrieval debugging은 later slices다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Retrieval orchestrator object-context ratchet | `quality:retrieval-orchestrator` | Agent Runtime이 fake context나 stale search-index text를 모델 prompt에 넣거나, object read 권한/마스킹을 우회하거나, 다른 tenant security partition/context budget 초과를 조용히 통과시키는 문제 차단 |
 
 ### S60 — AI Evidence Lineage Ratchet
 

@@ -1013,6 +1013,7 @@ def test_api_aip_builder_run_executes_logic_and_links_operations_detail(foundry,
 
 
 def test_api_aip_agent_run_calls_model_and_links_operations_detail(foundry, monkeypatch) -> None:
+    prepare_indexed_demo(foundry)
     monkeypatch.setattr(api_main, "foundry", foundry)
     headers = {
         "X-Tenant-ID": "tenant-demo",

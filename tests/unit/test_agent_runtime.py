@@ -9,6 +9,8 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
 from sqlalchemy import func, select
 
+from tests.conftest import prepare_indexed_demo
+
 _CTX = RequestContext(
     tenant_id="tenant-demo",
     actor_user_id="ops-user",
@@ -35,6 +37,8 @@ class _ToolCallingLanguageModel:
 
 
 def test_agent_runtime_retrieves_context_calls_model_and_links_operations(foundry: Any) -> None:
+    prepare_indexed_demo(foundry)
+
     result = foundry.aip.run_agent_payload(payload=_payload(), ctx=_CTX)
 
     detail = foundry.operations.run_detail("ai", result.ai_run_id or "", ctx=_CTX)
@@ -59,6 +63,7 @@ def test_agent_runtime_retrieves_context_calls_model_and_links_operations(foundr
 
 
 def test_agent_runtime_rejects_tool_calls_and_marks_seeded_run_failed(foundry: Any) -> None:
+    prepare_indexed_demo(foundry)
     foundry._services.model_gateway.language_model_adapter = _ToolCallingLanguageModel()
 
     result = foundry.aip.run_agent_payload(

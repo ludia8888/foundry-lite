@@ -11,9 +11,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from foundry_lite.application.ports import AdapterError
 from foundry_lite.application.ports.context_provider import (
     ContextCompilationError,
+    ContextRetrievalError,
     ContextRetrievalRequest,
     RetrievedContextItem,
 )
@@ -37,6 +37,7 @@ from foundry_lite.application.services.aip.context_compiler import (
     ContextCompilerService,
 )
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService, ModelResolution
+from foundry_lite.application.services.aip.retrieval_orchestrator import RetrievalObjectQuery, RetrievalOrchestrator
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 
@@ -107,10 +108,11 @@ class AgentRuntimeResult:
 class AgentRuntimeService(CoreService):
     """Retrieve context, compile prompt, call model gateway, and write ledger evidence."""
 
-    required_dependencies = ("engine", "ai_run_repository", "context_provider")
-    required_collaborators = ("context_compiler_service", "model_gateway_service")
+    required_dependencies = ("engine", "ai_run_repository")
+    required_collaborators = ("context_compiler_service", "model_gateway_service", "object_query_service")
     context_compiler_service: ContextCompilerService
     model_gateway_service: ModelGatewayService
+    object_query_service: RetrievalObjectQuery
 
     def run(self, ctx: RequestContext, request: AgentRuntimeRequest) -> AgentRuntimeResult:
         ai_run_id: str | None = None
@@ -137,7 +139,9 @@ class AgentRuntimeService(CoreService):
         return _success_result(request, ai_run_id, session_id, context_items, response)
 
     def _retrieve_context(self, ctx: RequestContext, request: AgentRuntimeRequest) -> tuple[RetrievedContextItem, ...]:
-        items = self.context_provider.retrieve_context(ctx=ctx, request=_retrieval_request(ctx, request))
+        items = RetrievalOrchestrator(self.object_query_service).retrieve_context(
+            ctx=ctx, request=_retrieval_request(ctx, request)
+        )
         _guard_context_budget(request, items)
         return items
 
@@ -266,6 +270,7 @@ def _retrieval_request(ctx: RequestContext, request: AgentRuntimeRequest) -> Con
         max_context_items=request.max_context_items,
         max_context_tokens=request.max_context_tokens,
         security_partition=request.security_partition,
+        state_json=request.state_json,
     )
 
 
@@ -322,9 +327,23 @@ def _error_payload(exc: Exception) -> dict[str, object]:
         return {"reason": _exception_arg(exc, 0), "detail": _exception_arg(exc, 1)}
     if isinstance(exc, ContextCompilationError):
         return {"reason": exc.reason, "detail": exc.detail}
-    if isinstance(exc, AdapterError):
-        return {"reason": exc.failure.details.get("reason", exc.failure.kind), "detail": exc.failure.operator_message}
+    if isinstance(exc, ContextRetrievalError):
+        return {"reason": exc.reason, "detail": exc.detail}
+    adapter_payload = _adapter_error_payload(exc)
+    if adapter_payload is not None:
+        return adapter_payload
     return {"reason": exc.__class__.__name__, "detail": str(exc)[:240]}
+
+
+def _adapter_error_payload(exc: Exception) -> dict[str, object] | None:
+    failure = getattr(exc, "failure", None)
+    if exc.__class__.__name__ != "AdapterError" or failure is None:
+        return None
+    details = getattr(failure, "details", {})
+    reason = exc.__class__.__name__
+    if isinstance(details, Mapping):
+        reason = str(details.get("reason", getattr(failure, "kind", reason)))
+    return {"reason": str(reason), "detail": str(getattr(failure, "operator_message", str(exc)))}
 
 
 def _exception_arg(exc: Exception, index: int) -> str:

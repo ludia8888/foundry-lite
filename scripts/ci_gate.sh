@@ -400,6 +400,8 @@ run_runtime_gate() {
 
   run_runtime_step "AIP context compiler ratchet" pnpm --silent quality:context-compiler
 
+  run_runtime_step "AIP Retrieval Orchestrator ratchet" pnpm --silent quality:retrieval-orchestrator
+
   run_runtime_step "AIP tool broker ratchet" pnpm --silent quality:tool-broker
 
   run_runtime_step "AIP citation service ratchet" pnpm --silent quality:citation-service

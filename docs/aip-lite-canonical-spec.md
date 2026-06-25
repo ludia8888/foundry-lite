@@ -193,13 +193,15 @@ Every error payload carries `request_id, ai_run_id, retryability, operator_messa
   introduced only after baseline eval) → authoritative DB re-read → security validation → version/hash
   validation → dedup/diversity → token-budget packing → `RetrievedContextItem[]`. Returns
   `RetrievedContextItem{context_id, kind∈object|document|function, text, source_ref, source_version,
-content_hash, relevance_score, retrieval_method, security_partition, token_estimate}`.
+content_hash, relevance_score, retrieval_method, security_partition, token_estimate}`. Current P0o
+  covers the first object-context baseline: Agent Runtime state objects and object keyword hits are
+  authoritatively re-read through Object Query before becoming context.
 - **Context Compiler (§8.6)**: fixed order = 1 platform safety policy, 2 published agent instruction,
   3 state schema+visible values, 4 tool definitions, 5 authoritative retrieved context, 6 citation
   mapping, 7 output schema, 8 user message. Emits `compiled_prompt_hash, context_manifest_hash,
 tool_manifest_hash, state_snapshot_hash, policy_snapshot_hash`. Retrieved docs are **untrusted data**,
-  fenced by explicit delimiter+policy so embedded "ignore previous instructions" is never promoted to
-  system instruction.
+  carried as JSON string values with policy metadata so embedded section headers or "ignore previous
+  instructions" text is never promoted to system instruction.
 - **Citation Service (§8.7)**: model is given **opaque context IDs**, never source URLs; service maps
   `ctx_id → media item version / page / content unit / hash` and verifies the context ID is in this
   run's manifest + caller may read source + version/hash still match + span relevant. Returns display
@@ -309,9 +311,10 @@ Phases: **P0** security+contracts · **P1** read-only Copilot · **P2** Action P
 Recommended PR sequence (granular): 1 `ai-contracts` (domain DTO + ports only) · 2 `ai-schema-ledger`
 (migration/repository/contract tests) · 3 `model-gateway-fake` (fake adapter + deterministic tests) ·
 4 `model-gateway-provider` (first provider-compatible adapter) · 5 `retrieval-security` (content/object
-security token contract — **done as P0a**) · 6 `context-compiler` · 7 `agent-runtime-readonly` (bounded
-loop + citations) · 8 `aip-api-sdk` · 9 `action-proposal` · 10 `approval-execution` · 11 `ai-operations`
-(run/event detail, usage, trace) · 12 `logic-runtime` · 13 `aip-evals` · 14 `visual-builder` (last).
+security token contract — **done as P0a**) · 6 `context-compiler` · 7 `agent-runtime-readonly` ·
+8 `retrieval-orchestrator-object-context` · 9 `aip-api-sdk` · 10 `action-proposal` ·
+11 `approval-execution` · 12 `ai-operations` (run/event detail, usage, trace) · 13 `logic-runtime` ·
+14 `aip-evals` · 15 `visual-builder` (last).
 
 ### P0 exit gate (§14.1.2)
 
