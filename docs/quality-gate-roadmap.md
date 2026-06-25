@@ -1779,6 +1779,22 @@ agent version + target channel의 passed eval run이 있어야 `ai_agent_release
 | AI eval evidence ratchet  | `quality:ai-evals`   | agent/model/prompt 후보가 deterministic eval evidence 없이 운영 승격 후보가 되거나, eval suite/case drift가 version bump 없이 조용히 바뀌는 문제 차단 |
 | AI release guard ratchet  | `quality:ai-release` | failed/mismatched/variance-bearing eval run으로 stable/canary release promotion 장부가 쓰이는 문제 차단 |
 
+### AIP P0l — Visual Builder Ratchet
+
+P0l의 현재 slice는 full drag-and-drop Agent Studio가 아니라, 이미 구현된 AIP backend
+계약을 화면과 SDK에서 안전하게 조립하기 위한 read-only preflight다.
+`VisualBuilderService`는 agent version, model alias version, prompt version, context
+source, tool manifest, Logic DAG, eval axes를 하나의 draft로 받아 `sha256:` draft/graph
+hash와 ready/blocked 결과를 반환한다. tenant security partition mismatch, unpublished or
+dangerous tool, direct `ApplyAction`, missing Logic dependency/cycle, missing eval axis, and
+stable release without Security+Action eval evidence를 fail closed로 표시한다. `/api/aip/builder/validate`,
+generated `client.aip.builder.validate(...)`, and Web Operations AIP Builder panel은 이 preflight를
+SDK-only path로 사용한다.
+
+| 게이트                  | 명령                     | Root cause                                                                                                                                      |
+| ----------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Visual builder ratchet  | `quality:visual-builder` | visual authoring 화면이 ToolBroker/ActionProposal/Eval/Release guard 경계를 우회하거나, 위험한 Logic/tool/action draft를 release-ready처럼 보여주는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와
@@ -1810,10 +1826,10 @@ tenant/user/role context header, request-id factory, and response telemetry call
 `isRetryableFoundryLiteError`, `retryWithBackoff`, `collectCursorPages`,
 `createInFlightActionLock`, `actionLockKey`, `classifyFoundryLiteError`와 함께
 system, datasets, ontology catalog/validation, generic objects, objectSets, materializations,
-operations, and Insight Review 하위 named method를 노출한다.
+operations, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 42개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 43개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 12개 SDK helper의 retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

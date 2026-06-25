@@ -149,6 +149,58 @@ class OntologyValidateRequest(BaseModel):
     yaml_text: str = Field(alias="yaml")
 
 
+class AipBuilderContextSourceRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_id: str = Field(alias="sourceId")
+    kind: str
+    security_partition: str = Field(alias="securityPartition")
+    selected_properties: list[str] = Field(default_factory=list, alias="selectedProperties")
+    token_budget: int = Field(default=800, alias="tokenBudget")
+
+
+class AipBuilderToolSpecRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    tool_id: str = Field(alias="toolId")
+    version: str
+    input_schema: JsonObject = Field(default_factory=dict, alias="inputSchema")
+    output_schema: JsonObject = Field(default_factory=dict, alias="outputSchema")
+    effect: str = "READ"
+    required_permission: str = Field(default="objects:read", alias="requiredPermission")
+    confirmation_policy: str = Field(default="NONE", alias="confirmationPolicy")
+    object_type_allowlist: list[str] = Field(default_factory=list, alias="objectTypeAllowlist")
+    property_allowlist: list[str] = Field(default_factory=list, alias="propertyAllowlist")
+    timeout_seconds: int = Field(default=30, alias="timeoutSeconds")
+    max_result_items: int = Field(default=50, alias="maxResultItems")
+    result_classification: str = Field(default="public", alias="resultClassification")
+    status: str = "published"
+
+
+class AipBuilderLogicBlockRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    block_id: str = Field(alias="blockId")
+    kind: str
+    inputs: JsonObject = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
+
+
+class AipBuilderValidateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_version_id: str = Field(alias="agentVersionId")
+    release_channel: str = Field(alias="releaseChannel")
+    model_alias_version: str = Field(alias="modelAliasVersion")
+    prompt_version_id: str = Field(alias="promptVersionId")
+    context_sources: list[AipBuilderContextSourceRequest] = Field(alias="contextSources")
+    tool_manifest: list[AipBuilderToolSpecRequest] = Field(alias="toolManifest")
+    logic_blocks: list[AipBuilderLogicBlockRequest] = Field(alias="logicBlocks")
+    eval_axes: list[str] = Field(alias="evalAxes")
+    agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
+    max_logic_blocks: int = Field(default=25, alias="maxLogicBlocks")
+
+
 class DeadLetterBulkRetryRequest(BaseModel):
     ids: list[str]
 
@@ -376,6 +428,15 @@ def validate_ontology(request: Request, payload: OntologyValidateRequest) -> Ont
         return foundry.ontology.validate(payload.yaml_text, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/aip/builder/validate")
+def validate_aip_builder(request: Request, payload: AipBuilderValidateRequest) -> JsonObject:
+    result = foundry.aip.validate_builder_payload(
+        payload=payload.model_dump(by_alias=True),
+        ctx=_ctx(request),
+    )
+    return result.to_payload()
 
 
 @app.get("/api/objects/{object_type}/{object_id}")

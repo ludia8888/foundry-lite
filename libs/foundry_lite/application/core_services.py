@@ -11,6 +11,7 @@ from foundry_lite.application.services.aip.eval_service import EvalService
 from foundry_lite.application.services.aip.logic_runtime import LogicRuntimeService
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerService
+from foundry_lite.application.services.aip.visual_builder import VisualBuilderService
 from foundry_lite.application.services.base import CoreService, build_service, collaborator_kwargs
 from foundry_lite.application.services.dataset_service import DatasetServices
 from foundry_lite.application.services.demo_service import DemoService
@@ -48,6 +49,7 @@ __all__ = [
     "LogicRuntimeService",
     "ModelGatewayService",
     "ToolBrokerService",
+    "VisualBuilderService",
     "ObjectServices",
     "OntologySearchService",
     "OntologyService",
@@ -83,6 +85,7 @@ class CoreServices:
     logic_runtime: LogicRuntimeService
     model_gateway: ModelGatewayService
     tool_broker: ToolBrokerService
+    visual_builder: VisualBuilderService
     object_store: ObjectServices
     ontology: OntologyService
     ontology_search: OntologySearchService
@@ -112,7 +115,6 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     ontology_search = build_service(OntologySearchService, dependencies)
     record_dlq = build_service(RecordDlqService, dependencies)
     runtime = build_service(RuntimeService, dependencies)
-    transform = build_service(TransformService, dependencies)
     return service_type(
         action=build_service(ActionService, dependencies),
         action_proposal=build_service(ActionProposalService, dependencies),
@@ -130,12 +132,13 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         logic_runtime=build_service(LogicRuntimeService, dependencies),
         model_gateway=build_service(ModelGatewayService, dependencies),
         tool_broker=build_service(ToolBrokerService, dependencies),
+        visual_builder=build_service(VisualBuilderService, dependencies),
         object_store=object_store,
         ontology=ontology,
         ontology_search=ontology_search,
         record_dlq=record_dlq,
         runtime=runtime,
-        transform=transform,
+        transform=build_service(TransformService, dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies),
     )
 
@@ -164,6 +167,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.logic_runtime,
         services.model_gateway,
         services.tool_broker,
+        services.visual_builder,
         *services.object_store.items(),
         services.ontology,
         services.ontology_search,

@@ -61,6 +61,7 @@ SDK helper, 파일을 봐야 하는지 남긴다.
 | Operations | run list/detail, lineage get, transform retry, index replay, outbox DLQ retry, Record DLQ controls |
 | Platform Ops | observability detect, backup/restore, reconciliation, workflows, Iceberg maintenance `planReadOnly`/`plan` |
 | Insights | `client.insights.reviews.list/create/get/assign/decide(...)` |
+| AIP | `client.aip.builder.validate(...)` |
 | Safety Helpers | `createFoundryLiteClient(...)`, `createRequestId(...)`, `requestContextHeaders(...)`, `normalizeFoundryLiteError(...)`, `isRetryableFoundryLiteError(...)`, `retryWithBackoff(...)`, `collectCursorPages(...)`, `createInFlightActionLock()`, `actionLockKey(...)`, `idempotencyKey(...)`, `expectedObjectVersion(...)`, `classifyFoundryLiteError(...)` |
 
 The public `client.request(...)` escape hatch still exists inside the SDK package for advanced callers and future
@@ -91,7 +92,7 @@ operator-evidence note, and helper request-contract proof test.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 42 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 43 frontend route surfaces
 -> browser SDK helper-contract proof for 12 frontend foundation helpers
 -> documentation count claims checked against the matrix and generated SDK helper list
 -> Web named-SDK-only usage

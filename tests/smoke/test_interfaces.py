@@ -849,6 +849,63 @@ def test_api_ai_operations_run_detail_returns_safe_ledger_payload(monkeypatch) -
     assert body["ai"]["trace"]["traceId"] == "trace-ops"
 
 
+def test_api_aip_builder_validate_returns_read_only_release_preflight(foundry, monkeypatch) -> None:
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    response = TestClient(app).post(
+        "/api/aip/builder/validate",
+        headers={"X-Tenant-ID": "tenant-demo", "X-User-ID": "ops-user", "X-Roles": "admin,ops_manager"},
+        json={
+            "agentVersionId": "agent.order-ops.v1",
+            "releaseChannel": "dev",
+            "modelAliasVersion": "gpt-governed@v1",
+            "promptVersionId": "prompt-order-copilot@v1",
+            "contextSources": [
+                {
+                    "sourceId": "ctx-order-ops",
+                    "kind": "ontology.object_set",
+                    "securityPartition": "tenant-demo:internal",
+                    "selectedProperties": ["orderId", "status"],
+                }
+            ],
+            "toolManifest": [
+                {
+                    "toolId": "ontology.get_object",
+                    "version": "2026-06-25",
+                    "effect": "READ",
+                    "confirmationPolicy": "NONE",
+                    "inputSchema": {"type": "object", "required": ["object_type", "object_id"]},
+                    "outputSchema": {"type": "object"},
+                }
+            ],
+            "logicBlocks": [
+                {"blockId": "input", "kind": "Input", "inputs": {"objectId": "O-1001"}},
+                {
+                    "blockId": "retrieve",
+                    "kind": "CallFunction",
+                    "inputs": {"toolId": "ontology.get_object", "version": "2026-06-25"},
+                    "dependsOn": ["input"],
+                },
+                {
+                    "blockId": "proposal",
+                    "kind": "CreateActionProposal",
+                    "inputs": {"actionType": "ApproveOrder"},
+                    "dependsOn": ["retrieve"],
+                },
+                {"blockId": "output", "kind": "Output", "inputs": {"fromBlock": "proposal"}},
+            ],
+            "evalAxes": ["retrieval", "answer", "tool", "action", "security"],
+            "agentAllowedActions": ["ApproveOrder"],
+        },
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert response.headers["X-Request-ID"]
+    assert body["validationStatus"] == "ready"
+    assert body["draftHash"].startswith("sha256:")
+    assert body["releaseReady"] is True
+
+
 def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
     monkeypatch.setattr(api_main, "foundry", foundry)

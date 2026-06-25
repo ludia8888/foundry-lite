@@ -4,6 +4,15 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await page.goto("/");
 
   await expect(page.locator("#statusText")).toHaveText("ok");
+  await expect(page.locator("#metricAipBuilderStatus")).toHaveText("ready");
+  await expect(page.locator("#aipBuilderResult")).toContainText('"releaseReady": true');
+  await expect(page.locator("#aipBuilderGraph .builder-node")).toHaveCount(5);
+  const generatedSdkBuilder = page.waitForRequest((request) => {
+    return request.method() === "POST" && request.url().includes("/api/aip/builder/validate");
+  });
+  await page.locator("#aipBuilderValidateBtn").click();
+  await expect(page.locator("#aipBuilderResult")).toContainText('"validationStatus": "ready"');
+  await expect((await generatedSdkBuilder).headers()["x-tenant-id"]).toBe("tenant-demo");
   await expect(page.locator("#datasetResult")).toContainText('"dataset": "clean.orders"');
   await expect(page.locator("#datasetResult")).toContainText('"version_number": 1');
   await expect(page.locator("#datasetResult")).toContainText('"order_id": "O-1001"');

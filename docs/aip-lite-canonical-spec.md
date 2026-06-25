@@ -235,6 +235,10 @@ originating_ai_run_id, proposal_fingerprint, policy_version, expires_at}`. Finge
 - **Evals / Release (§8.12, §15)**: axes Retrieval/Answer/Citation/Tool/Action/Security/Operations.
   Release channel `draft → dev → canary → stable → sunset`. Write-producing agent promoted to stable
   only after deterministic security/action gate + repeated-run variance.
+- **Visual Builder (§14.6)**: Agent Studio / Context source editor / Tool manifest editor / Logic DAG
+  canvas / Eval dashboard / AI run debugger is implemented after backend contracts are stable. The first
+  Foundry-lite slice is a read-only Builder preflight that validates pinned agent/model/prompt/context/
+  tool/Logic/eval drafts before runtime execution or release promotion.
 
 ---
 
@@ -285,7 +289,7 @@ AiRunRepository, ContextProvider, ToolExecutor, UsageMeter`.
 Add granular gates: `quality:ai-contracts, quality:model-gateway, quality:ai-ledger,
 quality:retrieval-security, quality:context-compiler, quality:tool-broker, quality:action-proposal,
 quality:approval-execution, quality:ai-operations, quality:logic-runtime, quality:ai-evals,
-quality:ai-release`. Release gate splits static / unit /
+quality:ai-release, quality:visual-builder`. Release gate splits static / unit /
 integration / **live provider smoke** (live smoke = separate lane needing credentials + cost).
 
 ## Operational failure semantics (§16.3)

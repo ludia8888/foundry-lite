@@ -1230,3 +1230,15 @@ Media/Content Plane (standalone family, not in `activeStack`).
   case-definition version drift rejection, matching-channel enforcement, and CI runtime-lane wiring.
   Visual eval workbench, generated eval datasets, LLM-as-judge scoring, baseline diff dashboards,
   Apollo rollout/rollback integration, and live-provider eval smoke remain later AIP slices.
+
+- **P0l — Visual Builder preflight (shipped as the first Builder slice):**
+  `VisualBuilderService` gives the Web Operations AIP Builder panel and generated SDK a read-only way to
+  validate an authored agent/model/prompt/context/tool/Logic/eval draft before runtime execution or
+  release promotion. The service returns `sha256:` draft and graph hashes, ready/blocked status, blocking
+  issues, and safe-boundary labels without writing DB state. It fails closed on tenant partition mismatch,
+  missing or unpublished governed tools, dangerous generic executors, direct `ApplyAction`, missing Logic
+  dependencies/cycles, missing eval axes, and stable release drafts without Security+Action eval axes.
+  `POST /api/aip/builder/validate`, generated `client.aip.builder.validate(...)`, and
+  `quality:visual-builder` prove the service/API/SDK/Web contract and CI runtime-lane wiring. Persisted
+  Builder definitions, drag-and-drop canvas editing, full Agent Studio, visual eval dashboard, visual AI
+  run debugger, and visual release promotion UI remain later AIP slices.

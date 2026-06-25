@@ -88,6 +88,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "aip.builder.validate",
+      "route": "POST /api/aip/builder/validate",
+      "productArea": "aip-builder",
+      "sdkSurface": "aip.builder.validate",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AIP Builder drafts are validated through a read-only preflight that pins context partitions, governed tool effects, Logic DAG shape, eval axes, and request_id-bearing typed failures before release.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "insights.reviews.list",
       "route": "GET /api/insights/reviews",
       "productArea": "insight-action-workspace",

@@ -169,6 +169,81 @@ await expectSdkCall("ontology.validate", () => client.ontology.validate({ yaml: 
   body: { yaml: "objectTypes: []" },
 });
 await expectSdkCall(
+  "aip.builder.validate",
+  () =>
+    client.aip.builder.validate({
+      agentVersionId: "agent-demo:v1",
+      releaseChannel: "dev",
+      modelAliasVersion: "support-assistant@1",
+      promptVersionId: "prompt-v1",
+      contextSources: [
+        {
+          sourceId: "ctx-orders",
+          kind: "object_set",
+          securityPartition: "tenant-a:orders",
+          selectedProperties: ["status", "riskScore"],
+          tokenBudget: 1200,
+        },
+      ],
+      toolManifest: [
+        {
+          toolId: "read_order",
+          version: "1",
+          effect: "READ",
+          confirmationPolicy: "NONE",
+          status: "published",
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+        },
+      ],
+      logicBlocks: [
+        { blockId: "load-order", kind: "CallFunction", inputs: { toolId: "read_order" } },
+        { blockId: "answer", kind: "Output", inputs: { fromBlock: "load-order" }, dependsOn: ["load-order"] },
+      ],
+      evalAxes: ["Quality", "Security"],
+      agentAllowedActions: ["ApproveOrder"],
+      maxLogicBlocks: 8,
+    }),
+  {
+    path: "/api/aip/builder/validate",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      agentVersionId: "agent-demo:v1",
+      releaseChannel: "dev",
+      modelAliasVersion: "support-assistant@1",
+      promptVersionId: "prompt-v1",
+      contextSources: [
+        {
+          sourceId: "ctx-orders",
+          kind: "object_set",
+          securityPartition: "tenant-a:orders",
+          selectedProperties: ["status", "riskScore"],
+          tokenBudget: 1200,
+        },
+      ],
+      toolManifest: [
+        {
+          toolId: "read_order",
+          version: "1",
+          effect: "READ",
+          confirmationPolicy: "NONE",
+          status: "published",
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+        },
+      ],
+      logicBlocks: [
+        { blockId: "load-order", kind: "CallFunction", inputs: { toolId: "read_order" } },
+        { blockId: "answer", kind: "Output", inputs: { fromBlock: "load-order" }, dependsOn: ["load-order"] },
+      ],
+      evalAxes: ["Quality", "Security"],
+      agentAllowedActions: ["ApproveOrder"],
+      maxLogicBlocks: 8,
+    },
+  },
+);
+await expectSdkCall(
   "insights.reviews.list",
   () => client.insights.reviews.list({ status: "pending", assigneeUserId: "ops/1", limit: 15 }),
   {

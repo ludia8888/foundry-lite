@@ -994,15 +994,29 @@ def test_ai_evals_and_release_gates_run_after_logic_runtime_before_ai_evidence()
     logic_runtime_step = "pnpm --silent quality:logic-runtime"
     ai_evals_step = "pnpm --silent quality:ai-evals"
     ai_release_step = "pnpm --silent quality:ai-release"
-    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    visual_builder_step = "pnpm --silent quality:visual-builder"
     assert ai_evals_step in script
     assert ai_release_step in script
     assert script.index(logic_runtime_step) < script.index(ai_evals_step) < script.index(ai_release_step)
-    assert script.index(ai_release_step) < script.index(ai_evidence_step)
+    assert script.index(ai_release_step) < script.index(visual_builder_step)
     assert '"quality:ai-evals"' in package_json
     assert '"quality:ai-release"' in package_json
     assert "tests/contracts/test_ai_eval_repository_contract.py" in package_json
     assert "tests/unit/test_ai_eval_service.py" in package_json
+
+
+def test_visual_builder_gate_runs_after_ai_release_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    ai_release_step = "pnpm --silent quality:ai-release"
+    visual_builder_step = "pnpm --silent quality:visual-builder"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert visual_builder_step in script
+    assert script.index(ai_release_step) < script.index(visual_builder_step) < script.index(ai_evidence_step)
+    assert '"quality:visual-builder"' in package_json
+    assert "tests/unit/test_visual_builder.py" in package_json
+    assert "api_aip_builder" in package_json
 
 
 def test_insight_review_gate_runs_after_ai_evidence_gate() -> None:
