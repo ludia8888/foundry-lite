@@ -5,6 +5,7 @@ from pathlib import Path
 
 from foundry_lite.application.ports import (
     ActionRepository,
+    AiRunRepository,
     ComputeAdapter,
     DatasetQualityRepository,
     DatasetRepository,
@@ -21,6 +22,7 @@ from foundry_lite.application.ports import (
     TransactionManager,
     TransformRepository,
 )
+from foundry_lite.application.ports.citation_source import CitationSourceVerifier
 from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
@@ -56,6 +58,7 @@ class CoreDependencies:
     engine: TransactionManager
     policy: PolicyService
     action_repository: ActionRepository
+    ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
@@ -90,6 +93,7 @@ class CoreDependencies:
     model_registry_repository: ModelRegistryRepository
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
+    citation_source_verifier: CitationSourceVerifier
     stream_adapter: StreamAdapter
     tool_executor: ToolExecutor
     workflow_adapter: WorkflowAdapter

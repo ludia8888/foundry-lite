@@ -1657,8 +1657,7 @@ citation mapping, output schema, user message를 묶고 `compiled_prompt_hash`,
 검색 문맥은 raw delimiter fence가 아니라 JSON string data로 인코딩되어 delimiter-like 문자열이
 prompt section boundary로 승격되지 못하며, duplicate context id, non-allowlisted partition,
 context hash mismatch는 provider call 전에 fail closed된다.
-RetrievalOrchestrator, ToolBroker execution, CitationService verification, AgentRuntime loop, public
-API/SDK surfaces는 후속 AIP slice다.
+RetrievalOrchestrator, AgentRuntime loop, public API/SDK surfaces는 후속 AIP slice다.
 
 | 게이트                    | 명령                       | Root cause                                                                                                                                                                                                    |
 | ------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1674,12 +1673,28 @@ timeout/result budgets, and confirmation/review requirement를 통과한 read-on
 넘긴다. 출력은 모델로 돌아가기 전에 masking/size limit을 거치고, argument/result는 `sha256:`
 hash와 redacted preview, `AiToolCallRecord`로 남는다. 기본 로컬 executor는 fake라서 network,
 SQL, shell, provider SDK를 열지 않는다.
-AgentRuntime loop, real ontology/content/state/action adapters, CitationService verification,
-approval bridge, public API/SDK surfaces는 후속 AIP slice다.
+AgentRuntime loop, real ontology/content/state/action adapters, approval bridge, public API/SDK
+surfaces는 후속 AIP slice다.
 
 | 게이트              | 명령                  | Root cause                                                                                                                                                                                                                          |
 | ------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Tool broker ratchet | `quality:tool-broker` | LLM이 generic SQL/shell/HTTP executor를 직접 호출하거나, agent manifest에 없는 도구를 실행하거나, 권한/마스킹/egress/예산/confirmation 검사를 건너뛰거나, raw tool result를 모델/장부에 그대로 돌려주는 문제 차단 |
+
+### AIP P0f — Citation Service Ratchet
+
+P0f의 현재 slice는 full Agent Runtime이나 visual trace UI가 아니라, 모델 응답의 citation을
+제품 서버가 검증해서 렌더링/이동 참조로 바꾸는 관문이다. `CitationService`는 모델이 제안한
+`context_id`와 claim span을 tenant-scoped AI run manifest에서 찾고, 선택된 context item인지
+확인한 뒤, source type별 read permission을 검사한다. 그 다음 `CitationSourceVerifier`가 현재
+source version/hash를 다시 확인하며, manifest와 맞을 때만 `AiCitationRecord`와 HMAC-signed
+`flite-citation-nav.v1` navigation ref를 만든다. forged context id, unselected context, stale
+source, invalid span/order, permission deny는 citation row 기록 전 fail closed된다.
+AgentRuntime loop, real object/document/media source resolvers, public API/SDK surfaces는 후속
+AIP slice다.
+
+| 게이트                   | 명령                       | Root cause                                                                                                                                                                                                     |
+| ------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Citation service ratchet | `quality:citation-service` | LLM이 존재하지 않는 context id나 직접 만든 URL을 citation처럼 내보내거나, omitted context/stale source/권한 없는 source가 answer citation으로 렌더링되거나, citation ledger row가 검증 없이 생기는 문제 차단 |
 
 ### S60 — AI Evidence Lineage Ratchet
 

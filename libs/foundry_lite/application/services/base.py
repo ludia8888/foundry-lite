@@ -7,6 +7,7 @@ from typing import ClassVar
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.ports import (
     ActionRepository,
+    AiRunRepository,
     ComputeAdapter,
     ConnectorAdapter,
     DatasetQualityRepository,
@@ -25,6 +26,7 @@ from foundry_lite.application.ports import (
     TransformRepository,
     WorkflowAdapter,
 )
+from foundry_lite.application.ports.citation_source import CitationSourceVerifier
 from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
 from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
@@ -41,6 +43,7 @@ from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
+from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.tool_executor import ToolExecutor
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
@@ -120,10 +123,13 @@ class CoreService:
     vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     language_model_adapter: LanguageModelAdapter
     model_registry_repository: ModelRegistryRepository
+    citation_source_verifier: CitationSourceVerifier
+    secret_provider: SecretProvider
     tool_executor: ToolExecutor
     engine: TransactionManager
     policy: PolicyService
     action_repository: ActionRepository
+    ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository

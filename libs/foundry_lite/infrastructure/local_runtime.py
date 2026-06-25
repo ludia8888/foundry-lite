@@ -62,6 +62,7 @@ from foundry_lite.infrastructure.adapters import (
     VideoSceneVisionProcessorAdapter,
 )
 from foundry_lite.infrastructure.adapters.asr_processor import _faster_whisper_asr_engine
+from foundry_lite.infrastructure.adapters.fake_citation_source_verifier import FakeCitationSourceVerifier
 from foundry_lite.infrastructure.adapters.fake_tool_executor import FakeToolExecutor
 from foundry_lite.infrastructure.adapters.local_embedding import (
     FASTEMBED_MODEL_VERSION,
@@ -81,6 +82,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
 )
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
+    SqlAlchemyAiRunRepository,
     SqlAlchemyDatasetQualityRepository,
     SqlAlchemyDatasetRepository,
     SqlAlchemyDatasetTransactionRepository,
@@ -171,6 +173,7 @@ def create_local_core_dependencies(
         engine=engine,
         policy=PolicyService(classification_provider=_classification_provider(engine, ontology_repository)),
         action_repository=SqlAlchemyActionRepository(engine),
+        ai_run_repository=SqlAlchemyAiRunRepository(engine),
         ontology_repository=ontology_repository,
         transform_repository=SqlAlchemyTransformRepository(engine),
         materialization_repository=SqlAlchemyMaterializationRepository(engine),
@@ -213,6 +216,7 @@ def create_local_core_dependencies(
         model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
         search_adapter=search_adapter,
         secret_provider=secret_provider_from_env(),
+        citation_source_verifier=FakeCitationSourceVerifier(),
         stream_adapter=stream_adapter,
         tool_executor=FakeToolExecutor(),
         workflow_adapter=workflow_adapter,

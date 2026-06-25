@@ -1091,9 +1091,8 @@ Media/Content Plane (standalone family, not in `activeStack`).
   boundaries; duplicate context ids fail closed, non-allowlisted security partitions fail closed, and a
   context text/hash mismatch fails closed before any model call. `quality:context-compiler` proves the
   port contract, deterministic section ordering, delimiter-escape resistance, opaque citation mapping,
-  fail-closed hash/partition checks, and runtime-lane wiring. Retrieval orchestration, ToolBroker
-  execution, CitationService verification, AgentRuntime looping, public API/SDK surfaces, and the visual
-  trace UI remain later AIP slices.
+  fail-closed hash/partition checks, and runtime-lane wiring. Retrieval orchestration, AgentRuntime
+  looping, public API/SDK surfaces, and the visual trace UI remain later AIP slices.
 
 - **P0e — read-only Tool Broker + executor port (shipped as the first tool-execution slice):**
   the LLM still does **not** execute tools directly. `ToolBrokerService` treats a model-requested
@@ -1113,6 +1112,23 @@ Media/Content Plane (standalone family, not in `activeStack`).
   and unit tests proving invoking-user execution, generic executor deny, no pre-check executor call,
   non-read confirmation fail-closed, egress incompatibility, output masking, result limits, ledger
   hashes, local runtime composition, and CI runtime-lane wiring through `quality:tool-broker`.
-  AgentRuntime looping, actual ontology/content/state/action tool adapters, approval bridge,
-  CitationService verification, public API/SDK surfaces, and the visual trace UI remain later AIP
-  slices.
+  AgentRuntime looping, actual ontology/content/state/action tool adapters, approval bridge, public
+  API/SDK surfaces, and the visual trace UI remain later AIP slices.
+
+- **P0f — Citation Service + source verifier port (shipped as the first citation integrity slice):**
+  the model still does **not** emit trusted source URLs. `CitationService` accepts model-proposed
+  `context_id` + claim-span pairs, looks up the selected context item in the tenant-scoped
+  `AiRunRepository` manifest, requires caller read permission for the source type, asks
+  `CitationSourceVerifier` to re-read the current source version/hash, and only then writes an
+  `AiCitationRecord` plus returns a `flite-citation-nav.v1` HMAC-signed navigation reference. Forged
+  context ids, omitted/unselected context, stale version/hash, invalid spans, duplicate orders, and
+  missing source permission all fail closed before a citation row is written. This mirrors Palantir's
+  documented AIP Chatbot Studio citation pattern: document/Ontology citations are rendered as clickable
+  source references, object citations can update Workshop variables, and the default behavior opens the
+  corresponding object or document (palantir.com/docs/foundry/chatbot-studio/citations). OUR
+  hardening is that model output supplies only an opaque context id; source display and navigation are
+  server-resolved and signed from the run ledger. `FakeCitationSourceVerifier` is the local default, and
+  `quality:citation-service` proves the port contract, local runtime composition, selected-context
+  lookup, source permission, stale-source rejection, signed-ref generation, raw-secret non-leakage,
+  ledger persistence, and CI runtime-lane wiring. AgentRuntime looping, real object/document/media
+  source resolvers, public API/SDK surfaces, and the visual trace UI remain later AIP slices.

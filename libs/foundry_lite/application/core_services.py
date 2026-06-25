@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.action_service import ActionService
+from foundry_lite.application.services.aip.citation_service import CitationService
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerService
 from foundry_lite.application.services.base import CoreService, build_service, collaborator_kwargs
@@ -36,6 +37,7 @@ __all__ = [
     "IcebergMaintenanceService",
     "MaterializationService",
     "MediaServices",
+    "CitationService",
     "ModelGatewayService",
     "ToolBrokerService",
     "ObjectServices",
@@ -66,6 +68,7 @@ class CoreServices:
     insight_review: InsightReviewService
     materialization: MaterializationService
     media: MediaServices
+    citation: CitationService
     model_gateway: ModelGatewayService
     tool_broker: ToolBrokerService
     object_store: ObjectServices
@@ -112,6 +115,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         insight_review=insight_review,
         materialization=materialization,
         media=media,
+        citation=build_service(CitationService, dependencies),
         model_gateway=model_gateway,
         tool_broker=tool_broker,
         object_store=object_store,
@@ -135,6 +139,7 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
         services.insight_review,
         services.materialization,
         *services.media.items(),
+        services.citation,
         services.model_gateway,
         services.tool_broker,
         *services.object_store.items(),
