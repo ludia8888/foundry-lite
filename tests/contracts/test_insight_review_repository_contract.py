@@ -153,33 +153,41 @@ def test_insight_review_execution_status_links_action_once() -> None:
             decision_idempotency_key="decision-1",
             updated_at="2026-06-19T00:00:01Z",
         )
+        success_before_start = harness.repository.mark_execution_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            action_run_id="action_run_early",
+            updated_at="2026-06-19T00:00:02Z",
+        )
         started = harness.repository.mark_execution_started(
             transaction=transaction,
             tenant_id="tenant-demo",
             review_id="review_1",
-            updated_at="2026-06-19T00:00:02Z",
+            updated_at="2026-06-19T00:00:03Z",
         )
         duplicate_start = harness.repository.mark_execution_started(
             transaction=transaction,
             tenant_id="tenant-demo",
             review_id="review_1",
-            updated_at="2026-06-19T00:00:03Z",
+            updated_at="2026-06-19T00:00:04Z",
         )
         succeeded = harness.repository.mark_execution_succeeded(
             transaction=transaction,
             tenant_id="tenant-demo",
             review_id="review_1",
             action_run_id="action_run_1",
-            updated_at="2026-06-19T00:00:04Z",
+            updated_at="2026-06-19T00:00:05Z",
         )
         late_failure = harness.repository.mark_execution_failed(
             transaction=transaction,
             tenant_id="tenant-demo",
             review_id="review_1",
             error={"message": "late"},
-            updated_at="2026-06-19T00:00:05Z",
+            updated_at="2026-06-19T00:00:06Z",
         )
 
+    assert success_before_start is None
     assert started is not None
     assert started["execution_status"] == "executing"
     assert duplicate_start is None

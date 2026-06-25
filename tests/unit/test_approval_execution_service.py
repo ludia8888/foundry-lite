@@ -9,9 +9,10 @@ import pytest
 from foundry_lite.application.ports.ai_run_repository import AiContextItemRecord, AiExecutionRunRecord, AiSessionRecord
 from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionError
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import PermissionDenied
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyAiRunRepository
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from tests.conftest import prepare_indexed_demo
 
@@ -21,6 +22,30 @@ _CTX = RequestContext(
     roles=("admin", "ops_manager", "data_engineer"),
     request_id="req-approval-execution",
 )
+_VIEWER_CTX = RequestContext(
+    tenant_id="tenant-demo",
+    actor_user_id="viewer-user",
+    roles=("viewer",),
+    request_id="req-approval-execution-viewer",
+)
+
+
+def test_approval_execution_validates_request_shape(foundry: Any) -> None:
+    with pytest.raises(ApprovalExecutionError) as missing_review:
+        foundry.aip.execute_approved_action(
+            review_id="",
+            expected_proposal_fingerprint="sha256:" + "1" * 64,
+            ctx=_CTX,
+        )
+    with pytest.raises(ApprovalExecutionError) as missing_prefix:
+        foundry.aip.execute_approved_action(
+            review_id="review-1",
+            expected_proposal_fingerprint="1" * 64,
+            ctx=_CTX,
+        )
+
+    assert missing_review.value.reason == "missing_field"
+    assert missing_prefix.value.reason == "missing_field"
 
 
 def test_approval_execution_runs_approved_proposal_once_and_links_review(foundry: Any) -> None:
@@ -77,6 +102,22 @@ def test_approval_execution_requires_approved_review_and_matching_fingerprint(fo
     assert _table_count(foundry.engine, db.action_runs) == 0
 
 
+def test_approval_execution_requires_reviewer_permission(foundry: Any) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _approved_proposal(foundry, ctx)
+
+    with pytest.raises(ApprovalExecutionError) as excinfo:
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            ctx=_VIEWER_CTX,
+        )
+
+    assert excinfo.value.reason == "policy_denied"
+    assert _review_row(foundry.engine, proposal.review_id)["execution_status"] == "pending_review"
+    assert _table_count(foundry.engine, db.action_runs) == 0
+
+
 def test_approval_rechecks_object_version_before_action_run(foundry: Any) -> None:
     ctx = prepare_indexed_demo(foundry)
     proposal = _approved_proposal(foundry, ctx)
@@ -119,6 +160,123 @@ def test_approval_execution_rejects_expired_review_before_action(foundry: Any) -
 
     assert excinfo.value.reason == "review_expired"
     assert _review_row(foundry.engine, proposal.review_id)["execution_status"] == "pending_review"
+    assert _table_count(foundry.engine, db.action_runs) == 0
+
+
+def test_approval_execution_reloads_originating_ai_run_before_action(foundry: Any) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _approved_proposal(foundry, ctx)
+    _update_review(foundry.engine, proposal.review_id, originating_ai_run_id="missing-ai-run")
+
+    with pytest.raises(ApprovalExecutionError) as excinfo:
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            ctx=_CTX,
+        )
+
+    assert excinfo.value.reason == "run_not_found"
+    assert _review_row(foundry.engine, proposal.review_id)["execution_status"] == "pending_review"
+    assert _table_count(foundry.engine, db.action_runs) == 0
+
+
+@pytest.mark.parametrize(
+    ("proposal_patch", "expected_reason"),
+    [
+        ({"actionType": "MissingAction"}, "action_not_found"),
+        ({"targetObjectType": "Customer"}, "action_target_mismatch"),
+        ({"targetObjectId": "missing-order"}, "target_not_found"),
+        ({"evidenceRefs": []}, "missing_evidence"),
+        ({"evidenceRefs": ["not-an-object"]}, "invalid_proposal"),
+        ({"expectedObjectVersion": "1"}, "invalid_proposal"),
+        ({"parameters": "not-a-mapping"}, "invalid_proposal"),
+        ({"expiresAt": "not-a-date"}, "invalid_expiration"),
+    ],
+)
+def test_approval_execution_rejects_mutated_proposal_payloads(
+    foundry: Any,
+    proposal_patch: Mapping[str, object],
+    expected_reason: str,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _approved_proposal(foundry, ctx)
+    _patch_action_proposal(foundry.engine, proposal.review_id, proposal_patch)
+
+    with pytest.raises(ApprovalExecutionError) as excinfo:
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            ctx=_CTX,
+        )
+
+    assert excinfo.value.reason == expected_reason
+    assert _review_row(foundry.engine, proposal.review_id)["execution_status"] == "pending_review"
+    assert _table_count(foundry.engine, db.action_runs) == 0
+
+
+def test_approval_execution_rejects_policy_version_drift(foundry: Any) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _approved_proposal(foundry, ctx)
+    _update_review(foundry.engine, proposal.review_id, approval_policy_version="policy-v2")
+
+    with pytest.raises(ApprovalExecutionError) as excinfo:
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            ctx=_CTX,
+        )
+
+    assert excinfo.value.reason == "fingerprint_mismatch"
+    assert _review_row(foundry.engine, proposal.review_id)["execution_status"] == "pending_review"
+
+
+def test_approval_execution_rechecks_source_access_before_action(foundry: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _approved_proposal(foundry, ctx)
+    original_require = foundry.policy.require
+
+    def deny_object_read(ctx: RequestContext, permission: str) -> None:
+        if permission == "object:read":
+            raise PermissionDenied("permission denied for object:read")
+        original_require(ctx, permission)
+
+    monkeypatch.setattr(foundry.policy, "require", deny_object_read)
+
+    with pytest.raises(ApprovalExecutionError) as excinfo:
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            ctx=_CTX,
+        )
+
+    assert excinfo.value.reason == "source_access_denied"
+    assert _review_row(foundry.engine, proposal.review_id)["execution_status"] == "pending_review"
+    assert _table_count(foundry.engine, db.action_runs) == 0
+
+
+def test_approval_execution_marks_review_failed_when_action_fails(
+    foundry: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _approved_proposal(foundry, ctx)
+    service = foundry._services.approval_execution  # noqa: SLF001 - test hooks the composition boundary.
+
+    def fail_apply_action(_action_api_name: str, **_kwargs: object) -> Mapping[str, object]:
+        raise RuntimeError("simulated action outage")
+
+    monkeypatch.setattr(service.action_service, "apply_action", fail_apply_action)
+
+    with pytest.raises(RuntimeError, match="simulated action outage"):
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            ctx=_CTX,
+        )
+
+    row = _review_row(foundry.engine, proposal.review_id)
+    assert row["execution_status"] == "failed"
+    assert row["approved_action_run_id"] is None
+    assert row["review_metadata"]["executionError"]["type"] == "RuntimeError"
     assert _table_count(foundry.engine, db.action_runs) == 0
 
 
@@ -226,6 +384,17 @@ def _review_row(engine: Any, review_id: str) -> Mapping[str, Any]:
         return (
             transaction.execute(select(db.insight_reviews).where(db.insight_reviews.c.id == review_id)).mappings().one()
         )
+
+
+def _update_review(engine: Any, review_id: str, **values: object) -> None:
+    with engine.begin() as transaction:
+        transaction.execute(update(db.insight_reviews).where(db.insight_reviews.c.id == review_id).values(**values))
+
+
+def _patch_action_proposal(engine: Any, review_id: str, patch: Mapping[str, object]) -> None:
+    row = _review_row(engine, review_id)
+    proposal = {**row["action_proposal"], **patch}
+    _update_review(engine, review_id, action_proposal=proposal)
 
 
 def _relations(engine: Any, review_id: str, action_run_id: str) -> list[Mapping[str, Any]]:
