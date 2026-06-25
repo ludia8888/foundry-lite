@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from foundry_lite.application.ports import ObjectPayload, ObjectQueryResult
+from foundry_lite.application.ports import ObjectPayload, ObjectQueryItem, ObjectQueryResult
 from foundry_lite.application.ports.context_provider import (
     ContextRetrievalError,
     ContextRetrievalRequest,
@@ -14,6 +14,7 @@ from foundry_lite.application.ports.context_provider import (
 from foundry_lite.application.services.aip.context_compiler import ContextCompileRequest, ContextCompilerService
 from foundry_lite.application.services.aip.retrieval_orchestrator import RetrievalObjectQuery, RetrievalOrchestrator
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import NotFound, ValidationFailed
 
 from tests.conftest import prepare_indexed_demo
 
@@ -63,6 +64,68 @@ class _FakeObjectQuery:
             "objectId": object_id,
             "objectVersion": 7,
             "properties": {"status": "AUTHORITATIVE_VALUE", "includeExplain": include_explain},
+            "sourceDatasetVersionId": "dataset-version-1",
+        }
+
+
+class _MissingExplicitObjectQuery(_FakeObjectQuery):
+    def get_object(
+        self,
+        object_type_api_name: str,
+        object_id: str,
+        *,
+        ctx: RequestContext | None = None,
+        include_explain: bool = False,
+    ) -> ObjectPayload:
+        raise NotFound("object not found")
+
+
+class _FailingSearchObjectQuery(_FakeObjectQuery):
+    def query_objects(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        limit: int = 50,
+        search_text: str | None = None,
+    ) -> ObjectQueryResult:
+        raise ValidationFailed("search unavailable")
+
+
+class _NoisyQueryObjectQuery(_FakeObjectQuery):
+    def query_objects(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        limit: int = 50,
+        search_text: str | None = None,
+    ) -> ObjectQueryResult:
+        return {
+            "items": [
+                _query_item(object_type_api_name, "O-1001"),
+                _query_item(object_type_api_name, "O-1002"),
+                _query_item(object_type_api_name, "O-1001"),
+                _query_item(object_type_api_name, "O-404"),
+            ],
+            "nextCursor": None,
+        }
+
+    def get_object(
+        self,
+        object_type_api_name: str,
+        object_id: str,
+        *,
+        ctx: RequestContext | None = None,
+        include_explain: bool = False,
+    ) -> ObjectPayload:
+        if object_id == "O-404":
+            raise NotFound("stale search hit")
+        return {
+            "objectType": object_type_api_name,
+            "objectId": object_id,
+            "objectVersion": 7,
+            "properties": {"status": f"AUTHORITATIVE_{object_id}"},
             "sourceDatasetVersionId": "dataset-version-1",
         }
 
@@ -121,6 +184,64 @@ def test_retrieval_orchestrator_fails_when_context_does_not_fit_budget(foundry: 
     assert exc_info.value.reason == "context_budget_exceeded"
 
 
+def test_retrieval_orchestrator_returns_empty_without_object_hint() -> None:
+    items = _service(_FakeObjectQuery()).retrieve_context(ctx=_CTX, request=_request(state_json={}))
+
+    assert items == ()
+
+
+def test_retrieval_orchestrator_fails_closed_for_missing_explicit_object() -> None:
+    with pytest.raises(ContextRetrievalError) as exc_info:
+        _service(_MissingExplicitObjectQuery()).retrieve_context(ctx=_CTX, request=_request())
+
+    assert exc_info.value.reason == "context_source_unavailable"
+
+
+def test_retrieval_orchestrator_fails_closed_when_search_unavailable() -> None:
+    with pytest.raises(ContextRetrievalError) as exc_info:
+        _service(_FailingSearchObjectQuery()).retrieve_context(
+            ctx=_CTX,
+            request=_request(state_json={"objectType": "Order"}),
+        )
+
+    assert exc_info.value.reason == "context_search_unavailable"
+
+
+def test_retrieval_orchestrator_skips_stale_hits_dedupes_and_packs() -> None:
+    items = _service(_NoisyQueryObjectQuery()).retrieve_context(
+        ctx=_CTX,
+        request=_request(state_json={"objectType": "Order"}, max_context_items=1),
+    )
+
+    assert [item.source_ref for item in items] == ["object://Order/O-1001"]
+
+
+def test_retrieval_orchestrator_rejects_context_mismatch_and_invalid_budget() -> None:
+    with pytest.raises(ContextRetrievalError) as mismatch:
+        _service(_FakeObjectQuery()).retrieve_context(
+            ctx=_CTX,
+            request=_request(actor_user_id="other-user"),
+        )
+    with pytest.raises(ContextRetrievalError) as invalid_budget:
+        _service(_FakeObjectQuery()).retrieve_context(
+            ctx=_CTX,
+            request=_request(max_context_tokens=-1),
+        )
+
+    assert mismatch.value.reason == "request_context_mismatch"
+    assert invalid_budget.value.reason == "invalid_context_budget"
+
+
+def test_retrieval_orchestrator_rejects_object_id_without_object_type() -> None:
+    with pytest.raises(ContextRetrievalError) as exc_info:
+        _service(_FakeObjectQuery()).retrieve_context(
+            ctx=_CTX,
+            request=_request(state_json={"objectId": "O-1001"}),
+        )
+
+    assert exc_info.value.reason == "invalid_state_context"
+
+
 def _service(object_query: RetrievalObjectQuery) -> RetrievalOrchestrator:
     return RetrievalOrchestrator(object_query)
 
@@ -129,19 +250,21 @@ def _request(
     *,
     state_json: dict[str, object] | None = None,
     query: str = "Explain Order O-1001 for the operator.",
+    actor_user_id: str = _CTX.actor_user_id,
+    max_context_items: int = 4,
     max_context_tokens: int = 1200,
     security_partition: str = "tenant-demo:internal",
 ) -> ContextRetrievalRequest:
     return ContextRetrievalRequest(
         tenant_id=_CTX.tenant_id,
-        actor_user_id=_CTX.actor_user_id,
+        actor_user_id=actor_user_id,
         query=query,
         agent_version_id="agent.order-ops.v1",
         ontology_version_id="active-ontology",
-        max_context_items=4,
+        max_context_items=max_context_items,
         max_context_tokens=max_context_tokens,
         security_partition=security_partition,
-        state_json=state_json or {"objectType": "Order", "objectId": "O-1001"},
+        state_json=state_json if state_json is not None else {"objectType": "Order", "objectId": "O-1001"},
     )
 
 
@@ -154,3 +277,12 @@ def _compile_request(items: tuple[RetrievedContextItem, ...]) -> ContextCompileR
         allowed_security_partitions=("tenant-demo:internal",),
         output_schema={"type": "object"},
     )
+
+
+def _query_item(object_type: str, object_id: str) -> ObjectQueryItem:
+    return {
+        "objectType": object_type,
+        "objectId": object_id,
+        "objectVersion": 1,
+        "properties": {"status": "STALE_INDEX_VALUE"},
+    }

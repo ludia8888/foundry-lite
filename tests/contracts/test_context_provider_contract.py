@@ -11,6 +11,7 @@ from foundry_lite.application.ports.context_provider import (
     RetrievedContextItem,
 )
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.infrastructure.adapters.fake_context_provider import FakeContextProvider
 
 _TENANT = "tenant-demo"
 
@@ -39,6 +40,39 @@ def test_context_provider_returns_canonical_retrieved_context_item() -> None:
     assert result[0].source_version == "object-version-7"
     assert result[0].retrieval_method == "authoritative_reread"
     assert result[0].security_partition == "tenant-demo:internal"
+
+
+def test_fake_context_provider_returns_hashed_document_context() -> None:
+    provider: ContextProvider = FakeContextProvider()
+
+    result = provider.retrieve_context(ctx=RequestContext(tenant_id=_TENANT), request=_request())
+
+    assert len(result) == 1
+    assert result[0].kind == "document"
+    assert result[0].source_ref == "fake-context://agent-v1"
+    assert result[0].content_hash == f"sha256:{hashlib.sha256(result[0].text.encode()).hexdigest()}"
+    assert result[0].context_id.startswith("ctx-")
+    assert result[0].token_estimate <= _request().max_context_tokens
+
+
+def test_fake_context_provider_honors_zero_item_budget() -> None:
+    provider: ContextProvider = FakeContextProvider()
+
+    result = provider.retrieve_context(
+        ctx=RequestContext(tenant_id=_TENANT),
+        request=ContextRetrievalRequest(
+            tenant_id=_TENANT,
+            actor_user_id="user-1",
+            query="why is PO-1042 delayed?",
+            agent_version_id="agent-v1",
+            ontology_version_id="ontology-v1",
+            max_context_items=0,
+            max_context_tokens=2048,
+            security_partition="tenant-demo:internal",
+        ),
+    )
+
+    assert result == ()
 
 
 def _request() -> ContextRetrievalRequest:
