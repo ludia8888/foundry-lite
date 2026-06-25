@@ -158,6 +158,19 @@ def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() ->
     assert "run: pnpm ci:gate:e2e" in e2e_job
 
 
+def test_context_compiler_gate_runs_after_ai_ledger_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    ledger_step = "pnpm --silent quality:ai-ledger"
+    context_step = "pnpm --silent quality:context-compiler"
+    evidence_step = "pnpm --silent quality:ai-evidence"
+    assert context_step in script
+    assert script.index(ledger_step) < script.index(context_step)
+    assert script.index(context_step) < script.index(evidence_step)
+    assert '"quality:context-compiler"' in package_json
+
+
 def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

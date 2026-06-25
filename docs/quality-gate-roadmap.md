@@ -1641,6 +1641,23 @@ public API/SDK surfaces는 후속 AIP slice다.
 | ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | AI run ledger ratchet  | `quality:ai-ledger` | AI 실행이 provider call 이후에만 휘발성 로그로 남거나, retry가 message/event를 중복 생성하거나, raw prompt/tool payload가 일반 DB/audit row에 저장되거나, Postgres와 SQLite 동작이 갈라지는 문제 차단 |
 
+### AIP P0d — Context Compiler Ratchet
+
+P0d의 현재 slice는 full Agent Runtime이나 trace UI가 아니라 모델 호출 직전의 prompt assembly
+계약이다. `ContextProvider`는 권한 검증이 끝난 `RetrievedContextItem`을 opaque `context_id`,
+source/version/hash/security partition과 함께 넘긴다. `ContextCompilerService`는 정본 §8.6 순서로
+platform safety policy, agent instruction, application state, tool definitions, retrieved context,
+citation mapping, output schema, user message를 묶고 `compiled_prompt_hash`,
+`context_manifest_hash`, `tool_manifest_hash`, `state_snapshot_hash`, `policy_snapshot_hash`를 만든다.
+검색 문맥은 `BEGIN_UNTRUSTED_CONTEXT` / `END_UNTRUSTED_CONTEXT`로 fence 처리되며, duplicate
+context id, cross-tenant partition, context hash mismatch는 provider call 전에 fail closed된다.
+RetrievalOrchestrator, ToolBroker execution, CitationService verification, AgentRuntime loop, public
+API/SDK surfaces는 후속 AIP slice다.
+
+| 게이트                    | 명령                       | Root cause                                                                                                                                                                                                    |
+| ------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Context compiler ratchet  | `quality:context-compiler` | 검색 결과나 application state가 임의 순서로 prompt에 섞이거나, retrieved document 안의 prompt-injection 문장이 system instruction처럼 승격되거나, context/tool/state/policy hash 없이 AI run ledger가 생성되는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와

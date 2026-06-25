@@ -1076,3 +1076,17 @@ Media/Content Plane (standalone family, not in `activeStack`).
   sequence idempotency, tenant scoping, and runtime-lane wiring. ModelGateway auto-recording, prompt
   artifact encryption, full trace UI, ToolBroker execution, and generated API/SDK surfaces remain later
   AIP slices.
+
+- **P0d — Context compiler + retrieval context contract (shipped as the first prompt assembly slice):**
+  `ContextProvider` and `RetrievedContextItem` now define the authorized retrieval boundary that hands
+  opaque `context_id` items to the AIP compiler. `ContextCompilerService` compiles model messages in the
+  canonical §8.6 order — platform safety policy, agent instruction, application state, tool definitions,
+  retrieved context, citation mapping, output schema, then the user message — and emits
+  `compiled_prompt_hash`, `context_manifest_hash`, `tool_manifest_hash`, `state_snapshot_hash`, and
+  `policy_snapshot_hash` for the AI ledger. Retrieved text is fenced as `BEGIN_UNTRUSTED_CONTEXT` /
+  `END_UNTRUSTED_CONTEXT`, duplicate context ids fail closed, cross-tenant security partitions fail
+  closed, and a context text/hash mismatch fails closed before any model call. `quality:context-compiler`
+  proves the port contract, deterministic section ordering, untrusted-context fencing, opaque citation
+  mapping, fail-closed hash/tenant checks, and runtime-lane wiring. Retrieval orchestration, ToolBroker
+  execution, CitationService verification, AgentRuntime looping, public API/SDK surfaces, and the visual
+  trace UI remain later AIP slices.

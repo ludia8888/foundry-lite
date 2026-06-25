@@ -398,6 +398,8 @@ run_runtime_gate() {
 
   run_runtime_step "AI run ledger ratchet" pnpm --silent quality:ai-ledger
 
+  run_runtime_step "AIP context compiler ratchet" pnpm --silent quality:context-compiler
+
   run_runtime_step "AI evidence lineage ratchet" pnpm --silent quality:ai-evidence
 
   run_runtime_step "Insight review workspace ratchet" pnpm --silent quality:insight-review
