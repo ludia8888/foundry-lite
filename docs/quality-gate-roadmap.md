@@ -1627,6 +1627,20 @@ executors, backup manifest rewrite, KMS/cloud crypto-shredding, and audit compac
 | --------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Right-to-erasure manifest ratchet | `quality:erasure` | 삭제 요청이 raw subject를 운영 증거에 노출하거나, 다른 tenant의 같은 subject 값을 같이 지우거나, 같은 idempotency key replay마다 다른 manifest를 만들거나, backup retention 상태를 숨기거나, search rebuild가 erased subject를 다시 살리는 문제 차단 |
 
+### AIP P0c — AI Run Ledger Ratchet
+
+P0c의 현재 slice는 full AIP trace UI가 아니라 AI 실행 장부의 DB/저장소 계약이다.
+`AiRunRepository`는 session/message/run/event/model-call/context/tool/citation/usage row를
+저장하되, raw prompt나 raw tool result를 일반 DB에 넣지 않고 ref/hash/redacted preview로 남긴다.
+`quality:ai-ledger`는 정본 §10.2 컬럼 목록, message client idempotency, event sequence
+idempotency, tenant scoping, SQLite/PostgreSQL round-trip, and runtime-lane wiring을 검증한다.
+ModelGateway 자동 기록, encrypted prompt artifact store, ToolBroker execution, trace UI, and
+public API/SDK surfaces는 후속 AIP slice다.
+
+| 게이트                 | 명령                | Root cause                                                                                                                                                                           |
+| ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| AI run ledger ratchet  | `quality:ai-ledger` | AI 실행이 provider call 이후에만 휘발성 로그로 남거나, retry가 message/event를 중복 생성하거나, raw prompt/tool payload가 일반 DB/audit row에 저장되거나, Postgres와 SQLite 동작이 갈라지는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와

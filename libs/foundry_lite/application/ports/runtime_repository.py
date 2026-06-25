@@ -42,6 +42,7 @@ RuntimeRowsTable = Literal[
     "outbox_events",
     "dead_letter_events",
     "workflow_runs",
+    "ai_execution_runs",
     "audit_events",
     "object_edits",
     "object_records",
@@ -56,6 +57,7 @@ RuntimeRunType = Literal[
     "outbox",
     "dead_letter",
     "workflow",
+    "ai",
     "audit",
 ]
 RuntimeJsonObject = Mapping[str, object]
@@ -272,8 +274,6 @@ class RuntimeRunSnapshot(TypedDict):
 
 
 class RuntimeRunPageCursor(TypedDict):
-    """Decoded keyset cursor for one Operations run group."""
-
     timestamp: str
     run_id: str
 

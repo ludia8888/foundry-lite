@@ -620,7 +620,7 @@ def _is_run_relation_duplicate(transaction: Any, record: RuntimeRunRelationRecor
 
 
 # Run tables that lineage edges attribute work to (``created_by_run_id``).
-_LINEAGE_RUN_TYPES: tuple[RuntimeRunType, ...] = ("sync", "transform", "index", "materialization")
+_LINEAGE_RUN_TYPES: tuple[RuntimeRunType, ...] = ("sync", "transform", "index", "materialization", "ai")
 
 
 def _relation_columns(runtime_table: Any) -> list[Any]:
@@ -642,6 +642,8 @@ def _rows_timestamp_column(table: RuntimeRowsTable) -> Any:
     # Recency column used to window each table to its most recent rows.
     if table == "dead_letter_events":
         return db.dead_letter_events.c.failed_at
+    if table == "ai_execution_runs":
+        return db.ai_execution_runs.c.started_at
     return _rows_table(table).c.created_at
 
 
@@ -656,6 +658,7 @@ def _rows_table(table: RuntimeRowsTable) -> Any:
         "outbox_events": db.outbox_events,
         "dead_letter_events": db.dead_letter_events,
         "workflow_runs": db.workflow_runs,
+        "ai_execution_runs": db.ai_execution_runs,
         "audit_events": db.audit_events,
         "object_edits": db.object_edits,
         "object_records": db.object_records,
@@ -673,6 +676,7 @@ def _run_table(run_type: RuntimeRunType) -> Any:
         "outbox": db.outbox_events,
         "dead_letter": db.dead_letter_events,
         "workflow": db.workflow_runs,
+        "ai": db.ai_execution_runs,
         "audit": db.audit_events,
     }[run_type]
 
@@ -680,6 +684,8 @@ def _run_table(run_type: RuntimeRunType) -> Any:
 def _run_timestamp_column(run_type: RuntimeRunType) -> Any:
     if run_type == "dead_letter":
         return db.dead_letter_events.c.failed_at
+    if run_type == "ai":
+        return db.ai_execution_runs.c.started_at
     return _run_table(run_type).c.created_at
 
 

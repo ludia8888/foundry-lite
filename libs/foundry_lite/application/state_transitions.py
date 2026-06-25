@@ -91,6 +91,9 @@ WORKFLOW_RUN_SUCCEEDED = StatusTransition(("starting", "running"), "succeeded")
 WORKFLOW_RUN_FAILED = StatusTransition(("requested", "starting", "running"), "failed")
 WORKFLOW_RUN_CANCELLED = StatusTransition(("starting", "running"), "cancelled")
 WORKFLOW_RUN_START_UNKNOWN = StatusTransition(("requested", "starting"), "start_unknown")
+AI_RUN_SUCCEEDED = StatusTransition(("started", "running"), "succeeded")
+AI_RUN_FAILED = StatusTransition(("started", "running"), "failed")
+AI_RUN_CANCELLED = StatusTransition(("started", "running"), "cancelled")
 
 
 def dataset_run_failed_transition(run_kind: str) -> StatusTransition:
