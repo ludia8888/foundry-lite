@@ -12,6 +12,7 @@ from foundry_lite.infrastructure.adapters.debezium_cdc import (
 )
 from foundry_lite.infrastructure.adapters.elasticsearch_content_index import ElasticsearchContentIndexAdapter
 from foundry_lite.infrastructure.adapters.elasticsearch_search import ElasticsearchAdapter, ElasticsearchAdapterConfig
+from foundry_lite.infrastructure.adapters.fake_language_model import FakeLanguageModel
 from foundry_lite.infrastructure.adapters.iceberg_dataset_storage import (
     IcebergDatasetStorageAdapter,
     IcebergDatasetStorageAdapterConfig,
@@ -34,6 +35,7 @@ from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaS
 from foundry_lite.infrastructure.adapters.local_preview_renderer import LocalPreviewRendererAdapter
 from foundry_lite.infrastructure.adapters.ocr_processor import OcrProcessorAdapter
 from foundry_lite.infrastructure.adapters.pdf_text_processor import PdfTextProcessorAdapter
+from foundry_lite.infrastructure.adapters.provider_compatible_language_model import ProviderCompatibleLanguageModel
 from foundry_lite.infrastructure.adapters.rest_connector import RestPullConnectorAdapter
 from foundry_lite.infrastructure.adapters.s3_dataset_storage import (
     S3DatasetStorageAdapter,
@@ -97,6 +99,8 @@ __all__ = [
     "ElasticsearchAdapter",
     "ElasticsearchAdapterConfig",
     "ElasticsearchContentIndexAdapter",
+    "FakeLanguageModel",
+    "ProviderCompatibleLanguageModel",
     "LocalContentIndexAdapter",
     "LocalEmbeddingAdapter",
     "RestPullConnectorAdapter",

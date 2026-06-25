@@ -1242,6 +1242,21 @@
         "test_same_idempotency_key_returns_existing_run_without_duplicate",
         "test_concurrent_starts_on_one_key_produce_one_run"
       ]
+    },
+    "model_access_is_gateway_governed_with_egress_and_no_silent_fallback": {
+      "description": "All LLM access goes through the governed Model Gateway: a stable alias resolves to provider/model/revision (pinned alias version when set, else the model's floating-latest revision); egress is policy-gated BEFORE any provider call (a data_classification not exportable to the resolved destination, or a region not permitted, is denied with reason=egress_denied and the adapter is never called); a resolved model that is sunset/deprecated, or an alias whose status is not enabled, fails typed and is never silently swapped for another model.",
+      "status": "enforced",
+      "tests": [
+        "test_gateway_resolves_pinned_revision",
+        "test_gateway_resolves_floating_latest_when_unpinned",
+        "test_gateway_denies_egress_when_classification_exceeds_allowance",
+        "test_gateway_denies_egress_when_region_not_permitted",
+        "test_gateway_does_not_silently_fall_back_on_deprecated_model",
+        "test_gateway_does_not_serve_a_non_enabled_alias",
+        "test_provider_egress_denied_before_network_call",
+        "test_secret_value_never_logged",
+        "test_deferred_provider_references_secret_by_name_and_raises_unavailable"
+      ]
     }
   }
 }

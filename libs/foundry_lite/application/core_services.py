@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.action_service import ActionService
+from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
 from foundry_lite.application.services.base import CoreService, build_service, collaborator_kwargs
 from foundry_lite.application.services.dataset_service import DatasetServices
 from foundry_lite.application.services.demo_service import DemoService
@@ -34,6 +35,7 @@ __all__ = [
     "IcebergMaintenanceService",
     "MaterializationService",
     "MediaServices",
+    "ModelGatewayService",
     "ObjectServices",
     "OntologySearchService",
     "OntologyService",
@@ -62,6 +64,7 @@ class CoreServices:
     insight_review: InsightReviewService
     materialization: MaterializationService
     media: MediaServices
+    model_gateway: ModelGatewayService
     object_store: ObjectServices
     ontology: OntologyService
     ontology_search: OntologySearchService
@@ -87,6 +90,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     insight_review = build_service(InsightReviewService, dependencies)
     materialization = build_service(MaterializationService, dependencies)
     media = MediaServices.create(dependencies)
+    model_gateway = build_service(ModelGatewayService, dependencies)
     object_store = ObjectServices.create(dependencies)
     ontology = build_service(OntologyService, dependencies)
     ontology_search = build_service(OntologySearchService, dependencies)
@@ -104,6 +108,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         insight_review=insight_review,
         materialization=materialization,
         media=media,
+        model_gateway=model_gateway,
         object_store=object_store,
         ontology=ontology,
         ontology_search=ontology_search,
@@ -125,6 +130,7 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
         services.insight_review,
         services.materialization,
         *services.media.items(),
+        services.model_gateway,
         *services.object_store.items(),
         services.ontology,
         services.ontology_search,
