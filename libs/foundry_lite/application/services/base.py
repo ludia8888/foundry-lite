@@ -63,6 +63,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "dataset_version_service": "DatasetVersionService",
     "demo_service": "DemoService",
     "iceberg_maintenance_service": "IcebergMaintenanceService",
+    "insight_review_service": "InsightReviewService",
     "materialization_service": "MaterializationService",
     "object_indexing_service": "ObjectIndexingService",
     "object_links_service": "ObjectLinksService",
@@ -128,6 +129,7 @@ class CoreService:
     tool_executor: ToolExecutor
     engine: TransactionManager
     policy: PolicyService
+    insight_review_service: object
     action_repository: ActionRepository
     ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository

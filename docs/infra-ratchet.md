@@ -1132,3 +1132,30 @@ Media/Content Plane (standalone family, not in `activeStack`).
   lookup, source permission, stale-source rejection, signed-ref generation, raw-secret non-leakage,
   ledger persistence, and CI runtime-lane wiring. AgentRuntime looping, real object/document/media
   source resolvers, public API/SDK surfaces, and the visual trace UI remain later AIP slices.
+
+- **P0g — Action Proposal Service + review-queue fingerprint (shipped as the first human-review action
+  slice):** the model still does **not** execute Ontology Actions. `ActionProposalService` accepts a
+  model-proposed action, then re-reads the tenant-scoped AI run ledger to require selected evidence
+  context ids, checks the agent action allowlist, requires `insight:create` plus
+  `action:execute:<ActionType>` for the invoking user, re-reads the active Ontology action definition,
+  and re-reads the current object version before creating a pending `insight_reviews` row. The
+  canonical proposal fingerprint covers action type, target type/id, expected object version,
+  canonical parameters, evidence refs, agent version, and policy version; that fingerprint is also the
+  review-create idempotency key, so exact retries replay while parameter/evidence/policy changes require
+  a new review. `insight_reviews` now carries the canonical §10.3 fields
+  `proposal_type`, `proposal_fingerprint`, `originating_ai_run_id`, `originating_tool_call_id`,
+  `expires_at`, `execution_status`, `approved_action_run_id`, and `approval_policy_version`, with a
+  forward-safe Alembic expand migration and schema snapshot. This mirrors Palantir's documented AIP
+  Logic + Automate proposal flow, where generated Actions can be staged for human review, proposal
+  details show the reason/decision log, and accepting a proposal executes the Action
+  (palantir.com/docs/foundry/logic/aip-logic-integration-automate). It also follows Palantir Action
+  Type semantics: an Action is the transaction that changes Ontology objects/properties/links, and
+  applying an Action depends on action permissions/submission criteria
+  (palantir.com/docs/foundry/action-types/overview, /action-types/permissions). OUR current slice stops
+  before execution: `ApprovalExecutionService`, reviewer-time fingerprint/object-version/source-access
+  rechecks, linking to `ActionService.apply_action`, public API/SDK action-proposal routes, and the
+  visual proposal review workspace remain later AIP slices. `quality:action-proposal` proves user-facing
+  `foundry.aip.propose_action(...)`, local runtime composition, selected-evidence enforcement, forged
+  context rejection before review creation, policy/agent/object-version fail-closed checks, exact retry
+  replay, changed-fingerprint new review creation, no `action_runs` side effect, and CI runtime-lane
+  wiring.

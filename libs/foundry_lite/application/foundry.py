@@ -6,6 +6,7 @@ from foundry_lite.application.core_services import CoreServices
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.facades import (
     ActionGateway,
+    AipWorkspace,
     DatasetWorkspace,
     ErasureGateway,
     InsightReviewWorkspace,
@@ -80,6 +81,7 @@ class FoundryLite:
         self.ontology = OntologyRegistry(services.ontology)
         self.objects = ObjectStore(services.object_store, services.ontology_search)
         self.actions = ActionGateway(services.action)
+        self.aip = AipWorkspace(services.action_proposal)
         self.materialization = MaterializationRunner(services.materialization)
         self.insights = InsightReviewWorkspace(services.insight_review)
         self.media = MediaWorkspace(services.media)

@@ -25,6 +25,14 @@ class InsightReviewRow(TypedDict):
     evidence_object_ids: Sequence[str]
     evidence_refs: Sequence[InsightReviewJson]
     action_proposal: InsightReviewJson | None
+    proposal_type: str | None
+    proposal_fingerprint: str | None
+    originating_ai_run_id: str | None
+    originating_tool_call_id: str | None
+    expires_at: str | None
+    execution_status: str | None
+    approved_action_run_id: str | None
+    approval_policy_version: str | None
     created_by_user_id: str
     created_idempotency_key: str
     assignment_idempotency_key: str | None
@@ -47,6 +55,14 @@ class InsightReviewRecord:
     evidence_object_ids: Sequence[str]
     evidence_refs: Sequence[InsightReviewJson]
     action_proposal: InsightReviewJson | None
+    proposal_type: str | None
+    proposal_fingerprint: str | None
+    originating_ai_run_id: str | None
+    originating_tool_call_id: str | None
+    expires_at: str | None
+    execution_status: str | None
+    approved_action_run_id: str | None
+    approval_policy_version: str | None
     created_by_user_id: str
     created_idempotency_key: str
     assignment_idempotency_key: str | None

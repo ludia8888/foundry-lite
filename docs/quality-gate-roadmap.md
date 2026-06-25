@@ -1696,6 +1696,23 @@ AIP slice다.
 | ------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Citation service ratchet | `quality:citation-service` | LLM이 존재하지 않는 context id나 직접 만든 URL을 citation처럼 내보내거나, omitted context/stale source/권한 없는 source가 answer citation으로 렌더링되거나, citation ledger row가 검증 없이 생기는 문제 차단 |
 
+### AIP P0g — Action Proposal Ratchet
+
+P0g의 현재 slice는 ApprovalExecutionService가 아니라, AI가 제안한 Ontology Action을 사람 검토
+큐에 넣기 전의 서버-side 관문이다. `ActionProposalService`는 model proposal을 곧바로 실행하지
+않고, tenant-scoped AI run manifest에서 선택된 evidence context인지 확인하고, agent action
+allowlist, user action permission, active Ontology action definition, current object version을 다시
+읽는다. 그런 다음 action type, target, expected object version, canonical params, evidence refs,
+agent version, policy version을 묶은 `sha256:` proposal fingerprint를 만들고, 그 fingerprint를
+review create idempotency key로 사용한다. 같은 fingerprint retry는 같은 review를 재사용하고,
+파라미터/근거/정책이 바뀐 proposal은 새 review가 필요하다. 이 slice는 `insight_reviews`에
+정본 §10.3 proposal fields를 추가하지만, 승인 후 실제 `ActionService.apply_action` 실행은
+후속 Approval-to-Action bridge에서 다룬다.
+
+| 게이트                    | 명령                      | Root cause                                                                                                                                                                           |
+| ------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Action proposal ratchet   | `quality:action-proposal` | LLM이 action을 직접 실행하거나, forged/unselected evidence로 review를 만들거나, agent allowlist/user permission/object version re-read 없이 approval queue에 action proposal을 넣는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와

@@ -202,6 +202,19 @@ def test_citation_service_gate_runs_after_tool_broker_before_ai_evidence() -> No
     assert "tests/unit/test_citation_service.py" in package_json
 
 
+def test_action_proposal_gate_runs_after_citation_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    citation_step = "pnpm --silent quality:citation-service"
+    action_proposal_step = "pnpm --silent quality:action-proposal"
+    evidence_step = "pnpm --silent quality:ai-evidence"
+    assert action_proposal_step in script
+    assert script.index(citation_step) < script.index(action_proposal_step) < script.index(evidence_step)
+    assert '"quality:action-proposal"' in package_json
+    assert "tests/unit/test_action_proposal_service.py" in package_json
+
+
 def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

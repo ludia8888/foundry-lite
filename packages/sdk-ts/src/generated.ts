@@ -297,6 +297,14 @@ export type InsightReviewPayload = {
   evidenceObjectIds: string[];
   evidenceRefs: Array<Record<string, unknown>>;
   actionProposal: InsightActionProposal | null;
+  proposalType: string | null;
+  proposalFingerprint: string | null;
+  originatingAiRunId: string | null;
+  originatingToolCallId: string | null;
+  expiresAt: string | null;
+  executionStatus: string | null;
+  approvedActionRunId: string | null;
+  approvalPolicyVersion: string | null;
   createdByUserId: string;
   decision: Record<string, unknown> | null;
   createdAt: string;
