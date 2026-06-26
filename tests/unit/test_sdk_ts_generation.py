@@ -58,6 +58,8 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type AipBuilderValidationResult = {" in generated
     assert "export type AipBuilderRunResult = {" in generated
     assert "export type AipAgentRunRequest = {" in generated
+    assert "toolManifest?: AipBuilderToolSpec[];" in generated
+    assert "maxToolCalls?: number;" in generated
     assert "export type AipAgentRunResult = {" in generated
     assert "aip: {" in generated
     assert "validate(payload: AipBuilderValidateRequest): Promise<AipBuilderValidationResult>;" in generated

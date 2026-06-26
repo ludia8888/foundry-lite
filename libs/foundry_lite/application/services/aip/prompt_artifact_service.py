@@ -61,10 +61,11 @@ class PromptArtifactService(CoreService):
         ai_run_id: str,
         compiled_prompt_hash: str,
         compiled_prompt_text: str,
+        artifact_id: str | None = None,
         created_at: str | None = None,
     ) -> AiPromptArtifactRecord:
         now = created_at or _now()
-        artifact_id = f"{ai_run_id}-compiled-prompt"
+        artifact_id = artifact_id or f"{ai_run_id}-compiled-prompt"
         self._require_existing_run(ctx, ai_run_id)
         _require_content_hash(compiled_prompt_text, compiled_prompt_hash)
         blob = self.prompt_artifact_store.write_prompt_artifact(

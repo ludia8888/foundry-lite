@@ -13,6 +13,11 @@ from foundry_lite.application.services.aip.agent_runtime_citations import (
     citation_error_payload,
     resolve_agent_answer_citations,
 )
+from foundry_lite.application.services.aip.agent_runtime_contracts import (
+    AgentRuntimeError,
+    AgentRuntimeRequest,
+    validate_request,
+)
 from foundry_lite.application.services.aip.citation_service import (
     CitationResolveRequest,
     CitationResolveResult,
@@ -46,6 +51,53 @@ class _ToolCallingLanguageModel:
             output_tokens=1,
             normalized_tool_calls=(ModelToolCall(tool_name="order.lookup", arguments_json="{}"),),
             provider_request_id="tool-call-request",
+        )
+
+
+class _ToolCallingThenAnswerLanguageModel:
+    profile_name = "tool-calling-then-answer-language-model"
+
+    def __init__(self) -> None:
+        self.followup_request_hash = ""
+        self.followup_prompt = ""
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        if request.model_call_attempt == 1:
+            return ModelResponse(
+                provider="fake",
+                resolved_model_id="",
+                resolved_model_revision="",
+                content="I need the order object.",
+                finish_reason="tool_calls",
+                input_tokens=4,
+                output_tokens=4,
+                normalized_tool_calls=(
+                    ModelToolCall(
+                        tool_name="ontology.get_object",
+                        arguments_json=json.dumps(
+                            {
+                                "object_type": "Order",
+                                "object_id": "O-1001",
+                                "property_names": ["orderId", "status"],
+                            },
+                            sort_keys=True,
+                        ),
+                    ),
+                ),
+                provider_request_id="tool-call-request-1",
+            )
+        self.followup_request_hash = request.request_hash
+        self.followup_prompt = request.messages[-1].content
+        return ModelResponse(
+            provider="fake",
+            resolved_model_id="",
+            resolved_model_revision="",
+            content="Order O-1001 was checked through the brokered object tool.",
+            finish_reason="stop",
+            input_tokens=7,
+            output_tokens=8,
+            normalized_tool_calls=(),
+            provider_request_id="tool-call-request-2",
         )
 
 
@@ -348,6 +400,45 @@ def test_agent_runtime_rejects_tool_calls_and_marks_seeded_run_failed(foundry: A
     assert detail["row"]["error_json"] == result.error
 
 
+def test_agent_runtime_executes_one_model_tool_call_through_broker_and_finishes(foundry: Any) -> None:
+    prepare_indexed_demo(foundry)
+    adapter = _ToolCallingThenAnswerLanguageModel()
+    foundry._services.model_gateway.language_model_adapter = adapter
+
+    result = foundry.aip.run_agent_payload(
+        payload={
+            **_payload(),
+            "agentRunId": "agent-runtime-tool-loop",
+            "agentInstruction": "Use only brokered tools when a tool is required.",
+            "maxModelCalls": 2,
+            "maxLoopIterations": 2,
+            "maxToolCalls": 1,
+            "toolManifest": [_tool_spec_payload()],
+            "agentAllowedTools": ["ontology.get_object"],
+            "modelAllowedClassifications": ["public", "internal"],
+        },
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "succeeded"
+    assert result.answer == "Order O-1001 was checked through the brokered object tool."
+    assert adapter.followup_request_hash.startswith("sha256:")
+    assert "brokered_tool_result" in adapter.followup_prompt
+
+    detail = foundry.operations.run_detail("ai", result.ai_run_id or "", ctx=_CTX)
+    assert detail["ai"]["summary"]["status"] == "succeeded"
+    assert detail["ai"]["summary"]["modelCallCount"] == 2
+    assert detail["ai"]["summary"]["toolCallCount"] == 1
+    assert detail["ai"]["summary"]["promptArtifactCount"] == 2
+    assert detail["ai"]["toolCalls"][0]["tool_id"] == "ontology.get_object"
+    assert detail["ai"]["toolCalls"][0]["arguments_hash"].startswith("sha256:")
+    assert detail["ai"]["toolCalls"][0]["result_hash"].startswith("sha256:")
+    assert any(row["content_hash"] == adapter.followup_request_hash for row in detail["ai"]["promptArtifacts"])
+    serialized_detail = json.dumps(detail, sort_keys=True)
+    assert "brokered_tool_result" not in serialized_detail
+    assert "property_names" not in serialized_detail
+
+
 def test_agent_runtime_fails_before_model_when_prompt_artifact_write_fails(foundry: Any) -> None:
     prepare_indexed_demo(foundry)
     foundry._services.agent_runtime.prompt_artifact_service = _FailingPromptArtifactService()
@@ -410,9 +501,21 @@ def test_agent_runtime_rejects_unsupported_budget_before_ledger(foundry: Any) ->
     assert result.run_status == "failed"
     assert result.to_payload()["error"] == {
         "reason": "unsupported_budget",
-        "detail": "read-only runtime supports exactly one model call and loop",
+        "detail": "agent runtime supports one model turn or one tool loop",
     }
     assert _table_count(foundry.engine, db.ai_execution_runs) == 0
+
+
+def test_agent_runtime_request_validation_requires_exact_allowlisted_partition() -> None:
+    request = _runtime_request(security_partition="tenant-demo:secret")
+
+    with pytest.raises(AgentRuntimeError) as excinfo:
+        validate_request(_CTX, request)
+
+    assert excinfo.value.args == (
+        "security_partition_mismatch",
+        "security partition must be explicitly allowlisted",
+    )
 
 
 def _payload() -> dict[str, object]:
@@ -434,6 +537,49 @@ def _payload() -> dict[str, object]:
         "maxLoopIterations": 1,
         "maxOutputTokens": 512,
         "policyVersion": "policy-v1",
+    }
+
+
+def _runtime_request(**overrides: object) -> AgentRuntimeRequest:
+    values = {
+        "agent_run_id": "agent-runtime-validation",
+        "agent_version_id": "agent.order-ops.v1",
+        "model_alias": "default-completion",
+        "prompt_version_id": "prompt-order-copilot@v1",
+        "user_message": "Explain Order O-1001 for the operator.",
+        "agent_instruction": "Answer as the Order Operations Copilot.",
+        "security_partition": "tenant-demo:internal",
+        "allowed_security_partitions": ("tenant-demo:internal",),
+        "state_json": {"objectType": "Order", "objectId": "O-1001"},
+    }
+    values.update(overrides)
+    return AgentRuntimeRequest(**values)
+
+
+def _tool_spec_payload() -> dict[str, object]:
+    return {
+        "toolId": "ontology.get_object",
+        "version": "2026-06-25",
+        "inputSchema": {
+            "type": "object",
+            "required": ["object_type", "object_id"],
+            "properties": {
+                "object_type": {"type": "string"},
+                "object_id": {"type": "string"},
+                "property_names": {"type": "array"},
+            },
+            "additionalProperties": False,
+        },
+        "outputSchema": {"type": "object"},
+        "effect": "READ",
+        "requiredPermission": "object:read",
+        "confirmationPolicy": "NONE",
+        "objectTypeAllowlist": ["Order"],
+        "propertyAllowlist": ["orderId", "status"],
+        "timeoutSeconds": 30,
+        "maxResultItems": 10,
+        "resultClassification": "internal",
+        "status": "published",
     }
 
 

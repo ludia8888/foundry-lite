@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse, ModelToolCall
 from foundry_lite.application.upload_limits import WEBHOOK_BODY_LIMIT_ENV
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import ExternalOutcomeUnknown, NotFound, ValidationFailed
@@ -1087,6 +1088,120 @@ def test_api_aip_agent_run_calls_model_and_links_operations_detail(foundry, monk
     assert reader_body["exportMarking"] == "aip-trace-restricted"
     assert reader_body["plaintext"] not in serialized_detail
     assert "Explain Order O-1001 for the operator." in {message["content"] for message in prompt_payload["messages"]}
+
+
+def test_api_aip_agent_run_executes_brokered_tool_loop(foundry, monkeypatch) -> None:
+    prepare_indexed_demo(foundry)
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    foundry._services.model_gateway.language_model_adapter = _ToolLoopLanguageModel()
+    headers = {
+        "X-Tenant-ID": "tenant-demo",
+        "X-User-ID": "ops-user",
+        "X-Roles": "admin,data_engineer,ops_manager",
+    }
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/aip/agent/run",
+        headers=headers,
+        json={
+            "agentRunId": "agent-api-tool-loop-1",
+            "agentVersionId": "agent.order-ops.v1",
+            "modelAlias": "default-completion",
+            "promptVersionId": "prompt-order-copilot@v1",
+            "userMessage": "Check Order O-1001 with a governed tool.",
+            "agentInstruction": "Use brokered tools only.",
+            "securityPartition": "tenant-demo:internal",
+            "allowedSecurityPartitions": ["tenant-demo:internal"],
+            "stateJson": {"objectType": "Order", "objectId": "O-1001"},
+            "modelAllowedClassifications": ["public", "internal"],
+            "maxModelCalls": 2,
+            "maxLoopIterations": 2,
+            "maxToolCalls": 1,
+            "toolManifest": [_agent_tool_spec_payload()],
+            "agentAllowedTools": ["ontology.get_object"],
+        },
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["runStatus"] == "succeeded"
+    assert body["answer"] == "The governed object tool checked O-1001."
+
+    detail = client.get(f"/api/operations/runs/ai/{body['aiRunId']}", headers=headers)
+    detail_body = detail.json()
+    assert detail.status_code == 200
+    assert detail_body["ai"]["summary"]["modelCallCount"] == 2
+    assert detail_body["ai"]["summary"]["toolCallCount"] == 1
+    assert detail_body["ai"]["summary"]["promptArtifactCount"] == 2
+    assert detail_body["ai"]["toolCalls"][0]["tool_id"] == "ontology.get_object"
+    assert "brokered_tool_result" not in json.dumps(detail_body, sort_keys=True)
+
+
+class _ToolLoopLanguageModel:
+    profile_name = "smoke-tool-loop-language-model"
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        if request.model_call_attempt == 1:
+            return ModelResponse(
+                provider="fake",
+                resolved_model_id="",
+                resolved_model_revision="",
+                content="Need a governed object lookup.",
+                finish_reason="tool_calls",
+                input_tokens=3,
+                output_tokens=3,
+                normalized_tool_calls=(
+                    ModelToolCall(
+                        tool_name="ontology.get_object",
+                        arguments_json=json.dumps(
+                            {
+                                "object_type": "Order",
+                                "object_id": "O-1001",
+                                "property_names": ["orderId", "status"],
+                            },
+                            sort_keys=True,
+                        ),
+                    ),
+                ),
+                provider_request_id="smoke-tool-loop-1",
+            )
+        return ModelResponse(
+            provider="fake",
+            resolved_model_id="",
+            resolved_model_revision="",
+            content="The governed object tool checked O-1001.",
+            finish_reason="stop",
+            input_tokens=5,
+            output_tokens=6,
+            normalized_tool_calls=(),
+            provider_request_id="smoke-tool-loop-2",
+        )
+
+
+def _agent_tool_spec_payload() -> dict[str, object]:
+    return {
+        "toolId": "ontology.get_object",
+        "version": "2026-06-25",
+        "inputSchema": {
+            "type": "object",
+            "required": ["object_type", "object_id"],
+            "properties": {
+                "object_type": {"type": "string"},
+                "object_id": {"type": "string"},
+                "property_names": {"type": "array"},
+            },
+            "additionalProperties": False,
+        },
+        "outputSchema": {"type": "object"},
+        "effect": "READ",
+        "requiredPermission": "object:read",
+        "confirmationPolicy": "NONE",
+        "objectTypeAllowlist": ["Order"],
+        "propertyAllowlist": ["orderId", "status"],
+        "resultClassification": "internal",
+        "status": "published",
+    }
 
 
 def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:

@@ -258,8 +258,12 @@ class AipAgentRunRequest(BaseModel):
     max_context_tokens: int = Field(default=1200, alias="maxContextTokens")
     max_model_calls: int = Field(default=1, alias="maxModelCalls")
     max_loop_iterations: int = Field(default=1, alias="maxLoopIterations")
+    max_tool_calls: int = Field(default=0, alias="maxToolCalls")
+    max_tool_output_bytes: int = Field(default=4096, alias="maxToolOutputBytes")
     max_output_tokens: int = Field(default=512, alias="maxOutputTokens")
     policy_version: str = Field(default="policy-v1", alias="policyVersion")
+    tool_manifest: list[AipBuilderToolSpecRequest] = Field(default_factory=list, alias="toolManifest")
+    agent_allowed_tools: list[str] = Field(default_factory=list, alias="agentAllowedTools")
 
 
 class DeadLetterBulkRetryRequest(BaseModel):

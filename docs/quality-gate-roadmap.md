@@ -1735,6 +1735,24 @@ reader role이 없으면 API는 `PERMISSION_DENIED`를 반환한다.
 |---|---|---|
 | Prompt artifact access ratchet | `quality:prompt-artifact-access`; `pnpm --silent quality:sdk-request-contract` | encrypted prompt artifact는 저장되어 있지만 운영/API/SDK에서 원문 접근 경로가 없거나, 일반 Operations detail에 raw prompt가 섞이거나, reader role 없는 caller가 plaintext를 받거나, URL run id와 receipt run id가 달라도 복호화가 진행되는 문제 차단 |
 
+### AIP P0z — Agent Runtime Tool Loop Ratchet
+
+P0z의 현재 slice는 full autonomous multi-tool agent, write tool execution, visual debugger, or
+long-running Temporal loop가 아니라, P0n Agent Runtime이 모델이 요청한 **read tool call 1개**를
+서버-side Tool Broker로 실행하고 최종 답변까지 이어지는 backend 계약이다. Tool call은 agent
+allowlist, published tool spec, JSON schema, user permission, object/property scope, masked property,
+model egress classification, timeout/result budget, confirmation policy를 통과해야만 실행된다.
+
+첫 model call이 tool call을 반환하면 Agent Runtime은 `AiToolCallRecord`를 hash/authorization
+metadata로 기록하고, brokered tool output을 포함한 follow-up model prompt를 별도 encrypted prompt
+artifact로 저장한 뒤 두 번째 governed Model Gateway call로 최종 답변을 만든다. 일반 Operations AI
+detail은 계속 raw prompt/tool output/provider body를 노출하지 않고, model-call count, tool-call hash,
+prompt artifact metadata만 보여준다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Agent runtime tool loop ratchet | `quality:agent-tool-loop` | 모델이 요청한 tool call이 ToolBroker 검사 없이 실행되거나, agent manifest 밖 tool/비허용 tool result classification이 통과되거나, tool result 원문이 Operations detail/일반 DB에 노출되거나, follow-up model prompt가 encrypted prompt artifact 없이 provider로 나가는 문제 차단 |
+
 ### AIP P0d — Context Compiler Ratchet
 
 P0d의 현재 slice는 full Agent Runtime이나 trace UI가 아니라 모델 호출 직전의 prompt assembly

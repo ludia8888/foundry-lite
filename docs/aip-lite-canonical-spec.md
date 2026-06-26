@@ -231,6 +231,9 @@ content_hash, relevance_score, retrieval_method, security_partition, token_estim
   (`GET /api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}` /
   `client.operations.runs.promptArtifact(...)`) that requires `aip_prompt_artifact_reader`, keeps the
   normal run detail plaintext-free, and verifies the receipt belongs to the URL AI run before decrypting.
+  Current P0z also records the follow-up model prompt artifact when a brokered tool result is added to
+  the model-visible turn, so raw tool output used for answer synthesis is encrypted rather than exposed
+  through the normal Operations detail.
 - **Citation Service (§8.7)**: model is given **opaque context IDs**, never source URLs; service maps
   `ctx_id → media item version / page / content unit / hash` and verifies the context ID is in this
   run's manifest + caller may read source + version/hash still match + span relevant. Returns display
@@ -252,10 +255,13 @@ object_type_allowlist, property_allowlist, timeout_seconds, max_result_items}`. 
 state.update, action.propose`. Initial deny: `generic_sql, arbitrary_http_request, shell_execute,
 python_eval, generic_repository_write`.
 - **Agent Runtime (§8.9)**: bounded loop `RECEIVED → RESOLVING_DEFINITION → RETRIEVING_CONTEXT →
-MODEL_RUNNING → TOOL_PENDING → TOOL_RUNNING → WAITING_CONFIRMATION → WAITING_HUMAN_REVIEW →
-MODEL_RUNNING → SUCCEEDED`; terminal `FAILED/CANCELLED/BUDGET_EXCEEDED/POLICY_DENIED`. Budget: max
+  MODEL_RUNNING → TOOL_PENDING → TOOL_RUNNING → WAITING_CONFIRMATION → WAITING_HUMAN_REVIEW →
+  MODEL_RUNNING → SUCCEEDED`; terminal `FAILED/CANCELLED/BUDGET_EXCEEDED/POLICY_DENIED`. Budget: max
   model calls / tool calls / loop iterations / input+output tokens / wall-clock / estimated cost /
-  context items / tool output bytes.
+  context items / tool output bytes. Current P0z adds the first backend-only brokered read-tool loop:
+  an Agent Runtime run may allow exactly one model-requested tool call, executes it only through
+  `ToolBrokerService`, records `AiToolCallRecord` hash/authorization evidence, stores the follow-up
+  model prompt as a second encrypted prompt artifact, and then performs the final governed model call.
 - **Action Proposal + Approval Execution (§8.10, §12.2)**: `ActionProposal{proposal_id, action_type,
 target_object_type, target_object_id, expected_object_version, parameters, evidence_refs,
 originating_ai_run_id, proposal_fingerprint, policy_version, expires_at}`. Fingerprint over
@@ -328,7 +334,7 @@ Add granular gates: `quality:ai-contracts, quality:model-gateway, quality:ai-led
 quality:model-gateway-ledger, quality:prompt-artifacts, quality:retrieval-security, quality:context-compiler, quality:tool-broker,
 quality:action-proposal, quality:approval-execution, quality:ai-operations, quality:logic-runtime,
 quality:ai-evals, quality:ai-release, quality:visual-builder, quality:builder-runtime, quality:agent-runtime,
-quality:agent-runtime-citations, quality:agent-citation-ui, quality:agent-source-previews`. Release gate splits static / unit /
+quality:agent-tool-loop, quality:agent-runtime-citations, quality:agent-citation-ui, quality:agent-source-previews`. Release gate splits static / unit /
 integration / **live provider smoke** (live smoke = separate lane needing credentials + cost).
 
 ## Operational failure semantics (§16.3)

@@ -323,8 +323,12 @@ export type AipAgentRunRequest = {
   maxContextTokens?: number;
   maxModelCalls?: number;
   maxLoopIterations?: number;
+  maxToolCalls?: number;
+  maxToolOutputBytes?: number;
   maxOutputTokens?: number;
   policyVersion?: string;
+  toolManifest?: AipBuilderToolSpec[];
+  agentAllowedTools?: string[];
 };
 export type AipAgentRunResult = {
   agentRunId: string;

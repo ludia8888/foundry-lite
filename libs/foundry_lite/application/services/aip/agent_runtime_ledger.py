@@ -15,7 +15,8 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.ports.context_provider import RetrievedContextItem
 from foundry_lite.application.ports.language_model import ModelResponse
-from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.application.ports.transaction_context import AI_RUN_SUCCEEDED, TransactionContext
+from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.aip.context_compiler import CompiledContext
 from foundry_lite.application.services.aip.eval_identifiers import hash_json
 from foundry_lite.application.services.aip.model_gateway import ModelResolution
@@ -56,7 +57,21 @@ class AgentRuntimeRequestShape(Protocol):
     def max_loop_iterations(self) -> int: ...
 
     @property
+    def max_tool_calls(self) -> int: ...
+
+    @property
+    def max_tool_output_bytes(self) -> int: ...
+
+    @property
     def max_output_tokens(self) -> int: ...
+
+
+def new_ai_run_id() -> str:
+    return f"aip-agent-run-{_new_id('agent')}"
+
+
+def ledger_timestamp() -> str:
+    return _now()
 
 
 def session_record(
@@ -164,6 +179,25 @@ def append_events(
         )
 
 
+def mark_execution_run_succeeded(
+    repository: AiRunRepository,
+    transaction: TransactionContext,
+    ctx: RequestContext,
+    ai_run_id: str,
+    usage: JsonObject,
+    now: str,
+) -> None:
+    repository.update_execution_run_status(
+        transaction=transaction,
+        tenant_id=ctx.tenant_id,
+        ai_run_id=ai_run_id,
+        transition=AI_RUN_SUCCEEDED,
+        usage_json=usage,
+        error_json=None,
+        completed_at=now,
+    )
+
+
 def event_record(
     ctx: RequestContext, ai_run_id: str, sequence: int, event_type: str, payload: JsonObject, now: str
 ) -> AiExecutionEventRecord:
@@ -250,6 +284,8 @@ def _budget_payload(request: AgentRuntimeRequestShape) -> dict[str, object]:
         "maxContextTokens": request.max_context_tokens,
         "maxModelCalls": request.max_model_calls,
         "maxLoopIterations": request.max_loop_iterations,
+        "maxToolCalls": request.max_tool_calls,
+        "maxToolOutputBytes": request.max_tool_output_bytes,
         "maxOutputTokens": request.max_output_tokens,
     }
 

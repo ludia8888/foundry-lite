@@ -317,8 +317,12 @@ def _agent_runtime_request_from_payload(payload: Mapping[str, object]) -> AgentR
         max_context_tokens=_int_default(payload, "maxContextTokens", 1200),
         max_model_calls=_int_default(payload, "maxModelCalls", 1),
         max_loop_iterations=_int_default(payload, "maxLoopIterations", 1),
+        max_tool_calls=_int_default(payload, "maxToolCalls", 0),
+        max_tool_output_bytes=_int_default(payload, "maxToolOutputBytes", 4096),
         max_output_tokens=_int_default(payload, "maxOutputTokens", 512),
         policy_version=_text_default(payload, "policyVersion", "policy-v1"),
+        tool_manifest=tuple(_builder_tool_spec(item) for item in _mapping_items_default(payload, "toolManifest")),
+        agent_allowed_tools=_text_items(payload, "agentAllowedTools"),
     )
 
 
@@ -366,6 +370,12 @@ def _builder_logic_block(payload: Mapping[str, object]) -> LogicBlock:
 
 def _mapping_items(payload: Mapping[str, object], key: str) -> tuple[Mapping[str, object], ...]:
     return tuple(cast(Sequence[Mapping[str, object]], payload[key]))
+
+
+def _mapping_items_default(payload: Mapping[str, object], key: str) -> tuple[Mapping[str, object], ...]:
+    if key not in payload:
+        return ()
+    return _mapping_items(payload, key)
 
 
 def _text_items(payload: Mapping[str, object], key: str) -> tuple[str, ...]:
