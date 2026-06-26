@@ -100,6 +100,8 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "runs: {" in generated
     assert "list(filters?: RuntimeRunQueryFilters): Promise<RuntimeRunQueryResult>;" in generated
     assert "detail(runType: string, runId: string): Promise<RuntimeRunDetail>;" in generated
+    assert "promptArtifact(runId: string, artifactId: string): Promise<PromptArtifactReadResult>;" in generated
+    assert "export type PromptArtifactReadResult = {" in generated
     assert '  | "ai"' in generated
     assert "  aiRuns: RuntimeRow[];" in generated
     assert "  ai?: Record<string, unknown> | null;" in generated
@@ -172,7 +174,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "lineage": ["get"],
         "observability": ["detect"],
         "reconciliation": ["resolve"],
-        "runs": ["list", "detail"],
+        "runs": ["list", "detail", "promptArtifact"],
         "transforms": ["retry"],
         "workflows": ["startConnectorSync", "get"],
     }

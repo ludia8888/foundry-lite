@@ -58,7 +58,7 @@ SDK helper, 파일을 봐야 하는지 남긴다.
 | Object Sets | `client.objectSets.list/create/get(...)` |
 | Actions | generated `client.actions.ApproveOrder.apply(...)` |
 | Materializations | `client.materializations.run(...)` |
-| Operations | run list/detail, lineage get, transform retry, index replay, outbox DLQ retry, Record DLQ controls |
+| Operations | run list/detail, AI prompt artifact access, lineage get, transform retry, index replay, outbox DLQ retry, Record DLQ controls |
 | Platform Ops | observability detect, backup/restore, reconciliation, workflows, Iceberg maintenance `planReadOnly`/`plan` |
 | Insights | `client.insights.reviews.list/create/get/assign/decide(...)` |
 | AIP | `client.aip.builder.validate(...)`, `client.aip.builder.run(...)`, `client.aip.agent.run(...)` |
@@ -92,7 +92,7 @@ operator-evidence note, and helper request-contract proof test.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 45 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 46 frontend route surfaces
 -> browser SDK helper-contract proof for 12 frontend foundation helpers
 -> documentation count claims checked against the matrix and generated SDK helper list
 -> Web named-SDK-only usage

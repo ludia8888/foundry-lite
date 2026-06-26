@@ -227,6 +227,10 @@ content_hash, relevance_score, retrieval_method, security_partition, token_estim
   historical key resolver: prompt artifact reads request the exact `secret://name@version` recorded at
   write time, and the local `EnvSecretProvider` can serve prior versions from
   `<CURRENT_SECRET_ENV>__VERSION_<NORMALIZED_VERSION>` while still redacting secret values in errors.
+  Current P0y exposes the protected raw prompt only through a separate Operations API/SDK read surface
+  (`GET /api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}` /
+  `client.operations.runs.promptArtifact(...)`) that requires `aip_prompt_artifact_reader`, keeps the
+  normal run detail plaintext-free, and verifies the receipt belongs to the URL AI run before decrypting.
 - **Citation Service (§8.7)**: model is given **opaque context IDs**, never source URLs; service maps
   `ctx_id → media item version / page / content unit / hash` and verifies the context ID is in this
   run's manifest + caller may read source + version/hash still match + span relevant. Returns display

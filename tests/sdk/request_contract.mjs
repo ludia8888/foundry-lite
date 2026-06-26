@@ -574,6 +574,13 @@ await expectSdkCall(
 await expectSdkCall("operations.runs.detail", () => client.operations.runs.detail("index", "run/1"), {
   path: "/api/operations/runs/index/run%2F1",
 });
+await expectSdkCall(
+  "operations.runs.promptArtifact",
+  () => client.operations.runs.promptArtifact("ai/run-1", "ai/run-1-compiled-prompt"),
+  {
+    path: "/api/operations/runs/ai/ai%2Frun-1/prompt-artifacts/ai%2Frun-1-compiled-prompt",
+  },
+);
 await expectSdkCall("operations.lineage.get", () => client.operations.lineage.get("dataset-version/1"), {
   path: "/api/operations/lineage?resourceId=dataset-version%2F1",
 });

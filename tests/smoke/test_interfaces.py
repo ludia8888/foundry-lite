@@ -1020,8 +1020,9 @@ def test_api_aip_agent_run_calls_model_and_links_operations_detail(foundry, monk
         "X-User-ID": "ops-user",
         "X-Roles": "admin,data_engineer,ops_manager",
     }
+    client = TestClient(app)
 
-    response = TestClient(app).post(
+    response = client.post(
         "/api/aip/agent/run",
         headers=headers,
         json={
@@ -1050,12 +1051,42 @@ def test_api_aip_agent_run_calls_model_and_links_operations_detail(foundry, monk
     assert body["operations"]["runType"] == "ai"
     assert len(body["contextIds"]) == 1
 
-    detail = TestClient(app).get(f"/api/operations/runs/ai/{body['aiRunId']}", headers=headers)
+    detail = client.get(f"/api/operations/runs/ai/{body['aiRunId']}", headers=headers)
     detail_body = detail.json()
     assert detail.status_code == 200
     assert detail_body["ai"]["summary"]["modelCallCount"] == 1
     assert detail_body["ai"]["summary"]["contextItemCount"] == 1
     assert detail_body["ai"]["summary"]["toolCallCount"] == 0
+    assert detail_body["ai"]["summary"]["promptArtifactCount"] == 1
+    artifact = detail_body["ai"]["promptArtifacts"][0]
+    assert artifact["artifact_ref"].startswith("local-prompt-artifact://")
+    assert artifact["content_hash"] == detail_body["row"]["compiled_prompt_hash"]
+    assert artifact["encryption_algorithm"] == "fernet-v1"
+    assert artifact["export_marking"] == "aip-trace-restricted"
+    serialized_detail = json.dumps(detail_body, sort_keys=True)
+    assert "Explain Order O-1001 for the operator." not in serialized_detail
+    assert "Answer as the Order Operations Copilot" not in serialized_detail
+    assert "pytest-prompt-artifact-key" not in serialized_detail
+    denied = client.get(
+        f"/api/operations/runs/ai/{body['aiRunId']}/prompt-artifacts/{artifact['id']}",
+        headers=headers,
+    )
+    assert denied.status_code == 403
+    assert denied.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+    reader = client.get(
+        f"/api/operations/runs/ai/{body['aiRunId']}/prompt-artifacts/{artifact['id']}",
+        headers={**headers, "X-Roles": headers["X-Roles"] + ",aip_prompt_artifact_reader"},
+    )
+    reader_body = reader.json()
+    prompt_payload = json.loads(reader_body["plaintext"])
+    assert reader.status_code == 200
+    assert reader_body["artifactId"] == artifact["id"]
+    assert reader_body["aiRunId"] == body["aiRunId"]
+    assert reader_body["contentHash"] == artifact["content_hash"]
+    assert reader_body["exportMarking"] == "aip-trace-restricted"
+    assert reader_body["plaintext"] not in serialized_detail
+    assert "Explain Order O-1001 for the operator." in {message["content"] for message in prompt_payload["messages"]}
 
 
 def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:

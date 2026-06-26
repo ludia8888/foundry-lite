@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 from types import ModuleType
@@ -970,18 +971,53 @@ def test_prompt_artifacts_gate_runs_after_model_gateway_before_context_compiler(
 
     model_gateway_ledger_step = "pnpm --silent quality:model-gateway-ledger"
     prompt_artifacts_step = "pnpm --silent quality:prompt-artifacts"
+    prompt_artifact_access_step = "pnpm --silent quality:prompt-artifact-access"
     context_compiler_step = "pnpm --silent quality:context-compiler"
     assert prompt_artifacts_step in script
     assert (
         script.index(model_gateway_ledger_step)
         < script.index(prompt_artifacts_step)
+        < script.index(prompt_artifact_access_step)
         < script.index(context_compiler_step)
     )
     assert '"quality:prompt-artifacts"' in package_json
+    assert '"quality:prompt-artifact-access"' in package_json
     assert "tests/contracts/test_prompt_artifact_store_contract.py" in package_json
     assert "tests/unit/test_prompt_artifact_service.py" in package_json
     assert "tests/unit/test_infrastructure_repository_edges.py" in package_json
     assert "agent_runtime_fails_before_model_when_prompt_artifact_write_fails" in package_json
+    assert "api_aip_agent_run_calls_model_and_links_operations_detail" in package_json
+
+
+def test_aip_roadmap_quality_gates_are_package_and_ci_covered() -> None:
+    roadmap = (ROOT / "docs" / "quality-gate-roadmap.md").read_text(encoding="utf-8")
+    ci_gate = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    scripts = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["scripts"]
+    aip_section = roadmap.split("### AIP P0c", maxsplit=1)[1].split("### S60", maxsplit=1)[0]
+
+    referenced_gates = sorted(set(re.findall(r"`(?:pnpm --silent |pnpm )?(quality:[a-z0-9-]+)`", aip_section)))
+    missing_package_scripts = [gate for gate in referenced_gates if gate not in scripts]
+
+    covered_gates = set(re.findall(r"quality:[a-z0-9-]+", ci_gate))
+    changed = True
+    while changed:
+        changed = False
+        for gate in list(covered_gates):
+            for nested_gate in re.findall(r"quality:[a-z0-9-]+", scripts.get(gate, "")):
+                if nested_gate in scripts and nested_gate not in covered_gates:
+                    covered_gates.add(nested_gate)
+                    changed = True
+
+    missing_ci_coverage = []
+    for gate in referenced_gates:
+        command = scripts.get(gate, "")
+        command_paths = re.findall(r"(?:scripts|tests)/[A-Za-z0-9_./-]+", command)
+        has_direct_command = any(path in ci_gate for path in command_paths)
+        if gate not in covered_gates and not has_direct_command:
+            missing_ci_coverage.append(gate)
+
+    assert not missing_package_scripts
+    assert not missing_ci_coverage
 
 
 def test_ai_evidence_gate_runs_after_ai_ledger_gate() -> None:

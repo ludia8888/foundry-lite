@@ -355,6 +355,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "operations.runs.promptArtifact",
+      "route": "GET /api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.runs.promptArtifact",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Prompt artifact access is separate from the safe AI run detail and requires the aip_prompt_artifact_reader role before plaintext is returned.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.workflows.start-connector-sync",
       "route": "POST /api/operations/workflows/connector-sync/start",
       "productArea": "operations-console",

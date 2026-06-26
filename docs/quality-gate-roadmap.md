@@ -1717,6 +1717,24 @@ missing/mismatched version 에러는 secret value를 노출하지 않는다.
 |---|---|---|
 | Prompt artifact key-version ratchet | `quality:prompt-artifacts`; `uv run pytest tests/contracts/test_secret_provider_contract.py tests/contracts/test_prompt_artifact_store_contract.py -q` | prompt artifact receipt에 key version을 저장해도 read path가 현재 key만 사용해 rotation 뒤 과거 prompt audit을 잃거나, unavailable old key를 current key fallback으로 가려 integrity/audit 원인을 흐리는 문제 차단 |
 
+### AIP P0y — Prompt Artifact Access API/SDK Ratchet
+
+P0y의 현재 slice는 full visual trace explorer나 prompt artifact viewer UI가 아니라, P0v/P0x로
+보호 저장된 raw compiled prompt를 **별도 권한 API/SDK surface**로만 여는 backend/operator-access
+계약이다. 일반 Operations AI run detail은 계속 artifact refs/hash/retention/export marking metadata만
+노출하고 plaintext를 포함하지 않는다. 새 `GET /api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}`
+경로와 generated SDK `client.operations.runs.promptArtifact(runId, artifactId)`는
+`aip_prompt_artifact_reader` role이 있는 caller에게만 plaintext를 반환한다.
+
+Route `run_id`는 단순 장식이 아니다. `PromptArtifactService.read_prompt_artifact(..., ai_run_id=...)`
+는 receipt의 `ai_run_id`가 URL의 run id와 다르면 encrypted store를 읽기 전에 `NOT_FOUND`로 fail
+closed한다. 따라서 tenant-scoped artifact id를 알아도 다른 AI run URL 아래에서 prompt를 열 수 없고,
+reader role이 없으면 API는 `PERMISSION_DENIED`를 반환한다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Prompt artifact access ratchet | `quality:prompt-artifact-access`; `pnpm --silent quality:sdk-request-contract` | encrypted prompt artifact는 저장되어 있지만 운영/API/SDK에서 원문 접근 경로가 없거나, 일반 Operations detail에 raw prompt가 섞이거나, reader role 없는 caller가 plaintext를 받거나, URL run id와 receipt run id가 달라도 복호화가 진행되는 문제 차단 |
+
 ### AIP P0d — Context Compiler Ratchet
 
 P0d의 현재 slice는 full Agent Runtime이나 trace UI가 아니라 모델 호출 직전의 prompt assembly
@@ -2029,7 +2047,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 45개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 46개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 12개 SDK helper의 retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

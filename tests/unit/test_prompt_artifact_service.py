@@ -17,6 +17,7 @@ from foundry_lite.application.ports.secret_provider import SecretValue
 from foundry_lite.application.services.aip.prompt_artifact_service import (
     PromptArtifactAccessDenied,
     PromptArtifactIntegrityError,
+    PromptArtifactNotFound,
     PromptArtifactService,
 )
 from foundry_lite.domain.context import RequestContext
@@ -141,6 +142,29 @@ def test_prompt_artifact_service_fails_closed_when_receipt_hash_does_not_match(t
 
     with pytest.raises(PromptArtifactStoreError, match="content hash mismatch"):
         service.read_prompt_artifact(reader_ctx, artifact_id=record.id)
+
+
+def test_prompt_artifact_service_rejects_wrong_ai_run_before_decrypting(tmp_path: Path) -> None:
+    service, engine = _service(tmp_path)
+    _seed_run(engine)
+    ctx = RequestContext(tenant_id=_TENANT, actor_user_id="ops-user", roles=("ops_manager",))
+    reader_ctx = RequestContext(
+        tenant_id=_TENANT,
+        actor_user_id="auditor",
+        roles=("ops_manager", "aip_prompt_artifact_reader"),
+    )
+    record = service.record_compiled_prompt(
+        ctx,
+        ai_run_id="ai-run-1",
+        compiled_prompt_hash=_hash_text(_RAW_PROMPT),
+        compiled_prompt_text=_RAW_PROMPT,
+        created_at="2026-06-26T00:00:00+00:00",
+    )
+    for artifact_file in tmp_path.rglob("*.fernet"):
+        artifact_file.unlink()
+
+    with pytest.raises(PromptArtifactNotFound, match="ai-run-2"):
+        service.read_prompt_artifact(reader_ctx, artifact_id=record.id, ai_run_id="ai-run-2")
 
 
 class _ReceiptFailingAiRunRepository:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import Protocol, cast
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -75,6 +75,23 @@ instrument_sqlalchemy_engine(foundry.engine)
 
 JsonObject = dict[str, object]
 ValidationErrorPayload = dict[str, object]
+
+
+class PromptArtifactPayload(Protocol):
+    @property
+    def artifact_id(self) -> str: ...
+
+    @property
+    def ai_run_id(self) -> str: ...
+
+    @property
+    def content_hash(self) -> str: ...
+
+    @property
+    def export_marking(self) -> str: ...
+
+    @property
+    def plaintext(self) -> str: ...
 
 
 class ObservabilityDetectRequest(BaseModel):
@@ -413,6 +430,16 @@ def _handle_error(exc: FoundryLiteError, request: Request | None = None) -> HTTP
         status_code=status,
         detail={"code": exc.code, "message": exc.message, "details": exc.details, "request_id": request_id},
     )
+
+
+def _prompt_artifact_payload(result: PromptArtifactPayload) -> dict[str, object]:
+    return {
+        "artifactId": result.artifact_id,
+        "aiRunId": result.ai_run_id,
+        "contentHash": result.content_hash,
+        "exportMarking": result.export_marking,
+        "plaintext": result.plaintext,
+    }
 
 
 @app.get("/healthz")
@@ -761,6 +788,15 @@ def approve_backup_restore_resume(
 def get_operation_run_detail(request: Request, run_type: str, run_id: str) -> RuntimeRunDetail:
     try:
         return foundry.operations.run_detail(run_type, run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}")
+def get_ai_prompt_artifact(request: Request, run_id: str, artifact_id: str) -> dict[str, object]:
+    try:
+        result = foundry.operations.read_prompt_artifact(run_id, artifact_id, ctx=_ctx(request))
+        return _prompt_artifact_payload(result)
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

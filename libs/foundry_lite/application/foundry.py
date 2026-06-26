@@ -111,6 +111,7 @@ class FoundryLite:
             services.backup_restore,
             services.iceberg_maintenance,
             services.workflow,
+            services.prompt_artifact,
         )
         self.demo = SupplyChainDemo(services.demo, reset_fresh=lambda: self.reset(confirm_dev=True))
 

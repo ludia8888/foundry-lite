@@ -18,21 +18,22 @@ from foundry_lite.application.ports.prompt_artifact_store import (
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
 
 _PROMPT_ARTIFACT_READER_ROLE = "aip_prompt_artifact_reader"
 _PROMPT_RETENTION_DAYS = 7
 _EXPORT_MARKING = "aip-trace-restricted"
 
 
-class PromptArtifactAccessDenied(Exception):
+class PromptArtifactAccessDenied(PermissionDenied):
     """Raised when a caller lacks explicit raw prompt artifact access."""
 
 
-class PromptArtifactNotFound(Exception):
+class PromptArtifactNotFound(NotFound):
     """Raised when the tenant-scoped artifact receipt is missing."""
 
 
-class PromptArtifactIntegrityError(Exception):
+class PromptArtifactIntegrityError(ConflictDetected):
     """Raised when a prompt artifact no longer matches its ledger receipt."""
 
 
@@ -98,7 +99,9 @@ class PromptArtifactService(CoreService):
         if run is None:
             raise PromptArtifactNotFound(f"AI run {ai_run_id} was not found")
 
-    def read_prompt_artifact(self, ctx: RequestContext, *, artifact_id: str) -> PromptArtifactReadResult:
+    def read_prompt_artifact(
+        self, ctx: RequestContext, *, artifact_id: str, ai_run_id: str | None = None
+    ) -> PromptArtifactReadResult:
         if not ctx.has_role(_PROMPT_ARTIFACT_READER_ROLE):
             raise PromptArtifactAccessDenied("explicit prompt artifact reader role is required")
         with self.engine.begin() as transaction:
@@ -107,6 +110,8 @@ class PromptArtifactService(CoreService):
             )
         if row is None:
             raise PromptArtifactNotFound(f"prompt artifact {artifact_id} was not found")
+        if ai_run_id is not None and str(row["ai_run_id"]) != ai_run_id:
+            raise PromptArtifactNotFound(f"prompt artifact {artifact_id} was not found for AI run {ai_run_id}")
         plaintext = self.prompt_artifact_store.read_prompt_artifact(
             PromptArtifactRead(
                 tenant_id=ctx.tenant_id,

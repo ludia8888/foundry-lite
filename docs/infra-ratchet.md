@@ -1107,7 +1107,10 @@ Media/Content Plane (standalone family, not in `activeStack`).
   version=...)`, and fail closed if the old key is unavailable instead of silently trying the current key.
   The local `EnvSecretProvider` supports retained prior local keys through
   `<CURRENT_SECRET_ENV>__VERSION_<NORMALIZED_VERSION>` entries and keeps mismatch/missing-version errors
-  value-redacted.
+  value-redacted. P0y adds the first separate prompt artifact access surface: Operations run detail remains
+  metadata-only, while `GET /api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}` and generated
+  SDK `client.operations.runs.promptArtifact(...)` require `aip_prompt_artifact_reader` and verify the
+  receipt's AI run id before decrypting.
 
 - **P0d — Context compiler + retrieval context contract (shipped as the first prompt assembly slice):**
   `ContextProvider` and `RetrievedContextItem` now define the authorized retrieval boundary that hands
@@ -1220,8 +1223,8 @@ Media/Content Plane (standalone family, not in `activeStack`).
   canonical §9.7 privacy boundary: the general DB/API surface carries refs, hashes, redacted previews,
   counts, and ids, not raw prompt artifacts. `quality:ai-operations` proves SQL-backed list/detail,
   API smoke behavior, raw AI payload non-leakage, generated SDK type drift, and CI runtime-lane wiring.
-  A full visual trace explorer, separate encrypted prompt artifact access, log-access/marking
-  administration, and live provider usage dashboards remain later AIP slices.
+  A full visual trace explorer, prompt artifact viewer UI, log-access/marking administration, and live
+  provider usage dashboards remain later AIP slices.
 
 - **P0j — Logic Runtime typed DAG + safe boundary execution (shipped as the first Logic slice):**
   `LogicRuntimeService` validates a typed, bounded AIP Logic DAG before any block runs. Duplicate block
