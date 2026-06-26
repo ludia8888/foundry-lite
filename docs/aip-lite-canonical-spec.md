@@ -209,7 +209,8 @@ tool_manifest_hash, state_snapshot_hash, policy_snapshot_hash`. Retrieved docs a
 - **Citation Service (§8.7)**: model is given **opaque context IDs**, never source URLs; service maps
   `ctx_id → media item version / page / content unit / hash` and verifies the context ID is in this
   run's manifest + caller may read source + version/hash still match + span relevant. Returns display
-  payload + signed navigation ref.
+  payload + signed navigation ref. Current P0q composes this service into Agent Runtime for structured
+  JSON `answer` + `citations` model output, keeping plain-text model output backward compatible.
 - **Tool Registry / Tool Broker (§8.8)**: `ToolSpec{tool_id, version, input_schema, output_schema,
 effect∈READ|PROPOSE_WRITE|WRITE, required_permission, confirmation_policy∈NONE|USER|HUMAN_REVIEW,
 object_type_allowlist, property_allowlist, timeout_seconds, max_result_items}`. Broker check order:
@@ -295,7 +296,8 @@ AiRunRepository, ContextProvider, ToolExecutor, UsageMeter`.
 Add granular gates: `quality:ai-contracts, quality:model-gateway, quality:ai-ledger,
 quality:retrieval-security, quality:context-compiler, quality:tool-broker, quality:action-proposal,
 quality:approval-execution, quality:ai-operations, quality:logic-runtime, quality:ai-evals,
-quality:ai-release, quality:visual-builder, quality:builder-runtime, quality:agent-runtime`. Release gate splits static / unit /
+quality:ai-release, quality:visual-builder, quality:builder-runtime, quality:agent-runtime,
+quality:agent-runtime-citations`. Release gate splits static / unit /
 integration / **live provider smoke** (live smoke = separate lane needing credentials + cost).
 
 ## Operational failure semantics (§16.3)

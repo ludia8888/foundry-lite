@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse, ModelToolCall
@@ -37,6 +38,41 @@ class _ToolCallingLanguageModel:
         )
 
 
+class _CitingLanguageModel:
+    profile_name = "citing-language-model"
+
+    def __init__(self, *, forged_context_id: str | None = None) -> None:
+        self._forged_context_id = forged_context_id
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        context_id = self._forged_context_id or _first_citation_context_id(request)
+        answer = "Order O-1001 is delayed because fulfillment is blocked."
+        content = json.dumps(
+            {
+                "answer": answer,
+                "citations": [
+                    {
+                        "contextId": context_id,
+                        "claimSpan": {"start": 0, "end": 13},
+                        "citationOrder": 1,
+                    }
+                ],
+            },
+            sort_keys=True,
+        )
+        return ModelResponse(
+            provider="fake",
+            resolved_model_id="",
+            resolved_model_revision="",
+            content=content,
+            finish_reason="stop",
+            input_tokens=8,
+            output_tokens=8,
+            normalized_tool_calls=(),
+            provider_request_id="citation-request",
+        )
+
+
 def test_agent_runtime_retrieves_context_calls_model_and_links_operations(foundry: Any) -> None:
     prepare_indexed_demo(foundry)
 
@@ -61,6 +97,29 @@ def test_agent_runtime_retrieves_context_calls_model_and_links_operations(foundr
     assert detail["row"]["resolved_model_id"] == "local-fake-model"
     assert detail["row"]["compiled_prompt_hash"].startswith("sha256:")
     assert detail["ai"]["events"][0]["event_type"] == "received"
+
+
+def test_agent_runtime_resolves_model_citations_into_payload_and_ai_ledger(foundry: Any, monkeypatch: Any) -> None:
+    prepare_indexed_demo(foundry)
+    monkeypatch.setenv("FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER", "agent-runtime-citation-secret")
+    foundry._services.model_gateway.language_model_adapter = _CitingLanguageModel()
+
+    result = foundry.aip.run_agent_payload(
+        payload={**_payload(), "agentRunId": "agent-runtime-citation"},
+        ctx=_CTX,
+    )
+    payload = result.to_payload()
+    detail = foundry.operations.run_detail("ai", result.ai_run_id or "", ctx=_CTX)
+
+    assert result.run_status == "succeeded"
+    assert result.answer == "Order O-1001 is delayed because fulfillment is blocked."
+    assert len(payload["citations"]) == 1
+    assert payload["citations"][0]["contextId"] == result.context_ids[0]
+    assert str(payload["citations"][0]["navigationRef"]).startswith("flite-citation-nav.v1.")
+    assert "agent-runtime-citation-secret" not in str(payload["citations"][0]["navigationRef"])
+    assert detail["ai"]["summary"]["citationCount"] == 1
+    assert detail["ai"]["citations"][0]["rendered_ref"].startswith("[1] object:")
+    assert detail["ai"]["citations"][0]["context_item_id"] == f"{result.ai_run_id}-context-1"
 
 
 def test_agent_runtime_packs_document_context_into_ai_ledger(foundry: Any) -> None:
@@ -90,6 +149,28 @@ def test_agent_runtime_packs_document_context_into_ai_ledger(foundry: Any) -> No
     assert row["source_resource_id"] == "content-unit://miv-agent-doc-1/cu-agent-doc-1"
     assert row["retrieval_method"] == "content_hybrid_authoritative_reread"
     assert row["content_hash"].startswith("sha256:")
+
+
+def test_agent_runtime_rejects_forged_model_citation_before_success(foundry: Any, monkeypatch: Any) -> None:
+    prepare_indexed_demo(foundry)
+    monkeypatch.setenv("FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER", "agent-runtime-citation-secret")
+    foundry._services.model_gateway.language_model_adapter = _CitingLanguageModel(forged_context_id="ctx-forged-url")
+
+    result = foundry.aip.run_agent_payload(
+        payload={**_payload(), "agentRunId": "agent-runtime-forged-citation"},
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "failed"
+    assert result.ai_run_id is not None
+    assert result.error == {
+        "reason": "context_not_in_manifest",
+        "detail": "context id ctx-forged-url is not in the run manifest",
+    }
+    detail = foundry.operations.run_detail("ai", result.ai_run_id, ctx=_CTX)
+    assert detail["row"]["status"] == "failed"
+    assert detail["ai"]["summary"]["citationCount"] == 0
+    assert detail["ai"]["events"][-1]["event_type"] == "failed"
 
 
 def test_agent_runtime_rejects_tool_calls_and_marks_seeded_run_failed(foundry: Any) -> None:
@@ -232,3 +313,12 @@ def _seed_agent_document_context(foundry: Any) -> None:
 def _table_count(engine: Any, table: Any) -> int:
     with engine.begin() as conn:
         return int(conn.execute(select(func.count()).select_from(table)).scalar_one())
+
+
+def _first_citation_context_id(request: ModelRequest) -> str:
+    system = request.messages[0].content
+    marker = "## citation_mapping\n"
+    start = system.index(marker) + len(marker)
+    end = system.find("\n\n## ", start)
+    payload = json.loads(system[start:] if end == -1 else system[start:end])
+    return str(payload["citations"][0]["context_id"])

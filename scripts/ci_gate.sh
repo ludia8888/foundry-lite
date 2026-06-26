@@ -426,6 +426,8 @@ run_runtime_gate() {
 
   run_runtime_step "AIP Agent Runtime readonly ratchet" pnpm --silent quality:agent-runtime
 
+  run_runtime_step "AIP Agent Runtime citation rendering ratchet" pnpm --silent quality:agent-runtime-citations
+
   run_runtime_step "AI evidence lineage ratchet" pnpm --silent quality:ai-evidence
 
   run_runtime_step "Insight review workspace ratchet" pnpm --silent quality:insight-review

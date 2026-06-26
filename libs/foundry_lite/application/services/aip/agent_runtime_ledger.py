@@ -82,7 +82,7 @@ def message_record(
     now: str,
 ) -> AiMessageRecord:
     return AiMessageRecord(
-        id=f"aip-agent-message-{request.agent_run_id}-{role}",
+        id=message_id(request, role),
         tenant_id=ctx.tenant_id,
         session_id=session_id,
         role=role,
@@ -91,6 +91,10 @@ def message_record(
         content_hash=hash_json({"role": role, "content": content}),
         created_at=now,
     )
+
+
+def message_id(request: AgentRuntimeRequestShape, role: str) -> str:
+    return f"aip-agent-message-{request.agent_run_id}-{role}"
 
 
 def run_record(

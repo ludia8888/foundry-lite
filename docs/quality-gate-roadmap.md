@@ -1820,7 +1820,7 @@ authorized context retrieval, deterministic context compiler, governed Model Gat
 ledger, Operations trace로 연결하는 read-only runtime path다. 모델이 tool call을 반환해도 이
 slice에서는 실행하지 않고 fail closed 한다.
 
-아직 multi-iteration tool loop, citation rendering, visual debugger, eval workbench,
+아직 multi-iteration tool loop, visual debugger, eval workbench,
 persisted Agent Studio definitions는 후속 slice다.
 
 | Gate | Command | Blocks |
@@ -1841,7 +1841,8 @@ source ref/version, `sha256:` content hash, retrieval method, security partition
 
 Beyond current P0o, AIP-specific document context packing is handled by P0p below. Already-covered
 ontology/media retrieval outputs를 Agent context로 묶는 broader dense+lexical fusion, optional
-reranking, citation rendering, visual retrieval debugging은 later slices다.
+reranking, visual retrieval debugging은 later slices다. Agent Runtime citation rendering is handled
+by P0q below.
 
 | Gate | Command | Blocks |
 |---|---|---|
@@ -1859,12 +1860,31 @@ source ref, source media version, `sha256:` prompt-text hash, retrieval method, 
 token estimate를 담는다. Agent Runtime은 `modelAllowedClassifications`를 retrieval request까지
 전달하므로 over-classified document가 ranking/prompt 전에 빠질 수 있다.
 
-Broader object+media OAG fusion, cross-source diversity, optional reranking, citation rendering,
-visual retrieval debugging은 later slices다.
+Broader object+media OAG fusion, cross-source diversity, optional reranking, visual retrieval
+debugging은 later slices다. Agent Runtime citation rendering is handled by P0q below.
 
 | Gate | Command | Blocks |
 |---|---|---|
 | Retrieval document context ratchet | `quality:retrieval-document-context` | Agent Runtime이 document/content search hit의 stale index text를 prompt에 넣거나, content unit DB re-read/hash/security/classification pre-filter를 건너뛰거나, document context가 AI run ledger에서 source/version/hash 없이 남는 문제 차단 |
+
+### AIP P0q — Agent Runtime Citation Rendering Ratchet
+
+P0q의 현재 slice는 full visual trace explorer나 multi-turn autonomous citation loop가 아니라,
+P0f `CitationService`를 P0n/P0p Agent Runtime 성공 경로에 연결하는 첫 answer-citation
+path다. Agent Runtime은 plain-text model output을 기존처럼 유지하되, model response가
+structured JSON `answer` + `citations`를 반환하면 citation claim의 opaque `contextId`,
+claim span, order만 받아들인다. 각 claim은 `CitationService`가 tenant-scoped AI run manifest,
+selected context item, source read permission, current source version/hash를 다시 확인한 뒤에만
+`AiCitationRecord`와 signed `flite-citation-nav.v1` navigation ref로 렌더링된다. forged context id,
+malformed citation payload, stale source, permission deny는 run success 전에 fail closed되고,
+Operations AI detail의 `citationCount`/`citations`에 검증된 citation만 남는다.
+
+Full inline citation UI, source-specific rich preview, multi-turn citation repair, and visual trace
+debugging은 later slices다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Agent runtime citation rendering ratchet | `quality:agent-runtime-citations` | Agent Runtime이 모델이 만든 URL/context id를 그대로 answer citation으로 노출하거나, CitationService 검증 없이 success run을 닫거나, 검증된 citation을 result/API/Operations 장부에 연결하지 못하는 문제 차단 |
 
 ### S60 — AI Evidence Lineage Ratchet
 

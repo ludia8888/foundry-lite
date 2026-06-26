@@ -333,6 +333,7 @@ export type AipAgentRunResult = {
   runStatus: string;
   answer: string | null;
   contextIds: string[];
+  citations: Array<Record<string, unknown>>;
   operations: { runType: string; runId: string; detailPath: string } | null;
   usage?: Record<string, unknown>;
   error?: { reason?: string; detail?: string } & Record<string, unknown>;

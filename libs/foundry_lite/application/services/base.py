@@ -59,6 +59,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_proposal_service": "ActionProposalService",
     "backup_restore_service": "BackupRestoreService",
     "builder_runtime_service": "BuilderRuntimeService",
+    "citation_service": "CitationService",
     "context_compiler_service": "ContextCompilerService",
     "content_retrieval_service": "DefaultContentRetrievalService",
     "media_visual_search_service": "MediaVisualSearchService",

@@ -11,18 +11,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from foundry_lite.application.ports.context_provider import (
-    ContextCompilationError,
-    ContextRetrievalError,
-    ContextRetrievalRequest,
-    RetrievedContextItem,
-)
-from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse
-from foundry_lite.application.ports.transaction_context import AI_RUN_FAILED, AI_RUN_SUCCEEDED
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.aip.agent_runtime_citations import (
+    AgentRuntimeAnswer,
+    CitationResolver,
+    citation_error_payload,
+    resolve_agent_answer_citations,
+)
 from foundry_lite.application.services.aip.agent_runtime_ledger import (
     append_events,
     event_record,
+    message_id,
     message_record,
     model_call,
     operations_ref,
@@ -30,6 +29,16 @@ from foundry_lite.application.services.aip.agent_runtime_ledger import (
     run_record,
     session_record,
     usage_record,
+)
+from foundry_lite.application.services.aip.agent_runtime_ports import (
+    AI_RUN_FAILED,
+    AI_RUN_SUCCEEDED,
+    ContextCompilationError,
+    ContextRetrievalError,
+    ContextRetrievalRequest,
+    ModelRequest,
+    ModelResponse,
+    RetrievedContextItem,
 )
 from foundry_lite.application.services.aip.context_compiler import (
     CompiledContext,
@@ -90,6 +99,7 @@ class AgentRuntimeResult:
     run_status: str
     answer: str | None
     context_ids: tuple[str, ...]
+    citations: tuple[JsonObject, ...] = ()
     usage: JsonObject | None = None
     error: JsonObject | None = None
 
@@ -101,6 +111,7 @@ class AgentRuntimeResult:
             "runStatus": self.run_status,
             "answer": self.answer,
             "contextIds": list(self.context_ids),
+            "citations": [dict(citation) for citation in self.citations],
             "operations": operations_ref(self.ai_run_id),
         }
         if self.usage is not None:
@@ -119,11 +130,13 @@ class AgentRuntimeService(CoreService):
         "model_gateway_service",
         "object_query_service",
         "content_retrieval_service",
+        "citation_service",
     )
     context_compiler_service: ContextCompilerService
     model_gateway_service: ModelGatewayService
     object_query_service: RetrievalObjectQuery
     content_retrieval_service: RetrievalContentSearch
+    citation_service: CitationResolver
 
     def run(self, ctx: RequestContext, request: AgentRuntimeRequest) -> AgentRuntimeResult:
         ai_run_id: str | None = None
@@ -140,14 +153,15 @@ class AgentRuntimeService(CoreService):
             seeded = True
             response = self.model_gateway_service.invoke(ctx, _model_request(request, ai_run_id, compiled))
             _guard_readonly_response(response)
+            answer = self._resolve_answer_citations(ctx, request, ai_run_id, response)
         except Exception as exc:
             if seeded and ai_run_id is not None:
                 self._fail_seeded_run(ctx, ai_run_id, exc)
             return _failed_result(request, ai_run_id if seeded else None, session_id if seeded else None, exc)
         assert ai_run_id is not None
         assert session_id is not None
-        self._finish_success(ctx, request, ai_run_id, session_id, context_items, compiled, response)
-        return _success_result(request, ai_run_id, session_id, context_items, response)
+        self._finish_success(ctx, request, ai_run_id, session_id, context_items, compiled, response, answer)
+        return _success_result(request, ai_run_id, session_id, context_items, response, answer)
 
     def _retrieve_context(self, ctx: RequestContext, request: AgentRuntimeRequest) -> tuple[RetrievedContextItem, ...]:
         items = RetrievalOrchestrator(
@@ -207,6 +221,7 @@ class AgentRuntimeService(CoreService):
         context_items: tuple[RetrievedContextItem, ...],
         compiled: CompiledContext,
         response: ModelResponse,
+        answer: AgentRuntimeAnswer,
     ) -> None:
         usage = _usage_payload(response, context_items)
         now = _now()
@@ -221,7 +236,7 @@ class AgentRuntimeService(CoreService):
             )
             self.ai_run_repository.insert_message_or_get_existing(
                 transaction=transaction,
-                record=message_record(ctx, request, session_id, response.content, "assistant", now),
+                record=message_record(ctx, request, session_id, answer.answer, "assistant", now),
             )
             append_events(self.ai_run_repository, transaction, ctx, request, ai_run_id, ("succeeded",), now, start=4)
             self.ai_run_repository.update_execution_run_status(
@@ -233,6 +248,19 @@ class AgentRuntimeService(CoreService):
                 error_json=None,
                 completed_at=now,
             )
+
+    def _resolve_answer_citations(
+        self, ctx: RequestContext, request: AgentRuntimeRequest, ai_run_id: str, response: ModelResponse
+    ) -> AgentRuntimeAnswer:
+        now = _now()
+        return resolve_agent_answer_citations(
+            ctx,
+            self.citation_service,
+            ai_run_id=ai_run_id,
+            message_id=message_id(request, "assistant"),
+            model_content=response.content,
+            issued_at=now,
+        )
 
     def _fail_seeded_run(self, ctx: RequestContext, ai_run_id: str, exc: Exception) -> None:
         try:
@@ -342,6 +370,9 @@ def _error_payload(exc: Exception) -> dict[str, object]:
         return {"reason": exc.reason, "detail": exc.detail}
     if isinstance(exc, ContextRetrievalError):
         return {"reason": exc.reason, "detail": exc.detail}
+    citation_payload = citation_error_payload(exc)
+    if citation_payload is not None:
+        return citation_payload
     adapter_payload = _adapter_error_payload(exc)
     if adapter_payload is not None:
         return adapter_payload
@@ -369,15 +400,17 @@ def _success_result(
     session_id: str,
     context_items: tuple[RetrievedContextItem, ...],
     response: ModelResponse,
+    answer: AgentRuntimeAnswer,
 ) -> AgentRuntimeResult:
     return AgentRuntimeResult(
         agent_run_id=request.agent_run_id,
         ai_run_id=ai_run_id,
         session_id=session_id,
         run_status="succeeded",
-        answer=response.content,
+        answer=answer.answer,
         context_ids=tuple(item.context_id for item in context_items),
         usage=_usage_payload(response, context_items),
+        citations=answer.citations,
     )
 
 

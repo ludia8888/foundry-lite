@@ -197,6 +197,7 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "approval_execution_service": services.approval_execution,
         "backup_restore_service": services.backup_restore,
         "builder_runtime_service": services.builder_runtime,
+        "citation_service": services.citation,
         "context_compiler_service": services.context_compiler,
         "content_retrieval_service": services.media.retrieval,
         "media_visual_search_service": services.media.visual_search,
