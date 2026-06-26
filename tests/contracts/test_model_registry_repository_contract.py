@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any
 
 from foundry_lite.application.ports.model_registry_repository import (
@@ -26,6 +27,7 @@ from sqlalchemy.engine import Engine
 from tests.contracts.conftest import PostgresFixture, skip_if_no_postgres
 
 _TENANT = "tenant-demo"
+_AI_MODEL_REGISTRY_TABLES = ("ai_model_providers", "ai_models", "ai_model_aliases")
 
 
 @contextmanager
@@ -141,6 +143,18 @@ def test_model_registry_pins_revision_round_trip_sqlite() -> None:
 
 def test_model_registry_floating_latest_round_trip_sqlite() -> None:
     _assert_round_trip(_sqlite_engine(), version=None)
+
+
+def test_model_registry_migration_applies_postgres_rls_to_tenant_tables() -> None:
+    migration_path = Path(__file__).resolve().parents[2] / "migrations/versions/e5f7b9c1d3a5_aip_model_registry.py"
+    migration = migration_path.read_text(encoding="utf-8")
+
+    assert 'context.get_context().dialect.name == "postgresql"' in migration
+    assert "current_setting('foundry_lite.tenant_id', true)" in migration
+    for table in _AI_MODEL_REGISTRY_TABLES:
+        assert f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY" in migration
+        assert f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY" in migration
+        assert f"CREATE POLICY {table}_tenant_isolation ON {table}" in migration
 
 
 @skip_if_no_postgres

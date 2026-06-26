@@ -29,6 +29,7 @@ class AiRunLedgerSnapshot(TypedDict):
     toolCalls: list[AiLedgerRow]
     citations: list[AiLedgerRow]
     usage: list[AiLedgerRow]
+    promptArtifacts: list[AiLedgerRow]
 
 
 @dataclass(frozen=True)
@@ -189,6 +190,25 @@ class AiUsageLedgerRecord:
     recorded_at: str
 
 
+@dataclass(frozen=True)
+class AiPromptArtifactRecord:
+    id: str
+    tenant_id: str
+    ai_run_id: str
+    artifact_kind: str
+    artifact_ref: str
+    content_hash: str
+    artifact_hash: str
+    byte_size: int
+    encryption_key_ref: str
+    encryption_algorithm: str
+    retention_until: str
+    is_legal_hold: bool
+    erasure_request_id: str | None
+    export_marking: str
+    created_at: str
+
+
 class AiRunRepository(Protocol):
     """DB boundary for the canonical AI runtime ledger."""
 
@@ -242,12 +262,28 @@ class AiRunRepository(Protocol):
         """Persist one tool authorization/execution row."""
         ...
 
+    def link_tool_call_to_action_run(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ai_run_id: str,
+        tool_call_id: str,
+        action_run_id: str,
+    ) -> AiLedgerRow | None:
+        """Attach the approved action run produced by a prior action.propose tool call."""
+        ...
+
     def record_citation(self, *, transaction: TransactionContext, record: AiCitationRecord) -> None:
         """Persist one rendered answer citation."""
         ...
 
     def record_usage(self, *, transaction: TransactionContext, record: AiUsageLedgerRecord) -> None:
         """Persist one usage/cost ledger row."""
+        ...
+
+    def record_prompt_artifact(self, *, transaction: TransactionContext, record: AiPromptArtifactRecord) -> None:
+        """Persist metadata for a separately encrypted prompt artifact."""
         ...
 
     def session_by_id(self, *, transaction: TransactionContext, tenant_id: str, session_id: str) -> AiLedgerRow | None:
@@ -276,4 +312,10 @@ class AiRunRepository(Protocol):
         self, *, transaction: TransactionContext, tenant_id: str, ai_run_id: str
     ) -> AiRunLedgerSnapshot | None:
         """Return the run plus its events/model/context/tool/citation/usage rows."""
+        ...
+
+    def prompt_artifact_by_id(
+        self, *, transaction: TransactionContext, tenant_id: str, artifact_id: str
+    ) -> AiLedgerRow | None:
+        """Return one tenant-scoped encrypted prompt artifact receipt."""
         ...

@@ -20,6 +20,8 @@ from testcontainers.kafka import KafkaContainer
 from testcontainers.postgres import PostgresContainer
 
 DEBEZIUM_CONNECT_IMAGE = "quay.io/debezium/connect:3.5"
+CONNECT_READY_TIMEOUT_SECONDS = 240
+DEFAULT_WAIT_TIMEOUT_SECONDS = 120
 
 
 def test_live_debezium_postgres_changes_archive_through_worker(tmp_path: Path) -> None:
@@ -191,7 +193,11 @@ def _register_postgres_connector(
 
 
 def _wait_for_connect(connect: DockerContainer) -> None:
-    _wait_until(lambda: _connect_ready(connect))
+    _wait_until(
+        lambda: _connect_ready(connect),
+        timeout_seconds=CONNECT_READY_TIMEOUT_SECONDS,
+        timeout_message=lambda: _connect_timeout_message(connect),
+    )
 
 
 def _wait_for_connector_running(connect: DockerContainer, name: str) -> None:
@@ -266,14 +272,38 @@ def _connect_ready(connect: DockerContainer) -> bool:
     return True
 
 
-def _wait_until(condition: Callable[[], bool], *, timeout_seconds: float = 120, interval_seconds: float = 1) -> None:
+def _wait_until(
+    condition: Callable[[], bool],
+    *,
+    timeout_seconds: float = DEFAULT_WAIT_TIMEOUT_SECONDS,
+    interval_seconds: float = 1,
+    timeout_message: Callable[[], str] | None = None,
+) -> None:
     deadline = monotonic() + timeout_seconds
     wrapped = _condition_without_transient_errors(condition)
     while monotonic() < deadline:
         if wrapped():
             return
         Event().wait(interval_seconds)
-    raise TimeoutError("condition was not satisfied before timeout")
+    message = timeout_message() if timeout_message is not None else "condition was not satisfied before timeout"
+    raise TimeoutError(message)
+
+
+def _connect_timeout_message(connect: DockerContainer) -> str:
+    return (
+        f"Kafka Connect REST API was not ready within {CONNECT_READY_TIMEOUT_SECONDS}s. "
+        f"container_logs_tail={_connect_logs_tail(connect)}"
+    )
+
+
+def _connect_logs_tail(connect: DockerContainer) -> list[str]:
+    try:
+        stdout, stderr = connect.get_logs()
+    except Exception as exc:  # noqa: BLE001 - timeout diagnostics must not hide the original readiness failure
+        return [f"<unable to read connect logs: {exc}>"]
+    decoded = f"{stdout.decode(errors='replace')}\n{stderr.decode(errors='replace')}"
+    lines = [line.strip() for line in decoded.splitlines() if line.strip()]
+    return lines[-40:]
 
 
 def _condition_without_transient_errors(condition: Callable[[], bool]) -> Callable[[], bool]:

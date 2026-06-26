@@ -73,7 +73,8 @@ from foundry_lite.infrastructure.repositories import (
 )
 from sqlalchemy import create_engine
 from testcontainers.core.container import DockerContainer
-from testcontainers.elasticsearch import ElasticSearchContainer
+
+from tests.integration.elasticsearch_live_lock import live_elasticsearch_container, live_elasticsearch_lock
 
 MINIO_ACCESS_KEY = "foundry_lite"
 MINIO_SECRET_KEY = "foundry_lite_password"
@@ -195,20 +196,21 @@ def minio_server() -> Iterator[MinioServer]:
 
 @pytest.fixture(scope="module")
 def es_url() -> Iterator[str]:
-    container = (
-        ElasticSearchContainer(_ES_IMAGE)
-        .with_env("xpack.security.enabled", "false")
-        .with_env("discovery.type", "single-node")
-        .with_env("ES_JAVA_OPTS", "-Xms1g -Xmx1g")
-        # tmpfs data dir: ES refresh fsync on the vz virtiofs disk is slow enough to exceed
-        # client timeouts; a memory-backed data dir keeps writes fast (same as the live cluster).
-        .with_kwargs(tmpfs={"/usr/share/elasticsearch/data": "rw,size=1g"})
-    )
-    container.start()
-    try:
-        yield f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9200)}"
-    finally:
-        container.stop()
+    with live_elasticsearch_lock():
+        container = (
+            live_elasticsearch_container(_ES_IMAGE)
+            .with_env("xpack.security.enabled", "false")
+            .with_env("discovery.type", "single-node")
+            .with_env("ES_JAVA_OPTS", "-Xms1g -Xmx1g")
+            # tmpfs data dir: ES refresh fsync on the vz virtiofs disk is slow enough to exceed
+            # client timeouts; a memory-backed data dir keeps writes fast (same as the live cluster).
+            .with_kwargs(tmpfs={"/usr/share/elasticsearch/data": "rw,size=1g"})
+        )
+        container.start()
+        try:
+            yield f"http://{container.get_container_host_ip()}:{container.get_exposed_port(9200)}"
+        finally:
+            container.stop()
 
 
 def _s3_media_storage(minio_server: MinioServer, bucket: str) -> S3MediaStorageAdapter:

@@ -88,6 +88,42 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "aip.builder.validate",
+      "route": "POST /api/aip/builder/validate",
+      "productArea": "aip-builder",
+      "sdkSurface": "aip.builder.validate",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AIP Builder drafts are validated through a read-only preflight that pins context partitions, governed tool effects, Logic DAG shape, eval axes, and request_id-bearing typed failures before release.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.builder.run",
+      "route": "POST /api/aip/builder/run",
+      "productArea": "aip-builder",
+      "sdkSurface": "aip.builder.run",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AIP Builder drafts are validated before runtime execution, then linked to an AI Operations run detail with context/tool/proposal evidence instead of bypassing ToolBroker or Approval-to-Action guards.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.agent.run",
+      "route": "POST /api/aip/agent/run",
+      "productArea": "aip-agent-runtime",
+      "sdkSurface": "aip.agent.run",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AIP Agent Runtime retrieves authorized context, compiles a governed prompt, calls Model Gateway, can execute one explicitly allowed read tool only through ToolBroker, can route one action.propose tool to pending human review without direct writes, and links the run to AI Operations detail with context/model/tool/proposal/usage evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "insights.reviews.list",
       "route": "GET /api/insights/reviews",
       "productArea": "insight-action-workspace",
@@ -145,6 +181,19 @@
       "rawRequestPolicy": "named-sdk-only",
       "requiresIdempotencyKey": true,
       "operatorEvidence": "Insight approve/reject requires Idempotency-Key, has one terminal winner, and writes insight_review.approved or insight_review.rejected audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "insights.reviews.execute",
+      "route": "POST /api/insights/reviews/{review_id}/execute-action",
+      "productArea": "insight-action-workspace",
+      "sdkSurface": "insights.reviews.execute",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Approved AI action proposal execution requires Idempotency-Key, rechecks the exact proposal fingerprint, executes through ApprovalExecutionService/ActionService, links review to action run, and back-links the originating AI action.propose tool call to the action run.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -228,7 +277,7 @@
       "productArea": "operations-console",
       "sdkSurface": "operations.runs.list",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Operations run list contains grouped run/audit/outbox/DLQ evidence and cursor metadata.",
+      "operatorEvidence": "Operations run list contains grouped run/audit/outbox/DLQ/AI evidence and cursor metadata, including aiRuns for canonical AI execution ledger rows.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -312,7 +361,19 @@
       "productArea": "operations-console",
       "sdkSurface": "operations.runs.detail",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Run detail returns investigation, normalized error, related audit/outbox/object edit, lineage, and quality evidence.",
+      "operatorEvidence": "Run detail returns investigation, normalized error, related audit/outbox/object edit, lineage, quality evidence, and for runType=ai a safe AI ledger detail with events, model/tool/context/citation/usage summary and trace metadata.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.runs.promptArtifact",
+      "route": "GET /api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.runs.promptArtifact",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Prompt artifact access is separate from the safe AI run detail and requires the aip_prompt_artifact_reader role before plaintext is returned.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],

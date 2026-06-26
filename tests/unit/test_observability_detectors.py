@@ -339,6 +339,7 @@ def _snapshot(
         "outboxEvents": outbox_events or [],
         "deadLetterEvents": dead_letter_events or [],
         "workflowRuns": workflow_runs or [],
+        "aiRuns": [],
         "auditEvents": audit_events or [],
         "objectEdits": [],
     }

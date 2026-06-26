@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, insert, select
+from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -15,6 +15,7 @@ from foundry_lite.application.ports.ai_run_repository import (
     AiLedgerRow,
     AiMessageRecord,
     AiModelCallRecord,
+    AiPromptArtifactRecord,
     AiRunLedgerSnapshot,
     AiSessionRecord,
     AiSessionStateVersionRecord,
@@ -121,11 +122,46 @@ class SqlAlchemyAiRunRepository:
             insert(db.ai_tool_calls).values({"tenant_id": record.tenant_id, **_tool_call_values(record)})
         )
 
+    def link_tool_call_to_action_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ai_run_id: str,
+        tool_call_id: str,
+        action_run_id: str,
+    ) -> AiLedgerRow | None:
+        transaction.execute(
+            update(db.ai_tool_calls)
+            .where(
+                and_(
+                    db.ai_tool_calls.c.tenant_id == tenant_id,
+                    db.ai_tool_calls.c.ai_run_id == ai_run_id,
+                    db.ai_tool_calls.c.id == tool_call_id,
+                    db.ai_tool_calls.c.effect == "PROPOSE_WRITE",
+                    or_(
+                        db.ai_tool_calls.c.linked_action_run_id.is_(None),
+                        db.ai_tool_calls.c.linked_action_run_id == action_run_id,
+                    ),
+                )
+            )
+            .values(linked_action_run_id=action_run_id)
+        )
+        row = _one_by_id(transaction, db.ai_tool_calls, tenant_id, tool_call_id)
+        if row is not None and row["linked_action_run_id"] == action_run_id:
+            return row
+        return None
+
     def record_citation(self, *, transaction: Any, record: AiCitationRecord) -> None:
         transaction.execute(insert(db.ai_citations).values({"tenant_id": record.tenant_id, **_citation_values(record)}))
 
     def record_usage(self, *, transaction: Any, record: AiUsageLedgerRecord) -> None:
         transaction.execute(insert(db.ai_usage_ledger).values({"tenant_id": record.tenant_id, **record.__dict__}))
+
+    def record_prompt_artifact(self, *, transaction: Any, record: AiPromptArtifactRecord) -> None:
+        transaction.execute(
+            insert(db.ai_prompt_artifacts).values({"tenant_id": record.tenant_id, **_prompt_artifact_values(record)})
+        )
 
     def session_by_id(self, *, transaction: Any, tenant_id: str, session_id: str) -> AiLedgerRow | None:
         return _one_by_id(transaction, db.ai_sessions, tenant_id, session_id)
@@ -192,7 +228,13 @@ class SqlAlchemyAiRunRepository:
             "usage": _rows_for_run(
                 transaction, db.ai_usage_ledger, tenant_id, ai_run_id, db.ai_usage_ledger.c.recorded_at
             ),
+            "promptArtifacts": _rows_for_run(
+                transaction, db.ai_prompt_artifacts, tenant_id, ai_run_id, db.ai_prompt_artifacts.c.created_at
+            ),
         }
+
+    def prompt_artifact_by_id(self, *, transaction: Any, tenant_id: str, artifact_id: str) -> AiLedgerRow | None:
+        return _one_by_id(transaction, db.ai_prompt_artifacts, tenant_id, artifact_id)
 
 
 def _json_or_none(value: AiJsonObject | None) -> dict[str, object] | None:
@@ -237,6 +279,12 @@ def _citation_values(record: AiCitationRecord) -> dict[str, object]:
         **record.__dict__,
         "claim_span": dict(record.claim_span),
     }
+
+
+def _prompt_artifact_values(record: AiPromptArtifactRecord) -> dict[str, object]:
+    values = dict(record.__dict__)
+    values["legal_hold"] = values.pop("is_legal_hold")
+    return values
 
 
 def _event_sequence_exists(transaction: Any, record: AiExecutionEventRecord) -> bool:

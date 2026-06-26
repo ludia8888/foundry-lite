@@ -216,6 +216,116 @@
         min-height: 160px;
       }
 
+      .agent-output {
+        display: grid;
+        gap: 12px;
+      }
+
+      .agent-answer {
+        background: #f4f7f2;
+        border: 1px solid var(--line);
+        display: grid;
+        gap: 6px;
+        padding: 12px;
+      }
+
+      .section-kicker {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .agent-answer p {
+        font-size: 14px;
+        line-height: 1.55;
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .citation-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .citation-card {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--accent);
+        display: grid;
+        gap: 8px;
+        padding: 10px 12px;
+      }
+
+      .citation-card header {
+        align-items: center;
+        border: 0;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-start;
+        padding: 0;
+      }
+
+      .citation-index {
+        background: var(--accent);
+        color: #fff;
+        display: inline-grid;
+        font-size: 11px;
+        font-weight: 700;
+        height: 24px;
+        min-width: 24px;
+        place-items: center;
+      }
+
+      .citation-title {
+        font-size: 13px;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .citation-meta {
+        display: grid;
+        gap: 6px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .citation-meta span {
+        color: var(--muted);
+        display: grid;
+        font-size: 11px;
+        gap: 3px;
+      }
+
+      .citation-meta strong,
+      .citation-meta code {
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+
+      .citation-preview {
+        background: #f7f4ed;
+        border: 1px solid var(--line);
+        display: grid;
+        gap: 6px;
+        padding: 8px;
+      }
+
+      .citation-preview-title {
+        color: var(--ink);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .citation-preview-grid {
+        display: grid;
+        gap: 6px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
       .object-card {
         border: 1px solid var(--line);
         display: grid;
@@ -275,6 +385,40 @@
         overflow-wrap: anywhere;
       }
 
+      .builder-layout {
+        display: grid;
+        gap: 14px;
+        grid-template-columns: minmax(210px, 0.8fr) minmax(0, 1fr);
+      }
+
+      .builder-canvas {
+        background: #eef2ed;
+        border: 1px solid var(--line);
+        display: grid;
+        gap: 10px;
+        min-height: 210px;
+        padding: 12px;
+      }
+
+      .builder-node {
+        background: #fff;
+        border-left: 4px solid var(--accent);
+        display: grid;
+        gap: 4px;
+        min-height: 54px;
+        padding: 10px;
+      }
+
+      .builder-node strong {
+        font-size: 13px;
+      }
+
+      .builder-node span {
+        color: var(--muted);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
       @media (max-width: 860px) {
         .shell {
           padding: 16px;
@@ -284,13 +428,19 @@
         .grid,
         .row,
         .toolbar,
-        .metric-strip {
+        .metric-strip,
+        .citation-meta,
+        .citation-preview-grid {
           grid-template-columns: 1fr;
         }
 
         .topbar {
           align-items: flex-start;
           display: grid;
+        }
+
+        .builder-layout {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -373,6 +523,7 @@
                   <option value="materialization">Materialization</option>
                   <option value="outbox">Outbox</option>
                   <option value="dead_letter">DLQ</option>
+                  <option value="ai">AI</option>
                   <option value="audit">Audit</option>
                 </select>
               </label>
@@ -412,6 +563,29 @@
                 <input id="recordDlqId" />
               </label>
             </div>
+            <label>
+              AIP Agent
+              <input id="aipBuilderAgentVersion" value="agent.order-ops.v1" />
+            </label>
+            <div class="row">
+              <label>
+                Release
+                <select id="aipBuilderReleaseChannel">
+                  <option value="dev">Dev</option>
+                  <option value="canary">Canary</option>
+                  <option value="stable">Stable</option>
+                  <option value="draft">Draft</option>
+                </select>
+              </label>
+              <label>
+                Model Alias
+                <input id="aipBuilderModelAlias" value="gpt-governed@v1" />
+              </label>
+            </div>
+            <label>
+              Prompt Version
+              <input id="aipBuilderPromptVersion" value="prompt-order-copilot@v1" />
+            </label>
             <div class="actions">
               <button id="healthBtn" type="button">Check</button>
               <button id="datasetBtn" type="button" class="secondary">Load Dataset</button>
@@ -435,6 +609,9 @@
               <button id="replayRecordDlqBtn" type="button" class="secondary">Replay Record</button>
               <button id="bulkReplayRecordDlqBtn" type="button" class="secondary">Bulk Replay Records</button>
               <button id="discardRecordDlqBtn" type="button" class="secondary">Discard Record</button>
+              <button id="aipBuilderValidateBtn" type="button" class="secondary">Validate AIP Builder</button>
+              <button id="aipBuilderRunBtn" type="button" class="secondary">Run AIP Builder</button>
+              <button id="aipAgentRunBtn" type="button" class="secondary">Run AIP Agent</button>
             </div>
           </div>
         </aside>
@@ -497,6 +674,67 @@
             <div class="metric">
               <span>Top Error Kind</span>
               <strong id="metricRecordDlqTopError">-</strong>
+            </div>
+          </div>
+
+          <div class="metric-strip">
+            <div class="metric">
+              <span>AIP Builder</span>
+              <strong id="metricAipBuilderStatus">-</strong>
+            </div>
+            <div class="metric">
+              <span>AIP Nodes</span>
+              <strong id="metricAipBuilderNodes">-</strong>
+            </div>
+            <div class="metric">
+              <span>AIP Issues</span>
+              <strong id="metricAipBuilderIssues">-</strong>
+            </div>
+          </div>
+
+          <div class="metric-strip">
+            <div class="metric">
+              <span>AIP Agent</span>
+              <strong id="metricAipAgentStatus">-</strong>
+            </div>
+            <div class="metric">
+              <span>AI Context</span>
+              <strong id="metricAipAgentContext">-</strong>
+            </div>
+            <div class="metric">
+              <span>AI Tokens</span>
+              <strong id="metricAipAgentTokens">-</strong>
+            </div>
+          </div>
+
+          <div class="panel">
+            <header>
+              <h2>AIP Builder</h2>
+            </header>
+            <div class="panel-body">
+              <div class="builder-layout">
+                <div id="aipBuilderGraph" class="builder-canvas"></div>
+                <pre id="aipBuilderResult" class="result compact">{}</pre>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <header>
+              <h2>AIP Agent</h2>
+            </header>
+            <div class="panel-body">
+              <div class="agent-output">
+                <div class="agent-answer">
+                  <span class="section-kicker">Answer</span>
+                  <p id="aipAgentAnswer">-</p>
+                </div>
+                <div>
+                  <span class="section-kicker">Citations</span>
+                  <div id="aipAgentCitations" class="citation-list"></div>
+                </div>
+                <pre id="aipAgentResult" class="result compact">{}</pre>
+              </div>
             </div>
           </div>
 
@@ -621,6 +859,10 @@
       const operationRunId = document.querySelector("#operationRunId");
       const recordDlqStatus = document.querySelector("#recordDlqStatus");
       const recordDlqId = document.querySelector("#recordDlqId");
+      const aipBuilderAgentVersion = document.querySelector("#aipBuilderAgentVersion");
+      const aipBuilderReleaseChannel = document.querySelector("#aipBuilderReleaseChannel");
+      const aipBuilderModelAlias = document.querySelector("#aipBuilderModelAlias");
+      const aipBuilderPromptVersion = document.querySelector("#aipBuilderPromptVersion");
       const datasetResult = document.querySelector("#datasetResult");
       const queryResult = document.querySelector("#queryResult");
       const ontologyResult = document.querySelector("#ontologyResult");
@@ -629,6 +871,11 @@
       const linkResult = document.querySelector("#linkResult");
       const runResult = document.querySelector("#runResult");
       const recordDlqResult = document.querySelector("#recordDlqResult");
+      const aipBuilderGraph = document.querySelector("#aipBuilderGraph");
+      const aipBuilderResult = document.querySelector("#aipBuilderResult");
+      const aipAgentResult = document.querySelector("#aipAgentResult");
+      const aipAgentAnswer = document.querySelector("#aipAgentAnswer");
+      const aipAgentCitations = document.querySelector("#aipAgentCitations");
       const metricObject = document.querySelector("#metricObject");
       const metricVersion = document.querySelector("#metricVersion");
       const metricStatus = document.querySelector("#metricStatus");
@@ -641,6 +888,12 @@
       const metricRecordDlqOpen = document.querySelector("#metricRecordDlqOpen");
       const metricRecordDlqClosed = document.querySelector("#metricRecordDlqClosed");
       const metricRecordDlqTopError = document.querySelector("#metricRecordDlqTopError");
+      const metricAipBuilderStatus = document.querySelector("#metricAipBuilderStatus");
+      const metricAipBuilderNodes = document.querySelector("#metricAipBuilderNodes");
+      const metricAipBuilderIssues = document.querySelector("#metricAipBuilderIssues");
+      const metricAipAgentStatus = document.querySelector("#metricAipAgentStatus");
+      const metricAipAgentContext = document.querySelector("#metricAipAgentContext");
+      const metricAipAgentTokens = document.querySelector("#metricAipAgentTokens");
       const recordDlqOpen = document.querySelector("#recordDlqOpen");
       const recordDlqClosed = document.querySelector("#recordDlqClosed");
       const recordDlqTopError = document.querySelector("#recordDlqTopError");
@@ -658,6 +911,7 @@
         outbox: "outboxEvents",
         dead_letter: "deadLetterEvents",
         workflow: "workflowRuns",
+        ai: "aiRuns",
         audit: "auditEvents",
       };
       const demoContext = {
@@ -754,6 +1008,7 @@
           "actionWritebacks",
           "materializationRuns",
           "workflowRuns",
+          "aiRuns",
         ];
         const failedRuns = runGroups
           .flatMap((key) => value[key] ?? [])
@@ -794,6 +1049,318 @@
         recordDlqOpen.textContent = summary.open;
         recordDlqClosed.textContent = summary.closed;
         recordDlqTopError.textContent = summary.topError;
+      }
+
+      function showAipBuilder(value) {
+        value = displayValue(value);
+        const validation = value.validation ?? value;
+        aipBuilderResult.textContent = JSON.stringify(value, null, 2);
+        metricAipBuilderStatus.textContent = value.runStatus ?? validation.validationStatus ?? "-";
+        metricAipBuilderNodes.textContent = validation.nodeCount ?? "-";
+        metricAipBuilderIssues.textContent = (validation.blockingIssues ?? []).length;
+        renderBuilderGraph(builderDraft().logicBlocks, validation);
+      }
+
+      function showAipAgent(value) {
+        value = displayValue(value);
+        aipAgentResult.textContent = JSON.stringify(value, null, 2);
+        renderAipAgentAnswer(value);
+        renderAipAgentCitations(value.citations);
+        metricAipAgentStatus.textContent = value.runStatus ?? "-";
+        metricAipAgentContext.textContent = Array.isArray(value.contextIds) ? value.contextIds.length : "-";
+        const usage = value.usage ?? {};
+        metricAipAgentTokens.textContent = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || "-";
+      }
+
+      function renderAipAgentAnswer(value) {
+        aipAgentAnswer.textContent = value.answer ?? "-";
+      }
+
+      function renderAipAgentCitations(rawCitations) {
+        aipAgentCitations.innerHTML = "";
+        const citations = Array.isArray(rawCitations) ? rawCitations : [];
+        if (citations.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "citation-card";
+          empty.textContent = "No citations";
+          aipAgentCitations.appendChild(empty);
+          return;
+        }
+        citations.forEach((citation, index) => {
+          aipAgentCitations.appendChild(citationCard(citation, index));
+        });
+      }
+
+      function citationCard(citation, index) {
+        const card = document.createElement("article");
+        card.className = "citation-card";
+        const header = document.createElement("header");
+        const citationIndex = document.createElement("span");
+        citationIndex.className = "citation-index";
+        citationIndex.textContent = citation.citationOrder ?? index + 1;
+        const title = document.createElement("span");
+        title.className = "citation-title";
+        title.textContent = citation.displayLabel ?? citation.sourceResourceId ?? citation.contextId ?? "Citation";
+        header.append(citationIndex, title);
+        card.append(header, citationMeta(citation));
+        const preview = sourcePreviewBlock(citation.sourcePreview);
+        if (preview) {
+          card.appendChild(preview);
+        }
+        return card;
+      }
+
+      function citationMeta(citation) {
+        const meta = document.createElement("div");
+        meta.className = "citation-meta";
+        meta.append(
+          citationMetaItem("Context", citation.contextId ?? "-"),
+          citationMetaItem("Source", citation.sourceResourceId ?? "-"),
+          citationMetaItem("Hash", shortHash(citation.contentHash)),
+        );
+        return meta;
+      }
+
+      function sourcePreviewBlock(sourcePreview) {
+        if (!sourcePreview || typeof sourcePreview !== "object" || Array.isArray(sourcePreview)) {
+          return null;
+        }
+        const block = document.createElement("section");
+        block.className = "citation-preview";
+        const title = document.createElement("span");
+        title.className = "citation-preview-title";
+        title.textContent = "Source preview";
+        const grid = document.createElement("div");
+        grid.className = "citation-meta citation-preview-grid";
+        grid.append(
+          citationMetaItem("Kind", sourcePreview.kind ?? "-"),
+          citationMetaItem("Method", sourcePreview.retrievalMethod ?? "-"),
+          citationMetaItem("Version", sourcePreview.sourceVersion ?? "-"),
+          citationMetaItem("Tokens", sourcePreview.tokenEstimate ?? "-"),
+          citationMetaItem("Partition", sourcePreview.securityPartition ?? "-"),
+          citationMetaItem("Selected", sourcePreview.selected === true ? "yes" : "no"),
+          citationMetaItem("Item", sourcePreview.contextItemId ?? "-"),
+          citationMetaItem("Hash", shortHash(sourcePreview.contentHash)),
+        );
+        block.append(title, grid);
+        return block;
+      }
+
+      function citationMetaItem(label, value) {
+        const item = document.createElement("span");
+        const labelNode = document.createTextNode(label);
+        const valueNode = document.createElement(label === "Hash" ? "code" : "strong");
+        valueNode.textContent = value;
+        item.append(labelNode, valueNode);
+        return item;
+      }
+
+      function shortHash(value) {
+        if (typeof value !== "string" || value.length <= 24) {
+          return value ?? "-";
+        }
+        return `${value.slice(0, 16)}...${value.slice(-8)}`;
+      }
+
+      function renderBuilderGraph(blocks, result = {}) {
+        const blockingCodes = new Set((result.blockingIssues ?? []).map((issue) => issue.code));
+        aipBuilderGraph.innerHTML = "";
+        for (const block of blocks) {
+          const node = document.createElement("div");
+          node.className = "builder-node";
+          const title = document.createElement("strong");
+          title.textContent = block.kind;
+          const label = document.createElement("span");
+          label.textContent = block.blockId;
+          node.append(title, label);
+          if (block.kind === "ApplyAction" || blockingCodes.has("direct_apply_action_blocked")) {
+            node.style.borderLeftColor = "var(--accent-2)";
+          }
+          aipBuilderGraph.appendChild(node);
+        }
+      }
+
+      function builderDraft() {
+        return {
+          agentVersionId: aipBuilderAgentVersion.value,
+          releaseChannel: aipBuilderReleaseChannel.value,
+          modelAliasVersion: aipBuilderModelAlias.value,
+          promptVersionId: aipBuilderPromptVersion.value,
+          contextSources: [builderContextSource()],
+          toolManifest: [builderReadTool()],
+          logicBlocks: builderLogicBlocks(),
+          evalAxes: ["retrieval", "answer", "citation", "tool", "action", "security"],
+          agentAllowedActions: ["ApproveOrder"],
+          maxLogicBlocks: 25,
+        };
+      }
+
+      function builderContextSource() {
+        return {
+          sourceId: "ctx-order-ops",
+          kind: "ontology.object_set",
+          securityPartition: `${demoContext.tenantId}:internal`,
+          selectedProperties: ["orderId", "status", "priority", "customerId"],
+          tokenBudget: 800,
+        };
+      }
+
+      function builderReadTool() {
+        return {
+          toolId: "ontology.get_object",
+          version: "2026-06-25",
+          effect: "READ",
+          requiredPermission: "object:read",
+          confirmationPolicy: "NONE",
+          objectTypeAllowlist: ["Order"],
+          propertyAllowlist: ["orderId", "status", "priority", "customerId"],
+          inputSchema: {
+            type: "object",
+            required: ["object_type", "object_id"],
+            properties: {
+              object_type: { type: "string" },
+              object_id: { type: "string" },
+              property_names: { type: "array" },
+            },
+          },
+          outputSchema: { type: "object" },
+          status: "published",
+        };
+      }
+
+      function builderLogicBlocks() {
+        return [
+          { blockId: "input", kind: "Input", inputs: { objectId: objectId.value }, dependsOn: [] },
+          { blockId: "retrieve", kind: "CallFunction", inputs: builderToolInputs(), dependsOn: ["input"] },
+          { blockId: "proposal", kind: "CreateActionProposal", inputs: builderProposalInputs(), dependsOn: ["retrieve"] },
+          { blockId: "review", kind: "HumanApproval", inputs: { reason: "approval_required" }, dependsOn: ["proposal"] },
+          { blockId: "output", kind: "Output", inputs: { fromBlock: "proposal" }, dependsOn: ["proposal"] },
+        ];
+      }
+
+      function builderToolInputs() {
+        return {
+          toolId: "ontology.get_object",
+          version: "2026-06-25",
+          arguments: {
+            object_type: objectType.value,
+            object_id: objectId.value,
+            property_names: ["orderId", "status", "priority", "customerId"],
+          },
+        };
+      }
+
+      function builderProposalInputs() {
+        const version = currentObject?.objectVersion ?? 1;
+        return {
+          actionType: "ApproveOrder",
+          targetObjectType: objectType.value,
+          targetObjectId: objectId.value,
+          expectedObjectVersion: version,
+          parameters: { reason: reason.value },
+          evidenceContextIds: ["ctx-order-ops"],
+          expiresAt: "2026-06-26T00:10:00Z",
+          claimText: `Approve ${objectId.value} based on selected AIP evidence.`,
+        };
+      }
+
+      async function validateAipBuilder() {
+        if (!currentObject) {
+          await loadObject();
+        }
+        const validation = await sdkClient().aip.builder.validate(builderDraft());
+        showAipBuilder(validation);
+      }
+
+      function builderRuntimePayload() {
+        const runToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        return {
+          ...builderDraft(),
+          logicRunId: `web-builder-${runToken}`,
+          inputJson: { objectType: objectType.value, objectId: objectId.value },
+          userMessage: `Run ${aipBuilderAgentVersion.value} for ${objectType.value} ${objectId.value}`,
+          agentAllowedTools: ["ontology.get_object"],
+          modelAllowedClassifications: ["public", "internal"],
+          policyVersion: "policy-v1",
+        };
+      }
+
+      async function runAipBuilder() {
+        if (!currentObject) {
+          await loadObject();
+        }
+        const result = await sdkClient().aip.builder.run(builderRuntimePayload());
+        showAipBuilder(result);
+        if (result.aiRunId) {
+          operationType.value = "ai";
+          operationRunId.value = result.aiRunId;
+          await loadRunDetail();
+        }
+      }
+
+      function agentRuntimePayload() {
+        const runToken = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        return {
+          agentRunId: `web-agent-${runToken}`,
+          agentVersionId: aipBuilderAgentVersion.value,
+          modelAlias: aipBuilderModelAlias.value.split("@")[0],
+          promptVersionId: aipBuilderPromptVersion.value,
+          userMessage: `Explain ${objectType.value} ${objectId.value} for the operator.`,
+          agentInstruction: "Answer as the Order Operations Copilot. Do not execute tools.",
+          securityPartition: `${demoContext.tenantId}:internal`,
+          allowedSecurityPartitions: [`${demoContext.tenantId}:internal`],
+          stateJson: { objectType: objectType.value, objectId: objectId.value },
+          outputSchema: agentCitationOutputSchema(),
+          dataClassification: "internal",
+          maxContextItems: 4,
+          maxContextTokens: 1200,
+          maxModelCalls: 1,
+          maxLoopIterations: 1,
+          maxOutputTokens: 512,
+          policyVersion: "policy-v1",
+        };
+      }
+
+      function agentCitationOutputSchema() {
+        return {
+          type: "object",
+          required: ["answer", "citations"],
+          properties: {
+            answer: { type: "string" },
+            citations: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["contextId", "claimSpan", "citationOrder"],
+                properties: {
+                  contextId: { type: "string" },
+                  claimSpan: {
+                    type: "object",
+                    required: ["start", "end"],
+                    properties: {
+                      start: { type: "integer" },
+                      end: { type: "integer" },
+                    },
+                  },
+                  citationOrder: { type: "integer" },
+                },
+              },
+            },
+          },
+        };
+      }
+
+      async function runAipAgent() {
+        if (!currentObject) {
+          await loadObject();
+        }
+        const result = await sdkClient().aip.agent.run(agentRuntimePayload());
+        showAipAgent(result);
+        if (result.aiRunId) {
+          operationType.value = "ai";
+          operationRunId.value = result.aiRunId;
+          await loadRunDetail();
+        }
       }
 
       function operationFilters(overrides = {}) {
@@ -1084,6 +1651,7 @@
           loadObject().catch(show),
           loadLinks().catch(showLinks),
           loadRecordDlqRecords().catch(showRecordDlq),
+          validateAipBuilder().catch(showAipBuilder),
         ]);
       }
 
@@ -1117,6 +1685,11 @@
         .querySelector("#bulkReplayRecordDlqBtn")
         .addEventListener("click", () => bulkReplayRecordDlq().catch(showRecordDlq));
       document.querySelector("#discardRecordDlqBtn").addEventListener("click", () => discardRecordDlq().catch(showRecordDlq));
+      document
+        .querySelector("#aipBuilderValidateBtn")
+        .addEventListener("click", () => validateAipBuilder().catch(showAipBuilder));
+      document.querySelector("#aipBuilderRunBtn").addEventListener("click", () => runAipBuilder().catch(showAipBuilder));
+      document.querySelector("#aipAgentRunBtn").addEventListener("click", () => runAipAgent().catch(showAipAgent));
       restoreFromServer();
     </script>
   </body>

@@ -36,6 +36,6 @@ class SecretProvider(Protocol):
         """Return the adapter failure taxonomy promised by this profile."""
         ...
 
-    def get_secret(self, name: str) -> SecretValue:
-        """Resolve a named secret or fail without exposing the secret value."""
+    def get_secret(self, name: str, *, version: str | None = None) -> SecretValue:
+        """Resolve the current or explicitly versioned secret without exposing the value."""
         ...

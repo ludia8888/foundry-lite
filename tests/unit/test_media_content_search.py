@@ -151,6 +151,37 @@ def test_index_then_search_returns_cited_hits(env: _Env) -> None:
     hits = env.retrieval.search_content(env.ctx, query=HybridContentQuery(tenant_id=env.ctx.tenant_id, text="payment"))
     assert [hit.content_unit_id for hit in hits] == ["cu-2"]
     assert hits[0].page_number == 2 and hits[0].text_hash == "h2"
+    assert hits[0].text == "net 30 payment terms"
+    assert hits[0].classification == "confidential"
+
+
+def test_retrieval_returns_authoritative_unit_text_not_index_text(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'm3authtext.db'}", future=True)
+    db.create_database(engine)
+    repo = SqlAlchemyMediaDerivativeRepository(engine)
+    leaky_hit = ContentSearchHit(
+        source_media_item_version_id=_SOURCE,
+        content_unit_id="cu-1",
+        index_generation="g1",
+        page_number=99,
+        text_hash="h1",
+        text="STALE_INDEX_TEXT",
+    )
+    retrieval = DefaultContentRetrievalService(
+        engine=engine,
+        media_derivative_repository=repo,
+        content_index_adapter=_StubIndex([leaky_hit]),
+        embedding_model_adapter=LocalEmbeddingAdapter(),
+        completion_model_adapter=LocalCompletionAdapter(),
+    )
+    env = _Env(RequestContext(), engine, repo, LocalContentIndexAdapter(), None, retrieval)  # type: ignore[arg-type]
+    env.seed([("cu-1", "AUTHORITATIVE content unit text", "h1")])
+
+    hits = retrieval.search_content(RequestContext(), query=HybridContentQuery(tenant_id="tenant-demo", text="content"))
+
+    assert len(hits) == 1
+    assert hits[0].text == "AUTHORITATIVE content unit text"
+    assert hits[0].page_number == 1
 
 
 def test_content_index_rebuilds_from_committed_artifacts(env: _Env) -> None:

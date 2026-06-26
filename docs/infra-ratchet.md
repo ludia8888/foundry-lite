@@ -1032,7 +1032,10 @@ Media/Content Plane (standalone family, not in `activeStack`).
   alias whose `status` is not `enabled` fails typed rather than swapping in another model, (4) calls the wired
   adapter with credentials referenced by NAME/version via `SecretProvider` (raw key never in app
   logic/response/trace), and (5) returns the response with provider/resolved id+revision + per-call
-  `model_hash`/`prompt_hash` (raw prompt never logged). `FakeLanguageModel` (deterministic echo) is
+  `model_hash`/`prompt_hash` (raw prompt never logged). The model-registry Alembic upgrade path now
+  applies PostgreSQL `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL SECURITY`, and tenant policies to
+  `ai_model_providers`/`ai_models`/`ai_model_aliases`, so existing DBs upgraded by Alembic match the
+  `create_database()` bootstrap RLS path. `FakeLanguageModel` (deterministic echo) is
   the SAFE composition default — no Foundry token, no network, existing tests unaffected;
   `ProviderCompatibleLanguageModel` is the real provider-compatible-proxy adapter whose default
   raises `language_model_unavailable` (real provider DEFERRED, mirroring the deferred-engine
@@ -1072,7 +1075,201 @@ Media/Content Plane (standalone family, not in `activeStack`).
   the local durable subset, not a managed Foundry trace backend. `runtime_run_relations` can now name
   `ai` as a run type so later AI runs can link to action/workflow/outbox/materialization evidence.
   `quality:ai-ledger` proves exact canonical columns, `UNIQUE(tenant_id, session_id, client_message_id)`,
-  `UNIQUE(ai_run_id, sequence)`, SQLite + PostgreSQL round-trip behavior, message retry idempotency, event
-  sequence idempotency, tenant scoping, and runtime-lane wiring. ModelGateway auto-recording, prompt
-  artifact encryption, full trace UI, ToolBroker execution, and generated API/SDK surfaces remain later
+  `UNIQUE(ai_run_id, sequence)`, PostgreSQL RLS DDL in the Alembic upgrade path, SQLite + PostgreSQL
+  round-trip behavior, message retry idempotency, event sequence idempotency, tenant scoping, and
+  runtime-lane wiring. P0i now adds the first generated Operations API/SDK read surface for these
+  rows, and P0u moves ModelGateway provider-attempt accounting into the gateway boundary. P0v now closes
+  the first encrypted compiled-prompt artifact slice; full trace UI and ToolBroker execution remain later
   AIP slices.
+
+- **P0v — encrypted prompt artifact receipts (shipped as the first protected prompt-log slice):**
+  Palantir's AIP observability/session logging docs expose traces with prompts, responses, token usage,
+  and retrieved context behind dedicated log permissions/markings. Foundry-lite's local equivalent keeps
+  the general AI ledger raw-value-free while preserving a protected inspection path: `PromptArtifactStore`
+  encrypts the compiled prompt into a separate artifact, `ai_prompt_artifacts` stores only the tenant-scoped
+  receipt (`artifact_ref`, prompt `content_hash`, encrypted `artifact_hash`, byte size, key ref, algorithm,
+  retention, legal hold, erasure lineage, and export marking), and `PromptArtifactService` requires the
+  explicit `aip_prompt_artifact_reader` role before decrypting. `AgentRuntimeService` writes this encrypted
+  artifact after seeding the AI run and before Model Gateway egress; if the artifact write fails, the seeded
+  run is marked failed and no provider/model adapter call occurs. The artifact plaintext is canonicalized as
+  the same `{"messages":[...]}` JSON whose SHA-256 becomes `compiled_prompt_hash`, receipt insert failure
+  deletes the just-written encrypted artifact to avoid orphan prompt bytes, read access revalidates both
+  ciphertext and plaintext hashes against the receipt, and local-dev key fallback is explicit opt-in only via
+  `FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY=true`. The Alembic upgrade path applies PostgreSQL RLS to
+  `ai_prompt_artifacts`, so existing DBs upgraded by migration match the bootstrap path. P0w tightens the
+  same protected prompt-log slice by adding `PromptArtifactStore.failure_contract()` to the application port
+  and the local encrypted adapter: write/delete storage failures are retryable `unavailable`, missing or
+  inactive encryption keys are `authentication`, receipt hash mismatches are non-retryable `conflict`, and
+  missing tenant-scoped refs are non-retryable `not_found`. The global adapter taxonomy gate now covers this
+  profile, so future prompt artifact adapters cannot skip operator-safe failure metadata. P0x then makes the
+  stored `encryption_key_ref` operational rather than decorative: reads parse the receipt's
+  `secret://name@version`, resolve that exact historical version through `SecretProvider.get_secret(...,
+  version=...)`, and fail closed if the old key is unavailable instead of silently trying the current key.
+  The local `EnvSecretProvider` supports retained prior local keys through
+  `<CURRENT_SECRET_ENV>__VERSION_<NORMALIZED_VERSION>` entries and keeps mismatch/missing-version errors
+  value-redacted. P0y adds the first separate prompt artifact access surface: Operations run detail remains
+  metadata-only, while `GET /api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}` and generated
+  SDK `client.operations.runs.promptArtifact(...)` require `aip_prompt_artifact_reader` and verify the
+  receipt's AI run id before decrypting.
+
+- **P0d — Context compiler + retrieval context contract (shipped as the first prompt assembly slice):**
+  `ContextProvider` and `RetrievedContextItem` now define the authorized retrieval boundary that hands
+  opaque `context_id` items to the AIP compiler. `ContextCompilerService` compiles model messages in the
+  canonical §8.6 order — platform safety policy, agent instruction, application state, tool definitions,
+  retrieved context, citation mapping, output schema, then the user message — and emits
+  `compiled_prompt_hash`, `context_manifest_hash`, `tool_manifest_hash`, `state_snapshot_hash`, and
+  `policy_snapshot_hash` for the AI ledger, using `sha256:`-prefixed digest strings. Retrieved text is
+  encoded as untrusted JSON string data so delimiter-like strings cannot become prompt section
+  boundaries; duplicate context ids fail closed, non-allowlisted security partitions fail closed, and a
+  context text/hash mismatch fails closed before any model call. `quality:context-compiler` proves the
+  port contract, deterministic section ordering, delimiter-escape resistance, opaque citation mapping,
+  fail-closed hash/partition checks, and runtime-lane wiring. Retrieval orchestration, AgentRuntime
+  looping, public API/SDK surfaces, and the visual trace UI remain later AIP slices.
+
+- **P0e — read-only Tool Broker + executor port (shipped as the first tool-execution slice):**
+  the LLM still does **not** execute tools directly. `ToolBrokerService` treats a model-requested
+  tool call as untrusted input and validates the canonical §8.8/§9.5 broker chain before any
+  server-side executor is reached: agent allowlist, published `ToolSpec` version, input JSON schema,
+  invoking-user permission, object/property allowlists, masked-property rejection, model-egress
+  compatibility, timeout/result budgets, and confirmation/review requirement for non-read effects.
+  `ToolExecutor` is the product boundary that runs the approved call with the same `RequestContext`
+  as the caller; `FakeToolExecutor` is the safe local default and never opens network, SQL, shell, or
+  provider SDK paths. The broker returns only masked/bounded output, `sha256:` argument/result hashes,
+  a redacted preview, and an `AiToolCallRecord` ready for the P0c ledger. This mirrors Palantir's
+  documented tool model: AIP Logic/Chatbot tools let an LLM ask for ontology reads/actions/functions,
+  but the platform executes those calls within the invoking user's permissions and write actions can
+  be configured for user confirmation or review (palantir.com/docs/foundry/logic/blocks,
+  /chatbot-studio/tools, /logic/execution-mode-settings, /action-types/permissions). New enforced
+  source-of-truth rule `tool_calls_are_brokered_as_user_scoped_bounded_requests` names the contract
+  and unit tests proving invoking-user execution, generic executor deny, no pre-check executor call,
+  non-read confirmation fail-closed, egress incompatibility, output masking, result limits, ledger
+  hashes, local runtime composition, and CI runtime-lane wiring through `quality:tool-broker`.
+  AgentRuntime looping, actual ontology/content/state/action tool adapters, approval bridge, public
+  API/SDK surfaces, and the visual trace UI remain later AIP slices.
+
+- **P0f — Citation Service + source verifier port (shipped as the first citation integrity slice):**
+  the model still does **not** emit trusted source URLs. `CitationService` accepts model-proposed
+  `context_id` + claim-span pairs, looks up the selected context item in the tenant-scoped
+  `AiRunRepository` manifest, requires caller read permission for the source type, asks
+  `CitationSourceVerifier` to re-read the current source version/hash, and only then writes an
+  `AiCitationRecord` plus returns a `flite-citation-nav.v1` HMAC-signed navigation reference. Forged
+  context ids, omitted/unselected context, stale version/hash, invalid spans, duplicate orders, and
+  missing source permission all fail closed before a citation row is written. This mirrors Palantir's
+  documented AIP Chatbot Studio citation pattern: document/Ontology citations are rendered as clickable
+  source references, object citations can update Workshop variables, and the default behavior opens the
+  corresponding object or document (palantir.com/docs/foundry/chatbot-studio/citations). OUR
+  hardening is that model output supplies only an opaque context id; source display and navigation are
+  server-resolved and signed from the run ledger. `FakeCitationSourceVerifier` is the local default, and
+  `quality:citation-service` proves the port contract, local runtime composition, selected-context
+  lookup, source permission, stale-source rejection, signed-ref generation, raw-secret non-leakage,
+  ledger persistence, and CI runtime-lane wiring. AgentRuntime looping, real object/document/media
+  source resolvers, public API/SDK surfaces, and the visual trace UI remain later AIP slices.
+
+- **P0g — Action Proposal Service + review-queue fingerprint (shipped as the first human-review action
+  slice):** the model still does **not** execute Ontology Actions. `ActionProposalService` accepts a
+  model-proposed action, then re-reads the tenant-scoped AI run ledger to require selected evidence
+  context ids, checks the agent action allowlist, requires `insight:create` plus
+  `action:execute:<ActionType>` for the invoking user, re-reads the active Ontology action definition,
+  and re-reads the current object version before creating a pending `insight_reviews` row. The
+  canonical proposal fingerprint covers action type, target type/id, expected object version,
+  canonical parameters, evidence refs, agent version, and policy version; that fingerprint is also the
+  review-create idempotency key, so exact retries replay while parameter/evidence/policy changes require
+  a new review. `insight_reviews` now carries the canonical §10.3 fields
+  `proposal_type`, `proposal_fingerprint`, `originating_ai_run_id`, `originating_tool_call_id`,
+  `expires_at`, `execution_status`, `approved_action_run_id`, and `approval_policy_version`, with a
+  forward-safe Alembic expand migration and schema snapshot. This mirrors Palantir's documented AIP
+  Logic + Automate proposal flow, where generated Actions can be staged for human review, proposal
+  details show the reason/decision log, and accepting a proposal executes the Action
+  (palantir.com/docs/foundry/logic/aip-logic-integration-automate). It also follows Palantir Action
+  Type semantics: an Action is the transaction that changes Ontology objects/properties/links, and
+  applying an Action depends on action permissions/submission criteria
+  (palantir.com/docs/foundry/action-types/overview, /action-types/permissions). P0g stops before
+  execution; the Approval-to-Action bridge is the next slice. Public API/SDK action-proposal routes and
+  the visual proposal review workspace remain later AIP slices. `quality:action-proposal` proves user-facing
+  `foundry.aip.propose_action(...)`, local runtime composition, selected-evidence enforcement, forged
+  context rejection before review creation, policy/agent/object-version fail-closed checks, exact retry
+  replay, changed-fingerprint new review creation, no `action_runs` side effect, and CI runtime-lane
+  wiring.
+
+- **P0h — Approval Execution Service + approved-as action linkage (shipped as the Approval-to-Action
+  bridge):** `ApprovalExecutionService` executes only an already-approved action proposal review through
+  `foundry.aip.execute_approved_action(...)`. The service requires reviewer permission, requires
+  `action:execute:<ActionType>`, re-checks source evidence access, re-loads the originating AI run ledger
+  and recomputes the canonical proposal fingerprint, rejects expired reviews, re-reads the active action
+  definition, and re-reads the current target object version before claiming execution. Execution then
+  calls `ActionService.apply_action(...)` with the proposal fingerprint as the action idempotency key, so
+  the existing action transaction, object mutation, outbox, audit, and optimistic-concurrency guarantees
+  remain the write path. After success, `insight_reviews.execution_status` moves to `executed`,
+  `approved_action_run_id` is filled, and `runtime_run_relations` records
+  `insight_review --approved_as--> action`. This mirrors Palantir's documented proposal review flow where
+  accepting a proposal executes the generated Action, while still enforcing Foundry Action permissions and
+  submission-time checks. `quality:approval-execution` proves approved-only execution, fingerprint
+  mismatch rejection, expired-review rejection, reviewer-time object-version recheck, exactly-once replay
+  after execution, durable review-to-action linkage, and CI runtime-lane wiring. Public API/SDK routes,
+  a visual evidence/proposal review workspace, Temporal-backed long-running human approval, and broader
+  external side-effect compensation UI remain later AIP slices.
+
+- **P0i — AI Operations run/detail surface (shipped as the first operator-facing AI trace slice):**
+  Operations now treats canonical AI executions as first-class run rows. `RuntimeRunType` and generated
+  SDK types include `ai`, `RuntimeRunQueryResult` includes `aiRuns`, and
+  `GET /api/operations/runs/{run_type}/{run_id}` returns an `ai` detail field for `run_type=ai` built from
+  `AiRunRepository.ledger_for_run(...)`. The payload exposes run refs and hashes, ordered events,
+  model-call request/response hashes plus token and latency accounting, selected/omitted context
+  metadata, tool-call argument/result hashes and status, citations, usage/cost rows, derived summary
+  totals, and a lightweight timeline. It does not expose raw prompt text, raw tool results, provider
+  response bodies, or authorization-bearing JSON values; the detail payload masks those values if they
+  are accidentally present in JSON evidence. This mirrors the documented Palantir AIP observability
+  pattern of run history, trace view, metrics, and access-controlled logs while keeping Foundry-lite's
+  canonical §9.7 privacy boundary: the general DB/API surface carries refs, hashes, redacted previews,
+  counts, and ids, not raw prompt artifacts. `quality:ai-operations` proves SQL-backed list/detail,
+  API smoke behavior, raw AI payload non-leakage, generated SDK type drift, and CI runtime-lane wiring.
+  A full visual trace explorer, prompt artifact viewer UI, log-access/marking administration, and live
+  provider usage dashboards remain later AIP slices.
+
+- **P0j — Logic Runtime typed DAG + safe boundary execution (shipped as the first Logic slice):**
+  `LogicRuntimeService` validates a typed, bounded AIP Logic DAG before any block runs. Duplicate block
+  ids, missing dependencies, cycles, unsupported block kinds, and max-block budget violations fail closed.
+  The first executable blocks are deliberately narrow: `CallFunction` delegates to `ToolBrokerService`
+  and records the returned `AiToolCallRecord`, while `CreateActionProposal` delegates to
+  `ActionProposalService` so write intent becomes a pending human-review proposal instead of an action
+  side effect. `ApplyAction` is rejected until a later approved-proposal signal path exists. Logic
+  start/completed/failed evidence is appended to `ai_execution_events` with payload refs, `sha256:`
+  hashes, and redacted previews, and same-graph replay keeps the same graph/result hash. This mirrors
+  Palantir AIP Logic's block-oriented execution model while preserving Foundry-lite's AIP invariant that
+  tools and writes must pass through the governed broker/proposal boundaries. `quality:logic-runtime`
+  proves brokered read-tool execution, deterministic replay hashing, direct action rejection, review-queue
+  proposal creation with no `action_runs` side effect, cycle rejection, and CI runtime-lane wiring.
+  Temporal async start/signal/cancel/query, crash-safe pause/resume, schedule/event triggers, model-call
+  blocks, visual DAG authoring, and workflow-status-vs-domain-commit proofs remain later AIP slices.
+
+- **P0k — AI Evals + Release Guard evidence (shipped as the first eval/release slice):**
+  `EvalService` records deterministic eval evidence before a candidate agent version can be promoted to
+  an operational release channel. The new tenant-scoped `ai_eval_suites`, `ai_eval_cases`,
+  `ai_eval_runs`, `ai_eval_results`, and `ai_agent_releases` tables capture suite/case definitions,
+  per-case input/expected/actual/result `sha256:` hashes, run summaries, and eval-backed promotion
+  decisions. The scoring slice is deliberately local and mutation-free: exact-subset observations prove
+  whether expected safety/action/answer/tool outcomes appeared, repeated runs of the same case must keep
+  the same actual hash, and suite/case definition drift without a version bump fails closed. Promotion
+  to a release channel requires a passed eval run for the same agent version and channel; `stable`
+  additionally requires passing Security and Action axes plus zero repeated-run variance. This mirrors
+  Palantir AIP Evals' test-case/evaluator/run-result pattern and the documented practice of evaluating
+  action-affecting logic in simulation rather than mutating production Ontology data, while keeping
+  Foundry-lite's release gate local and inspectable. The Alembic upgrade path applies PostgreSQL
+  `ENABLE ROW LEVEL SECURITY`, `FORCE ROW LEVEL SECURITY`, and tenant policies to all new eval/release
+  tables. `quality:ai-evals` and `quality:ai-release` prove repository round-trip, migration RLS DDL,
+  failed-eval release rejection, stable Security+Action gate, repeated-run variance rejection,
+  case-definition version drift rejection, matching-channel enforcement, and CI runtime-lane wiring.
+  Visual eval workbench, generated eval datasets, LLM-as-judge scoring, baseline diff dashboards,
+  Apollo rollout/rollback integration, and live-provider eval smoke remain later AIP slices.
+
+- **P0l — Visual Builder preflight (shipped as the first Builder slice):**
+  `VisualBuilderService` gives the Web Operations AIP Builder panel and generated SDK a read-only way to
+  validate an authored agent/model/prompt/context/tool/Logic/eval draft before runtime execution or
+  release promotion. The service returns `sha256:` draft and graph hashes, ready/blocked status, blocking
+  issues, and safe-boundary labels without writing DB state. It fails closed on tenant partition mismatch,
+  missing or unpublished governed tools, dangerous generic executors, direct `ApplyAction`, missing Logic
+  dependencies/cycles, missing eval axes, and stable release drafts without Security+Action eval axes.
+  `POST /api/aip/builder/validate`, generated `client.aip.builder.validate(...)`, and
+  `quality:visual-builder` prove the service/API/SDK/Web contract and CI runtime-lane wiring. Persisted
+  Builder definitions, drag-and-drop canvas editing, full Agent Studio, visual eval dashboard, visual AI
+  run debugger, and visual release promotion UI remain later AIP slices.

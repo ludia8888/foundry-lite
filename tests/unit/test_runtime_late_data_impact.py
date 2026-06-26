@@ -215,6 +215,7 @@ def _snapshot(
         "outboxEvents": [],
         "deadLetterEvents": [],
         "workflowRuns": [],
+        "aiRuns": [],
         "auditEvents": [],
         "objectEdits": [],
     }

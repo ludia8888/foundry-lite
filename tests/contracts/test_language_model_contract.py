@@ -9,6 +9,8 @@ logic never imports a provider SDK.
 
 from __future__ import annotations
 
+import json
+
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 from foundry_lite.application.ports.language_model import (
     LanguageModelAdapter,
@@ -49,6 +51,71 @@ def test_language_model_stream_yields_same_content_as_complete() -> None:
     assert events[-1].finish_reason == "stop"
 
 
+def test_fake_language_model_returns_schema_requested_citation_claim() -> None:
+    adapter: LanguageModelAdapter = FakeLanguageModel()
+    request = ModelRequest(
+        model_alias="default-completion",
+        messages=(
+            ModelMessage(
+                role="system",
+                content='## citation_mapping\n{"citations":[{"context_id":"ctx-order-1"}]}',
+            ),
+            ModelMessage(role="user", content="hello world"),
+        ),
+        response_schema=json.dumps({"type": "object", "properties": {"citations": {"type": "array"}}}),
+    )
+
+    payload = json.loads(adapter.complete(request).content)
+
+    assert payload["answer"] == "echo: hello world"
+    assert payload["citations"][0]["contextId"] == "ctx-order-1"
+    assert payload["citations"][0]["citationOrder"] == 1
+
+
+def test_fake_language_model_falls_back_without_valid_citation_mapping() -> None:
+    adapter: LanguageModelAdapter = FakeLanguageModel()
+    citing_schema = json.dumps({"type": "object", "properties": {"citations": {"type": "array"}}})
+
+    invalid_schema = ModelRequest(
+        model_alias="default-completion",
+        messages=(ModelMessage(role="user", content="hello world"),),
+        response_schema="{",
+    )
+    no_mapping = ModelRequest(
+        model_alias="default-completion",
+        messages=(ModelMessage(role="system", content="## agent_instruction\nAnswer"), _user_message()),
+        response_schema=citing_schema,
+    )
+    malformed_mapping = ModelRequest(
+        model_alias="default-completion",
+        messages=(ModelMessage(role="system", content="## citation_mapping\n{"), _user_message()),
+        response_schema=citing_schema,
+    )
+
+    assert adapter.complete(invalid_schema).content == "echo: hello world"
+    assert adapter.complete(no_mapping).content == "echo: hello world"
+    assert adapter.complete(malformed_mapping).content == "echo: hello world"
+
+
+def test_fake_language_model_detects_citation_schema_inside_lists() -> None:
+    adapter: LanguageModelAdapter = FakeLanguageModel()
+    request = ModelRequest(
+        model_alias="default-completion",
+        messages=(
+            ModelMessage(
+                role="system",
+                content='## citation_mapping\n{"citations":[{"context_id":"ctx-order-2"}]}',
+            ),
+            _user_message(),
+        ),
+        response_schema=json.dumps([{"citations": {"type": "array"}}]),
+    )
+
+    payload = json.loads(adapter.complete(request).content)
+
+    assert payload["citations"][0]["contextId"] == "ctx-order-2"
+
+
 def test_language_model_declares_failure_contract() -> None:
     adapter: LanguageModelAdapter = FakeLanguageModel()
     contract = adapter.failure_contract()
@@ -56,3 +123,7 @@ def test_language_model_declares_failure_contract() -> None:
     assert isinstance(contract, AdapterFailureContract)
     assert adapter.profile_name == "fake-language-model"
     assert contract.adapter_profile == "fake-language-model"
+
+
+def _user_message() -> ModelMessage:
+    return ModelMessage(role="user", content="hello world")

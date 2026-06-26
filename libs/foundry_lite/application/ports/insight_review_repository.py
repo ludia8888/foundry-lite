@@ -25,6 +25,14 @@ class InsightReviewRow(TypedDict):
     evidence_object_ids: Sequence[str]
     evidence_refs: Sequence[InsightReviewJson]
     action_proposal: InsightReviewJson | None
+    proposal_type: str | None
+    proposal_fingerprint: str | None
+    originating_ai_run_id: str | None
+    originating_tool_call_id: str | None
+    expires_at: str | None
+    execution_status: str | None
+    approved_action_run_id: str | None
+    approval_policy_version: str | None
     created_by_user_id: str
     created_idempotency_key: str
     assignment_idempotency_key: str | None
@@ -47,6 +55,14 @@ class InsightReviewRecord:
     evidence_object_ids: Sequence[str]
     evidence_refs: Sequence[InsightReviewJson]
     action_proposal: InsightReviewJson | None
+    proposal_type: str | None
+    proposal_fingerprint: str | None
+    originating_ai_run_id: str | None
+    originating_tool_call_id: str | None
+    expires_at: str | None
+    execution_status: str | None
+    approved_action_run_id: str | None
+    approval_policy_version: str | None
     created_by_user_id: str
     created_idempotency_key: str
     assignment_idempotency_key: str | None
@@ -116,4 +132,39 @@ class InsightReviewRepository(Protocol):
         updated_at: str,
     ) -> InsightReviewRow | None:
         """Approve or reject a pending review if this caller wins the race."""
+        ...
+
+    def mark_execution_started(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        review_id: str,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        """Move an approved action proposal review into executing state."""
+        ...
+
+    def mark_execution_succeeded(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        review_id: str,
+        action_run_id: str,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        """Link an approved review to the action run it produced."""
+        ...
+
+    def mark_execution_failed(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        review_id: str,
+        error: InsightReviewJson,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        """Record that approval execution failed after the execution claim was taken."""
         ...

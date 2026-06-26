@@ -1,10 +1,32 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import cast
 
 from scripts import generate_sdk_ts as sdk
+
+
+def _balanced_brace_bounds(source: str, open_brace_index: int) -> tuple[int, int]:
+    depth = 0
+    for index in range(open_brace_index, len(source)):
+        character = source[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return open_brace_index, index
+    raise AssertionError("unterminated brace block")
+
+
+def _export_type_block(source: str, type_name: str) -> str:
+    prefix = f"export type {type_name} = "
+    start = source.index(prefix)
+    open_brace = source.index("{", start)
+    _, close_brace = _balanced_brace_bounds(source, open_brace)
+    return source[start : close_brace + 2]
 
 
 def _type_block(source: str, type_name: str) -> str:
@@ -12,6 +34,39 @@ def _type_block(source: str, type_name: str) -> str:
     start = source.index(prefix)
     end = source.index("};", start)
     return source[start : end + 2]
+
+
+def _nested_client_block(source: str, member_path: tuple[str, ...]) -> str:
+    block = source
+    for member_name in member_path:
+        match = re.search(rf"(?m)^\s*{re.escape(member_name)}:\s*\{{", block)
+        assert match is not None, f"missing generated client member {'.'.join(member_path)}"
+        open_brace = block.index("{", match.start())
+        start, end = _balanced_brace_bounds(block, open_brace)
+        block = block[start : end + 1]
+    return block
+
+
+def _client_surface_method_paths(surface: dict[str, object]) -> list[tuple[str, ...]]:
+    paths: list[tuple[str, ...]] = []
+
+    def collect(prefix: tuple[str, ...], value: object) -> None:
+        if prefix == ("helpers",):
+            return
+        if isinstance(value, list):
+            for method_name in value:
+                assert isinstance(method_name, str)
+                paths.append((*prefix, method_name))
+            return
+        if isinstance(value, dict):
+            for member_name, child in value.items():
+                collect((*prefix, member_name), child)
+            return
+        raise AssertionError(f"unsupported SDK surface entry at {'.'.join(prefix)}: {value!r}")
+
+    for namespace, value in surface.items():
+        collect((namespace,), value)
+    return sorted(paths)
 
 
 def _client_surface_payload(source: str) -> dict[str, object]:
@@ -53,11 +108,26 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type OntologyCatalog = {" in generated
     assert "catalog(): Promise<OntologyCatalog>;" in generated
     assert "validate(payload: OntologyValidateRequest): Promise<OntologyValidationResult>;" in generated
+    assert "export type AipBuilderValidateRequest = {" in generated
+    assert "export type AipBuilderRunRequest = AipBuilderValidateRequest & {" in generated
+    assert "export type AipBuilderValidationResult = {" in generated
+    assert "export type AipBuilderRunResult = {" in generated
+    assert "export type AipAgentRunRequest = {" in generated
+    assert "toolManifest?: AipBuilderToolSpec[];" in generated
+    assert "maxToolCalls?: number;" in generated
+    assert "export type AipAgentRunResult = {" in generated
+    assert "aip: {" in generated
+    assert "validate(payload: AipBuilderValidateRequest): Promise<AipBuilderValidationResult>;" in generated
+    assert "run(payload: AipBuilderRunRequest): Promise<AipBuilderRunResult>;" in generated
+    assert "run(payload: AipAgentRunRequest): Promise<AipAgentRunResult>;" in generated
+    assert "sdkClient().aip.builder.validate" not in generated
     assert "insights: {" in generated
     assert "export type InsightReviewPayload = {" in generated
     assert "list(filters?: InsightReviewListFilters): Promise<InsightReviewQueryResult>;" in generated
     assert "create(payload: InsightReviewCreateRequest, options: { idempotencyKey: string })" in generated
     assert "decide(reviewId: string, payload: InsightReviewDecisionRequest" in generated
+    assert "execute(reviewId: string, payload: InsightReviewExecuteActionRequest" in generated
+    assert "Promise<InsightReviewExecuteActionResult>;" in generated
     assert "generic: {" in generated
     assert "links(objectType: string, id: string, linkType: string): Promise<ObjectLinkPayload[]>;" in generated
     assert "objectSets: {" in generated
@@ -89,6 +159,11 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "runs: {" in generated
     assert "list(filters?: RuntimeRunQueryFilters): Promise<RuntimeRunQueryResult>;" in generated
     assert "detail(runType: string, runId: string): Promise<RuntimeRunDetail>;" in generated
+    assert "promptArtifact(runId: string, artifactId: string): Promise<PromptArtifactReadResult>;" in generated
+    assert "export type PromptArtifactReadResult = {" in generated
+    assert '  | "ai"' in generated
+    assert "  aiRuns: RuntimeRow[];" in generated
+    assert "  ai?: Record<string, unknown> | null;" in generated
     assert "planReadOnly(datasetRef: string, options?: IcebergMaintenancePlanOptions)" in generated
     assert "export type LineageEdge = {" in generated
     assert "lineage: {" in generated
@@ -125,6 +200,10 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.create")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.assign")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.decide")' in generated
+    assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.execute")' in generated
+    assert "execute: (" in generated
+    assert "payload: InsightReviewExecuteActionRequest," in generated
+    assert "export type InsightReviewExecuteActionResult = {" in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.deadLetterRecords.retry")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.deadLetterRecords.bulkRetry")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.workflows.startConnectorSync")' in generated
@@ -143,7 +222,8 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["system"] == ["health"]
     assert ts_surface["datasets"] == ["list", "versions", "preview", "inspect"]
     assert ts_surface["ontology"] == ["catalog", "validate"]
-    assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide"]}
+    assert ts_surface["aip"] == {"builder": ["validate", "run"], "agent": ["run"]}
+    assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide", "execute"]}
     objects_surface = cast(dict[str, object], ts_surface["objects"])
     assert objects_surface["generic"] == ["get", "query", "links"]
     assert ts_surface["objectSets"] == ["list", "create", "get"]
@@ -157,7 +237,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "lineage": ["get"],
         "observability": ["detect"],
         "reconciliation": ["resolve"],
-        "runs": ["list", "detail"],
+        "runs": ["list", "detail", "promptArtifact"],
         "transforms": ["retry"],
         "workflows": ["startConnectorSync", "get"],
     }
@@ -177,6 +257,24 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     ]
 
 
+def test_sdk_package_and_browser_outputs_share_client_surface_declares_client_type_methods() -> None:
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    generated = sdk.render_typescript(ontology)
+    surface = json.loads(sdk.render_client_surface_json(sdk.client_surface(ontology)))
+    assert isinstance(surface, dict)
+    client_type = _export_type_block(generated, "FoundryLiteGeneratedClient")
+
+    missing_paths = []
+    for path in _client_surface_method_paths(surface):
+        parent_path = path[:-1]
+        method_name = path[-1]
+        parent_block = _nested_client_block(client_type, parent_path)
+        if re.search(rf"(?m)^\s*{re.escape(method_name)}\s*\(", parent_block) is None:
+            missing_paths.append(".".join(path))
+
+    assert missing_paths == []
+
+
 def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
     ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
     browser_sdk = sdk.render_web_javascript(ontology)
@@ -189,11 +287,18 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "export function isRetryableFoundryLiteError(error)",
         "insights: {",
         "reviews: {",
+        "aip: {",
+        "builder: {",
+        "validate: (payload) => request(`/api/aip/builder/validate`, {",
+        "run: (payload) => request(`/api/aip/builder/run`, {",
+        "agent: {",
+        "run: (payload) => request(`/api/aip/agent/run`, {",
         "export function classifyFoundryLiteError(error)",
         "export function actionLockKey(actionName, objectId)",
         "export function createInFlightActionLock()",
         "function requireIdempotencyKey(value, operationName)",
         'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.create")',
+        'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.execute")',
         'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.deadLetterRecords.retry")',
         'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.workflows.startConnectorSync")',
         '"MISSING_IDEMPOTENCY_KEY"',

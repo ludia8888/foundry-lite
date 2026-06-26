@@ -68,6 +68,7 @@ class SqlAlchemyRuntimeRepository:
                 "outboxEvents": window("outbox_events"),
                 "deadLetterEvents": window("dead_letter_events"),
                 "workflowRuns": window("workflow_runs"),
+                "aiRuns": window("ai_execution_runs"),
                 "auditEvents": window("audit_events"),
                 "objectEdits": window("object_edits"),
             }
@@ -135,22 +136,39 @@ class SqlAlchemyRuntimeRepository:
                 "workflowRuns": self._scoped_rows(
                     transaction, db.workflow_runs, tenant_id, limit, None, run_ids=runids
                 ),
+                "aiRuns": self._scoped_rows(
+                    transaction,
+                    db.ai_execution_runs,
+                    tenant_id,
+                    limit,
+                    None,
+                    run_ids=runids,
+                    timestamp_column=db.ai_execution_runs.c.started_at,
+                ),
                 "auditEvents": [],
                 "objectEdits": [],
             }
 
     def _scoped_rows(
-        self, transaction: Any, table: Any, tenant_id: str, limit: int, *match: Any, run_ids: Sequence[str]
+        self,
+        transaction: Any,
+        table: Any,
+        tenant_id: str,
+        limit: int,
+        *match: Any,
+        run_ids: Sequence[str],
+        timestamp_column: Any | None = None,
     ) -> list[RuntimeRow]:
         conditions = [condition for condition in match if condition is not None]
         if run_ids:
             conditions.append(table.c.id.in_(list(run_ids)))
         if not conditions:
             return []
+        timestamp = timestamp_column if timestamp_column is not None else table.c.created_at
         query = (
             select(table)
             .where(and_(table.c.tenant_id == tenant_id, or_(*conditions)))
-            .order_by(desc(table.c.created_at), desc(table.c.id))
+            .order_by(desc(timestamp), desc(table.c.id))
             .limit(limit)
         )
         rows = transaction.execute(query).mappings().all()

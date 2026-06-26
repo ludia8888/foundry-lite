@@ -60,7 +60,16 @@ status, created_at`
 - **ai_agent_versions**: `id, agent_api_name, version, status, model_alias_version, prompt_version_id,
 tool_manifest_hash, context_policy, output_schema, budget, risk_policy, ontology_compatibility,
 release_channel, created_at`
-- **ai*eval*\***: `ai_eval_suites, ai_eval_cases, ai_eval_runs, ai_eval_results`
+- **ai_eval_suites**: `id, tenant_id, suite_api_name, version, description, axes_json, status,
+created_at`
+- **ai_eval_cases**: `id, tenant_id, suite_id, case_api_name, axis, input_json, expected_json,
+rubric_json, tags_json, created_at`
+- **ai_eval_runs**: `id, tenant_id, suite_id, agent_version_id, candidate_release_channel, status,
+min_score, passed, summary_json, started_at, completed_at`
+- **ai_eval_results**: `id, tenant_id, eval_run_id, case_id, sample_index, axis, score, passed,
+evaluator, input_hash, expected_hash, actual_hash, result_json, created_at`
+- **ai_agent_releases** (local first release-guard ledger): `id, tenant_id, agent_version_id,
+release_channel, eval_run_id, status, policy_version, promoted_by, promoted_at, created_at`
 
 ### Runtime Plane (§10.2)
 
@@ -148,7 +157,8 @@ class LanguageModelAdapter(Protocol):
 ```
 
 **ModelRequest** (§8.1.3): `model_alias, messages, tools, response_schema, temperature,
-max_output_tokens, request_id, ai_run_id, data_classification, region_requirement, timeout_seconds`.
+max_output_tokens, request_id, ai_run_id, request_hash, model_call_attempt, data_classification,
+region_requirement, timeout_seconds`.
 **ModelResponse** (§8.1.4): `provider, resolved_model_id, resolved_model_revision, content,
 normalized_tool_calls, finish_reason, input_tokens, output_tokens, provider_request_id, latency_ms`.
 **Retry** (§8.1.5): only transport timeout / 429 / temporary unavailable, retried under the same
@@ -174,7 +184,10 @@ Every error payload carries `request_id, ai_run_id, retryability, operator_messa
 - **Model Gateway (§8.1)**: alias → provider/model/revision resolve · request normalization ·
   native/prompted tool-calling capability negotiation · structured-output capability check · provider
   secret resolve (via SecretProvider) · egress policy check · timeout/rate-limit/retry · usage+latency
-  record · provider error → typed failure.
+  record · provider error → typed failure. Current P0u moves model-call ledger ownership into the
+  gateway: if the `ModelRequest` `ai_run_id` field is set, the seeded AI run must already exist before
+  provider egress, and the gateway records succeeded or failed provider attempts to `ai_model_calls` with
+  request/response hashes and redacted error payloads.
 - **Model Alias (§8.2)**: agent references the **alias**, never the provider-native model id. Alias
   record carries lifecycle, environment mapping, capabilities (streaming/native tools/parallel tools/
   JSON schema/vision), context/output token limits, provider region, allowed classifications,
@@ -184,17 +197,54 @@ Every error payload carries `request_id, ai_run_id, retryability, operator_messa
   introduced only after baseline eval) → authoritative DB re-read → security validation → version/hash
   validation → dedup/diversity → token-budget packing → `RetrievedContextItem[]`. Returns
   `RetrievedContextItem{context_id, kind∈object|document|function, text, source_ref, source_version,
-content_hash, relevance_score, retrieval_method, security_partition, token_estimate}`.
+content_hash, relevance_score, retrieval_method, security_partition, token_estimate}`. Current P0o
+  covers the first object-context baseline: Agent Runtime state objects and object keyword hits are
+  authoritatively re-read through Object Query before becoming context. Current P0p adds the first
+  document-context baseline: authoritative `DefaultContentRetrievalService` hits carry DB re-read
+  content-unit text into `kind=document` context items, with `content-unit://...` source refs,
+  source media version pins, `sha256:` prompt-text hashes, classification pre-filter propagation,
+  and the same item/token packing.
 - **Context Compiler (§8.6)**: fixed order = 1 platform safety policy, 2 published agent instruction,
   3 state schema+visible values, 4 tool definitions, 5 authoritative retrieved context, 6 citation
   mapping, 7 output schema, 8 user message. Emits `compiled_prompt_hash, context_manifest_hash,
-tool_manifest_hash, state_snapshot_hash, policy_snapshot_hash`. Retrieved docs are **untrusted data**,
-  fenced by explicit delimiter+policy so embedded "ignore previous instructions" is never promoted to
-  system instruction.
+  tool_manifest_hash, state_snapshot_hash, policy_snapshot_hash`. Retrieved docs are **untrusted data**,
+  carried as JSON string values with policy metadata so embedded section headers or "ignore previous
+  instructions" text is never promoted to system instruction.
+- **Prompt Artifact Store (§9.7/§10.2 extension)**: raw compiled prompt bytes are written only to a
+  separate encrypted artifact store. `ai_prompt_artifacts` stores the tenant-scoped receipt:
+  `id, tenant_id, ai_run_id, artifact_kind, artifact_ref, content_hash, artifact_hash, byte_size,
+  encryption_key_ref, encryption_algorithm, retention_until, legal_hold, erasure_request_id,
+  export_marking, created_at`. Current P0v composes this into Agent Runtime before Model Gateway egress:
+  if the encrypted artifact write fails, the seeded run is marked failed and the model is not called.
+  The stored plaintext uses the same canonical `{"messages":[...]}` JSON that produces
+  `compiled_prompt_hash`; DB receipt failure deletes the just-written artifact; raw read requires the
+  separate `aip_prompt_artifact_reader` role and rechecks both ciphertext `artifact_hash` and plaintext
+  `content_hash`. Local-dev key fallback is disabled unless explicitly opted in through
+  `FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY=true`. Operations exposes only refs/hashes/retention/export
+  marking. Current P0w adds the `PromptArtifactStore` adapter failure contract so write/read/delete,
+  missing or inactive keys, corrupt/hash-mismatched artifacts, and missing tenant-scoped refs have
+  operator-safe retryability/kind metadata. Current P0x makes the receipt `encryption_key_ref` a real
+  historical key resolver: prompt artifact reads request the exact `secret://name@version` recorded at
+  write time, and the local `EnvSecretProvider` can serve prior versions from
+  `<CURRENT_SECRET_ENV>__VERSION_<NORMALIZED_VERSION>` while still redacting secret values in errors.
+  Current P0y exposes the protected raw prompt only through a separate Operations API/SDK read surface
+  (`GET /api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}` /
+  `client.operations.runs.promptArtifact(...)`) that requires `aip_prompt_artifact_reader`, keeps the
+  normal run detail plaintext-free, and verifies the receipt belongs to the URL AI run before decrypting.
+  Current P0z also records the follow-up model prompt artifact when a brokered tool result is added to
+  the model-visible turn, so raw tool output used for answer synthesis is encrypted rather than exposed
+  through the normal Operations detail.
 - **Citation Service (§8.7)**: model is given **opaque context IDs**, never source URLs; service maps
   `ctx_id → media item version / page / content unit / hash` and verifies the context ID is in this
   run's manifest + caller may read source + version/hash still match + span relevant. Returns display
-  payload + signed navigation ref.
+  payload + signed navigation ref. Current P0q composes this service into Agent Runtime for structured
+  JSON `answer` + `citations` model output, keeping plain-text model output backward compatible.
+  Current P0r carries the requested output schema into the `response_schema` field on `ModelRequest` and renders
+  verified citation cards in the Web Operations AIP Agent panel while preserving the raw JSON payload
+  and Operations AI detail link for audit. Current P0s adds a `sourcePreview` object to each resolved
+  citation, derived only from selected AI run ledger context metadata (`kind`, source ref/version/hash,
+  retrieval method, relevance score, token estimate, and security partition) and rendered in Web
+  Operations without raw context text, prompt text, tool payloads, or provider bodies.
 - **Tool Registry / Tool Broker (§8.8)**: `ToolSpec{tool_id, version, input_schema, output_schema,
 effect∈READ|PROPOSE_WRITE|WRITE, required_permission, confirmation_policy∈NONE|USER|HUMAN_REVIEW,
 object_type_allowlist, property_allowlist, timeout_seconds, max_result_items}`. Broker check order:
@@ -205,10 +255,17 @@ object_type_allowlist, property_allowlist, timeout_seconds, max_result_items}`. 
 state.update, action.propose`. Initial deny: `generic_sql, arbitrary_http_request, shell_execute,
 python_eval, generic_repository_write`.
 - **Agent Runtime (§8.9)**: bounded loop `RECEIVED → RESOLVING_DEFINITION → RETRIEVING_CONTEXT →
-MODEL_RUNNING → TOOL_PENDING → TOOL_RUNNING → WAITING_CONFIRMATION → WAITING_HUMAN_REVIEW →
-MODEL_RUNNING → SUCCEEDED`; terminal `FAILED/CANCELLED/BUDGET_EXCEEDED/POLICY_DENIED`. Budget: max
+  MODEL_RUNNING → TOOL_PENDING → TOOL_RUNNING → WAITING_CONFIRMATION → WAITING_HUMAN_REVIEW →
+  MODEL_RUNNING → SUCCEEDED`; terminal `FAILED/CANCELLED/BUDGET_EXCEEDED/POLICY_DENIED`. Budget: max
   model calls / tool calls / loop iterations / input+output tokens / wall-clock / estimated cost /
-  context items / tool output bytes.
+  context items / tool output bytes. Current P0z adds the first backend-only brokered read-tool loop:
+  an Agent Runtime run may allow exactly one model-requested tool call, executes it only through
+  `ToolBrokerService`, records `AiToolCallRecord` hash/authorization evidence, stores the follow-up
+  model prompt as a second encrypted prompt artifact, and then performs the final governed model call.
+  Current P1a also supports one model-requested `action.propose` `PROPOSE_WRITE` tool: the runtime
+  validates the published manifest/schema/allowlist, calls `ActionProposalService` to create a pending
+  human-review row, records `AiToolCallRecord` with `pending_human_review`, and never calls
+  `ActionService` directly.
 - **Action Proposal + Approval Execution (§8.10, §12.2)**: `ActionProposal{proposal_id, action_type,
 target_object_type, target_object_id, expected_object_version, parameters, evidence_refs,
 originating_ai_run_id, proposal_fingerprint, policy_version, expires_at}`. Fingerprint over
@@ -217,7 +274,11 @@ originating_ai_run_id, proposal_fingerprint, policy_version, expires_at}`. Finge
   permission, action enabled, current object version, source evidence access, restore/write traffic
   gate, policy still compatible. **`ApprovalExecutionService` performs execution** (InsightReviewService
   does not call ActionService directly — separate approval event from execution ledger). Action
-  idempotency key = proposal fingerprint.
+  idempotency key = proposal fingerprint. Current P1b exposes the approved-review execution path through
+  `POST /api/insights/reviews/{review_id}/execute-action` and generated
+  `client.insights.reviews.execute(...)`, requires an API idempotency key, and back-links an
+  agent-originated `action.propose` tool call by filling `ai_tool_calls.linked_action_run_id` after the
+  approved ActionService run succeeds.
 - **Logic Runtime (§8.11)**: blocks Input/RetrieveObject/QueryObjects/TraverseLinks/RetrieveContent/
   CallLLM/CallFunction/Condition/Map/Reduce/UpdateState/CreateActionProposal/ApplyAction/HumanApproval/
   Output. Temporal only for long-running (human approval, batch, external side-effect compensation,
@@ -226,6 +287,10 @@ originating_ai_run_id, proposal_fingerprint, policy_version, expires_at}`. Finge
 - **Evals / Release (§8.12, §15)**: axes Retrieval/Answer/Citation/Tool/Action/Security/Operations.
   Release channel `draft → dev → canary → stable → sunset`. Write-producing agent promoted to stable
   only after deterministic security/action gate + repeated-run variance.
+- **Visual Builder (§14.6)**: Agent Studio / Context source editor / Tool manifest editor / Logic DAG
+  canvas / Eval dashboard / AI run debugger is implemented after backend contracts are stable. The first
+  Foundry-lite slice is a read-only Builder preflight that validates pinned agent/model/prompt/context/
+  tool/Logic/eval drafts before runtime execution or release promotion.
 
 ---
 
@@ -254,7 +319,7 @@ secret_version, provider_profile, resolution_timestamp` — never the value. Ada
   hash/redacted preview/counts/IDs; encrypted prompt artifact = separate access permission + short
   explicit retention + legal-hold + erasure-request lineage + export marking. Hidden chain-of-thought is
   not stored; stored = input, compiled context manifest, tool call/result, final answer, policy decision,
-  short execution summary.
+  short execution summary. Current P0v implements the first encrypted compiled-prompt artifact slice.
 
 ---
 
@@ -274,8 +339,10 @@ AiRunRepository, ContextProvider, ToolExecutor, UsageMeter`.
 ## CI quality gates (§15.6)
 
 Add granular gates: `quality:ai-contracts, quality:model-gateway, quality:ai-ledger,
-quality:retrieval-security, quality:context-compiler, quality:tool-broker, quality:action-proposal,
-quality:approval-execution, quality:ai-evals, quality:ai-release`. Release gate splits static / unit /
+quality:model-gateway-ledger, quality:prompt-artifacts, quality:retrieval-security, quality:context-compiler, quality:tool-broker,
+quality:action-proposal, quality:approval-execution, quality:ai-operations, quality:logic-runtime,
+quality:ai-evals, quality:ai-release, quality:visual-builder, quality:builder-runtime, quality:agent-runtime,
+quality:agent-tool-loop, quality:agent-runtime-citations, quality:agent-citation-ui, quality:agent-source-previews`. Release gate splits static / unit /
 integration / **live provider smoke** (live smoke = separate lane needing credentials + cost).
 
 ## Operational failure semantics (§16.3)
@@ -295,9 +362,10 @@ Phases: **P0** security+contracts · **P1** read-only Copilot · **P2** Action P
 Recommended PR sequence (granular): 1 `ai-contracts` (domain DTO + ports only) · 2 `ai-schema-ledger`
 (migration/repository/contract tests) · 3 `model-gateway-fake` (fake adapter + deterministic tests) ·
 4 `model-gateway-provider` (first provider-compatible adapter) · 5 `retrieval-security` (content/object
-security token contract — **done as P0a**) · 6 `context-compiler` · 7 `agent-runtime-readonly` (bounded
-loop + citations) · 8 `aip-api-sdk` · 9 `action-proposal` · 10 `approval-execution` · 11 `ai-operations`
-(run/event detail, usage, trace) · 12 `logic-runtime` · 13 `aip-evals` · 14 `visual-builder` (last).
+security token contract — **done as P0a**) · 6 `context-compiler` · 7 `agent-runtime-readonly` ·
+8 `retrieval-orchestrator-object-context` · 9 `aip-api-sdk` · 10 `action-proposal` ·
+11 `approval-execution` · 12 `ai-operations` (run/event detail, usage, trace) · 13 `logic-runtime` ·
+14 `aip-evals` · 15 `visual-builder` (last).
 
 ### P0 exit gate (§14.1.2)
 

@@ -39,6 +39,9 @@ from foundry_lite.infrastructure.adapters import (  # noqa: E402
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
 )
+from foundry_lite.infrastructure.adapters.local_prompt_artifact_store import (  # noqa: E402
+    LocalPromptArtifactStore,
+)
 from foundry_lite.infrastructure.auth import (  # noqa: E402
     DemoAuthProvider,
     HeaderTrustAuthProvider,
@@ -71,6 +74,7 @@ REQUIRED_PROFILES = frozenset(
         "demo-auth",
         "jwt-oidc-auth",
         "env-secret",
+        "local-prompt-artifact-store",
     }
 )
 
@@ -125,6 +129,7 @@ def load_contracts() -> tuple[AdapterFailureContract, ...]:
                 JwtOidcAuthConfig(issuer="https://issuer.example.test", audience="foundry-lite", jwks={"keys": []})
             ),
             EnvSecretProvider(environ={}),
+            LocalPromptArtifactStore(storage_root / "prompt-artifacts", EnvSecretProvider(environ={})),
         )
         return tuple(adapter.failure_contract() for adapter in adapters)
 

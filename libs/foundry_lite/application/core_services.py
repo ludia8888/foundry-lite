@@ -4,7 +4,18 @@ from dataclasses import dataclass
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.action_service import ActionService
+from foundry_lite.application.services.aip.action_proposal import ActionProposalService
+from foundry_lite.application.services.aip.agent_runtime import AgentRuntimeService
+from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionService
+from foundry_lite.application.services.aip.builder_runtime import BuilderRuntimeService
+from foundry_lite.application.services.aip.citation_service import CitationService
+from foundry_lite.application.services.aip.context_compiler import ContextCompilerService
+from foundry_lite.application.services.aip.eval_service import EvalService
+from foundry_lite.application.services.aip.logic_runtime import LogicRuntimeService
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
+from foundry_lite.application.services.aip.prompt_artifact_service import PromptArtifactService
+from foundry_lite.application.services.aip.tool_broker import ToolBrokerService
+from foundry_lite.application.services.aip.visual_builder import VisualBuilderService
 from foundry_lite.application.services.base import CoreService, build_service, collaborator_kwargs
 from foundry_lite.application.services.dataset_service import DatasetServices
 from foundry_lite.application.services.demo_service import DemoService
@@ -27,15 +38,26 @@ from foundry_lite.application.services.transform_service import TransformService
 __all__ = [
     "CoreServices",
     "ActionService",
+    "AgentRuntimeService",
+    "ActionProposalService",
+    "ApprovalExecutionService",
     "BackupRestoreService",
+    "BuilderRuntimeService",
+    "ContextCompilerService",
     "DemoService",
     "ErasureService",
+    "EvalService",
     "InsightReviewService",
     "DatasetServices",
     "IcebergMaintenanceService",
     "MaterializationService",
     "MediaServices",
+    "CitationService",
+    "LogicRuntimeService",
     "ModelGatewayService",
+    "PromptArtifactService",
+    "ToolBrokerService",
+    "VisualBuilderService",
     "ObjectServices",
     "OntologySearchService",
     "OntologyService",
@@ -56,15 +78,26 @@ class CoreServices:
     """
 
     action: ActionService
+    agent_runtime: AgentRuntimeService
+    action_proposal: ActionProposalService
+    approval_execution: ApprovalExecutionService
     backup_restore: BackupRestoreService
+    builder_runtime: BuilderRuntimeService
+    context_compiler: ContextCompilerService
     dataset: DatasetServices
     demo: DemoService
     erasure: ErasureService
+    evals: EvalService
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
     materialization: MaterializationService
     media: MediaServices
+    citation: CitationService
+    logic_runtime: LogicRuntimeService
     model_gateway: ModelGatewayService
+    prompt_artifact: PromptArtifactService
+    tool_broker: ToolBrokerService
+    visual_builder: VisualBuilderService
     object_store: ObjectServices
     ontology: OntologyService
     ontology_search: OntologySearchService
@@ -81,56 +114,76 @@ class CoreServices:
 
 
 def _new_core_services(service_type: type[CoreServices], dependencies: CoreDependencies) -> CoreServices:
-    action = build_service(ActionService, dependencies)
     backup_restore = build_service(BackupRestoreService, dependencies)
     dataset = DatasetServices.create(dependencies)
-    demo = build_service(DemoService, dependencies)
-    erasure = build_service(ErasureService, dependencies)
     iceberg_maintenance = build_service(IcebergMaintenanceService, dependencies)
     insight_review = build_service(InsightReviewService, dependencies)
-    materialization = build_service(MaterializationService, dependencies)
     media = MediaServices.create(dependencies)
-    model_gateway = build_service(ModelGatewayService, dependencies)
     object_store = ObjectServices.create(dependencies)
     ontology = build_service(OntologyService, dependencies)
     ontology_search = build_service(OntologySearchService, dependencies)
     record_dlq = build_service(RecordDlqService, dependencies)
-    runtime = build_service(RuntimeService, dependencies)
-    transform = build_service(TransformService, dependencies)
-    workflow = build_service(WorkflowOrchestrationService, dependencies)
     return service_type(
-        action=action,
+        action=build_service(ActionService, dependencies),
+        agent_runtime=build_service(AgentRuntimeService, dependencies),
+        action_proposal=build_service(ActionProposalService, dependencies),
+        approval_execution=build_service(ApprovalExecutionService, dependencies),
         backup_restore=backup_restore,
+        builder_runtime=build_service(BuilderRuntimeService, dependencies),
+        context_compiler=build_service(ContextCompilerService, dependencies),
         dataset=dataset,
-        demo=demo,
-        erasure=erasure,
+        demo=build_service(DemoService, dependencies),
+        erasure=build_service(ErasureService, dependencies),
+        evals=build_service(EvalService, dependencies),
         iceberg_maintenance=iceberg_maintenance,
         insight_review=insight_review,
-        materialization=materialization,
+        materialization=build_service(MaterializationService, dependencies),
         media=media,
-        model_gateway=model_gateway,
+        citation=build_service(CitationService, dependencies),
+        logic_runtime=build_service(LogicRuntimeService, dependencies),
+        model_gateway=build_service(ModelGatewayService, dependencies),
+        prompt_artifact=build_service(PromptArtifactService, dependencies),
+        tool_broker=build_service(ToolBrokerService, dependencies),
+        visual_builder=build_service(VisualBuilderService, dependencies),
         object_store=object_store,
         ontology=ontology,
         ontology_search=ontology_search,
         record_dlq=record_dlq,
-        runtime=runtime,
-        transform=transform,
-        workflow=workflow,
+        runtime=build_service(RuntimeService, dependencies),
+        transform=build_service(TransformService, dependencies),
+        workflow=build_service(WorkflowOrchestrationService, dependencies),
     )
 
 
 def _bind_core_service_collaborators(services: CoreServices) -> None:
-    service_items = [
+    collaborators = _collaborator_map(services)
+    for service in _core_service_items(services):
+        service.bind_collaborators(collaborator_kwargs(service, collaborators))
+
+
+def _core_service_items(services: CoreServices) -> list[CoreService]:
+    return [
         services.action,
+        services.agent_runtime,
+        services.action_proposal,
+        services.approval_execution,
         services.backup_restore,
+        services.builder_runtime,
+        services.context_compiler,
         *services.dataset.items(),
         services.demo,
         services.erasure,
+        services.evals,
         services.iceberg_maintenance,
         services.insight_review,
         services.materialization,
         *services.media.items(),
+        services.citation,
+        services.logic_runtime,
         services.model_gateway,
+        services.prompt_artifact,
+        services.tool_broker,
+        services.visual_builder,
         *services.object_store.items(),
         services.ontology,
         services.ontology_search,
@@ -139,62 +192,43 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
         services.transform,
         services.workflow,
     ]
-    collaborators = _collaborator_map(
-        services.action,
-        services.backup_restore,
-        services.dataset,
-        services.demo,
-        services.iceberg_maintenance,
-        services.materialization,
-        services.media,
-        services.object_store,
-        services.ontology,
-        services.record_dlq,
-        services.runtime,
-        services.transform,
-        services.workflow,
-    )
-    for service in service_items:
-        service.bind_collaborators(collaborator_kwargs(service, collaborators))
 
 
-def _collaborator_map(
-    action: ActionService,
-    backup_restore: BackupRestoreService,
-    dataset: DatasetServices,
-    demo: DemoService,
-    iceberg_maintenance: IcebergMaintenanceService,
-    materialization: MaterializationService,
-    media: MediaServices,
-    object_store: ObjectServices,
-    ontology: OntologyService,
-    record_dlq: RecordDlqService,
-    runtime: RuntimeService,
-    transform: TransformService,
-    workflow: WorkflowOrchestrationService,
-) -> dict[str, CoreService]:
+def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
-        "action_service": action,
-        "backup_restore_service": backup_restore,
-        "content_retrieval_service": media.retrieval,
-        "media_visual_search_service": media.visual_search,
-        "dataset_ingest_service": dataset.ingest,
-        "dataset_quality_service": dataset.quality,
-        "dataset_registry_service": dataset.registry,
-        "dataset_transaction_service": dataset.transaction,
-        "dataset_version_service": dataset.version,
-        "demo_service": demo,
-        "iceberg_maintenance_service": iceberg_maintenance,
-        "materialization_service": materialization,
-        "object_indexing_service": object_store.indexing,
-        "object_links_service": object_store.links,
-        "object_query_service": object_store.query,
-        "object_records_service": object_store.records,
-        "object_search_service": object_store.search,
-        "object_sets_service": object_store.sets,
-        "ontology_service": ontology,
-        "record_dlq_service": record_dlq,
-        "runtime_service": runtime,
-        "transform_service": transform,
-        "workflow_orchestration_service": workflow,
+        "action_service": services.action,
+        "agent_runtime_service": services.agent_runtime,
+        "action_proposal_service": services.action_proposal,
+        "approval_execution_service": services.approval_execution,
+        "backup_restore_service": services.backup_restore,
+        "builder_runtime_service": services.builder_runtime,
+        "citation_service": services.citation,
+        "context_compiler_service": services.context_compiler,
+        "content_retrieval_service": services.media.retrieval,
+        "media_visual_search_service": services.media.visual_search,
+        "dataset_ingest_service": services.dataset.ingest,
+        "dataset_quality_service": services.dataset.quality,
+        "dataset_registry_service": services.dataset.registry,
+        "dataset_transaction_service": services.dataset.transaction,
+        "dataset_version_service": services.dataset.version,
+        "demo_service": services.demo,
+        "iceberg_maintenance_service": services.iceberg_maintenance,
+        "insight_review_service": services.insight_review,
+        "logic_runtime_service": services.logic_runtime,
+        "model_gateway_service": services.model_gateway,
+        "prompt_artifact_service": services.prompt_artifact,
+        "materialization_service": services.materialization,
+        "object_indexing_service": services.object_store.indexing,
+        "object_links_service": services.object_store.links,
+        "object_query_service": services.object_store.query,
+        "object_records_service": services.object_store.records,
+        "object_search_service": services.object_store.search,
+        "object_sets_service": services.object_store.sets,
+        "ontology_service": services.ontology,
+        "record_dlq_service": services.record_dlq,
+        "runtime_service": services.runtime,
+        "tool_broker_service": services.tool_broker,
+        "transform_service": services.transform,
+        "visual_builder_service": services.visual_builder,
+        "workflow_orchestration_service": services.workflow,
     }

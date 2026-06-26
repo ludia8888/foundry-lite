@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, desc, insert, select
+from sqlalchemy import and_, desc, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
@@ -132,6 +132,87 @@ class SqlAlchemyInsightReviewRepository:
             return None
         return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
 
+    def mark_execution_started(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        review_id: str,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        updated = transaction.execute(
+            update(db.insight_reviews)
+            .where(
+                and_(
+                    db.insight_reviews.c.tenant_id == tenant_id,
+                    db.insight_reviews.c.id == review_id,
+                    db.insight_reviews.c.status == "approved",
+                    db.insight_reviews.c.execution_status == "pending_review",
+                )
+            )
+            .values(execution_status="executing", updated_at=updated_at)
+        )
+        if updated.rowcount != 1:
+            return None
+        return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+
+    def mark_execution_succeeded(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        review_id: str,
+        action_run_id: str,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        updated = transaction.execute(
+            update(db.insight_reviews)
+            .where(
+                and_(
+                    db.insight_reviews.c.tenant_id == tenant_id,
+                    db.insight_reviews.c.id == review_id,
+                    db.insight_reviews.c.status == "approved",
+                    db.insight_reviews.c.execution_status == "executing",
+                )
+            )
+            .values(
+                execution_status="executed",
+                approved_action_run_id=action_run_id,
+                updated_at=updated_at,
+            )
+        )
+        if updated.rowcount != 1:
+            return None
+        return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+
+    def mark_execution_failed(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        review_id: str,
+        error: InsightReviewJson,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        row = self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+        if row is None or row["execution_status"] != "executing":
+            return None
+        metadata = {**dict(row["review_metadata"]), "executionError": dict(error)}
+        updated = transaction.execute(
+            update(db.insight_reviews)
+            .where(
+                and_(
+                    db.insight_reviews.c.tenant_id == tenant_id,
+                    db.insight_reviews.c.id == review_id,
+                    db.insight_reviews.c.execution_status == "executing",
+                )
+            )
+            .values(execution_status="failed", review_metadata=metadata, updated_at=updated_at)
+        )
+        if updated.rowcount != 1:
+            return None
+        return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+
     def _review_by_create_key(
         self,
         transaction: Any,
@@ -165,6 +246,14 @@ def _insight_review_values(record: InsightReviewRecord) -> dict[str, object]:
         "evidence_object_ids": list(record.evidence_object_ids),
         "evidence_refs": [dict(ref) for ref in record.evidence_refs],
         "action_proposal": dict(record.action_proposal) if record.action_proposal is not None else None,
+        "proposal_type": record.proposal_type,
+        "proposal_fingerprint": record.proposal_fingerprint,
+        "originating_ai_run_id": record.originating_ai_run_id,
+        "originating_tool_call_id": record.originating_tool_call_id,
+        "expires_at": record.expires_at,
+        "execution_status": record.execution_status,
+        "approved_action_run_id": record.approved_action_run_id,
+        "approval_policy_version": record.approval_policy_version,
         "created_by_user_id": record.created_by_user_id,
         "created_idempotency_key": record.created_idempotency_key,
         "assignment_idempotency_key": record.assignment_idempotency_key,

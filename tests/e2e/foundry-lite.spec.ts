@@ -4,6 +4,40 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await page.goto("/");
 
   await expect(page.locator("#statusText")).toHaveText("ok");
+  await expect(page.locator("#metricAipBuilderStatus")).toHaveText("ready");
+  await expect(page.locator("#aipBuilderResult")).toContainText('"releaseReady": true');
+  await expect(page.locator("#aipBuilderGraph .builder-node")).toHaveCount(5);
+  const generatedSdkBuilder = page.waitForRequest((request) => {
+    return request.method() === "POST" && request.url().includes("/api/aip/builder/validate");
+  });
+  await page.locator("#aipBuilderValidateBtn").click();
+  await expect(page.locator("#aipBuilderResult")).toContainText('"validationStatus": "ready"');
+  await expect((await generatedSdkBuilder).headers()["x-tenant-id"]).toBe("tenant-demo");
+  const generatedSdkBuilderRun = page.waitForRequest((request) => {
+    return request.method() === "POST" && request.url().includes("/api/aip/builder/run");
+  });
+  await page.locator("#aipBuilderRunBtn").click();
+  await expect(page.locator("#aipBuilderResult")).toContainText('"runStatus": "waiting_human_review"');
+  await expect(page.locator("#runResult")).toContainText('"runType": "ai"');
+  await expect(page.locator("#runResult")).toContainText('"status": "succeeded"');
+  await expect((await generatedSdkBuilderRun).headers()["x-tenant-id"]).toBe("tenant-demo");
+  const generatedSdkAgentRun = page.waitForRequest((request) => {
+    return request.method() === "POST" && request.url().includes("/api/aip/agent/run");
+  });
+  await page.locator("#aipAgentRunBtn").click();
+  await expect(page.locator("#aipAgentResult")).toContainText('"runStatus": "succeeded"');
+  await expect(page.locator("#aipAgentResult")).toContainText('"answer": "echo: Explain Order O-1001 for the operator."');
+  await expect(page.locator("#aipAgentAnswer")).toHaveText("echo: Explain Order O-1001 for the operator.");
+  await expect(page.locator("#aipAgentCitations")).toContainText("object://Order/O-1001");
+  await expect(page.locator("#aipAgentCitations")).toContainText("ctx-");
+  await expect(page.locator("#aipAgentCitations")).toContainText("Source preview");
+  await expect(page.locator("#aipAgentCitations")).toContainText("object_authoritative_reread");
+  await expect(page.locator("#aipAgentCitations")).toContainText("tenant-demo:internal");
+  await expect(page.locator("#aipAgentResult")).toContainText('"sourcePreview"');
+  await expect(page.locator("#aipAgentResult")).toContainText('"navigationRef": "flite-citation-nav.v1.');
+  await expect(page.locator("#runResult")).toContainText('"modelCallCount": 1');
+  await expect(page.locator("#runResult")).toContainText('"citationCount": 1');
+  await expect((await generatedSdkAgentRun).headers()["x-tenant-id"]).toBe("tenant-demo");
   await expect(page.locator("#datasetResult")).toContainText('"dataset": "clean.orders"');
   await expect(page.locator("#datasetResult")).toContainText('"version_number": 1');
   await expect(page.locator("#datasetResult")).toContainText('"order_id": "O-1001"');

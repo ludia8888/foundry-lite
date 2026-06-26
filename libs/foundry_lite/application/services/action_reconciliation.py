@@ -63,6 +63,10 @@ class ActionWritebackReconciliationWorkflow:
             if writeback.status == "reconciled":
                 return _already_reconciled_result(writeback, status, resource_id)
             action_run = self._required_action_run(conn, ctx, writeback.action_run_id)
+            if not _is_resolvable_writeback(writeback, action_run):
+                current = self._required_writeback(conn, ctx, writeback_id)
+                if current.status == "reconciled":
+                    return _already_reconciled_result(current, status, resource_id)
             self._require_outcome_unknown(writeback, action_run)
             return self._reconcile_outcome_unknown(
                 conn,
@@ -161,8 +165,7 @@ class ActionWritebackReconciliationWorkflow:
         # Both an outcome_unknown writeback (a timeout that may have landed) and a compensation_required
         # writeback (external success + local failure) are unresolved before-commit external side effects
         # that a remote-success reconciliation drives forward to a committed local mutation.
-        resolvable = {"outcome_unknown", "compensation_required"}
-        if writeback.status not in resolvable or action_run["status"] not in resolvable:
+        if not _is_resolvable_writeback(writeback, action_run):
             raise ValidationFailed(
                 "action writeback is not resolvable by reconciliation",
                 details={
@@ -276,6 +279,11 @@ def _validate_remote_success(remote_status: str, remote_resource_id: str) -> Non
         )
     if not remote_resource_id:
         raise ValidationFailed("remote resource id is required")
+
+
+def _is_resolvable_writeback(writeback: ActionWritebackRecord, action_run: ActionRunRow) -> bool:
+    resolvable = {"outcome_unknown", "compensation_required"}
+    return writeback.status in resolvable and action_run["status"] in resolvable
 
 
 def _reconciled_writeback_response(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from foundry_lite.application.ports.content_index import ContentSearchHit, HybridContentQuery
+from foundry_lite.domain.context import RequestContext
 
 
 class ContentRetrievalService(Protocol):
@@ -13,6 +14,6 @@ class ContentRetrievalService(Protocol):
     returning hits. Contract only in this sprint.
     """
 
-    def search_content(self, query: HybridContentQuery) -> list[ContentSearchHit]:
+    def search_content(self, ctx: RequestContext, *, query: HybridContentQuery) -> list[ContentSearchHit]:
         """Return content hits with exact citations, after authoritative security re-read."""
         ...

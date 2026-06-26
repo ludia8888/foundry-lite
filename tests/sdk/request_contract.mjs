@@ -169,6 +169,209 @@ await expectSdkCall("ontology.validate", () => client.ontology.validate({ yaml: 
   body: { yaml: "objectTypes: []" },
 });
 await expectSdkCall(
+  "aip.builder.validate",
+  () =>
+    client.aip.builder.validate({
+      agentVersionId: "agent-demo:v1",
+      releaseChannel: "dev",
+      modelAliasVersion: "support-assistant@1",
+      promptVersionId: "prompt-v1",
+      contextSources: [
+        {
+          sourceId: "ctx-orders",
+          kind: "object_set",
+          securityPartition: "tenant-a:orders",
+          selectedProperties: ["status", "riskScore"],
+          tokenBudget: 1200,
+        },
+      ],
+      toolManifest: [
+        {
+          toolId: "read_order",
+          version: "1",
+          effect: "READ",
+          confirmationPolicy: "NONE",
+          status: "published",
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+        },
+      ],
+      logicBlocks: [
+        { blockId: "load-order", kind: "CallFunction", inputs: { toolId: "read_order" } },
+        { blockId: "answer", kind: "Output", inputs: { fromBlock: "load-order" }, dependsOn: ["load-order"] },
+      ],
+      evalAxes: ["Quality", "Security"],
+      agentAllowedActions: ["ApproveOrder"],
+      maxLogicBlocks: 8,
+    }),
+  {
+    path: "/api/aip/builder/validate",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      agentVersionId: "agent-demo:v1",
+      releaseChannel: "dev",
+      modelAliasVersion: "support-assistant@1",
+      promptVersionId: "prompt-v1",
+      contextSources: [
+        {
+          sourceId: "ctx-orders",
+          kind: "object_set",
+          securityPartition: "tenant-a:orders",
+          selectedProperties: ["status", "riskScore"],
+          tokenBudget: 1200,
+        },
+      ],
+      toolManifest: [
+        {
+          toolId: "read_order",
+          version: "1",
+          effect: "READ",
+          confirmationPolicy: "NONE",
+          status: "published",
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+        },
+      ],
+      logicBlocks: [
+        { blockId: "load-order", kind: "CallFunction", inputs: { toolId: "read_order" } },
+        { blockId: "answer", kind: "Output", inputs: { fromBlock: "load-order" }, dependsOn: ["load-order"] },
+      ],
+      evalAxes: ["Quality", "Security"],
+      agentAllowedActions: ["ApproveOrder"],
+      maxLogicBlocks: 8,
+    },
+  },
+);
+await expectSdkCall(
+  "aip.builder.run",
+  () =>
+    client.aip.builder.run({
+      logicRunId: "logic-web-1",
+      agentVersionId: "agent-demo:v1",
+      releaseChannel: "dev",
+      modelAliasVersion: "support-assistant@1",
+      promptVersionId: "prompt-v1",
+      contextSources: [
+        {
+          sourceId: "ctx-orders",
+          kind: "object_set",
+          securityPartition: "tenant-a:orders",
+          selectedProperties: ["status", "riskScore"],
+          tokenBudget: 1200,
+        },
+      ],
+      toolManifest: [
+        {
+          toolId: "read_order",
+          version: "1",
+          effect: "READ",
+          confirmationPolicy: "NONE",
+          status: "published",
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+        },
+      ],
+      logicBlocks: [
+        { blockId: "load-order", kind: "CallFunction", inputs: { toolId: "read_order" } },
+        { blockId: "answer", kind: "Output", inputs: { fromBlock: "load-order" }, dependsOn: ["load-order"] },
+      ],
+      evalAxes: ["Quality", "Security"],
+      agentAllowedTools: ["read_order"],
+      agentAllowedActions: ["ApproveOrder"],
+      modelAllowedClassifications: ["public"],
+      inputJson: { objectId: "O-1" },
+      userMessage: "Run the draft",
+      maxLogicBlocks: 8,
+    }),
+  {
+    path: "/api/aip/builder/run",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      logicRunId: "logic-web-1",
+      agentVersionId: "agent-demo:v1",
+      releaseChannel: "dev",
+      modelAliasVersion: "support-assistant@1",
+      promptVersionId: "prompt-v1",
+      contextSources: [
+        {
+          sourceId: "ctx-orders",
+          kind: "object_set",
+          securityPartition: "tenant-a:orders",
+          selectedProperties: ["status", "riskScore"],
+          tokenBudget: 1200,
+        },
+      ],
+      toolManifest: [
+        {
+          toolId: "read_order",
+          version: "1",
+          effect: "READ",
+          confirmationPolicy: "NONE",
+          status: "published",
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+        },
+      ],
+      logicBlocks: [
+        { blockId: "load-order", kind: "CallFunction", inputs: { toolId: "read_order" } },
+        { blockId: "answer", kind: "Output", inputs: { fromBlock: "load-order" }, dependsOn: ["load-order"] },
+      ],
+      evalAxes: ["Quality", "Security"],
+      agentAllowedTools: ["read_order"],
+      agentAllowedActions: ["ApproveOrder"],
+      modelAllowedClassifications: ["public"],
+      inputJson: { objectId: "O-1" },
+      userMessage: "Run the draft",
+      maxLogicBlocks: 8,
+    },
+  },
+);
+await expectSdkCall(
+  "aip.agent.run",
+  () =>
+    client.aip.agent.run({
+      agentRunId: "agent-web-1",
+      agentVersionId: "agent-demo:v1",
+      modelAlias: "support-assistant",
+      promptVersionId: "prompt-v1",
+      userMessage: "Explain O-1",
+      agentInstruction: "Answer with authorized context only.",
+      securityPartition: "tenant-a:orders",
+      allowedSecurityPartitions: ["tenant-a:orders"],
+      stateJson: { objectId: "O-1" },
+      outputSchema: { type: "object" },
+      dataClassification: "internal",
+      maxContextItems: 4,
+      maxContextTokens: 1200,
+      maxModelCalls: 1,
+      maxLoopIterations: 1,
+    }),
+  {
+    path: "/api/aip/agent/run",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      agentRunId: "agent-web-1",
+      agentVersionId: "agent-demo:v1",
+      modelAlias: "support-assistant",
+      promptVersionId: "prompt-v1",
+      userMessage: "Explain O-1",
+      agentInstruction: "Answer with authorized context only.",
+      securityPartition: "tenant-a:orders",
+      allowedSecurityPartitions: ["tenant-a:orders"],
+      stateJson: { objectId: "O-1" },
+      outputSchema: { type: "object" },
+      dataClassification: "internal",
+      maxContextItems: 4,
+      maxContextTokens: 1200,
+      maxModelCalls: 1,
+      maxLoopIterations: 1,
+    },
+  },
+);
+await expectSdkCall(
   "insights.reviews.list",
   () => client.insights.reviews.list({ status: "pending", assigneeUserId: "ops/1", limit: 15 }),
   {
@@ -271,6 +474,26 @@ assertMissingIdempotencyFailFast(
   () => client.insights.reviews.decide("review/1", { decision: "approved", comment: "Evidence checked" }),
   "insights.reviews.decide",
 );
+await expectSdkCall(
+  "insights.reviews.execute",
+  () =>
+    client.insights.reviews.execute(
+      "review/1",
+      { expectedProposalFingerprint: "sha256:proposal" },
+      { idempotencyKey: "insight-execute-key" },
+    ),
+  {
+    path: "/api/insights/reviews/review%2F1/execute-action",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "insight-execute-key" },
+    body: { expectedProposalFingerprint: "sha256:proposal" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "insights.reviews.execute",
+  () => client.insights.reviews.execute("review/1", { expectedProposalFingerprint: "sha256:proposal" }),
+  "insights.reviews.execute",
+);
 await expectSdkCall("objects.generic.get", () => client.objects.generic.get("Order Item", "order/1", { explain: true }), {
   path: "/api/objects/Order%20Item/order%2F1?explain=true",
 });
@@ -371,6 +594,13 @@ await expectSdkCall(
 await expectSdkCall("operations.runs.detail", () => client.operations.runs.detail("index", "run/1"), {
   path: "/api/operations/runs/index/run%2F1",
 });
+await expectSdkCall(
+  "operations.runs.promptArtifact",
+  () => client.operations.runs.promptArtifact("ai/run-1", "ai/run-1-compiled-prompt"),
+  {
+    path: "/api/operations/runs/ai/ai%2Frun-1/prompt-artifacts/ai%2Frun-1-compiled-prompt",
+  },
+);
 await expectSdkCall("operations.lineage.get", () => client.operations.lineage.get("dataset-version/1"), {
   path: "/api/operations/lineage?resourceId=dataset-version%2F1",
 });

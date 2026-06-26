@@ -62,10 +62,14 @@ from foundry_lite.infrastructure.adapters import (
     VideoSceneVisionProcessorAdapter,
 )
 from foundry_lite.infrastructure.adapters.asr_processor import _faster_whisper_asr_engine
+from foundry_lite.infrastructure.adapters.fake_citation_source_verifier import FakeCitationSourceVerifier
+from foundry_lite.infrastructure.adapters.fake_context_provider import FakeContextProvider
+from foundry_lite.infrastructure.adapters.fake_tool_executor import FakeToolExecutor
 from foundry_lite.infrastructure.adapters.local_embedding import (
     FASTEMBED_MODEL_VERSION,
     _fastembed_embedding_engine,
 )
+from foundry_lite.infrastructure.adapters.local_prompt_artifact_store import LocalPromptArtifactStore
 from foundry_lite.infrastructure.adapters.local_vision_embedding import (
     CLIP_MODEL_VERSION,
     LocalVisionEmbeddingAdapter,
@@ -80,6 +84,8 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
 )
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
+    SqlAlchemyAiEvalRepository,
+    SqlAlchemyAiRunRepository,
     SqlAlchemyDatasetQualityRepository,
     SqlAlchemyDatasetRepository,
     SqlAlchemyDatasetTransactionRepository,
@@ -105,6 +111,7 @@ from foundry_lite.infrastructure.secrets import secret_provider_from_env
 from foundry_lite.security.policy import ClassificationProvider, PolicyService
 
 _RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
+_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV = "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY"
 _SCHEMA_MUTATION_PROTECTED_PROFILES = frozenset({"production", "prod", "staging", "stage"})
 
 
@@ -139,6 +146,8 @@ def create_local_core_dependencies(
     object_storage_root.mkdir(parents=True, exist_ok=True)
     media_storage_root = root / "media-storage"
     media_storage_root.mkdir(parents=True, exist_ok=True)
+    prompt_artifacts_root = root / "prompt-artifacts"
+    prompt_artifacts_root.mkdir(parents=True, exist_ok=True)
 
     storage_adapter = _dataset_storage_adapter(adapter_profile, object_storage_root)
     media_storage = _media_storage_adapter(adapter_profile, media_storage_root)
@@ -160,6 +169,7 @@ def create_local_core_dependencies(
     search_adapter = _search_adapter(adapter_profile)
     stream_adapter = _stream_adapter(adapter_profile)
     workflow_adapter = _workflow_adapter(adapter_profile)
+    secret_provider = secret_provider_from_env()
     database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
     engine = create_engine(database_url, future=True)
     ontology_repository = SqlAlchemyOntologyRepository(engine)
@@ -170,6 +180,8 @@ def create_local_core_dependencies(
         engine=engine,
         policy=PolicyService(classification_provider=_classification_provider(engine, ontology_repository)),
         action_repository=SqlAlchemyActionRepository(engine),
+        ai_eval_repository=SqlAlchemyAiEvalRepository(engine),
+        ai_run_repository=SqlAlchemyAiRunRepository(engine),
         ontology_repository=ontology_repository,
         transform_repository=SqlAlchemyTransformRepository(engine),
         materialization_repository=SqlAlchemyMaterializationRepository(engine),
@@ -210,9 +222,17 @@ def create_local_core_dependencies(
         # network) so existing tests are unaffected; a real profile injects the proxy adapter.
         language_model_adapter=FakeLanguageModel(),
         model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
+        context_provider=FakeContextProvider(),
         search_adapter=search_adapter,
-        secret_provider=secret_provider_from_env(),
+        secret_provider=secret_provider,
+        prompt_artifact_store=LocalPromptArtifactStore(
+            prompt_artifacts_root,
+            secret_provider,
+            allow_local_dev_fallback=_allow_local_prompt_artifact_key_from_env(),
+        ),
+        citation_source_verifier=FakeCitationSourceVerifier(),
         stream_adapter=stream_adapter,
+        tool_executor=FakeToolExecutor(),
         workflow_adapter=workflow_adapter,
     )
 
@@ -367,6 +387,10 @@ def _workflow_adapter(adapter_profile: str) -> WorkflowAdapter:
 def _schema_mutation_allowed_from_env() -> bool:
     runtime_profile = os.getenv(_RUNTIME_PROFILE_ENV, "local").strip().casefold()
     return runtime_profile not in _SCHEMA_MUTATION_PROTECTED_PROFILES
+
+
+def _allow_local_prompt_artifact_key_from_env() -> bool:
+    return os.getenv(_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV, "").strip().casefold() in {"1", "true", "yes"}
 
 
 def _temporal_workflow_config() -> TemporalWorkflowAdapterConfig:

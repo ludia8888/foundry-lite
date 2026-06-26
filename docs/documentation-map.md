@@ -85,7 +85,7 @@ ledger에 남아야 한다.
 | `docs/infra-ratchet.md`                                  | `source-of-truth`  | Infra ratchet methodology                      | 새 인프라는 self test plus active-infra composition test를 요구한다.                                                                                       |
 | `docs/infra-tricky-matrix.json`                          | `machine-registry` | Machine-readable infra proof matrix            | source-of-truth and operator-evidence gates가 읽는 registry다.                                                                                             |
 | `docs/foundry_lite_tricky_failure_modes_checklist.md`    | `risk-registry`    | Failure-mode backlog and partial shield        | `[ ]`는 대부분 future hardening backlog이고, 완료 증거는 ledger와 gate로 확인한다.                                                                         |
-| `docs/aip-lite-canonical-spec.md`                        | `reference`        | AIP-lite design spec and Palantir cross-check  | Model Gateway/registry/egress/run-event ledger 등 AIP-lite 섹션의 설계 원본과 documented-Palantir vs our-extension 대조를 담는다.                           |
+| `docs/aip-lite-canonical-spec.md`                        | `reference`        | AIP-lite design spec and Palantir cross-check  | Model Gateway/registry/egress/run-event ledger/context compiler 등 AIP-lite 섹션의 설계 원본과 documented-Palantir vs our-extension 대조를 담는다.           |
 | `docs/Foundry-lite_AIP_Architecture_Report.pdf`          | `reference`        | AIP-lite authoritative architecture report     | `docs/aip-lite-canonical-spec.md`가 인코딩하는 정본 PDF. 충돌 시 PDF가 정본이다.                                                                           |
 | `docs/data-engineering-pattern-matrix.json`              | `machine-registry` | Data-pattern current/partial/deferred matrix   | S46 semantic consistency gate의 입력이다.                                                                                                                  |
 | `docs/data-platform-expansion-sprint-plan-ko.md`         | `source-of-truth`  | S46+ expansion roadmap and sprint checklist    | roadmap summary, detailed sprint checklist, and current/partial/future status live in one document.                                                        |
@@ -148,7 +148,7 @@ backend/API/SDK/audit evidence를 함께 확인한다.
 - `check_data_platform_sprint_status.py`는 S46-S64 status table과 README/roadmap/status 문서의
   high-level boundary가 서로 달라지지 않게 막는다. 현재 잠긴 의미는 S46 complete, S47-S63
   partial, S59/S64 proposed/future다.
-- S61은 더 이상 단순 request wrapper만이 아니다. 현재는 named SDK namespaces, 42개 route
+- S61은 더 이상 단순 request wrapper만이 아니다. 현재는 named SDK namespaces, 46개 route
   surface, `requiresIdempotencyKey` mutation marker, 12개 matrix-locked safety helpers, browser
   request/helper contract, documentation count-claim guard, and Web named-SDK-only rule까지 포함하는
   partial frontend foundation이다.

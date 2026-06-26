@@ -75,6 +75,8 @@ class ModelRequest:
     max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS
     request_id: str = ""
     ai_run_id: str = ""
+    request_hash: str = ""
+    model_call_attempt: int = 1
     # Egress governance inputs (our gateway gates these BEFORE calling the adapter): the data
     # classification leaving the boundary, and an optional region the call must be pinned to.
     data_classification: str = ""

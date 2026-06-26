@@ -398,6 +398,54 @@ run_runtime_gate() {
 
   run_runtime_step "AI run ledger ratchet" pnpm --silent quality:ai-ledger
 
+  run_runtime_step "AIP Model Gateway ledger ratchet" pnpm --silent quality:model-gateway-ledger
+
+  run_runtime_step "AIP encrypted prompt artifact ratchet" pnpm --silent quality:prompt-artifacts
+
+  run_runtime_step "AIP prompt artifact access ratchet" pnpm --silent quality:prompt-artifact-access
+
+  run_runtime_step "AIP context compiler ratchet" pnpm --silent quality:context-compiler
+
+  run_runtime_step "AIP Retrieval Orchestrator ratchet" pnpm --silent quality:retrieval-orchestrator
+
+  run_runtime_step "AIP retrieval document context ratchet" pnpm --silent quality:retrieval-document-context
+
+  run_runtime_step "AIP tool broker ratchet" pnpm --silent quality:tool-broker
+
+  run_runtime_step "AIP citation service ratchet" pnpm --silent quality:citation-service
+
+  run_runtime_step "AIP action proposal ratchet" pnpm --silent quality:action-proposal
+
+  run_runtime_step "AIP approval execution ratchet" pnpm --silent quality:approval-execution
+
+  run_runtime_step "AIP AI operations ratchet" pnpm --silent quality:ai-operations
+
+  run_runtime_step "AIP Logic Runtime ratchet" pnpm --silent quality:logic-runtime
+
+  run_runtime_step "AIP evals ratchet" pnpm --silent quality:ai-evals
+
+  run_runtime_step "AIP release guard ratchet" pnpm --silent quality:ai-release
+
+  run_runtime_step "AIP Visual Builder ratchet" pnpm --silent quality:visual-builder
+
+  run_runtime_step "AIP Builder runtime execution ratchet" pnpm --silent quality:builder-runtime
+
+  run_runtime_step "AIP Agent Runtime readonly ratchet" pnpm --silent quality:agent-runtime
+
+  run_runtime_step "AIP Agent Runtime tool loop ratchet" pnpm --silent quality:agent-tool-loop
+
+  run_runtime_step "AIP Agent action proposal tool ratchet" pnpm --silent quality:agent-action-proposal-tool
+
+  run_runtime_step "AIP Agent approval execution API ratchet" pnpm --silent quality:agent-approval-execution-api
+
+  run_runtime_step "AIP Agent approval execution idempotency ratchet" pnpm --silent quality:agent-approval-execution-idempotency
+
+  run_runtime_step "AIP Agent Runtime citation rendering ratchet" pnpm --silent quality:agent-runtime-citations
+
+  run_runtime_step "AIP Agent citation UI ratchet" pnpm --silent quality:agent-citation-ui
+
+  run_runtime_step "AIP Agent source preview ratchet" pnpm --silent quality:agent-source-previews
+
   run_runtime_step "AI evidence lineage ratchet" pnpm --silent quality:ai-evidence
 
   run_runtime_step "Insight review workspace ratchet" pnpm --silent quality:insight-review
@@ -440,6 +488,7 @@ run_runtime_gate() {
 
 run_e2e_gate() {
   echo "== Dynamic: Playwright E2E =="
+  export FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY="${FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY:-ci-prompt-artifact-key}"
   pnpm exec playwright test
 }
 

@@ -8,6 +8,9 @@ without any heavy ML dependency, Foundry token, or network. This is the SAFE com
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping, Sequence
+
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.language_model import ModelEvent, ModelRequest, ModelResponse
 
@@ -41,7 +44,23 @@ class FakeLanguageModel:
         return " ".join(message.content for message in request.messages if message.role == "user")
 
     def _echo(self, request: ModelRequest) -> str:
-        return f"echo: {self._user_text(request)}".strip()
+        answer = f"echo: {self._user_text(request)}".strip()
+        context_id = _first_citation_context_id(request) if _schema_requests_citations(request.response_schema) else ""
+        if not context_id:
+            return answer
+        return json.dumps(
+            {
+                "answer": answer,
+                "citations": [
+                    {
+                        "contextId": context_id,
+                        "claimSpan": {"start": 0, "end": len(answer)},
+                        "citationOrder": 1,
+                    }
+                ],
+            },
+            sort_keys=True,
+        )
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -59,3 +78,63 @@ class FakeLanguageModel:
 
 def _token_count(text: str) -> int:
     return len(text.split())
+
+
+def _schema_requests_citations(response_schema: str | None) -> bool:
+    if not response_schema:
+        return False
+    try:
+        payload = json.loads(response_schema)
+    except json.JSONDecodeError:
+        return False
+    return _contains_key(payload, "citations")
+
+
+def _first_citation_context_id(request: ModelRequest) -> str:
+    citations = _citation_rows(request)
+    if not citations:
+        return ""
+    first = citations[0]
+    context_id = first.get("context_id") if isinstance(first, Mapping) else None
+    return context_id if isinstance(context_id, str) else ""
+
+
+def _citation_rows(request: ModelRequest) -> Sequence[object]:
+    payload = _citation_mapping_payload(request)
+    citations = payload.get("citations") if payload is not None else None
+    if not isinstance(citations, Sequence) or isinstance(citations, str | bytes):
+        return ()
+    return citations
+
+
+def _citation_mapping_payload(request: ModelRequest) -> Mapping[str, object] | None:
+    block = _citation_mapping_block(_system_content(request))
+    if block == "":
+        return None
+    try:
+        payload = json.loads(block)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, Mapping) else None
+
+
+def _system_content(request: ModelRequest) -> str:
+    return next((message.content for message in request.messages if message.role == "system"), "")
+
+
+def _citation_mapping_block(system: str) -> str:
+    marker = "## citation_mapping\n"
+    start = system.find(marker)
+    if start == -1:
+        return ""
+    start += len(marker)
+    end = system.find("\n\n## ", start)
+    return system[start:] if end == -1 else system[start:end]
+
+
+def _contains_key(value: object, key: str) -> bool:
+    if isinstance(value, Mapping):
+        return key in value or any(_contains_key(child, key) for child in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return any(_contains_key(child, key) for child in value)
+    return False
