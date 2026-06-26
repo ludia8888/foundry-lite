@@ -5,8 +5,18 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
 from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse, ModelToolCall
 from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord, MediaDerivativeRecord
+from foundry_lite.application.services.aip.agent_runtime_citations import (
+    citation_error_payload,
+    resolve_agent_answer_citations,
+)
+from foundry_lite.application.services.aip.citation_service import (
+    CitationResolveRequest,
+    CitationResolveResult,
+    CitationServiceError,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
 from sqlalchemy import func, select
@@ -73,6 +83,11 @@ class _CitingLanguageModel:
         )
 
 
+class _UnexpectedCitationResolver:
+    def resolve(self, ctx: RequestContext, request: CitationResolveRequest) -> CitationResolveResult:
+        raise AssertionError("citation resolver should not be called")
+
+
 def test_agent_runtime_retrieves_context_calls_model_and_links_operations(foundry: Any) -> None:
     prepare_indexed_demo(foundry)
 
@@ -97,6 +112,73 @@ def test_agent_runtime_retrieves_context_calls_model_and_links_operations(foundr
     assert detail["row"]["resolved_model_id"] == "local-fake-model"
     assert detail["row"]["compiled_prompt_hash"].startswith("sha256:")
     assert detail["ai"]["events"][0]["event_type"] == "received"
+
+
+def test_agent_runtime_citation_payload_plain_text_and_empty_claims_skip_resolver() -> None:
+    resolver = _UnexpectedCitationResolver()
+
+    plain = resolve_agent_answer_citations(
+        _CTX,
+        resolver,
+        ai_run_id="ai-run-plain",
+        message_id="message-plain",
+        model_content="plain answer",
+        issued_at="2026-06-26T00:00:00Z",
+    )
+    structured = resolve_agent_answer_citations(
+        _CTX,
+        resolver,
+        ai_run_id="ai-run-structured",
+        message_id="message-structured",
+        model_content=json.dumps({"answer": "structured answer"}),
+        issued_at="2026-06-26T00:00:00Z",
+    )
+
+    assert plain.answer == "plain answer"
+    assert plain.citations == ()
+    assert structured.answer == "structured answer"
+    assert structured.citations == ()
+    assert citation_error_payload(RuntimeError("not a citation error")) is None
+
+
+@pytest.mark.parametrize(
+    ("model_payload", "expected_detail"),
+    [
+        ({"answer": "x", "citations": {"contextId": "ctx-1"}}, "citations must be a list of claim objects"),
+        ({"answer": "x", "citations": [1]}, "each citation must be an object"),
+        (
+            {"answer": "x", "citations": [{"claimSpan": {"start": 0, "end": 1}, "citationOrder": 1}]},
+            "contextId is required",
+        ),
+        (
+            {"answer": "x", "citations": [{"contextId": "ctx-1", "citationOrder": 1}]},
+            "claimSpan is required",
+        ),
+        (
+            {"answer": "x", "citations": [{"contextId": "ctx-1", "claimSpan": {"start": 0}, "citationOrder": 0}]},
+            "citationOrder must be a positive integer",
+        ),
+    ],
+)
+def test_agent_runtime_citation_payload_validation_rejects_malformed_claims(
+    model_payload: dict[str, object], expected_detail: str
+) -> None:
+    with pytest.raises(CitationServiceError) as excinfo:
+        resolve_agent_answer_citations(
+            _CTX,
+            _UnexpectedCitationResolver(),
+            ai_run_id="ai-run-invalid",
+            message_id="message-invalid",
+            model_content=json.dumps(model_payload),
+            issued_at="2026-06-26T00:00:00Z",
+        )
+
+    assert excinfo.value.reason == "invalid_citation_payload"
+    assert excinfo.value.detail == expected_detail
+    assert citation_error_payload(excinfo.value) == {
+        "reason": "invalid_citation_payload",
+        "detail": expected_detail,
+    }
 
 
 def test_agent_runtime_resolves_model_citations_into_payload_and_ai_ledger(foundry: Any, monkeypatch: Any) -> None:
