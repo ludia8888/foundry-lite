@@ -1096,7 +1096,12 @@ Media/Content Plane (standalone family, not in `activeStack`).
   deletes the just-written encrypted artifact to avoid orphan prompt bytes, read access revalidates both
   ciphertext and plaintext hashes against the receipt, and local-dev key fallback is explicit opt-in only via
   `FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY=true`. The Alembic upgrade path applies PostgreSQL RLS to
-  `ai_prompt_artifacts`, so existing DBs upgraded by migration match the bootstrap path.
+  `ai_prompt_artifacts`, so existing DBs upgraded by migration match the bootstrap path. P0w tightens the
+  same protected prompt-log slice by adding `PromptArtifactStore.failure_contract()` to the application port
+  and the local encrypted adapter: write/delete storage failures are retryable `unavailable`, missing or
+  inactive encryption keys are `authentication`, receipt hash mismatches are non-retryable `conflict`, and
+  missing tenant-scoped refs are non-retryable `not_found`. The global adapter taxonomy gate now covers this
+  profile, so future prompt artifact adapters cannot skip operator-safe failure metadata.
 
 - **P0d — Context compiler + retrieval context contract (shipped as the first prompt assembly slice):**
   `ContextProvider` and `RetrievedContextItem` now define the authorized retrieval boundary that hands

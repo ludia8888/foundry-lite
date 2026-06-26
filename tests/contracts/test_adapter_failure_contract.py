@@ -28,6 +28,7 @@ from foundry_lite.infrastructure.adapters import (
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
 )
+from foundry_lite.infrastructure.adapters.local_prompt_artifact_store import LocalPromptArtifactStore
 from foundry_lite.infrastructure.auth import (
     DemoAuthProvider,
     HeaderTrustAuthProvider,
@@ -60,6 +61,7 @@ from foundry_lite.infrastructure.secrets import EnvSecretProvider
         "demo-auth",
         "jwt-oidc-auth",
         "env-secret",
+        "local-prompt-artifact-store",
     ]
 )
 def failure_contract(request: pytest.FixtureRequest, tmp_path: Path) -> AdapterFailureContract:
@@ -128,5 +130,9 @@ def _adapter_failure_contract(profile: str, tmp_path: Path) -> AdapterFailureCon
             JwtOidcAuthConfig(issuer="https://issuer.example.test", audience="foundry-lite", jwks={"keys": []})
         ),
         "env-secret": EnvSecretProvider(environ={}),
+        "local-prompt-artifact-store": LocalPromptArtifactStore(
+            tmp_path / "prompt-artifacts",
+            EnvSecretProvider(environ={}),
+        ),
     }
     return adapters[profile].failure_contract()

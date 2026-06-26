@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
+
 
 @dataclass(frozen=True)
 class PromptArtifactWrite:
@@ -53,6 +55,10 @@ class PromptArtifactStore(Protocol):
 
     @property
     def profile_name(self) -> str: ...
+
+    def failure_contract(self) -> AdapterFailureContract:
+        """Return the adapter failure taxonomy promised by this profile."""
+        ...
 
     def write_prompt_artifact(self, request: PromptArtifactWrite) -> PromptArtifactBlob:
         """Encrypt and store one raw prompt artifact."""

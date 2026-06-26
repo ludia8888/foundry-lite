@@ -175,5 +175,19 @@ def test_local_prompt_artifact_store_fails_closed_on_hash_mismatch(tmp_path: Pat
         )
 
 
+def test_local_prompt_artifact_store_declares_failure_taxonomy(tmp_path: Path) -> None:
+    store = LocalPromptArtifactStore(tmp_path, _MissingSecretProvider())
+
+    contract = store.failure_contract()
+    modes = {(mode.operation, mode.kind, mode.is_retryable) for mode in contract.modes}
+
+    assert contract.adapter_profile == "local-prompt-artifact-store"
+    assert ("write_prompt_artifact", "unavailable", True) in modes
+    assert ("read_prompt_artifact", "authentication", True) in modes
+    assert ("read_prompt_artifact", "conflict", False) in modes
+    assert ("read_prompt_artifact", "not_found", False) in modes
+    assert ("delete_prompt_artifact", "unavailable", True) in modes
+
+
 def _hash_text(value: str) -> str:
     return f"sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"

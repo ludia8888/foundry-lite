@@ -221,7 +221,9 @@ content_hash, relevance_score, retrieval_method, security_partition, token_estim
   separate `aip_prompt_artifact_reader` role and rechecks both ciphertext `artifact_hash` and plaintext
   `content_hash`. Local-dev key fallback is disabled unless explicitly opted in through
   `FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY=true`. Operations exposes only refs/hashes/retention/export
-  marking.
+  marking. Current P0w adds the `PromptArtifactStore` adapter failure contract so write/read/delete,
+  missing or inactive keys, corrupt/hash-mismatched artifacts, and missing tenant-scoped refs have
+  operator-safe retryability/kind metadata.
 - **Citation Service (§8.7)**: model is given **opaque context IDs**, never source URLs; service maps
   `ctx_id → media item version / page / content unit / hash` and verifies the context ID is in this
   run's manifest + caller may read source + version/hash still match + span relevant. Returns display

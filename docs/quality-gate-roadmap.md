@@ -86,7 +86,7 @@
 | 25   | fake/local adapter contract test 동일                              | contract tests                      | pass                                                                    | △ (수동) |
 | 26   | trace key boundary 유지                                            | `check_trace_continuity.py`         | dynamic                                                                 | ✅       |
 | 27   | 새 boundary에 contract test 동반                                   | `check_contract_test_per_port.py`   | 0개 누락                                                                | ✅       |
-| 28   | adapter 실패 의미 표준화                                           | `check_adapter_failure_taxonomy.py` | 19 adapter profile                                                      | ✅       |
+| 28   | adapter 실패 의미 표준화                                           | `check_adapter_failure_taxonomy.py` | 22 adapter profile                                                      | ✅       |
 | 28.1 | 인프라는 한 번에 하나씩 실패/동시성/복구/조합 증거와 함께 추가     | `check_infra_ratchet.py`            | infra ratchet doc/CI/doc-sync violation 0                               | ✅       |
 | 28.2 | MinIO/S3 storage ratchet                                           | `quality:s3-storage`                | S3 contract/failure/concurrency/retry/cleanup/operator evidence 8 tests | ✅       |
 | 28.3 | active 인프라 조합 ratchet                                         | `quality:infra-composition`         | S3+Iceberg+Spark end-to-end + failure-abort tests                       | ✅       |
@@ -740,7 +740,7 @@ probe, trace 누락, 필수 키 누락, request context mismatch, JSON report �
 
 검사 기준:
 
-- compute/storage/workflow/stream/search/connector/auth adapter profile은 실패 계약을 가져야 한다.
+- compute/storage/workflow/stream/search/connector/auth/secret/prompt-artifact adapter profile은 실패 계약을 가져야 한다.
 - 각 실패 mode는 `operation`, 실패 `kind`, `is_retryable`, 운영자 메시지를 가져야 한다.
 - timeout 실패는 retry 가능한 실패여야 하고, timeout 값은 양수여야 한다.
 - 결과는 `artifacts/quality/adapter_failure_taxonomy.json`에 남긴다.
@@ -1687,6 +1687,20 @@ Alembic migration은 `ai_prompt_artifacts`에 PostgreSQL RLS/FORCE/policy를 적
 | 게이트 | 명령 | Root cause |
 |---|---|---|
 | Encrypted prompt artifact ratchet | `quality:prompt-artifacts` | raw compiled prompt가 일반 DB/Operations payload/파일에 평문으로 남거나, compiled_prompt_hash와 저장 plaintext가 갈라지거나, receipt 실패 뒤 orphan artifact가 남거나, 조용한 local-dev key fallback이 발동하거나, receipt hash 재검증 없이 raw prompt를 읽거나, 별도 reader role 없이 원문을 읽거나, prompt artifact write 실패 뒤에도 provider egress가 진행되거나, 기존 DB migration 경로에서 새 AI tenant table이 PostgreSQL RLS 밖에 남는 문제 차단 |
+
+### AIP P0w — Prompt Artifact Failure Taxonomy Ratchet
+
+P0w의 현재 slice는 key rotation이나 prompt artifact viewer가 아니라, P0v의 protected prompt-log
+store가 실패할 때 운영자가 같은 adapter taxonomy 언어로 판단할 수 있게 만드는 backend 운영 계약이다.
+`PromptArtifactStore` port는 `failure_contract()`를 요구하고, local encrypted adapter는
+write/delete storage failure를 retryable `unavailable`, missing/inactive key를 retryable
+`authentication`, receipt hash mismatch/corrupt artifact를 non-retryable `conflict`, tenant-scoped
+artifact ref miss를 non-retryable `not_found`로 선언한다. 전역 `adapter-failure-taxonomy` gate는
+`local-prompt-artifact-store` profile을 필수 concrete adapter profile로 포함한다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Prompt artifact failure taxonomy ratchet | `quality:prompt-artifacts`; `quality:adapter-failure-taxonomy` | prompt artifact store 장애가 일반 예외 문자열로만 남아 운영자가 key 문제인지, retry 가능한 storage 문제인지, hash/corruption conflict인지, missing ref인지 구분하지 못하거나, 새 prompt artifact adapter가 operator-safe failure contract 없이 추가되는 문제 차단 |
 
 ### AIP P0d — Context Compiler Ratchet
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.prompt_artifact_store import (
     PromptArtifactBlob,
     PromptArtifactDelete,
@@ -49,6 +50,43 @@ class LocalPromptArtifactStore:
         self._secret_provider = secret_provider
         self._key_name = key_name
         self._allow_local_dev_fallback = allow_local_dev_fallback
+
+    def failure_contract(self) -> AdapterFailureContract:
+        return AdapterFailureContract(
+            adapter_profile=self.profile_name,
+            modes=(
+                AdapterFailureMode(
+                    "write_prompt_artifact",
+                    "unavailable",
+                    True,
+                    "Prompt artifact storage could not write the encrypted prompt bytes.",
+                ),
+                AdapterFailureMode(
+                    "read_prompt_artifact",
+                    "authentication",
+                    True,
+                    "Prompt artifact encryption key is missing or no longer active.",
+                ),
+                AdapterFailureMode(
+                    "read_prompt_artifact",
+                    "conflict",
+                    False,
+                    "Prompt artifact receipt hashes do not match the stored encrypted artifact.",
+                ),
+                AdapterFailureMode(
+                    "read_prompt_artifact",
+                    "not_found",
+                    False,
+                    "Prompt artifact reference does not resolve to a tenant-scoped encrypted artifact.",
+                ),
+                AdapterFailureMode(
+                    "delete_prompt_artifact",
+                    "unavailable",
+                    True,
+                    "Prompt artifact storage could not delete an uncommitted encrypted artifact.",
+                ),
+            ),
+        )
 
     def write_prompt_artifact(self, request: PromptArtifactWrite) -> PromptArtifactBlob:
         key = self._artifact_key()
