@@ -1058,3 +1058,21 @@ Media/Content Plane (standalone family, not in `activeStack`).
   `CompletionModelAdapter` (L13) is left AS-IS; unifying it onto the gateway is a later P1 step.
   Unifying tool execution server-side as the invoking user is P1's ToolBroker (the LLM only REQUESTS
   tools here); the full call ledger is P0c (P0b just computes/returns the hashes).
+
+- **P0c — AI run/event ledger schema + repository (shipped as the first ledger slice):** the
+  canonical §10.2 runtime-plane tables now exist in SQLAlchemy metadata, Alembic, and schema-revision
+  evidence: `ai_sessions`, `ai_session_state_versions`, `ai_messages`, `ai_execution_runs`,
+  `ai_execution_events`, `ai_model_calls`, `ai_context_items`, `ai_tool_calls`, `ai_citations`, and
+  `ai_usage_ledger`. The `AiRunRepository` contract persists the run intent, session state, idempotent
+  messages, sequenced events, provider call accounting, selected/omitted context, tool authorization
+  decisions, citations, and usage/cost rows without storing raw prompts or tool results in the general
+  DB (`*_ref`, `*_hash`, and `redacted_preview` carry the durable trace). This mirrors Palantir's
+  documented AIP observability/run-history shape: executions have trace ids, timeline events, model
+  call accounting, errors, user/session attribution, and access-controlled exported logs; our schema is
+  the local durable subset, not a managed Foundry trace backend. `runtime_run_relations` can now name
+  `ai` as a run type so later AI runs can link to action/workflow/outbox/materialization evidence.
+  `quality:ai-ledger` proves exact canonical columns, `UNIQUE(tenant_id, session_id, client_message_id)`,
+  `UNIQUE(ai_run_id, sequence)`, SQLite + PostgreSQL round-trip behavior, message retry idempotency, event
+  sequence idempotency, tenant scoping, and runtime-lane wiring. ModelGateway auto-recording, prompt
+  artifact encryption, full trace UI, ToolBroker execution, and generated API/SDK surfaces remain later
+  AIP slices.

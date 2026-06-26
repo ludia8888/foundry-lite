@@ -13,6 +13,7 @@ from foundry_lite.application.ports import (
     LineageEdgeRecord,
     LineageEdgeRow,
     OutboxEventRecord,
+    RuntimeJsonObject,
     RuntimeLookupTable,
     RuntimeRepository,
     RuntimeRow,
@@ -81,7 +82,7 @@ class FakeRuntimeRepository:
             rows = self.rows_for_tenant(transaction=None, table=table, tenant_id=tenant_id)
             if limit is None:
                 return rows
-            timestamp = "failed_at" if table == "dead_letter_events" else "created_at"
+            timestamp = _runtime_rows_timestamp(table)
             ordered = sorted(
                 rows, key=lambda row: (str(row.get(timestamp) or ""), str(row.get("id") or "")), reverse=True
             )
@@ -181,7 +182,7 @@ class FakeRuntimeRepository:
         return None
 
     def run_row_any_type(self, *, tenant_id: str, run_id: str) -> tuple[RuntimeRunType, RuntimeRow] | None:
-        for run_type in ("sync", "transform", "index", "materialization"):
+        for run_type in ("sync", "transform", "index", "materialization", "ai"):
             row = self.run_row(tenant_id=tenant_id, run_type=cast(RuntimeRunType, run_type), run_id=run_id)
             if row is not None:
                 return cast(RuntimeRunType, run_type), row
@@ -256,8 +257,8 @@ class FakeRuntimeRepository:
         tenant_id: str,
         workflow_run_id: str,
         transition: StatusTransition,
-        output: dict[str, object],
-        error: dict[str, object] | None,
+        output: RuntimeJsonObject,
+        error: RuntimeJsonObject | None,
         started_at: str | None,
         completed_at: str | None,
     ) -> WorkflowRunRow | None:
@@ -268,7 +269,7 @@ class FakeRuntimeRepository:
                 and row["id"] == workflow_run_id
                 and row["status"] in transition.from_statuses
             ):
-                row.update(status=transition.to_status, output=dict(output), error=error)
+                row.update(status=transition.to_status, output=dict(output), error=dict(error) if error else None)
                 if started_at is not None:
                     row["started_at"] = started_at
                 if completed_at is not None:
@@ -756,8 +757,17 @@ def _run_table_name(run_type: RuntimeRunType) -> str:
         "outbox": "outbox_events",
         "dead_letter": "dead_letter_events",
         "workflow": "workflow_runs",
+        "ai": "ai_execution_runs",
         "audit": "audit_events",
     }[run_type]
+
+
+def _runtime_rows_timestamp(table: RuntimeRowsTable) -> str:
+    if table == "dead_letter_events":
+        return "failed_at"
+    if table == "ai_execution_runs":
+        return "started_at"
+    return "created_at"
 
 
 def _matches_run_query(
@@ -781,6 +791,8 @@ def _matches_run_query(
 
 
 def _runtime_timestamp(row: dict[str, Any], run_type: RuntimeRunType) -> str:
+    if run_type == "ai":
+        return str(row["started_at"])
     key = "failed_at" if run_type == "dead_letter" else "created_at"
     return str(row[key])
 

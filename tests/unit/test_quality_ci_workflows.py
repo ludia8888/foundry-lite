@@ -850,22 +850,35 @@ def test_erasure_gate_runs_after_privacy_gate() -> None:
 
     privacy_step = "pnpm --silent quality:privacy"
     erasure_step = "pnpm --silent quality:erasure"
-    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    ai_ledger_step = "pnpm --silent quality:ai-ledger"
     assert erasure_step in script
-    assert script.index(privacy_step) < script.index(erasure_step) < script.index(ai_evidence_step)
+    assert script.index(privacy_step) < script.index(erasure_step) < script.index(ai_ledger_step)
     assert '"quality:erasure"' in package_json
     assert "tests/unit/test_erasure_lifecycle.py" in package_json
 
 
-def test_ai_evidence_gate_runs_after_erasure_gate() -> None:
+def test_ai_ledger_gate_runs_after_erasure_gate() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     erasure_step = "pnpm --silent quality:erasure"
+    ai_ledger_step = "pnpm --silent quality:ai-ledger"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert ai_ledger_step in script
+    assert script.index(erasure_step) < script.index(ai_ledger_step) < script.index(ai_evidence_step)
+    assert '"quality:ai-ledger"' in package_json
+    assert "tests/contracts/test_ai_run_repository_contract.py" in package_json
+
+
+def test_ai_evidence_gate_runs_after_ai_ledger_gate() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    ai_ledger_step = "pnpm --silent quality:ai-ledger"
     ai_evidence_step = "pnpm --silent quality:ai-evidence"
     insight_review_step = "pnpm --silent quality:insight-review"
     assert ai_evidence_step in script
-    assert script.index(erasure_step) < script.index(ai_evidence_step) < script.index(insight_review_step)
+    assert script.index(ai_ledger_step) < script.index(ai_evidence_step) < script.index(insight_review_step)
     assert '"quality:ai-evidence"' in package_json
     assert "tests/unit/test_ai_evidence.py" in package_json
     assert "object_property_lineage" in package_json

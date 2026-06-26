@@ -4,6 +4,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     Column,
+    Float,
     Index,
     Integer,
     MetaData,
@@ -1070,6 +1071,179 @@ ai_model_aliases = Table(
     Column("effective_at", String),
     Column("retired_at", String),
     UniqueConstraint("tenant_id", "alias", "environment", name="uq_ai_model_alias"),
+)
+
+# AIP-lite P0c — AI run/event ledger (§10.2). These rows are the durable
+# "what happened" trail for a model-assisted turn. Raw prompt/tool payloads stay
+# outside the general DB; rows store refs, hashes, redacted previews, and counts.
+ai_sessions = Table(
+    "ai_sessions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("agent_version_id", String, nullable=False),
+    Column("actor_user_id", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("last_activity_at", String, nullable=False),
+)
+
+ai_session_state_versions = Table(
+    "ai_session_state_versions",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("session_id", String, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("state_json", JSON, nullable=False),
+    Column("state_hash", String, nullable=False),
+    Column("created_by_run_id", String),
+    Column("created_at", String, nullable=False),
+)
+
+ai_messages = Table(
+    "ai_messages",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("session_id", String, nullable=False),
+    Column("role", String, nullable=False),
+    Column("client_message_id", String, nullable=False),
+    Column("content_ref", String, nullable=False),
+    Column("content_hash", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "session_id", "client_message_id", name="uq_ai_message_client_id"),
+)
+
+ai_execution_runs = Table(
+    "ai_execution_runs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("session_id", String, nullable=False),
+    Column("agent_version_id", String, nullable=False),
+    Column("actor_user_id", String, nullable=False),
+    Column("request_id", String, nullable=False),
+    Column("trace_id", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("ontology_version_id", String, nullable=False),
+    Column("model_alias_version", String, nullable=False),
+    Column("resolved_model_id", String, nullable=False),
+    Column("resolved_model_revision", String, nullable=False),
+    Column("prompt_version_id", String, nullable=False),
+    Column("compiled_prompt_hash", String, nullable=False),
+    Column("tool_manifest_hash", String, nullable=False),
+    Column("context_manifest_hash", String, nullable=False),
+    Column("state_snapshot_hash", String, nullable=False),
+    Column("policy_snapshot_hash", String, nullable=False),
+    Column("budget_json", JSON, nullable=False),
+    Column("usage_json", JSON),
+    Column("error_json", JSON),
+    Column("started_at", String, nullable=False),
+    Column("completed_at", String),
+)
+
+ai_execution_events = Table(
+    "ai_execution_events",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ai_run_id", String, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("event_type", String, nullable=False),
+    Column("payload_ref", String, nullable=False),
+    Column("payload_hash", String, nullable=False),
+    Column("redacted_preview", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("ai_run_id", "sequence", name="uq_ai_execution_event_sequence"),
+)
+
+ai_model_calls = Table(
+    "ai_model_calls",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ai_run_id", String, nullable=False),
+    Column("attempt", Integer, nullable=False),
+    Column("provider", String, nullable=False),
+    Column("model_revision", String, nullable=False),
+    Column("request_hash", String, nullable=False),
+    Column("response_hash", String, nullable=False),
+    Column("provider_request_id", String, nullable=False),
+    Column("input_tokens", Integer, nullable=False),
+    Column("output_tokens", Integer, nullable=False),
+    Column("latency_ms", Integer, nullable=False),
+    Column("status", String, nullable=False),
+    Column("error_json", JSON),
+)
+
+ai_context_items = Table(
+    "ai_context_items",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ai_run_id", String, nullable=False),
+    Column("context_id", String, nullable=False),
+    Column("kind", String, nullable=False),
+    Column("source_resource_type", String, nullable=False),
+    Column("source_resource_id", String, nullable=False),
+    Column("source_version", String, nullable=False),
+    Column("content_hash", String, nullable=False),
+    Column("retrieval_method", String, nullable=False),
+    Column("relevance_score", Float, nullable=False),
+    Column("security_partition", String, nullable=False),
+    Column("token_estimate", Integer, nullable=False),
+    Column("selected", Boolean, nullable=False),
+    Column("omission_reason", String),
+)
+
+ai_tool_calls = Table(
+    "ai_tool_calls",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ai_run_id", String, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("tool_id", String, nullable=False),
+    Column("tool_version", String, nullable=False),
+    Column("arguments_hash", String, nullable=False),
+    Column("effect", String, nullable=False),
+    Column("authorization_decision", String, nullable=False),
+    Column("confirmation_policy", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("result_hash", String, nullable=False),
+    Column("linked_action_run_id", String),
+    Column("started_at", String, nullable=False),
+    Column("completed_at", String),
+    Column("error_json", JSON),
+)
+
+ai_citations = Table(
+    "ai_citations",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ai_run_id", String, nullable=False),
+    Column("message_id", String, nullable=False),
+    Column("context_item_id", String, nullable=False),
+    Column("claim_span", JSON, nullable=False),
+    Column("citation_order", Integer, nullable=False),
+    Column("rendered_ref", String, nullable=False),
+)
+
+ai_usage_ledger = Table(
+    "ai_usage_ledger",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ai_run_id", String, nullable=False),
+    Column("provider", String, nullable=False),
+    Column("model_revision", String, nullable=False),
+    Column("input_tokens", Integer, nullable=False),
+    Column("output_tokens", Integer, nullable=False),
+    Column("estimated_cost", Float, nullable=False),
+    Column("currency", String, nullable=False),
+    Column("recorded_at", String, nullable=False),
 )
 
 
