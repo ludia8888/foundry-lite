@@ -27,7 +27,10 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await page.locator("#aipAgentRunBtn").click();
   await expect(page.locator("#aipAgentResult")).toContainText('"runStatus": "succeeded"');
   await expect(page.locator("#aipAgentResult")).toContainText('"answer": "echo: Explain Order O-1001 for the operator."');
-  await expect(page.locator("#aipAgentAnswer")).toHaveText("echo: Explain Order O-1001 for the operator.");
+  await expect(page.locator("#aipAgentAnswer")).toContainText("echo: Explain Order O-1001 for the operator.");
+  await expect(page.locator("#aipAgentAnswer .citation-anchor")).toHaveText("[1]");
+  await page.locator("#aipAgentAnswer .citation-anchor").click();
+  await expect(page.locator("#aipAgentCitations .citation-card").first()).toHaveAttribute("data-selected", "true");
   await expect(page.locator("#aipAgentCitations")).toContainText("object://Order/O-1001");
   await expect(page.locator("#aipAgentCitations")).toContainText("ctx-");
   await expect(page.locator("#aipAgentCitations")).toContainText("Source preview");

@@ -432,6 +432,8 @@ run_runtime_gate() {
 
   run_runtime_step "AIP Agent source preview ratchet" pnpm --silent quality:agent-source-previews
 
+  run_runtime_step "AIP Agent inline citation ratchet" pnpm --silent quality:agent-inline-citations
+
   run_runtime_step "AI evidence lineage ratchet" pnpm --silent quality:ai-evidence
 
   run_runtime_step "Insight review workspace ratchet" pnpm --silent quality:insight-review
