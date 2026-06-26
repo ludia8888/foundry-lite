@@ -1078,8 +1078,8 @@ Media/Content Plane (standalone family, not in `activeStack`).
   `UNIQUE(ai_run_id, sequence)`, PostgreSQL RLS DDL in the Alembic upgrade path, SQLite + PostgreSQL
   round-trip behavior, message retry idempotency, event sequence idempotency, tenant scoping, and
   runtime-lane wiring. P0i now adds the first generated Operations API/SDK read surface for these
-  rows; ModelGateway auto-recording, prompt artifact encryption, full trace UI, and ToolBroker
-  execution remain later AIP slices.
+  rows, and P0u moves ModelGateway provider-attempt accounting into the gateway boundary. Prompt
+  artifact encryption, full trace UI, and ToolBroker execution remain later AIP slices.
 
 - **P0d — Context compiler + retrieval context contract (shipped as the first prompt assembly slice):**
   `ContextProvider` and `RetrievedContextItem` now define the authorized retrieval boundary that hands

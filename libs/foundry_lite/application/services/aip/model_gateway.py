@@ -28,12 +28,14 @@ import hashlib
 from dataclasses import dataclass, replace
 
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure, AdapterFailureKind
+from foundry_lite.application.ports.ai_run_repository import AiModelCallRecord
 from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse
 from foundry_lite.application.ports.model_registry_repository import (
     ModelAliasRecord,
     ModelProviderRecord,
     ModelRecord,
 )
+from foundry_lite.application.services.aip.eval_identifiers import hash_json
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 
@@ -54,7 +56,7 @@ class ModelResolution:
 class ModelGatewayService(CoreService):
     """Single governed seam: resolve alias, gate egress, forbid silent fallback, invoke, hash."""
 
-    required_dependencies = ("engine", "model_registry_repository", "language_model_adapter")
+    required_dependencies = ("engine", "model_registry_repository", "language_model_adapter", "ai_run_repository")
     required_collaborators = ()
 
     def invoke(self, ctx: RequestContext, request: ModelRequest) -> ModelResponse:
@@ -62,8 +64,13 @@ class ModelGatewayService(CoreService):
         revision = alias.version or model.revision
         self._guard_serving(alias, model)
         self._guard_egress(request, model, provider)
-        response = self.language_model_adapter.complete(request)
-        return replace(
+        self._guard_seeded_run(ctx, request)
+        try:
+            response = self.language_model_adapter.complete(request)
+        except Exception as exc:
+            self._record_model_call(ctx, request, provider.provider_type, revision, None, exc)
+            raise
+        resolved_response = replace(
             response,
             provider=provider.provider_type,
             resolved_model_id=model.model_id,
@@ -71,6 +78,8 @@ class ModelGatewayService(CoreService):
             model_hash=_model_hash(model.model_id, revision),
             prompt_hash=_prompt_hash(request),
         )
+        self._record_model_call(ctx, request, provider.provider_type, revision, resolved_response, None)
+        return resolved_response
 
     def resolve_model(self, ctx: RequestContext, model_alias: str) -> ModelResolution:
         """Resolve a serving alias without making a provider call."""
@@ -137,8 +146,47 @@ class ModelGatewayService(CoreService):
                 model.model_id,
             )
 
-    def _error(self, kind: AdapterFailureKind, message: str, resource: str) -> AdapterError:
-        reason = "egress_denied" if kind == "authorization" else "language_model_unavailable"
+    def _guard_seeded_run(self, ctx: RequestContext, request: ModelRequest) -> None:
+        if not request.ai_run_id:
+            return
+        with self.engine.begin() as transaction:
+            row = self.ai_run_repository.execution_run_by_id(
+                transaction=transaction,
+                tenant_id=ctx.tenant_id,
+                ai_run_id=request.ai_run_id,
+            )
+        if row is None:
+            raise self._error(
+                "unavailable",
+                f"AI run {request.ai_run_id} must be recorded before model invocation",
+                request.ai_run_id,
+                reason="ai_run_ledger_not_seeded",
+            )
+
+    def _record_model_call(
+        self,
+        ctx: RequestContext,
+        request: ModelRequest,
+        provider: str,
+        revision: str,
+        response: ModelResponse | None,
+        error: Exception | None,
+    ) -> None:
+        if not request.ai_run_id:
+            return
+        record = _model_call_record(ctx, request, provider, revision, response, error)
+        with self.engine.begin() as transaction:
+            self.ai_run_repository.record_model_call(transaction=transaction, record=record)
+
+    def _error(
+        self, kind: AdapterFailureKind, message: str, resource: str, *, reason: str | None = None
+    ) -> AdapterError:
+        return self._adapter_error(kind, message, resource, reason=reason)
+
+    def _adapter_error(
+        self, kind: AdapterFailureKind, message: str, resource: str, *, reason: str | None
+    ) -> AdapterError:
+        failure_reason = reason or ("egress_denied" if kind == "authorization" else "language_model_unavailable")
         return AdapterError(
             AdapterFailure(
                 _GATEWAY_PROFILE,
@@ -146,15 +194,67 @@ class ModelGatewayService(CoreService):
                 kind,
                 is_retryable=False,
                 operator_message=message,
-                details={"reason": reason, "resource": resource},
+                details={"reason": failure_reason, "resource": resource},
             )
         )
 
 
 def _model_hash(model_id: str, revision: str) -> str:
-    return hashlib.sha256(f"{model_id}@{revision}".encode()).hexdigest()
+    return f"sha256:{hashlib.sha256(f'{model_id}@{revision}'.encode()).hexdigest()}"
 
 
 def _prompt_hash(request: ModelRequest) -> str:
     joined = "\n".join(f"{message.role}:{message.content}" for message in request.messages)
-    return hashlib.sha256(joined.encode()).hexdigest()
+    return f"sha256:{hashlib.sha256(joined.encode()).hexdigest()}"
+
+
+def _model_call_record(
+    ctx: RequestContext,
+    request: ModelRequest,
+    provider: str,
+    revision: str,
+    response: ModelResponse | None,
+    error: Exception | None,
+) -> AiModelCallRecord:
+    attempt = max(1, request.model_call_attempt)
+    return AiModelCallRecord(
+        id=f"{request.ai_run_id}-model-{attempt}",
+        tenant_id=ctx.tenant_id,
+        ai_run_id=request.ai_run_id,
+        attempt=attempt,
+        provider=provider,
+        model_revision=revision,
+        request_hash=request.request_hash or _prompt_hash(request),
+        response_hash=_response_hash(response, error),
+        provider_request_id=response.provider_request_id if response is not None else "",
+        input_tokens=response.input_tokens if response is not None else 0,
+        output_tokens=response.output_tokens if response is not None else 0,
+        latency_ms=response.latency_ms if response is not None else 0,
+        status="succeeded" if error is None else "failed",
+        error_json=None if error is None else _error_payload(error),
+    )
+
+
+def _response_hash(response: ModelResponse | None, error: Exception | None) -> str:
+    if response is not None:
+        return hash_json(
+            {
+                "contentHash": hash_json(response.content),
+                "finishReason": response.finish_reason,
+                "toolCallCount": len(response.normalized_tool_calls),
+            }
+        )
+    return hash_json({"error": _error_payload(error)})
+
+
+def _error_payload(error: Exception | None) -> dict[str, object]:
+    if isinstance(error, AdapterError):
+        return {
+            "kind": error.failure.kind,
+            "reason": error.failure.details.get("reason", "adapter_error"),
+            "retryable": error.failure.is_retryable,
+        }
+    reason = getattr(error, "reason", None)
+    if isinstance(reason, str) and reason:
+        return {"reason": reason}
+    return {"reason": error.__class__.__name__ if error is not None else "unknown_model_error"}

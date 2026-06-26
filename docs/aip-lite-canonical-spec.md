@@ -157,7 +157,8 @@ class LanguageModelAdapter(Protocol):
 ```
 
 **ModelRequest** (§8.1.3): `model_alias, messages, tools, response_schema, temperature,
-max_output_tokens, request_id, ai_run_id, data_classification, region_requirement, timeout_seconds`.
+max_output_tokens, request_id, ai_run_id, request_hash, model_call_attempt, data_classification,
+region_requirement, timeout_seconds`.
 **ModelResponse** (§8.1.4): `provider, resolved_model_id, resolved_model_revision, content,
 normalized_tool_calls, finish_reason, input_tokens, output_tokens, provider_request_id, latency_ms`.
 **Retry** (§8.1.5): only transport timeout / 429 / temporary unavailable, retried under the same
@@ -183,7 +184,10 @@ Every error payload carries `request_id, ai_run_id, retryability, operator_messa
 - **Model Gateway (§8.1)**: alias → provider/model/revision resolve · request normalization ·
   native/prompted tool-calling capability negotiation · structured-output capability check · provider
   secret resolve (via SecretProvider) · egress policy check · timeout/rate-limit/retry · usage+latency
-  record · provider error → typed failure.
+  record · provider error → typed failure. Current P0u moves model-call ledger ownership into the
+  gateway: if the `ModelRequest` `ai_run_id` field is set, the seeded AI run must already exist before
+  provider egress, and the gateway records succeeded or failed provider attempts to `ai_model_calls` with
+  request/response hashes and redacted error payloads.
 - **Model Alias (§8.2)**: agent references the **alias**, never the provider-native model id. Alias
   record carries lifecycle, environment mapping, capabilities (streaming/native tools/parallel tools/
   JSON schema/vision), context/output token limits, provider region, allowed classifications,
@@ -300,9 +304,9 @@ AiRunRepository, ContextProvider, ToolExecutor, UsageMeter`.
 ## CI quality gates (§15.6)
 
 Add granular gates: `quality:ai-contracts, quality:model-gateway, quality:ai-ledger,
-quality:retrieval-security, quality:context-compiler, quality:tool-broker, quality:action-proposal,
-quality:approval-execution, quality:ai-operations, quality:logic-runtime, quality:ai-evals,
-quality:ai-release, quality:visual-builder, quality:builder-runtime, quality:agent-runtime,
+quality:model-gateway-ledger, quality:retrieval-security, quality:context-compiler, quality:tool-broker,
+quality:action-proposal, quality:approval-execution, quality:ai-operations, quality:logic-runtime,
+quality:ai-evals, quality:ai-release, quality:visual-builder, quality:builder-runtime, quality:agent-runtime,
 quality:agent-runtime-citations, quality:agent-citation-ui, quality:agent-source-previews`. Release gate splits static / unit /
 integration / **live provider smoke** (live smoke = separate lane needing credentials + cost).
 

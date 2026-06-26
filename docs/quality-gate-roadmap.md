@@ -1639,12 +1639,31 @@ P0c의 현재 slice는 full AIP trace UI가 아니라 AI 실행 장부의 DB/저
 `quality:ai-ledger`는 정본 §10.2 컬럼 목록, message client idempotency, event sequence
 idempotency, tenant scoping, PostgreSQL RLS migration DDL, SQLite/PostgreSQL round-trip, and
 runtime-lane wiring을 검증한다.
-P0i는 이 장부의 첫 Operations API/SDK read surface를 추가했다. ModelGateway 자동 기록,
-encrypted prompt artifact store, ToolBroker execution, and full trace UI는 후속 AIP slice다.
+P0i는 이 장부의 첫 Operations API/SDK read surface를 추가했고, P0u는 ModelGateway 자동
+model-call 기록을 추가했다. Encrypted prompt artifact store, ToolBroker execution, and full
+trace UI는 후속 AIP slice다.
 
 | 게이트                 | 명령                | Root cause                                                                                                                                                                           |
 | ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | AI run ledger ratchet  | `quality:ai-ledger` | AI 실행이 provider call 이후에만 휘발성 로그로 남거나, retry가 message/event를 중복 생성하거나, raw prompt/tool payload가 일반 DB/audit row에 저장되거나, 기존 DB migration 경로에서 새 AI 테이블이 PostgreSQL RLS 밖에 남거나, Postgres와 SQLite 동작이 갈라지는 문제 차단 |
+
+### AIP P0u — Model Gateway Ledger Ratchet
+
+P0u의 현재 slice는 live provider dashboard나 encrypted prompt artifact viewer가 아니라,
+governed Model Gateway가 provider attempt accounting을 직접 남기는 backend contract다.
+`ModelGatewayService.invoke(...)`는 `ModelRequest` `ai_run_id` field가 있는 경우 provider call 전에
+tenant-scoped AI run이 이미 seed되어 있는지 확인한다. Seeded run이 없으면 provider adapter를
+호출하지 않고 fail closed한다. Provider adapter가 성공하면 `ai_model_calls`에 succeeded row를
+기록하고, provider adapter가 실패하면 raw prompt 없이 request/response hash와 redacted error
+payload를 가진 failed row를 남긴 뒤 원래 오류를 다시 올린다.
+
+Agent Runtime은 더 이상 model-call ledger row를 수동으로 쓰지 않고, compiled prompt hash를
+`ModelRequest` `request_hash` field로 Gateway에 넘긴다. 따라서 모델 호출을 장부에 남기는 책임은
+Agent Runtime의 후처리 관습이 아니라 Gateway boundary의 불변 조건이 된다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Model Gateway ledger ratchet | `quality:model-gateway-ledger` | Model Gateway를 통과한 provider call이 AI run ledger에 누락되거나, seeded run 없이 provider egress가 먼저 발생하거나, provider 실패가 raw prompt와 함께 로그/장부에 남거나, Agent Runtime이 Gateway 밖에서 model-call row를 수동으로 맞추는 문제 차단 |
 
 ### AIP P0d — Context Compiler Ratchet
 

@@ -24,7 +24,6 @@ from foundry_lite.application.services.aip.agent_runtime_ledger import (
     event_record,
     message_id,
     message_record,
-    model_call,
     operations_ref,
     record_context_items,
     run_record,
@@ -227,10 +226,6 @@ class AgentRuntimeService(CoreService):
         usage = _usage_payload(response, context_items)
         now = _now()
         with self.engine.begin() as transaction:
-            self.ai_run_repository.record_model_call(
-                transaction=transaction,
-                record=model_call(ctx, ai_run_id, compiled, response),
-            )
             self.ai_run_repository.record_usage(
                 transaction=transaction,
                 record=usage_record(ctx, ai_run_id, response, now),
@@ -337,6 +332,8 @@ def _model_request(request: AgentRuntimeRequest, ai_run_id: str, compiled: Compi
         max_output_tokens=request.max_output_tokens,
         request_id=request.agent_run_id,
         ai_run_id=ai_run_id,
+        request_hash=compiled.compiled_prompt_hash,
+        model_call_attempt=1,
         data_classification=request.data_classification,
         region_requirement=request.region_requirement,
     )

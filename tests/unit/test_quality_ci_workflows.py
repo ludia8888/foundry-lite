@@ -933,11 +933,26 @@ def test_ai_ledger_gate_runs_after_erasure_gate() -> None:
 
     erasure_step = "pnpm --silent quality:erasure"
     ai_ledger_step = "pnpm --silent quality:ai-ledger"
-    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    model_gateway_ledger_step = "pnpm --silent quality:model-gateway-ledger"
     assert ai_ledger_step in script
-    assert script.index(erasure_step) < script.index(ai_ledger_step) < script.index(ai_evidence_step)
+    assert script.index(erasure_step) < script.index(ai_ledger_step) < script.index(model_gateway_ledger_step)
     assert '"quality:ai-ledger"' in package_json
     assert "tests/contracts/test_ai_run_repository_contract.py" in package_json
+
+
+def test_model_gateway_ledger_gate_runs_after_ai_ledger_before_context_compiler() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    ai_ledger_step = "pnpm --silent quality:ai-ledger"
+    model_gateway_ledger_step = "pnpm --silent quality:model-gateway-ledger"
+    context_compiler_step = "pnpm --silent quality:context-compiler"
+    assert model_gateway_ledger_step in script
+    assert script.index(ai_ledger_step) < script.index(model_gateway_ledger_step) < script.index(context_compiler_step)
+    assert '"quality:model-gateway-ledger"' in package_json
+    assert "gateway_records_model_call" in package_json
+    assert "gateway_requires_seeded_ai_run" in package_json
+    assert "gateway_records_failed_provider_attempt" in package_json
 
 
 def test_ai_evidence_gate_runs_after_ai_ledger_gate() -> None:
@@ -945,12 +960,14 @@ def test_ai_evidence_gate_runs_after_ai_ledger_gate() -> None:
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     ai_ledger_step = "pnpm --silent quality:ai-ledger"
+    model_gateway_ledger_step = "pnpm --silent quality:model-gateway-ledger"
     ai_operations_step = "pnpm --silent quality:ai-operations"
     logic_runtime_step = "pnpm --silent quality:logic-runtime"
     ai_evidence_step = "pnpm --silent quality:ai-evidence"
     insight_review_step = "pnpm --silent quality:insight-review"
     assert ai_evidence_step in script
-    assert script.index(ai_ledger_step) < script.index(ai_operations_step) < script.index(logic_runtime_step)
+    assert script.index(ai_ledger_step) < script.index(model_gateway_ledger_step)
+    assert script.index(model_gateway_ledger_step) < script.index(ai_operations_step) < script.index(logic_runtime_step)
     assert script.index(logic_runtime_step) < script.index(ai_evidence_step)
     assert script.index(ai_evidence_step) < script.index(insight_review_step)
     assert '"quality:ai-evidence"' in package_json
