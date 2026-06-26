@@ -1185,6 +1185,21 @@ def test_agent_approval_execution_api_gate_runs_after_action_proposal_before_cit
     assert "api_aip_agent_run_proposal_can_be_approved_and_executed" in package_json
 
 
+def test_agent_approval_execution_idempotency_gate_runs_after_api_before_citations() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_approval_execution_step = "pnpm --silent quality:agent-approval-execution-api"
+    agent_idempotency_step = "pnpm --silent quality:agent-approval-execution-idempotency"
+    agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
+    assert agent_idempotency_step in script
+    assert script.index(agent_approval_execution_step) < script.index(agent_idempotency_step)
+    assert script.index(agent_idempotency_step) < script.index(agent_citation_step)
+    assert '"quality:agent-approval-execution-idempotency"' in package_json
+    assert "approval_execution_runs_approved_proposal_once_and_links_review" in package_json
+    assert "api_aip_agent_run_proposal_can_be_approved_and_executed" in package_json
+
+
 def test_agent_runtime_citation_gate_runs_after_agent_runtime_before_ai_evidence() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

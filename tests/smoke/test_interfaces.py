@@ -1243,15 +1243,25 @@ def test_api_aip_agent_run_proposal_can_be_approved_and_executed(foundry, monkey
         headers={**headers, "Idempotency-Key": "execute-agent-proposal-api"},
         json={"expectedProposalFingerprint": review["proposalFingerprint"]},
     )
+    replayed = client.post(
+        f"/api/insights/reviews/{review['id']}/execute-action",
+        headers={**headers, "Idempotency-Key": "execute-agent-proposal-api"},
+        json={"expectedProposalFingerprint": review["proposalFingerprint"]},
+    )
 
     assert run.status_code == 200
     assert approved.status_code == 200
     assert executed.status_code == 200
+    assert replayed.status_code == 200
     executed_body = executed.json()
+    replayed_body = replayed.json()
     detail_body = client.get(f"/api/operations/runs/ai/{run.json()['aiRunId']}", headers=headers).json()
     updated_order = foundry.objects.get("Order", "O-1001", ctx=ctx)
     assert executed_body["review"]["executionStatus"] == "executed"
     assert executed_body["review"]["approvedActionRunId"] == executed_body["actionRunId"]
+    assert replayed_body["actionRunId"] == executed_body["actionRunId"]
+    assert replayed_body["actionResponse"]["idempotentReplay"] is True
+    assert replayed_body["review"]["approvedActionRunId"] == executed_body["actionRunId"]
     assert detail_body["ai"]["toolCalls"][0]["linked_action_run_id"] == executed_body["actionRunId"]
     assert detail_body["ai"]["toolCalls"][0]["result_hash"] == review["proposalFingerprint"]
     assert updated_order["objectVersion"] == 2

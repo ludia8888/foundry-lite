@@ -1610,7 +1610,9 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
 - [x] dataset catalog/inspect/lineage API/SDK surface for Dataset Explorer start, committed manifest evidence, and lineage drill-down
 - [x] Insight Review queue API/SDK surface for list/create/get/assign/decide
 - [x] request ID visible on errors
-- [ ] same action click does not duplicate result
+- [~] same action click does not duplicate result: current backend/API/SDK ratchets prove
+  idempotency-key enforcement, generated SDK in-flight action locks, and approved action execution
+  replay to one action run. Visual duplicate-click button state UX remains future.
 - [ ] stale object version shows conflict UI
 - [ ] permission denied does not leak sensitive fields
 
@@ -1694,7 +1696,7 @@ AI/분석 결과를 검토하고 허용된 Action Type으로 실제 업무를 �
 - [x] Insight Review list filters status and assignee
 - [x] Insight Review decision has one terminal winner
 - [x] API create/assign/decision writes durable audit evidence
-- [ ] double click produces one action run
+- [x] double click produces one action run
 - [ ] stale object conflicts before mutation
 - [ ] unauthorized action is hidden and denied server-side
 - [ ] action evidence links to object/source data

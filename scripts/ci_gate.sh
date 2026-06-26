@@ -438,6 +438,8 @@ run_runtime_gate() {
 
   run_runtime_step "AIP Agent approval execution API ratchet" pnpm --silent quality:agent-approval-execution-api
 
+  run_runtime_step "AIP Agent approval execution idempotency ratchet" pnpm --silent quality:agent-approval-execution-idempotency
+
   run_runtime_step "AIP Agent Runtime citation rendering ratchet" pnpm --silent quality:agent-runtime-citations
 
   run_runtime_step "AIP Agent citation UI ratchet" pnpm --silent quality:agent-citation-ui

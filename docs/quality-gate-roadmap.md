@@ -1789,6 +1789,20 @@ Action run까지 추적할 수 있다.
 |---|---|---|
 | Agent approval execution API ratchet | `quality:agent-approval-execution-api` | 사람이 승인한 AI proposal이 raw API path 없이 실행되지 못하거나, expected fingerprint/idempotency 없이 실행되거나, originating tool-call ledger와 action run 사이 back-link가 끊기거나, missing/forged originating tool call이 ActionService 호출 뒤에야 발견되는 문제 차단 |
 
+### AIP P1c — Agent Approval Execution Idempotency Ratchet
+
+P1c의 현재 slice는 새로운 approval UI가 아니라, 승인된 AI proposal 실행을 사용자가 반복 클릭하거나
+클라이언트가 같은 mutation을 재시도해도 실제 Ontology Action side effect가 한 번만 생긴다는 backend/API
+증거다. 공개 `execute-action` API는 같은 review/fingerprint 실행을 다시 받아도 같은 `actionRunId`로
+replay하고, `action_runs` row와 target object version은 한 번만 증가해야 한다.
+
+비개발자 관점으로 말하면, 사람이 승인 버튼을 두 번 눌러도 주문 승인 지시서가 두 장 찍히면 안 된다.
+이 게이트는 그 사고를 서비스 레벨과 공개 API 레벨에서 같이 막는다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Agent approval execution idempotency ratchet | `quality:agent-approval-execution-idempotency` | 승인 실행 재시도/중복 클릭이 같은 proposal fingerprint를 새 mutation처럼 처리해 action run, object version, tool-call link를 중복 생성하는 문제 차단 |
+
 ### AIP P0d — Context Compiler Ratchet
 
 P0d의 현재 slice는 full Agent Runtime이나 trace UI가 아니라 모델 호출 직전의 prompt assembly
