@@ -5,7 +5,10 @@ from pathlib import Path
 
 from foundry_lite.application.ports import (
     ActionRepository,
+    AiEvalRepository,
+    AiRunRepository,
     ComputeAdapter,
+    ContextProvider,
     DatasetQualityRepository,
     DatasetRepository,
     DatasetStorageAdapter,
@@ -21,6 +24,7 @@ from foundry_lite.application.ports import (
     TransactionManager,
     TransformRepository,
 )
+from foundry_lite.application.ports.citation_source import CitationSourceVerifier
 from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
@@ -41,6 +45,7 @@ from foundry_lite.application.ports.model_registry_repository import ModelRegist
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
+from foundry_lite.application.ports.tool_executor import ToolExecutor
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.security.policy import PolicyService
@@ -55,6 +60,8 @@ class CoreDependencies:
     engine: TransactionManager
     policy: PolicyService
     action_repository: ActionRepository
+    ai_eval_repository: AiEvalRepository
+    ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
@@ -87,7 +94,11 @@ class CoreDependencies:
     vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     language_model_adapter: LanguageModelAdapter
     model_registry_repository: ModelRegistryRepository
+    context_provider: ContextProvider
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
+    prompt_artifact_store: object
+    citation_source_verifier: CitationSourceVerifier
     stream_adapter: StreamAdapter
+    tool_executor: ToolExecutor
     workflow_adapter: WorkflowAdapter

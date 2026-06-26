@@ -101,6 +101,9 @@ class ContentSearchHit:
     start_ms: int | None = None
     end_ms: int | None = None
     text_hash: str | None = None
+    text: str = ""
+    chunk_spec_hash: str = ""
+    classification: str = ""
 
 
 class ContentIndexAdapter(Protocol):

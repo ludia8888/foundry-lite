@@ -38,15 +38,44 @@ class EnvSecretProvider:
             ),
         )
 
-    def get_secret(self, name: str) -> SecretValue:
+    def get_secret(self, name: str, *, version: str | None = None) -> SecretValue:
         env_var = self._env_var(name)
-        value = self._source().get(env_var, "")
-        if value == "":
+        source = self._source()
+        value = source.get(env_var, "")
+        if value != "":
+            secret = SecretValue(name=name, version=_secret_version(value), value=value)
+            if version is None or secret.version == version:
+                return secret
+        if version is None:
             raise ValidationFailed(
                 "secret is not configured",
                 details={"secret_name": name, "env_var": env_var, "secret_value": REDACTED_VALUE},
             )
-        return SecretValue(name=name, version=_secret_version(value), value=value)
+        versioned_env_var = _versioned_env_var(env_var, version)
+        versioned_value = source.get(versioned_env_var, "")
+        if versioned_value == "":
+            raise ValidationFailed(
+                "secret version is not configured",
+                details={
+                    "secret_name": name,
+                    "env_var": versioned_env_var,
+                    "secret_version": version,
+                    "secret_value": REDACTED_VALUE,
+                },
+            )
+        secret = SecretValue(name=name, version=_secret_version(versioned_value), value=versioned_value)
+        if secret.version != version:
+            raise ValidationFailed(
+                "secret version mismatch",
+                details={
+                    "secret_name": name,
+                    "env_var": versioned_env_var,
+                    "expected_version": version,
+                    "actual_version": secret.version,
+                    "secret_value": REDACTED_VALUE,
+                },
+            )
+        return secret
 
     def _env_var(self, name: str) -> str:
         return self.env_aliases.get(name, _default_env_var(name))
@@ -63,6 +92,11 @@ def secret_provider_from_env(environ: Mapping[str, str] | None = None) -> EnvSec
 def _default_env_var(name: str) -> str:
     normalized = "".join(char if char.isalnum() else "_" for char in name).upper()
     return f"FOUNDRY_LITE_SECRET_{normalized}"
+
+
+def _versioned_env_var(env_var: str, version: str) -> str:
+    normalized = "".join(char if char.isalnum() else "_" for char in version).upper()
+    return f"{env_var}__VERSION_{normalized}"
 
 
 def _secret_version(value: str) -> str:

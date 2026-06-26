@@ -164,6 +164,80 @@ def test_expand_phase_blocks_destructive_upgrade(tmp_path: Path) -> None:
     assert any(finding.code == "migration_expand_operation_not_allowed" for finding in findings)
 
 
+def test_expand_phase_allows_safe_rls_upgrade_sql(tmp_path: Path) -> None:
+    versions_dir = tmp_path / "migrations" / "versions"
+    _write_migration(versions_dir, "aaa111_root.py", revision="aaa111", down_revision=None)
+    _write_migration(
+        versions_dir,
+        "bbb222_child.py",
+        revision="bbb222",
+        down_revision="aaa111",
+        upgrade_body='op.execute("ALTER TABLE ai_sessions ENABLE ROW LEVEL SECURITY")',
+    )
+
+    assert gate.collect_findings(versions_dir=versions_dir) == []
+
+
+def test_expand_phase_requires_ai_tenant_table_rls(tmp_path: Path) -> None:
+    versions_dir = tmp_path / "migrations" / "versions"
+    _write_migration(versions_dir, "aaa111_root.py", revision="aaa111", down_revision=None)
+    _write_migration(
+        versions_dir,
+        "bbb222_child.py",
+        revision="bbb222",
+        down_revision="aaa111",
+        upgrade_body=(
+            'op.create_table("ai_shadow_runs", '
+            'sa.Column("id", sa.String(), nullable=False), '
+            'sa.Column("tenant_id", sa.String(), nullable=False))'
+        ),
+    )
+
+    findings = gate.collect_findings(versions_dir=versions_dir)
+
+    assert any(finding.code == "migration_ai_tenant_rls_missing" for finding in findings)
+
+
+def test_expand_phase_accepts_ai_tenant_table_rls_policy(tmp_path: Path) -> None:
+    versions_dir = tmp_path / "migrations" / "versions"
+    _write_migration(versions_dir, "aaa111_root.py", revision="aaa111", down_revision=None)
+    _write_migration(
+        versions_dir,
+        "bbb222_child.py",
+        revision="bbb222",
+        down_revision="aaa111",
+        upgrade_body=(
+            'op.create_table("ai_shadow_runs", '
+            'sa.Column("id", sa.String(), nullable=False), '
+            'sa.Column("tenant_id", sa.String(), nullable=False))\n'
+            '    op.execute("ALTER TABLE ai_shadow_runs ENABLE ROW LEVEL SECURITY")\n'
+            '    op.execute("ALTER TABLE ai_shadow_runs FORCE ROW LEVEL SECURITY")\n'
+            '    op.execute("CREATE POLICY ai_shadow_runs_tenant_isolation ON ai_shadow_runs '
+            "USING (tenant_id = current_setting('foundry_lite.tenant_id', true)) "
+            "WITH CHECK (tenant_id = current_setting('foundry_lite.tenant_id', true))"
+            '")'
+        ),
+    )
+
+    assert gate.collect_findings(versions_dir=versions_dir) == []
+
+
+def test_expand_phase_blocks_destructive_upgrade_sql(tmp_path: Path) -> None:
+    versions_dir = tmp_path / "migrations" / "versions"
+    _write_migration(versions_dir, "aaa111_root.py", revision="aaa111", down_revision=None)
+    _write_migration(
+        versions_dir,
+        "bbb222_child.py",
+        revision="bbb222",
+        down_revision="aaa111",
+        upgrade_body='op.execute("ALTER TABLE orders DROP COLUMN legacy_status")',
+    )
+
+    findings = gate.collect_findings(versions_dir=versions_dir)
+
+    assert any(finding.code == "migration_expand_execute_destructive_sql" for finding in findings)
+
+
 def test_expand_phase_requires_default_for_not_null_column(tmp_path: Path) -> None:
     versions_dir = tmp_path / "migrations" / "versions"
     _write_migration(versions_dir, "aaa111_root.py", revision="aaa111", down_revision=None)

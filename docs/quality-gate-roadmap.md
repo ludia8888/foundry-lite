@@ -86,7 +86,7 @@
 | 25   | fake/local adapter contract test 동일                              | contract tests                      | pass                                                                    | △ (수동) |
 | 26   | trace key boundary 유지                                            | `check_trace_continuity.py`         | dynamic                                                                 | ✅       |
 | 27   | 새 boundary에 contract test 동반                                   | `check_contract_test_per_port.py`   | 0개 누락                                                                | ✅       |
-| 28   | adapter 실패 의미 표준화                                           | `check_adapter_failure_taxonomy.py` | 19 adapter profile                                                      | ✅       |
+| 28   | adapter 실패 의미 표준화                                           | `check_adapter_failure_taxonomy.py` | 22 adapter profile                                                      | ✅       |
 | 28.1 | 인프라는 한 번에 하나씩 실패/동시성/복구/조합 증거와 함께 추가     | `check_infra_ratchet.py`            | infra ratchet doc/CI/doc-sync violation 0                               | ✅       |
 | 28.2 | MinIO/S3 storage ratchet                                           | `quality:s3-storage`                | S3 contract/failure/concurrency/retry/cleanup/operator evidence 8 tests | ✅       |
 | 28.3 | active 인프라 조합 ratchet                                         | `quality:infra-composition`         | S3+Iceberg+Spark end-to-end + failure-abort tests                       | ✅       |
@@ -740,7 +740,7 @@ probe, trace 누락, 필수 키 누락, request context mismatch, JSON report �
 
 검사 기준:
 
-- compute/storage/workflow/stream/search/connector/auth adapter profile은 실패 계약을 가져야 한다.
+- compute/storage/workflow/stream/search/connector/auth/secret/prompt-artifact adapter profile은 실패 계약을 가져야 한다.
 - 각 실패 mode는 `operation`, 실패 `kind`, `is_retryable`, 운영자 메시지를 가져야 한다.
 - timeout 실패는 retry 가능한 실패여야 하고, timeout 값은 양수여야 한다.
 - 결과는 `artifacts/quality/adapter_failure_taxonomy.json`에 남긴다.
@@ -1493,7 +1493,10 @@ DB lock으로 같은 위험을 재현한다. 세 번째 S55 slice인 expand-cont
 `release_compatibility`를 선언해야 하고, expand 단계는 `old_and_new_app` window에서
 compatible add/table/index/backfill SQL만 허용하며 기본값 없는 새 `NOT NULL` 컬럼을
 막는다. contract 단계는 `new_app_only` window라도 old-writer reject와 release
-window proof가 생기기 전까지 fail-closed로 차단된다. 다음 S55 slice는
+window proof가 생기기 전까지 fail-closed로 차단된다. 같은 gate는 `tenant_id`를 가진
+새 `ai_` 테이블이 PostgreSQL `ENABLE/FORCE ROW LEVEL SECURITY`와 tenant policy 없이
+추가되는 것도 차단해, `create_database()` bootstrap과 Alembic upgrade 경로의 tenant
+isolation drift를 막는다. 다음 S55 slice는
 `quality:schema-evolution`으로 Dataset commit 직전 schema change를 compatible,
 warning, blocked로 분류한다. Rename/drop/type narrowing/primary-key change는 blocking
 change로 남고, numeric widening/deprecated field/non-null default backfill은 warning
@@ -1516,6 +1519,7 @@ password-masked JSON artifact로 남기게 해 operator가 실패 revision, lock
 | Schema migration singleton runner      | `quality:schema-migration-runner` | API/worker/app startup 여러 개가 동시에 migration을 실행해 schema lock, partial migration, app/schema mismatch를 만드는 문제 차단                                                    |
 | Schema migration expand-contract guard | `quality:schema-migrations`       | expand 단계에서 old app/write path를 깨는 drop/alter/rename, 기본값 없는 NOT NULL 컬럼, 검토 불가능한 SQL, 준비 안 된 contract cleanup이 들어오는 문제 차단                          |
 | Schema migration release-window guard  | `quality:schema-migrations`       | migration phase와 rolling-deploy compatibility window가 어긋나 old/new app 공존 기간을 리뷰할 기준이 사라지는 문제 차단                                                              |
+| AI tenant RLS migration guard          | `quality:schema-migrations`       | 기존 DB가 Alembic upgrade로 새 AI tenant table을 받는 경로에서 PostgreSQL RLS/tenant policy 없이 테이블만 생성되어 tenant isolation 방어 밖에 남는 문제 차단                          |
 | Schema migration operator evidence     | `quality:schema-migration-runner` | migration 실패가 traceback으로만 사라져 어떤 revision/lock/error 상태였는지 운영자가 재현하지 못하는 문제 차단                                                                       |
 | Dataset schema evolution ratchet       | `quality:schema-evolution`        | Dataset schema rename/drop/narrowing 같은 consumer-breaking 변경이 단순 schema drift 실패로만 보이거나, widening/backfill 영향이 transaction metadata 없이 merge되는 문제 차단       |
 | Ontology migration ratchet             | `quality:ontology-migrations`     | Ontology property/object/link/action parameter 변경이 기존 object/query/action/generated SDK 소비자를 조용히 깨거나, reindex 필요성이 audit/outbox evidence 없이 merge되는 문제 차단 |
@@ -1633,13 +1637,449 @@ P0c의 현재 slice는 full AIP trace UI가 아니라 AI 실행 장부의 DB/저
 `AiRunRepository`는 session/message/run/event/model-call/context/tool/citation/usage row를
 저장하되, raw prompt나 raw tool result를 일반 DB에 넣지 않고 ref/hash/redacted preview로 남긴다.
 `quality:ai-ledger`는 정본 §10.2 컬럼 목록, message client idempotency, event sequence
-idempotency, tenant scoping, SQLite/PostgreSQL round-trip, and runtime-lane wiring을 검증한다.
-ModelGateway 자동 기록, encrypted prompt artifact store, ToolBroker execution, trace UI, and
-public API/SDK surfaces는 후속 AIP slice다.
+idempotency, tenant scoping, PostgreSQL RLS migration DDL, SQLite/PostgreSQL round-trip, and
+runtime-lane wiring을 검증한다.
+P0i는 이 장부의 첫 Operations API/SDK read surface를 추가했고, P0u는 ModelGateway 자동
+model-call 기록을 추가했다. P0v는 encrypted compiled-prompt artifact store를 추가했다.
+ToolBroker execution and full trace UI는 후속 AIP slice다.
 
 | 게이트                 | 명령                | Root cause                                                                                                                                                                           |
 | ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| AI run ledger ratchet  | `quality:ai-ledger` | AI 실행이 provider call 이후에만 휘발성 로그로 남거나, retry가 message/event를 중복 생성하거나, raw prompt/tool payload가 일반 DB/audit row에 저장되거나, Postgres와 SQLite 동작이 갈라지는 문제 차단 |
+| AI run ledger ratchet  | `quality:ai-ledger` | AI 실행이 provider call 이후에만 휘발성 로그로 남거나, retry가 message/event를 중복 생성하거나, raw prompt/tool payload가 일반 DB/audit row에 저장되거나, 기존 DB migration 경로에서 새 AI 테이블이 PostgreSQL RLS 밖에 남거나, Postgres와 SQLite 동작이 갈라지는 문제 차단 |
+
+### AIP P0u — Model Gateway Ledger Ratchet
+
+P0u의 현재 slice는 live provider dashboard나 encrypted prompt artifact viewer가 아니라,
+governed Model Gateway가 provider attempt accounting을 직접 남기는 backend contract다.
+`ModelGatewayService.invoke(...)`는 `ModelRequest` `ai_run_id` field가 있는 경우 provider call 전에
+tenant-scoped AI run이 이미 seed되어 있는지 확인한다. Seeded run이 없으면 provider adapter를
+호출하지 않고 fail closed한다. Provider adapter가 성공하면 `ai_model_calls`에 succeeded row를
+기록하고, provider adapter가 실패하면 raw prompt 없이 request/response hash와 redacted error
+payload를 가진 failed row를 남긴 뒤 원래 오류를 다시 올린다.
+
+Agent Runtime은 더 이상 model-call ledger row를 수동으로 쓰지 않고, compiled prompt hash를
+`ModelRequest` `request_hash` field로 Gateway에 넘긴다. 따라서 모델 호출을 장부에 남기는 책임은
+Agent Runtime의 후처리 관습이 아니라 Gateway boundary의 불변 조건이 된다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Model Gateway ledger ratchet | `quality:model-gateway-ledger` | Model Gateway를 통과한 provider call이 AI run ledger에 누락되거나, seeded run 없이 provider egress가 먼저 발생하거나, provider 실패가 raw prompt와 함께 로그/장부에 남거나, Agent Runtime이 Gateway 밖에서 model-call row를 수동으로 맞추는 문제 차단 |
+
+### AIP P0v — Encrypted Prompt Artifact Ratchet
+
+P0v의 현재 slice는 prompt artifact viewer나 full trace UI가 아니라, raw compiled prompt를
+일반 DB/audit JSON 밖의 별도 암호화 artifact에 저장하는 backend privacy contract다.
+`PromptArtifactStore`는 원문 prompt를 encrypted blob으로 쓰고, `PromptArtifactService`는
+`ai_prompt_artifacts`에 `artifact_ref`, prompt `content_hash`, encrypted `artifact_hash`, byte size,
+key ref, algorithm, retention, legal hold, erasure lineage, export marking만 기록한다. Raw read는
+`aip_prompt_artifact_reader` 역할이 있는 caller에게만 허용된다.
+
+Agent Runtime은 AI run을 seed한 뒤 Model Gateway 호출 전에 compiled prompt artifact를 기록한다.
+Artifact write가 실패하면 seeded run을 failed로 닫고 provider/model adapter를 호출하지 않는다.
+저장 plaintext는 `compiled_prompt_hash`와 같은 canonical `{"messages":[...]}` JSON이고, receipt
+insert 실패 시 방금 쓴 encrypted artifact를 삭제해 retention/erasure 없는 orphan prompt를 남기지
+않는다. Raw read는 ciphertext `artifact_hash`와 plaintext `content_hash`를 receipt와 다시 맞춰본다.
+SecretProvider key 조회 실패 시 local-dev fallback은 `FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY=true`
+명시 opt-in이 있을 때만 허용된다.
+Alembic migration은 `ai_prompt_artifacts`에 PostgreSQL RLS/FORCE/policy를 적용해 기존 DB upgrade
+경로도 bootstrap 경로와 같은 tenant isolation을 갖는다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Encrypted prompt artifact ratchet | `quality:prompt-artifacts` | raw compiled prompt가 일반 DB/Operations payload/파일에 평문으로 남거나, compiled_prompt_hash와 저장 plaintext가 갈라지거나, receipt 실패 뒤 orphan artifact가 남거나, 조용한 local-dev key fallback이 발동하거나, receipt hash 재검증 없이 raw prompt를 읽거나, 별도 reader role 없이 원문을 읽거나, prompt artifact write 실패 뒤에도 provider egress가 진행되거나, 기존 DB migration 경로에서 새 AI tenant table이 PostgreSQL RLS 밖에 남는 문제 차단 |
+
+### AIP P0w — Prompt Artifact Failure Taxonomy Ratchet
+
+P0w의 현재 slice는 key rotation이나 prompt artifact viewer가 아니라, P0v의 protected prompt-log
+store가 실패할 때 운영자가 같은 adapter taxonomy 언어로 판단할 수 있게 만드는 backend 운영 계약이다.
+`PromptArtifactStore` port는 `failure_contract()`를 요구하고, local encrypted adapter는
+write/delete storage failure를 retryable `unavailable`, missing/inactive key를 retryable
+`authentication`, receipt hash mismatch/corrupt artifact를 non-retryable `conflict`, tenant-scoped
+artifact ref miss를 non-retryable `not_found`로 선언한다. 전역 `adapter-failure-taxonomy` gate는
+`local-prompt-artifact-store` profile을 필수 concrete adapter profile로 포함한다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Prompt artifact failure taxonomy ratchet | `quality:prompt-artifacts`; `quality:adapter-failure-taxonomy` | prompt artifact store 장애가 일반 예외 문자열로만 남아 운영자가 key 문제인지, retry 가능한 storage 문제인지, hash/corruption conflict인지, missing ref인지 구분하지 못하거나, 새 prompt artifact adapter가 operator-safe failure contract 없이 추가되는 문제 차단 |
+
+### AIP P0x — Prompt Artifact Historical Key Version Ratchet
+
+P0x의 현재 slice는 prompt artifact viewer나 cloud KMS integration이 아니라, P0v receipt의
+`encryption_key_ref`가 실제 복호화 경계가 되게 만드는 backend 보안 계약이다. `SecretProvider`
+는 current secret뿐 아니라 `version`을 명시한 조회를 지원하고, `LocalPromptArtifactStore` read
+path는 receipt의 `secret://name@version`을 파싱해 정확히 그 버전을 요청한다. 현재 키가 회전되어도
+보관된 old key version이 있으면 과거 artifact를 읽을 수 있고, old key가 없으면 current key로
+조용히 재시도하지 않고 fail closed된다. Local `EnvSecretProvider`는
+`<CURRENT_SECRET_ENV>__VERSION_<NORMALIZED_VERSION>` 형식으로 retained historical key를 제공하며,
+missing/mismatched version 에러는 secret value를 노출하지 않는다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Prompt artifact key-version ratchet | `quality:prompt-artifacts`; `uv run pytest tests/contracts/test_secret_provider_contract.py tests/contracts/test_prompt_artifact_store_contract.py -q` | prompt artifact receipt에 key version을 저장해도 read path가 현재 key만 사용해 rotation 뒤 과거 prompt audit을 잃거나, unavailable old key를 current key fallback으로 가려 integrity/audit 원인을 흐리는 문제 차단 |
+
+### AIP P0y — Prompt Artifact Access API/SDK Ratchet
+
+P0y의 현재 slice는 full visual trace explorer나 prompt artifact viewer UI가 아니라, P0v/P0x로
+보호 저장된 raw compiled prompt를 **별도 권한 API/SDK surface**로만 여는 backend/operator-access
+계약이다. 일반 Operations AI run detail은 계속 artifact refs/hash/retention/export marking metadata만
+노출하고 plaintext를 포함하지 않는다. 새 `GET /api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}`
+경로와 generated SDK `client.operations.runs.promptArtifact(runId, artifactId)`는
+`aip_prompt_artifact_reader` role이 있는 caller에게만 plaintext를 반환한다.
+
+Route `run_id`는 단순 장식이 아니다. `PromptArtifactService.read_prompt_artifact(..., ai_run_id=...)`
+는 receipt의 `ai_run_id`가 URL의 run id와 다르면 encrypted store를 읽기 전에 `NOT_FOUND`로 fail
+closed한다. 따라서 tenant-scoped artifact id를 알아도 다른 AI run URL 아래에서 prompt를 열 수 없고,
+reader role이 없으면 API는 `PERMISSION_DENIED`를 반환한다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Prompt artifact access ratchet | `quality:prompt-artifact-access`; `pnpm --silent quality:sdk-request-contract` | encrypted prompt artifact는 저장되어 있지만 운영/API/SDK에서 원문 접근 경로가 없거나, 일반 Operations detail에 raw prompt가 섞이거나, reader role 없는 caller가 plaintext를 받거나, URL run id와 receipt run id가 달라도 복호화가 진행되는 문제 차단 |
+
+### AIP P0z — Agent Runtime Tool Loop Ratchet
+
+P0z의 현재 slice는 full autonomous multi-tool agent, write tool execution, visual debugger, or
+long-running Temporal loop가 아니라, P0n Agent Runtime이 모델이 요청한 **read tool call 1개**를
+서버-side Tool Broker로 실행하고 최종 답변까지 이어지는 backend 계약이다. Tool call은 agent
+allowlist, published tool spec, JSON schema, user permission, object/property scope, masked property,
+model egress classification, timeout/result budget, confirmation policy를 통과해야만 실행된다.
+
+첫 model call이 tool call을 반환하면 Agent Runtime은 `AiToolCallRecord`를 hash/authorization
+metadata로 기록하고, brokered tool output을 포함한 follow-up model prompt를 별도 encrypted prompt
+artifact로 저장한 뒤 두 번째 governed Model Gateway call로 최종 답변을 만든다. 일반 Operations AI
+detail은 계속 raw prompt/tool output/provider body를 노출하지 않고, model-call count, tool-call hash,
+prompt artifact metadata만 보여준다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Agent runtime tool loop ratchet | `quality:agent-tool-loop` | 모델이 요청한 tool call이 ToolBroker 검사 없이 실행되거나, agent manifest 밖 tool/비허용 tool result classification이 통과되거나, tool result 원문이 Operations detail/일반 DB에 노출되거나, follow-up model prompt가 encrypted prompt artifact 없이 provider로 나가는 문제 차단 |
+
+### AIP P1a — Agent Action Proposal Tool Ratchet
+
+P1a의 현재 slice는 write tool execution, autonomous multi-action agent, visual approval workspace,
+or Temporal-backed human task가 아니라, P0z Agent Runtime tool loop에 정본 `action.propose`
+`PROPOSE_WRITE` tool을 연결하는 backend 계약이다. 모델이 `action.propose`를 요청하면 Agent
+Runtime은 published tool spec, agent tool allowlist, JSON schema, `HUMAN_REVIEW` confirmation
+policy, and `agentAllowedActions`를 fail-closed로 검증한 뒤 `ActionProposalService`를 호출해
+pending `insight_reviews` row만 만든다.
+
+직접 `WRITE` tool은 거부된다. 성공 경로에서도 `ActionService`나 `action_runs` side effect는
+발생하지 않고, AI Operations detail에는 `AiToolCallRecord`의 hash/status/fingerprint metadata만
+노출된다. 일반 Operations detail은 계속 raw tool arguments, proposal parameters, prompt text,
+provider body를 노출하지 않는다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Agent action proposal tool ratchet | `quality:agent-action-proposal-tool` | 모델이 action proposal을 우회해 직접 WRITE tool을 실행하거나, `action.propose`가 human review 없이 action side effect를 만들거나, proposal parameters가 일반 Operations AI detail에 노출되거나, API/SDK가 agent action allowlist 없이 proposal tool을 허용하는 문제 차단 |
+
+### AIP P1b — Agent Approval Execution API Ratchet
+
+P1b의 현재 slice는 visual approval workspace나 Temporal-backed human task가 아니라, P1a가 만든
+AI-originated action proposal을 사람이 approve한 뒤 named API/SDK로 실행하는 backend/API 계약이다.
+`POST /api/insights/reviews/{review_id}/execute-action`와 generated
+`client.insights.reviews.execute(...)`는 `Idempotency-Key`와 expected proposal fingerprint를 요구하고,
+실행은 계속 `ApprovalExecutionService`가 소유한다.
+
+승인 실행은 ActionService 호출 전 originating AI run ledger에서 `originating_tool_call_id`가 실제
+`action.propose` `PROPOSE_WRITE` tool call인지, 그리고 tool call result hash가 proposal fingerprint와
+같은지 다시 확인한다. 성공하면 review는 `executed`/`approved_action_run_id`로 닫히고,
+`ai_tool_calls.linked_action_run_id`에도 같은 action run id가 채워져 Operations가 AI proposal에서 실제
+Action run까지 추적할 수 있다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Agent approval execution API ratchet | `quality:agent-approval-execution-api` | 사람이 승인한 AI proposal이 raw API path 없이 실행되지 못하거나, expected fingerprint/idempotency 없이 실행되거나, originating tool-call ledger와 action run 사이 back-link가 끊기거나, missing/forged originating tool call이 ActionService 호출 뒤에야 발견되는 문제 차단 |
+
+### AIP P1c — Agent Approval Execution Idempotency Ratchet
+
+P1c의 현재 slice는 새로운 approval UI가 아니라, 승인된 AI proposal 실행을 사용자가 반복 클릭하거나
+클라이언트가 같은 mutation을 재시도해도 실제 Ontology Action side effect가 한 번만 생긴다는 backend/API
+증거다. 공개 `execute-action` API는 같은 review/fingerprint 실행을 다시 받아도 같은 `actionRunId`로
+replay하고, `action_runs` row와 target object version은 한 번만 증가해야 한다.
+
+비개발자 관점으로 말하면, 사람이 승인 버튼을 두 번 눌러도 주문 승인 지시서가 두 장 찍히면 안 된다.
+이 게이트는 그 사고를 서비스 레벨과 공개 API 레벨에서 같이 막는다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Agent approval execution idempotency ratchet | `quality:agent-approval-execution-idempotency` | 승인 실행 재시도/중복 클릭이 같은 proposal fingerprint를 새 mutation처럼 처리해 action run, object version, tool-call link를 중복 생성하는 문제 차단 |
+
+### AIP P0d — Context Compiler Ratchet
+
+P0d의 현재 slice는 full Agent Runtime이나 trace UI가 아니라 모델 호출 직전의 prompt assembly
+계약이다. `ContextProvider`는 권한 검증이 끝난 `RetrievedContextItem`을 opaque `context_id`,
+source/version/hash/security partition과 함께 넘긴다. `ContextCompilerService`는 정본 §8.6 순서로
+platform safety policy, agent instruction, application state, tool definitions, retrieved context,
+citation mapping, output schema, user message를 묶고 `compiled_prompt_hash`,
+`context_manifest_hash`, `tool_manifest_hash`, `state_snapshot_hash`, `policy_snapshot_hash`를 만든다.
+검색 문맥은 raw delimiter fence가 아니라 JSON string data로 인코딩되어 delimiter-like 문자열이
+prompt section boundary로 승격되지 못하며, duplicate context id, non-allowlisted partition,
+context hash mismatch는 provider call 전에 fail closed된다.
+RetrievalOrchestrator, AgentRuntime loop, public API/SDK surfaces는 후속 AIP slice다.
+
+| 게이트                    | 명령                       | Root cause                                                                                                                                                                                                    |
+| ------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Context compiler ratchet  | `quality:context-compiler` | 검색 결과나 application state가 임의 순서로 prompt에 섞이거나, retrieved document 안의 delimiter/prompt-injection 문장이 system instruction처럼 승격되거나, 같은 tenant 안의 비허용 security partition이 섞이거나, context/tool/state/policy hash 없이 AI run ledger가 생성되는 문제 차단 |
+
+### AIP P0e — Tool Broker Ratchet
+
+P0e의 현재 slice는 full Agent Runtime이나 실제 ontology/content/action tool adapter가 아니라,
+모델이 요청한 tool call을 제품 서버가 안전하게 심사하는 관문이다. `ToolExecutor`는 승인된
+도구 실행 포트이고, `ToolBrokerService`는 agent allowlist, published tool version, input JSON
+schema, invoking-user permission, object/property scope, masked property, model egress compatibility,
+timeout/result budgets, and confirmation/review requirement를 통과한 read-only call만 executor에
+넘긴다. 출력은 모델로 돌아가기 전에 masking/size limit을 거치고, argument/result는 `sha256:`
+hash와 redacted preview, `AiToolCallRecord`로 남는다. 기본 로컬 executor는 fake라서 network,
+SQL, shell, provider SDK를 열지 않는다.
+AgentRuntime loop, real ontology/content/state/action adapters, approval bridge, public API/SDK
+surfaces는 후속 AIP slice다.
+
+| 게이트              | 명령                  | Root cause                                                                                                                                                                                                                          |
+| ------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tool broker ratchet | `quality:tool-broker` | LLM이 generic SQL/shell/HTTP executor를 직접 호출하거나, agent manifest에 없는 도구를 실행하거나, 권한/마스킹/egress/예산/confirmation 검사를 건너뛰거나, raw tool result를 모델/장부에 그대로 돌려주는 문제 차단 |
+
+### AIP P0f — Citation Service Ratchet
+
+P0f의 현재 slice는 full Agent Runtime이나 visual trace UI가 아니라, 모델 응답의 citation을
+제품 서버가 검증해서 렌더링/이동 참조로 바꾸는 관문이다. `CitationService`는 모델이 제안한
+`context_id`와 claim span을 tenant-scoped AI run manifest에서 찾고, 선택된 context item인지
+확인한 뒤, source type별 read permission을 검사한다. 그 다음 `CitationSourceVerifier`가 현재
+source version/hash를 다시 확인하며, manifest와 맞을 때만 `AiCitationRecord`와 HMAC-signed
+`flite-citation-nav.v1` navigation ref를 만든다. forged context id, unselected context, stale
+source, invalid span/order, permission deny는 citation row 기록 전 fail closed된다.
+AgentRuntime loop, real object/document/media source resolvers, public API/SDK surfaces는 후속
+AIP slice다.
+
+| 게이트                   | 명령                       | Root cause                                                                                                                                                                                                     |
+| ------------------------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Citation service ratchet | `quality:citation-service` | LLM이 존재하지 않는 context id나 직접 만든 URL을 citation처럼 내보내거나, omitted context/stale source/권한 없는 source가 answer citation으로 렌더링되거나, citation ledger row가 검증 없이 생기는 문제 차단 |
+
+### AIP P0g — Action Proposal Ratchet
+
+P0g의 현재 slice는 ApprovalExecutionService가 아니라, AI가 제안한 Ontology Action을 사람 검토
+큐에 넣기 전의 서버-side 관문이다. `ActionProposalService`는 model proposal을 곧바로 실행하지
+않고, tenant-scoped AI run manifest에서 선택된 evidence context인지 확인하고, agent action
+allowlist, user action permission, active Ontology action definition, current object version을 다시
+읽는다. 그런 다음 action type, target, expected object version, canonical params, evidence refs,
+agent version, policy version을 묶은 `sha256:` proposal fingerprint를 만들고, 그 fingerprint를
+review create idempotency key로 사용한다. 같은 fingerprint retry는 같은 review를 재사용하고,
+파라미터/근거/정책이 바뀐 proposal은 새 review가 필요하다. 이 slice는 `insight_reviews`에
+정본 §10.3 proposal fields를 추가하지만, 승인 후 실제 `ActionService.apply_action` 실행은
+후속 Approval-to-Action bridge에서 다룬다.
+
+| 게이트                    | 명령                      | Root cause                                                                                                                                                                           |
+| ------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Action proposal ratchet   | `quality:action-proposal` | LLM이 action을 직접 실행하거나, forged/unselected evidence로 review를 만들거나, agent allowlist/user permission/object version re-read 없이 approval queue에 action proposal을 넣는 문제 차단 |
+
+### AIP P0h — Approval Execution Ratchet
+
+P0h의 현재 slice는 visual proposal review workspace가 아니라, 이미 승인된 action proposal review를
+실제 `ActionService.apply_action(...)` 호출로 연결하는 서버-side bridge다.
+`ApprovalExecutionService`는 review가 approved 상태인지 확인하고, reviewer permission,
+action execution permission, source evidence access, restore/write traffic gate, active action
+definition, current object version, expiry, 그리고 originating AI run ledger로 재계산한 proposal
+fingerprint를 다시 검증한다. 실행은 proposal fingerprint를 action idempotency key로 사용하므로
+같은 승인 실행 retry가 새 action run을 만들지 않는다. 성공하면 review의 `execution_status`와
+`approved_action_run_id`를 갱신하고, Operations가 따라갈 수 있도록
+`runtime_run_relations`에 `insight_review --approved_as--> action` 링크를 남긴다.
+
+| 게이트                       | 명령                         | Root cause                                                                                                                                                      |
+| ---------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Approval execution ratchet   | `quality:approval-execution` | 승인되지 않은 review나 변조/만료/stale proposal이 action으로 실행되거나, 승인 retry가 중복 action run을 만들거나, review와 action run 사이 운영 추적이 끊기는 문제 차단 |
+
+### AIP P0i — AI Operations Ratchet
+
+P0i의 현재 slice는 full visual trace explorer가 아니라, 이미 저장된 canonical AI run ledger를
+Operations 목록/상세/API/SDK에서 안전하게 볼 수 있게 하는 operator-facing surface다.
+`RuntimeRunType`은 `ai`를 허용하고, run list는 `aiRuns`를 반환하며,
+`GET /api/operations/runs/{run_type}/{run_id}` detail은 `run_type=ai`일 때 `ai` field에 run refs/hashes,
+ordered events, model-call token/latency accounting, selected/omitted context metadata,
+tool-call hashes/status, citations, usage/cost summary, and lightweight timeline을 담는다.
+raw prompt, raw tool result, provider response body, authorization-bearing JSON 값은 detail payload에
+노출하지 않는다. Source-chain lookup은 `ai_execution_runs`처럼 `created_at` 대신 `started_at`을
+쓰는 runtime table도 안전하게 정렬해야 한다.
+
+| 게이트                  | 명령                    | Root cause                                                                                                                                                     |
+| ----------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AI operations ratchet   | `quality:ai-operations` | AI 실행 장부가 DB에만 있고 운영자가 목록/상세/API/SDK에서 찾지 못하거나, trace/detail 화면이 raw prompt/tool/provider/authorization payload를 그대로 노출하거나, AI run source-chain 조회가 잘못된 timestamp 컬럼 가정으로 깨지는 문제 차단 |
+
+### AIP P0j — Logic Runtime Ratchet
+
+P0j의 현재 slice는 full Temporal-backed Logic engine이나 visual DAG builder가 아니라, AIP Logic
+블록 그래프를 typed/bounded DAG로 검증하고 안전한 기존 경계를 통해 실행하는 첫 runtime surface다.
+`LogicRuntimeService`는 `Input`, `CallFunction`, `Condition`, `CreateActionProposal`,
+`HumanApproval`, `ApplyAction`, `Output` block id/kind/dependency를 검증하고, duplicate id,
+missing dependency, cycle, max block budget을 fail closed한다. `CallFunction`은 직접 executor를
+부르지 않고 `ToolBrokerService`를 통과하며, tool call ledger row를 기록한다.
+`CreateActionProposal`은 직접 Action을 실행하지 않고 `ActionProposalService`를 통해
+`insight_reviews` pending proposal을 만든다. `ApplyAction`은 approved proposal signal이 없는
+interactive Logic run에서 fail closed한다. Logic run start/completed/failed evidence는 기존
+`ai_execution_events`에 ref/hash/redacted preview로 남기며, 같은 graph/input의 result hash는
+deterministic replay proof로 고정된다.
+
+| 게이트                  | 명령                    | Root cause                                                                                                                                           |
+| ----------------------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Logic runtime ratchet   | `quality:logic-runtime` | Logic DAG가 cycle/무제한 loop/직접 Action 실행/ToolBroker 우회로 이어지거나, read tool/proposal 실행 흔적이 AI ledger에 남지 않는 문제 차단 |
+
+### AIP P0k — AI Evals + Release Guard Ratchet
+
+P0k의 현재 slice는 full eval workbench/Apollo release automation이 아니라, AI agent candidate를
+운영 release channel로 올리기 전에 deterministic eval evidence를 요구하는 첫 guard다.
+`EvalService`는 `ai_eval_suites`, `ai_eval_cases`, `ai_eval_runs`, `ai_eval_results`에
+suite/case/run/result 장부를 남기고, 입력/기대값/실제값/result를 `sha256:` hash로 고정한다.
+동일 case의 repeated-run actual hash가 흔들리거나, required axis가 빠지거나, suite/case
+definition이 version bump 없이 바뀌면 fail closed한다. `promote_agent_release(...)`는 같은
+agent version + target channel의 passed eval run이 있어야 `ai_agent_releases`를 쓸 수 있고,
+`stable`은 Security + Action axis 통과와 zero variance를 추가로 요구한다.
+
+| 게이트                    | 명령                 | Root cause                                                                                                                                               |
+| ------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| AI eval evidence ratchet  | `quality:ai-evals`   | agent/model/prompt 후보가 deterministic eval evidence 없이 운영 승격 후보가 되거나, eval suite/case drift가 version bump 없이 조용히 바뀌는 문제 차단 |
+| AI release guard ratchet  | `quality:ai-release` | failed/mismatched/variance-bearing eval run으로 stable/canary release promotion 장부가 쓰이는 문제 차단 |
+
+### AIP P0l — Visual Builder Ratchet
+
+P0l의 현재 slice는 full drag-and-drop Agent Studio가 아니라, 이미 구현된 AIP backend
+계약을 화면과 SDK에서 안전하게 조립하기 위한 read-only preflight다.
+`VisualBuilderService`는 agent version, model alias version, prompt version, context
+source, tool manifest, Logic DAG, eval axes를 하나의 draft로 받아 `sha256:` draft/graph
+hash와 ready/blocked 결과를 반환한다. tenant security partition mismatch, unpublished or
+dangerous tool, direct `ApplyAction`, missing Logic dependency/cycle, missing eval axis, and
+stable release without Security+Action eval evidence를 fail closed로 표시한다. `/api/aip/builder/validate`,
+generated `client.aip.builder.validate(...)`, and Web Operations AIP Builder panel은 이 preflight를
+SDK-only path로 사용한다.
+
+| 게이트                  | 명령                     | Root cause                                                                                                                                      |
+| ----------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Visual builder ratchet  | `quality:visual-builder` | visual authoring 화면이 ToolBroker/ActionProposal/Eval/Release guard 경계를 우회하거나, 위험한 Logic/tool/action draft를 release-ready처럼 보여주는 문제 차단 |
+
+### AIP P0m — Builder Runtime Execution Ratchet
+
+P0m의 현재 slice는 full Agent Studio나 autonomous AgentRuntime이 아니라, P0l의 read-only
+Builder preflight를 실제 bounded Logic 실행으로 연결하는 첫 product path다.
+`BuilderRuntimeService`는 draft를 먼저 `VisualBuilderService`로 검증하고, 통과한 경우에만
+tenant-scoped AI run ledger를 생성한다. 선택된 Builder context source는 AI run manifest에
+selected context item으로 기록되므로 `CreateActionProposal`이 forged evidence 없이 같은
+ledger를 재검증할 수 있다. `CallFunction`은 계속 ToolBroker를 통과하고, `CreateActionProposal`
+은 pending Insight Review만 만들며, direct action side effect는 만들지 않는다. API/SDK/Web은
+`POST /api/aip/builder/run`과 `client.aip.builder.run(...)`으로 이 흐름을 사용하고,
+반환값은 Operations AI run detail로 바로 이어진다.
+Full retrieval orchestration, model-call AgentRuntime loop, persisted multi-user Builder drafts,
+drag-and-drop editing, visual debugger, eval workbench, and release dashboards는 후속 AIP slice다.
+
+| 게이트                            | 명령                      | Root cause                                                                                                                                                       |
+| --------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Builder runtime execution ratchet | `quality:builder-runtime` | Builder 화면이 validate만 통과한 draft를 런타임 장부 없이 실행하거나, ToolBroker/ActionProposal guard를 우회하거나, 실행 후 Operations trace로 돌아가지 못하는 문제 차단 |
+
+### AIP P0n — Agent Runtime Readonly Ratchet
+
+P0n의 현재 slice는 full autonomous multi-tool AgentRuntime이 아니라, 한 번의 사용자 메시지를
+authorized context retrieval, deterministic context compiler, governed Model Gateway call, AI run
+ledger, Operations trace로 연결하는 read-only runtime path다. 모델이 tool call을 반환해도 이
+slice에서는 실행하지 않고 fail closed 한다.
+
+아직 multi-iteration tool loop, visual debugger, eval workbench,
+persisted Agent Studio definitions는 후속 slice다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Agent runtime readonly ratchet | `quality:agent-runtime` | Agent Runtime 화면/API가 ContextCompiler/ModelGateway/AI ledger를 우회하거나, 비허용 security partition을 모델 prompt에 넣거나, 모델 호출 뒤 Operations trace 없이 답변을 반환하거나, read-only slice에서 tool call을 실행하는 문제 차단 |
+
+### AIP P0o — Retrieval Orchestrator Object Context Ratchet
+
+P0o의 현재 slice는 full document/vector/reranking RetrievalOrchestrator가 아니라,
+Agent Runtime의 첫 실제 컨텍스트 경로를 fake provider에서 object-authoritative re-read로
+교체하는 baseline이다. `RetrievalOrchestrator`는 request tenant/actor/security partition을
+fail closed로 확인하고, Agent Runtime state의 `objectType`/`objectId`가 있으면
+`ObjectQueryService.get_object(...)`를 통해 권한/마스킹이 적용된 committed object를 다시 읽어
+`RetrievedContextItem`으로 만든다. objectId가 없는 objectType query path도 검색 hit text를
+그대로 쓰지 않고 hit의 object id를 다시 읽은 payload만 context text로 만든다. 각 item은
+source ref/version, `sha256:` content hash, retrieval method, security partition, token estimate를
+담고, max item/token budget에 맞게 dedupe/packing된다.
+
+Beyond current P0o, AIP-specific document context packing is handled by P0p below. Already-covered
+ontology/media retrieval outputs를 Agent context로 묶는 broader dense+lexical fusion, optional
+reranking, visual retrieval debugging은 later slices다. Agent Runtime citation rendering is handled
+by P0q below.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Retrieval orchestrator object-context ratchet | `quality:retrieval-orchestrator` | Agent Runtime이 fake context나 stale search-index text를 모델 prompt에 넣거나, object read 권한/마스킹을 우회하거나, 다른 tenant security partition/context budget 초과를 조용히 통과시키는 문제 차단 |
+
+### AIP P0p — Retrieval Document Context Ratchet
+
+P0p의 현재 slice는 full ontology/media fusion이나 visual retrieval debugger가 아니라, 이미
+구현된 media/content retrieval 결과를 Agent Runtime context로 안전하게 묶는 첫 문서 경로다.
+`DefaultContentRetrievalService`는 검색 hit를 반환하기 전에 DB `content_units` row를 다시 읽고,
+tenant/security envelope, classification pre-filter, text hash를 검증한 뒤 authoritative text를
+`ContentSearchHit`에 채운다. `RetrievalOrchestrator`는 이 검증된 hit를 `kind=document`
+`RetrievedContextItem`으로 변환하고, `content-unit://{source_media_item_version_id}/{content_unit_id}`
+source ref, source media version, `sha256:` prompt-text hash, retrieval method, security partition,
+token estimate를 담는다. Agent Runtime은 `modelAllowedClassifications`를 retrieval request까지
+전달하므로 over-classified document가 ranking/prompt 전에 빠질 수 있다.
+
+Broader object+media OAG fusion, cross-source diversity, optional reranking, visual retrieval
+debugging은 later slices다. Agent Runtime citation rendering is handled by P0q below.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Retrieval document context ratchet | `quality:retrieval-document-context` | Agent Runtime이 document/content search hit의 stale index text를 prompt에 넣거나, content unit DB re-read/hash/security/classification pre-filter를 건너뛰거나, document context가 AI run ledger에서 source/version/hash 없이 남는 문제 차단 |
+
+### AIP P0q — Agent Runtime Citation Rendering Ratchet
+
+P0q의 현재 slice는 full visual trace explorer나 multi-turn autonomous citation loop가 아니라,
+P0f `CitationService`를 P0n/P0p Agent Runtime 성공 경로에 연결하는 첫 answer-citation
+path다. Agent Runtime은 plain-text model output을 기존처럼 유지하되, model response가
+structured JSON `answer` + `citations`를 반환하면 citation claim의 opaque `contextId`,
+claim span, order만 받아들인다. 각 claim은 `CitationService`가 tenant-scoped AI run manifest,
+selected context item, source read permission, current source version/hash를 다시 확인한 뒤에만
+`AiCitationRecord`와 signed `flite-citation-nav.v1` navigation ref로 렌더링된다. forged context id,
+malformed citation payload, stale source, permission deny는 run success 전에 fail closed되고,
+Operations AI detail의 `citationCount`/`citations`에 검증된 citation만 남는다.
+
+Full inline citation UI, source-specific rich preview, multi-turn citation repair, and visual trace
+debugging은 later slices다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Agent runtime citation rendering ratchet | `quality:agent-runtime-citations` | Agent Runtime이 모델이 만든 URL/context id를 그대로 answer citation으로 노출하거나, CitationService 검증 없이 success run을 닫거나, 검증된 citation을 result/API/Operations 장부에 연결하지 못하는 문제 차단 |
+
+### AIP P0r — Agent Citation UI Ratchet
+
+P0r의 현재 slice는 full source preview나 visual trace explorer가 아니라, P0q에서 검증된
+answer citation payload를 운영자가 화면에서 바로 읽을 수 있게 하는 첫 Web Operations
+surface다. Agent Runtime은 `outputSchema`를 prompt에만 넣지 않고 `ModelRequest`의
+`response_schema` field에도 전달한다. local fake model은 schema가 citations를 요구하고 compiled citation mapping이
+있을 때만 structured JSON `answer` + opaque `contextId` citation claim을 반환하므로, Web
+E2E가 실제 API/SDK/Agent Runtime/CitationService 경로를 지나 검증된 citation card와
+Operations `citationCount`를 확인한다.
+
+Rich source previews, inline answer-span anchors, multi-turn citation repair, and visual trace
+debugging은 later slices다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Agent citation UI ratchet | `quality:agent-citation-ui` | Web Operations AIP Agent가 citation을 JSON payload에만 숨겨두거나, output schema를 모델 요청에 전달하지 않거나, 검증되지 않은 citation/text를 unsafe DOM으로 렌더링하거나, 브라우저 사용자 흐름에서 Operations citation summary까지 연결하지 못하는 문제 차단 |
+
+### AIP P0s — Agent Source Preview Ratchet
+
+P0s의 현재 slice는 full source viewer나 visual trace debugger가 아니라, P0r에서 화면에
+나온 verified citation card에 안전한 source preview metadata를 붙이는 첫 operator-facing
+출처 확인 경로다. `CitationService`는 model이 준 citation claim을 그대로 믿지 않고 기존처럼
+tenant-scoped AI run manifest, selected context item, source permission, source version/hash를
+검증한 뒤, resolved citation payload에 `sourcePreview`를 추가한다. 이 preview는 selected
+AI run ledger context item에서 온 allowlisted metadata만 담는다: context item id, kind,
+source resource type/id, source version, content hash, retrieval method, relevance score,
+token estimate, security partition, selected flag. Raw retrieved text, prompt text, tool payload,
+provider request/response body는 preview에 포함하지 않는다. Web Operations AIP Agent card는
+이 preview를 `textContent`로 렌더링하고, browser E2E는 같은 user action 뒤 citation card와
+Operations AI detail의 `citationCount`를 함께 확인한다.
+
+Inline answer-span anchors, full source document preview, multi-turn citation repair, and visual
+trace debugging은 later slices다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Agent source preview ratchet | `quality:agent-source-previews` | Citation card가 출처 metadata 없이 opaque label만 보여주거나, preview가 raw context/prompt/tool/provider body를 노출하거나, Web Operations 사용자 흐름에서 retrieval method/security partition/source version을 확인하지 못하는 문제 차단 |
 
 ### S60 — AI Evidence Lineage Ratchet
 
@@ -1672,10 +2112,10 @@ tenant/user/role context header, request-id factory, and response telemetry call
 `isRetryableFoundryLiteError`, `retryWithBackoff`, `collectCursorPages`,
 `createInFlightActionLock`, `actionLockKey`, `classifyFoundryLiteError`와 함께
 system, datasets, ontology catalog/validation, generic objects, objectSets, materializations,
-operations, and Insight Review 하위 named method를 노출한다.
+operations, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 42개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 47개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 12개 SDK helper의 retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

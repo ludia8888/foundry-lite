@@ -12,6 +12,10 @@ from __future__ import annotations
 
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
+from foundry_lite.application.ports.ai_run_repository import (
+    AiExecutionRunRecord,
+    AiSessionRecord,
+)
 from foundry_lite.application.ports.language_model import (
     LanguageModelError,
     ModelMessage,
@@ -33,8 +37,8 @@ from foundry_lite.infrastructure.adapters.fake_language_model import FakeLanguag
 from foundry_lite.infrastructure.adapters.provider_compatible_language_model import (
     ProviderCompatibleLanguageModel,
 )
-from foundry_lite.infrastructure.repositories import SqlAlchemyModelRegistryRepository
-from sqlalchemy import create_engine
+from foundry_lite.infrastructure.repositories import SqlAlchemyAiRunRepository, SqlAlchemyModelRegistryRepository
+from sqlalchemy import create_engine, select
 from sqlalchemy.engine import Engine
 
 _TENANT = "tenant-demo"
@@ -65,6 +69,18 @@ class _SpyLanguageModel:
         return AdapterFailureContract(adapter_profile=self.profile_name, modes=())
 
 
+class _FailingLanguageModel:
+    profile_name = "failing-language-model"
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        raise LanguageModelError("language_model_unavailable")
+
+    def failure_contract(self):  # type: ignore[no-untyped-def]
+        from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
+
+        return AdapterFailureContract(adapter_profile=self.profile_name, modes=())
+
+
 class _RecordingSecretProvider:
     profile_name = "recording-secret"
 
@@ -76,7 +92,9 @@ class _RecordingSecretProvider:
 
         return AdapterFailureContract(adapter_profile=self.profile_name, modes=())
 
-    def get_secret(self, name: str) -> SecretValue:
+    def get_secret(self, name: str, *, version: str | None = None) -> SecretValue:
+        if version is not None:
+            raise RuntimeError(f"unexpected secret version: {version}")
         self.requested_names.append(name)
         return SecretValue(name=name, version="v9", value="super-secret-token")
 
@@ -147,6 +165,7 @@ def _gateway(engine: Engine, adapter: object) -> ModelGatewayService:
         engine=engine,
         model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
         language_model_adapter=adapter,
+        ai_run_repository=SqlAlchemyAiRunRepository(engine),
     )
 
 
@@ -182,8 +201,87 @@ def test_gateway_fake_path_returns_tokens_and_hashes() -> None:
     assert response.content == "echo: hello world"
     assert response.input_tokens == 2
     assert response.output_tokens == 3
-    assert len(response.prompt_hash) == 64  # sha256 over messages
-    assert len(response.model_hash) == 64
+    assert response.prompt_hash.startswith("sha256:")  # sha256 over messages
+    assert response.model_hash.startswith("sha256:")
+
+
+def test_gateway_records_model_call_for_seeded_ai_run() -> None:
+    engine = _engine_with_model()
+    _seed_ai_run(engine, ai_run_id="ai-run-gateway-ledger")
+
+    response = _gateway(engine, FakeLanguageModel()).invoke(
+        _CTX,
+        ModelRequest(
+            model_alias="default-completion",
+            messages=(ModelMessage(role="user", content="hello ledger"),),
+            ai_run_id="ai-run-gateway-ledger",
+            request_hash="sha256:compiled-prompt",
+            model_call_attempt=1,
+            data_classification="internal",
+        ),
+    )
+
+    with engine.begin() as conn:
+        row = conn.execute(select(db.ai_model_calls)).mappings().one()
+
+    assert response.content == "echo: hello ledger"
+    assert row["ai_run_id"] == "ai-run-gateway-ledger"
+    assert row["attempt"] == 1
+    assert row["provider"] == "acme"
+    assert row["model_revision"] == "2026-06-01"
+    assert row["request_hash"] == "sha256:compiled-prompt"
+    assert str(row["response_hash"]).startswith("sha256:")
+    assert row["status"] == "succeeded"
+    assert row["error_json"] is None
+
+
+def test_gateway_requires_seeded_ai_run_before_network_call() -> None:
+    engine = _engine_with_model()
+    spy = _SpyLanguageModel()
+
+    with pytest.raises(AdapterError) as excinfo:
+        _gateway(engine, spy).invoke(
+            _CTX,
+            ModelRequest(
+                model_alias="default-completion",
+                messages=(ModelMessage(role="user", content="must not escape"),),
+                ai_run_id="ai-run-missing",
+                request_hash="sha256:missing-run",
+            ),
+        )
+
+    assert spy.calls == 0
+    assert excinfo.value.failure.details["reason"] == "ai_run_ledger_not_seeded"
+    with engine.begin() as conn:
+        assert conn.execute(select(db.ai_model_calls)).all() == []
+
+
+def test_gateway_records_failed_provider_attempt_without_raw_prompt() -> None:
+    engine = _engine_with_model()
+    _seed_ai_run(engine, ai_run_id="ai-run-provider-failed")
+
+    with pytest.raises(LanguageModelError):
+        _gateway(engine, _FailingLanguageModel()).invoke(
+            _CTX,
+            ModelRequest(
+                model_alias="default-completion",
+                messages=(ModelMessage(role="user", content="secret prompt text"),),
+                ai_run_id="ai-run-provider-failed",
+                request_hash="sha256:provider-failure",
+            ),
+        )
+
+    with engine.begin() as conn:
+        row = conn.execute(select(db.ai_model_calls)).mappings().one()
+
+    assert row["ai_run_id"] == "ai-run-provider-failed"
+    assert row["status"] == "failed"
+    assert row["request_hash"] == "sha256:provider-failure"
+    assert str(row["response_hash"]).startswith("sha256:")
+    assert row["input_tokens"] == 0
+    assert row["output_tokens"] == 0
+    assert row["error_json"] == {"reason": "language_model_unavailable"}
+    assert "secret prompt text" not in str(row)
 
 
 def test_gateway_denies_egress_when_classification_exceeds_allowance() -> None:
@@ -319,3 +417,48 @@ def test_deferred_provider_with_injected_engine_resolves_secret_then_delegates()
     assert response.content == "live"
     assert len(seen) == 1  # the wired engine handled the request
     assert secret_provider.requested_names == ["foundry_aip_token"]  # token resolved by name first
+
+
+def _seed_ai_run(engine: Engine, *, ai_run_id: str) -> None:
+    repository = SqlAlchemyAiRunRepository(engine)
+    with engine.begin() as conn:
+        repository.create_session(
+            transaction=conn,
+            record=AiSessionRecord(
+                id=f"{ai_run_id}-session",
+                tenant_id=_TENANT,
+                agent_version_id="agent.gateway-ledger.v1",
+                actor_user_id="ops-user",
+                status="active",
+                created_at="2026-06-26T00:00:00Z",
+                last_activity_at="2026-06-26T00:00:00Z",
+            ),
+        )
+        repository.create_execution_run(
+            transaction=conn,
+            record=AiExecutionRunRecord(
+                id=ai_run_id,
+                tenant_id=_TENANT,
+                session_id=f"{ai_run_id}-session",
+                agent_version_id="agent.gateway-ledger.v1",
+                actor_user_id="ops-user",
+                request_id="req-gateway-ledger",
+                trace_id=f"{ai_run_id}-trace",
+                status="running",
+                ontology_version_id="active-ontology",
+                model_alias_version="default-completion",
+                resolved_model_id="model-1",
+                resolved_model_revision="2026-06-01",
+                prompt_version_id="prompt-gateway-ledger@v1",
+                compiled_prompt_hash="sha256:compiled-prompt",
+                tool_manifest_hash="sha256:tool-manifest",
+                context_manifest_hash="sha256:context-manifest",
+                state_snapshot_hash="sha256:state-snapshot",
+                policy_snapshot_hash="sha256:policy-snapshot",
+                budget_json={"maxModelCalls": 1},
+                usage_json=None,
+                error_json=None,
+                started_at="2026-06-26T00:00:00Z",
+                completed_at=None,
+            ),
+        )

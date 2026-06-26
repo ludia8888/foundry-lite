@@ -496,6 +496,14 @@ insight_reviews = Table(
     Column("evidence_object_ids", JSON, nullable=False),
     Column("evidence_refs", JSON, nullable=False),
     Column("action_proposal", JSON),
+    Column("proposal_type", String),
+    Column("proposal_fingerprint", String),
+    Column("originating_ai_run_id", String),
+    Column("originating_tool_call_id", String),
+    Column("expires_at", String),
+    Column("execution_status", String),
+    Column("approved_action_run_id", String),
+    Column("approval_policy_version", String),
     Column("created_by_user_id", String, nullable=False),
     Column("created_idempotency_key", String, nullable=False),
     Column("assignment_idempotency_key", String),
@@ -1244,6 +1252,113 @@ ai_usage_ledger = Table(
     Column("estimated_cost", Float, nullable=False),
     Column("currency", String, nullable=False),
     Column("recorded_at", String, nullable=False),
+)
+
+# AIP-lite P0v — encrypted prompt artifact metadata. The raw prompt bytes live
+# in a separate encrypted store; this table is only the tenant-scoped receipt.
+ai_prompt_artifacts = Table(
+    "ai_prompt_artifacts",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ai_run_id", String, nullable=False),
+    Column("artifact_kind", String, nullable=False),
+    Column("artifact_ref", Text, nullable=False),
+    Column("content_hash", String, nullable=False),
+    Column("artifact_hash", String, nullable=False),
+    Column("byte_size", Integer, nullable=False),
+    Column("encryption_key_ref", String, nullable=False),
+    Column("encryption_algorithm", String, nullable=False),
+    Column("retention_until", String, nullable=False),
+    Column("legal_hold", Boolean, nullable=False),
+    Column("erasure_request_id", String),
+    Column("export_marking", String, nullable=False),
+    Column("created_at", String, nullable=False),
+)
+
+# AIP-lite P0k — eval evidence and release promotion guard (§8.12/§15).
+# These rows are the local proof that an agent/model/prompt candidate passed a
+# deterministic eval gate before being promoted to an operational release channel.
+ai_eval_suites = Table(
+    "ai_eval_suites",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("suite_api_name", String, nullable=False),
+    Column("version", String, nullable=False),
+    Column("description", String, nullable=False),
+    Column("axes_json", JSON, nullable=False),
+    Column("status", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "suite_api_name", "version", name="uq_ai_eval_suite_version"),
+)
+
+ai_eval_cases = Table(
+    "ai_eval_cases",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("suite_id", String, nullable=False),
+    Column("case_api_name", String, nullable=False),
+    Column("axis", String, nullable=False),
+    Column("input_json", JSON, nullable=False),
+    Column("expected_json", JSON, nullable=False),
+    Column("rubric_json", JSON, nullable=False),
+    Column("tags_json", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "suite_id", "case_api_name", name="uq_ai_eval_case_name"),
+)
+
+ai_eval_runs = Table(
+    "ai_eval_runs",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("suite_id", String, nullable=False),
+    Column("agent_version_id", String, nullable=False),
+    Column("candidate_release_channel", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("min_score", Float, nullable=False),
+    Column("passed", Boolean, nullable=False),
+    Column("summary_json", JSON, nullable=False),
+    Column("started_at", String, nullable=False),
+    Column("completed_at", String),
+)
+
+ai_eval_results = Table(
+    "ai_eval_results",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("eval_run_id", String, nullable=False),
+    Column("case_id", String, nullable=False),
+    Column("sample_index", Integer, nullable=False),
+    Column("axis", String, nullable=False),
+    Column("score", Float, nullable=False),
+    Column("passed", Boolean, nullable=False),
+    Column("evaluator", String, nullable=False),
+    Column("input_hash", String, nullable=False),
+    Column("expected_hash", String, nullable=False),
+    Column("actual_hash", String, nullable=False),
+    Column("result_json", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("eval_run_id", "case_id", "sample_index", "axis", name="uq_ai_eval_result_sample"),
+)
+
+ai_agent_releases = Table(
+    "ai_agent_releases",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("agent_version_id", String, nullable=False),
+    Column("release_channel", String, nullable=False),
+    Column("eval_run_id", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("policy_version", String, nullable=False),
+    Column("promoted_by", String, nullable=False),
+    Column("promoted_at", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "agent_version_id", "release_channel", name="uq_ai_agent_release_channel"),
 )
 
 

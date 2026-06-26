@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Awaitable, Callable
-from typing import cast
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Protocol, cast
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -75,6 +75,40 @@ instrument_sqlalchemy_engine(foundry.engine)
 
 JsonObject = dict[str, object]
 ValidationErrorPayload = dict[str, object]
+
+
+class PromptArtifactPayload(Protocol):
+    @property
+    def artifact_id(self) -> str: ...
+
+    @property
+    def ai_run_id(self) -> str: ...
+
+    @property
+    def content_hash(self) -> str: ...
+
+    @property
+    def export_marking(self) -> str: ...
+
+    @property
+    def plaintext(self) -> str: ...
+
+
+class ApprovalExecutionPayload(Protocol):
+    @property
+    def review_id(self) -> str: ...
+
+    @property
+    def proposal_fingerprint(self) -> str: ...
+
+    @property
+    def action_run_id(self) -> str: ...
+
+    @property
+    def action_response(self) -> Mapping[str, object]: ...
+
+    @property
+    def review_payload(self) -> Mapping[str, object]: ...
 
 
 class ObservabilityDetectRequest(BaseModel):
@@ -149,6 +183,107 @@ class OntologyValidateRequest(BaseModel):
     yaml_text: str = Field(alias="yaml")
 
 
+class AipBuilderContextSourceRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_id: str = Field(alias="sourceId")
+    kind: str
+    security_partition: str = Field(alias="securityPartition")
+    selected_properties: list[str] = Field(default_factory=list, alias="selectedProperties")
+    token_budget: int = Field(default=800, alias="tokenBudget")
+
+
+class AipBuilderToolSpecRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    tool_id: str = Field(alias="toolId")
+    version: str
+    input_schema: JsonObject = Field(default_factory=dict, alias="inputSchema")
+    output_schema: JsonObject = Field(default_factory=dict, alias="outputSchema")
+    effect: str = "READ"
+    required_permission: str = Field(default="object:read", alias="requiredPermission")
+    confirmation_policy: str = Field(default="NONE", alias="confirmationPolicy")
+    object_type_allowlist: list[str] = Field(default_factory=list, alias="objectTypeAllowlist")
+    property_allowlist: list[str] = Field(default_factory=list, alias="propertyAllowlist")
+    timeout_seconds: int = Field(default=30, alias="timeoutSeconds")
+    max_result_items: int = Field(default=50, alias="maxResultItems")
+    result_classification: str = Field(default="public", alias="resultClassification")
+    status: str = "published"
+
+
+class AipBuilderLogicBlockRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    block_id: str = Field(alias="blockId")
+    kind: str
+    inputs: JsonObject = Field(default_factory=dict)
+    depends_on: list[str] = Field(default_factory=list, alias="dependsOn")
+
+
+class AipBuilderValidateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_version_id: str = Field(alias="agentVersionId")
+    release_channel: str = Field(alias="releaseChannel")
+    model_alias_version: str = Field(alias="modelAliasVersion")
+    prompt_version_id: str = Field(alias="promptVersionId")
+    context_sources: list[AipBuilderContextSourceRequest] = Field(alias="contextSources")
+    tool_manifest: list[AipBuilderToolSpecRequest] = Field(alias="toolManifest")
+    logic_blocks: list[AipBuilderLogicBlockRequest] = Field(alias="logicBlocks")
+    eval_axes: list[str] = Field(alias="evalAxes")
+    agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
+    max_logic_blocks: int = Field(default=25, alias="maxLogicBlocks")
+
+
+class AipBuilderRunRequest(AipBuilderValidateRequest):
+    logic_run_id: str = Field(alias="logicRunId")
+    ai_run_id: str | None = Field(default=None, alias="aiRunId")
+    session_id: str | None = Field(default=None, alias="sessionId")
+    input_json: JsonObject = Field(default_factory=dict, alias="inputJson")
+    user_message: str = Field(default="", alias="userMessage")
+    agent_allowed_tools: list[str] = Field(default_factory=list, alias="agentAllowedTools")
+    model_allowed_classifications: list[str] = Field(
+        default_factory=lambda: ["public", "internal"],
+        alias="modelAllowedClassifications",
+    )
+    policy_version: str = Field(default="policy-v1", alias="policyVersion")
+
+
+class AipAgentRunRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_run_id: str = Field(default="agent-run-default", alias="agentRunId")
+    agent_version_id: str = Field(alias="agentVersionId")
+    model_alias: str = Field(default="default-completion", alias="modelAlias")
+    prompt_version_id: str = Field(alias="promptVersionId")
+    user_message: str = Field(alias="userMessage")
+    agent_instruction: str = Field(
+        default="Answer the operator using cited context.",
+        alias="agentInstruction",
+    )
+    security_partition: str = Field(alias="securityPartition")
+    allowed_security_partitions: list[str] = Field(alias="allowedSecurityPartitions")
+    state_json: JsonObject = Field(default_factory=dict, alias="stateJson")
+    output_schema: JsonObject | None = Field(default=None, alias="outputSchema")
+    ai_run_id: str | None = Field(default=None, alias="aiRunId")
+    session_id: str | None = Field(default=None, alias="sessionId")
+    ontology_version_id: str = Field(default="active-ontology", alias="ontologyVersionId")
+    data_classification: str = Field(default="internal", alias="dataClassification")
+    model_allowed_classifications: list[str] | None = Field(default=None, alias="modelAllowedClassifications")
+    region_requirement: str | None = Field(default=None, alias="regionRequirement")
+    max_context_items: int = Field(default=4, alias="maxContextItems")
+    max_context_tokens: int = Field(default=1200, alias="maxContextTokens")
+    max_model_calls: int = Field(default=1, alias="maxModelCalls")
+    max_loop_iterations: int = Field(default=1, alias="maxLoopIterations")
+    max_tool_calls: int = Field(default=0, alias="maxToolCalls")
+    max_tool_output_bytes: int = Field(default=4096, alias="maxToolOutputBytes")
+    max_output_tokens: int = Field(default=512, alias="maxOutputTokens")
+    policy_version: str = Field(default="policy-v1", alias="policyVersion")
+    tool_manifest: list[AipBuilderToolSpecRequest] = Field(default_factory=list, alias="toolManifest")
+    agent_allowed_tools: list[str] = Field(default_factory=list, alias="agentAllowedTools")
+    agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
+
+
 class DeadLetterBulkRetryRequest(BaseModel):
     ids: list[str]
 
@@ -190,6 +325,12 @@ class InsightReviewAssignRequest(BaseModel):
 class InsightReviewDecisionRequest(BaseModel):
     decision: str
     comment: str | None = None
+
+
+class InsightReviewExecuteActionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_proposal_fingerprint: str = Field(alias="expectedProposalFingerprint")
 
 
 WEBHOOK_SIGNING_KEY_ENV = "FOUNDRY_LITE_WEBHOOK_SIGNING_KEY"
@@ -311,12 +452,65 @@ def _handle_error(exc: FoundryLiteError, request: Request | None = None) -> HTTP
         "CONFLICT": 409,
         "PERMISSION_DENIED": 403,
     }
-    status = status_by_code.get(exc.code, 400)
+    status = _status_for_error(exc, status_by_code.get(exc.code, 400))
     request_id = getattr(getattr(request, "state", None), "request_id", None)
     return HTTPException(
         status_code=status,
-        detail={"code": exc.code, "message": exc.message, "details": exc.details, "request_id": request_id},
+        detail={"code": _code_for_error(exc), "message": exc.message, "details": exc.details, "request_id": request_id},
     )
+
+
+def _code_for_error(exc: FoundryLiteError) -> str:
+    if exc.code != "APPROVAL_EXECUTION_ERROR":
+        return exc.code
+    reason = exc.details.get("reason")
+    if isinstance(reason, str) and reason:
+        return reason.upper()
+    return exc.code
+
+
+def _status_for_error(exc: FoundryLiteError, default_status: int) -> int:
+    if exc.code != "APPROVAL_EXECUTION_ERROR":
+        return default_status
+    reason = exc.details.get("reason")
+    if not isinstance(reason, str):
+        return default_status
+    not_found = {"action_not_found", "run_not_found", "target_not_found"}
+    conflict = {
+        "approval_object_version_conflict",
+        "fingerprint_mismatch",
+        "originating_tool_call_not_found",
+        "review_expired",
+        "review_not_approved",
+    }
+    denied = {"policy_denied", "source_access_denied"}
+    if reason in not_found:
+        return 404
+    if reason in conflict:
+        return 409
+    if reason in denied:
+        return 403
+    return default_status
+
+
+def _prompt_artifact_payload(result: PromptArtifactPayload) -> dict[str, object]:
+    return {
+        "artifactId": result.artifact_id,
+        "aiRunId": result.ai_run_id,
+        "contentHash": result.content_hash,
+        "exportMarking": result.export_marking,
+        "plaintext": result.plaintext,
+    }
+
+
+def _approval_execution_payload(result: ApprovalExecutionPayload) -> dict[str, object]:
+    return {
+        "reviewId": result.review_id,
+        "proposalFingerprint": result.proposal_fingerprint,
+        "actionRunId": result.action_run_id,
+        "actionResponse": dict(result.action_response),
+        "review": dict(result.review_payload),
+    }
 
 
 @app.get("/healthz")
@@ -376,6 +570,33 @@ def validate_ontology(request: Request, payload: OntologyValidateRequest) -> Ont
         return foundry.ontology.validate(payload.yaml_text, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/aip/builder/validate")
+def validate_aip_builder(request: Request, payload: AipBuilderValidateRequest) -> JsonObject:
+    result = foundry.aip.validate_builder_payload(
+        payload=payload.model_dump(by_alias=True),
+        ctx=_ctx(request),
+    )
+    return result.to_payload()
+
+
+@app.post("/api/aip/builder/run")
+def run_aip_builder(request: Request, payload: AipBuilderRunRequest) -> JsonObject:
+    result = foundry.aip.run_builder_payload(
+        payload=payload.model_dump(by_alias=True),
+        ctx=_ctx(request),
+    )
+    return result.to_payload()
+
+
+@app.post("/api/aip/agent/run")
+def run_aip_agent(request: Request, payload: AipAgentRunRequest) -> JsonObject:
+    result = foundry.aip.run_agent_payload(
+        payload=payload.model_dump(by_alias=True),
+        ctx=_ctx(request),
+    )
+    return result.to_payload()
 
 
 @app.get("/api/objects/{object_type}/{object_id}")
@@ -496,6 +717,32 @@ def decide_insight_review(
             ctx=_ctx(request),
             comment=payload.comment,
         )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/insights/reviews/{review_id}/execute-action")
+def execute_insight_review_action(
+    request: Request,
+    review_id: str,
+    payload: InsightReviewExecuteActionRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    if not idempotency_key:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "MISSING_IDEMPOTENCY_KEY",
+                "request_id": getattr(getattr(request, "state", None), "request_id", None),
+            },
+        )
+    try:
+        result = foundry.aip.execute_approved_action(
+            review_id=review_id,
+            expected_proposal_fingerprint=payload.expected_proposal_fingerprint,
+            ctx=_ctx(request),
+        )
+        return _approval_execution_payload(result)
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -638,6 +885,15 @@ def approve_backup_restore_resume(
 def get_operation_run_detail(request: Request, run_type: str, run_id: str) -> RuntimeRunDetail:
     try:
         return foundry.operations.run_detail(run_type, run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/runs/ai/{run_id}/prompt-artifacts/{artifact_id}")
+def get_ai_prompt_artifact(request: Request, run_id: str, artifact_id: str) -> dict[str, object]:
+    try:
+        result = foundry.operations.read_prompt_artifact(run_id, artifact_id, ctx=_ctx(request))
+        return _prompt_artifact_payload(result)
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

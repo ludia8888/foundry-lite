@@ -41,6 +41,7 @@ def pytest_configure(config: pytest.Config) -> None:
     worker_input = getattr(config, "workerinput", None)
     worker_id = worker_input.get("workerid") if isinstance(worker_input, dict) else None
     _configure_xdist_foundry_home(worker_id)
+    os.environ.setdefault("FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY", "pytest-prompt-artifact-key")
 
 
 @pytest.fixture

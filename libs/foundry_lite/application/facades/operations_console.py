@@ -80,6 +80,29 @@ class BackupRestoreReporter(Protocol):
     ) -> BackupRestoreModeReport: ...
 
 
+class PromptArtifactReadPayload(Protocol):
+    @property
+    def artifact_id(self) -> str: ...
+
+    @property
+    def ai_run_id(self) -> str: ...
+
+    @property
+    def content_hash(self) -> str: ...
+
+    @property
+    def export_marking(self) -> str: ...
+
+    @property
+    def plaintext(self) -> str: ...
+
+
+class PromptArtifactReader(Protocol):
+    def read_prompt_artifact(
+        self, ctx: RequestContext, *, artifact_id: str, ai_run_id: str | None = None
+    ) -> PromptArtifactReadPayload: ...
+
+
 @trace_public_methods
 class OperationsConsole:
     """Operations bounded context: run inspection, lineage, retries, and DLQ reprocessing."""
@@ -93,6 +116,7 @@ class OperationsConsole:
         backup_restore: BackupRestoreReporter,
         iceberg_maintenance: IcebergMaintenanceService,
         workflow: WorkflowOrchestrationService,
+        prompt_artifact: PromptArtifactReader,
     ) -> None:
         self._action = action
         self._runtime = runtime
@@ -101,6 +125,7 @@ class OperationsConsole:
         self._backup_restore = backup_restore
         self._iceberg_maintenance = iceberg_maintenance
         self._workflow = workflow
+        self._prompt_artifact = prompt_artifact
 
     def lineage(self, resource_id: str, *, ctx: RequestContext | None = None) -> list[LineageEdgeRow]:
         resolved_ctx = ctx or RequestContext()
@@ -178,6 +203,12 @@ class OperationsConsole:
 
     def run_detail(self, run_type: str, run_id: str, *, ctx: RequestContext | None = None) -> RuntimeRunDetail:
         return self._runtime.run_detail(run_type, run_id, ctx=ctx)
+
+    def read_prompt_artifact(
+        self, run_id: str, artifact_id: str, *, ctx: RequestContext | None = None
+    ) -> PromptArtifactReadPayload:
+        resolved_ctx = ctx or RequestContext()
+        return self._prompt_artifact.read_prompt_artifact(resolved_ctx, artifact_id=artifact_id, ai_run_id=run_id)
 
     def restore_preflight_report(
         self,

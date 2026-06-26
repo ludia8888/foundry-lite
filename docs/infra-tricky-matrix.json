@@ -1257,6 +1257,23 @@
         "test_secret_value_never_logged",
         "test_deferred_provider_references_secret_by_name_and_raises_unavailable"
       ]
+    },
+    "tool_calls_are_brokered_as_user_scoped_bounded_requests": {
+      "description": "LLM tool calls are treated as untrusted requests and can only execute through the Tool Broker: the requested tool must be in the agent manifest, match a published tool version, satisfy the input JSON schema, pass the invoking user's permission and object/property scope, avoid masked properties, be exportable to the selected model, fit timeout/result budgets, and require confirmation/review for non-read effects; outputs are masked and hashed before returning to the model or ledger.",
+      "status": "enforced",
+      "tests": [
+        "test_fake_tool_executor_runs_as_invoking_user_context",
+        "test_tool_broker_executes_read_tool_as_invoking_user_and_returns_ledger_record",
+        "test_tool_not_in_agent_manifest_rejected",
+        "test_generic_executor_tool_is_denied_before_executor_call",
+        "test_write_tool_requires_confirmation_or_review",
+        "test_tool_broker_rejects_input_schema_mismatch_before_executor_call",
+        "test_tool_broker_rejects_masked_property_before_executor_call",
+        "test_tool_broker_rejects_non_exportable_tool_result_before_executor_call",
+        "test_tool_broker_masks_output_before_returning_to_model",
+        "test_tool_broker_enforces_result_item_limit",
+        "test_local_runtime_composes_tool_broker_with_safe_fake_executor"
+      ]
     }
   }
 }

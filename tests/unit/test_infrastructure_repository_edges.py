@@ -9,6 +9,8 @@ from foundry_lite.application.ports.action_repository import ActionRunRecord
 from foundry_lite.application.services.object_store.query_cursor import CURSOR_SIGNING_KEY_ENV
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.local_runtime import (
+    _ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV,
+    _allow_local_prompt_artifact_key_from_env,
     _compute_adapter,
     _connector_adapter,
     _dataset_storage_adapter,
@@ -80,6 +82,14 @@ def test_runtime_workflow_adapter_selects_temporal_and_rejects_unknown_profile(
     monkeypatch.setenv("FOUNDRY_LITE_WORKFLOW_PROFILE", "missing-workflow")
     with pytest.raises(ValueError, match="unknown workflow profile"):
         _workflow_adapter("local")
+
+
+def test_prompt_artifact_local_dev_key_requires_explicit_env_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV, raising=False)
+    assert not _allow_local_prompt_artifact_key_from_env()
+
+    monkeypatch.setenv(_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV, "true")
+    assert _allow_local_prompt_artifact_key_from_env()
 
 
 def test_protected_runtime_profile_disables_create_all_schema_mutation(

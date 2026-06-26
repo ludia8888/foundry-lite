@@ -35,11 +35,13 @@ from foundry_lite.application.services.runtime_detail_payload import (
     quality_evidence_for_transaction,
     related_evidence_for_row,
     run_relations_for_row,
+    runtime_detail_row_and_ai_payload,
     runtime_run_detail_payload,
     scoped_source_runs,
 )
 from foundry_lite.application.services.runtime_error_payloads import (
     dead_letter_retry_plan,
+    link_dlq_retry,
     require_outbox_retry_open,
     require_write_traffic_open,
     runtime_error_payload,
@@ -60,11 +62,15 @@ from foundry_lite.application.services.runtime_run_queries import (
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, PermissionDenied
 
+_OPERATIONS_FORBIDDEN_JSON_KEYS = frozenset({"actionproposal"})
+
 
 def _redact_sensitive(value: object, sensitive: set[str]) -> object:
     if isinstance(value, Mapping):
         return {
-            key: "***MASKED***" if key in sensitive else _redact_sensitive(item, sensitive)
+            key: "***MASKED***"
+            if key in sensitive or _is_forbidden_operations_key(key)
+            else _redact_sensitive(item, sensitive)
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -72,11 +78,17 @@ def _redact_sensitive(value: object, sensitive: set[str]) -> object:
     return value
 
 
+def _is_forbidden_operations_key(key: object) -> bool:
+    normalized = "".join(char for char in str(key).lower() if char.isalnum())
+    return normalized in _OPERATIONS_FORBIDDEN_JSON_KEYS
+
+
 class RuntimeService(CoreService):
     required_dependencies = (
         "engine",
         "policy",
         "runtime_repository",
+        "ai_run_repository",
         "dataset_transaction_repository",
         "dataset_quality_repository",
     )
@@ -188,9 +200,7 @@ class RuntimeService(CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "operations:read:detail")
         parsed_type = required_run_type(run_type)
-        row = self.runtime_repository.run_row(tenant_id=ctx.tenant_id, run_type=parsed_type, run_id=run_id)
-        if row is None:
-            raise NotFound("operations run not found", details={"run_type": parsed_type, "run_id": run_id})
+        row, ai_payload = runtime_detail_row_and_ai_payload(self, self.ai_run_repository, ctx, parsed_type, run_id)
         outbox_events, audit_events, object_edits, action_writebacks = related_evidence_for_row(
             self.runtime_repository, tenant_id=ctx.tenant_id, run_row=row, limit=OPERATIONS_RUN_MAX_LIMIT
         )
@@ -219,6 +229,8 @@ class RuntimeService(CoreService):
             quality_check_results=quality_check_results,
             quality_failed_row_samples=quality_failed_row_samples,
         )
+        if ai_payload is not None:
+            detail["ai"] = ai_payload
         return cast(RuntimeRunDetail, _redact_sensitive(detail, self.policy.sensitive_column_names(ctx)))
 
     def dead_letter_event_retry_plan(
@@ -239,40 +251,51 @@ class RuntimeService(CoreService):
         with self.engine.begin() as conn:
             self._require_outbox_retry_open(conn, ctx)
             plan = dead_letter_retry_plan(self.runtime_repository, conn, ctx, event_id)
-            outbox_event_id = plan["outboxEventId"]
-            outbox = self.runtime_repository.update_outbox_event_for_retry(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                event_id=outbox_event_id,
-                transition=OUTBOX_RETRY_PENDING,
+            outbox_event_id = self._retry_dead_letter_event_rows(conn, ctx, event_id, plan)
+            event_type = plan["eventType"]
+            self._audit(
+                conn,
+                ctx,
+                event_type="dead_letter_event.retry_requested",
+                resource_type="dead_letter_event",
+                resource_id=event_id,
+                action="operations:retry",
+                before_ref={"deadLetterEventId": event_id, "eventType": event_type},
+                after_ref={"outboxEventId": outbox_event_id, "status": "pending"},
+                correlation_id=ctx.request_id,
             )
-            if outbox is None:
-                raise NotFound("source outbox event not found", details={"event_id": outbox_event_id})
-            deleted = self.runtime_repository.delete_dead_letter_event(
-                transaction=conn, tenant_id=ctx.tenant_id, event_id=event_id
-            )
-            if not deleted:
-                raise NotFound("dead-letter event not found", details={"event_id": event_id})
-            self._audit_dlq_retry(
+            link_dlq_retry(
+                self._run_relation,
                 conn,
                 ctx,
                 event_id=event_id,
                 outbox_event_id=outbox_event_id,
-                event_type=plan["eventType"],
-            )
-            self._run_relation(
-                conn,
-                ctx,
-                source_run_type="dead_letter",
-                source_run_id=event_id,
-                target_run_type="outbox",
-                target_run_id=outbox_event_id,
-                relation="requeued",
-                resource_type="outbox_event",
-                resource_id=outbox_event_id,
-                metadata={"eventType": plan["eventType"]},
+                event_type=event_type,
             )
         return {**plan, "status": "pending"}
+
+    def _retry_dead_letter_event_rows(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        event_id: str,
+        plan: RuntimeRetryPlan,
+    ) -> str:
+        outbox_event_id = plan["outboxEventId"]
+        outbox = self.runtime_repository.update_outbox_event_for_retry(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            event_id=outbox_event_id,
+            transition=OUTBOX_RETRY_PENDING,
+        )
+        if outbox is None:
+            raise NotFound("source outbox event not found", details={"event_id": outbox_event_id})
+        deleted = self.runtime_repository.delete_dead_letter_event(
+            transaction=conn, tenant_id=ctx.tenant_id, event_id=event_id
+        )
+        if not deleted:
+            raise NotFound("dead-letter event not found", details={"event_id": event_id})
+        return outbox_event_id
 
     def _require_outbox_retry_open(self, conn: TransactionContext, ctx: RequestContext) -> None:
         require_outbox_retry_open(self.runtime_repository, conn, ctx)
@@ -475,24 +498,3 @@ class RuntimeService(CoreService):
         adapter: str | None = None,
     ) -> Mapping[str, object]:
         return runtime_error_payload(exc, ctx, run_id=run_id, correlation_id=correlation_id, adapter=adapter)
-
-    def _audit_dlq_retry(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        *,
-        event_id: str,
-        outbox_event_id: str,
-        event_type: str,
-    ) -> None:
-        self._audit(
-            conn,
-            ctx,
-            event_type="dead_letter_event.retry_requested",
-            resource_type="dead_letter_event",
-            resource_id=event_id,
-            action="operations:retry",
-            before_ref={"deadLetterEventId": event_id, "eventType": event_type},
-            after_ref={"outboxEventId": outbox_event_id, "status": "pending"},
-            correlation_id=ctx.request_id,
-        )

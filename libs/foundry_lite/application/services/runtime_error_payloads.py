@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from foundry_lite.application.ports import (
     RuntimeJsonObject,
@@ -17,6 +17,9 @@ from foundry_lite.application.services.backup_restore_mode import (
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, ValidationFailed
 
+AuditWriter = Callable[..., None]
+RunRelationWriter = Callable[..., bool]
+
 
 def runtime_error_payload(
     exc: Exception,
@@ -31,6 +34,51 @@ def runtime_error_payload(
     if trace:
         payload["trace"] = trace
     return payload
+
+
+def audit_dlq_retry(
+    audit: AuditWriter,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    *,
+    event_id: str,
+    outbox_event_id: str,
+    event_type: str,
+) -> None:
+    audit(
+        conn,
+        ctx,
+        event_type="dead_letter_event.retry_requested",
+        resource_type="dead_letter_event",
+        resource_id=event_id,
+        action="operations:retry",
+        before_ref={"deadLetterEventId": event_id, "eventType": event_type},
+        after_ref={"outboxEventId": outbox_event_id, "status": "pending"},
+        correlation_id=ctx.request_id,
+    )
+
+
+def link_dlq_retry(
+    run_relation: RunRelationWriter,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    *,
+    event_id: str,
+    outbox_event_id: str,
+    event_type: str,
+) -> bool:
+    return run_relation(
+        conn,
+        ctx,
+        source_run_type="dead_letter",
+        source_run_id=event_id,
+        target_run_type="outbox",
+        target_run_id=outbox_event_id,
+        relation="requeued",
+        resource_type="outbox_event",
+        resource_id=outbox_event_id,
+        metadata={"eventType": event_type},
+    )
 
 
 def _base_error_payload(exc: Exception) -> dict[str, object]:

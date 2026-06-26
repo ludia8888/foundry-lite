@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import pytest
-from foundry_lite.application.ports.action_repository import ActionWritebackRecord
+from foundry_lite.application.ports.action_repository import ActionRunRow, ActionWritebackRecord
 from foundry_lite.application.services.action_reconciliation import (
     _already_reconciled_result,
+    _is_resolvable_writeback,
     _reconciled_result,
     _reconciled_writeback_response,
     _validate_remote_success,
@@ -74,6 +75,11 @@ def test_reconciliation_results_include_mutation_and_idempotent_replay_evidence(
     }
 
 
+def test_terminal_action_run_is_not_treated_as_reconciliation_candidate() -> None:
+    assert not _is_resolvable_writeback(_writeback(), _action_run(status="succeeded"))
+    assert _is_resolvable_writeback(_writeback(), _action_run(status="outcome_unknown"))
+
+
 def _writeback(response: dict[str, object] | None = None) -> ActionWritebackRecord:
     return ActionWritebackRecord(
         writeback_id="writeback-1",
@@ -89,3 +95,25 @@ def _writeback(response: dict[str, object] | None = None) -> ActionWritebackReco
         created_at="2026-06-19T00:00:00Z",
         completed_at=None,
     )
+
+
+def _action_run(status: str) -> ActionRunRow:
+    return {
+        "id": "run-1",
+        "tenant_id": "tenant-demo",
+        "action_type_id": "atype-1",
+        "action_type_api_name": "ApproveOrder",
+        "actor_user_id": "user-1",
+        "target_object_type_id": "otype-1",
+        "target_object_type_api_name": "Order",
+        "target_object_id": "O-1001",
+        "expected_object_version": 1,
+        "parameters": {},
+        "status": status,
+        "idempotency_key": "idem-1",
+        "request_fingerprint": "hash-1",
+        "result": None,
+        "error": None,
+        "created_at": "2026-06-19T00:00:00Z",
+        "completed_at": None,
+    }

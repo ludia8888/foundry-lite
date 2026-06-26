@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import subprocess
 from pathlib import Path
 from types import ModuleType
@@ -156,6 +157,76 @@ def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() ->
     assert "timeout-minutes: 20" in e2e_job
     assert "run: pnpm exec playwright install --with-deps chromium" in e2e_job
     assert "run: pnpm ci:gate:e2e" in e2e_job
+
+
+def test_context_compiler_gate_runs_after_ai_ledger_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    ledger_step = "pnpm --silent quality:ai-ledger"
+    context_step = "pnpm --silent quality:context-compiler"
+    tool_broker_step = "pnpm --silent quality:tool-broker"
+    evidence_step = "pnpm --silent quality:ai-evidence"
+    assert context_step in script
+    assert script.index(ledger_step) < script.index(context_step)
+    assert script.index(context_step) < script.index(tool_broker_step) < script.index(evidence_step)
+    assert '"quality:context-compiler"' in package_json
+
+
+def test_tool_broker_gate_runs_after_context_compiler_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    context_step = "pnpm --silent quality:context-compiler"
+    tool_broker_step = "pnpm --silent quality:tool-broker"
+    citation_step = "pnpm --silent quality:citation-service"
+    evidence_step = "pnpm --silent quality:ai-evidence"
+    assert tool_broker_step in script
+    assert script.index(context_step) < script.index(tool_broker_step) < script.index(citation_step)
+    assert script.index(citation_step) < script.index(evidence_step)
+    assert '"quality:tool-broker"' in package_json
+    assert "tests/contracts/test_tool_executor_contract.py" in package_json
+    assert "tests/unit/test_tool_broker.py" in package_json
+
+
+def test_citation_service_gate_runs_after_tool_broker_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    tool_broker_step = "pnpm --silent quality:tool-broker"
+    citation_step = "pnpm --silent quality:citation-service"
+    evidence_step = "pnpm --silent quality:ai-evidence"
+    assert citation_step in script
+    assert script.index(tool_broker_step) < script.index(citation_step) < script.index(evidence_step)
+    assert '"quality:citation-service"' in package_json
+    assert "tests/contracts/test_citation_source_contract.py" in package_json
+    assert "tests/unit/test_citation_service.py" in package_json
+
+
+def test_action_proposal_gate_runs_after_citation_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    citation_step = "pnpm --silent quality:citation-service"
+    action_proposal_step = "pnpm --silent quality:action-proposal"
+    evidence_step = "pnpm --silent quality:ai-evidence"
+    assert action_proposal_step in script
+    assert script.index(citation_step) < script.index(action_proposal_step) < script.index(evidence_step)
+    assert '"quality:action-proposal"' in package_json
+    assert "tests/unit/test_action_proposal_service.py" in package_json
+
+
+def test_approval_execution_gate_runs_after_action_proposal_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    action_proposal_step = "pnpm --silent quality:action-proposal"
+    approval_execution_step = "pnpm --silent quality:approval-execution"
+    evidence_step = "pnpm --silent quality:ai-evidence"
+    assert approval_execution_step in script
+    assert script.index(action_proposal_step) < script.index(approval_execution_step) < script.index(evidence_step)
+    assert '"quality:approval-execution"' in package_json
+    assert "tests/unit/test_approval_execution_service.py" in package_json
 
 
 def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None:
@@ -655,6 +726,15 @@ def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() 
     assert "run: pnpm ci:gate:e2e" in workflow
 
 
+def test_e2e_gate_sets_prompt_artifact_test_secret_without_local_fallback() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+
+    e2e_gate = script.split("run_e2e_gate() {", maxsplit=1)[1].split("run_all_gate() {", maxsplit=1)[0]
+    assert "FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY" in e2e_gate
+    assert "ci-prompt-artifact-key" in e2e_gate
+    assert "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY" not in e2e_gate
+
+
 def test_doc_drift_is_release_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
@@ -863,11 +943,81 @@ def test_ai_ledger_gate_runs_after_erasure_gate() -> None:
 
     erasure_step = "pnpm --silent quality:erasure"
     ai_ledger_step = "pnpm --silent quality:ai-ledger"
-    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    model_gateway_ledger_step = "pnpm --silent quality:model-gateway-ledger"
     assert ai_ledger_step in script
-    assert script.index(erasure_step) < script.index(ai_ledger_step) < script.index(ai_evidence_step)
+    assert script.index(erasure_step) < script.index(ai_ledger_step) < script.index(model_gateway_ledger_step)
     assert '"quality:ai-ledger"' in package_json
     assert "tests/contracts/test_ai_run_repository_contract.py" in package_json
+
+
+def test_model_gateway_ledger_gate_runs_after_ai_ledger_before_prompt_artifacts() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    ai_ledger_step = "pnpm --silent quality:ai-ledger"
+    model_gateway_ledger_step = "pnpm --silent quality:model-gateway-ledger"
+    prompt_artifacts_step = "pnpm --silent quality:prompt-artifacts"
+    assert model_gateway_ledger_step in script
+    assert script.index(ai_ledger_step) < script.index(model_gateway_ledger_step) < script.index(prompt_artifacts_step)
+    assert '"quality:model-gateway-ledger"' in package_json
+    assert "gateway_records_model_call" in package_json
+    assert "gateway_requires_seeded_ai_run" in package_json
+    assert "gateway_records_failed_provider_attempt" in package_json
+
+
+def test_prompt_artifacts_gate_runs_after_model_gateway_before_context_compiler() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    model_gateway_ledger_step = "pnpm --silent quality:model-gateway-ledger"
+    prompt_artifacts_step = "pnpm --silent quality:prompt-artifacts"
+    prompt_artifact_access_step = "pnpm --silent quality:prompt-artifact-access"
+    context_compiler_step = "pnpm --silent quality:context-compiler"
+    assert prompt_artifacts_step in script
+    assert (
+        script.index(model_gateway_ledger_step)
+        < script.index(prompt_artifacts_step)
+        < script.index(prompt_artifact_access_step)
+        < script.index(context_compiler_step)
+    )
+    assert '"quality:prompt-artifacts"' in package_json
+    assert '"quality:prompt-artifact-access"' in package_json
+    assert "tests/contracts/test_prompt_artifact_store_contract.py" in package_json
+    assert "tests/unit/test_prompt_artifact_service.py" in package_json
+    assert "tests/unit/test_infrastructure_repository_edges.py" in package_json
+    assert "agent_runtime_fails_before_model_when_prompt_artifact_write_fails" in package_json
+    assert "api_aip_agent_run_calls_model_and_links_operations_detail" in package_json
+
+
+def test_aip_roadmap_quality_gates_are_package_and_ci_covered() -> None:
+    roadmap = (ROOT / "docs" / "quality-gate-roadmap.md").read_text(encoding="utf-8")
+    ci_gate = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    scripts = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["scripts"]
+    aip_section = roadmap.split("### AIP P0c", maxsplit=1)[1].split("### S60", maxsplit=1)[0]
+
+    referenced_gates = sorted(set(re.findall(r"`(?:pnpm --silent |pnpm )?(quality:[a-z0-9-]+)`", aip_section)))
+    missing_package_scripts = [gate for gate in referenced_gates if gate not in scripts]
+
+    covered_gates = set(re.findall(r"quality:[a-z0-9-]+", ci_gate))
+    changed = True
+    while changed:
+        changed = False
+        for gate in list(covered_gates):
+            for nested_gate in re.findall(r"quality:[a-z0-9-]+", scripts.get(gate, "")):
+                if nested_gate in scripts and nested_gate not in covered_gates:
+                    covered_gates.add(nested_gate)
+                    changed = True
+
+    missing_ci_coverage = []
+    for gate in referenced_gates:
+        command = scripts.get(gate, "")
+        command_paths = re.findall(r"(?:scripts|tests)/[A-Za-z0-9_./-]+", command)
+        has_direct_command = any(path in ci_gate for path in command_paths)
+        if gate not in covered_gates and not has_direct_command:
+            missing_ci_coverage.append(gate)
+
+    assert not missing_package_scripts
+    assert not missing_ci_coverage
 
 
 def test_ai_evidence_gate_runs_after_ai_ledger_gate() -> None:
@@ -875,13 +1025,270 @@ def test_ai_evidence_gate_runs_after_ai_ledger_gate() -> None:
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     ai_ledger_step = "pnpm --silent quality:ai-ledger"
+    model_gateway_ledger_step = "pnpm --silent quality:model-gateway-ledger"
+    ai_operations_step = "pnpm --silent quality:ai-operations"
+    logic_runtime_step = "pnpm --silent quality:logic-runtime"
     ai_evidence_step = "pnpm --silent quality:ai-evidence"
     insight_review_step = "pnpm --silent quality:insight-review"
     assert ai_evidence_step in script
-    assert script.index(ai_ledger_step) < script.index(ai_evidence_step) < script.index(insight_review_step)
+    assert script.index(ai_ledger_step) < script.index(model_gateway_ledger_step)
+    assert script.index(model_gateway_ledger_step) < script.index(ai_operations_step) < script.index(logic_runtime_step)
+    assert script.index(logic_runtime_step) < script.index(ai_evidence_step)
+    assert script.index(ai_evidence_step) < script.index(insight_review_step)
     assert '"quality:ai-evidence"' in package_json
     assert "tests/unit/test_ai_evidence.py" in package_json
     assert "object_property_lineage" in package_json
+
+
+def test_ai_operations_gate_runs_after_approval_execution_gate() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    approval_execution_step = "pnpm --silent quality:approval-execution"
+    ai_operations_step = "pnpm --silent quality:ai-operations"
+    logic_runtime_step = "pnpm --silent quality:logic-runtime"
+    assert ai_operations_step in script
+    assert script.index(approval_execution_step) < script.index(ai_operations_step) < script.index(logic_runtime_step)
+    assert '"quality:ai-operations"' in package_json
+    assert "tests/unit/test_ai_operations_detail.py" in package_json
+    assert "tests/smoke/test_interfaces.py" in package_json
+    assert "test_ai_operations_run_list_and_detail_expose_safe_ledger_trace" in package_json
+    assert "api_ai_operations" in package_json
+
+
+def test_logic_runtime_gate_runs_after_ai_operations_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    ai_operations_step = "pnpm --silent quality:ai-operations"
+    logic_runtime_step = "pnpm --silent quality:logic-runtime"
+    ai_evals_step = "pnpm --silent quality:ai-evals"
+    assert logic_runtime_step in script
+    assert script.index(ai_operations_step) < script.index(logic_runtime_step) < script.index(ai_evals_step)
+    assert '"quality:logic-runtime"' in package_json
+    assert "tests/unit/test_logic_runtime.py" in package_json
+
+
+def test_ai_evals_and_release_gates_run_after_logic_runtime_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    logic_runtime_step = "pnpm --silent quality:logic-runtime"
+    ai_evals_step = "pnpm --silent quality:ai-evals"
+    ai_release_step = "pnpm --silent quality:ai-release"
+    visual_builder_step = "pnpm --silent quality:visual-builder"
+    assert ai_evals_step in script
+    assert ai_release_step in script
+    assert script.index(logic_runtime_step) < script.index(ai_evals_step) < script.index(ai_release_step)
+    assert script.index(ai_release_step) < script.index(visual_builder_step)
+    assert '"quality:ai-evals"' in package_json
+    assert '"quality:ai-release"' in package_json
+    assert "tests/contracts/test_ai_eval_repository_contract.py" in package_json
+    assert "tests/unit/test_ai_eval_service.py" in package_json
+
+
+def test_visual_builder_gate_runs_after_ai_release_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    ai_release_step = "pnpm --silent quality:ai-release"
+    visual_builder_step = "pnpm --silent quality:visual-builder"
+    builder_runtime_step = "pnpm --silent quality:builder-runtime"
+    assert visual_builder_step in script
+    assert script.index(ai_release_step) < script.index(visual_builder_step) < script.index(builder_runtime_step)
+    assert '"quality:visual-builder"' in package_json
+    assert "tests/unit/test_visual_builder.py" in package_json
+    assert "api_aip_builder" in package_json
+
+
+def test_builder_runtime_gate_runs_after_visual_builder_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    visual_builder_step = "pnpm --silent quality:visual-builder"
+    builder_runtime_step = "pnpm --silent quality:builder-runtime"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert builder_runtime_step in script
+    assert script.index(visual_builder_step) < script.index(builder_runtime_step) < script.index(ai_evidence_step)
+    assert '"quality:builder-runtime"' in package_json
+    assert "tests/unit/test_builder_runtime_execution.py" in package_json
+    assert "api_aip_builder_run" in package_json
+
+
+def test_agent_runtime_gate_runs_after_builder_runtime_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    builder_runtime_step = "pnpm --silent quality:builder-runtime"
+    retrieval_orchestrator_step = "pnpm --silent quality:retrieval-orchestrator"
+    agent_runtime_step = "pnpm --silent quality:agent-runtime"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert agent_runtime_step in script
+    assert script.index(builder_runtime_step) < script.index(agent_runtime_step) < script.index(ai_evidence_step)
+    assert script.index(retrieval_orchestrator_step) < script.index(agent_runtime_step)
+    assert '"quality:agent-runtime"' in package_json
+    assert "tests/unit/test_agent_runtime.py" in package_json
+    assert "api_aip_agent_run" in package_json
+
+
+def test_agent_tool_loop_gate_runs_after_agent_runtime_before_citations() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_runtime_step = "pnpm --silent quality:agent-runtime"
+    agent_tool_loop_step = "pnpm --silent quality:agent-tool-loop"
+    agent_action_proposal_step = "pnpm --silent quality:agent-action-proposal-tool"
+    agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
+    assert agent_tool_loop_step in script
+    assert (
+        script.index(agent_runtime_step) < script.index(agent_tool_loop_step) < script.index(agent_action_proposal_step)
+    )
+    assert script.index(agent_action_proposal_step) < script.index(agent_citation_step)
+    assert '"quality:agent-tool-loop"' in package_json
+    assert "agent_runtime_executes_one_model_tool_call_through_broker_and_finishes" in package_json
+    assert "api_aip_agent_run_executes_brokered_tool_loop" in package_json
+
+
+def test_agent_action_proposal_tool_gate_runs_after_tool_loop_before_citations() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_tool_loop_step = "pnpm --silent quality:agent-tool-loop"
+    agent_action_proposal_step = "pnpm --silent quality:agent-action-proposal-tool"
+    agent_approval_execution_step = "pnpm --silent quality:agent-approval-execution-api"
+    agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
+    assert agent_action_proposal_step in script
+    assert (
+        script.index(agent_tool_loop_step)
+        < script.index(agent_action_proposal_step)
+        < script.index(agent_approval_execution_step)
+        < script.index(agent_citation_step)
+    )
+    assert '"quality:agent-action-proposal-tool"' in package_json
+    assert "agent_runtime_action_propose_tool" in package_json
+    assert "agent_runtime_direct_write_tool_is_denied" in package_json
+    assert "api_aip_agent_run_proposes_action_for_human_review" in package_json
+
+
+def test_agent_approval_execution_api_gate_runs_after_action_proposal_before_citations() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_action_proposal_step = "pnpm --silent quality:agent-action-proposal-tool"
+    agent_approval_execution_step = "pnpm --silent quality:agent-approval-execution-api"
+    agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
+    assert agent_approval_execution_step in script
+    assert script.index(agent_action_proposal_step) < script.index(agent_approval_execution_step)
+    assert script.index(agent_approval_execution_step) < script.index(agent_citation_step)
+    assert '"quality:agent-approval-execution-api"' in package_json
+    assert "approval_execution_links_originating_agent_tool_call" in package_json
+    assert "api_aip_agent_run_proposal_can_be_approved_and_executed" in package_json
+
+
+def test_agent_approval_execution_idempotency_gate_runs_after_api_before_citations() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_approval_execution_step = "pnpm --silent quality:agent-approval-execution-api"
+    agent_idempotency_step = "pnpm --silent quality:agent-approval-execution-idempotency"
+    agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
+    assert agent_idempotency_step in script
+    assert script.index(agent_approval_execution_step) < script.index(agent_idempotency_step)
+    assert script.index(agent_idempotency_step) < script.index(agent_citation_step)
+    assert '"quality:agent-approval-execution-idempotency"' in package_json
+    assert "approval_execution_runs_approved_proposal_once_and_links_review" in package_json
+    assert "api_aip_agent_run_proposal_can_be_approved_and_executed" in package_json
+
+
+def test_agent_runtime_citation_gate_runs_after_agent_runtime_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    citation_service_step = "pnpm --silent quality:citation-service"
+    agent_runtime_step = "pnpm --silent quality:agent-runtime"
+    agent_tool_loop_step = "pnpm --silent quality:agent-tool-loop"
+    agent_action_proposal_step = "pnpm --silent quality:agent-action-proposal-tool"
+    agent_approval_execution_step = "pnpm --silent quality:agent-approval-execution-api"
+    agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert agent_citation_step in script
+    assert script.index(citation_service_step) < script.index(agent_citation_step)
+    assert script.index(agent_runtime_step) < script.index(agent_tool_loop_step)
+    assert script.index(agent_tool_loop_step) < script.index(agent_action_proposal_step)
+    assert script.index(agent_action_proposal_step) < script.index(agent_approval_execution_step)
+    assert script.index(agent_approval_execution_step) < script.index(agent_citation_step)
+    assert script.index(agent_citation_step) < script.index(ai_evidence_step)
+    assert '"quality:agent-tool-loop"' in package_json
+    assert '"quality:agent-action-proposal-tool"' in package_json
+    assert '"quality:agent-approval-execution-api"' in package_json
+    assert "agent_runtime_executes_one_model_tool_call_through_broker_and_finishes" in package_json
+    assert "api_aip_agent_run_executes_brokered_tool_loop" in package_json
+    assert '"quality:agent-runtime-citations"' in package_json
+    assert "agent_runtime_resolves_model_citations" in package_json
+    assert "agent_runtime_rejects_forged_model_citation" in package_json
+
+
+def test_agent_citation_ui_gate_runs_after_agent_runtime_citations_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
+    agent_citation_ui_step = "pnpm --silent quality:agent-citation-ui"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert agent_citation_ui_step in script
+    assert script.index(agent_citation_step) < script.index(agent_citation_ui_step) < script.index(ai_evidence_step)
+    assert '"quality:agent-citation-ui"' in package_json
+    assert "schema_requested_citation_claim" in package_json
+    assert "valid_citation_mapping" in package_json
+    assert "citation_schema_inside_lists" in package_json
+    assert "agent_runtime_forwards_output_schema_to_model_request" in package_json
+    assert "operations_ui_record_dlq_retry_shows_result" in package_json
+
+
+def test_agent_source_preview_gate_runs_after_agent_citation_ui_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_citation_ui_step = "pnpm --silent quality:agent-citation-ui"
+    agent_source_preview_step = "pnpm --silent quality:agent-source-previews"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert agent_source_preview_step in script
+    assert script.index(agent_citation_ui_step) < script.index(agent_source_preview_step)
+    assert script.index(agent_source_preview_step) < script.index(ai_evidence_step)
+    assert '"quality:agent-source-previews"' in package_json
+    assert "source_preview" in package_json
+    assert "agent_runtime_resolves_model_citations" in package_json
+    assert "operations_ui_record_dlq_retry_shows_result" in package_json
+
+
+def test_retrieval_orchestrator_gate_runs_after_context_compiler_before_agent_runtime() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    context_compiler_step = "pnpm --silent quality:context-compiler"
+    retrieval_orchestrator_step = "pnpm --silent quality:retrieval-orchestrator"
+    agent_runtime_step = "pnpm --silent quality:agent-runtime"
+    assert retrieval_orchestrator_step in script
+    assert script.index(context_compiler_step) < script.index(retrieval_orchestrator_step)
+    assert script.index(retrieval_orchestrator_step) < script.index(agent_runtime_step)
+    assert '"quality:retrieval-orchestrator"' in package_json
+    assert "tests/unit/test_retrieval_orchestrator.py" in package_json
+    assert "retrieval_orchestrator_gate" in package_json
+
+
+def test_retrieval_document_context_gate_runs_after_object_orchestrator_before_agent_runtime() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    retrieval_orchestrator_step = "pnpm --silent quality:retrieval-orchestrator"
+    retrieval_document_step = "pnpm --silent quality:retrieval-document-context"
+    agent_runtime_step = "pnpm --silent quality:agent-runtime"
+    assert retrieval_document_step in script
+    assert script.index(retrieval_orchestrator_step) < script.index(retrieval_document_step)
+    assert script.index(retrieval_document_step) < script.index(agent_runtime_step)
+    assert '"quality:retrieval-document-context"' in package_json
+    assert "tests/unit/test_media_content_search.py" in package_json
+    assert "retrieval_document_context_gate" in package_json
 
 
 def test_insight_review_gate_runs_after_ai_evidence_gate() -> None:

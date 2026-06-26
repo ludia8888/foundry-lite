@@ -57,6 +57,7 @@ RuntimeRunType = Literal[
     "outbox",
     "dead_letter",
     "workflow",
+    "insight_review",
     "ai",
     "audit",
 ]
@@ -258,8 +259,6 @@ class RuntimeRetryMaterializationResult(TypedDict):
 
 
 class RuntimeRunSnapshot(TypedDict):
-    """Operational runtime rows grouped for the run-list screen/API."""
-
     syncRuns: list[RuntimeRow]
     transformRuns: list[RuntimeRow]
     indexRuns: list[RuntimeRow]
@@ -269,6 +268,7 @@ class RuntimeRunSnapshot(TypedDict):
     outboxEvents: list[RuntimeRow]
     deadLetterEvents: list[RuntimeRow]
     workflowRuns: list[RuntimeRow]
+    aiRuns: list[RuntimeRow]
     auditEvents: list[RuntimeRow]
     objectEdits: list[RuntimeRow]
 
@@ -324,6 +324,7 @@ class RuntimeRunDetail(TypedDict):
     materialization: NotRequired[RuntimeJsonObject | None]
     downstreamImpact: NotRequired[RuntimeJsonObject | None]
     quality: NotRequired[RuntimeJsonObject | None]
+    ai: NotRequired[RuntimeJsonObject | None]
 
 
 class RuntimeRepository(Protocol):
@@ -495,6 +496,4 @@ class RuntimeRepository(Protocol):
         tenant_id: str,
         run_type: RuntimeRunType,
         run_id: str,
-    ) -> list[RuntimeRunRelationRow]:
-        """Return durable relations touching one Operations run."""
-        ...
+    ) -> list[RuntimeRunRelationRow]: ...
