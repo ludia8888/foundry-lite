@@ -1,10 +1,32 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import cast
 
 from scripts import generate_sdk_ts as sdk
+
+
+def _balanced_brace_bounds(source: str, open_brace_index: int) -> tuple[int, int]:
+    depth = 0
+    for index in range(open_brace_index, len(source)):
+        character = source[index]
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                return open_brace_index, index
+    raise AssertionError("unterminated brace block")
+
+
+def _export_type_block(source: str, type_name: str) -> str:
+    prefix = f"export type {type_name} = "
+    start = source.index(prefix)
+    open_brace = source.index("{", start)
+    _, close_brace = _balanced_brace_bounds(source, open_brace)
+    return source[start : close_brace + 2]
 
 
 def _type_block(source: str, type_name: str) -> str:
@@ -12,6 +34,39 @@ def _type_block(source: str, type_name: str) -> str:
     start = source.index(prefix)
     end = source.index("};", start)
     return source[start : end + 2]
+
+
+def _nested_client_block(source: str, member_path: tuple[str, ...]) -> str:
+    block = source
+    for member_name in member_path:
+        match = re.search(rf"(?m)^\s*{re.escape(member_name)}:\s*\{{", block)
+        assert match is not None, f"missing generated client member {'.'.join(member_path)}"
+        open_brace = block.index("{", match.start())
+        start, end = _balanced_brace_bounds(block, open_brace)
+        block = block[start : end + 1]
+    return block
+
+
+def _client_surface_method_paths(surface: dict[str, object]) -> list[tuple[str, ...]]:
+    paths: list[tuple[str, ...]] = []
+
+    def collect(prefix: tuple[str, ...], value: object) -> None:
+        if prefix == ("helpers",):
+            return
+        if isinstance(value, list):
+            for method_name in value:
+                assert isinstance(method_name, str)
+                paths.append((*prefix, method_name))
+            return
+        if isinstance(value, dict):
+            for member_name, child in value.items():
+                collect((*prefix, member_name), child)
+            return
+        raise AssertionError(f"unsupported SDK surface entry at {'.'.join(prefix)}: {value!r}")
+
+    for namespace, value in surface.items():
+        collect((namespace,), value)
+    return sorted(paths)
 
 
 def _client_surface_payload(source: str) -> dict[str, object]:
@@ -71,6 +126,8 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "list(filters?: InsightReviewListFilters): Promise<InsightReviewQueryResult>;" in generated
     assert "create(payload: InsightReviewCreateRequest, options: { idempotencyKey: string })" in generated
     assert "decide(reviewId: string, payload: InsightReviewDecisionRequest" in generated
+    assert "execute(reviewId: string, payload: InsightReviewExecuteActionRequest" in generated
+    assert "Promise<InsightReviewExecuteActionResult>;" in generated
     assert "generic: {" in generated
     assert "links(objectType: string, id: string, linkType: string): Promise<ObjectLinkPayload[]>;" in generated
     assert "objectSets: {" in generated
@@ -198,6 +255,24 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "requestContextHeaders",
         "retryWithBackoff",
     ]
+
+
+def test_sdk_package_and_browser_outputs_share_client_surface_declares_client_type_methods() -> None:
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    generated = sdk.render_typescript(ontology)
+    surface = json.loads(sdk.render_client_surface_json(sdk.client_surface(ontology)))
+    assert isinstance(surface, dict)
+    client_type = _export_type_block(generated, "FoundryLiteGeneratedClient")
+
+    missing_paths = []
+    for path in _client_surface_method_paths(surface):
+        parent_path = path[:-1]
+        method_name = path[-1]
+        parent_block = _nested_client_block(client_type, parent_path)
+        if re.search(rf"(?m)^\s*{re.escape(method_name)}\s*\(", parent_block) is None:
+            missing_paths.append(".".join(path))
+
+    assert missing_paths == []
 
 
 def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:

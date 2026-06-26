@@ -1567,6 +1567,10 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "      decide(reviewId: string, payload: InsightReviewDecisionRequest, "
             "options: { idempotencyKey: string }): Promise<InsightReviewPayload>;"
         ),
+        (
+            "      execute(reviewId: string, payload: InsightReviewExecuteActionRequest, "
+            "options: { idempotencyKey: string }): Promise<InsightReviewExecuteActionResult>;"
+        ),
         "    };",
         "  };",
         "  objects: {",

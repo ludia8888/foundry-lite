@@ -922,6 +922,7 @@ export type FoundryLiteGeneratedClient = {
       get(reviewId: string): Promise<InsightReviewPayload>;
       assign(reviewId: string, payload: InsightReviewAssignRequest, options: { idempotencyKey: string }): Promise<InsightReviewPayload>;
       decide(reviewId: string, payload: InsightReviewDecisionRequest, options: { idempotencyKey: string }): Promise<InsightReviewPayload>;
+      execute(reviewId: string, payload: InsightReviewExecuteActionRequest, options: { idempotencyKey: string }): Promise<InsightReviewExecuteActionResult>;
     };
   };
   objects: {
