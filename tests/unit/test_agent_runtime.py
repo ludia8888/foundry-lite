@@ -83,6 +83,27 @@ class _CitingLanguageModel:
         )
 
 
+class _CapturingSchemaLanguageModel:
+    profile_name = "capturing-schema-language-model"
+
+    def __init__(self) -> None:
+        self.response_schema: str | None = None
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        self.response_schema = request.response_schema
+        return ModelResponse(
+            provider="fake",
+            resolved_model_id="",
+            resolved_model_revision="",
+            content="schema captured",
+            finish_reason="stop",
+            input_tokens=2,
+            output_tokens=2,
+            normalized_tool_calls=(),
+            provider_request_id="schema-request",
+        )
+
+
 class _UnexpectedCitationResolver:
     def resolve(self, ctx: RequestContext, request: CitationResolveRequest) -> CitationResolveResult:
         raise AssertionError("citation resolver should not be called")
@@ -139,6 +160,19 @@ def test_agent_runtime_citation_payload_plain_text_and_empty_claims_skip_resolve
     assert structured.answer == "structured answer"
     assert structured.citations == ()
     assert citation_error_payload(RuntimeError("not a citation error")) is None
+
+
+def test_agent_runtime_forwards_output_schema_to_model_request(foundry: Any) -> None:
+    prepare_indexed_demo(foundry)
+    adapter = _CapturingSchemaLanguageModel()
+    foundry._services.model_gateway.language_model_adapter = adapter
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}, "citations": {"type": "array"}}}
+
+    result = foundry.aip.run_agent_payload(payload={**_payload(), "outputSchema": schema}, ctx=_CTX)
+
+    assert result.run_status == "succeeded"
+    assert adapter.response_schema is not None
+    assert json.loads(adapter.response_schema)["properties"]["citations"]["type"] == "array"
 
 
 @pytest.mark.parametrize(

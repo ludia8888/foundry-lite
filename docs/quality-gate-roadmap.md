@@ -1886,6 +1886,23 @@ debugging은 later slices다.
 |---|---|---|
 | Agent runtime citation rendering ratchet | `quality:agent-runtime-citations` | Agent Runtime이 모델이 만든 URL/context id를 그대로 answer citation으로 노출하거나, CitationService 검증 없이 success run을 닫거나, 검증된 citation을 result/API/Operations 장부에 연결하지 못하는 문제 차단 |
 
+### AIP P0r — Agent Citation UI Ratchet
+
+P0r의 현재 slice는 full source preview나 visual trace explorer가 아니라, P0q에서 검증된
+answer citation payload를 운영자가 화면에서 바로 읽을 수 있게 하는 첫 Web Operations
+surface다. Agent Runtime은 `outputSchema`를 prompt에만 넣지 않고 `ModelRequest`의
+`response_schema` field에도 전달한다. local fake model은 schema가 citations를 요구하고 compiled citation mapping이
+있을 때만 structured JSON `answer` + opaque `contextId` citation claim을 반환하므로, Web
+E2E가 실제 API/SDK/Agent Runtime/CitationService 경로를 지나 검증된 citation card와
+Operations `citationCount`를 확인한다.
+
+Rich source previews, inline answer-span anchors, multi-turn citation repair, and visual trace
+debugging은 later slices다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Agent citation UI ratchet | `quality:agent-citation-ui` | Web Operations AIP Agent가 citation을 JSON payload에만 숨겨두거나, output schema를 모델 요청에 전달하지 않거나, 검증되지 않은 citation/text를 unsafe DOM으로 렌더링하거나, 브라우저 사용자 흐름에서 Operations citation summary까지 연결하지 못하는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와

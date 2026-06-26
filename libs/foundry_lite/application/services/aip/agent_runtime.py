@@ -8,6 +8,7 @@ calls are recorded as unsupported instead of executed.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -332,12 +333,19 @@ def _model_request(request: AgentRuntimeRequest, ai_run_id: str, compiled: Compi
     return ModelRequest(
         model_alias=request.model_alias,
         messages=compiled.messages,
+        response_schema=_response_schema(request.output_schema),
         max_output_tokens=request.max_output_tokens,
         request_id=request.agent_run_id,
         ai_run_id=ai_run_id,
         data_classification=request.data_classification,
         region_requirement=request.region_requirement,
     )
+
+
+def _response_schema(output_schema: JsonObject | None) -> str | None:
+    if not output_schema:
+        return None
+    return json.dumps(output_schema, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
 
 
 def _guard_context_budget(request: AgentRuntimeRequest, items: tuple[RetrievedContextItem, ...]) -> None:

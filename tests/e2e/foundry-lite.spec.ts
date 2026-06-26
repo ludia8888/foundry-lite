@@ -27,7 +27,12 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await page.locator("#aipAgentRunBtn").click();
   await expect(page.locator("#aipAgentResult")).toContainText('"runStatus": "succeeded"');
   await expect(page.locator("#aipAgentResult")).toContainText('"answer": "echo: Explain Order O-1001 for the operator."');
+  await expect(page.locator("#aipAgentAnswer")).toHaveText("echo: Explain Order O-1001 for the operator.");
+  await expect(page.locator("#aipAgentCitations")).toContainText("object://Order/O-1001");
+  await expect(page.locator("#aipAgentCitations")).toContainText("ctx-");
+  await expect(page.locator("#aipAgentResult")).toContainText('"navigationRef": "flite-citation-nav.v1.');
   await expect(page.locator("#runResult")).toContainText('"modelCallCount": 1');
+  await expect(page.locator("#runResult")).toContainText('"citationCount": 1');
   await expect((await generatedSdkAgentRun).headers()["x-tenant-id"]).toBe("tenant-demo");
   await expect(page.locator("#datasetResult")).toContainText('"dataset": "clean.orders"');
   await expect(page.locator("#datasetResult")).toContainText('"version_number": 1');

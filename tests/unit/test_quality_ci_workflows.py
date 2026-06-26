@@ -1065,6 +1065,23 @@ def test_agent_runtime_citation_gate_runs_after_agent_runtime_before_ai_evidence
     assert "agent_runtime_rejects_forged_model_citation" in package_json
 
 
+def test_agent_citation_ui_gate_runs_after_agent_runtime_citations_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
+    agent_citation_ui_step = "pnpm --silent quality:agent-citation-ui"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert agent_citation_ui_step in script
+    assert script.index(agent_citation_step) < script.index(agent_citation_ui_step) < script.index(ai_evidence_step)
+    assert '"quality:agent-citation-ui"' in package_json
+    assert "schema_requested_citation_claim" in package_json
+    assert "valid_citation_mapping" in package_json
+    assert "citation_schema_inside_lists" in package_json
+    assert "agent_runtime_forwards_output_schema_to_model_request" in package_json
+    assert "operations_ui_record_dlq_retry_shows_result" in package_json
+
+
 def test_retrieval_orchestrator_gate_runs_after_context_compiler_before_agent_runtime() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

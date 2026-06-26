@@ -4,6 +4,7 @@ set -euo pipefail
 export PYTHONPATH=".:libs:apps/cli:apps/api"
 export FOUNDRY_LITE_HOME="${FOUNDRY_LITE_HOME:-.foundry-lite-e2e}"
 export FOUNDRY_LITE_OTEL_DISABLED="${FOUNDRY_LITE_OTEL_DISABLED:-1}"
+export FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER="${FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER:-e2e-citation-navigation-signer}"
 
 rm -rf "$FOUNDRY_LITE_HOME"
 uv run python - <<'PY' >/tmp/foundry-lite-e2e-seed.json

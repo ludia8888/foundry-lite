@@ -211,6 +211,9 @@ tool_manifest_hash, state_snapshot_hash, policy_snapshot_hash`. Retrieved docs a
   run's manifest + caller may read source + version/hash still match + span relevant. Returns display
   payload + signed navigation ref. Current P0q composes this service into Agent Runtime for structured
   JSON `answer` + `citations` model output, keeping plain-text model output backward compatible.
+  Current P0r carries the requested output schema into the `response_schema` field on `ModelRequest` and renders
+  verified citation cards in the Web Operations AIP Agent panel while preserving the raw JSON payload
+  and Operations AI detail link for audit.
 - **Tool Registry / Tool Broker (§8.8)**: `ToolSpec{tool_id, version, input_schema, output_schema,
 effect∈READ|PROPOSE_WRITE|WRITE, required_permission, confirmation_policy∈NONE|USER|HUMAN_REVIEW,
 object_type_allowlist, property_allowlist, timeout_seconds, max_result_items}`. Broker check order:

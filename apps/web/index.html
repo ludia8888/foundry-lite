@@ -216,6 +216,95 @@
         min-height: 160px;
       }
 
+      .agent-output {
+        display: grid;
+        gap: 12px;
+      }
+
+      .agent-answer {
+        background: #f4f7f2;
+        border: 1px solid var(--line);
+        display: grid;
+        gap: 6px;
+        padding: 12px;
+      }
+
+      .section-kicker {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0;
+        text-transform: uppercase;
+      }
+
+      .agent-answer p {
+        font-size: 14px;
+        line-height: 1.55;
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .citation-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .citation-card {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--accent);
+        display: grid;
+        gap: 8px;
+        padding: 10px 12px;
+      }
+
+      .citation-card header {
+        align-items: center;
+        border: 0;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-start;
+        padding: 0;
+      }
+
+      .citation-index {
+        background: var(--accent);
+        color: #fff;
+        display: inline-grid;
+        font-size: 11px;
+        font-weight: 700;
+        height: 24px;
+        min-width: 24px;
+        place-items: center;
+      }
+
+      .citation-title {
+        font-size: 13px;
+        font-weight: 700;
+        overflow-wrap: anywhere;
+      }
+
+      .citation-meta {
+        display: grid;
+        gap: 6px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .citation-meta span {
+        color: var(--muted);
+        display: grid;
+        font-size: 11px;
+        gap: 3px;
+      }
+
+      .citation-meta strong,
+      .citation-meta code {
+        color: var(--ink);
+        font-size: 12px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+
       .object-card {
         border: 1px solid var(--line);
         display: grid;
@@ -318,7 +407,8 @@
         .grid,
         .row,
         .toolbar,
-        .metric-strip {
+        .metric-strip,
+        .citation-meta {
           grid-template-columns: 1fr;
         }
 
@@ -612,7 +702,17 @@
               <h2>AIP Agent</h2>
             </header>
             <div class="panel-body">
-              <pre id="aipAgentResult" class="result compact">{}</pre>
+              <div class="agent-output">
+                <div class="agent-answer">
+                  <span class="section-kicker">Answer</span>
+                  <p id="aipAgentAnswer">-</p>
+                </div>
+                <div>
+                  <span class="section-kicker">Citations</span>
+                  <div id="aipAgentCitations" class="citation-list"></div>
+                </div>
+                <pre id="aipAgentResult" class="result compact">{}</pre>
+              </div>
             </div>
           </div>
 
@@ -752,6 +852,8 @@
       const aipBuilderGraph = document.querySelector("#aipBuilderGraph");
       const aipBuilderResult = document.querySelector("#aipBuilderResult");
       const aipAgentResult = document.querySelector("#aipAgentResult");
+      const aipAgentAnswer = document.querySelector("#aipAgentAnswer");
+      const aipAgentCitations = document.querySelector("#aipAgentCitations");
       const metricObject = document.querySelector("#metricObject");
       const metricVersion = document.querySelector("#metricVersion");
       const metricStatus = document.querySelector("#metricStatus");
@@ -940,10 +1042,73 @@
       function showAipAgent(value) {
         value = displayValue(value);
         aipAgentResult.textContent = JSON.stringify(value, null, 2);
+        renderAipAgentAnswer(value);
+        renderAipAgentCitations(value.citations);
         metricAipAgentStatus.textContent = value.runStatus ?? "-";
         metricAipAgentContext.textContent = Array.isArray(value.contextIds) ? value.contextIds.length : "-";
         const usage = value.usage ?? {};
         metricAipAgentTokens.textContent = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0) || "-";
+      }
+
+      function renderAipAgentAnswer(value) {
+        aipAgentAnswer.textContent = value.answer ?? "-";
+      }
+
+      function renderAipAgentCitations(rawCitations) {
+        aipAgentCitations.innerHTML = "";
+        const citations = Array.isArray(rawCitations) ? rawCitations : [];
+        if (citations.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "citation-card";
+          empty.textContent = "No citations";
+          aipAgentCitations.appendChild(empty);
+          return;
+        }
+        citations.forEach((citation, index) => {
+          aipAgentCitations.appendChild(citationCard(citation, index));
+        });
+      }
+
+      function citationCard(citation, index) {
+        const card = document.createElement("article");
+        card.className = "citation-card";
+        const header = document.createElement("header");
+        const citationIndex = document.createElement("span");
+        citationIndex.className = "citation-index";
+        citationIndex.textContent = citation.citationOrder ?? index + 1;
+        const title = document.createElement("span");
+        title.className = "citation-title";
+        title.textContent = citation.displayLabel ?? citation.sourceResourceId ?? citation.contextId ?? "Citation";
+        header.append(citationIndex, title);
+        card.append(header, citationMeta(citation));
+        return card;
+      }
+
+      function citationMeta(citation) {
+        const meta = document.createElement("div");
+        meta.className = "citation-meta";
+        meta.append(
+          citationMetaItem("Context", citation.contextId ?? "-"),
+          citationMetaItem("Source", citation.sourceResourceId ?? "-"),
+          citationMetaItem("Hash", shortHash(citation.contentHash)),
+        );
+        return meta;
+      }
+
+      function citationMetaItem(label, value) {
+        const item = document.createElement("span");
+        const labelNode = document.createTextNode(label);
+        const valueNode = document.createElement(label === "Hash" ? "code" : "strong");
+        valueNode.textContent = value;
+        item.append(labelNode, valueNode);
+        return item;
+      }
+
+      function shortHash(value) {
+        if (typeof value !== "string" || value.length <= 24) {
+          return value ?? "-";
+        }
+        return `${value.slice(0, 16)}...${value.slice(-8)}`;
       }
 
       function renderBuilderGraph(blocks, result = {}) {
@@ -1094,7 +1259,7 @@
           securityPartition: `${demoContext.tenantId}:internal`,
           allowedSecurityPartitions: [`${demoContext.tenantId}:internal`],
           stateJson: { objectType: objectType.value, objectId: objectId.value },
-          outputSchema: { type: "object", properties: { answer: { type: "string" } } },
+          outputSchema: agentCitationOutputSchema(),
           dataClassification: "internal",
           maxContextItems: 4,
           maxContextTokens: 1200,
@@ -1102,6 +1267,35 @@
           maxLoopIterations: 1,
           maxOutputTokens: 512,
           policyVersion: "policy-v1",
+        };
+      }
+
+      function agentCitationOutputSchema() {
+        return {
+          type: "object",
+          required: ["answer", "citations"],
+          properties: {
+            answer: { type: "string" },
+            citations: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["contextId", "claimSpan", "citationOrder"],
+                properties: {
+                  contextId: { type: "string" },
+                  claimSpan: {
+                    type: "object",
+                    required: ["start", "end"],
+                    properties: {
+                      start: { type: "integer" },
+                      end: { type: "integer" },
+                    },
+                  },
+                  citationOrder: { type: "integer" },
+                },
+              },
+            },
+          },
         };
       }
 
