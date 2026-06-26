@@ -1101,7 +1101,13 @@ Media/Content Plane (standalone family, not in `activeStack`).
   and the local encrypted adapter: write/delete storage failures are retryable `unavailable`, missing or
   inactive encryption keys are `authentication`, receipt hash mismatches are non-retryable `conflict`, and
   missing tenant-scoped refs are non-retryable `not_found`. The global adapter taxonomy gate now covers this
-  profile, so future prompt artifact adapters cannot skip operator-safe failure metadata.
+  profile, so future prompt artifact adapters cannot skip operator-safe failure metadata. P0x then makes the
+  stored `encryption_key_ref` operational rather than decorative: reads parse the receipt's
+  `secret://name@version`, resolve that exact historical version through `SecretProvider.get_secret(...,
+  version=...)`, and fail closed if the old key is unavailable instead of silently trying the current key.
+  The local `EnvSecretProvider` supports retained prior local keys through
+  `<CURRENT_SECRET_ENV>__VERSION_<NORMALIZED_VERSION>` entries and keeps mismatch/missing-version errors
+  value-redacted.
 
 - **P0d — Context compiler + retrieval context contract (shipped as the first prompt assembly slice):**
   `ContextProvider` and `RetrievedContextItem` now define the authorized retrieval boundary that hands

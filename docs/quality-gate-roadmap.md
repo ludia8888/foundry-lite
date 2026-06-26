@@ -1702,6 +1702,21 @@ artifact ref miss를 non-retryable `not_found`로 선언한다. 전역 `adapter-
 |---|---|---|
 | Prompt artifact failure taxonomy ratchet | `quality:prompt-artifacts`; `quality:adapter-failure-taxonomy` | prompt artifact store 장애가 일반 예외 문자열로만 남아 운영자가 key 문제인지, retry 가능한 storage 문제인지, hash/corruption conflict인지, missing ref인지 구분하지 못하거나, 새 prompt artifact adapter가 operator-safe failure contract 없이 추가되는 문제 차단 |
 
+### AIP P0x — Prompt Artifact Historical Key Version Ratchet
+
+P0x의 현재 slice는 prompt artifact viewer나 cloud KMS integration이 아니라, P0v receipt의
+`encryption_key_ref`가 실제 복호화 경계가 되게 만드는 backend 보안 계약이다. `SecretProvider`
+는 current secret뿐 아니라 `version`을 명시한 조회를 지원하고, `LocalPromptArtifactStore` read
+path는 receipt의 `secret://name@version`을 파싱해 정확히 그 버전을 요청한다. 현재 키가 회전되어도
+보관된 old key version이 있으면 과거 artifact를 읽을 수 있고, old key가 없으면 current key로
+조용히 재시도하지 않고 fail closed된다. Local `EnvSecretProvider`는
+`<CURRENT_SECRET_ENV>__VERSION_<NORMALIZED_VERSION>` 형식으로 retained historical key를 제공하며,
+missing/mismatched version 에러는 secret value를 노출하지 않는다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Prompt artifact key-version ratchet | `quality:prompt-artifacts`; `uv run pytest tests/contracts/test_secret_provider_contract.py tests/contracts/test_prompt_artifact_store_contract.py -q` | prompt artifact receipt에 key version을 저장해도 read path가 현재 key만 사용해 rotation 뒤 과거 prompt audit을 잃거나, unavailable old key를 current key fallback으로 가려 integrity/audit 원인을 흐리는 문제 차단 |
+
 ### AIP P0d — Context Compiler Ratchet
 
 P0d의 현재 slice는 full Agent Runtime이나 trace UI가 아니라 모델 호출 직전의 prompt assembly

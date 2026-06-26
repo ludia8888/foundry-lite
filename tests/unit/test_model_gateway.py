@@ -92,7 +92,9 @@ class _RecordingSecretProvider:
 
         return AdapterFailureContract(adapter_profile=self.profile_name, modes=())
 
-    def get_secret(self, name: str) -> SecretValue:
+    def get_secret(self, name: str, *, version: str | None = None) -> SecretValue:
+        if version is not None:
+            raise RuntimeError(f"unexpected secret version: {version}")
         self.requested_names.append(name)
         return SecretValue(name=name, version="v9", value="super-secret-token")
 

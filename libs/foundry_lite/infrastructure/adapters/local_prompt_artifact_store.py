@@ -65,7 +65,7 @@ class LocalPromptArtifactStore:
                     "read_prompt_artifact",
                     "authentication",
                     True,
-                    "Prompt artifact encryption key is missing or no longer active.",
+                    "Prompt artifact encryption key is missing or the requested version is unavailable.",
                 ),
                 AdapterFailureMode(
                     "read_prompt_artifact",
@@ -89,7 +89,7 @@ class LocalPromptArtifactStore:
         )
 
     def write_prompt_artifact(self, request: PromptArtifactWrite) -> PromptArtifactBlob:
-        key = self._artifact_key()
+        key = self._current_artifact_key()
         ciphertext = Fernet(key.fernet_key).encrypt(request.plaintext.encode("utf-8"))
         artifact_path = self._path_for_parts(request.tenant_id, request.ai_run_id, request.artifact_id)
         artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,9 +104,7 @@ class LocalPromptArtifactStore:
         )
 
     def read_prompt_artifact(self, request: PromptArtifactRead) -> str:
-        key = self._artifact_key()
-        if key.key_ref != request.encryption_key_ref:
-            raise PromptArtifactStoreError("prompt artifact encryption key version is no longer active")
+        key = self._artifact_key_for_ref(request.encryption_key_ref)
         artifact_path = self._path_for_ref(request.artifact_ref, request.tenant_id)
         try:
             ciphertext = artifact_path.read_bytes()
@@ -121,7 +119,7 @@ class LocalPromptArtifactStore:
         artifact_path = self._path_for_ref(request.artifact_ref, request.tenant_id)
         artifact_path.unlink(missing_ok=True)
 
-    def _artifact_key(self) -> _ArtifactKey:
+    def _current_artifact_key(self) -> _ArtifactKey:
         try:
             secret = self._secret_provider.get_secret(self._key_name)
             return _ArtifactKey(
@@ -132,6 +130,26 @@ class LocalPromptArtifactStore:
             if not self._allow_local_dev_fallback:
                 raise
             return _local_dev_key(self._root, self._key_name)
+
+    def _artifact_key_for_ref(self, key_ref: str) -> _ArtifactKey:
+        if key_ref.startswith("local-dev://"):
+            if not self._allow_local_dev_fallback:
+                raise PromptArtifactStoreError("local-dev prompt artifact key fallback is not enabled")
+            key = _local_dev_key(self._root, self._key_name)
+            if key.key_ref != key_ref:
+                raise PromptArtifactStoreError("prompt artifact local-dev key reference does not match this store")
+            return key
+        name, version = _parse_secret_key_ref(key_ref)
+        if name != self._key_name:
+            raise PromptArtifactStoreError("prompt artifact encryption key name is not supported by this store")
+        try:
+            secret = self._secret_provider.get_secret(name, version=version)
+        except Exception as exc:
+            raise PromptArtifactStoreError("prompt artifact encryption key version is unavailable") from exc
+        key = _ArtifactKey(key_ref=f"secret://{secret.name}@{secret.version}", fernet_key=_fernet_key(secret.value))
+        if key.key_ref != key_ref:
+            raise PromptArtifactStoreError("prompt artifact encryption key version does not match receipt")
+        return key
 
     def _ref_for_parts(self, tenant_id: str, ai_run_id: str, artifact_id: str) -> str:
         segments = [_safe_segment(tenant_id), _safe_segment(ai_run_id), f"{_safe_segment(artifact_id)}.fernet"]
@@ -160,6 +178,16 @@ def _local_dev_key(root: Path, secret_name: str) -> _ArtifactKey:
         key_ref=f"local-dev://{secret_name}@sha256:{digest[:12]}",
         fernet_key=_fernet_key(raw),
     )
+
+
+def _parse_secret_key_ref(key_ref: str) -> tuple[str, str]:
+    prefix = "secret://"
+    if not key_ref.startswith(prefix) or "@" not in key_ref:
+        raise PromptArtifactStoreError("unsupported prompt artifact encryption key ref")
+    name, version = key_ref.removeprefix(prefix).split("@", 1)
+    if not name or not version:
+        raise PromptArtifactStoreError("prompt artifact encryption key ref is incomplete")
+    return name, version
 
 
 def _fernet_key(value: str) -> bytes:

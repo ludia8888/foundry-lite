@@ -223,7 +223,10 @@ content_hash, relevance_score, retrieval_method, security_partition, token_estim
   `FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY=true`. Operations exposes only refs/hashes/retention/export
   marking. Current P0w adds the `PromptArtifactStore` adapter failure contract so write/read/delete,
   missing or inactive keys, corrupt/hash-mismatched artifacts, and missing tenant-scoped refs have
-  operator-safe retryability/kind metadata.
+  operator-safe retryability/kind metadata. Current P0x makes the receipt `encryption_key_ref` a real
+  historical key resolver: prompt artifact reads request the exact `secret://name@version` recorded at
+  write time, and the local `EnvSecretProvider` can serve prior versions from
+  `<CURRENT_SECRET_ENV>__VERSION_<NORMALIZED_VERSION>` while still redacting secret values in errors.
 - **Citation Service (§8.7)**: model is given **opaque context IDs**, never source URLs; service maps
   `ctx_id → media item version / page / content unit / hash` and verifies the context ID is in this
   run's manifest + caller may read source + version/hash still match + span relevant. Returns display

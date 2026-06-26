@@ -37,8 +37,10 @@ class _StaticSecretProvider:
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(adapter_profile=self.profile_name, modes=())
 
-    def get_secret(self, name: str) -> SecretValue:
+    def get_secret(self, name: str, *, version: str | None = None) -> SecretValue:
         assert name == self.secret.name
+        if version is not None and version != self.secret.version:
+            raise RuntimeError(f"missing secret version: {version}")
         return self.secret
 
 
