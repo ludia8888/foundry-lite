@@ -376,7 +376,7 @@ def _tool_call_record() -> AiToolCallRecord:
         tool_id="create-action-proposal",
         tool_version="v1",
         arguments_hash="sha256:tool-args",
-        effect="propose",
+        effect="PROPOSE_WRITE",
         authorization_decision="allowed",
         confirmation_policy="human_required",
         status="succeeded",
