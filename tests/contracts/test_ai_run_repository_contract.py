@@ -191,6 +191,24 @@ def _seed_ledger(repository: SqlAlchemyAiRunRepository, transaction: Any) -> tup
     repository.record_model_call(transaction=transaction, record=_model_call_record())
     repository.record_context_item(transaction=transaction, record=_context_item_record())
     repository.record_tool_call(transaction=transaction, record=_tool_call_record())
+    linked_tool = repository.link_tool_call_to_action_run(
+        transaction=transaction,
+        tenant_id=_TENANT,
+        ai_run_id="ai-run-1",
+        tool_call_id="tool-call-1",
+        action_run_id="action-run-1",
+    )
+    assert linked_tool is not None and linked_tool["linked_action_run_id"] == "action-run-1"
+    assert (
+        repository.link_tool_call_to_action_run(
+            transaction=transaction,
+            tenant_id="tenant-test",
+            ai_run_id="ai-run-1",
+            tool_call_id="tool-call-1",
+            action_run_id="action-run-2",
+        )
+        is None
+    )
     repository.record_citation(transaction=transaction, record=_citation_record())
     repository.record_usage(transaction=transaction, record=_usage_record())
     repository.record_prompt_artifact(transaction=transaction, record=_prompt_artifact_record())
@@ -214,6 +232,7 @@ def _assert_ledger_rows(ledger: Any) -> None:
     assert ledger["modelCalls"][0]["request_hash"] == "sha256:model-request"
     assert ledger["contextItems"][0]["security_partition"] == "tenant-demo:internal"
     assert ledger["toolCalls"][0]["authorization_decision"] == "allowed"
+    assert ledger["toolCalls"][0]["linked_action_run_id"] == "action-run-1"
     assert ledger["citations"][0]["claim_span"] == {"start": 0, "end": 18}
     assert ledger["usage"][0]["estimated_cost"] == 0.0123
     assert ledger["promptArtifacts"][0]["artifact_kind"] == "compiled_prompt"
@@ -362,7 +381,7 @@ def _tool_call_record() -> AiToolCallRecord:
         confirmation_policy="human_required",
         status="succeeded",
         result_hash="sha256:tool-result",
-        linked_action_run_id="action-run-1",
+        linked_action_run_id=None,
         started_at="2026-06-25T00:00:04Z",
         completed_at="2026-06-25T00:00:05Z",
         error_json=None,

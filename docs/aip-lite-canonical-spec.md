@@ -274,7 +274,11 @@ originating_ai_run_id, proposal_fingerprint, policy_version, expires_at}`. Finge
   permission, action enabled, current object version, source evidence access, restore/write traffic
   gate, policy still compatible. **`ApprovalExecutionService` performs execution** (InsightReviewService
   does not call ActionService directly — separate approval event from execution ledger). Action
-  idempotency key = proposal fingerprint.
+  idempotency key = proposal fingerprint. Current P1b exposes the approved-review execution path through
+  `POST /api/insights/reviews/{review_id}/execute-action` and generated
+  `client.insights.reviews.execute(...)`, requires an API idempotency key, and back-links an
+  agent-originated `action.propose` tool call by filling `ai_tool_calls.linked_action_run_id` after the
+  approved ActionService run succeeds.
 - **Logic Runtime (§8.11)**: blocks Input/RetrieveObject/QueryObjects/TraverseLinks/RetrieveContent/
   CallLLM/CallFunction/Condition/Map/Reduce/UpdateState/CreateActionProposal/ApplyAction/HumanApproval/
   Output. Temporal only for long-running (human approval, batch, external side-effect compensation,

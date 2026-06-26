@@ -187,6 +187,19 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "insights.reviews.execute",
+      "route": "POST /api/insights/reviews/{review_id}/execute-action",
+      "productArea": "insight-action-workspace",
+      "sdkSurface": "insights.reviews.execute",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Approved AI action proposal execution requires Idempotency-Key, rechecks the exact proposal fingerprint, executes through ApprovalExecutionService/ActionService, links review to action run, and back-links the originating AI action.propose tool call to the action run.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "objects.generic.get",
       "route": "GET /api/objects/{object_type}/{object_id}",
       "productArea": "object-explorer",

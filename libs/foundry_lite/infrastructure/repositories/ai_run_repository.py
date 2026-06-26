@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, insert, select
+from sqlalchemy import and_, insert, or_, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
@@ -121,6 +121,36 @@ class SqlAlchemyAiRunRepository:
         transaction.execute(
             insert(db.ai_tool_calls).values({"tenant_id": record.tenant_id, **_tool_call_values(record)})
         )
+
+    def link_tool_call_to_action_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ai_run_id: str,
+        tool_call_id: str,
+        action_run_id: str,
+    ) -> AiLedgerRow | None:
+        transaction.execute(
+            update(db.ai_tool_calls)
+            .where(
+                and_(
+                    db.ai_tool_calls.c.tenant_id == tenant_id,
+                    db.ai_tool_calls.c.ai_run_id == ai_run_id,
+                    db.ai_tool_calls.c.id == tool_call_id,
+                    db.ai_tool_calls.c.effect == "PROPOSE_WRITE",
+                    or_(
+                        db.ai_tool_calls.c.linked_action_run_id.is_(None),
+                        db.ai_tool_calls.c.linked_action_run_id == action_run_id,
+                    ),
+                )
+            )
+            .values(linked_action_run_id=action_run_id)
+        )
+        row = _one_by_id(transaction, db.ai_tool_calls, tenant_id, tool_call_id)
+        if row is not None and row["linked_action_run_id"] == action_run_id:
+            return row
+        return None
 
     def record_citation(self, *, transaction: Any, record: AiCitationRecord) -> None:
         transaction.execute(insert(db.ai_citations).values({"tenant_id": record.tenant_id, **_citation_values(record)}))

@@ -114,7 +114,7 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
         system=("health",),
         datasets=("list", "versions", "preview", "inspect"),
         ontology=("catalog", "validate"),
-        insights=(OperationClientSurface("reviews", ("list", "create", "get", "assign", "decide")),),
+        insights=(OperationClientSurface("reviews", ("list", "create", "get", "assign", "decide", "execute")),),
         objects=tuple(ObjectClientSurface(item.api_name, item.api_name, ("get", "query")) for item in ontology.objects),
         actions=tuple(
             ActionClientSurface(item.api_name, item.target, f"{item.api_name}ApplyRequest", ("apply",))
@@ -607,6 +607,16 @@ def render_typescript(ontology: OntologyDef) -> str:
         "export type InsightReviewDecisionRequest = {",
         "  decision: InsightReviewDecision;",
         "  comment?: string | null;",
+        "};",
+        "export type InsightReviewExecuteActionRequest = {",
+        "  expectedProposalFingerprint: string;",
+        "};",
+        "export type InsightReviewExecuteActionResult = {",
+        "  reviewId: string;",
+        "  proposalFingerprint: string;",
+        "  actionRunId: string;",
+        "  actionResponse: Record<string, unknown>;",
+        "  review: InsightReviewPayload;",
         "};",
         "export type InsightReviewPayload = {",
         "  id: string;",
@@ -1358,6 +1368,17 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         "            body: JSON.stringify(payload),",
         "          },",
         "        ),",
+        "        execute: (reviewId, payload, options) => request(",
+        "          `/api/insights/reviews/${encodeURIComponent(reviewId)}/execute-action`,",
+        "          {",
+        '            method: "POST",',
+        (
+            '            headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.execute") },'
+        ),
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
         "      },",
         "    },",
         "    objects: {",
@@ -1987,6 +2008,22 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         (
             '              headers: { "Content-Type": "application/json", "Idempotency-Key": '
             'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.decide") },'
+        ),
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "        execute: (",
+        "          reviewId: string,",
+        "          payload: InsightReviewExecuteActionRequest,",
+        "          options: { idempotencyKey: string },",
+        "        ) =>",
+        "          request<InsightReviewExecuteActionResult>(",
+        "            `/api/insights/reviews/${encodeURIComponent(reviewId)}/execute-action`,",
+        "            {",
+        '              method: "POST",',
+        (
+            '              headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.execute") },'
         ),
         "              body: JSON.stringify(payload),",
         "            },",

@@ -9,22 +9,36 @@ traffic gate.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from datetime import datetime
 from typing import Protocol, cast
 
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRow
 from foundry_lite.application.primitives import _now
-from foundry_lite.application.services.aip.action_proposal import compute_action_proposal_fingerprint
+from foundry_lite.application.services.aip.approval_execution_contracts import (
+    ApprovalExecutionError,
+    ApprovalExecutionRequest,
+    ApprovalExecutionResult,
+    JsonObject,
+    PreparedExecution,
+    approved_pending_proposal,
+    evidence_refs,
+    prepared_execution,
+    require_matching_fingerprint,
+    require_not_expired,
+    require_originating_tool_call,
+    require_recomputed_fingerprint,
+    required_row_text,
+    required_text,
+    tool_call_rows,
+    validate_request,
+)
 from foundry_lite.application.services.aip.source_permissions import source_permission_for_type
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.insight_review_payloads import review_payload
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
 
-JsonObject = Mapping[str, object]
-_PROPOSAL_TYPE = "ontology_action"
+_PreparedExecution = PreparedExecution
 
 
 class _ActionRunner(Protocol):
@@ -110,43 +124,6 @@ class _RuntimeBoundary(Protocol):
     ) -> Mapping[str, object]: ...
 
 
-@dataclass(frozen=True)
-class ApprovalExecutionRequest:
-    review_id: str
-    expected_proposal_fingerprint: str
-
-
-@dataclass(frozen=True)
-class ApprovalExecutionResult:
-    review_id: str
-    proposal_fingerprint: str
-    action_run_id: str
-    action_response: Mapping[str, object]
-    review_payload: Mapping[str, object]
-
-
-@dataclass
-class ApprovalExecutionError(Exception):
-    reason: str
-    detail: str
-
-    def __post_init__(self) -> None:
-        Exception.__init__(self, self.detail)
-
-
-@dataclass(frozen=True)
-class _PreparedExecution:
-    review_id: str
-    proposal_fingerprint: str
-    originating_ai_run_id: str
-    action_type: str
-    target_object_type: str
-    target_object_id: str
-    expected_object_version: int
-    parameters: JsonObject
-    policy_version: str
-
-
 class ApprovalExecutionService(CoreService):
     """Execute approved ontology action proposals exactly once."""
 
@@ -158,7 +135,7 @@ class ApprovalExecutionService(CoreService):
     runtime_service: _RuntimeBoundary
 
     def execute(self, ctx: RequestContext, request: ApprovalExecutionRequest) -> ApprovalExecutionResult:
-        _validate_request(request)
+        validate_request(request)
         self._require_reviewer(ctx, request.review_id)
         existing = self._existing_executed_result(ctx, request)
         if existing is not None:
@@ -186,8 +163,8 @@ class ApprovalExecutionService(CoreService):
             row = self._review_row(transaction, ctx, request.review_id)
             if row["execution_status"] != "executed":
                 return None
-            _require_matching_fingerprint(row, request.expected_proposal_fingerprint)
-            action_run_id = _required_row_text(row, "approved_action_run_id")
+            require_matching_fingerprint(row, request.expected_proposal_fingerprint)
+            action_run_id = required_row_text(row, "approved_action_run_id")
         return ApprovalExecutionResult(
             review_id=row["id"],
             proposal_fingerprint=request.expected_proposal_fingerprint,
@@ -199,9 +176,9 @@ class ApprovalExecutionService(CoreService):
     def _prepare_execution(self, ctx: RequestContext, request: ApprovalExecutionRequest) -> _PreparedExecution:
         with self.engine.begin() as transaction:
             row = self._review_row(transaction, ctx, request.review_id)
-            proposal = _approved_pending_proposal(row)
-            _require_matching_fingerprint(row, request.expected_proposal_fingerprint)
-            prepared = _prepared_execution(row, proposal)
+            proposal = approved_pending_proposal(row)
+            require_matching_fingerprint(row, request.expected_proposal_fingerprint)
+            prepared = prepared_execution(row, proposal)
             self._recheck_proposal(transaction, ctx, prepared, proposal)
             self._claim_execution(transaction, ctx, prepared.review_id)
         return prepared
@@ -215,12 +192,13 @@ class ApprovalExecutionService(CoreService):
     ) -> None:
         self._require_action_permission(ctx, prepared.action_type)
         self._require_write_open(ctx, prepared.review_id)
-        self._require_evidence_access(ctx, _evidence_refs(proposal))
+        self._require_evidence_access(ctx, evidence_refs(proposal))
         ledger = self._ledger(transaction, ctx, prepared.originating_ai_run_id)
+        require_originating_tool_call(prepared, tool_call_rows(ledger))
         action = self._action_type(transaction, ctx, prepared)
         self._target_record(transaction, ctx, action, prepared)
-        _require_not_expired(proposal)
-        _require_recomputed_fingerprint(prepared, _evidence_refs(proposal), cast(JsonObject, ledger["run"]))
+        require_not_expired(proposal)
+        require_recomputed_fingerprint(prepared, evidence_refs(proposal), cast(JsonObject, ledger["run"]))
 
     def _finish_execution(
         self,
@@ -228,7 +206,7 @@ class ApprovalExecutionService(CoreService):
         prepared: _PreparedExecution,
         response: Mapping[str, object],
     ) -> ApprovalExecutionResult:
-        action_run_id = _required_text(response, "actionRunId")
+        action_run_id = required_text(response, "actionRunId")
         with self.engine.begin() as transaction:
             row = self.insight_review_repository.mark_execution_succeeded(
                 transaction=transaction,
@@ -239,6 +217,7 @@ class ApprovalExecutionService(CoreService):
             )
             if row is None:
                 raise ConflictDetected("approval execution state changed concurrently")
+            self._link_originating_tool_call(transaction, ctx, prepared, action_run_id)
             self._record_execution_evidence(transaction, ctx, prepared, action_run_id, response)
         return ApprovalExecutionResult(
             review_id=prepared.review_id,
@@ -301,7 +280,7 @@ class ApprovalExecutionService(CoreService):
             ctx,
             prepared.target_object_type,
             prepared.target_object_id,
-            _required_text(action, "target_object_type_id"),
+            required_text(action, "target_object_type_id"),
         )
         if record is None:
             raise ApprovalExecutionError("target_not_found", "approved proposal target object was not found")
@@ -327,7 +306,7 @@ class ApprovalExecutionService(CoreService):
 
     def _require_evidence_access(self, ctx: RequestContext, evidence_refs: Sequence[JsonObject]) -> None:
         for ref in evidence_refs:
-            permission = source_permission_for_type(_required_text(ref, "sourceResourceType"))
+            permission = source_permission_for_type(required_text(ref, "sourceResourceType"))
             try:
                 self.policy.require(ctx, permission)
             except PermissionDenied as exc:
@@ -372,6 +351,28 @@ class ApprovalExecutionService(CoreService):
             correlation_id=action_run_id,
         )
 
+    def _link_originating_tool_call(
+        self,
+        transaction: TransactionContext,
+        ctx: RequestContext,
+        prepared: _PreparedExecution,
+        action_run_id: str,
+    ) -> None:
+        if prepared.originating_tool_call_id is None:
+            return
+        linked = self.ai_run_repository.link_tool_call_to_action_run(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            ai_run_id=prepared.originating_ai_run_id,
+            tool_call_id=prepared.originating_tool_call_id,
+            action_run_id=action_run_id,
+        )
+        if linked is None:
+            raise ApprovalExecutionError(
+                "originating_tool_call_not_found",
+                "approved proposal tool-call ledger row was not found",
+            )
+
     def _mark_failed(self, ctx: RequestContext, review_id: str, exc: Exception) -> None:
         with self.engine.begin() as transaction:
             self.insight_review_repository.mark_execution_failed(
@@ -381,117 +382,3 @@ class ApprovalExecutionService(CoreService):
                 error=self.runtime_service._error_payload(exc, ctx, run_id=review_id, correlation_id=ctx.request_id),
                 updated_at=_now(),
             )
-
-
-def _validate_request(request: ApprovalExecutionRequest) -> None:
-    if not request.review_id:
-        raise ApprovalExecutionError("missing_field", "review_id is required")
-    if not request.expected_proposal_fingerprint.startswith("sha256:"):
-        raise ApprovalExecutionError("missing_field", "expected proposal fingerprint must be sha256-prefixed")
-
-
-def _approved_pending_proposal(row: InsightReviewRow) -> Mapping[str, object]:
-    if row["status"] != "approved":
-        raise ApprovalExecutionError("review_not_approved", "insight review must be approved before execution")
-    if row["execution_status"] not in {None, "pending_review"}:
-        raise ConflictDetected(
-            "approval execution is already in progress or terminal",
-            details={"review_id": row["id"]},
-        )
-    if row["proposal_type"] != _PROPOSAL_TYPE or row["action_proposal"] is None:
-        raise ApprovalExecutionError("not_action_proposal", "insight review does not contain an action proposal")
-    return row["action_proposal"]
-
-
-def _require_matching_fingerprint(row: InsightReviewRow, expected: str) -> None:
-    stored = row["proposal_fingerprint"]
-    proposal = row["action_proposal"] or {}
-    proposal_fingerprint = proposal.get("proposalFingerprint")
-    if stored != expected or proposal_fingerprint != expected:
-        raise ApprovalExecutionError("fingerprint_mismatch", "approved proposal fingerprint does not match")
-
-
-def _prepared_execution(row: InsightReviewRow, proposal: Mapping[str, object]) -> _PreparedExecution:
-    policy_version = _required_text(proposal, "policyVersion")
-    if row["approval_policy_version"] != policy_version:
-        raise ApprovalExecutionError("fingerprint_mismatch", "approval policy version does not match proposal")
-    return _PreparedExecution(
-        review_id=row["id"],
-        proposal_fingerprint=_required_row_text(row, "proposal_fingerprint"),
-        originating_ai_run_id=_required_row_text(row, "originating_ai_run_id"),
-        action_type=_required_text(proposal, "actionType"),
-        target_object_type=_required_text(proposal, "targetObjectType"),
-        target_object_id=_required_text(proposal, "targetObjectId"),
-        expected_object_version=_required_int(proposal, "expectedObjectVersion"),
-        parameters=_required_mapping(proposal, "parameters"),
-        policy_version=policy_version,
-    )
-
-
-def _require_recomputed_fingerprint(
-    prepared: _PreparedExecution,
-    evidence_refs: Sequence[JsonObject],
-    run: Mapping[str, object],
-) -> None:
-    fingerprint = compute_action_proposal_fingerprint(
-        action_type=prepared.action_type,
-        target_object_type=prepared.target_object_type,
-        target_object_id=prepared.target_object_id,
-        expected_object_version=prepared.expected_object_version,
-        parameters=prepared.parameters,
-        evidence_refs=evidence_refs,
-        agent_version_id=_required_text(run, "agent_version_id"),
-        policy_version=prepared.policy_version,
-    )
-    if fingerprint != prepared.proposal_fingerprint:
-        raise ApprovalExecutionError("fingerprint_mismatch", "approved proposal was changed after review")
-
-
-def _require_not_expired(proposal: Mapping[str, object]) -> None:
-    expires_at = _required_text(proposal, "expiresAt")
-    if _parse_instant(expires_at) <= _parse_instant(_now()):
-        raise ApprovalExecutionError("review_expired", "approved proposal has expired")
-
-
-def _evidence_refs(proposal: Mapping[str, object]) -> list[JsonObject]:
-    refs = proposal.get("evidenceRefs")
-    if not isinstance(refs, list) or not refs:
-        raise ApprovalExecutionError("missing_evidence", "approved proposal requires evidence references")
-    if not all(isinstance(ref, dict) for ref in refs):
-        raise ApprovalExecutionError("invalid_proposal", "proposal evidence references must be objects")
-    return [cast(JsonObject, ref) for ref in refs]
-
-
-def _required_row_text(row: InsightReviewRow, key: str) -> str:
-    value = row.get(key)
-    if not isinstance(value, str) or not value:
-        raise ApprovalExecutionError("invalid_review", f"review is missing {key}")
-    return value
-
-
-def _required_text(payload: Mapping[str, object], key: str) -> str:
-    value = payload.get(key)
-    if not isinstance(value, str) or not value:
-        raise ApprovalExecutionError("invalid_proposal", f"proposal is missing {key}")
-    return value
-
-
-def _required_int(payload: Mapping[str, object], key: str) -> int:
-    value = payload.get(key)
-    if not isinstance(value, int):
-        raise ApprovalExecutionError("invalid_proposal", f"proposal is missing integer {key}")
-    return value
-
-
-def _required_mapping(payload: Mapping[str, object], key: str) -> JsonObject:
-    value = payload.get(key)
-    if not isinstance(value, Mapping):
-        raise ApprovalExecutionError("invalid_proposal", f"proposal is missing {key}")
-    return value
-
-
-def _parse_instant(value: str) -> datetime:
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ApprovalExecutionError("invalid_expiration", "proposal expiration is not a valid ISO timestamp") from exc

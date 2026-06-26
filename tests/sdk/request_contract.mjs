@@ -474,6 +474,26 @@ assertMissingIdempotencyFailFast(
   () => client.insights.reviews.decide("review/1", { decision: "approved", comment: "Evidence checked" }),
   "insights.reviews.decide",
 );
+await expectSdkCall(
+  "insights.reviews.execute",
+  () =>
+    client.insights.reviews.execute(
+      "review/1",
+      { expectedProposalFingerprint: "sha256:proposal" },
+      { idempotencyKey: "insight-execute-key" },
+    ),
+  {
+    path: "/api/insights/reviews/review%2F1/execute-action",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "insight-execute-key" },
+    body: { expectedProposalFingerprint: "sha256:proposal" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "insights.reviews.execute",
+  () => client.insights.reviews.execute("review/1", { expectedProposalFingerprint: "sha256:proposal" }),
+  "insights.reviews.execute",
+);
 await expectSdkCall("objects.generic.get", () => client.objects.generic.get("Order Item", "order/1", { explain: true }), {
   path: "/api/objects/Order%20Item/order%2F1?explain=true",
 });

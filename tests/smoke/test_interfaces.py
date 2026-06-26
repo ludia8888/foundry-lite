@@ -1195,6 +1195,68 @@ def test_api_aip_agent_run_proposes_action_for_human_review(foundry, monkeypatch
     assert "Inventory confirmed" not in json.dumps(detail_body, sort_keys=True)
 
 
+def test_api_aip_agent_run_proposal_can_be_approved_and_executed(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    foundry._services.model_gateway.language_model_adapter = _ActionProposalLanguageModel(
+        expected_object_version=int(order["objectVersion"])
+    )
+    headers = {
+        "X-Tenant-ID": "tenant-demo",
+        "X-User-ID": "ops-user",
+        "X-Roles": "admin,data_engineer,ops_manager",
+    }
+    client = TestClient(app)
+
+    run = client.post(
+        "/api/aip/agent/run",
+        headers=headers,
+        json={
+            "agentRunId": "agent-api-action-execution-1",
+            "agentVersionId": "agent.order-ops.v1",
+            "modelAlias": "default-completion",
+            "promptVersionId": "prompt-order-copilot@v1",
+            "userMessage": "Propose approval for Order O-1001 if evidence supports it.",
+            "agentInstruction": "Create action proposals for human review; do not execute writes.",
+            "securityPartition": "tenant-demo:internal",
+            "allowedSecurityPartitions": ["tenant-demo:internal"],
+            "stateJson": {"objectType": "Order", "objectId": "O-1001"},
+            "modelAllowedClassifications": ["public", "internal"],
+            "maxModelCalls": 2,
+            "maxLoopIterations": 2,
+            "maxToolCalls": 1,
+            "toolManifest": [_agent_action_proposal_tool_spec_payload()],
+            "agentAllowedTools": ["action.propose"],
+            "agentAllowedActions": ["ApproveOrder"],
+        },
+    )
+    review = client.get("/api/insights/reviews?status=pending", headers=headers).json()["items"][0]
+    approved = client.post(
+        f"/api/insights/reviews/{review['id']}/decision",
+        headers={**headers, "Idempotency-Key": "approve-agent-proposal-api"},
+        json={"decision": "approved", "comment": "Evidence checked"},
+    )
+    executed = client.post(
+        f"/api/insights/reviews/{review['id']}/execute-action",
+        headers={**headers, "Idempotency-Key": "execute-agent-proposal-api"},
+        json={"expectedProposalFingerprint": review["proposalFingerprint"]},
+    )
+
+    assert run.status_code == 200
+    assert approved.status_code == 200
+    assert executed.status_code == 200
+    executed_body = executed.json()
+    detail_body = client.get(f"/api/operations/runs/ai/{run.json()['aiRunId']}", headers=headers).json()
+    updated_order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    assert executed_body["review"]["executionStatus"] == "executed"
+    assert executed_body["review"]["approvedActionRunId"] == executed_body["actionRunId"]
+    assert detail_body["ai"]["toolCalls"][0]["linked_action_run_id"] == executed_body["actionRunId"]
+    assert detail_body["ai"]["toolCalls"][0]["result_hash"] == review["proposalFingerprint"]
+    assert updated_order["objectVersion"] == 2
+    assert _table_count(foundry.engine, db.action_runs) == 1
+
+
 class _ToolLoopLanguageModel:
     profile_name = "smoke-tool-loop-language-model"
 
@@ -1262,7 +1324,7 @@ class _ActionProposalLanguageModel:
                             "expectedObjectVersion": self._expected_object_version,
                             "parameters": {"reason": "Inventory confirmed"},
                             "evidenceContextIds": [_first_agent_context_id(request)],
-                            "expiresAt": "2026-06-26T23:59:00Z",
+                            "expiresAt": "2999-01-01T00:00:00+00:00",
                             "claimText": "Approve O-1001 based on selected AI evidence.",
                         },
                         sort_keys=True,

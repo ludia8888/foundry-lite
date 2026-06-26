@@ -1771,6 +1771,24 @@ provider body를 노출하지 않는다.
 |---|---|---|
 | Agent action proposal tool ratchet | `quality:agent-action-proposal-tool` | 모델이 action proposal을 우회해 직접 WRITE tool을 실행하거나, `action.propose`가 human review 없이 action side effect를 만들거나, proposal parameters가 일반 Operations AI detail에 노출되거나, API/SDK가 agent action allowlist 없이 proposal tool을 허용하는 문제 차단 |
 
+### AIP P1b — Agent Approval Execution API Ratchet
+
+P1b의 현재 slice는 visual approval workspace나 Temporal-backed human task가 아니라, P1a가 만든
+AI-originated action proposal을 사람이 approve한 뒤 named API/SDK로 실행하는 backend/API 계약이다.
+`POST /api/insights/reviews/{review_id}/execute-action`와 generated
+`client.insights.reviews.execute(...)`는 `Idempotency-Key`와 expected proposal fingerprint를 요구하고,
+실행은 계속 `ApprovalExecutionService`가 소유한다.
+
+승인 실행은 ActionService 호출 전 originating AI run ledger에서 `originating_tool_call_id`가 실제
+`action.propose` `PROPOSE_WRITE` tool call인지, 그리고 tool call result hash가 proposal fingerprint와
+같은지 다시 확인한다. 성공하면 review는 `executed`/`approved_action_run_id`로 닫히고,
+`ai_tool_calls.linked_action_run_id`에도 같은 action run id가 채워져 Operations가 AI proposal에서 실제
+Action run까지 추적할 수 있다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Agent approval execution API ratchet | `quality:agent-approval-execution-api` | 사람이 승인한 AI proposal이 raw API path 없이 실행되지 못하거나, expected fingerprint/idempotency 없이 실행되거나, originating tool-call ledger와 action run 사이 back-link가 끊기거나, missing/forged originating tool call이 ActionService 호출 뒤에야 발견되는 문제 차단 |
+
 ### AIP P0d — Context Compiler Ratchet
 
 P0d의 현재 slice는 full Agent Runtime이나 trace UI가 아니라 모델 호출 직전의 prompt assembly
@@ -2083,7 +2101,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 46개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 47개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 12개 SDK helper의 retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key

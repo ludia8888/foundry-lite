@@ -6,8 +6,17 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
-from foundry_lite.application.ports.ai_run_repository import AiContextItemRecord, AiExecutionRunRecord, AiSessionRecord
-from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionError
+from foundry_lite.application.ports.ai_run_repository import (
+    AiContextItemRecord,
+    AiExecutionRunRecord,
+    AiSessionRecord,
+    AiToolCallRecord,
+)
+from foundry_lite.application.services.aip.approval_execution_contracts import (
+    ApprovalExecutionError,
+    ApprovalExecutionRequest,
+    validate_request,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied
 from foundry_lite.infrastructure import schema as db
@@ -31,6 +40,20 @@ _VIEWER_CTX = RequestContext(
 
 
 def test_approval_execution_validates_request_shape(foundry: Any) -> None:
+    with pytest.raises(ApprovalExecutionError) as direct_missing_review:
+        validate_request(
+            ApprovalExecutionRequest(
+                review_id="",
+                expected_proposal_fingerprint="sha256:" + "1" * 64,
+            )
+        )
+    with pytest.raises(ApprovalExecutionError) as direct_missing_prefix:
+        validate_request(
+            ApprovalExecutionRequest(
+                review_id="review-1",
+                expected_proposal_fingerprint="1" * 64,
+            )
+        )
     with pytest.raises(ApprovalExecutionError) as missing_review:
         foundry.aip.execute_approved_action(
             review_id="",
@@ -44,6 +67,8 @@ def test_approval_execution_validates_request_shape(foundry: Any) -> None:
             ctx=_CTX,
         )
 
+    assert direct_missing_review.value.reason == "missing_field"
+    assert direct_missing_prefix.value.reason == "missing_field"
     assert missing_review.value.reason == "missing_field"
     assert missing_prefix.value.reason == "missing_field"
 
@@ -77,6 +102,43 @@ def test_approval_execution_runs_approved_proposal_once_and_links_review(foundry
     assert result.review_payload["approvedActionRunId"] == result.action_run_id
     assert relations[0]["relation"] == "approved_as"
     assert relations[0]["metadata"]["proposalFingerprint"] == proposal.proposal_fingerprint
+
+
+def test_approval_execution_links_originating_agent_tool_call(foundry: Any) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _approved_agent_tool_proposal(foundry, ctx)
+
+    result = foundry.aip.execute_approved_action(
+        review_id=proposal.review_id,
+        expected_proposal_fingerprint=proposal.proposal_fingerprint,
+        ctx=_CTX,
+    )
+
+    ledger = _ai_ledger(foundry.engine)
+    assert ledger["toolCalls"][0]["id"] == "tool-call-approval-1"
+    assert ledger["toolCalls"][0]["linked_action_run_id"] == result.action_run_id
+
+
+def test_approval_execution_rejects_missing_originating_tool_call_before_action(foundry: Any) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _propose(foundry, ctx, originating_tool_call_id="missing-tool-call")
+    foundry.insights.decide(
+        proposal.review_id,
+        decision="approved",
+        idempotency_key=f"approve-{proposal.review_id}",
+        ctx=_CTX,
+    )
+
+    with pytest.raises(ApprovalExecutionError) as excinfo:
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            ctx=_CTX,
+        )
+
+    assert excinfo.value.reason == "originating_tool_call_not_found"
+    assert _review_row(foundry.engine, proposal.review_id)["execution_status"] == "pending_review"
+    assert _table_count(foundry.engine, db.action_runs) == 0
 
 
 def test_approval_execution_requires_approved_review_and_matching_fingerprint(foundry: Any) -> None:
@@ -291,7 +353,25 @@ def _approved_proposal(foundry: Any, ctx: RequestContext, *, expires_at: str = "
     return proposal
 
 
-def _propose(foundry: Any, ctx: RequestContext, *, expires_at: str = "2999-01-01T00:00:00+00:00"):
+def _approved_agent_tool_proposal(foundry: Any, ctx: RequestContext):
+    proposal = _propose(foundry, ctx, originating_tool_call_id="tool-call-approval-1")
+    _seed_tool_call(foundry.engine, proposal.proposal_fingerprint)
+    foundry.insights.decide(
+        proposal.review_id,
+        decision="approved",
+        idempotency_key=f"approve-{proposal.review_id}",
+        ctx=_CTX,
+    )
+    return proposal
+
+
+def _propose(
+    foundry: Any,
+    ctx: RequestContext,
+    *,
+    expires_at: str = "2999-01-01T00:00:00+00:00",
+    originating_tool_call_id: str | None = None,
+):
     order = foundry.objects.get("Order", "O-1001", ctx=ctx)
     _seed_ai_run(foundry.engine)
     return foundry.aip.propose_action(
@@ -306,7 +386,7 @@ def _propose(foundry: Any, ctx: RequestContext, *, expires_at: str = "2999-01-01
         policy_version="policy-v1",
         expires_at=expires_at,
         claim_text="Approve O-1001 based on reviewed AI evidence.",
-        originating_tool_call_id="tool-call-approval-1",
+        originating_tool_call_id=originating_tool_call_id,
         ctx=_CTX,
     )
 
@@ -317,6 +397,45 @@ def _seed_ai_run(engine: Any) -> None:
         repository.create_session(transaction=transaction, record=_session_record())
         repository.create_execution_run(transaction=transaction, record=_run_record())
         repository.record_context_item(transaction=transaction, record=_context_item_record())
+
+
+def _seed_tool_call(engine: Any, result_hash: str) -> None:
+    repository = SqlAlchemyAiRunRepository(engine)
+    with engine.begin() as transaction:
+        repository.record_tool_call(transaction=transaction, record=_tool_call_record(result_hash))
+
+
+def _tool_call_record(result_hash: str) -> AiToolCallRecord:
+    return AiToolCallRecord(
+        id="tool-call-approval-1",
+        tenant_id="tenant-demo",
+        ai_run_id="ai-run-approval-1",
+        sequence=1,
+        tool_id="action.propose",
+        tool_version="2026-06-26",
+        arguments_hash="sha256:tool-args",
+        effect="PROPOSE_WRITE",
+        authorization_decision="pending_human_review",
+        confirmation_policy="HUMAN_REVIEW",
+        status="pending_review",
+        result_hash=result_hash,
+        linked_action_run_id=None,
+        started_at="2026-06-25T00:00:04Z",
+        completed_at=None,
+        error_json=None,
+    )
+
+
+def _ai_ledger(engine: Any):
+    repository = SqlAlchemyAiRunRepository(engine)
+    with engine.begin() as transaction:
+        ledger = repository.ledger_for_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            ai_run_id="ai-run-approval-1",
+        )
+    assert ledger is not None
+    return ledger
 
 
 def _session_record() -> AiSessionRecord:

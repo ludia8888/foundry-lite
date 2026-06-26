@@ -262,6 +262,18 @@ class AiRunRepository(Protocol):
         """Persist one tool authorization/execution row."""
         ...
 
+    def link_tool_call_to_action_run(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ai_run_id: str,
+        tool_call_id: str,
+        action_run_id: str,
+    ) -> AiLedgerRow | None:
+        """Attach the approved action run produced by a prior action.propose tool call."""
+        ...
+
     def record_citation(self, *, transaction: TransactionContext, record: AiCitationRecord) -> None:
         """Persist one rendered answer citation."""
         ...

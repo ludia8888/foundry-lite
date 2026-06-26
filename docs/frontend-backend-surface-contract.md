@@ -83,7 +83,7 @@ operator-evidence note, and helper request-contract proof test.
 | Stale-version conflict UI | SDK `classifyFoundryLiteError(...)` can identify `stale_object_version`; the human-facing compare/refresh flow remains product work. |
 | Permission-denied masking UX | SDK `classifyFoundryLiteError(...)` can identify `permission_denied`; dedicated masked-field/role guidance UX remains product work. |
 | Full catalog-driven workspace UX | `ontology.catalog()` and dataset list/inspect give the frontend active metadata entrypoints, but S62-S64 screens still need richer drill-down flows. |
-| Insight review workspace UI | `insight_reviews` persistence, `/api/insights/reviews`, generated `client.insights.reviews.*`, idempotent create/assign/decision, terminal decision conflict, and audit evidence are current. Evidence viewer UI, action execution orchestration, approval policy UI, and rich review workspace screens remain product work. |
+| Insight review workspace UI | `insight_reviews` persistence, `/api/insights/reviews`, generated `client.insights.reviews.*`, idempotent create/assign/decision/approved execution, terminal decision conflict, API/SDK execute-action, and audit/AI-ledger linkage evidence are current. Evidence viewer UI, approval policy UI, rich execution controls, and full review workspace screens remain product work. |
 
 ## Completion Meaning
 
@@ -92,7 +92,7 @@ operator-evidence note, and helper request-contract proof test.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 46 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 47 frontend route surfaces
 -> browser SDK helper-contract proof for 12 frontend foundation helpers
 -> documentation count claims checked against the matrix and generated SDK helper list
 -> Web named-SDK-only usage

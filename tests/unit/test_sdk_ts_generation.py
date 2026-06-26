@@ -143,6 +143,10 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.create")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.assign")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.decide")' in generated
+    assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.execute")' in generated
+    assert "execute: (" in generated
+    assert "payload: InsightReviewExecuteActionRequest," in generated
+    assert "export type InsightReviewExecuteActionResult = {" in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.deadLetterRecords.retry")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.deadLetterRecords.bulkRetry")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.workflows.startConnectorSync")' in generated
@@ -162,7 +166,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["datasets"] == ["list", "versions", "preview", "inspect"]
     assert ts_surface["ontology"] == ["catalog", "validate"]
     assert ts_surface["aip"] == {"builder": ["validate", "run"], "agent": ["run"]}
-    assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide"]}
+    assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide", "execute"]}
     objects_surface = cast(dict[str, object], ts_surface["objects"])
     assert objects_surface["generic"] == ["get", "query", "links"]
     assert ts_surface["objectSets"] == ["list", "create", "get"]
@@ -219,6 +223,7 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "export function createInFlightActionLock()",
         "function requireIdempotencyKey(value, operationName)",
         'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.create")',
+        'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.execute")',
         'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.deadLetterRecords.retry")',
         'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.workflows.startConnectorSync")',
         '"MISSING_IDEMPOTENCY_KEY"',

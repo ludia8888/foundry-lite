@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Protocol, cast
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
@@ -92,6 +92,23 @@ class PromptArtifactPayload(Protocol):
 
     @property
     def plaintext(self) -> str: ...
+
+
+class ApprovalExecutionPayload(Protocol):
+    @property
+    def review_id(self) -> str: ...
+
+    @property
+    def proposal_fingerprint(self) -> str: ...
+
+    @property
+    def action_run_id(self) -> str: ...
+
+    @property
+    def action_response(self) -> Mapping[str, object]: ...
+
+    @property
+    def review_payload(self) -> Mapping[str, object]: ...
 
 
 class ObservabilityDetectRequest(BaseModel):
@@ -310,6 +327,12 @@ class InsightReviewDecisionRequest(BaseModel):
     comment: str | None = None
 
 
+class InsightReviewExecuteActionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_proposal_fingerprint: str = Field(alias="expectedProposalFingerprint")
+
+
 WEBHOOK_SIGNING_KEY_ENV = "FOUNDRY_LITE_WEBHOOK_SIGNING_KEY"
 WEBHOOK_SIGNING_KEY_NAME = "webhook_signing_key"
 
@@ -429,12 +452,45 @@ def _handle_error(exc: FoundryLiteError, request: Request | None = None) -> HTTP
         "CONFLICT": 409,
         "PERMISSION_DENIED": 403,
     }
-    status = status_by_code.get(exc.code, 400)
+    status = _status_for_error(exc, status_by_code.get(exc.code, 400))
     request_id = getattr(getattr(request, "state", None), "request_id", None)
     return HTTPException(
         status_code=status,
-        detail={"code": exc.code, "message": exc.message, "details": exc.details, "request_id": request_id},
+        detail={"code": _code_for_error(exc), "message": exc.message, "details": exc.details, "request_id": request_id},
     )
+
+
+def _code_for_error(exc: FoundryLiteError) -> str:
+    if exc.code != "APPROVAL_EXECUTION_ERROR":
+        return exc.code
+    reason = exc.details.get("reason")
+    if isinstance(reason, str) and reason:
+        return reason.upper()
+    return exc.code
+
+
+def _status_for_error(exc: FoundryLiteError, default_status: int) -> int:
+    if exc.code != "APPROVAL_EXECUTION_ERROR":
+        return default_status
+    reason = exc.details.get("reason")
+    if not isinstance(reason, str):
+        return default_status
+    not_found = {"action_not_found", "run_not_found", "target_not_found"}
+    conflict = {
+        "approval_object_version_conflict",
+        "fingerprint_mismatch",
+        "originating_tool_call_not_found",
+        "review_expired",
+        "review_not_approved",
+    }
+    denied = {"policy_denied", "source_access_denied"}
+    if reason in not_found:
+        return 404
+    if reason in conflict:
+        return 409
+    if reason in denied:
+        return 403
+    return default_status
 
 
 def _prompt_artifact_payload(result: PromptArtifactPayload) -> dict[str, object]:
@@ -444,6 +500,16 @@ def _prompt_artifact_payload(result: PromptArtifactPayload) -> dict[str, object]
         "contentHash": result.content_hash,
         "exportMarking": result.export_marking,
         "plaintext": result.plaintext,
+    }
+
+
+def _approval_execution_payload(result: ApprovalExecutionPayload) -> dict[str, object]:
+    return {
+        "reviewId": result.review_id,
+        "proposalFingerprint": result.proposal_fingerprint,
+        "actionRunId": result.action_run_id,
+        "actionResponse": dict(result.action_response),
+        "review": dict(result.review_payload),
     }
 
 
@@ -651,6 +717,32 @@ def decide_insight_review(
             ctx=_ctx(request),
             comment=payload.comment,
         )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/insights/reviews/{review_id}/execute-action")
+def execute_insight_review_action(
+    request: Request,
+    review_id: str,
+    payload: InsightReviewExecuteActionRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    if not idempotency_key:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "MISSING_IDEMPOTENCY_KEY",
+                "request_id": getattr(getattr(request, "state", None), "request_id", None),
+            },
+        )
+    try:
+        result = foundry.aip.execute_approved_action(
+            review_id=review_id,
+            expected_proposal_fingerprint=payload.expected_proposal_fingerprint,
+            ctx=_ctx(request),
+        )
+        return _approval_execution_payload(result)
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
