@@ -25,6 +25,7 @@ from foundry_lite.application.ports import (
     AiToolCallRecord,
     AiUsageLedgerRecord,
 )
+from foundry_lite.application.ports.ai_run_repository import AiPromptArtifactRecord
 from foundry_lite.application.ports.transaction_context import AI_RUN_SUCCEEDED
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyAiRunRepository
@@ -34,7 +35,7 @@ from sqlalchemy.engine import Engine
 from tests.contracts.conftest import PostgresFixture, skip_if_no_postgres
 
 _TENANT = "tenant-demo"
-_AI_LEDGER_TABLES = (
+_AI_RUN_LEDGER_MIGRATION_TABLES = (
     "ai_sessions",
     "ai_session_state_versions",
     "ai_messages",
@@ -105,6 +106,23 @@ def test_ai_run_ledger_tables_match_canonical_section_10_2() -> None:
         "currency",
         "recorded_at",
     ]
+    assert _columns(db.ai_prompt_artifacts) == [
+        "id",
+        "tenant_id",
+        "ai_run_id",
+        "artifact_kind",
+        "artifact_ref",
+        "content_hash",
+        "artifact_hash",
+        "byte_size",
+        "encryption_key_ref",
+        "encryption_algorithm",
+        "retention_until",
+        "legal_hold",
+        "erasure_request_id",
+        "export_marking",
+        "created_at",
+    ]
 
 
 def test_ai_run_ledger_migration_applies_postgres_rls_to_tenant_tables() -> None:
@@ -113,10 +131,20 @@ def test_ai_run_ledger_migration_applies_postgres_rls_to_tenant_tables() -> None
 
     assert 'context.get_context().dialect.name == "postgresql"' in migration
     assert "current_setting('foundry_lite.tenant_id', true)" in migration
-    for table in _AI_LEDGER_TABLES:
+    for table in _AI_RUN_LEDGER_MIGRATION_TABLES:
         assert f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY" in migration
         assert f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY" in migration
         assert f"CREATE POLICY {table}_tenant_isolation ON {table}" in migration
+
+
+def test_prompt_artifact_migration_applies_postgres_rls_to_tenant_table() -> None:
+    migration_path = Path(__file__).resolve().parents[2] / "migrations/versions/f9b1c3d5e7a9_aip_prompt_artifacts.py"
+    migration = migration_path.read_text(encoding="utf-8")
+
+    assert 'context.get_context().dialect.name == "postgresql"' in migration
+    assert "ALTER TABLE ai_prompt_artifacts ENABLE ROW LEVEL SECURITY" in migration
+    assert "ALTER TABLE ai_prompt_artifacts FORCE ROW LEVEL SECURITY" in migration
+    assert "CREATE POLICY ai_prompt_artifacts_tenant_isolation ON ai_prompt_artifacts" in migration
 
 
 def _assert_round_trip(engine: Engine) -> None:
@@ -165,6 +193,7 @@ def _seed_ledger(repository: SqlAlchemyAiRunRepository, transaction: Any) -> tup
     repository.record_tool_call(transaction=transaction, record=_tool_call_record())
     repository.record_citation(transaction=transaction, record=_citation_record())
     repository.record_usage(transaction=transaction, record=_usage_record())
+    repository.record_prompt_artifact(transaction=transaction, record=_prompt_artifact_record())
     updated = repository.update_execution_run_status(
         transaction=transaction,
         tenant_id=_TENANT,
@@ -187,6 +216,8 @@ def _assert_ledger_rows(ledger: Any) -> None:
     assert ledger["toolCalls"][0]["authorization_decision"] == "allowed"
     assert ledger["citations"][0]["claim_span"] == {"start": 0, "end": 18}
     assert ledger["usage"][0]["estimated_cost"] == 0.0123
+    assert ledger["promptArtifacts"][0]["artifact_kind"] == "compiled_prompt"
+    assert ledger["promptArtifacts"][0]["content_hash"] == "sha256:compiled-prompt"
 
 
 def _insert_idempotent_message(repository: SqlAlchemyAiRunRepository, transaction: Any) -> Any:
@@ -363,6 +394,26 @@ def _usage_record() -> AiUsageLedgerRecord:
         estimated_cost=0.0123,
         currency="USD",
         recorded_at="2026-06-25T00:00:06Z",
+    )
+
+
+def _prompt_artifact_record() -> AiPromptArtifactRecord:
+    return AiPromptArtifactRecord(
+        id="prompt-artifact-1",
+        tenant_id=_TENANT,
+        ai_run_id="ai-run-1",
+        artifact_kind="compiled_prompt",
+        artifact_ref="local-prompt-artifact://tenant-demo/ai-run-1/prompt-artifact-1.fernet",
+        content_hash="sha256:compiled-prompt",
+        artifact_hash="sha256:encrypted-prompt",
+        byte_size=256,
+        encryption_key_ref="secret://aip_prompt_artifact_encryption_key@sha256:key",
+        encryption_algorithm="fernet-v1",
+        retention_until="2026-07-02T00:00:00Z",
+        is_legal_hold=False,
+        erasure_request_id=None,
+        export_marking="aip-trace-restricted",
+        created_at="2026-06-25T00:00:05Z",
     )
 
 

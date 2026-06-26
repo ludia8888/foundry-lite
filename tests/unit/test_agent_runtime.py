@@ -104,6 +104,18 @@ class _CapturingSchemaLanguageModel:
         )
 
 
+class _FailIfCalledLanguageModel:
+    profile_name = "fail-if-called-language-model"
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        raise AssertionError("model should not be called when prompt artifact write fails")
+
+
+class _FailingPromptArtifactService:
+    def record_compiled_prompt(self, *_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("prompt artifact store unavailable")
+
+
 class _UnexpectedCitationResolver:
     def resolve(self, ctx: RequestContext, request: CitationResolveRequest) -> CitationResolveResult:
         raise AssertionError("citation resolver should not be called")
@@ -129,10 +141,25 @@ def test_agent_runtime_retrieves_context_calls_model_and_links_operations(foundr
     assert detail["ai"]["summary"]["modelCallCount"] == 1
     assert detail["ai"]["summary"]["contextItemCount"] == 1
     assert detail["ai"]["summary"]["usageLedgerCount"] == 1
+    assert detail["ai"]["summary"]["promptArtifactCount"] == 1
     assert detail["ai"]["summary"]["toolCallCount"] == 0
     assert detail["row"]["resolved_model_id"] == "local-fake-model"
     assert detail["row"]["compiled_prompt_hash"].startswith("sha256:")
+    prompt_artifact = detail["ai"]["promptArtifacts"][0]
+    assert prompt_artifact["content_hash"] == detail["row"]["compiled_prompt_hash"]
+    assert prompt_artifact["artifact_ref"].startswith("local-prompt-artifact://")
+    reader_ctx = RequestContext(
+        tenant_id=_CTX.tenant_id,
+        actor_user_id="auditor",
+        roles=(*_CTX.roles, "aip_prompt_artifact_reader"),
+        request_id="req-agent-runtime-reader",
+    )
+    decrypted = foundry._services.prompt_artifact.read_prompt_artifact(
+        reader_ctx, artifact_id=str(prompt_artifact["id"])
+    )
+    assert "Explain Order O-1001 for the operator." in decrypted.plaintext
     assert detail["ai"]["events"][0]["event_type"] == "received"
+    assert "Explain Order O-1001 for the operator." not in json.dumps(detail, sort_keys=True)
 
 
 def test_agent_runtime_citation_payload_plain_text_and_empty_claims_skip_resolver() -> None:
@@ -316,6 +343,25 @@ def test_agent_runtime_rejects_tool_calls_and_marks_seeded_run_failed(foundry: A
     assert detail["row"]["status"] == "failed"
     assert detail["ai"]["events"][-1]["event_type"] == "failed"
     assert detail["row"]["error_json"] == result.error
+
+
+def test_agent_runtime_fails_before_model_when_prompt_artifact_write_fails(foundry: Any) -> None:
+    prepare_indexed_demo(foundry)
+    foundry._services.agent_runtime.prompt_artifact_service = _FailingPromptArtifactService()
+    foundry._services.model_gateway.language_model_adapter = _FailIfCalledLanguageModel()
+
+    result = foundry.aip.run_agent_payload(
+        payload={**_payload(), "agentRunId": "agent-runtime-prompt-artifact-fail"},
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "failed"
+    assert result.ai_run_id is not None
+    assert result.error == {"reason": "RuntimeError", "detail": "prompt artifact store unavailable"}
+    detail = foundry.operations.run_detail("ai", result.ai_run_id, ctx=_CTX)
+    assert detail["row"]["status"] == "failed"
+    assert detail["ai"]["summary"]["modelCallCount"] == 0
+    assert detail["ai"]["summary"]["promptArtifactCount"] == 0
 
 
 def test_agent_runtime_rejects_non_allowlisted_partition_before_ledger(foundry: Any) -> None:

@@ -1254,6 +1254,28 @@ ai_usage_ledger = Table(
     Column("recorded_at", String, nullable=False),
 )
 
+# AIP-lite P0v — encrypted prompt artifact metadata. The raw prompt bytes live
+# in a separate encrypted store; this table is only the tenant-scoped receipt.
+ai_prompt_artifacts = Table(
+    "ai_prompt_artifacts",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ai_run_id", String, nullable=False),
+    Column("artifact_kind", String, nullable=False),
+    Column("artifact_ref", Text, nullable=False),
+    Column("content_hash", String, nullable=False),
+    Column("artifact_hash", String, nullable=False),
+    Column("byte_size", Integer, nullable=False),
+    Column("encryption_key_ref", String, nullable=False),
+    Column("encryption_algorithm", String, nullable=False),
+    Column("retention_until", String, nullable=False),
+    Column("legal_hold", Boolean, nullable=False),
+    Column("erasure_request_id", String),
+    Column("export_marking", String, nullable=False),
+    Column("created_at", String, nullable=False),
+)
+
 # AIP-lite P0k — eval evidence and release promotion guard (§8.12/§15).
 # These rows are the local proof that an agent/model/prompt candidate passed a
 # deterministic eval gate before being promoted to an operational release channel.

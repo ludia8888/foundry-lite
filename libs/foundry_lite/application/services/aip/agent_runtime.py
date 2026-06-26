@@ -46,6 +46,7 @@ from foundry_lite.application.services.aip.context_compiler import (
     ContextCompilerService,
 )
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService, ModelResolution
+from foundry_lite.application.services.aip.prompt_artifact_service import PromptArtifactService
 from foundry_lite.application.services.aip.retrieval_orchestrator import (
     RetrievalContentSearch,
     RetrievalObjectQuery,
@@ -128,12 +129,14 @@ class AgentRuntimeService(CoreService):
     required_collaborators = (
         "context_compiler_service",
         "model_gateway_service",
+        "prompt_artifact_service",
         "object_query_service",
         "content_retrieval_service",
         "citation_service",
     )
     context_compiler_service: ContextCompilerService
     model_gateway_service: ModelGatewayService
+    prompt_artifact_service: PromptArtifactService
     object_query_service: RetrievalObjectQuery
     content_retrieval_service: RetrievalContentSearch
     citation_service: CitationResolver
@@ -151,6 +154,12 @@ class AgentRuntimeService(CoreService):
             resolution = self.model_gateway_service.resolve_model(ctx, request.model_alias)
             self._seed_ledger(ctx, request, ai_run_id, session_id, context_items, compiled, resolution)
             seeded = True
+            self.prompt_artifact_service.record_compiled_prompt(
+                ctx,
+                ai_run_id=ai_run_id,
+                compiled_prompt_hash=compiled.compiled_prompt_hash,
+                compiled_prompt_text=_compiled_prompt_text(compiled),
+            )
             response = self.model_gateway_service.invoke(ctx, _model_request(request, ai_run_id, compiled))
             _guard_readonly_response(response)
             answer = self._resolve_answer_citations(ctx, request, ai_run_id, response)
@@ -343,6 +352,15 @@ def _response_schema(output_schema: JsonObject | None) -> str | None:
     if not output_schema:
         return None
     return json.dumps(output_schema, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _compiled_prompt_text(compiled: CompiledContext) -> str:
+    return json.dumps(
+        [{"role": message.role, "content": message.content} for message in compiled.messages],
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _guard_context_budget(request: AgentRuntimeRequest, items: tuple[RetrievedContextItem, ...]) -> None:

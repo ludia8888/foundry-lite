@@ -73,6 +73,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "insight_review_service": "InsightReviewService",
     "logic_runtime_service": "LogicRuntimeService",
     "model_gateway_service": "ModelGatewayService",
+    "prompt_artifact_service": "PromptArtifactService",
     "materialization_service": "MaterializationService",
     "object_indexing_service": "ObjectIndexingService",
     "object_links_service": "ObjectLinksService",
@@ -138,6 +139,7 @@ class CoreService:
     context_provider: ContextProvider
     citation_source_verifier: CitationSourceVerifier
     secret_provider: SecretProvider
+    prompt_artifact_store: object
     tool_executor: ToolExecutor
     engine: TransactionManager
     policy: PolicyService

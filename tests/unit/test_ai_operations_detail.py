@@ -10,6 +10,7 @@ from foundry_lite.application.ports.ai_run_repository import (
     AiExecutionEventRecord,
     AiExecutionRunRecord,
     AiModelCallRecord,
+    AiPromptArtifactRecord,
     AiSessionRecord,
     AiToolCallRecord,
     AiUsageLedgerRecord,
@@ -58,6 +59,7 @@ def test_ai_operations_run_list_and_detail_expose_safe_ledger_trace() -> None:
     ai = detail["ai"]
     assert ai["summary"]["eventCount"] == 2
     assert ai["summary"]["modelCallCount"] == 1
+    assert ai["summary"]["promptArtifactCount"] == 1
     assert ai["summary"]["inputTokens"] == 128
     assert ai["summary"]["outputTokens"] == 64
     assert ai["summary"]["estimatedCost"] == 0.0123
@@ -65,6 +67,8 @@ def test_ai_operations_run_list_and_detail_expose_safe_ledger_trace() -> None:
     assert [item["kind"] for item in ai["trace"]["timeline"]] == ["event", "event", "tool_call", "model_call"]
     assert ai["events"][0]["payload_ref"] == "blob://ai-runs/ai-run-ops/intent.json"
     assert ai["modelCalls"][0]["request_hash"] == "sha256:model-request"
+    assert ai["promptArtifacts"][0]["artifact_ref"].startswith("local-prompt-artifact://")
+    assert ai["promptArtifacts"][0]["content_hash"] == "sha256:compiled-prompt"
     assert ai["toolCalls"][0]["arguments_hash"] == "sha256:tool-args"
     assert ai["toolCalls"][0]["result_hash"] == "sha256:tool-result"
     _assert_no_raw_ai_payload_leaks(detail)
@@ -126,6 +130,7 @@ def test_ai_operations_payload_redacts_nested_non_json_primitives_and_sorts_fall
                     "recorded_at": "2026-06-25T00:00:05Z",
                 },
             ],
+            "promptArtifacts": [],
         }
     )
 
@@ -170,6 +175,7 @@ def _seed_ai_ledger(ai_repository: SqlAlchemyAiRunRepository, engine: Any) -> No
         ai_repository.record_tool_call(transaction=transaction, record=_tool_call_record())
         ai_repository.record_citation(transaction=transaction, record=_citation_record())
         ai_repository.record_usage(transaction=transaction, record=_usage_record())
+        ai_repository.record_prompt_artifact(transaction=transaction, record=_prompt_artifact_record())
 
 
 def _session_record() -> AiSessionRecord:
@@ -317,4 +323,24 @@ def _usage_record() -> AiUsageLedgerRecord:
         estimated_cost=0.0123,
         currency="USD",
         recorded_at="2026-06-25T00:00:06Z",
+    )
+
+
+def _prompt_artifact_record() -> AiPromptArtifactRecord:
+    return AiPromptArtifactRecord(
+        id="ai-run-ops-compiled-prompt",
+        tenant_id=_TENANT,
+        ai_run_id="ai-run-ops",
+        artifact_kind="compiled_prompt",
+        artifact_ref="local-prompt-artifact://tenant-demo/ai-run-ops/ai-run-ops-compiled-prompt.fernet",
+        content_hash="sha256:compiled-prompt",
+        artifact_hash="sha256:encrypted-prompt",
+        byte_size=320,
+        encryption_key_ref="secret://aip_prompt_artifact_encryption_key@sha256:key",
+        encryption_algorithm="fernet-v1",
+        retention_until="2026-07-02T00:00:00Z",
+        is_legal_hold=False,
+        erasure_request_id=None,
+        export_marking="aip-trace-restricted",
+        created_at="2026-06-25T00:00:06Z",
     )

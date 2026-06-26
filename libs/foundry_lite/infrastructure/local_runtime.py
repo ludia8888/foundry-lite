@@ -69,6 +69,7 @@ from foundry_lite.infrastructure.adapters.local_embedding import (
     FASTEMBED_MODEL_VERSION,
     _fastembed_embedding_engine,
 )
+from foundry_lite.infrastructure.adapters.local_prompt_artifact_store import LocalPromptArtifactStore
 from foundry_lite.infrastructure.adapters.local_vision_embedding import (
     CLIP_MODEL_VERSION,
     LocalVisionEmbeddingAdapter,
@@ -144,6 +145,8 @@ def create_local_core_dependencies(
     object_storage_root.mkdir(parents=True, exist_ok=True)
     media_storage_root = root / "media-storage"
     media_storage_root.mkdir(parents=True, exist_ok=True)
+    prompt_artifacts_root = root / "prompt-artifacts"
+    prompt_artifacts_root.mkdir(parents=True, exist_ok=True)
 
     storage_adapter = _dataset_storage_adapter(adapter_profile, object_storage_root)
     media_storage = _media_storage_adapter(adapter_profile, media_storage_root)
@@ -165,6 +168,7 @@ def create_local_core_dependencies(
     search_adapter = _search_adapter(adapter_profile)
     stream_adapter = _stream_adapter(adapter_profile)
     workflow_adapter = _workflow_adapter(adapter_profile)
+    secret_provider = secret_provider_from_env()
     database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
     engine = create_engine(database_url, future=True)
     ontology_repository = SqlAlchemyOntologyRepository(engine)
@@ -219,7 +223,8 @@ def create_local_core_dependencies(
         model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
         context_provider=FakeContextProvider(),
         search_adapter=search_adapter,
-        secret_provider=secret_provider_from_env(),
+        secret_provider=secret_provider,
+        prompt_artifact_store=LocalPromptArtifactStore(prompt_artifacts_root, secret_provider),
         citation_source_verifier=FakeCitationSourceVerifier(),
         stream_adapter=stream_adapter,
         tool_executor=FakeToolExecutor(),

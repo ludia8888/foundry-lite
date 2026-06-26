@@ -141,6 +141,22 @@ _AI_USAGE_FIELDS = (
     "currency",
     "recorded_at",
 )
+_AI_PROMPT_ARTIFACT_FIELDS = (
+    "id",
+    "ai_run_id",
+    "artifact_kind",
+    "artifact_ref",
+    "content_hash",
+    "artifact_hash",
+    "byte_size",
+    "encryption_key_ref",
+    "encryption_algorithm",
+    "retention_until",
+    "legal_hold",
+    "erasure_request_id",
+    "export_marking",
+    "created_at",
+)
 
 
 def safe_ai_run_row(row: Mapping[str, object]) -> RuntimeRow:
@@ -159,6 +175,7 @@ def ai_operations_payload(ledger: AiRunLedgerSnapshot) -> RuntimeJsonObject:
     tool_calls = _select_rows(ledger["toolCalls"], _AI_TOOL_CALL_FIELDS)
     citations = _select_rows(ledger["citations"], _AI_CITATION_FIELDS)
     usage = _select_rows(ledger["usage"], _AI_USAGE_FIELDS)
+    prompt_artifacts = _select_rows(ledger["promptArtifacts"], _AI_PROMPT_ARTIFACT_FIELDS)
     return {
         "run": run,
         "events": events,
@@ -167,7 +184,8 @@ def ai_operations_payload(ledger: AiRunLedgerSnapshot) -> RuntimeJsonObject:
         "toolCalls": tool_calls,
         "citations": citations,
         "usage": usage,
-        "summary": _summary(run, events, model_calls, context_items, tool_calls, citations, usage),
+        "promptArtifacts": prompt_artifacts,
+        "summary": _summary(run, events, model_calls, context_items, tool_calls, citations, usage, prompt_artifacts),
         "trace": {
             "traceId": run.get("trace_id"),
             "timeline": _timeline(events, model_calls, tool_calls),
@@ -212,6 +230,7 @@ def _summary(
     tool_calls: Sequence[Mapping[str, object]],
     citations: Sequence[Mapping[str, object]],
     usage: Sequence[Mapping[str, object]],
+    prompt_artifacts: Sequence[Mapping[str, object]],
 ) -> dict[str, object]:
     selected_context = sum(1 for item in context_items if item.get("selected") is True)
     input_tokens = _sum_number(usage, "input_tokens") or _sum_number(model_calls, "input_tokens")
@@ -230,6 +249,7 @@ def _summary(
         "toolCallCount": len(tool_calls),
         "citationCount": len(citations),
         "usageLedgerCount": len(usage),
+        "promptArtifactCount": len(prompt_artifacts),
         "inputTokens": input_tokens,
         "outputTokens": output_tokens,
         "estimatedCost": estimated_cost,

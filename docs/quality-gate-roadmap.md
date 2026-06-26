@@ -1640,8 +1640,8 @@ P0c의 현재 slice는 full AIP trace UI가 아니라 AI 실행 장부의 DB/저
 idempotency, tenant scoping, PostgreSQL RLS migration DDL, SQLite/PostgreSQL round-trip, and
 runtime-lane wiring을 검증한다.
 P0i는 이 장부의 첫 Operations API/SDK read surface를 추가했고, P0u는 ModelGateway 자동
-model-call 기록을 추가했다. Encrypted prompt artifact store, ToolBroker execution, and full
-trace UI는 후속 AIP slice다.
+model-call 기록을 추가했다. P0v는 encrypted compiled-prompt artifact store를 추가했다.
+ToolBroker execution and full trace UI는 후속 AIP slice다.
 
 | 게이트                 | 명령                | Root cause                                                                                                                                                                           |
 | ---------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -1664,6 +1664,24 @@ Agent Runtime의 후처리 관습이 아니라 Gateway boundary의 불변 조건
 | 게이트 | 명령 | Root cause |
 |---|---|---|
 | Model Gateway ledger ratchet | `quality:model-gateway-ledger` | Model Gateway를 통과한 provider call이 AI run ledger에 누락되거나, seeded run 없이 provider egress가 먼저 발생하거나, provider 실패가 raw prompt와 함께 로그/장부에 남거나, Agent Runtime이 Gateway 밖에서 model-call row를 수동으로 맞추는 문제 차단 |
+
+### AIP P0v — Encrypted Prompt Artifact Ratchet
+
+P0v의 현재 slice는 prompt artifact viewer나 full trace UI가 아니라, raw compiled prompt를
+일반 DB/audit JSON 밖의 별도 암호화 artifact에 저장하는 backend privacy contract다.
+`PromptArtifactStore`는 원문 prompt를 encrypted blob으로 쓰고, `PromptArtifactService`는
+`ai_prompt_artifacts`에 `artifact_ref`, prompt `content_hash`, encrypted `artifact_hash`, byte size,
+key ref, algorithm, retention, legal hold, erasure lineage, export marking만 기록한다. Raw read는
+`aip_prompt_artifact_reader` 역할이 있는 caller에게만 허용된다.
+
+Agent Runtime은 AI run을 seed한 뒤 Model Gateway 호출 전에 compiled prompt artifact를 기록한다.
+Artifact write가 실패하면 seeded run을 failed로 닫고 provider/model adapter를 호출하지 않는다.
+Alembic migration은 `ai_prompt_artifacts`에 PostgreSQL RLS/FORCE/policy를 적용해 기존 DB upgrade
+경로도 bootstrap 경로와 같은 tenant isolation을 갖는다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Encrypted prompt artifact ratchet | `quality:prompt-artifacts` | raw compiled prompt가 일반 DB/Operations payload/파일에 평문으로 남거나, 별도 reader role 없이 원문을 읽거나, prompt artifact write 실패 뒤에도 provider egress가 진행되거나, 기존 DB migration 경로에서 새 AI tenant table이 PostgreSQL RLS 밖에 남는 문제 차단 |
 
 ### AIP P0d — Context Compiler Ratchet
 

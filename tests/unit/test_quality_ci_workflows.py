@@ -940,19 +940,38 @@ def test_ai_ledger_gate_runs_after_erasure_gate() -> None:
     assert "tests/contracts/test_ai_run_repository_contract.py" in package_json
 
 
-def test_model_gateway_ledger_gate_runs_after_ai_ledger_before_context_compiler() -> None:
+def test_model_gateway_ledger_gate_runs_after_ai_ledger_before_prompt_artifacts() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     ai_ledger_step = "pnpm --silent quality:ai-ledger"
     model_gateway_ledger_step = "pnpm --silent quality:model-gateway-ledger"
-    context_compiler_step = "pnpm --silent quality:context-compiler"
+    prompt_artifacts_step = "pnpm --silent quality:prompt-artifacts"
     assert model_gateway_ledger_step in script
-    assert script.index(ai_ledger_step) < script.index(model_gateway_ledger_step) < script.index(context_compiler_step)
+    assert script.index(ai_ledger_step) < script.index(model_gateway_ledger_step) < script.index(prompt_artifacts_step)
     assert '"quality:model-gateway-ledger"' in package_json
     assert "gateway_records_model_call" in package_json
     assert "gateway_requires_seeded_ai_run" in package_json
     assert "gateway_records_failed_provider_attempt" in package_json
+
+
+def test_prompt_artifacts_gate_runs_after_model_gateway_before_context_compiler() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    model_gateway_ledger_step = "pnpm --silent quality:model-gateway-ledger"
+    prompt_artifacts_step = "pnpm --silent quality:prompt-artifacts"
+    context_compiler_step = "pnpm --silent quality:context-compiler"
+    assert prompt_artifacts_step in script
+    assert (
+        script.index(model_gateway_ledger_step)
+        < script.index(prompt_artifacts_step)
+        < script.index(context_compiler_step)
+    )
+    assert '"quality:prompt-artifacts"' in package_json
+    assert "tests/contracts/test_prompt_artifact_store_contract.py" in package_json
+    assert "tests/unit/test_prompt_artifact_service.py" in package_json
+    assert "agent_runtime_fails_before_model_when_prompt_artifact_write_fails" in package_json
 
 
 def test_ai_evidence_gate_runs_after_ai_ledger_gate() -> None:

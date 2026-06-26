@@ -207,9 +207,17 @@ content_hash, relevance_score, retrieval_method, security_partition, token_estim
 - **Context Compiler (§8.6)**: fixed order = 1 platform safety policy, 2 published agent instruction,
   3 state schema+visible values, 4 tool definitions, 5 authoritative retrieved context, 6 citation
   mapping, 7 output schema, 8 user message. Emits `compiled_prompt_hash, context_manifest_hash,
-tool_manifest_hash, state_snapshot_hash, policy_snapshot_hash`. Retrieved docs are **untrusted data**,
+  tool_manifest_hash, state_snapshot_hash, policy_snapshot_hash`. Retrieved docs are **untrusted data**,
   carried as JSON string values with policy metadata so embedded section headers or "ignore previous
   instructions" text is never promoted to system instruction.
+- **Prompt Artifact Store (§9.7/§10.2 extension)**: raw compiled prompt bytes are written only to a
+  separate encrypted artifact store. `ai_prompt_artifacts` stores the tenant-scoped receipt:
+  `id, tenant_id, ai_run_id, artifact_kind, artifact_ref, content_hash, artifact_hash, byte_size,
+  encryption_key_ref, encryption_algorithm, retention_until, legal_hold, erasure_request_id,
+  export_marking, created_at`. Current P0v composes this into Agent Runtime before Model Gateway egress:
+  if the encrypted artifact write fails, the seeded run is marked failed and the model is not called.
+  Operations exposes only refs/hashes/retention/export marking; raw read requires the separate
+  `aip_prompt_artifact_reader` role.
 - **Citation Service (§8.7)**: model is given **opaque context IDs**, never source URLs; service maps
   `ctx_id → media item version / page / content unit / hash` and verifies the context ID is in this
   run's manifest + caller may read source + version/hash still match + span relevant. Returns display
@@ -284,7 +292,7 @@ secret_version, provider_profile, resolution_timestamp` — never the value. Ada
   hash/redacted preview/counts/IDs; encrypted prompt artifact = separate access permission + short
   explicit retention + legal-hold + erasure-request lineage + export marking. Hidden chain-of-thought is
   not stored; stored = input, compiled context manifest, tool call/result, final answer, policy decision,
-  short execution summary.
+  short execution summary. Current P0v implements the first encrypted compiled-prompt artifact slice.
 
 ---
 
@@ -304,7 +312,7 @@ AiRunRepository, ContextProvider, ToolExecutor, UsageMeter`.
 ## CI quality gates (§15.6)
 
 Add granular gates: `quality:ai-contracts, quality:model-gateway, quality:ai-ledger,
-quality:model-gateway-ledger, quality:retrieval-security, quality:context-compiler, quality:tool-broker,
+quality:model-gateway-ledger, quality:prompt-artifacts, quality:retrieval-security, quality:context-compiler, quality:tool-broker,
 quality:action-proposal, quality:approval-execution, quality:ai-operations, quality:logic-runtime,
 quality:ai-evals, quality:ai-release, quality:visual-builder, quality:builder-runtime, quality:agent-runtime,
 quality:agent-runtime-citations, quality:agent-citation-ui, quality:agent-source-previews`. Release gate splits static / unit /

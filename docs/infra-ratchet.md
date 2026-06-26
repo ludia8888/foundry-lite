@@ -1078,8 +1078,21 @@ Media/Content Plane (standalone family, not in `activeStack`).
   `UNIQUE(ai_run_id, sequence)`, PostgreSQL RLS DDL in the Alembic upgrade path, SQLite + PostgreSQL
   round-trip behavior, message retry idempotency, event sequence idempotency, tenant scoping, and
   runtime-lane wiring. P0i now adds the first generated Operations API/SDK read surface for these
-  rows, and P0u moves ModelGateway provider-attempt accounting into the gateway boundary. Prompt
-  artifact encryption, full trace UI, and ToolBroker execution remain later AIP slices.
+  rows, and P0u moves ModelGateway provider-attempt accounting into the gateway boundary. P0v now closes
+  the first encrypted compiled-prompt artifact slice; full trace UI and ToolBroker execution remain later
+  AIP slices.
+
+- **P0v — encrypted prompt artifact receipts (shipped as the first protected prompt-log slice):**
+  Palantir's AIP observability/session logging docs expose traces with prompts, responses, token usage,
+  and retrieved context behind dedicated log permissions/markings. Foundry-lite's local equivalent keeps
+  the general AI ledger raw-value-free while preserving a protected inspection path: `PromptArtifactStore`
+  encrypts the compiled prompt into a separate artifact, `ai_prompt_artifacts` stores only the tenant-scoped
+  receipt (`artifact_ref`, prompt `content_hash`, encrypted `artifact_hash`, byte size, key ref, algorithm,
+  retention, legal hold, erasure lineage, and export marking), and `PromptArtifactService` requires the
+  explicit `aip_prompt_artifact_reader` role before decrypting. `AgentRuntimeService` writes this encrypted
+  artifact after seeding the AI run and before Model Gateway egress; if the artifact write fails, the seeded
+  run is marked failed and no provider/model adapter call occurs. The Alembic upgrade path applies PostgreSQL
+  RLS to `ai_prompt_artifacts`, so existing DBs upgraded by migration match the bootstrap path.
 
 - **P0d — Context compiler + retrieval context contract (shipped as the first prompt assembly slice):**
   `ContextProvider` and `RetrievedContextItem` now define the authorized retrieval boundary that hands

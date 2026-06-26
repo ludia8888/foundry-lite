@@ -400,6 +400,8 @@ run_runtime_gate() {
 
   run_runtime_step "AIP Model Gateway ledger ratchet" pnpm --silent quality:model-gateway-ledger
 
+  run_runtime_step "AIP encrypted prompt artifact ratchet" pnpm --silent quality:prompt-artifacts
+
   run_runtime_step "AIP context compiler ratchet" pnpm --silent quality:context-compiler
 
   run_runtime_step "AIP Retrieval Orchestrator ratchet" pnpm --silent quality:retrieval-orchestrator

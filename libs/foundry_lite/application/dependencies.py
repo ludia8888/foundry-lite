@@ -97,6 +97,7 @@ class CoreDependencies:
     context_provider: ContextProvider
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
+    prompt_artifact_store: object
     citation_source_verifier: CitationSourceVerifier
     stream_adapter: StreamAdapter
     tool_executor: ToolExecutor

@@ -13,6 +13,7 @@ from foundry_lite.application.services.aip.context_compiler import ContextCompil
 from foundry_lite.application.services.aip.eval_service import EvalService
 from foundry_lite.application.services.aip.logic_runtime import LogicRuntimeService
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService
+from foundry_lite.application.services.aip.prompt_artifact_service import PromptArtifactService
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerService
 from foundry_lite.application.services.aip.visual_builder import VisualBuilderService
 from foundry_lite.application.services.base import CoreService, build_service, collaborator_kwargs
@@ -54,6 +55,7 @@ __all__ = [
     "CitationService",
     "LogicRuntimeService",
     "ModelGatewayService",
+    "PromptArtifactService",
     "ToolBrokerService",
     "VisualBuilderService",
     "ObjectServices",
@@ -93,6 +95,7 @@ class CoreServices:
     citation: CitationService
     logic_runtime: LogicRuntimeService
     model_gateway: ModelGatewayService
+    prompt_artifact: PromptArtifactService
     tool_broker: ToolBrokerService
     visual_builder: VisualBuilderService
     object_store: ObjectServices
@@ -139,6 +142,7 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         citation=build_service(CitationService, dependencies),
         logic_runtime=build_service(LogicRuntimeService, dependencies),
         model_gateway=build_service(ModelGatewayService, dependencies),
+        prompt_artifact=build_service(PromptArtifactService, dependencies),
         tool_broker=build_service(ToolBrokerService, dependencies),
         visual_builder=build_service(VisualBuilderService, dependencies),
         object_store=object_store,
@@ -177,6 +181,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.citation,
         services.logic_runtime,
         services.model_gateway,
+        services.prompt_artifact,
         services.tool_broker,
         services.visual_builder,
         *services.object_store.items(),
@@ -211,6 +216,7 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "insight_review_service": services.insight_review,
         "logic_runtime_service": services.logic_runtime,
         "model_gateway_service": services.model_gateway,
+        "prompt_artifact_service": services.prompt_artifact,
         "materialization_service": services.materialization,
         "object_indexing_service": services.object_store.indexing,
         "object_links_service": services.object_store.links,
