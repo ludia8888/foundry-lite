@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse, ModelToolCall
+from foundry_lite.application.services.aip.approval_execution_contracts import ApprovalExecutionError
 from foundry_lite.application.upload_limits import WEBHOOK_BODY_LIMIT_ENV
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import ExternalOutcomeUnknown, NotFound, ValidationFailed
@@ -1255,6 +1256,59 @@ def test_api_aip_agent_run_proposal_can_be_approved_and_executed(foundry, monkey
     assert detail_body["ai"]["toolCalls"][0]["result_hash"] == review["proposalFingerprint"]
     assert updated_order["objectVersion"] == 2
     assert _table_count(foundry.engine, db.action_runs) == 1
+
+
+def test_api_aip_agent_run_proposal_can_be_approved_and_executed_rejects_empty_idempotency(monkeypatch) -> None:
+    class _Aip:
+        def execute_approved_action(self, *_args, **_kwargs):
+            raise AssertionError("empty idempotency key should fail before approval execution")
+
+    class FailingCore:
+        aip = _Aip()
+
+    monkeypatch.setattr(api_main, "foundry", FailingCore())
+    response = TestClient(app).post(
+        "/api/insights/reviews/review-1/execute-action",
+        headers={"Idempotency-Key": ""},
+        json={"expectedProposalFingerprint": "sha256:" + ("a" * 64)},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "MISSING_IDEMPOTENCY_KEY"
+    assert "request_id" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected_status"),
+    [
+        ("action_not_found", 404),
+        ("fingerprint_mismatch", 409),
+        ("policy_denied", 403),
+        ("not_action_proposal", 400),
+    ],
+)
+def test_api_aip_agent_run_proposal_can_be_approved_and_executed_maps_execution_errors(
+    monkeypatch, reason: str, expected_status: int
+) -> None:
+    class _Aip:
+        def execute_approved_action(self, *_args, **_kwargs):
+            raise ApprovalExecutionError(reason, "approval execution failed")
+
+    class FailingCore:
+        aip = _Aip()
+
+    monkeypatch.setattr(api_main, "foundry", FailingCore())
+    response = TestClient(app).post(
+        "/api/insights/reviews/review-1/execute-action",
+        headers={"Idempotency-Key": f"execute-error-{reason}"},
+        json={"expectedProposalFingerprint": "sha256:" + ("a" * 64)},
+    )
+
+    detail = response.json()["detail"]
+    assert response.status_code == expected_status
+    assert detail["code"] == reason.upper()
+    assert detail["details"] == {"reason": reason}
+    assert "request_id" in detail
 
 
 class _ToolLoopLanguageModel:
