@@ -478,6 +478,7 @@ run_runtime_gate() {
 
 run_e2e_gate() {
   echo "== Dynamic: Playwright E2E =="
+  export FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY="${FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY:-ci-prompt-artifact-key}"
   pnpm exec playwright test
 }
 

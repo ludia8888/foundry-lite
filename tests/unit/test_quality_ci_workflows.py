@@ -725,6 +725,15 @@ def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() 
     assert "run: pnpm ci:gate:e2e" in workflow
 
 
+def test_e2e_gate_sets_prompt_artifact_test_secret_without_local_fallback() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+
+    e2e_gate = script.split("run_e2e_gate() {", maxsplit=1)[1].split("run_all_gate() {", maxsplit=1)[0]
+    assert "FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY" in e2e_gate
+    assert "ci-prompt-artifact-key" in e2e_gate
+    assert "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY" not in e2e_gate
+
+
 def test_doc_drift_is_release_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
