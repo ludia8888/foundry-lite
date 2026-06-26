@@ -31,6 +31,7 @@ from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
 from foundry_lite.application.ports.erasure_repository import ErasureRepository
 from foundry_lite.application.ports.external_media_reader import ExternalMediaReader
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository
+from foundry_lite.application.ports.language_model import LanguageModelAdapter
 from foundry_lite.application.ports.media_access_cache_repository import MediaAccessCacheRepository
 from foundry_lite.application.ports.media_derivative_repository import MediaDerivativeRepository
 from foundry_lite.application.ports.media_preview_renderer import MediaPreviewRendererAdapter
@@ -38,6 +39,7 @@ from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
 from foundry_lite.application.ports.media_reference_binding_repository import MediaReferenceBindingRepository
 from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
+from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
@@ -115,6 +117,8 @@ class CoreService:
     embedding_model_adapter: EmbeddingModelAdapter
     completion_model_adapter: CompletionModelAdapter
     vision_embedding_model_adapter: VisionEmbeddingModelAdapter
+    language_model_adapter: LanguageModelAdapter
+    model_registry_repository: ModelRegistryRepository
     engine: TransactionManager
     policy: PolicyService
     action_repository: ActionRepository

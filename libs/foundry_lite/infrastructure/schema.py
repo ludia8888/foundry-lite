@@ -1010,6 +1010,69 @@ media_processing_runs = Table(
 )
 
 
+# AIP-lite P0b — governed Model Gateway catalog + alias indirection (§10.1).
+# `tenant_id` is the RLS-discovery column (see `tenant_rls_tables`); the canonical `tenant_scope`
+# column carries the §10.1 scope value (kept consistent with `tenant_id` by the repository).
+ai_model_providers = Table(
+    "ai_model_providers",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("tenant_scope", String, nullable=False),
+    Column("provider_type", String, nullable=False),
+    Column("profile_name", String, nullable=False),
+    Column("region", String, nullable=False),
+    # The secret NAME the SecretProvider resolves by; the raw value never lives in the DB or trace.
+    Column("secret_ref", String, nullable=False),
+    # ZDR / no-retrain egress assurance the destination promises (§9.3).
+    Column("retention_policy", String, nullable=False),
+    Column("training_policy", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "profile_name", name="uq_ai_model_provider_profile"),
+)
+
+ai_models = Table(
+    "ai_models",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("tenant_scope", String, nullable=False),
+    Column("provider_id", String, nullable=False),
+    # The provider-native model id (the resolved provider comes from the joined provider row).
+    Column("provider_model_id", String, nullable=False),
+    Column("revision", String, nullable=False),
+    Column("lifecycle", String, nullable=False),
+    Column("capabilities_json", JSON, nullable=False),
+    Column("context_limit", Integer, nullable=False),
+    Column("output_limit", Integer, nullable=False),
+    Column("pricing_json", JSON, nullable=False),
+    # Export-control marking the destination accepts; the gateway gates classification against it.
+    Column("allowed_classifications", JSON, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "id", name="uq_ai_model_tenant_id"),
+)
+
+ai_model_aliases = Table(
+    "ai_model_aliases",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("tenant_scope", String, nullable=False),
+    Column("alias", String, nullable=False),
+    Column("environment", String, nullable=False),
+    Column("model_id", String, nullable=False),
+    # NULL version = floating latest; a value pins the alias to that model revision (prod-recommended).
+    Column("version", String),
+    Column("status", String, nullable=False),
+    # Eval evidence link (no FK — ai_eval_runs is a later phase).
+    Column("eval_run_id", String),
+    Column("effective_at", String),
+    Column("retired_at", String),
+    UniqueConstraint("tenant_id", "alias", "environment", name="uq_ai_model_alias"),
+)
+
+
 def tenant_rls_tables() -> tuple[Table, ...]:
     return tuple(table for table in metadata.sorted_tables if "tenant_id" in table.c)
 

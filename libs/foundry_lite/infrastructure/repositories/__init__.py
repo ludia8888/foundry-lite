@@ -23,6 +23,7 @@ from foundry_lite.infrastructure.repositories.metadata_repository import (
     SqlAlchemyDestructiveDevelopmentAdmin,
     SqlAlchemyMetadataRepository,
 )
+from foundry_lite.infrastructure.repositories.model_registry_repository import SqlAlchemyModelRegistryRepository
 from foundry_lite.infrastructure.repositories.object_index_repository import SqlAlchemyObjectIndexRepository
 from foundry_lite.infrastructure.repositories.object_read_repository import SqlAlchemyObjectReadRepository
 from foundry_lite.infrastructure.repositories.object_set_repository import SqlAlchemyObjectSetRepository
@@ -42,6 +43,7 @@ __all__ = [
     "SqlAlchemyMediaDerivativeRepository",
     "SqlAlchemyMediaReferenceBindingRepository",
     "SqlAlchemyMediaRepository",
+    "SqlAlchemyModelRegistryRepository",
     "SchemaMutationDisabledError",
     "SqlAlchemyDestructiveDevelopmentAdmin",
     "SqlAlchemyMetadataRepository",

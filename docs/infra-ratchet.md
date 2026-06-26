@@ -1016,3 +1016,45 @@ Media/Content Plane (standalone family, not in `activeStack`).
   `test_authoritative_re_read_drops_over_classified_leaked_by_stale_index` (defense-in-depth re-read), and
   `test_empty_classification_back_compat_unchanged` (back-compat). No family change in
   `infra-tricky-matrix.json` (content search stays in its existing family).
+
+- **P0b — governed Model Gateway + registry/alias + egress (shipped):** all LLM access flows through
+  ONE boundary so no provider SDK leaks into app logic. New ports `LanguageModelAdapter`
+  (`complete(ModelRequest) -> ModelResponse` + `stream(ModelRequest) -> Iterable[ModelEvent]`:
+  messages/params/tools → content + tokenUsage + finish_reason + `normalized_tool_calls`) and
+  `ModelRegistryRepository` (catalog: `ai_model_providers`/`ai_models`/`ai_model_aliases`, canonical
+  §10.1 columns). `ModelGatewayService.invoke` (1) **resolves a stable alias →
+  provider/model/revision** (pinned to the alias's `version` if set, else the model's `revision`;
+  the resolved provider comes from the joined provider row's `provider_type`/`profile_name`),
+  (2) **egress-gates BEFORE any provider call** — a request whose `data_classification` is not in
+  the resolved model's `allowed_classifications`, or whose `region_requirement` disagrees with the
+  provider's region, is DENIED typed (`AdapterError` with `details.reason=egress_denied`) and the
+  adapter is never reached, (3) **never silently falls back** — a sunset/deprecated model OR an
+  alias whose `status` is not `enabled` fails typed rather than swapping in another model, (4) calls the wired
+  adapter with credentials referenced by NAME/version via `SecretProvider` (raw key never in app
+  logic/response/trace), and (5) returns the response with provider/resolved id+revision + per-call
+  `model_hash`/`prompt_hash` (raw prompt never logged). `FakeLanguageModel` (deterministic echo) is
+  the SAFE composition default — no Foundry token, no network, existing tests unaffected;
+  `ProviderCompatibleLanguageModel` is the real provider-compatible-proxy adapter whose default
+  raises `language_model_unavailable` (real provider DEFERRED, mirroring the deferred-engine
+  pattern; the seam + contract is what P0b proves). New enforced source-of-truth rule
+  `model_access_is_gateway_governed_with_egress_and_no_silent_fallback` names the tests
+  (`test_gateway_resolves_pinned_revision`, `test_gateway_resolves_floating_latest_when_unpinned`,
+  `test_gateway_denies_egress_when_classification_exceeds_allowance`,
+  `test_gateway_denies_egress_when_region_not_permitted`,
+  `test_gateway_does_not_silently_fall_back_on_deprecated_model`,
+  `test_gateway_does_not_serve_a_non_enabled_alias`, plus the canonical §15.2 deterministic security
+  tests `test_provider_egress_denied_before_network_call` + `test_secret_value_never_logged`,
+  `test_deferred_provider_references_secret_by_name_and_raises_unavailable`).
+  **Documented Palantir** (mirrored): Model Catalog model types (completion/embedding/vision) +
+  lifecycle status + provider/context-window/region; provider-compatible proxy (Foundry token, never
+  a provider API key; `model` = concrete Catalog RID); export-control markings + network egress +
+  georestriction gating classification/region; pin-revision recommended for production
+  (palantir.com/docs/foundry/model-catalog/overview, /aip/llm-provider-compatible-apis,
+  /administration/configure-egress, /integrate-models/transform-model-input).
+  **OUR extension** (clearly NOT a copy of a documented proxy feature): the alias→provider/model/
+  revision table extends the SDK `ModelInput.alias` indirection to the gateway (Palantir has NO alias
+  indirection at the proxy layer — the proxy binds to a concrete RID); per-call model/prompt hash
+  logging; and the no-silent-fallback invariant on write-producing paths. HyDE's existing minimal
+  `CompletionModelAdapter` (L13) is left AS-IS; unifying it onto the gateway is a later P1 step.
+  Unifying tool execution server-side as the invoking user is P1's ToolBroker (the LLM only REQUESTS
+  tools here); the full call ledger is P0c (P0b just computes/returns the hashes).

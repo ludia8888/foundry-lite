@@ -28,6 +28,7 @@ from foundry_lite.infrastructure.adapters import (
     FakeComputeAdapter,
     FakeConnectorAdapter,
     FakeDatasetStorageAdapter,
+    FakeLanguageModel,
     FakeSearchAdapter,
     FakeStreamAdapter,
     FakeWorkflowAdapter,
@@ -92,6 +93,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyMediaReferenceBindingRepository,
     SqlAlchemyMediaRepository,
     SqlAlchemyMetadataRepository,
+    SqlAlchemyModelRegistryRepository,
     SqlAlchemyObjectIndexRepository,
     SqlAlchemyObjectReadRepository,
     SqlAlchemyObjectSetRepository,
@@ -204,6 +206,10 @@ def create_local_core_dependencies(
         embedding_model_adapter=embedding_model_adapter,
         completion_model_adapter=completion_model_adapter,
         vision_embedding_model_adapter=vision_embedding_model_adapter,
+        # AIP P0b: the safe composition default is the deterministic fake (no Foundry token, no
+        # network) so existing tests are unaffected; a real profile injects the proxy adapter.
+        language_model_adapter=FakeLanguageModel(),
+        model_registry_repository=SqlAlchemyModelRegistryRepository(engine),
         search_adapter=search_adapter,
         secret_provider=secret_provider_from_env(),
         stream_adapter=stream_adapter,
