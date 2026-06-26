@@ -209,6 +209,23 @@ def _display_payload(
         "contentHash": _required_str(item, "content_hash"),
         "displayLabel": display_label,
         "navigationRef": signed_navigation_ref,
+        "sourcePreview": _source_preview(item),
+    }
+
+
+def _source_preview(item: AiLedgerRow) -> dict[str, object]:
+    return {
+        "contextItemId": _required_str(item, "id"),
+        "kind": _required_str(item, "kind"),
+        "sourceResourceType": _required_str(item, "source_resource_type"),
+        "sourceResourceId": _required_str(item, "source_resource_id"),
+        "sourceVersion": _required_str(item, "source_version"),
+        "contentHash": _required_str(item, "content_hash"),
+        "retrievalMethod": _required_str(item, "retrieval_method"),
+        "relevanceScore": item.get("relevance_score"),
+        "tokenEstimate": item.get("token_estimate"),
+        "securityPartition": _required_str(item, "security_partition"),
+        "selected": item.get("selected") is True,
     }
 
 

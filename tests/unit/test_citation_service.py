@@ -53,6 +53,20 @@ def test_citation_service_resolves_selected_context_records_ledger_and_returns_s
     assert citation.signed_navigation_ref.startswith("flite-citation-nav.v1.")
     assert citation.ledger_record.context_item_id == "context-item-1"
     assert citation.display_payload["sourceResourceId"] == "Order:O-1001"
+    source_preview = cast(Mapping[str, object], citation.display_payload["sourcePreview"])
+    assert source_preview == {
+        "contextItemId": "context-item-1",
+        "kind": "object",
+        "sourceResourceType": "object",
+        "sourceResourceId": "Order:O-1001",
+        "sourceVersion": "object-version-1",
+        "contentHash": "sha256:context",
+        "retrievalMethod": "semantic",
+        "relevanceScore": 0.98,
+        "tokenEstimate": 44,
+        "securityPartition": "tenant-demo:internal",
+        "selected": True,
+    }
     assert ledger["citations"][0]["rendered_ref"] == "[1] object:Order:O-1001@object-version-1"
     assert "citation-test-secret" not in citation.signed_navigation_ref
 
@@ -61,6 +75,27 @@ def test_citation_service_resolves_selected_context_records_ledger_and_returns_s
     assert payload["context_id"] == "ctx-order-1"
     assert payload["content_hash"] == "sha256:context"
     assert payload["navigation_path"] == "/sources/object/Order:O-1001"
+
+
+def test_citation_service_source_preview_uses_only_ledger_metadata_without_raw_context_text() -> None:
+    engine, repository = _seed_repository()
+    service = _service(engine, repository, _SpyCitationSourceVerifier())
+
+    result = service.resolve(_CTX, _resolve_request())
+
+    source_preview = cast(Mapping[str, object], result.citations[0].display_payload["sourcePreview"])
+    assert source_preview["retrievalMethod"] == "semantic"
+    assert source_preview["contentHash"] == "sha256:context"
+    assert source_preview["securityPartition"] == "tenant-demo:internal"
+    assert {
+        "text",
+        "rawText",
+        "prompt",
+        "promptText",
+        "toolPayload",
+        "providerRequest",
+        "providerResponse",
+    }.isdisjoint(source_preview)
 
 
 def test_citation_service_rejects_context_id_not_in_run_manifest_before_source_reread() -> None:

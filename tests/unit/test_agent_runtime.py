@@ -230,9 +230,17 @@ def test_agent_runtime_resolves_model_citations_into_payload_and_ai_ledger(found
     assert result.run_status == "succeeded"
     assert result.answer == "Order O-1001 is delayed because fulfillment is blocked."
     assert len(payload["citations"]) == 1
-    assert payload["citations"][0]["contextId"] == result.context_ids[0]
-    assert str(payload["citations"][0]["navigationRef"]).startswith("flite-citation-nav.v1.")
-    assert "agent-runtime-citation-secret" not in str(payload["citations"][0]["navigationRef"])
+    citation = payload["citations"][0]
+    assert citation["contextId"] == result.context_ids[0]
+    assert str(citation["navigationRef"]).startswith("flite-citation-nav.v1.")
+    assert "agent-runtime-citation-secret" not in str(citation["navigationRef"])
+    source_preview = citation["sourcePreview"]
+    assert isinstance(source_preview, dict)
+    assert source_preview["contextItemId"] == f"{result.ai_run_id}-context-1"
+    assert source_preview["kind"] == "object"
+    assert source_preview["sourceResourceId"] == "object://Order/O-1001"
+    assert source_preview["retrievalMethod"] == "object_authoritative_reread"
+    assert source_preview["selected"] is True
     assert detail["ai"]["summary"]["citationCount"] == 1
     assert detail["ai"]["citations"][0]["rendered_ref"].startswith("[1] object:")
     assert detail["ai"]["citations"][0]["context_item_id"] == f"{result.ai_run_id}-context-1"

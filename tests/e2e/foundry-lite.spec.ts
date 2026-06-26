@@ -30,6 +30,10 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await expect(page.locator("#aipAgentAnswer")).toHaveText("echo: Explain Order O-1001 for the operator.");
   await expect(page.locator("#aipAgentCitations")).toContainText("object://Order/O-1001");
   await expect(page.locator("#aipAgentCitations")).toContainText("ctx-");
+  await expect(page.locator("#aipAgentCitations")).toContainText("Source preview");
+  await expect(page.locator("#aipAgentCitations")).toContainText("object_authoritative_reread");
+  await expect(page.locator("#aipAgentCitations")).toContainText("tenant-demo:internal");
+  await expect(page.locator("#aipAgentResult")).toContainText('"sourcePreview"');
   await expect(page.locator("#aipAgentResult")).toContainText('"navigationRef": "flite-citation-nav.v1.');
   await expect(page.locator("#runResult")).toContainText('"modelCallCount": 1');
   await expect(page.locator("#runResult")).toContainText('"citationCount": 1');

@@ -1903,6 +1903,27 @@ debugging은 later slices다.
 |---|---|---|
 | Agent citation UI ratchet | `quality:agent-citation-ui` | Web Operations AIP Agent가 citation을 JSON payload에만 숨겨두거나, output schema를 모델 요청에 전달하지 않거나, 검증되지 않은 citation/text를 unsafe DOM으로 렌더링하거나, 브라우저 사용자 흐름에서 Operations citation summary까지 연결하지 못하는 문제 차단 |
 
+### AIP P0s — Agent Source Preview Ratchet
+
+P0s의 현재 slice는 full source viewer나 visual trace debugger가 아니라, P0r에서 화면에
+나온 verified citation card에 안전한 source preview metadata를 붙이는 첫 operator-facing
+출처 확인 경로다. `CitationService`는 model이 준 citation claim을 그대로 믿지 않고 기존처럼
+tenant-scoped AI run manifest, selected context item, source permission, source version/hash를
+검증한 뒤, resolved citation payload에 `sourcePreview`를 추가한다. 이 preview는 selected
+AI run ledger context item에서 온 allowlisted metadata만 담는다: context item id, kind,
+source resource type/id, source version, content hash, retrieval method, relevance score,
+token estimate, security partition, selected flag. Raw retrieved text, prompt text, tool payload,
+provider request/response body는 preview에 포함하지 않는다. Web Operations AIP Agent card는
+이 preview를 `textContent`로 렌더링하고, browser E2E는 같은 user action 뒤 citation card와
+Operations AI detail의 `citationCount`를 함께 확인한다.
+
+Inline answer-span anchors, full source document preview, multi-turn citation repair, and visual
+trace debugging은 later slices다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Agent source preview ratchet | `quality:agent-source-previews` | Citation card가 출처 metadata 없이 opaque label만 보여주거나, preview가 raw context/prompt/tool/provider body를 노출하거나, Web Operations 사용자 흐름에서 retrieval method/security partition/source version을 확인하지 못하는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와

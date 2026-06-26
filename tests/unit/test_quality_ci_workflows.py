@@ -1082,6 +1082,22 @@ def test_agent_citation_ui_gate_runs_after_agent_runtime_citations_before_ai_evi
     assert "operations_ui_record_dlq_retry_shows_result" in package_json
 
 
+def test_agent_source_preview_gate_runs_after_agent_citation_ui_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_citation_ui_step = "pnpm --silent quality:agent-citation-ui"
+    agent_source_preview_step = "pnpm --silent quality:agent-source-previews"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert agent_source_preview_step in script
+    assert script.index(agent_citation_ui_step) < script.index(agent_source_preview_step)
+    assert script.index(agent_source_preview_step) < script.index(ai_evidence_step)
+    assert '"quality:agent-source-previews"' in package_json
+    assert "source_preview" in package_json
+    assert "agent_runtime_resolves_model_citations" in package_json
+    assert "operations_ui_record_dlq_retry_shows_result" in package_json
+
+
 def test_retrieval_orchestrator_gate_runs_after_context_compiler_before_agent_runtime() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

@@ -305,6 +305,27 @@
         overflow-wrap: anywhere;
       }
 
+      .citation-preview {
+        background: #f7f4ed;
+        border: 1px solid var(--line);
+        display: grid;
+        gap: 6px;
+        padding: 8px;
+      }
+
+      .citation-preview-title {
+        color: var(--ink);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      .citation-preview-grid {
+        display: grid;
+        gap: 6px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
       .object-card {
         border: 1px solid var(--line);
         display: grid;
@@ -408,7 +429,8 @@
         .row,
         .toolbar,
         .metric-strip,
-        .citation-meta {
+        .citation-meta,
+        .citation-preview-grid {
           grid-template-columns: 1fr;
         }
 
@@ -1081,6 +1103,10 @@
         title.textContent = citation.displayLabel ?? citation.sourceResourceId ?? citation.contextId ?? "Citation";
         header.append(citationIndex, title);
         card.append(header, citationMeta(citation));
+        const preview = sourcePreviewBlock(citation.sourcePreview);
+        if (preview) {
+          card.appendChild(preview);
+        }
         return card;
       }
 
@@ -1093,6 +1119,31 @@
           citationMetaItem("Hash", shortHash(citation.contentHash)),
         );
         return meta;
+      }
+
+      function sourcePreviewBlock(sourcePreview) {
+        if (!sourcePreview || typeof sourcePreview !== "object" || Array.isArray(sourcePreview)) {
+          return null;
+        }
+        const block = document.createElement("section");
+        block.className = "citation-preview";
+        const title = document.createElement("span");
+        title.className = "citation-preview-title";
+        title.textContent = "Source preview";
+        const grid = document.createElement("div");
+        grid.className = "citation-meta citation-preview-grid";
+        grid.append(
+          citationMetaItem("Kind", sourcePreview.kind ?? "-"),
+          citationMetaItem("Method", sourcePreview.retrievalMethod ?? "-"),
+          citationMetaItem("Version", sourcePreview.sourceVersion ?? "-"),
+          citationMetaItem("Tokens", sourcePreview.tokenEstimate ?? "-"),
+          citationMetaItem("Partition", sourcePreview.securityPartition ?? "-"),
+          citationMetaItem("Selected", sourcePreview.selected === true ? "yes" : "no"),
+          citationMetaItem("Item", sourcePreview.contextItemId ?? "-"),
+          citationMetaItem("Hash", shortHash(sourcePreview.contentHash)),
+        );
+        block.append(title, grid);
+        return block;
       }
 
       function citationMetaItem(label, value) {
