@@ -1839,13 +1839,32 @@ fail closed로 확인하고, Agent Runtime state의 `objectType`/`objectId`가 �
 source ref/version, `sha256:` content hash, retrieval method, security partition, token estimate를
 담고, max item/token budget에 맞게 dedupe/packing된다.
 
-Beyond current P0o, AIP-specific document context packing, already-covered ontology/media
-retrieval outputs를 Agent context로 묶는 dense+lexical fusion, optional reranking, citation
-rendering, visual retrieval debugging은 later slices다.
+Beyond current P0o, AIP-specific document context packing is handled by P0p below. Already-covered
+ontology/media retrieval outputs를 Agent context로 묶는 broader dense+lexical fusion, optional
+reranking, citation rendering, visual retrieval debugging은 later slices다.
 
 | Gate | Command | Blocks |
 |---|---|---|
 | Retrieval orchestrator object-context ratchet | `quality:retrieval-orchestrator` | Agent Runtime이 fake context나 stale search-index text를 모델 prompt에 넣거나, object read 권한/마스킹을 우회하거나, 다른 tenant security partition/context budget 초과를 조용히 통과시키는 문제 차단 |
+
+### AIP P0p — Retrieval Document Context Ratchet
+
+P0p의 현재 slice는 full ontology/media fusion이나 visual retrieval debugger가 아니라, 이미
+구현된 media/content retrieval 결과를 Agent Runtime context로 안전하게 묶는 첫 문서 경로다.
+`DefaultContentRetrievalService`는 검색 hit를 반환하기 전에 DB `content_units` row를 다시 읽고,
+tenant/security envelope, classification pre-filter, text hash를 검증한 뒤 authoritative text를
+`ContentSearchHit`에 채운다. `RetrievalOrchestrator`는 이 검증된 hit를 `kind=document`
+`RetrievedContextItem`으로 변환하고, `content-unit://{source_media_item_version_id}/{content_unit_id}`
+source ref, source media version, `sha256:` prompt-text hash, retrieval method, security partition,
+token estimate를 담는다. Agent Runtime은 `modelAllowedClassifications`를 retrieval request까지
+전달하므로 over-classified document가 ranking/prompt 전에 빠질 수 있다.
+
+Broader object+media OAG fusion, cross-source diversity, optional reranking, citation rendering,
+visual retrieval debugging은 later slices다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Retrieval document context ratchet | `quality:retrieval-document-context` | Agent Runtime이 document/content search hit의 stale index text를 prompt에 넣거나, content unit DB re-read/hash/security/classification pre-filter를 건너뛰거나, document context가 AI run ledger에서 source/version/hash 없이 남는 문제 차단 |
 
 ### S60 — AI Evidence Lineage Ratchet
 

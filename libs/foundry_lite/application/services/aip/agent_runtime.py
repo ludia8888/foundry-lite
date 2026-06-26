@@ -37,7 +37,11 @@ from foundry_lite.application.services.aip.context_compiler import (
     ContextCompilerService,
 )
 from foundry_lite.application.services.aip.model_gateway import ModelGatewayService, ModelResolution
-from foundry_lite.application.services.aip.retrieval_orchestrator import RetrievalObjectQuery, RetrievalOrchestrator
+from foundry_lite.application.services.aip.retrieval_orchestrator import (
+    RetrievalContentSearch,
+    RetrievalObjectQuery,
+    RetrievalOrchestrator,
+)
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 
@@ -66,6 +70,7 @@ class AgentRuntimeRequest:
     session_id: str | None = None
     ontology_version_id: str = "active-ontology"
     data_classification: str = "internal"
+    allowed_classifications: tuple[str, ...] | None = None
     region_requirement: str | None = None
     max_context_items: int = 4
     max_context_tokens: int = 1200
@@ -109,10 +114,16 @@ class AgentRuntimeService(CoreService):
     """Retrieve context, compile prompt, call model gateway, and write ledger evidence."""
 
     required_dependencies = ("engine", "ai_run_repository")
-    required_collaborators = ("context_compiler_service", "model_gateway_service", "object_query_service")
+    required_collaborators = (
+        "context_compiler_service",
+        "model_gateway_service",
+        "object_query_service",
+        "content_retrieval_service",
+    )
     context_compiler_service: ContextCompilerService
     model_gateway_service: ModelGatewayService
     object_query_service: RetrievalObjectQuery
+    content_retrieval_service: RetrievalContentSearch
 
     def run(self, ctx: RequestContext, request: AgentRuntimeRequest) -> AgentRuntimeResult:
         ai_run_id: str | None = None
@@ -139,9 +150,10 @@ class AgentRuntimeService(CoreService):
         return _success_result(request, ai_run_id, session_id, context_items, response)
 
     def _retrieve_context(self, ctx: RequestContext, request: AgentRuntimeRequest) -> tuple[RetrievedContextItem, ...]:
-        items = RetrievalOrchestrator(self.object_query_service).retrieve_context(
-            ctx=ctx, request=_retrieval_request(ctx, request)
-        )
+        items = RetrievalOrchestrator(
+            self.object_query_service,
+            content_retrieval_service=self.content_retrieval_service,
+        ).retrieve_context(ctx=ctx, request=_retrieval_request(ctx, request))
         _guard_context_budget(request, items)
         return items
 
@@ -271,6 +283,7 @@ def _retrieval_request(ctx: RequestContext, request: AgentRuntimeRequest) -> Con
         max_context_tokens=request.max_context_tokens,
         security_partition=request.security_partition,
         state_json=request.state_json,
+        allowed_classifications=request.allowed_classifications,
     )
 
 

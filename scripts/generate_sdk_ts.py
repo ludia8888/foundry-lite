@@ -501,6 +501,7 @@ def render_typescript(ontology: OntologyDef) -> str:
         "  sessionId?: string;",
         "  ontologyVersionId?: string;",
         "  dataClassification?: string;",
+        "  modelAllowedClassifications?: string[];",
         "  regionRequirement?: string | null;",
         "  maxContextItems?: number;",
         "  maxContextTokens?: number;",

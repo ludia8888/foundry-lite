@@ -311,6 +311,7 @@ def _agent_runtime_request_from_payload(payload: Mapping[str, object]) -> AgentR
         session_id=_optional_text(payload, "sessionId"),
         ontology_version_id=_text_default(payload, "ontologyVersionId", "active-ontology"),
         data_classification=_text_default(payload, "dataClassification", "internal"),
+        allowed_classifications=_optional_text_items(payload, "modelAllowedClassifications"),
         region_requirement=_optional_text(payload, "regionRequirement"),
         max_context_items=_int_default(payload, "maxContextItems", 4),
         max_context_tokens=_int_default(payload, "maxContextTokens", 1200),
@@ -374,6 +375,12 @@ def _text_items(payload: Mapping[str, object], key: str) -> tuple[str, ...]:
 def _text_items_default(payload: Mapping[str, object], key: str, default: tuple[str, ...]) -> tuple[str, ...]:
     if key not in payload:
         return default
+    return _text_items(payload, key)
+
+
+def _optional_text_items(payload: Mapping[str, object], key: str) -> tuple[str, ...] | None:
+    if key not in payload or payload.get(key) is None:
+        return None
     return _text_items(payload, key)
 
 

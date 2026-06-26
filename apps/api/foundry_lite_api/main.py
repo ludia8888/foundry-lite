@@ -235,6 +235,7 @@ class AipAgentRunRequest(BaseModel):
     session_id: str | None = Field(default=None, alias="sessionId")
     ontology_version_id: str = Field(default="active-ontology", alias="ontologyVersionId")
     data_classification: str = Field(default="internal", alias="dataClassification")
+    model_allowed_classifications: list[str] | None = Field(default=None, alias="modelAllowedClassifications")
     region_requirement: str | None = Field(default=None, alias="regionRequirement")
     max_context_items: int = Field(default=4, alias="maxContextItems")
     max_context_tokens: int = Field(default=1200, alias="maxContextTokens")

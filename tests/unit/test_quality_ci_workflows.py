@@ -1064,6 +1064,21 @@ def test_retrieval_orchestrator_gate_runs_after_context_compiler_before_agent_ru
     assert "retrieval_orchestrator_gate" in package_json
 
 
+def test_retrieval_document_context_gate_runs_after_object_orchestrator_before_agent_runtime() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    retrieval_orchestrator_step = "pnpm --silent quality:retrieval-orchestrator"
+    retrieval_document_step = "pnpm --silent quality:retrieval-document-context"
+    agent_runtime_step = "pnpm --silent quality:agent-runtime"
+    assert retrieval_document_step in script
+    assert script.index(retrieval_orchestrator_step) < script.index(retrieval_document_step)
+    assert script.index(retrieval_document_step) < script.index(agent_runtime_step)
+    assert '"quality:retrieval-document-context"' in package_json
+    assert "tests/unit/test_media_content_search.py" in package_json
+    assert "retrieval_document_context_gate" in package_json
+
+
 def test_insight_review_gate_runs_after_ai_evidence_gate() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

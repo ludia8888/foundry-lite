@@ -53,6 +53,7 @@ class ContextRetrievalRequest:
     max_context_tokens: int
     security_partition: str
     state_json: Mapping[str, object] = field(default_factory=_empty_state_json)
+    allowed_classifications: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse, ModelToolCall
+from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord, MediaDerivativeRecord
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
 from sqlalchemy import func, select
@@ -60,6 +61,35 @@ def test_agent_runtime_retrieves_context_calls_model_and_links_operations(foundr
     assert detail["row"]["resolved_model_id"] == "local-fake-model"
     assert detail["row"]["compiled_prompt_hash"].startswith("sha256:")
     assert detail["ai"]["events"][0]["event_type"] == "received"
+
+
+def test_agent_runtime_packs_document_context_into_ai_ledger(foundry: Any) -> None:
+    _seed_agent_document_context(foundry)
+
+    result = foundry.aip.run_agent_payload(
+        payload={
+            **_payload(),
+            "agentRunId": "agent-runtime-document-context",
+            "userMessage": "Summarize the expedited payment terms.",
+            "stateJson": {},
+            "modelAllowedClassifications": ["internal"],
+        },
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "succeeded"
+    assert len(result.context_ids) == 1
+    with foundry.engine.begin() as conn:
+        row = (
+            conn.execute(select(db.ai_context_items).where(db.ai_context_items.c.ai_run_id == result.ai_run_id))
+            .mappings()
+            .one()
+        )
+    assert row["kind"] == "document"
+    assert row["source_resource_type"] == "content_unit"
+    assert row["source_resource_id"] == "content-unit://miv-agent-doc-1/cu-agent-doc-1"
+    assert row["retrieval_method"] == "content_hybrid_authoritative_reread"
+    assert row["content_hash"].startswith("sha256:")
 
 
 def test_agent_runtime_rejects_tool_calls_and_marks_seeded_run_failed(foundry: Any) -> None:
@@ -151,6 +181,52 @@ def _payload() -> dict[str, object]:
         "maxOutputTokens": 512,
         "policyVersion": "policy-v1",
     }
+
+
+def _seed_agent_document_context(foundry: Any) -> None:
+    derivative_id = "mder-agent-doc-1"
+    envelope = {"tenantId": _CTX.tenant_id, "classification": "internal"}
+    with foundry.engine.begin() as conn:
+        foundry._services.media.retrieval.media_derivative_repository.create_derivative_or_get_existing(
+            transaction=conn,
+            record=MediaDerivativeRecord(
+                media_derivative_id=derivative_id,
+                tenant_id=_CTX.tenant_id,
+                source_media_item_version_id="miv-agent-doc-1",
+                derivative_kind="pdf_text",
+                processor_spec_hash="agent-doc-spec",
+                processor_name="pdf_text_v1",
+                processor_version="1.0.0",
+                model_name=None,
+                model_version="",
+                params_hash="agent-doc-spec",
+                security_envelope=dict(envelope),
+                status="COMMITTED",
+                created_at="2026-06-25T00:00:00Z",
+            ),
+        )
+        foundry._services.media.retrieval.media_derivative_repository.insert_content_units(
+            transaction=conn,
+            records=[
+                ContentUnitRecord(
+                    content_unit_id="cu-agent-doc-1",
+                    tenant_id=_CTX.tenant_id,
+                    source_media_item_version_id="miv-agent-doc-1",
+                    derivative_id=derivative_id,
+                    unit_kind="page",
+                    ordinal=1,
+                    text="Expedited payment terms require approval before supplier release.",
+                    text_hash="agent-doc-text-hash",
+                    chunk_spec_hash="agent-doc-chunk-v1",
+                    security_envelope=dict(envelope),
+                    page_number=7,
+                    created_at="2026-06-25T00:00:00Z",
+                )
+            ],
+        )
+    foundry.media.configure_content_generation(_CTX, generation="agent-doc-g1")
+    foundry.media.index_derivative(_CTX, media_derivative_id=derivative_id, generation="agent-doc-g1")
+    foundry.media.promote_content_generation(_CTX, expected_active="", generation="agent-doc-g1")
 
 
 def _table_count(engine: Any, table: Any) -> int:

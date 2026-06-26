@@ -317,6 +317,7 @@ export type AipAgentRunRequest = {
   sessionId?: string;
   ontologyVersionId?: string;
   dataClassification?: string;
+  modelAllowedClassifications?: string[];
   regionRequirement?: string | null;
   maxContextItems?: number;
   maxContextTokens?: number;

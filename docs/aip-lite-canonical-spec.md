@@ -195,7 +195,11 @@ Every error payload carries `request_id, ai_run_id, retryability, operator_messa
   `RetrievedContextItem{context_id, kind∈object|document|function, text, source_ref, source_version,
 content_hash, relevance_score, retrieval_method, security_partition, token_estimate}`. Current P0o
   covers the first object-context baseline: Agent Runtime state objects and object keyword hits are
-  authoritatively re-read through Object Query before becoming context.
+  authoritatively re-read through Object Query before becoming context. Current P0p adds the first
+  document-context baseline: authoritative `DefaultContentRetrievalService` hits carry DB re-read
+  content-unit text into `kind=document` context items, with `content-unit://...` source refs,
+  source media version pins, `sha256:` prompt-text hashes, classification pre-filter propagation,
+  and the same item/token packing.
 - **Context Compiler (§8.6)**: fixed order = 1 platform safety policy, 2 published agent instruction,
   3 state schema+visible values, 4 tool definitions, 5 authoritative retrieved context, 6 citation
   mapping, 7 output schema, 8 user message. Emits `compiled_prompt_hash, context_manifest_hash,

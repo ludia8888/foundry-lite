@@ -43,11 +43,17 @@ class DefaultContentRetrievalService(CoreService):
             )
         unit_by_id = {unit.content_unit_id: unit for unit in units}
         return [
-            hit
+            authoritative
             for hit in hits
-            if _is_authoritative(
-                hit, unit_by_id.get(hit.content_unit_id), ctx.tenant_id, scoped.allowed_classifications
+            if (
+                authoritative := _authoritative_hit(
+                    hit,
+                    unit_by_id.get(hit.content_unit_id),
+                    ctx.tenant_id,
+                    scoped.allowed_classifications,
+                )
             )
+            is not None
         ]
 
     def _with_query_vector(self, query: HybridContentQuery) -> HybridContentQuery:
@@ -66,18 +72,32 @@ class DefaultContentRetrievalService(CoreService):
         )
 
 
-def _is_authoritative(
+def _authoritative_hit(
     hit: ContentSearchHit,
     unit: ContentUnitRecord | None,
     tenant_id: str,
     allowed_classifications: tuple[str, ...] | None,
-) -> bool:
+) -> ContentSearchHit | None:
     if unit is None:
-        return False  # stale: the source content unit no longer exists
+        return None  # stale: the source content unit no longer exists
     if unit.tenant_id != tenant_id or str(unit.security_envelope.get("tenantId", unit.tenant_id)) != tenant_id:
-        return False  # ACL: never leak another tenant's content
+        return None  # ACL: never leak another tenant's content
     # AIP P0a defense-in-depth: re-apply the classification gate against the authoritative DB row,
     # so even a stale/over-broad index that leaked an over-classified unit is dropped here.
-    if not is_classification_cleared(str(unit.security_envelope.get("classification", "")), allowed_classifications):
-        return False
-    return hit.text_hash == unit.text_hash  # citation integrity: index must match the truth
+    classification = str(unit.security_envelope.get("classification", ""))
+    if not is_classification_cleared(classification, allowed_classifications):
+        return None
+    if hit.text_hash != unit.text_hash:
+        return None  # citation integrity: index must match the truth
+    return ContentSearchHit(
+        source_media_item_version_id=unit.source_media_item_version_id,
+        content_unit_id=unit.content_unit_id,
+        index_generation=hit.index_generation,
+        page_number=unit.page_number,
+        start_ms=unit.start_ms,
+        end_ms=unit.end_ms,
+        text_hash=unit.text_hash,
+        text=unit.text,
+        chunk_spec_hash=unit.chunk_spec_hash,
+        classification=classification,
+    )

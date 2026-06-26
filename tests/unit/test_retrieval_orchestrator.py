@@ -6,13 +6,19 @@ from typing import Any
 
 import pytest
 from foundry_lite.application.ports import ObjectPayload, ObjectQueryItem, ObjectQueryResult
+from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
+from foundry_lite.application.ports.content_index import ContentSearchHit, HybridContentQuery
 from foundry_lite.application.ports.context_provider import (
     ContextRetrievalError,
     ContextRetrievalRequest,
     RetrievedContextItem,
 )
 from foundry_lite.application.services.aip.context_compiler import ContextCompileRequest, ContextCompilerService
-from foundry_lite.application.services.aip.retrieval_orchestrator import RetrievalObjectQuery, RetrievalOrchestrator
+from foundry_lite.application.services.aip.retrieval_orchestrator import (
+    RetrievalContentSearch,
+    RetrievalObjectQuery,
+    RetrievalOrchestrator,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 
@@ -130,6 +136,39 @@ class _NoisyQueryObjectQuery(_FakeObjectQuery):
         }
 
 
+class _FakeContentSearch:
+    def __init__(self) -> None:
+        self.last_query: HybridContentQuery | None = None
+
+    def search_content(self, ctx: RequestContext, *, query: HybridContentQuery) -> list[ContentSearchHit]:
+        self.last_query = query
+        return [
+            ContentSearchHit(
+                source_media_item_version_id="miv-contract-v3",
+                content_unit_id="cu-payment-terms",
+                index_generation="content-g17",
+                page_number=2,
+                text_hash="unit-text-hash",
+                text="AUTHORITATIVE payment terms from the re-read content unit",
+                chunk_spec_hash="chunk-v1",
+                classification="internal",
+            )
+        ]
+
+
+class _FailingContentSearch:
+    def search_content(self, ctx: RequestContext, *, query: HybridContentQuery) -> list[ContentSearchHit]:
+        raise AdapterError(
+            AdapterFailure(
+                adapter_profile="fake-content",
+                operation="search",
+                kind="unavailable",
+                is_retryable=True,
+                operator_message="content index unavailable",
+            )
+        )
+
+
 def test_retrieval_orchestrator_rereads_state_object_and_hash_compiles(foundry: Any) -> None:
     prepare_indexed_demo(foundry)
 
@@ -190,6 +229,46 @@ def test_retrieval_orchestrator_returns_empty_without_object_hint() -> None:
     assert items == ()
 
 
+def test_retrieval_orchestrator_packs_document_context_and_hash_compiles() -> None:
+    content = _FakeContentSearch()
+
+    items = _service(_FakeObjectQuery(), content).retrieve_context(ctx=_CTX, request=_request(state_json={}))
+    compiled = ContextCompilerService().compile(ctx=_CTX, request=_compile_request(items))
+
+    assert len(items) == 1
+    assert items[0].kind == "document"
+    assert items[0].source_ref == "content-unit://miv-contract-v3/cu-payment-terms"
+    assert items[0].source_version == "miv-contract-v3"
+    assert items[0].retrieval_method == "content_hybrid_authoritative_reread"
+    assert items[0].content_hash.startswith("sha256:")
+    assert "AUTHORITATIVE payment terms" in items[0].text
+    assert compiled.context_ids == (items[0].context_id,)
+
+
+def test_retrieval_orchestrator_passes_classification_prefilter_to_content_search() -> None:
+    content = _FakeContentSearch()
+
+    _service(_FakeObjectQuery(), content).retrieve_context(
+        ctx=_CTX,
+        request=_request(
+            state_json={},
+            allowed_classifications=("public",),
+        ),
+    )
+
+    assert content.last_query is not None
+    assert content.last_query.allowed_classifications == ("public",)
+
+
+def test_retrieval_orchestrator_fails_closed_when_content_search_unavailable() -> None:
+    with pytest.raises(ContextRetrievalError) as exc_info:
+        _service(_FakeObjectQuery(), _FailingContentSearch()).retrieve_context(
+            ctx=_CTX, request=_request(state_json={})
+        )
+
+    assert exc_info.value.reason == "context_content_search_unavailable"
+
+
 def test_retrieval_orchestrator_fails_closed_for_missing_explicit_object() -> None:
     with pytest.raises(ContextRetrievalError) as exc_info:
         _service(_MissingExplicitObjectQuery()).retrieve_context(ctx=_CTX, request=_request())
@@ -242,8 +321,11 @@ def test_retrieval_orchestrator_rejects_object_id_without_object_type() -> None:
     assert exc_info.value.reason == "invalid_state_context"
 
 
-def _service(object_query: RetrievalObjectQuery) -> RetrievalOrchestrator:
-    return RetrievalOrchestrator(object_query)
+def _service(
+    object_query: RetrievalObjectQuery,
+    content_search: RetrievalContentSearch | None = None,
+) -> RetrievalOrchestrator:
+    return RetrievalOrchestrator(object_query, content_retrieval_service=content_search)
 
 
 def _request(
@@ -254,6 +336,7 @@ def _request(
     max_context_items: int = 4,
     max_context_tokens: int = 1200,
     security_partition: str = "tenant-demo:internal",
+    allowed_classifications: tuple[str, ...] | None = None,
 ) -> ContextRetrievalRequest:
     return ContextRetrievalRequest(
         tenant_id=_CTX.tenant_id,
@@ -265,6 +348,7 @@ def _request(
         max_context_tokens=max_context_tokens,
         security_partition=security_partition,
         state_json=state_json if state_json is not None else {"objectType": "Order", "objectId": "O-1001"},
+        allowed_classifications=allowed_classifications,
     )
 
 

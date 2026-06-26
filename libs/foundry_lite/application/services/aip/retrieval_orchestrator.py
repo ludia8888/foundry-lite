@@ -1,9 +1,10 @@
-"""AIP Retrieval Orchestrator baseline (P0o, §8.5).
+"""AIP Retrieval Orchestrator baseline (P0o/P0p, §8.5).
 
 The orchestrator converts user turn state into authorized, versioned context
 items. This first product slice supports ontology object context: explicit
 state objects are authoritatively re-read, and object keyword hits are re-read
-before they become model-visible context.
+before they become model-visible context. P0p also packs already-authorized
+content-unit retrieval hits into document context items.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from foundry_lite.application.ports import ObjectPayload, ObjectQueryResult
+from foundry_lite.application.ports.adapter_failure import AdapterError
+from foundry_lite.application.ports.content_index import ContentSearchHit, HybridContentQuery
 from foundry_lite.application.ports.context_provider import (
     ContextRetrievalError,
     ContextRetrievalRequest,
@@ -44,6 +47,10 @@ class RetrievalObjectQuery(Protocol):
     ) -> ObjectQueryResult: ...
 
 
+class RetrievalContentSearch(Protocol):
+    def search_content(self, ctx: RequestContext, *, query: HybridContentQuery) -> list[ContentSearchHit]: ...
+
+
 @dataclass(frozen=True)
 class ObjectRef:
     object_type: str
@@ -52,9 +59,10 @@ class ObjectRef:
 
 @dataclass(frozen=True)
 class RetrievalOrchestrator:
-    """Retrieve object context through existing authorization boundaries."""
+    """Retrieve object/document context through existing authorization boundaries."""
 
     object_query_service: RetrievalObjectQuery
+    content_retrieval_service: RetrievalContentSearch | None = None
 
     def retrieve_context(
         self, *, ctx: RequestContext, request: ContextRetrievalRequest
@@ -66,13 +74,14 @@ class RetrievalOrchestrator:
     def _candidate_items(
         self, ctx: RequestContext, request: ContextRetrievalRequest
     ) -> tuple[RetrievedContextItem, ...]:
+        object_items: tuple[RetrievedContextItem, ...]
         explicit = _explicit_object_ref(request.state_json)
         if explicit is not None:
-            return (self._explicit_object_item(ctx, request, explicit),)
-        object_type = _state_string(request.state_json, "objectType")
-        if object_type is None:
-            return ()
-        return self._query_object_items(ctx, request, object_type)
+            object_items = (self._explicit_object_item(ctx, request, explicit),)
+        else:
+            object_type = _state_string(request.state_json, "objectType")
+            object_items = () if object_type is None else self._query_object_items(ctx, request, object_type)
+        return (*object_items, *self._document_items(ctx, request))
 
     def _explicit_object_item(
         self, ctx: RequestContext, request: ContextRetrievalRequest, ref: ObjectRef
@@ -121,6 +130,29 @@ class RetrievalOrchestrator:
                 continue
         return tuple(payloads)
 
+    def _document_items(
+        self, ctx: RequestContext, request: ContextRetrievalRequest
+    ) -> tuple[RetrievedContextItem, ...]:
+        if self.content_retrieval_service is None or not request.query.strip():
+            return ()
+        try:
+            hits = self.content_retrieval_service.search_content(
+                ctx,
+                query=HybridContentQuery(
+                    tenant_id=ctx.tenant_id,
+                    text=_normalized_query(request.query),
+                    top_k=request.max_context_items,
+                    allowed_classifications=request.allowed_classifications,
+                ),
+            )
+        except AdapterError as exc:
+            raise _retrieval_failure("context_content_search_unavailable", exc) from exc
+        return tuple(
+            _document_item(hit, request, "content_hybrid_authoritative_reread", _rank_score(index))
+            for index, hit in enumerate(hits)
+            if hit.text
+        )
+
 
 def _guard_request(ctx: RequestContext, request: ContextRetrievalRequest) -> None:
     if request.tenant_id != ctx.tenant_id or request.actor_user_id != ctx.actor_user_id:
@@ -165,6 +197,30 @@ def _object_item(
     )
 
 
+def _document_item(
+    hit: ContentSearchHit,
+    request: ContextRetrievalRequest,
+    retrieval_method: str,
+    relevance_score: float,
+) -> RetrievedContextItem:
+    text = _document_text(hit)
+    source_ref = f"content-unit://{hit.source_media_item_version_id}/{hit.content_unit_id}"
+    source_version = hit.source_media_item_version_id
+    content_hash = _hash_text(text)
+    return RetrievedContextItem(
+        context_id=f"ctx-{_short_hash(source_ref, source_version, content_hash)}",
+        kind="document",
+        text=text,
+        source_ref=source_ref,
+        source_version=source_version,
+        content_hash=content_hash,
+        relevance_score=relevance_score,
+        retrieval_method=retrieval_method,
+        security_partition=request.security_partition,
+        token_estimate=_token_estimate(text),
+    )
+
+
 def _object_text(payload: Mapping[str, object]) -> str:
     visible_payload = {
         "objectId": payload["objectId"],
@@ -173,6 +229,22 @@ def _object_text(payload: Mapping[str, object]) -> str:
         "properties": payload.get("properties", {}),
     }
     return _json_block(visible_payload)
+
+
+def _document_text(hit: ContentSearchHit) -> str:
+    return _json_block(
+        {
+            "contentUnitId": hit.content_unit_id,
+            "sourceMediaItemVersionId": hit.source_media_item_version_id,
+            "indexGeneration": hit.index_generation,
+            "pageNumber": hit.page_number,
+            "startMs": hit.start_ms,
+            "endMs": hit.end_ms,
+            "chunkSpecHash": hit.chunk_spec_hash,
+            "textHash": hit.text_hash,
+            "text": hit.text,
+        }
+    )
 
 
 def _pack_items(
