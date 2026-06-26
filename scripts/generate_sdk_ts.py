@@ -513,6 +513,7 @@ def render_typescript(ontology: OntologyDef) -> str:
         "  policyVersion?: string;",
         "  toolManifest?: AipBuilderToolSpec[];",
         "  agentAllowedTools?: string[];",
+        "  agentAllowedActions?: string[];",
         "};",
         "export type AipAgentRunResult = {",
         "  agentRunId: string;",

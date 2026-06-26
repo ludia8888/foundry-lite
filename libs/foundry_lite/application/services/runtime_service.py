@@ -62,16 +62,25 @@ from foundry_lite.application.services.runtime_run_queries import (
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, PermissionDenied
 
+_OPERATIONS_FORBIDDEN_JSON_KEYS = frozenset({"actionproposal"})
+
 
 def _redact_sensitive(value: object, sensitive: set[str]) -> object:
     if isinstance(value, Mapping):
         return {
-            key: "***MASKED***" if key in sensitive else _redact_sensitive(item, sensitive)
+            key: "***MASKED***"
+            if key in sensitive or _is_forbidden_operations_key(key)
+            else _redact_sensitive(item, sensitive)
             for key, item in value.items()
         }
     if isinstance(value, list):
         return [_redact_sensitive(item, sensitive) for item in value]
     return value
+
+
+def _is_forbidden_operations_key(key: object) -> bool:
+    normalized = "".join(char for char in str(key).lower() if char.isalnum())
+    return normalized in _OPERATIONS_FORBIDDEN_JSON_KEYS
 
 
 class RuntimeService(CoreService):

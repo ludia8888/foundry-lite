@@ -264,6 +264,7 @@ class AipAgentRunRequest(BaseModel):
     policy_version: str = Field(default="policy-v1", alias="policyVersion")
     tool_manifest: list[AipBuilderToolSpecRequest] = Field(default_factory=list, alias="toolManifest")
     agent_allowed_tools: list[str] = Field(default_factory=list, alias="agentAllowedTools")
+    agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
 
 
 class DeadLetterBulkRetryRequest(BaseModel):

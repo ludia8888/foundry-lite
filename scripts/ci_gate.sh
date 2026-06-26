@@ -434,6 +434,8 @@ run_runtime_gate() {
 
   run_runtime_step "AIP Agent Runtime tool loop ratchet" pnpm --silent quality:agent-tool-loop
 
+  run_runtime_step "AIP Agent action proposal tool ratchet" pnpm --silent quality:agent-action-proposal-tool
+
   run_runtime_step "AIP Agent Runtime citation rendering ratchet" pnpm --silent quality:agent-runtime-citations
 
   run_runtime_step "AIP Agent citation UI ratchet" pnpm --silent quality:agent-citation-ui

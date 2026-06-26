@@ -1137,12 +1137,35 @@ def test_agent_tool_loop_gate_runs_after_agent_runtime_before_citations() -> Non
 
     agent_runtime_step = "pnpm --silent quality:agent-runtime"
     agent_tool_loop_step = "pnpm --silent quality:agent-tool-loop"
+    agent_action_proposal_step = "pnpm --silent quality:agent-action-proposal-tool"
     agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
     assert agent_tool_loop_step in script
-    assert script.index(agent_runtime_step) < script.index(agent_tool_loop_step) < script.index(agent_citation_step)
+    assert (
+        script.index(agent_runtime_step) < script.index(agent_tool_loop_step) < script.index(agent_action_proposal_step)
+    )
+    assert script.index(agent_action_proposal_step) < script.index(agent_citation_step)
     assert '"quality:agent-tool-loop"' in package_json
     assert "agent_runtime_executes_one_model_tool_call_through_broker_and_finishes" in package_json
     assert "api_aip_agent_run_executes_brokered_tool_loop" in package_json
+
+
+def test_agent_action_proposal_tool_gate_runs_after_tool_loop_before_citations() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_tool_loop_step = "pnpm --silent quality:agent-tool-loop"
+    agent_action_proposal_step = "pnpm --silent quality:agent-action-proposal-tool"
+    agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
+    assert agent_action_proposal_step in script
+    assert (
+        script.index(agent_tool_loop_step)
+        < script.index(agent_action_proposal_step)
+        < script.index(agent_citation_step)
+    )
+    assert '"quality:agent-action-proposal-tool"' in package_json
+    assert "agent_runtime_action_propose_tool" in package_json
+    assert "agent_runtime_direct_write_tool_is_denied" in package_json
+    assert "api_aip_agent_run_proposes_action_for_human_review" in package_json
 
 
 def test_agent_runtime_citation_gate_runs_after_agent_runtime_before_ai_evidence() -> None:
@@ -1152,13 +1175,16 @@ def test_agent_runtime_citation_gate_runs_after_agent_runtime_before_ai_evidence
     citation_service_step = "pnpm --silent quality:citation-service"
     agent_runtime_step = "pnpm --silent quality:agent-runtime"
     agent_tool_loop_step = "pnpm --silent quality:agent-tool-loop"
+    agent_action_proposal_step = "pnpm --silent quality:agent-action-proposal-tool"
     agent_citation_step = "pnpm --silent quality:agent-runtime-citations"
     ai_evidence_step = "pnpm --silent quality:ai-evidence"
     assert agent_citation_step in script
     assert script.index(citation_service_step) < script.index(agent_citation_step)
     assert script.index(agent_runtime_step) < script.index(agent_tool_loop_step)
-    assert script.index(agent_tool_loop_step) < script.index(agent_citation_step) < script.index(ai_evidence_step)
+    assert script.index(agent_tool_loop_step) < script.index(agent_action_proposal_step)
+    assert script.index(agent_action_proposal_step) < script.index(agent_citation_step) < script.index(ai_evidence_step)
     assert '"quality:agent-tool-loop"' in package_json
+    assert '"quality:agent-action-proposal-tool"' in package_json
     assert "agent_runtime_executes_one_model_tool_call_through_broker_and_finishes" in package_json
     assert "api_aip_agent_run_executes_brokered_tool_loop" in package_json
     assert '"quality:agent-runtime-citations"' in package_json

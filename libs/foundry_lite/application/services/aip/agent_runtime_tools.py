@@ -6,7 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from foundry_lite.application.ports.ai_run_repository import AiToolCallRecord
 from foundry_lite.application.ports.language_model import ModelMessage, ModelRequest, ModelResponse, ModelToolCall
+from foundry_lite.application.services.aip.action_proposal import (
+    ActionProposalError,
+    ActionProposalRequest,
+    ActionProposalResult,
+)
 from foundry_lite.application.services.aip.context_compiler import CompiledContext, ToolDefinition
 from foundry_lite.application.services.aip.tool_broker import (
     ToolBrokerError,
@@ -14,6 +20,8 @@ from foundry_lite.application.services.aip.tool_broker import (
     ToolBrokerResult,
     ToolCallRequest,
     ToolSpec,
+    published_tool_spec,
+    validated_tool_arguments,
 )
 from foundry_lite.domain.context import RequestContext
 
@@ -24,6 +32,10 @@ class ToolBroker(Protocol):
     def execute(self, ctx: RequestContext, request: ToolBrokerRequest) -> ToolBrokerResult: ...
 
 
+class ActionProposalCreator(Protocol):
+    def propose(self, ctx: RequestContext, request: ActionProposalRequest) -> ActionProposalResult: ...
+
+
 @dataclass(frozen=True)
 class AgentRuntimeToolExecution:
     """One brokered model-requested tool call plus the follow-up prompt artifact."""
@@ -32,6 +44,15 @@ class AgentRuntimeToolExecution:
     followup_messages: tuple[ModelMessage, ...]
     followup_prompt_hash: str
     followup_prompt_text: str
+
+
+@dataclass(frozen=True)
+class AgentRuntimeActionProposalExecution:
+    """One model-requested action proposal routed to human review."""
+
+    proposal: ActionProposalResult
+    ledger_record: AiToolCallRecord
+    answer: str
 
 
 @dataclass
@@ -59,6 +80,29 @@ def execute_model_tool_call(
     tool_call = _tool_call_request(request, ai_run_id, response.normalized_tool_calls[0], occurred_at)
     result = broker.execute(ctx, _tool_broker_request(request, tool_call))
     return _tool_execution(compiled, result)
+
+
+def execute_action_proposal_tool_call(
+    *,
+    ctx: RequestContext,
+    proposer: ActionProposalCreator,
+    request: AgentRuntimeActionProposalRequest,
+    ai_run_id: str,
+    response: ModelResponse,
+    occurred_at: str,
+) -> AgentRuntimeActionProposalExecution | None:
+    if not response.normalized_tool_calls:
+        return None
+    _guard_tool_call_budget(request, response.normalized_tool_calls)
+    tool_call = _tool_call_request(request, ai_run_id, response.normalized_tool_calls[0], occurred_at)
+    broker_request = _tool_broker_request(request, tool_call)
+    spec = published_tool_spec(broker_request)
+    if spec.effect == "READ":
+        return None
+    _guard_action_proposal_spec(spec)
+    arguments = validated_tool_arguments(spec, tool_call.arguments_json)
+    proposal = proposer.propose(ctx, _action_proposal_request(request, ai_run_id, tool_call, arguments))
+    return _action_proposal_execution(ctx, request, tool_call, spec, arguments, proposal, occurred_at)
 
 
 class AgentRuntimeToolRequest(Protocol):
@@ -94,6 +138,14 @@ class AgentRuntimeToolRequest(Protocol):
 
     @property
     def allowed_classifications(self) -> tuple[str, ...] | None: ...
+
+
+class AgentRuntimeActionProposalRequest(AgentRuntimeToolRequest, Protocol):
+    @property
+    def agent_allowed_actions(self) -> tuple[str, ...]: ...
+
+    @property
+    def policy_version(self) -> str: ...
 
 
 def tool_definitions(tools: tuple[ToolSpec, ...]) -> tuple[ToolDefinition, ...]:
@@ -152,13 +204,20 @@ def guard_final_response(response: ModelResponse) -> None:
 
 
 def tool_error_payload(exc: Exception) -> dict[str, object] | None:
-    if isinstance(exc, AgentRuntimeToolLoopError | ToolBrokerError):
+    if isinstance(exc, AgentRuntimeToolLoopError | ToolBrokerError | ActionProposalError):
         return {"reason": exc.reason, "detail": exc.detail}
     return None
 
 
-def success_event_sequence(tool_execution: AgentRuntimeToolExecution | None) -> int:
-    return 7 if tool_execution is not None else 4
+def success_event_sequence(
+    tool_execution: AgentRuntimeToolExecution | None,
+    action_proposal_execution: AgentRuntimeActionProposalExecution | None = None,
+) -> int:
+    if tool_execution is not None:
+        return 7
+    if action_proposal_execution is not None:
+        return 6
+    return 4
 
 
 def _tool_call_request(
@@ -214,6 +273,119 @@ def _tool_execution(compiled: CompiledContext, result: ToolBrokerResult) -> Agen
     )
 
 
+def _guard_action_proposal_spec(spec: ToolSpec) -> None:
+    if spec.effect == "WRITE":
+        raise AgentRuntimeToolLoopError("direct_write_tool_denied", "direct WRITE tools must use action proposals")
+    if spec.effect != "PROPOSE_WRITE":
+        raise AgentRuntimeToolLoopError("unsupported_tool_effect", f"tool effect {spec.effect} is not supported")
+    if spec.tool_id != "action.propose":
+        raise AgentRuntimeToolLoopError("unsupported_action_proposal_tool", "only action.propose is supported")
+    if spec.confirmation_policy != "HUMAN_REVIEW":
+        raise AgentRuntimeToolLoopError("proposal_requires_human_review", "action.propose requires HUMAN_REVIEW")
+
+
+def _action_proposal_request(
+    request: AgentRuntimeActionProposalRequest,
+    ai_run_id: str,
+    tool_call: ToolCallRequest,
+    arguments: Mapping[str, object],
+) -> ActionProposalRequest:
+    return ActionProposalRequest(
+        originating_ai_run_id=ai_run_id,
+        action_type=_text_arg(arguments, "actionType", "action_type"),
+        target_object_type=_text_arg(arguments, "targetObjectType", "target_object_type"),
+        target_object_id=_text_arg(arguments, "targetObjectId", "target_object_id"),
+        expected_object_version=_int_arg(arguments, "expectedObjectVersion", "expected_object_version"),
+        parameters=_mapping_arg(arguments, "parameters"),
+        evidence_context_ids=_text_tuple_arg(arguments, "evidenceContextIds", "evidence_context_ids"),
+        agent_allowed_actions=request.agent_allowed_actions,
+        policy_version=request.policy_version,
+        expires_at=_text_arg(arguments, "expiresAt", "expires_at"),
+        claim_text=_text_arg(arguments, "claimText", "claim_text"),
+        originating_tool_call_id=tool_call.tool_call_id,
+        priority=_optional_text_arg(arguments, "priority") or "normal",
+        assignee_user_id=_optional_text_arg(arguments, "assigneeUserId", "assignee_user_id"),
+    )
+
+
+def _action_proposal_execution(
+    ctx: RequestContext,
+    request: AgentRuntimeActionProposalRequest,
+    tool_call: ToolCallRequest,
+    spec: ToolSpec,
+    arguments: Mapping[str, object],
+    proposal: ActionProposalResult,
+    occurred_at: str,
+) -> AgentRuntimeActionProposalExecution:
+    ledger = AiToolCallRecord(
+        id=tool_call.tool_call_id,
+        tenant_id=ctx.tenant_id,
+        ai_run_id=tool_call.ai_run_id,
+        sequence=tool_call.sequence,
+        tool_id=spec.tool_id,
+        tool_version=spec.version,
+        arguments_hash=_hash_json(arguments),
+        effect=spec.effect,
+        authorization_decision="pending_human_review",
+        confirmation_policy=spec.confirmation_policy,
+        status="pending_review",
+        result_hash=proposal.proposal_fingerprint,
+        linked_action_run_id=None,
+        started_at=occurred_at,
+        completed_at=occurred_at,
+        error_json=None,
+    )
+    return AgentRuntimeActionProposalExecution(
+        proposal=proposal,
+        ledger_record=ledger,
+        answer=(
+            f"Action proposal {proposal.proposal_id} is awaiting human review for agent run {request.agent_run_id}."
+        ),
+    )
+
+
+def _text_arg(arguments: Mapping[str, object], *keys: str) -> str:
+    for key in keys:
+        value = arguments.get(key)
+        if isinstance(value, str) and value:
+            return value
+    raise AgentRuntimeToolLoopError("invalid_action_proposal_arguments", f"{keys[0]} is required")
+
+
+def _optional_text_arg(arguments: Mapping[str, object], *keys: str) -> str | None:
+    for key in keys:
+        value = arguments.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and value:
+            return value
+        raise AgentRuntimeToolLoopError("invalid_action_proposal_arguments", f"{key} must be a non-empty string")
+    return None
+
+
+def _int_arg(arguments: Mapping[str, object], *keys: str) -> int:
+    for key in keys:
+        value = arguments.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    raise AgentRuntimeToolLoopError("invalid_action_proposal_arguments", f"{keys[0]} must be an integer")
+
+
+def _mapping_arg(arguments: Mapping[str, object], key: str) -> Mapping[str, object]:
+    value = arguments.get(key)
+    if isinstance(value, Mapping):
+        return value
+    raise AgentRuntimeToolLoopError("invalid_action_proposal_arguments", f"{key} must be an object")
+
+
+def _text_tuple_arg(arguments: Mapping[str, object], *keys: str) -> tuple[str, ...]:
+    for key in keys:
+        value = arguments.get(key)
+        if isinstance(value, list | tuple) and all(isinstance(item, str) and item for item in value):
+            return tuple(value)
+    raise AgentRuntimeToolLoopError("invalid_action_proposal_arguments", f"{keys[0]} must be a string list")
+
+
 def _tool_result_message(result: ToolBrokerResult) -> str:
     return "## brokered_tool_result\n" + json.dumps(
         {
@@ -247,3 +419,7 @@ def _response_schema(output_schema: object) -> str | None:
 
 def _hash_text(text: str) -> str:
     return f"sha256:{hashlib.sha256(text.encode('utf-8')).hexdigest()}"
+
+
+def _hash_json(value: object) -> str:
+    return _hash_text(json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")))

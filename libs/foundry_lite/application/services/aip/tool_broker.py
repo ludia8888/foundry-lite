@@ -155,6 +155,18 @@ def _validated_arguments(spec: ToolSpec, arguments_json: str) -> dict[str, objec
     return value
 
 
+def validated_tool_arguments(spec: ToolSpec, arguments_json: str) -> dict[str, object]:
+    """Validate model tool-call arguments against the published tool schema."""
+
+    return _validated_arguments(spec, arguments_json)
+
+
+def published_tool_spec(request: ToolBrokerRequest) -> ToolSpec:
+    """Resolve the published, agent-allowlisted tool spec for a model tool call."""
+
+    return _published_spec(request)
+
+
 def _validate_json_object(schema: JsonObject, value: JsonObject) -> None:
     if schema.get("type") not in (None, "object"):
         raise ToolBrokerError("schema_invalid", "tool input schema must describe an object")

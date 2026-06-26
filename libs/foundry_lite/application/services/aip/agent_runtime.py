@@ -50,8 +50,11 @@ from foundry_lite.application.services.aip.agent_runtime_ports import (
     RetrievedContextItem,
 )
 from foundry_lite.application.services.aip.agent_runtime_tools import (
+    ActionProposalCreator,
+    AgentRuntimeActionProposalExecution,
     AgentRuntimeToolExecution,
     ToolBroker,
+    execute_action_proposal_tool_call,
     execute_model_tool_call,
     followup_model_request,
     guard_final_response,
@@ -81,6 +84,7 @@ class AgentRuntimeService(CoreService):
         "content_retrieval_service",
         "citation_service",
         "tool_broker_service",
+        "action_proposal_service",
     )
     context_compiler_service: ContextCompilerService
     model_gateway_service: ModelGatewayService
@@ -89,6 +93,7 @@ class AgentRuntimeService(CoreService):
     content_retrieval_service: RetrievalContentSearch
     citation_service: CitationResolver
     tool_broker_service: ToolBroker
+    action_proposal_service: ActionProposalCreator
 
     def run(self, ctx: RequestContext, request: AgentRuntimeRequest) -> AgentRuntimeResult:
         ai_run_id: str | None = None
@@ -103,25 +108,26 @@ class AgentRuntimeService(CoreService):
             resolution = self.model_gateway_service.resolve_model(ctx, request.model_alias)
             self._seed_ledger(ctx, request, ai_run_id, session_id, context_items, compiled, resolution)
             seeded = True
-            self.prompt_artifact_service.record_compiled_prompt(
-                ctx,
-                ai_run_id=ai_run_id,
-                compiled_prompt_hash=compiled.compiled_prompt_hash,
-                compiled_prompt_text=compiled_prompt_text(compiled),
-            )
+            self._record_initial_prompt_artifact(ctx, ai_run_id, compiled)
             response = self.model_gateway_service.invoke(ctx, model_request(request, ai_run_id, compiled))
-            tool_execution = self._execute_model_tool_call(ctx, request, ai_run_id, compiled, response)
-            final_response = self._final_model_response(ctx, request, ai_run_id, compiled, response, tool_execution)
-            answer = self._resolve_answer_citations(ctx, request, ai_run_id, final_response)
+            final_response, answer, tool_execution, action_proposal = self._complete_model_turn(
+                ctx, request, ai_run_id, compiled, response
+            )
         except Exception as exc:
             if seeded and ai_run_id is not None:
                 self._fail_seeded_run(ctx, ai_run_id, exc)
             return failed_result(request, ai_run_id if seeded else None, session_id if seeded else None, exc)
-        assert ai_run_id is not None
-        assert session_id is not None
-        aggregate = aggregate_response(response, final_response)
-        self._finish_success(ctx, request, ai_run_id, session_id, context_items, aggregate, answer, tool_execution)
-        return success_result(request, ai_run_id, session_id, context_items, aggregate, answer, tool_execution)
+        return self._finish_result(
+            ctx,
+            request,
+            ai_run_id,
+            session_id,
+            context_items,
+            aggregate_response(response, final_response),
+            answer,
+            tool_execution,
+            action_proposal,
+        )
 
     def _retrieve_context(self, ctx: RequestContext, request: AgentRuntimeRequest) -> tuple[RetrievedContextItem, ...]:
         return retrieve_runtime_context(
@@ -130,6 +136,57 @@ class AgentRuntimeService(CoreService):
             self.content_retrieval_service,
             request,
         )
+
+    def _record_initial_prompt_artifact(self, ctx: RequestContext, ai_run_id: str, compiled: CompiledContext) -> None:
+        self.prompt_artifact_service.record_compiled_prompt(
+            ctx,
+            ai_run_id=ai_run_id,
+            compiled_prompt_hash=compiled.compiled_prompt_hash,
+            compiled_prompt_text=compiled_prompt_text(compiled),
+        )
+
+    def _finish_result(
+        self,
+        ctx: RequestContext,
+        request: AgentRuntimeRequest,
+        ai_run_id: str | None,
+        session_id: str | None,
+        context_items: tuple[RetrievedContextItem, ...],
+        response: ModelResponse,
+        answer: AgentRuntimeAnswer,
+        tool_execution: AgentRuntimeToolExecution | None,
+        action_proposal: AgentRuntimeActionProposalExecution | None,
+    ) -> AgentRuntimeResult:
+        assert ai_run_id is not None
+        assert session_id is not None
+        self._finish_success(
+            ctx, request, ai_run_id, session_id, context_items, response, answer, tool_execution, action_proposal
+        )
+        return success_result(
+            request, ai_run_id, session_id, context_items, response, answer, tool_execution, action_proposal
+        )
+
+    def _complete_model_turn(
+        self,
+        ctx: RequestContext,
+        request: AgentRuntimeRequest,
+        ai_run_id: str,
+        compiled: CompiledContext,
+        response: ModelResponse,
+    ) -> tuple[
+        ModelResponse,
+        AgentRuntimeAnswer,
+        AgentRuntimeToolExecution | None,
+        AgentRuntimeActionProposalExecution | None,
+    ]:
+        action_proposal = self._execute_action_proposal_tool_call(ctx, request, ai_run_id, response)
+        if action_proposal is not None:
+            answer = AgentRuntimeAnswer(answer=action_proposal.answer, citations=())
+            return response, answer, None, action_proposal
+        tool_execution = self._execute_model_tool_call(ctx, request, ai_run_id, compiled, response)
+        final_response = self._final_model_response(ctx, request, ai_run_id, compiled, response, tool_execution)
+        answer = self._resolve_answer_citations(ctx, request, ai_run_id, final_response)
+        return final_response, answer, tool_execution, None
 
     def _seed_ledger(
         self,
@@ -182,8 +239,9 @@ class AgentRuntimeService(CoreService):
         response: ModelResponse,
         answer: AgentRuntimeAnswer,
         tool_execution: AgentRuntimeToolExecution | None,
+        action_proposal: AgentRuntimeActionProposalExecution | None,
     ) -> None:
-        usage = usage_payload(response, context_items, tool_execution)
+        usage = usage_payload(response, context_items, tool_execution, action_proposal)
         now = ledger_timestamp()
         with self.engine.begin() as transaction:
             self.ai_run_repository.record_usage(
@@ -202,7 +260,7 @@ class AgentRuntimeService(CoreService):
                 ai_run_id,
                 ("succeeded",),
                 now,
-                start=success_event_sequence(tool_execution),
+                start=success_event_sequence(tool_execution, action_proposal),
             )
             mark_execution_run_succeeded(self.ai_run_repository, transaction, ctx, ai_run_id, usage, now)
 
@@ -239,6 +297,46 @@ class AgentRuntimeService(CoreService):
         if tool_execution is not None:
             self._record_tool_execution(ctx, request, ai_run_id, tool_execution)
         return tool_execution
+
+    def _execute_action_proposal_tool_call(
+        self,
+        ctx: RequestContext,
+        request: AgentRuntimeRequest,
+        ai_run_id: str,
+        response: ModelResponse,
+    ) -> AgentRuntimeActionProposalExecution | None:
+        action_proposal = execute_action_proposal_tool_call(
+            ctx=ctx,
+            proposer=self.action_proposal_service,
+            request=request,
+            ai_run_id=ai_run_id,
+            response=response,
+            occurred_at=ledger_timestamp(),
+        )
+        if action_proposal is not None:
+            self._record_action_proposal_tool_call(ctx, request, ai_run_id, action_proposal)
+        return action_proposal
+
+    def _record_action_proposal_tool_call(
+        self,
+        ctx: RequestContext,
+        request: AgentRuntimeRequest,
+        ai_run_id: str,
+        action_proposal: AgentRuntimeActionProposalExecution,
+    ) -> None:
+        now = ledger_timestamp()
+        with self.engine.begin() as transaction:
+            self.ai_run_repository.record_tool_call(transaction=transaction, record=action_proposal.ledger_record)
+            append_events(
+                self.ai_run_repository,
+                transaction,
+                ctx,
+                request,
+                ai_run_id,
+                ("tool_pending", "waiting_human_review"),
+                now,
+                start=4,
+            )
 
     def _record_tool_execution(
         self,

@@ -329,6 +329,7 @@ export type AipAgentRunRequest = {
   policyVersion?: string;
   toolManifest?: AipBuilderToolSpec[];
   agentAllowedTools?: string[];
+  agentAllowedActions?: string[];
 };
 export type AipAgentRunResult = {
   agentRunId: string;

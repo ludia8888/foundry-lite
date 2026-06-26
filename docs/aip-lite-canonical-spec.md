@@ -262,6 +262,10 @@ python_eval, generic_repository_write`.
   an Agent Runtime run may allow exactly one model-requested tool call, executes it only through
   `ToolBrokerService`, records `AiToolCallRecord` hash/authorization evidence, stores the follow-up
   model prompt as a second encrypted prompt artifact, and then performs the final governed model call.
+  Current P1a also supports one model-requested `action.propose` `PROPOSE_WRITE` tool: the runtime
+  validates the published manifest/schema/allowlist, calls `ActionProposalService` to create a pending
+  human-review row, records `AiToolCallRecord` with `pending_human_review`, and never calls
+  `ActionService` directly.
 - **Action Proposal + Approval Execution (§8.10, §12.2)**: `ActionProposal{proposal_id, action_type,
 target_object_type, target_object_id, expected_object_version, parameters, evidence_refs,
 originating_ai_run_id, proposal_fingerprint, policy_version, expires_at}`. Fingerprint over

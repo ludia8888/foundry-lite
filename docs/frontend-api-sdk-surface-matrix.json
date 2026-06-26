@@ -117,7 +117,7 @@
       "productArea": "aip-agent-runtime",
       "sdkSurface": "aip.agent.run",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "AIP Agent Runtime retrieves authorized context, compiles a governed prompt, calls Model Gateway, can execute one explicitly allowed read tool only through ToolBroker, and links the run to AI Operations detail with context/model/tool/usage evidence.",
+      "operatorEvidence": "AIP Agent Runtime retrieves authorized context, compiles a governed prompt, calls Model Gateway, can execute one explicitly allowed read tool only through ToolBroker, can route one action.propose tool to pending human review without direct writes, and links the run to AI Operations detail with context/model/tool/proposal/usage evidence.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],

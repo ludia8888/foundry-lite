@@ -1753,6 +1753,24 @@ prompt artifact metadata만 보여준다.
 |---|---|---|
 | Agent runtime tool loop ratchet | `quality:agent-tool-loop` | 모델이 요청한 tool call이 ToolBroker 검사 없이 실행되거나, agent manifest 밖 tool/비허용 tool result classification이 통과되거나, tool result 원문이 Operations detail/일반 DB에 노출되거나, follow-up model prompt가 encrypted prompt artifact 없이 provider로 나가는 문제 차단 |
 
+### AIP P1a — Agent Action Proposal Tool Ratchet
+
+P1a의 현재 slice는 write tool execution, autonomous multi-action agent, visual approval workspace,
+or Temporal-backed human task가 아니라, P0z Agent Runtime tool loop에 정본 `action.propose`
+`PROPOSE_WRITE` tool을 연결하는 backend 계약이다. 모델이 `action.propose`를 요청하면 Agent
+Runtime은 published tool spec, agent tool allowlist, JSON schema, `HUMAN_REVIEW` confirmation
+policy, and `agentAllowedActions`를 fail-closed로 검증한 뒤 `ActionProposalService`를 호출해
+pending `insight_reviews` row만 만든다.
+
+직접 `WRITE` tool은 거부된다. 성공 경로에서도 `ActionService`나 `action_runs` side effect는
+발생하지 않고, AI Operations detail에는 `AiToolCallRecord`의 hash/status/fingerprint metadata만
+노출된다. 일반 Operations detail은 계속 raw tool arguments, proposal parameters, prompt text,
+provider body를 노출하지 않는다.
+
+| 게이트 | 명령 | Root cause |
+|---|---|---|
+| Agent action proposal tool ratchet | `quality:agent-action-proposal-tool` | 모델이 action proposal을 우회해 직접 WRITE tool을 실행하거나, `action.propose`가 human review 없이 action side effect를 만들거나, proposal parameters가 일반 Operations AI detail에 노출되거나, API/SDK가 agent action allowlist 없이 proposal tool을 허용하는 문제 차단 |
+
 ### AIP P0d — Context Compiler Ratchet
 
 P0d의 현재 slice는 full Agent Runtime이나 trace UI가 아니라 모델 호출 직전의 prompt assembly

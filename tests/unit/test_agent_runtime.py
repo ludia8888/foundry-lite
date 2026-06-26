@@ -101,6 +101,45 @@ class _ToolCallingThenAnswerLanguageModel:
         )
 
 
+class _ActionProposingLanguageModel:
+    profile_name = "action-proposing-language-model"
+
+    def __init__(self, *, expected_object_version: int, tool_name: str = "action.propose") -> None:
+        self._expected_object_version = expected_object_version
+        self._tool_name = tool_name
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        context_id = _first_citation_context_id(request)
+        return ModelResponse(
+            provider="fake",
+            resolved_model_id="",
+            resolved_model_revision="",
+            content="I should propose an approval action for review.",
+            finish_reason="tool_calls",
+            input_tokens=6,
+            output_tokens=5,
+            normalized_tool_calls=(
+                ModelToolCall(
+                    tool_name=self._tool_name,
+                    arguments_json=json.dumps(
+                        {
+                            "actionType": "ApproveOrder",
+                            "targetObjectType": "Order",
+                            "targetObjectId": "O-1001",
+                            "expectedObjectVersion": self._expected_object_version,
+                            "parameters": {"reason": "Inventory confirmed"},
+                            "evidenceContextIds": [context_id],
+                            "expiresAt": "2026-06-26T23:59:00Z",
+                            "claimText": "Approve O-1001 based on selected AI evidence.",
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            ),
+            provider_request_id="action-proposal-request-1",
+        )
+
+
 class _CitingLanguageModel:
     profile_name = "citing-language-model"
 
@@ -439,6 +478,88 @@ def test_agent_runtime_executes_one_model_tool_call_through_broker_and_finishes(
     assert "property_names" not in serialized_detail
 
 
+def test_agent_runtime_action_propose_tool_creates_review_without_executing_action(foundry: Any) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    foundry._services.model_gateway.language_model_adapter = _ActionProposingLanguageModel(
+        expected_object_version=int(order["objectVersion"])
+    )
+    before_action_runs = _table_count(foundry.engine, db.action_runs)
+
+    result = foundry.aip.run_agent_payload(
+        payload={
+            **_payload(),
+            "agentRunId": "agent-runtime-action-proposal-tool",
+            "agentInstruction": "Propose actions for human review; never execute writes directly.",
+            "maxModelCalls": 2,
+            "maxLoopIterations": 2,
+            "maxToolCalls": 1,
+            "toolManifest": [_action_proposal_tool_spec_payload()],
+            "agentAllowedTools": ["action.propose"],
+            "agentAllowedActions": ["ApproveOrder"],
+            "modelAllowedClassifications": ["public", "internal"],
+        },
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "succeeded"
+    assert result.answer is not None
+    assert "awaiting human review" in result.answer
+    assert result.usage is not None
+    assert result.usage["modelCallCount"] == 1
+    assert result.usage["toolCallCount"] == 1
+    assert result.usage["actionProposalCount"] == 1
+
+    detail = foundry.operations.run_detail("ai", result.ai_run_id or "", ctx=_CTX)
+    tool_call = detail["ai"]["toolCalls"][0]
+    review = _review_for_run(foundry.engine, result.ai_run_id or "")
+    assert detail["ai"]["summary"]["modelCallCount"] == 1
+    assert detail["ai"]["summary"]["toolCallCount"] == 1
+    assert detail["ai"]["summary"]["promptArtifactCount"] == 1
+    assert detail["ai"]["events"][-2]["event_type"] == "waiting_human_review"
+    assert tool_call["tool_id"] == "action.propose"
+    assert tool_call["effect"] == "PROPOSE_WRITE"
+    assert tool_call["authorization_decision"] == "pending_human_review"
+    assert tool_call["confirmation_policy"] == "HUMAN_REVIEW"
+    assert tool_call["status"] == "pending_review"
+    assert tool_call["result_hash"] == review["proposal_fingerprint"]
+    assert review["originating_tool_call_id"] == f"{result.ai_run_id}-tool-1"
+    assert review["execution_status"] == "pending_review"
+    assert _table_count(foundry.engine, db.action_runs) == before_action_runs
+    assert "Inventory confirmed" not in json.dumps(detail, sort_keys=True)
+
+
+def test_agent_runtime_direct_write_tool_is_denied_without_review_or_action(foundry: Any) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    foundry._services.model_gateway.language_model_adapter = _ActionProposingLanguageModel(
+        expected_object_version=int(order["objectVersion"]),
+        tool_name="action.apply",
+    )
+
+    result = foundry.aip.run_agent_payload(
+        payload={
+            **_payload(),
+            "agentRunId": "agent-runtime-direct-write-denied",
+            "maxModelCalls": 2,
+            "maxLoopIterations": 2,
+            "maxToolCalls": 1,
+            "toolManifest": [_action_proposal_tool_spec_payload(tool_id="action.apply", effect="WRITE")],
+            "agentAllowedTools": ["action.apply"],
+            "agentAllowedActions": ["ApproveOrder"],
+        },
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "failed"
+    assert result.error == {
+        "reason": "direct_write_tool_denied",
+        "detail": "direct WRITE tools must use action proposals",
+    }
+    assert _table_count(foundry.engine, db.insight_reviews) == 0
+    assert _table_count(foundry.engine, db.action_runs) == 0
+
+
 def test_agent_runtime_fails_before_model_when_prompt_artifact_write_fails(foundry: Any) -> None:
     prepare_indexed_demo(foundry)
     foundry._services.agent_runtime.prompt_artifact_service = _FailingPromptArtifactService()
@@ -583,6 +704,49 @@ def _tool_spec_payload() -> dict[str, object]:
     }
 
 
+def _action_proposal_tool_spec_payload(
+    *, tool_id: str = "action.propose", effect: str = "PROPOSE_WRITE"
+) -> dict[str, object]:
+    return {
+        "toolId": tool_id,
+        "version": "2026-06-26",
+        "inputSchema": {
+            "type": "object",
+            "required": [
+                "actionType",
+                "targetObjectType",
+                "targetObjectId",
+                "expectedObjectVersion",
+                "parameters",
+                "evidenceContextIds",
+                "expiresAt",
+                "claimText",
+            ],
+            "properties": {
+                "actionType": {"type": "string"},
+                "targetObjectType": {"type": "string"},
+                "targetObjectId": {"type": "string"},
+                "expectedObjectVersion": {"type": "integer"},
+                "parameters": {"type": "object"},
+                "evidenceContextIds": {"type": "array"},
+                "expiresAt": {"type": "string"},
+                "claimText": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        "outputSchema": {"type": "object"},
+        "effect": effect,
+        "requiredPermission": "insight:create",
+        "confirmationPolicy": "HUMAN_REVIEW",
+        "objectTypeAllowlist": ["Order"],
+        "propertyAllowlist": [],
+        "timeoutSeconds": 30,
+        "maxResultItems": 1,
+        "resultClassification": "internal",
+        "status": "published",
+    }
+
+
 def _seed_agent_document_context(foundry: Any) -> None:
     derivative_id = "mder-agent-doc-1"
     envelope = {"tenantId": _CTX.tenant_id, "classification": "internal"}
@@ -632,6 +796,16 @@ def _seed_agent_document_context(foundry: Any) -> None:
 def _table_count(engine: Any, table: Any) -> int:
     with engine.begin() as conn:
         return int(conn.execute(select(func.count()).select_from(table)).scalar_one())
+
+
+def _review_for_run(engine: Any, ai_run_id: str) -> dict[str, object]:
+    with engine.begin() as conn:
+        row = (
+            conn.execute(select(db.insight_reviews).where(db.insight_reviews.c.originating_ai_run_id == ai_run_id))
+            .mappings()
+            .one()
+        )
+    return dict(row)
 
 
 def _first_citation_context_id(request: ModelRequest) -> str:

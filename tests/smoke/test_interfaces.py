@@ -22,7 +22,7 @@ from foundry_lite.infrastructure.local_runtime import create_local_core_dependen
 from foundry_lite_api import main as api_main
 from foundry_lite_api.main import _header_or_request, app, healthz
 from foundry_lite_cli.main import _dispatch, _fresh_supply_chain_demo, _json_arg, _params, _storage_root_for_args, main
-from sqlalchemy import create_engine, insert, select
+from sqlalchemy import create_engine, func, insert, select
 
 from tests.conftest import prepare_indexed_demo
 
@@ -1138,6 +1138,63 @@ def test_api_aip_agent_run_executes_brokered_tool_loop(foundry, monkeypatch) -> 
     assert "brokered_tool_result" not in json.dumps(detail_body, sort_keys=True)
 
 
+def test_api_aip_agent_run_proposes_action_for_human_review(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    foundry._services.model_gateway.language_model_adapter = _ActionProposalLanguageModel(
+        expected_object_version=int(order["objectVersion"])
+    )
+    headers = {
+        "X-Tenant-ID": "tenant-demo",
+        "X-User-ID": "ops-user",
+        "X-Roles": "admin,data_engineer,ops_manager",
+    }
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/aip/agent/run",
+        headers=headers,
+        json={
+            "agentRunId": "agent-api-action-proposal-1",
+            "agentVersionId": "agent.order-ops.v1",
+            "modelAlias": "default-completion",
+            "promptVersionId": "prompt-order-copilot@v1",
+            "userMessage": "Propose approval for Order O-1001 if evidence supports it.",
+            "agentInstruction": "Create action proposals for human review; do not execute writes.",
+            "securityPartition": "tenant-demo:internal",
+            "allowedSecurityPartitions": ["tenant-demo:internal"],
+            "stateJson": {"objectType": "Order", "objectId": "O-1001"},
+            "modelAllowedClassifications": ["public", "internal"],
+            "maxModelCalls": 2,
+            "maxLoopIterations": 2,
+            "maxToolCalls": 1,
+            "toolManifest": [_agent_action_proposal_tool_spec_payload()],
+            "agentAllowedTools": ["action.propose"],
+            "agentAllowedActions": ["ApproveOrder"],
+        },
+    )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["runStatus"] == "succeeded"
+    assert "awaiting human review" in body["answer"]
+    assert body["usage"]["actionProposalCount"] == 1
+
+    detail_body = client.get(f"/api/operations/runs/ai/{body['aiRunId']}", headers=headers).json()
+    review_listing = client.get("/api/insights/reviews?status=pending", headers=headers).json()
+    review = review_listing["items"][0]
+    assert detail_body["ai"]["summary"]["modelCallCount"] == 1
+    assert detail_body["ai"]["summary"]["toolCallCount"] == 1
+    assert detail_body["ai"]["toolCalls"][0]["tool_id"] == "action.propose"
+    assert detail_body["ai"]["toolCalls"][0]["status"] == "pending_review"
+    assert detail_body["ai"]["toolCalls"][0]["result_hash"] == review["proposalFingerprint"]
+    assert review["originatingAiRunId"] == body["aiRunId"]
+    assert review["executionStatus"] == "pending_review"
+    assert _table_count(foundry.engine, db.action_runs) == 0
+    assert "Inventory confirmed" not in json.dumps(detail_body, sort_keys=True)
+
+
 class _ToolLoopLanguageModel:
     profile_name = "smoke-tool-loop-language-model"
 
@@ -1179,6 +1236,43 @@ class _ToolLoopLanguageModel:
         )
 
 
+class _ActionProposalLanguageModel:
+    profile_name = "smoke-action-proposal-language-model"
+
+    def __init__(self, *, expected_object_version: int) -> None:
+        self._expected_object_version = expected_object_version
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        return ModelResponse(
+            provider="fake",
+            resolved_model_id="",
+            resolved_model_revision="",
+            content="Need a governed action proposal.",
+            finish_reason="tool_calls",
+            input_tokens=4,
+            output_tokens=4,
+            normalized_tool_calls=(
+                ModelToolCall(
+                    tool_name="action.propose",
+                    arguments_json=json.dumps(
+                        {
+                            "actionType": "ApproveOrder",
+                            "targetObjectType": "Order",
+                            "targetObjectId": "O-1001",
+                            "expectedObjectVersion": self._expected_object_version,
+                            "parameters": {"reason": "Inventory confirmed"},
+                            "evidenceContextIds": [_first_agent_context_id(request)],
+                            "expiresAt": "2026-06-26T23:59:00Z",
+                            "claimText": "Approve O-1001 based on selected AI evidence.",
+                        },
+                        sort_keys=True,
+                    ),
+                ),
+            ),
+            provider_request_id="smoke-action-proposal-1",
+        )
+
+
 def _agent_tool_spec_payload() -> dict[str, object]:
     return {
         "toolId": "ontology.get_object",
@@ -1202,6 +1296,59 @@ def _agent_tool_spec_payload() -> dict[str, object]:
         "resultClassification": "internal",
         "status": "published",
     }
+
+
+def _agent_action_proposal_tool_spec_payload() -> dict[str, object]:
+    return {
+        "toolId": "action.propose",
+        "version": "2026-06-26",
+        "inputSchema": {
+            "type": "object",
+            "required": [
+                "actionType",
+                "targetObjectType",
+                "targetObjectId",
+                "expectedObjectVersion",
+                "parameters",
+                "evidenceContextIds",
+                "expiresAt",
+                "claimText",
+            ],
+            "properties": {
+                "actionType": {"type": "string"},
+                "targetObjectType": {"type": "string"},
+                "targetObjectId": {"type": "string"},
+                "expectedObjectVersion": {"type": "integer"},
+                "parameters": {"type": "object"},
+                "evidenceContextIds": {"type": "array"},
+                "expiresAt": {"type": "string"},
+                "claimText": {"type": "string"},
+            },
+            "additionalProperties": False,
+        },
+        "outputSchema": {"type": "object"},
+        "effect": "PROPOSE_WRITE",
+        "requiredPermission": "insight:create",
+        "confirmationPolicy": "HUMAN_REVIEW",
+        "objectTypeAllowlist": ["Order"],
+        "propertyAllowlist": [],
+        "resultClassification": "internal",
+        "status": "published",
+    }
+
+
+def _first_agent_context_id(request: ModelRequest) -> str:
+    system = request.messages[0].content
+    marker = "## citation_mapping\n"
+    start = system.index(marker) + len(marker)
+    end = system.find("\n\n## ", start)
+    payload = json.loads(system[start:] if end == -1 else system[start:end])
+    return str(payload["citations"][0]["context_id"])
+
+
+def _table_count(engine, table) -> int:
+    with engine.begin() as conn:
+        return int(conn.execute(select(func.count()).select_from(table)).scalar_one())
 
 
 def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:

@@ -323,6 +323,7 @@ def _agent_runtime_request_from_payload(payload: Mapping[str, object]) -> AgentR
         policy_version=_text_default(payload, "policyVersion", "policy-v1"),
         tool_manifest=tuple(_builder_tool_spec(item) for item in _mapping_items_default(payload, "toolManifest")),
         agent_allowed_tools=_text_items(payload, "agentAllowedTools"),
+        agent_allowed_actions=_text_items(payload, "agentAllowedActions"),
     )
 
 

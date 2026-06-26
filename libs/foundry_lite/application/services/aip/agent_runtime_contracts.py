@@ -18,6 +18,7 @@ from foundry_lite.application.services.aip.agent_runtime_ports import (
     RetrievedContextItem,
 )
 from foundry_lite.application.services.aip.agent_runtime_tools import (
+    AgentRuntimeActionProposalExecution,
     AgentRuntimeToolExecution,
     ToolSpec,
     messages_prompt_text,
@@ -73,6 +74,7 @@ class AgentRuntimeRequest:
     policy_version: str = "policy-v1"
     tool_manifest: tuple[ToolSpec, ...] = ()
     agent_allowed_tools: tuple[str, ...] = ()
+    agent_allowed_actions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -197,15 +199,20 @@ def usage_payload(
     response: ModelResponse,
     context_items: tuple[RetrievedContextItem, ...],
     tool_execution: AgentRuntimeToolExecution | None = None,
+    action_proposal_execution: AgentRuntimeActionProposalExecution | None = None,
 ) -> dict[str, object]:
-    return {
+    has_tool_call = tool_execution is not None or action_proposal_execution is not None
+    payload: dict[str, object] = {
         "inputTokens": response.input_tokens,
         "outputTokens": response.output_tokens,
         "modelCallCount": 2 if tool_execution is not None else 1,
-        "toolCallCount": 1 if tool_execution is not None else 0,
+        "toolCallCount": 1 if has_tool_call else 0,
         "contextItemCount": len(context_items),
         "finishReason": response.finish_reason,
     }
+    if action_proposal_execution is not None:
+        payload["actionProposalCount"] = 1
+    return payload
 
 
 def aggregate_response(first: ModelResponse, final: ModelResponse) -> ModelResponse:
@@ -254,6 +261,7 @@ def success_result(
     response: ModelResponse,
     answer: AgentRuntimeAnswer,
     tool_execution: AgentRuntimeToolExecution | None = None,
+    action_proposal_execution: AgentRuntimeActionProposalExecution | None = None,
 ) -> AgentRuntimeResult:
     return AgentRuntimeResult(
         agent_run_id=request.agent_run_id,
@@ -262,7 +270,7 @@ def success_result(
         run_status="succeeded",
         answer=answer.answer,
         context_ids=tuple(item.context_id for item in context_items),
-        usage=usage_payload(response, context_items, tool_execution),
+        usage=usage_payload(response, context_items, tool_execution, action_proposal_execution),
         citations=answer.citations,
     )
 
