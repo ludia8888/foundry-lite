@@ -13,7 +13,9 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from foundry_lite.application.ports.prompt_artifact_store import (
     PromptArtifactBlob,
+    PromptArtifactDelete,
     PromptArtifactRead,
+    PromptArtifactStoreError,
     PromptArtifactWrite,
 )
 from foundry_lite.application.ports.secret_provider import SecretProvider
@@ -22,10 +24,6 @@ _ALGORITHM = "fernet-v1"
 _ARTIFACT_SCHEME = "local-prompt-artifact://"
 _DEFAULT_KEY_NAME = "aip_prompt_artifact_encryption_key"
 _SAFE_SEGMENT = re.compile(r"[^A-Za-z0-9_.=-]+")
-
-
-class PromptArtifactStoreError(Exception):
-    """Raised when encrypted prompt artifact storage fails closed."""
 
 
 @dataclass(frozen=True)
@@ -45,7 +43,7 @@ class LocalPromptArtifactStore:
         secret_provider: SecretProvider,
         *,
         key_name: str = _DEFAULT_KEY_NAME,
-        allow_local_dev_fallback: bool = True,
+        allow_local_dev_fallback: bool = False,
     ) -> None:
         self._root = root
         self._secret_provider = secret_provider
@@ -74,9 +72,16 @@ class LocalPromptArtifactStore:
         artifact_path = self._path_for_ref(request.artifact_ref, request.tenant_id)
         try:
             ciphertext = artifact_path.read_bytes()
-            return Fernet(key.fernet_key).decrypt(ciphertext).decode("utf-8")
+            _require_hash(ciphertext, request.expected_artifact_hash, "artifact")
+            plaintext = Fernet(key.fernet_key).decrypt(ciphertext).decode("utf-8")
+            _require_hash(plaintext.encode("utf-8"), request.expected_content_hash, "content")
+            return plaintext
         except (OSError, InvalidToken, UnicodeDecodeError) as exc:
             raise PromptArtifactStoreError("prompt artifact could not be decrypted") from exc
+
+    def delete_prompt_artifact(self, request: PromptArtifactDelete) -> None:
+        artifact_path = self._path_for_ref(request.artifact_ref, request.tenant_id)
+        artifact_path.unlink(missing_ok=True)
 
     def _artifact_key(self) -> _ArtifactKey:
         try:
@@ -148,3 +153,9 @@ def _atomic_write(path: Path, data: bytes) -> None:
 
 def _hash_bytes(value: bytes) -> str:
     return f"sha256:{hashlib.sha256(value).hexdigest()}"
+
+
+def _require_hash(value: bytes, expected_hash: str, label: str) -> None:
+    actual_hash = _hash_bytes(value)
+    if actual_hash != expected_hash:
+        raise PromptArtifactStoreError(f"prompt artifact {label} hash mismatch")

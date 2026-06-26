@@ -33,6 +33,18 @@ class PromptArtifactRead:
     tenant_id: str
     artifact_ref: str
     encryption_key_ref: str
+    expected_artifact_hash: str
+    expected_content_hash: str
+
+
+@dataclass(frozen=True)
+class PromptArtifactDelete:
+    tenant_id: str
+    artifact_ref: str
+
+
+class PromptArtifactStoreError(Exception):
+    """Raised when prompt artifact storage fails closed."""
 
 
 @runtime_checkable
@@ -48,4 +60,8 @@ class PromptArtifactStore(Protocol):
 
     def read_prompt_artifact(self, request: PromptArtifactRead) -> str:
         """Decrypt one prompt artifact for an explicitly authorized caller."""
+        ...
+
+    def delete_prompt_artifact(self, request: PromptArtifactDelete) -> None:
+        """Remove an artifact that could not be committed into the ledger."""
         ...

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -157,7 +158,9 @@ def test_agent_runtime_retrieves_context_calls_model_and_links_operations(foundr
     decrypted = foundry._services.prompt_artifact.read_prompt_artifact(
         reader_ctx, artifact_id=str(prompt_artifact["id"])
     )
-    assert "Explain Order O-1001 for the operator." in decrypted.plaintext
+    decrypted_payload = json.loads(decrypted.plaintext)
+    assert decrypted_payload["messages"][1]["content"] == "Explain Order O-1001 for the operator."
+    assert _hash_text(decrypted.plaintext) == decrypted.content_hash
     assert detail["ai"]["events"][0]["event_type"] == "received"
     assert "Explain Order O-1001 for the operator." not in json.dumps(detail, sort_keys=True)
 
@@ -492,3 +495,7 @@ def _first_citation_context_id(request: ModelRequest) -> str:
     end = system.find("\n\n## ", start)
     payload = json.loads(system[start:] if end == -1 else system[start:end])
     return str(payload["citations"][0]["context_id"])
+
+
+def _hash_text(value: str) -> str:
+    return f"sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"

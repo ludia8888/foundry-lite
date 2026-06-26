@@ -216,8 +216,12 @@ content_hash, relevance_score, retrieval_method, security_partition, token_estim
   encryption_key_ref, encryption_algorithm, retention_until, legal_hold, erasure_request_id,
   export_marking, created_at`. Current P0v composes this into Agent Runtime before Model Gateway egress:
   if the encrypted artifact write fails, the seeded run is marked failed and the model is not called.
-  Operations exposes only refs/hashes/retention/export marking; raw read requires the separate
-  `aip_prompt_artifact_reader` role.
+  The stored plaintext uses the same canonical `{"messages":[...]}` JSON that produces
+  `compiled_prompt_hash`; DB receipt failure deletes the just-written artifact; raw read requires the
+  separate `aip_prompt_artifact_reader` role and rechecks both ciphertext `artifact_hash` and plaintext
+  `content_hash`. Local-dev key fallback is disabled unless explicitly opted in through
+  `FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY=true`. Operations exposes only refs/hashes/retention/export
+  marking.
 - **Citation Service (§8.7)**: model is given **opaque context IDs**, never source URLs; service maps
   `ctx_id → media item version / page / content unit / hash` and verifies the context ID is in this
   run's manifest + caller may read source + version/hash still match + span relevant. Returns display

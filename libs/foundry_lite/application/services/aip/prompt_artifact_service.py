@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -9,6 +10,7 @@ from datetime import datetime, timedelta
 from foundry_lite.application.ports.ai_run_repository import AiLedgerRow, AiPromptArtifactRecord
 from foundry_lite.application.ports.prompt_artifact_store import (
     PromptArtifactBlob,
+    PromptArtifactDelete,
     PromptArtifactRead,
     PromptArtifactStore,
     PromptArtifactWrite,
@@ -28,6 +30,10 @@ class PromptArtifactAccessDenied(Exception):
 
 class PromptArtifactNotFound(Exception):
     """Raised when the tenant-scoped artifact receipt is missing."""
+
+
+class PromptArtifactIntegrityError(Exception):
+    """Raised when a prompt artifact no longer matches its ledger receipt."""
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,7 @@ class PromptArtifactService(CoreService):
         now = created_at or _now()
         artifact_id = f"{ai_run_id}-compiled-prompt"
         self._require_existing_run(ctx, ai_run_id)
+        _require_content_hash(compiled_prompt_text, compiled_prompt_hash)
         blob = self.prompt_artifact_store.write_prompt_artifact(
             PromptArtifactWrite(
                 tenant_id=ctx.tenant_id,
@@ -68,9 +75,20 @@ class PromptArtifactService(CoreService):
             )
         )
         record = _artifact_record(ctx, ai_run_id, artifact_id, compiled_prompt_hash, blob, now)
-        with self.engine.begin() as transaction:
-            self.ai_run_repository.record_prompt_artifact(transaction=transaction, record=record)
+        self._record_artifact_receipt_or_cleanup(ctx, record, blob)
         return record
+
+    def _record_artifact_receipt_or_cleanup(
+        self, ctx: RequestContext, record: AiPromptArtifactRecord, blob: PromptArtifactBlob
+    ) -> None:
+        try:
+            with self.engine.begin() as transaction:
+                self.ai_run_repository.record_prompt_artifact(transaction=transaction, record=record)
+        except Exception:
+            self.prompt_artifact_store.delete_prompt_artifact(
+                PromptArtifactDelete(tenant_id=ctx.tenant_id, artifact_ref=blob.artifact_ref)
+            )
+            raise
 
     def _require_existing_run(self, ctx: RequestContext, ai_run_id: str) -> None:
         with self.engine.begin() as transaction:
@@ -94,6 +112,8 @@ class PromptArtifactService(CoreService):
                 tenant_id=ctx.tenant_id,
                 artifact_ref=str(row["artifact_ref"]),
                 encryption_key_ref=str(row["encryption_key_ref"]),
+                expected_artifact_hash=str(row["artifact_hash"]),
+                expected_content_hash=str(row["content_hash"]),
             )
         )
         return _read_result(row, plaintext)
@@ -141,3 +161,9 @@ def _read_result(row: AiLedgerRow, plaintext: str) -> PromptArtifactReadResult:
 def _retention_until(created_at: str) -> str:
     parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
     return (parsed + timedelta(days=_PROMPT_RETENTION_DAYS)).isoformat()
+
+
+def _require_content_hash(plaintext: str, expected_hash: str) -> None:
+    actual_hash = f"sha256:{hashlib.sha256(plaintext.encode('utf-8')).hexdigest()}"
+    if actual_hash != expected_hash:
+        raise PromptArtifactIntegrityError("compiled prompt text does not match compiled_prompt_hash")

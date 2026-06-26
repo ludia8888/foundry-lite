@@ -1676,12 +1676,17 @@ key ref, algorithm, retention, legal hold, erasure lineage, export marking만 �
 
 Agent Runtime은 AI run을 seed한 뒤 Model Gateway 호출 전에 compiled prompt artifact를 기록한다.
 Artifact write가 실패하면 seeded run을 failed로 닫고 provider/model adapter를 호출하지 않는다.
+저장 plaintext는 `compiled_prompt_hash`와 같은 canonical `{"messages":[...]}` JSON이고, receipt
+insert 실패 시 방금 쓴 encrypted artifact를 삭제해 retention/erasure 없는 orphan prompt를 남기지
+않는다. Raw read는 ciphertext `artifact_hash`와 plaintext `content_hash`를 receipt와 다시 맞춰본다.
+SecretProvider key 조회 실패 시 local-dev fallback은 `FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY=true`
+명시 opt-in이 있을 때만 허용된다.
 Alembic migration은 `ai_prompt_artifacts`에 PostgreSQL RLS/FORCE/policy를 적용해 기존 DB upgrade
 경로도 bootstrap 경로와 같은 tenant isolation을 갖는다.
 
 | 게이트 | 명령 | Root cause |
 |---|---|---|
-| Encrypted prompt artifact ratchet | `quality:prompt-artifacts` | raw compiled prompt가 일반 DB/Operations payload/파일에 평문으로 남거나, 별도 reader role 없이 원문을 읽거나, prompt artifact write 실패 뒤에도 provider egress가 진행되거나, 기존 DB migration 경로에서 새 AI tenant table이 PostgreSQL RLS 밖에 남는 문제 차단 |
+| Encrypted prompt artifact ratchet | `quality:prompt-artifacts` | raw compiled prompt가 일반 DB/Operations payload/파일에 평문으로 남거나, compiled_prompt_hash와 저장 plaintext가 갈라지거나, receipt 실패 뒤 orphan artifact가 남거나, 조용한 local-dev key fallback이 발동하거나, receipt hash 재검증 없이 raw prompt를 읽거나, 별도 reader role 없이 원문을 읽거나, prompt artifact write 실패 뒤에도 provider egress가 진행되거나, 기존 DB migration 경로에서 새 AI tenant table이 PostgreSQL RLS 밖에 남는 문제 차단 |
 
 ### AIP P0d — Context Compiler Ratchet
 

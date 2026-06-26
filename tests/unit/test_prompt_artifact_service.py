@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,9 +12,11 @@ import pytest
 from cryptography.fernet import Fernet
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 from foundry_lite.application.ports.ai_run_repository import AiExecutionRunRecord, AiSessionRecord
+from foundry_lite.application.ports.prompt_artifact_store import PromptArtifactStoreError
 from foundry_lite.application.ports.secret_provider import SecretValue
 from foundry_lite.application.services.aip.prompt_artifact_service import (
     PromptArtifactAccessDenied,
+    PromptArtifactIntegrityError,
     PromptArtifactService,
 )
 from foundry_lite.domain.context import RequestContext
@@ -47,7 +50,7 @@ def test_prompt_artifact_service_stores_encrypted_receipt_and_requires_reader_ro
     record = service.record_compiled_prompt(
         ctx,
         ai_run_id="ai-run-1",
-        compiled_prompt_hash="sha256:compiled-prompt",
+        compiled_prompt_hash=_hash_text(_RAW_PROMPT),
         compiled_prompt_text=_RAW_PROMPT,
         created_at="2026-06-26T00:00:00+00:00",
     )
@@ -55,7 +58,7 @@ def test_prompt_artifact_service_stores_encrypted_receipt_and_requires_reader_ro
     row = _artifact_row(engine, record.id)
     serialized = json.dumps(dict(row), sort_keys=True)
     assert row["artifact_kind"] == "compiled_prompt"
-    assert row["content_hash"] == "sha256:compiled-prompt"
+    assert row["content_hash"] == _hash_text(_RAW_PROMPT)
     assert row["artifact_hash"].startswith("sha256:")
     assert row["retention_until"] == "2026-07-03T00:00:00+00:00"
     assert row["legal_hold"] is False
@@ -73,11 +76,83 @@ def test_prompt_artifact_service_stores_encrypted_receipt_and_requires_reader_ro
     result = service.read_prompt_artifact(reader_ctx, artifact_id=record.id)
 
     assert result.plaintext == _RAW_PROMPT
-    assert result.content_hash == "sha256:compiled-prompt"
+    assert result.content_hash == _hash_text(_RAW_PROMPT)
     assert "aip_prompt_artifact_reader" not in serialized
 
 
-def _service(tmp_path: Path) -> tuple[PromptArtifactService, Any]:
+def test_prompt_artifact_service_rejects_mismatched_compiled_prompt_hash(tmp_path: Path) -> None:
+    service, engine = _service(tmp_path)
+    _seed_run(engine)
+    ctx = RequestContext(tenant_id=_TENANT, actor_user_id="ops-user", roles=("ops_manager",))
+
+    with pytest.raises(PromptArtifactIntegrityError, match="compiled_prompt_hash"):
+        service.record_compiled_prompt(
+            ctx,
+            ai_run_id="ai-run-1",
+            compiled_prompt_hash="sha256:wrong",
+            compiled_prompt_text=_RAW_PROMPT,
+            created_at="2026-06-26T00:00:00+00:00",
+        )
+
+    assert list(tmp_path.rglob("*.fernet")) == []
+
+
+def test_prompt_artifact_service_deletes_artifact_when_receipt_insert_fails(tmp_path: Path) -> None:
+    service, engine = _service(tmp_path, repository_profile="receipt-fails")
+    _seed_run(engine)
+    ctx = RequestContext(tenant_id=_TENANT, actor_user_id="ops-user", roles=("ops_manager",))
+
+    with pytest.raises(RuntimeError, match="receipt insert failed"):
+        service.record_compiled_prompt(
+            ctx,
+            ai_run_id="ai-run-1",
+            compiled_prompt_hash=_hash_text(_RAW_PROMPT),
+            compiled_prompt_text=_RAW_PROMPT,
+            created_at="2026-06-26T00:00:00+00:00",
+        )
+
+    assert list(tmp_path.rglob("*.fernet")) == []
+
+
+def test_prompt_artifact_service_fails_closed_when_receipt_hash_does_not_match(tmp_path: Path) -> None:
+    service, engine = _service(tmp_path)
+    _seed_run(engine)
+    ctx = RequestContext(tenant_id=_TENANT, actor_user_id="ops-user", roles=("ops_manager",))
+    reader_ctx = RequestContext(
+        tenant_id=_TENANT,
+        actor_user_id="auditor",
+        roles=("ops_manager", "aip_prompt_artifact_reader"),
+    )
+    record = service.record_compiled_prompt(
+        ctx,
+        ai_run_id="ai-run-1",
+        compiled_prompt_hash=_hash_text(_RAW_PROMPT),
+        compiled_prompt_text=_RAW_PROMPT,
+        created_at="2026-06-26T00:00:00+00:00",
+    )
+    with engine.begin() as transaction:
+        transaction.execute(
+            db.ai_prompt_artifacts.update()
+            .where(db.ai_prompt_artifacts.c.id == record.id)
+            .values(content_hash=_hash_text("different prompt"))
+        )
+
+    with pytest.raises(PromptArtifactStoreError, match="content hash mismatch"):
+        service.read_prompt_artifact(reader_ctx, artifact_id=record.id)
+
+
+class _ReceiptFailingAiRunRepository:
+    def __init__(self, delegate: SqlAlchemyAiRunRepository) -> None:
+        self._delegate = delegate
+
+    def execution_run_by_id(self, **kwargs: Any) -> Any:
+        return self._delegate.execution_run_by_id(**kwargs)
+
+    def record_prompt_artifact(self, **kwargs: Any) -> None:
+        raise RuntimeError("receipt insert failed")
+
+
+def _service(tmp_path: Path, *, repository_profile: str = "sql") -> tuple[PromptArtifactService, Any]:
     engine = create_engine("sqlite:///:memory:", future=True)
     db.create_database(engine)
     repository = SqlAlchemyAiRunRepository(engine)
@@ -89,7 +164,12 @@ def _service(tmp_path: Path) -> tuple[PromptArtifactService, Any]:
         )
     )
     store = LocalPromptArtifactStore(tmp_path, secret_provider, allow_local_dev_fallback=False)
-    return PromptArtifactService(engine=engine, ai_run_repository=repository, prompt_artifact_store=store), engine
+    service_repository: Any = repository
+    if repository_profile == "receipt-fails":
+        service_repository = _ReceiptFailingAiRunRepository(repository)
+    return PromptArtifactService(
+        engine=engine, ai_run_repository=service_repository, prompt_artifact_store=store
+    ), engine
 
 
 def _seed_run(engine: Any) -> None:
@@ -146,3 +226,7 @@ def _run_record() -> AiExecutionRunRecord:
         started_at="2026-06-26T00:00:00+00:00",
         completed_at=None,
     )
+
+
+def _hash_text(value: str) -> str:
+    return f"sha256:{hashlib.sha256(value.encode('utf-8')).hexdigest()}"

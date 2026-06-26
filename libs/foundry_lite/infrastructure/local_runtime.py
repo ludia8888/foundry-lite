@@ -111,6 +111,7 @@ from foundry_lite.infrastructure.secrets import secret_provider_from_env
 from foundry_lite.security.policy import ClassificationProvider, PolicyService
 
 _RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
+_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV = "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY"
 _SCHEMA_MUTATION_PROTECTED_PROFILES = frozenset({"production", "prod", "staging", "stage"})
 
 
@@ -224,7 +225,11 @@ def create_local_core_dependencies(
         context_provider=FakeContextProvider(),
         search_adapter=search_adapter,
         secret_provider=secret_provider,
-        prompt_artifact_store=LocalPromptArtifactStore(prompt_artifacts_root, secret_provider),
+        prompt_artifact_store=LocalPromptArtifactStore(
+            prompt_artifacts_root,
+            secret_provider,
+            allow_local_dev_fallback=_allow_local_prompt_artifact_key_from_env(),
+        ),
         citation_source_verifier=FakeCitationSourceVerifier(),
         stream_adapter=stream_adapter,
         tool_executor=FakeToolExecutor(),
@@ -382,6 +387,10 @@ def _workflow_adapter(adapter_profile: str) -> WorkflowAdapter:
 def _schema_mutation_allowed_from_env() -> bool:
     runtime_profile = os.getenv(_RUNTIME_PROFILE_ENV, "local").strip().casefold()
     return runtime_profile not in _SCHEMA_MUTATION_PROTECTED_PROFILES
+
+
+def _allow_local_prompt_artifact_key_from_env() -> bool:
+    return os.getenv(_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV, "").strip().casefold() in {"1", "true", "yes"}
 
 
 def _temporal_workflow_config() -> TemporalWorkflowAdapterConfig:

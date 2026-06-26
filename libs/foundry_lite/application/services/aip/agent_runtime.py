@@ -356,7 +356,7 @@ def _response_schema(output_schema: JsonObject | None) -> str | None:
 
 def _compiled_prompt_text(compiled: CompiledContext) -> str:
     return json.dumps(
-        [{"role": message.role, "content": message.content} for message in compiled.messages],
+        {"messages": [{"role": message.role, "content": message.content} for message in compiled.messages]},
         ensure_ascii=True,
         sort_keys=True,
         separators=(",", ":"),

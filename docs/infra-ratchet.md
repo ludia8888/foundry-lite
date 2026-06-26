@@ -1091,8 +1091,12 @@ Media/Content Plane (standalone family, not in `activeStack`).
   retention, legal hold, erasure lineage, and export marking), and `PromptArtifactService` requires the
   explicit `aip_prompt_artifact_reader` role before decrypting. `AgentRuntimeService` writes this encrypted
   artifact after seeding the AI run and before Model Gateway egress; if the artifact write fails, the seeded
-  run is marked failed and no provider/model adapter call occurs. The Alembic upgrade path applies PostgreSQL
-  RLS to `ai_prompt_artifacts`, so existing DBs upgraded by migration match the bootstrap path.
+  run is marked failed and no provider/model adapter call occurs. The artifact plaintext is canonicalized as
+  the same `{"messages":[...]}` JSON whose SHA-256 becomes `compiled_prompt_hash`, receipt insert failure
+  deletes the just-written encrypted artifact to avoid orphan prompt bytes, read access revalidates both
+  ciphertext and plaintext hashes against the receipt, and local-dev key fallback is explicit opt-in only via
+  `FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY=true`. The Alembic upgrade path applies PostgreSQL RLS to
+  `ai_prompt_artifacts`, so existing DBs upgraded by migration match the bootstrap path.
 
 - **P0d — Context compiler + retrieval context contract (shipped as the first prompt assembly slice):**
   `ContextProvider` and `RetrievedContextItem` now define the authorized retrieval boundary that hands

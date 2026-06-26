@@ -971,6 +971,7 @@ def test_prompt_artifacts_gate_runs_after_model_gateway_before_context_compiler(
     assert '"quality:prompt-artifacts"' in package_json
     assert "tests/contracts/test_prompt_artifact_store_contract.py" in package_json
     assert "tests/unit/test_prompt_artifact_service.py" in package_json
+    assert "tests/unit/test_infrastructure_repository_edges.py" in package_json
     assert "agent_runtime_fails_before_model_when_prompt_artifact_write_fails" in package_json
 
 
