@@ -743,6 +743,19 @@ def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() 
     assert "run: pnpm ci:gate:e2e" in workflow
 
 
+def test_media_active_covered_gate_runs_after_live_media_lanes() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    external_step = "pnpm --silent quality:media-live-external"
+    active_step = "pnpm --silent quality:media-active-covered"
+    assert external_step in script
+    assert active_step in script
+    assert script.index(external_step) < script.index(active_step)
+    assert '"quality:media-active-covered"' in package_json
+    assert "tests/unit/test_media_transaction_service.py" in package_json
+
+
 def test_e2e_gate_sets_prompt_artifact_test_secret_without_local_fallback() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
 
