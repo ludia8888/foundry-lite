@@ -1134,6 +1134,9 @@ quality:ontology-migrations
 
 - [~] source event time ↔ processing time: detector가 `event_time`/`source_event_time`과
   `processed_at`/`completed_at`을 분리해 lag evidence로 남긴다.
+- [~] clock-skew guard: source event time이 processing time보다 미래이거나 run
+  `finished_at`이 `started_at`보다 앞서면 값을 0초로 숨기지 않고
+  `clockSkewSeconds` evidence가 있는 active incident로 남긴다.
 - [ ] broker latest offset ↔ committed offset
 - [ ] REST cursor observation lag
 
@@ -1182,6 +1185,7 @@ quality:slo-contracts
 
 - [x] `test_missing_data_triggers_flow_interruption`
 - [x] `test_lag_alert_uses_event_and_processing_time_separately`
+- [x] `test_observability_clock_skew_is_reported_instead_of_clamped`
 - [x] `test_skew_detector_ignores_expected_seasonality`
 - [x] `test_sla_alert_carries_run_and_dataset_refs`
 - [x] `test_alert_dedup_prevents_alarm_storm`

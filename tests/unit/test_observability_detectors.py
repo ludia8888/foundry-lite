@@ -4,7 +4,12 @@ from copy import deepcopy
 from typing import cast
 
 import pytest
-from foundry_lite.application.ports import ObservabilityDetectorConfig, ObservabilityIncident, RuntimeRunSnapshot
+from foundry_lite.application.ports import (
+    ObservabilityDetectorConfig,
+    ObservabilityIncident,
+    RuntimeRow,
+    RuntimeRunSnapshot,
+)
 from foundry_lite.application.services.observability_detectors import (
     _contains_resource,
     _latest_row,
@@ -107,6 +112,42 @@ def test_sla_alert_carries_run_and_dataset_refs() -> None:
     assert incident["evidence"]["datasetVersionId"] == "clean_v1"
     assert incident["evidence"]["references"] == {"output_version_id": "clean_v1"}
     assert incident["evidenceLinks"][0]["operationPath"] == "/api/operations/runs/transform/transform_slow"
+
+
+def test_observability_clock_skew_is_reported_instead_of_clamped() -> None:
+    snapshot = _snapshot(
+        sync_runs=[
+            _run(
+                "sync_clock_skew",
+                event_time="2026-06-19T00:10:00Z",
+                processed_at="2026-06-19T00:05:00Z",
+            )
+        ],
+        transform_runs=[
+            _run(
+                "transform_clock_skew",
+                output_version_id="clean_clock_skew",
+                started_at="2026-06-19T00:10:00Z",
+                finished_at="2026-06-19T00:05:00Z",
+            )
+        ],
+    )
+
+    report = build_observability_report(
+        snapshot,
+        configs=[
+            _config("source-clock-skew", "lag", thresholdSeconds=600),
+            _config("transform-clock-skew", "slo", runType="transform", thresholdSeconds=600),
+        ],
+        observed_at="2026-06-19T00:12:00Z",
+    )
+
+    assert [incident["message"] for incident in report["activeIncidents"]] == [
+        "runtime clock skew detected",
+        "runtime clock skew detected",
+    ]
+    assert [incident["evidence"]["clockSkewSeconds"] for incident in report["activeIncidents"]] == [300.0, 300.0]
+    assert [incident["evidence"]["measuredSeconds"] for incident in report["activeIncidents"]] == [-300.0, -300.0]
 
 
 def test_alert_dedup_prevents_alarm_storm() -> None:
@@ -299,7 +340,7 @@ def _config(
     detector_type: str,
     **overrides: object,
 ) -> ObservabilityDetectorConfig:
-    payload = {
+    payload: dict[str, object] = {
         "detectorId": detector_id,
         "detectorType": detector_type,
         "configVersion": "s56-v1",
@@ -312,22 +353,22 @@ def _config(
     return cast(ObservabilityDetectorConfig, payload)
 
 
-def _run(run_id: str, **fields: object) -> dict[str, object]:
+def _run(run_id: str, **fields: object) -> RuntimeRow:
     return {"id": run_id, "status": "succeeded", **fields}
 
 
 def _snapshot(
     *,
-    sync_runs: list[dict[str, object]] | None = None,
-    transform_runs: list[dict[str, object]] | None = None,
-    index_runs: list[dict[str, object]] | None = None,
-    action_runs: list[dict[str, object]] | None = None,
-    action_writebacks: list[dict[str, object]] | None = None,
-    materialization_runs: list[dict[str, object]] | None = None,
-    outbox_events: list[dict[str, object]] | None = None,
-    dead_letter_events: list[dict[str, object]] | None = None,
-    workflow_runs: list[dict[str, object]] | None = None,
-    audit_events: list[dict[str, object]] | None = None,
+    sync_runs: list[RuntimeRow] | None = None,
+    transform_runs: list[RuntimeRow] | None = None,
+    index_runs: list[RuntimeRow] | None = None,
+    action_runs: list[RuntimeRow] | None = None,
+    action_writebacks: list[RuntimeRow] | None = None,
+    materialization_runs: list[RuntimeRow] | None = None,
+    outbox_events: list[RuntimeRow] | None = None,
+    dead_letter_events: list[RuntimeRow] | None = None,
+    workflow_runs: list[RuntimeRow] | None = None,
+    audit_events: list[RuntimeRow] | None = None,
 ) -> RuntimeRunSnapshot:
     return {
         "syncRuns": sync_runs or [],
