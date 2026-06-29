@@ -14,14 +14,17 @@ from urllib.request import urlopen
 from uuid import uuid4
 
 import foundry_lite_api.main as api_main
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.ports import DatasetFileRecord
+from foundry_lite.application.ports import DatasetFileRecord, DatasetManifestFile
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
 from foundry_lite.infrastructure.adapters import S3DatasetStorageAdapter, S3DatasetStorageAdapterConfig
+from foundry_lite.infrastructure.adapters.s3_dataset_storage import _verify_parquet_footer
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.infrastructure.repositories import SqlAlchemyDatasetTransactionRepository
 from testcontainers.core.container import DockerContainer
@@ -224,13 +227,7 @@ def minio_server() -> Iterator[MinioServer]:
 
 def test_s3_dataset_storage_adapter_contract(minio_server: MinioServer, tmp_path: Path) -> None:
     adapter = _adapter(tmp_path, minio_server)
-    staged = adapter.staging_file(
-        tenant_id="tenant_demo",
-        dataset_id="ds_orders",
-        transaction_id="dstx_demo",
-        file_name="part-00000.parquet",
-    )
-    staged.write_bytes(b"fake parquet bytes")
+    staged = _staged_bytes(adapter, b"contract parquet bytes")
 
     stored = adapter.commit_staged_file(
         tenant_id="tenant_demo",
@@ -240,14 +237,14 @@ def test_s3_dataset_storage_adapter_contract(minio_server: MinioServer, tmp_path
         dataset_ref="raw.orders",
         schema_hash="schema_hash_demo",
         staged_file=staged,
-        row_count=3,
+        row_count=1,
         created_at="2026-06-10T00:00:00Z",
     )
 
     manifest = adapter.load_manifest(stored.manifest_uri)
     assert manifest["storage_profile"] == "s3-storage"
     assert manifest["files"][0]["uri"] == stored.data_file_uri
-    assert adapter.first_data_file_path(stored.manifest_uri).read_bytes() == b"fake parquet bytes"
+    assert _parquet_payloads(adapter.first_data_file_path(stored.manifest_uri)) == ["contract parquet bytes"]
     assert adapter.delete_committed_version(
         tenant_id="tenant_demo",
         dataset_id="ds_orders",
@@ -275,7 +272,7 @@ def test_s3_data_file_paths_apply_partition_filter_before_download(
     matched_paths = adapter.data_file_paths(stored.manifest_uri, partition_filter={"bucket": "a"})
     missing_paths = adapter.data_file_paths(stored.manifest_uri, partition_filter={"bucket": "b"})
 
-    assert [path.read_bytes() for path in matched_paths] == [b"partitioned bytes"]
+    assert [_parquet_payloads(path) for path in matched_paths] == [["partitioned bytes"]]
     assert missing_paths == []
 
 
@@ -433,10 +430,64 @@ def test_s3_read_path_detects_corrupted_data_object(minio_server: MinioServer, t
     stored = _commit(adapter, _staged_bytes(adapter, b"healthy parquet bytes"), version_id="dsv_corrupt")
 
     data_key = _key_from_uri(adapter, stored.data_file_uri)
-    client.put_object(Bucket=adapter.config.bucket, Key=data_key, Body=b"X" * len(b"healthy parquet bytes"))
+    original = client.get_object(Bucket=adapter.config.bucket, Key=data_key)["Body"].read()
+    client.put_object(Bucket=adapter.config.bucket, Key=data_key, Body=b"X" * len(original))
 
     with pytest.raises(ValueError, match="content hash mismatch"):
         adapter.first_data_file_path(stored.manifest_uri)
+
+
+def test_s3_commit_rejects_unreadable_parquet_footer_and_cleans_up(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    client = _s3_client(minio_server)
+    adapter = _adapter(tmp_path, minio_server, client=client)
+    staged = adapter.staging_file(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        transaction_id=f"dstx_{uuid4().hex}",
+        file_name="part-00000.parquet",
+    )
+    staged.write_bytes(b"not a parquet file")
+
+    with pytest.raises(AdapterError) as exc_info:
+        _commit(adapter, staged, version_id="dsv_bad_footer")
+
+    failure = exc_info.value.failure
+    assert failure.kind == "validation"
+    assert failure.is_retryable is False
+    assert _version_keys(client, adapter, "dsv_bad_footer") == []
+
+
+def test_s3_commit_rejects_parquet_row_count_mismatch_and_cleans_up(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    client = _s3_client(minio_server)
+    adapter = _adapter(tmp_path, minio_server, client=client)
+
+    with pytest.raises(AdapterError) as exc_info:
+        _commit(adapter, _staged_bytes(adapter, b"one parquet row"), version_id="dsv_bad_row_count", row_count=2)
+
+    failure = exc_info.value.failure
+    assert failure.kind == "validation"
+    assert failure.is_retryable is False
+    assert _version_keys(client, adapter, "dsv_bad_row_count") == []
+
+
+def test_s3_parquet_footer_validation_skips_non_parquet_format(tmp_path: Path) -> None:
+    payload = tmp_path / "plain.csv"
+    payload.write_text("not,parquet\n", encoding="utf-8")
+    manifest_file: DatasetManifestFile = {
+        "uri": "s3://bucket/plain.csv",
+        "format": "csv",
+        "row_count": 99,
+        "byte_size": payload.stat().st_size,
+        "content_hash": "sha256:unused",
+    }
+
+    _verify_parquet_footer(payload, manifest_file)
 
 
 def test_s3_transient_load_error_is_retryable_not_corruption(
@@ -506,7 +557,7 @@ def test_s3_duplicate_version_commit_is_rejected_without_destroying_existing(
     assert exc_info.value.failure.is_retryable is False
     # The first commit must be untouched: same manifest, same bytes.
     assert adapter.load_manifest(stored.manifest_uri)["version_id"] == "dsv_dup"
-    assert adapter.first_data_file_path(stored.manifest_uri).read_bytes() == b"first writer bytes"
+    assert _parquet_payloads(adapter.first_data_file_path(stored.manifest_uri)) == ["first writer bytes"]
 
 
 def test_s3_read_path_detects_truncated_data_object(minio_server: MinioServer, tmp_path: Path) -> None:
@@ -843,7 +894,7 @@ def _foundry_with_storage(
     )
 
 
-def _commit(adapter: S3DatasetStorageAdapter, staged: Path, version_id: str) -> Any:
+def _commit(adapter: S3DatasetStorageAdapter, staged: Path, version_id: str, *, row_count: int = 1) -> Any:
     return adapter.commit_staged_file(
         tenant_id="tenant_demo",
         dataset_id="ds_orders",
@@ -852,7 +903,7 @@ def _commit(adapter: S3DatasetStorageAdapter, staged: Path, version_id: str) -> 
         dataset_ref="raw.orders",
         schema_hash="schema_hash_demo",
         staged_file=staged,
-        row_count=1,
+        row_count=row_count,
         created_at="2026-06-10T00:00:00Z",
     )
 
@@ -864,8 +915,12 @@ def _staged_bytes(adapter: S3DatasetStorageAdapter, payload: bytes = b"fake parq
         transaction_id=f"dstx_{uuid4().hex}",
         file_name="part-00000.parquet",
     )
-    staged.write_bytes(payload)
+    pq.write_table(pa.table({"payload": [payload.decode("utf-8")]}), str(staged))
     return staged
+
+
+def _parquet_payloads(path: Path) -> list[str]:
+    return list(pq.read_table(path).to_pydict()["payload"])
 
 
 def _version_keys(client: Any, adapter: S3DatasetStorageAdapter, version_id: str) -> list[str]:

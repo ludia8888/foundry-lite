@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+import pyarrow.parquet as pq
+from pyarrow.lib import ArrowException
+
 from foundry_lite.application.ports import DatasetManifest, DatasetManifestFile, StoredDatasetCommit
 from foundry_lite.application.ports.adapter_failure import (
     AdapterError,
@@ -61,6 +64,12 @@ class S3DatasetStorageAdapter:
                     "conflict",
                     False,
                     "S3 dataset version id is already committed; the version allocator must hand out a fresh id.",
+                ),
+                AdapterFailureMode(
+                    "commit_staged_file",
+                    "validation",
+                    False,
+                    "S3 dataset artifact is not a readable parquet file or its footer metadata disagrees.",
                 ),
                 AdapterFailureMode(
                     "load_manifest",
@@ -265,6 +274,7 @@ class S3DatasetStorageAdapter:
         expected_hash = manifest_file.get("content_hash")
         if expected_hash is not None and _file_hash(target) != expected_hash:
             raise ValueError(f"S3 data object content hash mismatch: {manifest_file['uri']}")
+        _verify_parquet_footer(target, manifest_file)
 
     def _put_json(self, key: str, payload: DatasetManifest) -> None:
         body = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
@@ -381,15 +391,15 @@ class S3DatasetStorageAdapter:
         idempotency_key: str | None = None,
         details: Mapping[str, object] | None = None,
     ) -> AdapterError:
-        kind: AdapterFailureKind = "timeout" if isinstance(exc, TimeoutError) else "unavailable"
+        kind, retryable, timeout = _adapter_failure_semantics(exc)
         return AdapterError(
             AdapterFailure(
                 self.profile_name,
                 operation,
                 kind,
-                True,
+                retryable,
                 f"S3 dataset storage {operation} failed: {exc}",
-                timeout_seconds=30 if kind == "timeout" else None,
+                timeout_seconds=timeout,
                 idempotency_key=idempotency_key,
                 details=details or {},
             )
@@ -406,6 +416,32 @@ def _boto3_s3_client(config: S3DatasetStorageAdapterConfig) -> Any:
 
 
 _is_not_found_error = is_not_found_error
+
+
+class _InvalidParquetArtifactError(ValueError):
+    """Raised when a manifest-listed parquet object cannot pass footer checks."""
+
+
+def _adapter_failure_semantics(exc: Exception) -> tuple[AdapterFailureKind, bool, int | None]:
+    if isinstance(exc, TimeoutError):
+        return "timeout", True, 30
+    if isinstance(exc, _InvalidParquetArtifactError):
+        return "validation", False, None
+    return "unavailable", True, None
+
+
+def _verify_parquet_footer(target: Path, manifest_file: DatasetManifestFile) -> None:
+    if str(manifest_file.get("format", "")).lower() != "parquet":
+        return
+    try:
+        metadata = pq.ParquetFile(target).metadata
+    except (ArrowException, OSError, ValueError) as exc:
+        raise _InvalidParquetArtifactError(
+            f"S3 data object parquet footer is unreadable: {manifest_file['uri']}"
+        ) from exc
+    expected_row_count = manifest_file.get("row_count")
+    if expected_row_count is not None and metadata.num_rows != expected_row_count:
+        raise _InvalidParquetArtifactError(f"S3 data object parquet row count mismatch: {manifest_file['uri']}")
 
 
 def _matches_partition_filter(
