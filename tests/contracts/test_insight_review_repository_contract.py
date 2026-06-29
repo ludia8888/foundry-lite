@@ -164,12 +164,18 @@ def test_insight_review_execution_status_links_action_once() -> None:
             transaction=transaction,
             tenant_id="tenant-demo",
             review_id="review_1",
+            execution_idempotency_key="execute-1",
+            execution_request_fingerprint="sha256:execution-request",
+            proposal_fingerprint="sha256:proposal",
             updated_at="2026-06-19T00:00:03Z",
         )
         duplicate_start = harness.repository.mark_execution_started(
             transaction=transaction,
             tenant_id="tenant-demo",
             review_id="review_1",
+            execution_idempotency_key="execute-1",
+            execution_request_fingerprint="sha256:execution-request",
+            proposal_fingerprint="sha256:proposal",
             updated_at="2026-06-19T00:00:04Z",
         )
         succeeded = harness.repository.mark_execution_succeeded(
@@ -190,6 +196,11 @@ def test_insight_review_execution_status_links_action_once() -> None:
     assert success_before_start is None
     assert started is not None
     assert started["execution_status"] == "executing"
+    assert started["review_metadata"]["approvalExecution"] == {
+        "idempotencyKey": "execute-1",
+        "requestFingerprint": "sha256:execution-request",
+        "proposalFingerprint": "sha256:proposal",
+    }
     assert duplicate_start is None
     assert succeeded is not None
     assert succeeded["execution_status"] == "executed"
