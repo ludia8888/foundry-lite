@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from foundry_lite.application.ports import (
+    AdapterError,
     AuditEventRecord,
     ProductWorkflowRun,
     RuntimeJsonObject,
@@ -14,7 +15,6 @@ from foundry_lite.application.ports import (
     workflow_request_fingerprint,
     workflow_run_id,
 )
-from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.transaction_context import (
     WORKFLOW_RUN_CANCELLED,
     WORKFLOW_RUN_FAILED,
@@ -29,6 +29,7 @@ from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRegistryLookup
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping
 from foundry_lite.application.services.runtime_service import RuntimeService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
@@ -370,7 +371,7 @@ def _workflow_run_from_start_exception(
 
 def _workflow_start_error_payload(adapter_profile: str, exc: Exception) -> Mapping[str, object]:
     if isinstance(exc, AdapterError):
-        return exc.failure.to_payload()
+        return scrub_error_mapping(exc.failure.to_payload())
     return {
         "adapterProfile": adapter_profile,
         "operation": "start_workflow",

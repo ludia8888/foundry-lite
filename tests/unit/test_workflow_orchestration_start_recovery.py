@@ -5,7 +5,7 @@ from pathlib import Path
 
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure, AdapterFailureContract
-from foundry_lite.application.ports.workflow_adapter import WorkflowRun, WorkflowStartRequest
+from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter, WorkflowRun, WorkflowStartRequest
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
@@ -38,6 +38,22 @@ class _PermanentRaisingWorkflowAdapter(_RetryableRaisingWorkflowAdapter):
         raise RuntimeError("Authorization: Bearer raw-workflow-token")
 
 
+class _SensitiveAdapterFailureWorkflowAdapter(_RetryableRaisingWorkflowAdapter):
+    profile_name = "sensitive-adapter-failure"
+
+    def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
+        raise AdapterError(
+            AdapterFailure(
+                self.profile_name,
+                "start_workflow",
+                "timeout",
+                True,
+                "Authorization: Bearer raw-workflow-token",
+                details={"apiKey": "plain-key", "safe": "visible", "nested": {"providerResponse": "raw"}},
+            )
+        )
+
+
 def test_retryable_workflow_start_exception_records_start_unknown(tmp_path: Path) -> None:
     foundry = _foundry(tmp_path, _RetryableRaisingWorkflowAdapter())
 
@@ -59,6 +75,28 @@ def test_retryable_workflow_start_exception_records_start_unknown(tmp_path: Path
     assert replay["status"] == "start_unknown"
 
 
+def test_workflow_start_exception_scrubs_adapter_failure_evidence(tmp_path: Path) -> None:
+    foundry = _foundry(tmp_path, _SensitiveAdapterFailureWorkflowAdapter())
+
+    run = foundry.operations.start_media_processing_workflow(
+        media_item_version_id="miv-sensitive-start-failure",
+        processor_spec={"processor": "ocr_v1"},
+        idempotency_key="wf-sensitive-start-failure",
+        ctx=demo_admin_context(),
+    )
+
+    assert run["status"] == "start_unknown"
+    assert run["error"] is not None
+    assert run["error"]["operatorMessage"] == "***MASKED***"
+    assert run["error"]["details"] == {
+        "apiKey": "***MASKED***",
+        "safe": "visible",
+        "nested": {"providerResponse": "***MASKED***"},
+    }
+    assert "raw-workflow-token" not in str(run["error"])
+    assert "plain-key" not in str(run["error"])
+
+
 def test_permanent_workflow_start_exception_records_failed_not_starting(tmp_path: Path) -> None:
     foundry = _foundry(tmp_path, _PermanentRaisingWorkflowAdapter())
 
@@ -75,6 +113,6 @@ def test_permanent_workflow_start_exception_records_failed_not_starting(tmp_path
     assert run["error"]["details"] == {"errorType": "RuntimeError"}
 
 
-def _foundry(tmp_path: Path, adapter: object) -> FoundryLite:
+def _foundry(tmp_path: Path, adapter: WorkflowAdapter) -> FoundryLite:
     deps = create_local_core_dependencies(storage_root=tmp_path / "flite")
     return FoundryLite(dependencies=replace(deps, workflow_adapter=adapter))

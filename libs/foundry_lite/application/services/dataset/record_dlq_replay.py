@@ -26,6 +26,7 @@ from foundry_lite.application.services.dataset.stream_archive import (
     stream_archive_fields,
     stream_event_row,
 )
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_text
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -264,7 +265,7 @@ def _record_replay_failure(
             resource_type="dead_letter_record",
             resource_id=row["id"],
             action="operations:retry",
-            after_ref={"error": str(exc), "replayRunId": plan.run_id},
+            after_ref={"error": _safe_error_message(exc), "replayRunId": plan.run_id},
             correlation_id=plan.run_id,
         )
         return updated
@@ -305,7 +306,7 @@ def _audit_prepare_failure(
         resource_type="dead_letter_record",
         resource_id=row["id"],
         action="operations:retry",
-        after_ref={"error": str(exc), "replayRunId": _replay_run_id(row), "stage": "prepare"},
+        after_ref={"error": _safe_error_message(exc), "replayRunId": _replay_run_id(row), "stage": "prepare"},
         correlation_id=_replay_run_id(row),
     )
 
@@ -444,8 +445,12 @@ def _success_metadata(row: DeadLetterRecordRow, ctx: RequestContext, result: Com
 def _failure_metadata(row: DeadLetterRecordRow, ctx: RequestContext, exc: Exception) -> Mapping[str, object]:
     metadata = dict(row["metadata"])
     metadata["lastOperation"] = _operation(ctx, "replay_failed")
-    metadata["lastReplayError"] = {"type": exc.__class__.__name__, "message": str(exc)}
+    metadata["lastReplayError"] = {"type": exc.__class__.__name__, "message": _safe_error_message(exc)}
     return metadata
+
+
+def _safe_error_message(exc: Exception) -> str:
+    return scrub_error_text(str(exc))
 
 
 def _operation(ctx: RequestContext, operation: str) -> Mapping[str, object]:

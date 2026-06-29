@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
+from foundry_lite.application.ports import RuntimeRepository
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
 from foundry_lite.application.services.runtime_error_payloads import dead_letter_retry_plan, runtime_error_payload
 from foundry_lite.application.services.runtime_redaction import redact_sensitive
@@ -68,10 +71,12 @@ def test_runtime_error_payload_prefers_explicit_correlation_for_adapter_error() 
     )
 
     assert payload["type"] == "ADAPTER_FAILURE"
-    assert payload["adapterFailure"]["kind"] == "timeout"
-    assert payload["adapterFailure"]["retryable"] is True
-    assert payload["trace"]["correlation_id"] == "corr-1"
-    assert "run_id" not in payload["trace"]
+    adapter_failure = cast(dict[str, object], payload["adapterFailure"])
+    trace = cast(dict[str, object], payload["trace"])
+    assert adapter_failure["kind"] == "timeout"
+    assert adapter_failure["retryable"] is True
+    assert trace["correlation_id"] == "corr-1"
+    assert "run_id" not in trace
 
 
 def test_runtime_error_payload_scrubs_secrets_from_messages_and_details() -> None:
@@ -106,7 +111,7 @@ def test_runtime_operations_redacts_denylisted_json_keys_recursively() -> None:
     assert redact_sensitive(payload, set()) == {
         "safe": "visible",
         "providerRequest": "***MASKED***",
-        "nested": [{"apiKey": "***MASKED***"}, {"compiledPrompt": "***MASKED***"}],
+        "nested": [{"apiKey": "***REDACTED***"}, {"compiledPrompt": "***MASKED***"}],
     }
 
 
@@ -127,14 +132,14 @@ def test_dead_letter_retry_plan_rejects_missing_dead_letter() -> None:
     repository = _DeadLetterPlanRepository(None, [])
 
     with pytest.raises(NotFound, match="dead-letter event not found"):
-        dead_letter_retry_plan(repository, object(), RequestContext(), "dlq-1")
+        dead_letter_retry_plan(cast(RuntimeRepository, repository), object(), RequestContext(), "dlq-1")
 
 
 def test_dead_letter_retry_plan_rejects_malformed_source_event_id() -> None:
     repository = _DeadLetterPlanRepository({"event_type": "materialization.requested", "payload": {}}, [])
 
     with pytest.raises(ValidationFailed, match="dead-letter event is not retryable") as exc_info:
-        dead_letter_retry_plan(repository, object(), RequestContext(), "dlq-1")
+        dead_letter_retry_plan(cast(RuntimeRepository, repository), object(), RequestContext(), "dlq-1")
 
     assert exc_info.value.details == {"event_id": "dlq-1", "field": "source_event_id"}
 
@@ -146,7 +151,7 @@ def test_dead_letter_retry_plan_requires_source_outbox_event() -> None:
     )
 
     with pytest.raises(NotFound, match="source outbox event not found"):
-        dead_letter_retry_plan(repository, object(), RequestContext(), "dlq-1")
+        dead_letter_retry_plan(cast(RuntimeRepository, repository), object(), RequestContext(), "dlq-1")
 
 
 def test_dead_letter_retry_plan_rejects_non_mapping_payload() -> None:
@@ -156,6 +161,6 @@ def test_dead_letter_retry_plan_rejects_non_mapping_payload() -> None:
     )
 
     with pytest.raises(ValidationFailed, match="dead-letter event is not retryable") as exc_info:
-        dead_letter_retry_plan(repository, object(), RequestContext(), "dlq-1")
+        dead_letter_retry_plan(cast(RuntimeRepository, repository), object(), RequestContext(), "dlq-1")
 
     assert exc_info.value.details == {"event_id": "dlq-1", "field": "payload"}

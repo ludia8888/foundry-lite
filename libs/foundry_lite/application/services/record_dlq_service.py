@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping, scrub_error_text
 from foundry_lite.application.services.runtime_restore_gates import require_write_traffic_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, PermissionDenied, ValidationFailed
@@ -479,8 +480,8 @@ def _bulk_retry_failure(record_id: str, exc: FoundryLiteError) -> DeadLetterReco
     return {
         "deadLetterRecordId": record_id,
         "code": exc.code,
-        "message": exc.message,
-        "details": dict(exc.details),
+        "message": scrub_error_text(exc.message),
+        "details": scrub_error_mapping(exc.details),
     }
 
 

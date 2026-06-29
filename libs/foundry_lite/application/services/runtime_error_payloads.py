@@ -64,6 +64,14 @@ def runtime_error_payload(
     return payload
 
 
+def scrub_error_mapping(value: Mapping[str, object]) -> dict[str, object]:
+    return cast(dict[str, object], _scrub_error_payload(value))
+
+
+def scrub_error_text(value: str) -> str:
+    return _scrub_text(value)
+
+
 def audit_dlq_retry(
     audit: AuditWriter,
     conn: TransactionContext,
@@ -111,14 +119,14 @@ def link_dlq_retry(
 
 def _base_error_payload(exc: Exception) -> dict[str, object]:
     if isinstance(exc, AdapterError):
-        return cast(dict[str, object], _scrub_error_payload(adapter_failure_payload(exc)))
+        return scrub_error_mapping(adapter_failure_payload(exc))
     if isinstance(exc, FoundryLiteError):
         return {
             "type": exc.code,
-            "message": _scrub_text(str(exc)),
-            "details": _scrub_error_payload(exc.details),
+            "message": scrub_error_text(str(exc)),
+            "details": scrub_error_mapping(exc.details),
         }
-    return {"type": exc.__class__.__name__, "message": _scrub_text(str(exc)), "details": {}}
+    return {"type": exc.__class__.__name__, "message": scrub_error_text(str(exc)), "details": {}}
 
 
 def _scrub_error_payload(value: object) -> object:
