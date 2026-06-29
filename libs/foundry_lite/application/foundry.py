@@ -7,6 +7,7 @@ from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.facades import (
     ActionGateway,
     AipWorkspace,
+    ConnectorWorkspace,
     DatasetWorkspace,
     ErasureGateway,
     InsightReviewWorkspace,
@@ -15,6 +16,7 @@ from foundry_lite.application.facades import (
     ObjectStore,
     OntologyRegistry,
     OperationsConsole,
+    SourceWorkspace,
     SupplyChainDemo,
     TransformPipeline,
 )
@@ -81,7 +83,12 @@ class FoundryLite:
         self.object_set_repository = dependencies.object_set_repository
         self.runtime_repository = dependencies.runtime_repository
         self.dataset_storage = dependencies.dataset_storage
+        self.connector_registry_repository = dependencies.connector_registry_repository
+        self.source_registry_repository = dependencies.source_registry_repository
+        self.source_management_repository = dependencies.source_management_repository
         self.secret_provider = dependencies.secret_provider
+        self.secret_vault = dependencies.secret_vault
+        self.source_database_adapter = dependencies.source_database_adapter
         self.model_registry_repository = dependencies.model_registry_repository
 
     def _attach_facades(self, services: CoreServices) -> None:
@@ -102,6 +109,8 @@ class FoundryLite:
         self.materialization = MaterializationRunner(services.materialization)
         self.insights = InsightReviewWorkspace(services.insight_review)
         self.media = MediaWorkspace(services.media)
+        self.connectors = ConnectorWorkspace(services.connector_onboarding)
+        self.sources = SourceWorkspace(services.source_onboarding, services.source_management)
         self.erasure = ErasureGateway(services.erasure)
         self.operations = OperationsConsole(
             services.action,
@@ -112,6 +121,7 @@ class FoundryLite:
             services.iceberg_maintenance,
             services.workflow,
             services.prompt_artifact,
+            services.outbox_publisher,
         )
         self.demo = SupplyChainDemo(services.demo, reset_fresh=lambda: self.reset(confirm_dev=True))
 

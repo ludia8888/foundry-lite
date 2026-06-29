@@ -7,7 +7,7 @@
 
 > 현재 구현 상태 주의: 2026-06-19 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. 완료 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
 >
-> 구현 동기화 메모: 현재 checkout은 Sprint 00~36, Sprint 02A, Sprint 36A의 MVP core/운영 안정성 체크를 완료한 상태다. Sprint 37~42의 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다. 이후 infra ratchet은 S3/MinIO, Iceberg-on-S3, Spark compute, Temporal workflow adapter, Elasticsearch live proof, 그리고 S3+Iceberg+Spark+CDC 조합까지 active-covered다. S46 이후 확장 순서는 [Data Platform Expansion Sprint Plan](./docs/data-platform-expansion-sprint-plan-ko.md)을 따르되, 현재 구현 완료 여부는 항상 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. S61은 generated SDK/request/error/request-id foundation과 frontend/backend surface lock, S62는 Dataset Explorer backend/API/SDK 시작점, S63은 Insight Review queue backend/API/SDK slice까지 부분 구현이다. PostgreSQL snapshot connector production implementation, multi-step Alembic upgrade/rollback operations, full Temporal connector data-plane/workflow operations, executable Python transform runner, full visual workspace UX는 MVP core 완료 조건에서 제외되며 현재 status 문서의 future/deferred 경계를 따른다.
+> 구현 동기화 메모: 현재 checkout은 Sprint 00~36, Sprint 02A, Sprint 36A의 MVP core/운영 안정성 체크를 완료한 상태다. Sprint 37~42의 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다. 이후 infra ratchet은 S3/MinIO, Iceberg-on-S3, Spark compute, Temporal workflow adapter, Elasticsearch live proof, 그리고 S3+Iceberg+Spark+CDC 조합까지 active-covered다. S46 이후 확장 순서는 [Data Platform Expansion Sprint Plan](./docs/data-platform-expansion-sprint-plan-ko.md)을 따르되, 현재 구현 완료 여부는 항상 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. S61은 generated SDK/request/error/request-id foundation과 frontend/backend surface lock, S62는 Dataset Explorer backend/API/SDK 시작점, S63은 Insight Review queue backend/API/SDK slice까지 부분 구현이다. PostgreSQL snapshot connector production implementation, multi-step Alembic upgrade/rollback operations, managed Temporal connector workflow operations beyond the local activity commit proof, executable Python transform runner, full visual workspace UX는 MVP core 완료 조건에서 제외되며 현재 status 문서의 future/deferred 경계를 따른다.
 
 ---
 
@@ -391,7 +391,7 @@ v1은 선택지를 줄여 구현 속도와 디버깅 가능성을 우선한다.
 | Monorepo | pnpm workspace + Turborepo + uv workspace | Web/SDK와 Python 백엔드를 한 저장소에서 관리 |
 | API | **Python 3.12 + FastAPI + Pydantic v2** | Python 백엔드 기준을 고정하고 request/response validation을 명확히 함 |
 | Backend persistence | SQLAlchemy 2.x + schema revision guard + Alembic baseline migration | 현재는 SQLAlchemy metadata bootstrap, frozen schema revision, and Alembic fresh-DB metadata parity test로 drift를 막고, multi-step upgrade/rollback 운영은 future scope |
-| Worker | local/direct workflow adapter + stream archive worker entrypoint + Temporal adapter ratchet + ConnectorSyncWorkflow control-plane proof | full Temporal connector data-plane execution은 future scope이고, 현재는 port/adapter contract, one-shot stream worker proof, Temporal adapter proof, Operations/API/SDK start/status proof를 사용 |
+| Worker | local/direct workflow adapter + stream archive worker entrypoint + Temporal adapter ratchet + ConnectorSyncWorkflow control-plane plus local activity commit proof | managed Temporal worker operations, production connector packaging, cancellation/reconciliation, and workflow upgrade replay는 future scope이고, 현재는 port/adapter contract, one-shot stream worker proof, Temporal adapter proof, Operations/API/SDK start/status proof, worker-bound local connector snapshot commit proof를 사용 |
 | CLI | Typer | 운영자와 개발자가 같은 Python service를 명령어로 실행 |
 | Web | Next.js + TanStack Query + shadcn/ui | 운영 UI 빠르게 개발 |
 | Metadata DB | SQLite/local SQLAlchemy + PostgreSQL contract coverage | schema, transaction, object store, audit 의미를 repository port 뒤에 고정 |
@@ -403,7 +403,7 @@ v1은 선택지를 줄여 구현 속도와 디버깅 가능성을 우선한다.
 | Batch compute | DuckDB canonical runner | local/small production에서 transaction/lineage 단순화 |
 | Python compute | transforms SDK skeleton + fail-closed registration | executable Python runner와 sandboxed SDK IO abstraction은 future scope |
 | Spark | Spark ComputeAdapter ratchet | v1 core 필수는 아니지만 post-MVP proof는 존재, real cluster 운영은 future scope |
-| Workflow | local/fake WorkflowAdapter contract + Temporal adapter ratchet + ConnectorSyncWorkflow Operations/API/SDK control plane | Temporal이 full connector activity data-plane, action/writeback/retry/replay를 실제 구동하는 것은 future scope |
+| Workflow | local/fake WorkflowAdapter contract + Temporal adapter ratchet + ConnectorSyncWorkflow Operations/API/SDK control plane + local connector snapshot activity commit proof | Temporal이 managed connector worker, cancellation/reconciliation, action/writeback/retry/replay를 실제 운영 구동하는 것은 future scope |
 | Search index | local/fake + Elasticsearch-compatible adapter/projection proof | object store가 source of truth이고 managed Elasticsearch deployment는 future scope |
 | Auth | `AuthProvider` local/demo/header-trust profile + production unsafe-profile guard | 로컬 개발은 단순하게 유지하되, production에서 demo/header-trust 인증이 켜지는 실수를 startup에서 차단 |
 | Observability | Structured logs + OpenTelemetry interface | Prometheus/Grafana/Loki는 docker-compose full profile |
@@ -415,7 +415,7 @@ v1은 선택지를 줄여 구현 속도와 디버깅 가능성을 우선한다.
 
 Foundry-lite에는 ETL schedule뿐 아니라 action writeback, side effect, index replay, materialization retry가 필요하다. 단순 queue는 실패 복구와 장기 workflow 추적이 약하다. Temporal은 워크플로우를 코드로 정의하면서 event history 기반으로 재시작/복구할 수 있으므로 action runtime과 pipeline runner 양쪽에 적합하다.
 
-다만 데이터 asset catalog UI가 필요해지면 나중에 Dagster를 transform authoring layer로 붙일 수 있다. 현재 MVP core는 자체 Dataset Registry + local/direct workflow boundary로 닫고, Temporal은 adapter ratchet과 S52 `ConnectorSyncWorkflow` control-plane proof까지만 current로 본다. 실제 connector activity data-plane, product workflow/action/writeback/retry/replay를 Temporal worker가 구동하는 범위는 future scope다.
+다만 데이터 asset catalog UI가 필요해지면 나중에 Dagster를 transform authoring layer로 붙일 수 있다. 현재 MVP core는 자체 Dataset Registry + local/direct workflow boundary로 닫고, Temporal은 adapter ratchet과 S52 `ConnectorSyncWorkflow` control-plane proof, worker-bound local connector snapshot commit proof까지만 current로 본다. Managed connector worker operations, cancellation/reconciliation, workflow upgrade replay, product workflow/action/writeback/retry/replay를 Temporal worker가 운영 구동하는 범위는 future scope다.
 
 ### 3.4 Scale path
 
@@ -475,7 +475,7 @@ SearchAdapter
 
 EventPublisher
 - 현재 SQLAlchemy outbox/DLQ/replay cursor 구현
-- Kafka-compatible stream archive proof는 존재하지만 full publisher/always-on worker는 future scope
+- Operations-bound outbox publisher proof, bounded `worker:outbox-publisher` entrypoint proof, Kafka-compatible stream archive proof는 존재하지만 always-on outbox publisher daemon/Kubernetes packaging은 future scope
 
 AuthProvider
 - 현재 local/demo/header-trust profile과 production unsafe-profile guard 구현
@@ -631,7 +631,7 @@ Scale Foundation은 “대규모 인프라를 지금 모두 붙인다”는 뜻�
 - Elasticsearch-compatible search projection proof / future managed cluster
 - external systems
 
-**Event plane**은 durable event와 replay 경계를 담당한다. 현재 MVP core에서는 Kafka 없이 SQLAlchemy outbox를 canonical event log로 사용한다. Kafka-compatible stream archive proof는 존재하지만, full publisher와 continuously running worker는 future scope다.
+**Event plane**은 durable event와 replay 경계를 담당한다. 현재 MVP core에서는 Kafka 없이 SQLAlchemy outbox를 canonical event log로 사용한다. Operations-bound outbox publisher와 bounded `worker:outbox-publisher` entrypoint는 pending event를 stream adapter로 발행하고 실패를 DLQ로 남길 수 있다. Kafka-compatible stream archive proof는 존재하지만, continuously running outbox publisher daemon과 production/Kubernetes packaging은 future scope다.
 
 - outbox_events
 - dead_letter_events
@@ -2757,7 +2757,7 @@ foundry-lite/
 
 DB transaction과 Kafka publish는 원자적으로 묶기 어렵다. 따라서 현재 MVP core는 DB transaction 안에서 outbox row를 쓰고, 이후 publisher가 외부 event bus 또는 internal worker queue로 발행할 수 있는 경계를 둔다.
 
-현재 checkout에서는 SQLAlchemy outbox가 canonical event plane이다. Kafka-compatible stream archive proof는 존재하지만, Kafka/Redpanda outbox publisher와 continuously running worker는 future scope다.
+현재 checkout에서는 SQLAlchemy outbox가 canonical event plane이다. `foundry.operations.publish_pending_outbox(...)`와 `worker:outbox-publisher`는 pending outbox를 CAS claim 후 stream adapter로 발행하고 success/failed/DLQ evidence를 남긴다. Kafka/Redpanda outbox publisher daemon과 continuously running production worker packaging은 future scope다.
 
 ```sql
 create table outbox_events (
@@ -2908,7 +2908,7 @@ Actions:
 | Streaming / CDC post-MVP proof | 부분 완료. REST/Webhook, Kafka-compatible stream archive, live broker proof, Debezium archive/live topic, CDC object indexing proof가 있다. | continuously running workers, rebalance/commit-unknown failure injection, production deployment packaging |
 | Search post-MVP proof | 부분 완료. Elasticsearch-compatible adapter/projection/rebuild/orphan drift proof가 있다. | managed live Elasticsearch cluster deployment |
 | Scale hardening | 일부 proof. active index pointer, shadow swap, PostgreSQL contract coverage, RLS contract proof, S3/Iceberg/Spark/infra-composition ratchet이 있다. | Kubernetes/Helm, backup/restore, managed operations, real cluster/cloud/chaos evidence |
-| Frontend/API/SDK product surface | 부분 완료. S61 generated SDK request/error/request-id foundation, 46 route-surface request contract, 12 helper-surface contract, frontend/backend surface lock, S62 Dataset Explorer backend/API/SDK start point, S63 Insight Review durable queue/API/SDK가 있다. | full visual dataset browser, lineage graph UX, insight evidence panel, approval policy UI, action orchestration workspace |
+| Frontend/API/SDK product surface | 부분 완료. S61 generated SDK request/error/request-id foundation, Ontology-style object/action/media OSDK facade, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, bounded operation polling, fetch-based operation event streaming helper, Source onboarding recipe/hook, Source Wizard recipe/hook, Generic REST connector onboarding recipe/hook, admin readiness overview/screen/task-plan/operations-board model, bounded outbox publish admin start, 114 route-surface request contract, 25 helper-surface contract, frontend/backend surface lock, S62 Dataset Explorer backend/API/SDK start point, S63 Insight Review durable queue/API/SDK, S64 Operations Recovery overview and post-restore validation API/SDK가 있다. | full visual dataset browser, lineage graph UX, insight evidence panel, approval policy UI, action orchestration workspace, recovery console UI, SAP/NetSuite/OAuth packaged source wizard |
 
 ## 22. Performance targets
 
@@ -3106,7 +3106,7 @@ Playwright:
 
 완화:
 
-- 현재 MVP core는 local/direct workflow boundary를 사용하고, Temporal adapter proof와 S52 `ConnectorSyncWorkflow` Operations/API/SDK control-plane proof만 current로 본다. Full connector activity data-plane, cancellation cleanup, response-loss reconciliation, continue-as-new, workflow upgrade replay, managed worker operations은 future scope로 둔다.
+- 현재 MVP core는 local/direct workflow boundary를 사용하고, Temporal adapter proof와 S52 `ConnectorSyncWorkflow` Operations/API/SDK control-plane proof, worker-bound local connector snapshot commit proof만 current로 본다. Cancellation cleanup, response-loss reconciliation, continue-as-new, workflow upgrade replay, managed worker operations은 future scope로 둔다.
 - DuckDB-first runner로 commit/lineage/check contract 고정
 - 복잡한 asset orchestration은 Dagster integration optional
 - transform SDK interface는 외부 orchestrator로도 호출 가능하게 설계

@@ -2,16 +2,101 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from typing import cast
 
-from foundry_lite.application.ports import BackupRestoreModeReport, BackupRestorePreflightReport, RuntimeJsonObject
+from foundry_lite.application.ports import (
+    BackupRestoreModeReport,
+    BackupRestorePostRestoreValidationReport,
+    BackupRestorePreflightReport,
+    RuntimeJsonObject,
+    RuntimeRepository,
+    RuntimeRow,
+    TransactionContext,
+)
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.backup_restore_mode import (
+    POST_RESTORE_VALIDATED_EVENT,
     RESTORE_MODE_BLOCKED_EVENT,
     RESTORE_MODE_RESUME_APPROVED_EVENT,
     RESTORE_MODE_STARTED_EVENT,
 )
+from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected, NotFound
+
+
+class BackupRestoreValidationMixin:
+    runtime_repository: RuntimeRepository
+    runtime_service: DatasetRuntimeBoundary
+
+    def _existing_restore_mode_report(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport | None:
+        raise NotImplementedError
+
+    def _approval_candidate(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport:
+        current = self._existing_restore_mode_report(ctx, restore_id)
+        if current is None:
+            raise NotFound("restore mode not found", details={"restore_id": restore_id})
+        if current["status"] == "blocked":
+            raise ConflictDetected(
+                "blocked restore mode cannot approve publisher resume",
+                details={"restore_id": restore_id, "blockingIssueCount": current["blockingIssueCount"]},
+            )
+        return current
+
+    def _required_passed_post_restore_validation(
+        self,
+        ctx: RequestContext,
+        restore_id: str,
+        validation_id: str | None,
+    ) -> BackupRestorePostRestoreValidationReport:
+        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        report = latest_post_restore_validation_report(snapshot["auditEvents"], restore_id)
+        if report is None or report["status"] != "passed":
+            raise ConflictDetected(
+                "post-restore validation must pass before publisher resume",
+                details={"restore_id": restore_id, "validation_id": validation_id},
+            )
+        if validation_id is not None and report["validationId"] != validation_id:
+            raise ConflictDetected(
+                "post-restore validation id does not match latest passed evidence",
+                details={"restore_id": restore_id, "validation_id": validation_id},
+            )
+        return report
+
+    def _audit_restore_mode(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        report: BackupRestoreModeReport,
+    ) -> None:
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type=restore_mode_event_type(report),
+            resource_type="backup_restore",
+            resource_id=report["restoreId"],
+            action="operations:retry",
+            after_ref=report,
+            correlation_id=ctx.request_id,
+        )
+
+    def _audit_post_restore_validation(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        report: BackupRestorePostRestoreValidationReport,
+    ) -> None:
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type=post_restore_validation_event_type(),
+            resource_type="backup_restore",
+            resource_id=report["restoreId"],
+            action="operations:retry",
+            after_ref=report,
+            correlation_id=ctx.request_id,
+        )
 
 
 def restore_mode_report(
@@ -38,6 +123,29 @@ def restore_mode_report(
         "reason": _restore_mode_reason(is_blocked, blocking_issue_count),
         "highWatermarks": preflight["highWatermarks"],
         "summary": _restore_mode_summary(preflight, is_blocked),
+    }
+
+
+def post_restore_validation_report(
+    ctx: RequestContext,
+    current: BackupRestoreModeReport,
+    preflight: BackupRestorePreflightReport,
+    validation_id: str | None,
+) -> BackupRestorePostRestoreValidationReport:
+    """Build durable post-restore validation evidence for operator approval."""
+    findings = post_restore_validation_findings(preflight)
+    resolved_validation_id = validation_id or f"post-restore:{current['restoreId']}:{preflight['backupId']}"
+    return {
+        "generatedAt": _now(),
+        "tenantId": ctx.tenant_id,
+        "restoreId": current["restoreId"],
+        "backupId": current["backupId"] or preflight["backupId"],
+        "validationId": resolved_validation_id,
+        "status": "blocked" if findings else "passed",
+        "preflightStatus": preflight["status"],
+        "findings": findings,
+        "highWatermarks": preflight["highWatermarks"],
+        "summary": _post_restore_validation_summary(preflight, resolved_validation_id, findings),
     }
 
 
@@ -89,6 +197,30 @@ def restore_mode_event_type(report: BackupRestoreModeReport) -> str:
     return RESTORE_MODE_STARTED_EVENT
 
 
+def latest_post_restore_validation_report(
+    audit_events: Sequence[RuntimeRow],
+    restore_id: str,
+) -> BackupRestorePostRestoreValidationReport | None:
+    """Return the latest validation report for a restore id from audit evidence."""
+    rows = [
+        row
+        for row in audit_events
+        if row.get("event_type") == POST_RESTORE_VALIDATED_EVENT and row.get("resource_id") == restore_id
+    ]
+    if not rows:
+        return None
+    latest = max(rows, key=_created_at)
+    after_ref = latest.get("after_ref")
+    if isinstance(after_ref, dict) and isinstance(after_ref.get("validationId"), str):
+        return cast(BackupRestorePostRestoreValidationReport, after_ref)
+    raise ValueError("post-restore validation audit event is missing report payload")
+
+
+def post_restore_validation_event_type() -> str:
+    """Return the audit event type used for post-restore validation evidence."""
+    return POST_RESTORE_VALIDATED_EVENT
+
+
 def _restore_mode_reason(is_blocked: bool, issue_count: int) -> str:
     if is_blocked:
         return f"restore mode blocked by {issue_count} DB/storage preflight issue(s)"
@@ -121,6 +253,23 @@ def _resume_approved_summary(
     }
 
 
+def _post_restore_validation_summary(
+    preflight: BackupRestorePreflightReport,
+    validation_id: str,
+    findings: list[RuntimeJsonObject],
+) -> RuntimeJsonObject:
+    return {
+        "validationId": validation_id,
+        "postRestoreValidation": "dataset_object_action_materialization_closed_loop",
+        "datasetVersionCount": len(preflight["datasetVersions"]),
+        "activeIndexPointerCount": len(preflight["activeIndexPointers"]),
+        "actionRunCount": _watermark_count(preflight["highWatermarks"], "actionRuns"),
+        "materializationRunCount": _watermark_count(preflight["highWatermarks"], "materializationRuns"),
+        "findingCount": len(findings),
+        "outboxResumeEligible": len(findings) == 0,
+    }
+
+
 def _missing_runtime_evidence(high_watermarks: RuntimeJsonObject) -> list[RuntimeJsonObject]:
     findings: list[RuntimeJsonObject] = []
     for table_name in ("actionRuns", "materializationRuns"):
@@ -134,3 +283,8 @@ def _watermark_count(high_watermarks: RuntimeJsonObject, table_name: str) -> int
     if isinstance(table, Mapping) and isinstance(table.get("count"), int):
         return int(table["count"])
     return 0
+
+
+def _created_at(row: RuntimeRow) -> str:
+    value = row.get("created_at")
+    return value if isinstance(value, str) else ""

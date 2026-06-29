@@ -42,6 +42,22 @@ function okResponse(body = {}) {
   };
 }
 
+function streamResponse(chunks, headers = {}) {
+  return {
+    ok: true,
+    status: 200,
+    headers: responseHeaders({ "X-Request-ID": "stream-response-id", ...headers }),
+    body: new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    }),
+    json: async () => ({}),
+  };
+}
+
 function errorResponse(status, body, headers = {}) {
   return {
     ok: false,
@@ -70,6 +86,158 @@ const client = sdk.createFoundryLiteClient({
   onResponse: (metadata) => telemetry.push(metadata),
 });
 coveredHelperIds.add("helpers.createFoundryLiteClient");
+const osdk = sdk.createFoundryLiteOsdkClient(client);
+assert.equal(sdk.Order.kind, "object");
+assert.equal(sdk.Order.apiName, "Order");
+assert.equal(sdk.Order.primaryKey, "orderId");
+assert.deepEqual(sdk.$Ontology.objectApiNames, ["Order", "Customer"]);
+assert.deepEqual(sdk.$Ontology.actionApiNames, ["ApproveOrder"]);
+assert.equal(osdk.objects.Order, sdk.Order);
+assert.equal(osdk.actions.ApproveOrder, sdk.ApproveOrder);
+assert.equal(sdk.getObjectType("Order"), sdk.Order);
+assert.equal(sdk.getActionType("ApproveOrder"), sdk.ApproveOrder);
+const staticOntologyIndex = sdk.createFoundryLiteOntologyIndex();
+assert.equal(staticOntologyIndex.objectCount, 2);
+assert.equal(staticOntologyIndex.getObjectView("Order").generatedObjectType, sdk.Order);
+assert.equal(staticOntologyIndex.actionsForObjectType("Order")[0].apiName, "ApproveOrder");
+assert.deepEqual(staticOntologyIndex.findObjectTypes("customer").map((view) => view.apiName), [
+  "Customer",
+  "Order",
+]);
+const liveOntologyCatalog = {
+  ontologyVersionId: "ontology/1",
+  versionNumber: 7,
+  status: "active",
+  createdAt: "2026-06-28T00:00:00Z",
+  activatedAt: "2026-06-28T00:01:00Z",
+  objectTypes: [
+    {
+      apiName: "Order",
+      displayName: "Order",
+      description: "Supply chain order",
+      primaryKeyProperty: "orderId",
+      backing: {},
+      config: {},
+      properties: [
+        {
+          apiName: "orderId",
+          displayName: "Order ID",
+          dataType: "string",
+          nullable: false,
+          indexed: true,
+          searchable: true,
+          editable: false,
+          classification: null,
+          source: "column",
+          columnName: "order_id",
+          editPolicy: "read_only",
+          derivation: null,
+        },
+      ],
+      actions: [
+        {
+          apiName: "ApproveOrder",
+          displayName: "Approve order",
+          target: "Order",
+          parameterSchema: {},
+          definition: {},
+          enabled: true,
+        },
+      ],
+    },
+    {
+      apiName: "SupplierRisk",
+      displayName: "Supplier Risk",
+      description: "Dynamic supplier risk object activated after SDK generation",
+      primaryKeyProperty: "supplierId",
+      backing: {},
+      config: {},
+      properties: [
+        {
+          apiName: "supplierId",
+          displayName: "Supplier ID",
+          dataType: "string",
+          nullable: false,
+          indexed: true,
+          searchable: true,
+          editable: false,
+          classification: null,
+          source: "column",
+          columnName: "supplier_id",
+          editPolicy: "read_only",
+          derivation: null,
+        },
+        {
+          apiName: "riskScore",
+          displayName: "Risk Score",
+          dataType: "number",
+          nullable: true,
+          indexed: true,
+          searchable: false,
+          editable: true,
+          classification: "finance",
+          source: "column",
+          columnName: "risk_score",
+          editPolicy: "editable",
+          derivation: null,
+        },
+      ],
+      actions: [
+        {
+          apiName: "EscalateSupplier",
+          displayName: "Escalate supplier",
+          target: "SupplierRisk",
+          parameterSchema: {},
+          definition: {},
+          enabled: true,
+        },
+      ],
+    },
+  ],
+  linkTypes: [],
+};
+const liveOntologyIndex = sdk.createFoundryLiteOntologyIndex(liveOntologyCatalog);
+assert.equal(liveOntologyIndex.objectCount, 3);
+assert.equal(liveOntologyIndex.actionCount, 2);
+assert.equal(liveOntologyIndex.hasDynamicOnlyTypes, true);
+assert.equal(liveOntologyIndex.hasStaticOnlyTypes, true);
+assert.deepEqual(liveOntologyIndex.dynamicOnlyObjectViews.map((view) => view.apiName), ["SupplierRisk"]);
+assert.deepEqual(liveOntologyIndex.staticOnlyObjectViews.map((view) => view.apiName), ["Customer"]);
+assert.deepEqual(liveOntologyIndex.dynamicOnlyActionViews.map((view) => view.apiName), ["EscalateSupplier"]);
+assert.equal(liveOntologyIndex.getObjectView("SupplierRisk").propertyCount, 2);
+assert.deepEqual(liveOntologyIndex.getObjectView("SupplierRisk").classifiedPropertyNames, ["riskScore"]);
+assert.deepEqual(liveOntologyIndex.actionsForObjectType("SupplierRisk").map((view) => view.apiName), [
+  "EscalateSupplier",
+]);
+assert.deepEqual(liveOntologyIndex.findObjectTypes("supplier risk").map((view) => view.apiName), [
+  "SupplierRisk",
+]);
+assert.deepEqual(liveOntologyIndex.findActionTypes("approve").map((view) => view.apiName), ["ApproveOrder"]);
+assert.throws(() => liveOntologyIndex.getActionView("MissingAction"), {
+  code: "UNKNOWN_ONTOLOGY_ACTION_VIEW",
+});
+coveredHelperIds.add("helpers.createFoundryLiteOsdkClient");
+coveredHelperIds.add("helpers.createFoundryLiteOntologyIndex");
+coveredHelperIds.add("helpers.getObjectType");
+coveredHelperIds.add("helpers.getActionType");
+
+let sessionTokenCalls = 0;
+const sessionClient = sdk.createFoundryLiteClient({
+  baseUrl: BASE_URL,
+  tokenProvider: sdk.createSessionTokenProvider(async () => {
+    sessionTokenCalls += 1;
+    return { accessToken: `session-token-${sessionTokenCalls}` };
+  }),
+  fetchImpl,
+  requestIdFactory: () => REQUEST_ID,
+});
+responseQueue.push(okResponse({ status: "ok" }));
+const beforeSessionCalls = calls.length;
+await sessionClient.system.health();
+assert.equal(calls.length, beforeSessionCalls + 1, "helpers.createSessionTokenProvider");
+assert.equal(calls.at(-1).init.headers.Authorization, "Bearer session-token-1");
+assert.equal(sessionTokenCalls, 1);
+coveredHelperIds.add("helpers.createSessionTokenProvider");
 
 function assertBaseHeaders(headers, surfaceId) {
   assert.equal(headers["X-Tenant-ID"], "tenant-a", surfaceId);
@@ -85,7 +253,35 @@ function assertBody(call, expectedBody, surfaceId) {
     assert.equal(call.init.body, undefined, surfaceId);
     return;
   }
+  if (expectedBody.kind === "formData") {
+    assertFormData(call.init.body, expectedBody, surfaceId);
+    return;
+  }
   assert.deepEqual(JSON.parse(call.init.body), expectedBody, surfaceId);
+}
+
+function assertFormData(body, expectedBody, surfaceId) {
+  assert.ok(body instanceof FormData, surfaceId);
+  const entries = Object.fromEntries(body.entries());
+  for (const [name, value] of Object.entries(expectedBody.fields ?? {})) {
+    assert.equal(entries[name], value, `${surfaceId}:${name}`);
+  }
+  const uploadedFile = entries.file;
+  if (expectedBody.file) {
+    assert.ok(uploadedFile, `${surfaceId}:file`);
+    assert.equal(uploadedFile.name, expectedBody.file.name, surfaceId);
+    assert.equal(uploadedFile.type, expectedBody.file.type, surfaceId);
+    assert.equal(uploadedFile.size, expectedBody.file.size, surfaceId);
+  }
+  if (expectedBody.files) {
+    const uploadedFiles = body.getAll("files");
+    assert.equal(uploadedFiles.length, expectedBody.files.length, surfaceId);
+    expectedBody.files.forEach((expectedFile, index) => {
+      assert.equal(uploadedFiles[index].name, expectedFile.name, `${surfaceId}:files:${index}:name`);
+      assert.equal(uploadedFiles[index].type, expectedFile.type, `${surfaceId}:files:${index}:type`);
+      assert.equal(uploadedFiles[index].size, expectedFile.size, `${surfaceId}:files:${index}:size`);
+    });
+  }
 }
 
 function assertRequest(call, expectation) {
@@ -157,6 +353,50 @@ await expectSdkCall(
   () => client.datasets.inspect("clean space", "orders/daily", { version: "version/1" }),
   {
     path: "/api/datasets/clean%20space/orders%2Fdaily/inspect?version=version%2F1",
+  },
+);
+await expectSdkCall("datasets.qualityChecks.list", () => client.datasets.qualityChecks.list("clean", "orders"), {
+  path: "/api/datasets/clean/orders/quality-contract/checks",
+});
+await expectSdkCall(
+  "datasets.qualityChecks.create",
+  () =>
+    client.datasets.qualityChecks.create("clean space", "orders/daily", {
+      config: { type: "row_count_min", min: 3 },
+      severity: "warn",
+    }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/checks",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { config: { type: "row_count_min", min: 3 }, severity: "warn" },
+  },
+);
+await expectSdkCall(
+  "datasets.qualityChecks.update",
+  () =>
+    client.datasets.qualityChecks.update("clean space", "orders/daily", "check/1", {
+      enabled: false,
+    }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/checks/check%2F1",
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: { enabled: false },
+  },
+);
+await expectSdkCall(
+  "datasets.qualityResults.list",
+  () => client.datasets.qualityResults.list("clean space", "orders/daily", { limit: 5 }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/results?limit=5",
+  },
+);
+await expectSdkCall(
+  "datasets.qualityResults.summary",
+  () => client.datasets.qualityResults.summary("clean space", "orders/daily", { latestLimit: 3 }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/results/summary?latest_limit=3",
   },
 );
 await expectSdkCall("ontology.catalog", () => client.ontology.catalog(), {
@@ -372,6 +612,365 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "aip.evals.run",
+  () =>
+    client.aip.evals.run({
+      evalRunId: "eval-web-1",
+      suiteApiName: "release-gate",
+      suiteVersion: "v1",
+      suiteDescription: "Web release gate",
+      agentVersionId: "agent-demo:v1",
+      candidateReleaseChannel: "dev",
+      cases: [
+        {
+          caseApiName: "answer-ok",
+          axis: "answer",
+          inputJson: { question: "What is the status?" },
+          expectedJson: { answer: "ok" },
+          actualJson: { answer: "ok" },
+          rubricJson: { mode: "exact_subset" },
+          tags: ["smoke"],
+          sampleIndex: 1,
+          evaluator: "exact_subset_v1",
+          weight: 1,
+        },
+      ],
+      minScore: 1,
+      requiredAxes: ["answer"],
+    }),
+  {
+    path: "/api/aip/evals/run",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      evalRunId: "eval-web-1",
+      suiteApiName: "release-gate",
+      suiteVersion: "v1",
+      suiteDescription: "Web release gate",
+      agentVersionId: "agent-demo:v1",
+      candidateReleaseChannel: "dev",
+      cases: [
+        {
+          caseApiName: "answer-ok",
+          axis: "answer",
+          inputJson: { question: "What is the status?" },
+          expectedJson: { answer: "ok" },
+          actualJson: { answer: "ok" },
+          rubricJson: { mode: "exact_subset" },
+          tags: ["smoke"],
+          sampleIndex: 1,
+          evaluator: "exact_subset_v1",
+          weight: 1,
+        },
+      ],
+      minScore: 1,
+      requiredAxes: ["answer"],
+    },
+  },
+);
+await expectSdkCall(
+  "aip.releases.promote",
+  () =>
+    client.aip.releases.promote({
+      agentVersionId: "agent-demo:v1",
+      targetReleaseChannel: "dev",
+      evalRunId: "eval-web-1",
+      policyVersion: "release-policy-v1",
+    }),
+  {
+    path: "/api/aip/releases/promote",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      agentVersionId: "agent-demo:v1",
+      targetReleaseChannel: "dev",
+      evalRunId: "eval-web-1",
+      policyVersion: "release-policy-v1",
+    },
+  },
+);
+await expectSdkCall(
+  "media.sets.create",
+  () =>
+    client.media.sets.create({
+      namespace: "raw",
+      name: "source-images",
+      schemaType: "image",
+      primaryFormat: "png",
+      allowedInputFormats: ["png", "jpeg"],
+      classification: "internal",
+      transactionPolicy: "transactional",
+      storageProfile: "local",
+      processingProfile: "local",
+      retentionPolicyId: "retention-30d",
+    }),
+  {
+    path: "/api/media/sets",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      namespace: "raw",
+      name: "source-images",
+      schemaType: "image",
+      primaryFormat: "png",
+      allowedInputFormats: ["png", "jpeg"],
+      classification: "internal",
+      transactionPolicy: "transactional",
+      storageProfile: "local",
+      processingProfile: "local",
+      retentionPolicyId: "retention-30d",
+    },
+  },
+);
+await expectSdkCall("media.sets.get", () => client.media.sets.get("media-set/1"), {
+  path: "/api/media/sets/media-set%2F1",
+});
+await expectSdkCall(
+  "media.transactions.open",
+  () => client.media.transactions.open("media-set/1", { mode: "APPEND" }, { idempotencyKey: "media-open-key" }),
+  {
+    path: "/api/media/sets/media-set%2F1/transactions",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "media-open-key" },
+    body: { mode: "APPEND" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "media.transactions.open",
+  () => client.media.transactions.open("media-set/1", { mode: "APPEND" }),
+  "media.transactions.open",
+);
+await expectSdkCall(
+  "media.transactions.upload",
+  () =>
+    client.media.transactions.upload("media-set/1", "media-tx/1", {
+      logicalPath: "/invoices/scan.png",
+      schemaType: "image",
+      format: "png",
+      file: new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }),
+      fileName: "scan.png",
+      suppliedMimeType: "image/png",
+      securityEnvelope: { tenantId: "tenant-a", classification: "internal" },
+      probeMetadata: { width: 1, height: 1 },
+    }),
+  {
+    path: "/api/media/sets/media-set%2F1/transactions/media-tx%2F1/uploads",
+    method: "POST",
+    body: {
+      kind: "formData",
+      fields: {
+        logicalPath: "/invoices/scan.png",
+        schemaType: "image",
+        format: "png",
+        suppliedMimeType: "image/png",
+        securityEnvelope: JSON.stringify({ tenantId: "tenant-a", classification: "internal" }),
+        probeMetadata: JSON.stringify({ width: 1, height: 1 }),
+      },
+      file: { name: "scan.png", type: "image/png", size: 3 },
+    },
+  },
+);
+await expectSdkCall("media.transactions.commit", () => client.media.transactions.commit("media-tx/1"), {
+  path: "/api/media/transactions/media-tx%2F1/commit",
+  method: "POST",
+});
+responseQueue.push(
+  okResponse({ mediaTransactionId: "osdk-media-tx" }),
+  okResponse({
+    media_item_version_id: "mver_osdk",
+    media_item_id: "mitem_osdk",
+    version_number: 1,
+    blob_key: "blob-osdk",
+    is_duplicate: false,
+  }),
+  okResponse({
+    media_transaction_id: "osdk-media-tx",
+    committed_version_ids: ["mver_osdk"],
+    head_version_id_by_item: {},
+  }),
+);
+const beforeOsdkMediaCalls = calls.length;
+const beforeOsdkMediaTelemetry = telemetry.length;
+await osdk.media.uploadAndCommit(
+  "media-set/1",
+  {
+    logicalPath: "/invoices/osdk-scan.png",
+    schemaType: "image",
+    format: "png",
+    file: new Blob([new Uint8Array([4, 5, 6])], { type: "image/png" }),
+    fileName: "osdk-scan.png",
+    suppliedMimeType: "image/png",
+    securityEnvelope: { tenantId: "tenant-a", classification: "internal" },
+  },
+  { idempotencyKey: "osdk-media-key" },
+);
+assert.equal(calls.length, beforeOsdkMediaCalls + 3, "osdk.media.uploadAndCommit");
+assert.equal(telemetry.length, beforeOsdkMediaTelemetry + 3, "osdk.media.uploadAndCommit");
+assertRequest(calls.at(-3), {
+  surfaceId: "media.transactions.open",
+  path: "/api/media/sets/media-set%2F1/transactions",
+  method: "POST",
+  headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-media-key" },
+  body: { mode: "APPEND" },
+});
+assertRequest(calls.at(-2), {
+  surfaceId: "media.transactions.upload",
+  path: "/api/media/sets/media-set%2F1/transactions/osdk-media-tx/uploads",
+  method: "POST",
+  body: {
+    kind: "formData",
+    fields: {
+      logicalPath: "/invoices/osdk-scan.png",
+      schemaType: "image",
+      format: "png",
+      suppliedMimeType: "image/png",
+      securityEnvelope: JSON.stringify({ tenantId: "tenant-a", classification: "internal" }),
+    },
+    file: { name: "osdk-scan.png", type: "image/png", size: 3 },
+  },
+});
+assertRequest(calls.at(-1), {
+  surfaceId: "media.transactions.commit",
+  path: "/api/media/transactions/osdk-media-tx/commit",
+  method: "POST",
+});
+await expectSdkCall(
+  "media.versions.process",
+  () =>
+    client.media.versions.process("media-version/1", {
+      processor: "ocr_v1",
+      processorVersion: "1.0",
+      model: "tesseract",
+      modelVersion: "5.5.2",
+      parameters: { maxPages: 2 },
+    }),
+  {
+    path: "/api/media/versions/media-version%2F1/process",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      processor: "ocr_v1",
+      processorVersion: "1.0",
+      model: "tesseract",
+      modelVersion: "5.5.2",
+      parameters: { maxPages: 2 },
+    },
+  },
+);
+await expectSdkCall("media.derivatives.get", () => client.media.derivatives.get("media-derivative/1"), {
+  path: "/api/media/derivatives/media-derivative%2F1",
+});
+await expectSdkCall(
+  "media.derivatives.index",
+  () => client.media.derivatives.index("media-derivative/1", { generation: "media-g1" }),
+  {
+    path: "/api/media/derivatives/media-derivative%2F1/index",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { generation: "media-g1" },
+  },
+);
+await expectSdkCall(
+  "media.content.search",
+  () => client.media.content.search({ text: "invoice", topK: 5, allowedClassifications: ["internal"] }),
+  {
+    path: "/api/media/content/search",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { text: "invoice", topK: 5, allowedClassifications: ["internal"] },
+  },
+);
+await expectSdkCall(
+  "media.visual.indexDerivative",
+  () => client.media.visual.indexDerivative("media-derivative/1", { generation: "clip-g1" }),
+  {
+    path: "/api/media/visual/derivatives/media-derivative%2F1/index",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { generation: "clip-g1" },
+  },
+);
+await expectSdkCall(
+  "media.visual.promoteGeneration",
+  () => client.media.visual.promoteGeneration({ expectedActive: "", generation: "clip-g1" }),
+  {
+    path: "/api/media/visual/generations/promote",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { expectedActive: "", generation: "clip-g1" },
+  },
+);
+await expectSdkCall(
+  "media.visual.search",
+  () => client.media.visual.search({ text: "a photo of a car", topK: 3 }),
+  {
+    path: "/api/media/visual/search",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { text: "a photo of a car", topK: 3 },
+  },
+);
+await expectSdkCall(
+  "media.processing-runs.list",
+  () => client.media.processingRuns.list({ sourceMediaItemVersionId: "media-version/1", limit: 5 }),
+  {
+    path: "/api/media/processing-runs?sourceMediaItemVersionId=media-version%2F1&limit=5",
+  },
+);
+await expectSdkCall("media.processing-runs.get", () => client.media.processingRuns.get("media-run/1"), {
+  path: "/api/media/processing-runs/media-run%2F1",
+});
+await expectSdkCall(
+  "media.references.bind",
+  () =>
+    client.media.references.bind(
+      {
+        holderType: "Order",
+        holderId: "O-1",
+        propertyName: "sourceDocument",
+        mediaItemVersionId: "media-version/1",
+      },
+      { idempotencyKey: "media-bind-key" },
+    ),
+  {
+    path: "/api/media/references/bind",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "media-bind-key" },
+    body: {
+      holderType: "Order",
+      holderId: "O-1",
+      propertyName: "sourceDocument",
+      mediaItemVersionId: "media-version/1",
+    },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "media.references.bind",
+  () =>
+    client.media.references.bind({
+      holderType: "Order",
+      holderId: "O-1",
+      propertyName: "sourceDocument",
+      mediaItemVersionId: "media-version/1",
+    }),
+  "media.references.bind",
+);
+await expectSdkCall(
+  "media.references.resolve",
+  () =>
+    client.media.references.resolve({
+      holderType: "Order",
+      holderId: "O-1",
+      propertyName: "sourceDocument",
+      allowedClassifications: ["internal", "confidential"],
+    }),
+  {
+    path:
+      "/api/media/references/resolve?holderType=Order&holderId=O-1&propertyName=sourceDocument" +
+      "&allowedClassifications=internal&allowedClassifications=confidential",
+  },
+);
+await expectSdkCall(
   "insights.reviews.list",
   () => client.insights.reviews.list({ status: "pending", assigneeUserId: "ops/1", limit: 15 }),
   {
@@ -474,6 +1073,29 @@ assertMissingIdempotencyFailFast(
   () => client.insights.reviews.decide("review/1", { decision: "approved", comment: "Evidence checked" }),
   "insights.reviews.decide",
 );
+await expectSdkCall(
+  "insights.reviews.executeApprovedAction",
+  () =>
+    client.insights.reviews.executeApprovedAction(
+      "review/1",
+      { expectedProposalFingerprint: "sha256:abc" },
+      { idempotencyKey: "approval-execute-key" },
+    ),
+  {
+    path: "/api/insights/reviews/review%2F1/execute-approved-action",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "approval-execute-key" },
+    body: { expectedProposalFingerprint: "sha256:abc" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "insights.reviews.executeApprovedAction",
+  () =>
+    client.insights.reviews.executeApprovedAction("review/1", {
+      expectedProposalFingerprint: "sha256:abc",
+    }),
+  "insights.reviews.executeApprovedAction",
+);
 await expectSdkCall("objects.generic.get", () => client.objects.generic.get("Order Item", "order/1", { explain: true }), {
   path: "/api/objects/Order%20Item/order%2F1?explain=true",
 });
@@ -486,6 +1108,19 @@ await expectSdkCall("objects.generic.query", () => client.objects.generic.query(
   headers: { "Content-Type": "application/json" },
   body: { limit: 10, search: "rush" },
 });
+await expectSdkCall("objects.generic.get", () => osdk(sdk.Order).fetchOne("order/osdk", { explain: true }), {
+  path: "/api/objects/Order/order%2Fosdk?explain=true",
+});
+await expectSdkCall(
+  "objects.generic.query",
+  () => osdk(sdk.Order).where({ property: "status", op: "eq", value: "PENDING" }).fetchPage({ pageSize: 2 }),
+  {
+    path: "/api/objects/Order/query",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { filter: { property: "status", op: "eq", value: "PENDING" }, limit: 2 },
+  },
+);
 await expectSdkCall("object-sets.list", () => client.objectSets.list({ objectType: "Order Item" }), {
   path: "/api/object-sets?objectType=Order%20Item",
 });
@@ -518,6 +1153,35 @@ await expectSdkCall(
 );
 await expectSdkCall("object-sets.get", () => client.objectSets.get("set/1"), {
   path: "/api/object-sets/set%2F1",
+});
+await expectSdkCall(
+  "transforms.register-sql",
+  () =>
+    client.transforms.registerSql({
+      apiName: "clean_orders_from_web",
+      sql: "select * from {{ input('raw.orders') }}",
+      inputs: { "raw.orders": "raw.orders" },
+      outputDatasetRef: "clean.orders_web",
+      checks: [{ type: "row_count_min", min: 1 }],
+      mode: "snapshot",
+    }),
+  {
+    path: "/api/transforms/sql",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      apiName: "clean_orders_from_web",
+      sql: "select * from {{ input('raw.orders') }}",
+      inputs: { "raw.orders": "raw.orders" },
+      outputDatasetRef: "clean.orders_web",
+      checks: [{ type: "row_count_min", min: 1 }],
+      mode: "snapshot",
+    },
+  },
+);
+await expectSdkCall("transforms.run", () => client.transforms.run("clean_orders_from_web"), {
+  path: "/api/transforms/clean_orders_from_web/run",
+  method: "POST",
 });
 await expectSdkCall(
   "operations.runs.list",
@@ -562,6 +1226,16 @@ await expectSdkCall("operations.backup-restore.status", () => client.operations.
   path: "/api/operations/backup-restore/restore-mode/restore%2F1",
 });
 await expectSdkCall(
+  "operations.backup-restore.post-restore-validation",
+  () => client.operations.backupRestore.postRestoreValidation("restore/1", { validationId: "validation-1" }),
+  {
+    path: "/api/operations/backup-restore/restore-mode/restore%2F1/post-restore-validation",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { validationId: "validation-1" },
+  },
+);
+await expectSdkCall(
   "operations.backup-restore.approve-resume",
   () => client.operations.backupRestore.approveResume("restore/1", { validationId: "validation-1" }),
   {
@@ -569,6 +1243,25 @@ await expectSdkCall(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: { validationId: "validation-1" },
+  },
+);
+await expectSdkCall("operations.recovery.overview", () => client.operations.backupRestore.recoveryOverview(), {
+  path: "/api/operations/recovery/overview",
+});
+await expectSdkCall("operations.admin.overview", () => client.operations.admin.overview(), {
+  path: "/api/operations/admin/overview",
+});
+await expectSdkCall("operations.admin.task-plan", () => client.operations.admin.taskPlan(), {
+  path: "/api/operations/admin/task-plan",
+});
+await expectSdkCall(
+  "operations.outbox.publish-pending",
+  () => client.operations.outbox.publishPending({ streamName: "ops-outbox", limit: 2 }),
+  {
+    path: "/api/operations/outbox/publish",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { streamName: "ops-outbox", limit: 2 },
   },
 );
 await expectSdkCall("operations.runs.detail", () => client.operations.runs.detail("index", "run/1"), {
@@ -584,6 +1277,729 @@ await expectSdkCall(
 await expectSdkCall("operations.lineage.get", () => client.operations.lineage.get("dataset-version/1"), {
   path: "/api/operations/lineage?resourceId=dataset-version%2F1",
 });
+await expectSdkCall("sources.list", () => client.sources.list(), {
+  path: "/api/sources",
+});
+await expectSdkCall("sources.get", () => client.sources.get("erp/source"), {
+  path: "/api/sources/erp%2Fsource",
+});
+await expectSdkCall("sources.templates.list", () => client.sources.templates.list(), {
+  path: "/api/sources/templates",
+});
+await expectSdkCall(
+  "sources.credentials.create",
+  () =>
+    client.sources.credentials.create(
+      {
+        credentialName: "erp_db",
+        displayName: "ERP DB",
+        kind: "postgres_jdbc",
+        authScheme: "database_url",
+        secretValue: "sqlite:///customer-erp.db",
+      },
+      { idempotencyKey: "source-credential-key" },
+    ),
+  {
+    path: "/api/sources/credentials",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-credential-key" },
+    body: {
+      credentialName: "erp_db",
+      displayName: "ERP DB",
+      kind: "postgres_jdbc",
+      authScheme: "database_url",
+      secretValue: "sqlite:///customer-erp.db",
+    },
+  },
+);
+await expectSdkCall("sources.credentials.list", () => client.sources.credentials.list(), {
+  path: "/api/sources/credentials",
+});
+await expectSdkCall("sources.credentials.get", () => client.sources.credentials.get("erp/db"), {
+  path: "/api/sources/credentials/erp%2Fdb",
+});
+await expectSdkCall(
+  "sources.agents.register",
+  () =>
+    client.sources.agents.register(
+      {
+        agentId: "customer_vpn_agent",
+        displayName: "Customer VPN Agent",
+        mode: "agent_proxy",
+        capabilities: { jdbc: true, rest: true },
+        networkSummary: { region: "customer-dmz" },
+      },
+      { idempotencyKey: "source-agent-key" },
+    ),
+  {
+    path: "/api/sources/agents",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-agent-key" },
+    body: {
+      agentId: "customer_vpn_agent",
+      displayName: "Customer VPN Agent",
+      mode: "agent_proxy",
+      capabilities: { jdbc: true, rest: true },
+      networkSummary: { region: "customer-dmz" },
+    },
+  },
+);
+await expectSdkCall("sources.agents.list", () => client.sources.agents.list(), {
+  path: "/api/sources/agents",
+});
+await expectSdkCall("sources.agents.heartbeat", () => client.sources.agents.heartbeat("customer_vpn_agent"), {
+  path: "/api/sources/agents/customer_vpn_agent/heartbeat",
+  method: "POST",
+});
+await expectSdkCall(
+  "sources.networkPolicies.create",
+  () =>
+    client.sources.networkPolicies.create(
+      {
+        policyName: "customer_erp_vpn",
+        displayName: "Customer ERP VPN",
+        mode: "agent_proxy",
+        agentId: "customer_vpn_agent",
+        allowedHosts: ["erp.customer.local"],
+      },
+      { idempotencyKey: "source-network-key" },
+    ),
+  {
+    path: "/api/sources/network-policies",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-network-key" },
+    body: {
+      policyName: "customer_erp_vpn",
+      displayName: "Customer ERP VPN",
+      mode: "agent_proxy",
+      agentId: "customer_vpn_agent",
+      allowedHosts: ["erp.customer.local"],
+    },
+  },
+);
+await expectSdkCall("sources.networkPolicies.list", () => client.sources.networkPolicies.list(), {
+  path: "/api/sources/network-policies",
+});
+await expectSdkCall(
+  "sources.exploration.run",
+  () =>
+    client.sources.exploration.run({
+      sourceName: "customer_erp",
+      sourceType: "postgres_jdbc",
+      request: {
+        databaseUrlSecretRef: "erp_db",
+        tableName: "orders",
+        checkpointColumn: "id",
+        sampleLimit: 25,
+      },
+    }),
+  {
+    path: "/api/sources/explore",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      sourceName: "customer_erp",
+      sourceType: "postgres_jdbc",
+      request: {
+        databaseUrlSecretRef: "erp_db",
+        tableName: "orders",
+        checkpointColumn: "id",
+        sampleLimit: 25,
+      },
+    },
+  },
+);
+await expectSdkCall(
+  "sources.managedSyncs.create",
+  () =>
+    client.sources.managedSyncs.create(
+      {
+        syncName: "orders_incremental",
+        sourceName: "customer_erp",
+        displayName: "Orders incremental",
+        sourceType: "postgres_jdbc",
+        capability: "batch",
+        targetDatasetRef: "raw.orders",
+        mode: "APPEND",
+        schedule: { mode: "manual" },
+        configSummary: {
+          databaseUrlSecretRef: "erp_db",
+          tableName: "orders",
+          checkpointColumn: "id",
+          batchLimit: 5000,
+        },
+      },
+      { idempotencyKey: "source-sync-create-key" },
+    ),
+  {
+    path: "/api/sources/managed-syncs",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-sync-create-key" },
+    body: {
+      syncName: "orders_incremental",
+      sourceName: "customer_erp",
+      displayName: "Orders incremental",
+      sourceType: "postgres_jdbc",
+      capability: "batch",
+      targetDatasetRef: "raw.orders",
+      mode: "APPEND",
+      schedule: { mode: "manual" },
+      configSummary: {
+        databaseUrlSecretRef: "erp_db",
+        tableName: "orders",
+        checkpointColumn: "id",
+        batchLimit: 5000,
+      },
+    },
+  },
+);
+await expectSdkCall("sources.managedSyncs.list", () => client.sources.managedSyncs.list(), {
+  path: "/api/sources/managed-syncs",
+});
+await expectSdkCall("sources.managedSyncs.get", () => client.sources.managedSyncs.get("orders/incremental"), {
+  path: "/api/sources/managed-syncs/orders%2Fincremental",
+});
+await expectSdkCall(
+  "sources.managedSyncs.startRun",
+  () =>
+    client.sources.managedSyncs.startRun(
+      "orders_incremental",
+      { triggerType: "manual", batchLimit: 5000 },
+      { idempotencyKey: "source-sync-run-key" },
+    ),
+  {
+    path: "/api/sources/managed-syncs/orders_incremental/runs/start",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-sync-run-key" },
+    body: { triggerType: "manual", batchLimit: 5000 },
+  },
+);
+await expectSdkCall("sources.managedSyncs.listRuns", () => client.sources.managedSyncs.listRuns("orders_incremental"), {
+  path: "/api/sources/managed-syncs/orders_incremental/runs",
+});
+await expectSdkCall("sources.managedSyncs.getRun", () => client.sources.managedSyncs.getRun("run/source/1"), {
+  path: "/api/sources/managed-sync-runs/run%2Fsource%2F1",
+});
+await expectSdkCall(
+  "sources.csv.upload",
+  () =>
+    client.sources.csv.upload(
+      {
+        sourceName: "orders_csv",
+        displayName: "Orders CSV",
+        datasetRef: "raw.orders",
+        file: new Blob(["order_id,amount\n1,10\n"], { type: "text/csv" }),
+        fileName: "orders.csv",
+        syncName: "first-orders-csv",
+        primaryKey: ["order_id"],
+      },
+      { idempotencyKey: "source-csv-key" },
+    ),
+  {
+    path: "/api/sources/csv/uploads",
+    method: "POST",
+    headers: { "Idempotency-Key": "source-csv-key" },
+    body: {
+      kind: "formData",
+      fields: {
+        sourceName: "orders_csv",
+        displayName: "Orders CSV",
+        datasetRef: "raw.orders",
+        syncName: "first-orders-csv",
+        primaryKey: JSON.stringify(["order_id"]),
+      },
+      file: { name: "orders.csv", type: "text/csv", size: 21 },
+    },
+  },
+);
+await expectSdkCall(
+  "sources.batchFiles.upload",
+  () =>
+    client.sources.batchFiles.upload(
+      {
+        sourceName: "erp_batch",
+        displayName: "ERP Batch",
+        syncName: "erp-batch-1",
+        files: [
+          {
+            fileName: "orders.csv",
+            datasetRef: "raw.orders",
+            file: new Blob(["order_id\n1\n"], { type: "text/csv" }),
+          },
+          {
+            fileName: "customers.csv",
+            datasetRef: "raw.customers",
+            file: new Blob(["customer_id\nc1\n"], { type: "text/csv" }),
+          },
+        ],
+      },
+      { idempotencyKey: "source-batch-key" },
+    ),
+  {
+    path: "/api/sources/batch-files/uploads",
+    method: "POST",
+    headers: { "Idempotency-Key": "source-batch-key" },
+    body: {
+      kind: "formData",
+      fields: {
+        manifest: JSON.stringify({
+          sourceName: "erp_batch",
+          displayName: "ERP Batch",
+          syncName: "erp-batch-1",
+          files: [
+            { fileName: "orders.csv", datasetRef: "raw.orders" },
+            { fileName: "customers.csv", datasetRef: "raw.customers" },
+          ],
+        }),
+      },
+      files: [
+        { name: "orders.csv", type: "text/csv", size: 11 },
+        { name: "customers.csv", type: "text/csv", size: 15 },
+      ],
+    },
+  },
+);
+await expectSdkCall(
+  "sources.webhookListeners.create",
+  () =>
+    client.sources.webhookListeners.create(
+      {
+        sourceName: "orders_webhook",
+        displayName: "Orders Listener",
+        datasetRef: "raw.webhook_orders",
+        connectorName: "erp",
+        resourceName: "orders",
+        signingSecretRef: "erp-webhook-secret",
+      },
+      { idempotencyKey: "source-webhook-key" },
+    ),
+  {
+    path: "/api/sources/webhook-listeners",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-webhook-key" },
+    body: {
+      sourceName: "orders_webhook",
+      displayName: "Orders Listener",
+      datasetRef: "raw.webhook_orders",
+      connectorName: "erp",
+      resourceName: "orders",
+      signingSecretRef: "erp-webhook-secret",
+    },
+  },
+);
+await expectSdkCall("sources.webhookListeners.get", () => client.sources.webhookListeners.get("orders_webhook"), {
+  path: "/api/sources/webhook-listeners/orders_webhook",
+});
+await expectSdkCall(
+  "sources.cdc.debezium.create",
+  () =>
+    client.sources.cdc.debezium.create(
+      {
+        sourceName: "orders_cdc",
+        displayName: "Orders CDC",
+        datasetRef: "raw.orders_cdc",
+        streamName: "debezium.orders",
+        topic: "db.public.orders",
+        consumerGroup: "foundry-orders",
+        secretRefs: { databasePasswordSecretRef: "orders-db-password" },
+      },
+      { idempotencyKey: "source-cdc-create-key" },
+    ),
+  {
+    path: "/api/sources/cdc/debezium",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-cdc-create-key" },
+    body: {
+      sourceName: "orders_cdc",
+      displayName: "Orders CDC",
+      datasetRef: "raw.orders_cdc",
+      streamName: "debezium.orders",
+      topic: "db.public.orders",
+      consumerGroup: "foundry-orders",
+      secretRefs: { databasePasswordSecretRef: "orders-db-password" },
+    },
+  },
+);
+await expectSdkCall(
+  "sources.cdc.debezium.startSync",
+  () =>
+    client.sources.cdc.debezium.startSync(
+      "orders_cdc",
+      { expectedConfigFingerprint: "sha256:abc", afterOffset: 4, limit: 10 },
+      { idempotencyKey: "source-cdc-start-key" },
+    ),
+  {
+    path: "/api/sources/cdc/debezium/orders_cdc/sync/start",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-cdc-start-key" },
+    body: { expectedConfigFingerprint: "sha256:abc", afterOffset: 4, limit: 10 },
+  },
+);
+await expectSdkCall(
+  "sources.media.uploadAndCommit",
+  () =>
+    client.sources.media.uploadAndCommit(
+      {
+        sourceName: "invoice_media",
+        displayName: "Invoice Media",
+        mediaSetId: "media-set-1",
+        logicalPath: "invoices/1.pdf",
+        schemaType: "document",
+        format: "pdf",
+        file: new Blob(["PDF"], { type: "application/pdf" }),
+        fileName: "invoice.pdf",
+        securityEnvelope: { classification: "internal" },
+      },
+      { idempotencyKey: "source-media-key" },
+    ),
+  {
+    path: "/api/sources/media/uploads",
+    method: "POST",
+    headers: { "Idempotency-Key": "source-media-key" },
+    body: {
+      kind: "formData",
+      fields: {
+        logicalPath: "invoices/1.pdf",
+        schemaType: "document",
+        format: "pdf",
+        suppliedMimeType: "application/pdf",
+        securityEnvelope: JSON.stringify({ classification: "internal" }),
+        sourceName: "invoice_media",
+        displayName: "Invoice Media",
+        mediaSetId: "media-set-1",
+      },
+      file: { name: "invoice.pdf", type: "application/pdf", size: 3 },
+    },
+  },
+);
+await expectSdkCall(
+  "sources.rest.createConnection",
+  () =>
+    client.sources.rest.createConnection(
+      {
+        connectorName: "erp_source",
+        displayName: "ERP Source",
+        baseUrl: "https://erp.example/api",
+        auth: { mode: "none" },
+      },
+      { idempotencyKey: "source-rest-create-key" },
+    ),
+  {
+    path: "/api/connectors/connections",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-rest-create-key" },
+    body: {
+      connectorName: "erp_source",
+      displayName: "ERP Source",
+      baseUrl: "https://erp.example/api",
+      auth: { mode: "none" },
+    },
+  },
+);
+await expectSdkCall(
+  "sources.rest.upsertResource",
+  () =>
+    client.sources.rest.upsertResource(
+      "erp_source",
+      "orders",
+      { datasetRef: "raw.source_orders", resourcePath: "/orders", primaryKey: ["order_id"] },
+      { idempotencyKey: "source-rest-upsert-key" },
+    ),
+  {
+    path: "/api/connectors/connections/erp_source/resources/orders",
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-rest-upsert-key" },
+    body: { datasetRef: "raw.source_orders", resourcePath: "/orders", primaryKey: ["order_id"] },
+  },
+);
+await expectSdkCall("sources.rest.test", () => client.sources.rest.test("erp_source", "orders"), {
+  path: "/api/connectors/connections/erp_source/resources/orders/test",
+  method: "POST",
+});
+await expectSdkCall(
+  "sources.rest.startSync",
+  () =>
+    client.sources.rest.startSync(
+      "erp_source",
+      "orders",
+      { syncName: "source-rest-orders" },
+      { idempotencyKey: "source-rest-start-key" },
+    ),
+  {
+    path: "/api/connectors/connections/erp_source/resources/orders/sync/start",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-rest-start-key" },
+    body: { syncName: "source-rest-orders" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "sources.credentials.create",
+  () =>
+    client.sources.credentials.create({
+      credentialName: "erp_db",
+      displayName: "ERP DB",
+      kind: "postgres_jdbc",
+      authScheme: "database_url",
+      secretValue: "sqlite:///customer-erp.db",
+    }),
+  "sources.credentials.create",
+);
+assertMissingIdempotencyFailFast(
+  "sources.agents.register",
+  () =>
+    client.sources.agents.register({
+      agentId: "customer_vpn_agent",
+      displayName: "Customer VPN Agent",
+      mode: "agent_proxy",
+    }),
+  "sources.agents.register",
+);
+assertMissingIdempotencyFailFast(
+  "sources.networkPolicies.create",
+  () =>
+    client.sources.networkPolicies.create({
+      policyName: "customer_erp_vpn",
+      displayName: "Customer ERP VPN",
+      mode: "agent_proxy",
+      agentId: "customer_vpn_agent",
+    }),
+  "sources.networkPolicies.create",
+);
+assertMissingIdempotencyFailFast(
+  "sources.managedSyncs.create",
+  () =>
+    client.sources.managedSyncs.create({
+      syncName: "orders_incremental",
+      sourceName: "customer_erp",
+      displayName: "Orders incremental",
+      sourceType: "postgres_jdbc",
+      capability: "batch",
+      targetDatasetRef: "raw.orders",
+      configSummary: { databaseUrlSecretRef: "erp_db", tableName: "orders" },
+    }),
+  "sources.managedSyncs.create",
+);
+assertMissingIdempotencyFailFast(
+  "sources.managedSyncs.startRun",
+  () => client.sources.managedSyncs.startRun("orders_incremental"),
+  "sources.managedSyncs.startRun",
+);
+assertMissingIdempotencyFailFast(
+  "sources.csv.upload",
+  () =>
+    client.sources.csv.upload({
+      sourceName: "orders_csv",
+      displayName: "Orders CSV",
+      datasetRef: "raw.orders",
+      file: new Blob(["a"], { type: "text/csv" }),
+    }),
+  "sources.csv.upload",
+);
+assertMissingIdempotencyFailFast(
+  "sources.batchFiles.upload",
+  () =>
+    client.sources.batchFiles.upload({
+      sourceName: "erp_batch",
+      displayName: "ERP Batch",
+      files: [{ fileName: "orders.csv", datasetRef: "raw.orders", file: new Blob(["a"], { type: "text/csv" }) }],
+    }),
+  "sources.batchFiles.upload",
+);
+assertMissingIdempotencyFailFast(
+  "sources.webhookListeners.create",
+  () =>
+    client.sources.webhookListeners.create({
+      sourceName: "orders_webhook",
+      displayName: "Orders Listener",
+      datasetRef: "raw.webhook_orders",
+      connectorName: "erp",
+      resourceName: "orders",
+      signingSecretRef: "erp-webhook-secret",
+    }),
+  "sources.webhookListeners.create",
+);
+assertMissingIdempotencyFailFast(
+  "sources.cdc.debezium.create",
+  () =>
+    client.sources.cdc.debezium.create({
+      sourceName: "orders_cdc",
+      displayName: "Orders CDC",
+      datasetRef: "raw.orders_cdc",
+      streamName: "debezium.orders",
+      topic: "db.public.orders",
+    }),
+  "sources.cdc.debezium.create",
+);
+assertMissingIdempotencyFailFast(
+  "sources.cdc.debezium.startSync",
+  () => client.sources.cdc.debezium.startSync("orders_cdc"),
+  "sources.cdc.debezium.startSync",
+);
+assertMissingIdempotencyFailFast(
+  "sources.media.uploadAndCommit",
+  () =>
+    client.sources.media.uploadAndCommit({
+      sourceName: "invoice_media",
+      displayName: "Invoice Media",
+      mediaSetId: "media-set-1",
+      logicalPath: "invoices/1.pdf",
+      schemaType: "document",
+      format: "pdf",
+      file: new Blob(["PDF"], { type: "application/pdf" }),
+    }),
+  "sources.media.uploadAndCommit",
+);
+assertMissingIdempotencyFailFast(
+  "sources.rest.createConnection",
+  () =>
+    client.sources.rest.createConnection({
+      connectorName: "erp_source",
+      displayName: "ERP Source",
+      baseUrl: "https://erp.example/api",
+      auth: { mode: "none" },
+    }),
+  "sources.rest.createConnection",
+);
+assertMissingIdempotencyFailFast(
+  "sources.rest.upsertResource",
+  () => client.sources.rest.upsertResource("erp_source", "orders", {
+    datasetRef: "raw.source_orders",
+    resourcePath: "/orders",
+  }),
+  "sources.rest.upsertResource",
+);
+assertMissingIdempotencyFailFast(
+  "sources.rest.startSync",
+  () => client.sources.rest.startSync("erp_source", "orders"),
+  "sources.rest.startSync",
+);
+await expectSdkCall(
+  "connectors.connections.create",
+  () =>
+    client.connectors.connections.create(
+      {
+        connectorName: "erp",
+        displayName: "ERP",
+        baseUrl: "https://erp.example/api",
+        auth: { mode: "bearer", tokenSecretRef: "erp-token" },
+        rateLimitPerMinute: 60,
+        allowPrivateNetwork: false,
+      },
+      { idempotencyKey: "connector-create-key" },
+    ),
+  {
+    path: "/api/connectors/connections",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "connector-create-key" },
+    body: {
+      connectorName: "erp",
+      displayName: "ERP",
+      baseUrl: "https://erp.example/api",
+      auth: { mode: "bearer", tokenSecretRef: "erp-token" },
+      rateLimitPerMinute: 60,
+      allowPrivateNetwork: false,
+    },
+  },
+);
+await expectSdkCall("connectors.connections.list", () => client.connectors.connections.list(), {
+  path: "/api/connectors/connections",
+});
+await expectSdkCall("connectors.connections.get", () => client.connectors.connections.get("erp/main"), {
+  path: "/api/connectors/connections/erp%2Fmain",
+});
+await expectSdkCall(
+  "connectors.connections.update",
+  () =>
+    client.connectors.connections.update(
+      "erp/main",
+      { status: "disabled" },
+      { idempotencyKey: "connector-update-key" },
+    ),
+  {
+    path: "/api/connectors/connections/erp%2Fmain",
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "connector-update-key" },
+    body: { status: "disabled" },
+  },
+);
+await expectSdkCall(
+  "connectors.resources.upsert",
+  () =>
+    client.connectors.resources.upsert(
+      "erp",
+      "orders",
+      {
+        datasetRef: "raw.erp_orders",
+        resourcePath: "/orders",
+        pagination: { strategy: "cursor", itemsPath: "items" },
+        schemaColumns: ["order_id", "amount"],
+        primaryKey: ["order_id"],
+      },
+      { idempotencyKey: "connector-resource-upsert-key" },
+    ),
+  {
+    path: "/api/connectors/connections/erp/resources/orders",
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "connector-resource-upsert-key" },
+    body: {
+      datasetRef: "raw.erp_orders",
+      resourcePath: "/orders",
+      pagination: { strategy: "cursor", itemsPath: "items" },
+      schemaColumns: ["order_id", "amount"],
+      primaryKey: ["order_id"],
+    },
+  },
+);
+await expectSdkCall("connectors.resources.test", () => client.connectors.resources.test("erp", "orders"), {
+  path: "/api/connectors/connections/erp/resources/orders/test",
+  method: "POST",
+});
+await expectSdkCall(
+  "connectors.resources.start-sync",
+  () =>
+    client.connectors.resources.startSync(
+      "erp",
+      "orders",
+      { syncName: "erp-orders-first-sync" },
+      { idempotencyKey: "connector-start-sync-key" },
+    ),
+  {
+    path: "/api/connectors/connections/erp/resources/orders/sync/start",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "connector-start-sync-key" },
+    body: { syncName: "erp-orders-first-sync" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "connectors.connections.create",
+  () =>
+    client.connectors.connections.create({
+      connectorName: "erp",
+      displayName: "ERP",
+      baseUrl: "https://erp.example/api",
+      auth: { mode: "bearer", tokenSecretRef: "erp-token" },
+    }),
+  "connectors.connections.create",
+);
+assertMissingIdempotencyFailFast(
+  "connectors.connections.update",
+  () => client.connectors.connections.update("erp", { status: "disabled" }),
+  "connectors.connections.update",
+);
+assertMissingIdempotencyFailFast(
+  "connectors.resources.upsert",
+  () =>
+    client.connectors.resources.upsert("erp", "orders", {
+      datasetRef: "raw.erp_orders",
+      resourcePath: "/orders",
+    }),
+  "connectors.resources.upsert",
+);
+assertMissingIdempotencyFailFast(
+  "connectors.resources.start-sync",
+  () => client.connectors.resources.startSync("erp", "orders"),
+  "connectors.resources.startSync",
+);
 await expectSdkCall(
   "operations.workflows.start-connector-sync",
   () =>
@@ -621,6 +2037,13 @@ assertMissingIdempotencyFailFast(
 await expectSdkCall("operations.workflows.get", () => client.operations.workflows.get("workflow/1"), {
   path: "/api/operations/workflows/workflow%2F1",
 });
+await expectSdkCall(
+  "operations.reconciliation.list",
+  () => client.operations.reconciliation.list({ status: "outcome_unknown", limit: 25 }),
+  {
+    path: "/api/operations/reconciliation/writebacks?status=outcome_unknown&limit=25",
+  },
+);
 await expectSdkCall(
   "operations.reconciliation.resolve",
   () =>
@@ -739,6 +2162,26 @@ await expectSdkCall(
     },
   },
 );
+await expectSdkCall(
+  "actions.generated.apply",
+  () =>
+    osdk(sdk.ApproveOrder).applyAction({
+      objectId: "order/osdk",
+      expectedObjectVersion: 8,
+      params: { reason: "osdk-approved" },
+      idempotencyKey: "osdk-approve-key",
+    }),
+  {
+    path: "/api/actions/ApproveOrder/apply",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-approve-key" },
+    body: {
+      target: { objectType: "Order", objectId: "order/osdk" },
+      expectedObjectVersion: 8,
+      params: { reason: "osdk-approved" },
+    },
+  },
+);
 
 assertMissingIdempotencyFailFast(
   "actions.generated.apply",
@@ -850,6 +2293,217 @@ assert.equal(
     .kind,
   "conflict",
 );
+const adminCapability = (fields) => ({
+  executionSurface: "future",
+  canStartFromBrowser: false,
+  requiresApproval: true,
+  operatorChecklist: ["Show operator evidence before marking the task complete."],
+  blockingReason: null,
+  ...fields,
+});
+const adminOverview = {
+  generatedAt: "2026-06-28T00:00:00Z",
+  summary: { apiAvailable: 1, workerEntrypoints: 1, cliOnly: 1, runbookOnly: 1, future: 1 },
+  capabilities: [
+    adminCapability({
+      id: "bounded-outbox-publish",
+      title: "Bounded outbox publish batch",
+      status: "api_available",
+      summary: "Publish one bounded batch.",
+      sdkSurface: "operations.outbox.publishPending",
+      apiRoute: "POST /api/operations/outbox/publish",
+      command: "pnpm worker:outbox-publisher",
+      evidencePath: "artifacts/operations/outbox_publisher_summary.json",
+      safetyBoundary: "Bounded batch only.",
+      nextSurface: null,
+      executionSurface: "browser_sdk",
+      canStartFromBrowser: true,
+      requiresApproval: false,
+      blockingReason: null,
+    }),
+    adminCapability({
+      id: "outbox-publisher-worker",
+      title: "Outbox publisher worker",
+      status: "worker_entrypoint",
+      summary: "Drain pending rows.",
+      sdkSurface: null,
+      apiRoute: null,
+      command: "pnpm worker:outbox-publisher",
+      evidencePath: "artifacts/operations/outbox_publisher_summary.json",
+      safetyBoundary: "Daemon lifecycle is future.",
+      nextSurface: "operations.admin.workers",
+      executionSurface: "worker_entrypoint",
+      blockingReason: "This worker entrypoint has no browser-safe daemon control yet.",
+    }),
+    adminCapability({
+      id: "schema-migration-runner",
+      title: "Schema migration runner",
+      status: "cli_only",
+      summary: "Run singleton-lock migrations.",
+      sdkSurface: null,
+      apiRoute: null,
+      command: "pnpm db:migrate",
+      evidencePath: "artifacts/operations/migration_run.json",
+      safetyBoundary: "Privileged CLI-only operation.",
+      nextSurface: "operations.admin.migrations",
+      executionSurface: "cli",
+      blockingReason: "Migration execution is CLI-only.",
+    }),
+    adminCapability({
+      id: "infra-bootstrap",
+      title: "Infrastructure bootstrap",
+      status: "runbook_only",
+      summary: "Bootstrap is runbook-driven.",
+      sdkSurface: null,
+      apiRoute: null,
+      command: "pnpm dev",
+      evidencePath: null,
+      safetyBoundary: "Creates or connects infrastructure.",
+      nextSurface: "operations.admin.bootstrap",
+      executionSurface: "runbook",
+      blockingReason: "Bootstrap is a runbook step.",
+    }),
+    adminCapability({
+      id: "full-visual-operations-workspace",
+      title: "Full visual operations workspace",
+      status: "future",
+      summary: "Full control room is future.",
+      sdkSurface: null,
+      apiRoute: null,
+      command: null,
+      evidencePath: null,
+      safetyBoundary: "Needs screen-level authorization.",
+      nextSurface: "operations.workspace",
+      executionSurface: "future",
+      blockingReason: "The full visual workspace is future work.",
+    }),
+  ],
+};
+const adminGroups = sdk.groupAdminCapabilities(adminOverview);
+assert.equal(adminGroups.apiAvailable.length, 1);
+assert.equal(adminGroups.workerEntrypoints.length, 1);
+assert.equal(adminGroups.cliOnly[0].id, "schema-migration-runner");
+coveredHelperIds.add("helpers.groupAdminCapabilities");
+const outboxCapability = sdk.adminCapabilityView(adminOverview.capabilities[0]);
+assert.equal(outboxCapability.actionKind, "browser_action");
+assert.equal(outboxCapability.canRenderActionButton, true);
+assert.equal(outboxCapability.primarySurface, "operations.outbox.publishPending");
+assert.equal(outboxCapability.executionSurface, "browser_sdk");
+assert.equal(outboxCapability.requiresApproval, false);
+assert.equal(outboxCapability.operatorChecklist.length, 1);
+assert.equal(outboxCapability.disabledReason, null);
+const workerCapability = sdk.adminCapabilityView(adminOverview.capabilities[1]);
+assert.equal(workerCapability.actionKind, "worker_entrypoint");
+assert.equal(workerCapability.canRenderActionButton, false);
+assert.match(workerCapability.disabledReason, /worker entrypoint/);
+assert.equal(workerCapability.blockingReason, "This worker entrypoint has no browser-safe daemon control yet.");
+assert.equal(
+  sdk.adminCapabilityView({
+    ...adminOverview.capabilities[0],
+    id: "api-without-sdk",
+    sdkSurface: null,
+  }).actionKind,
+  "api_without_sdk",
+);
+coveredHelperIds.add("helpers.adminCapabilityView");
+const adminScreen = sdk.adminReadinessScreen(adminOverview);
+assert.equal(adminScreen.canPublishOutbox, true);
+assert.equal(adminScreen.browserRunnableCapabilityViews.length, 1);
+assert.equal(adminScreen.workerEntrypointCapabilityViews[0].capability.id, "outbox-publisher-worker");
+assert.equal(adminScreen.workerEntrypointCapabilityViews[0].actionKind, "worker_entrypoint");
+assert.equal(adminScreen.cliOnlyCapabilityViews[0].capability.command, "pnpm db:migrate");
+assert.equal(adminScreen.runbookOnlyCapabilityViews[0].capability.id, "infra-bootstrap");
+assert.equal(adminScreen.futureCapabilityViews[0].capability.nextSurface, "operations.workspace");
+coveredHelperIds.add("helpers.adminReadinessScreen");
+const adminTaskPlan = {
+  generatedAt: "2026-06-28T00:00:00Z",
+  summary: { browserRunnable: 1, operatorRequired: 4, futureBackendSurfaces: 4 },
+  tasks: [
+    {
+      id: "bounded-outbox-publish-task",
+      capabilityId: "bounded-outbox-publish",
+      title: "Bounded outbox publish batch",
+      area: "event_plane",
+      status: "api_available",
+      executionSurface: "browser_sdk",
+      canStartFromBrowser: true,
+      requiresApproval: false,
+      primarySurface: "operations.outbox.publishPending",
+      sdkSurface: "operations.outbox.publishPending",
+      apiRoute: "POST /api/operations/outbox/publish",
+      command: "pnpm worker:outbox-publisher",
+      evidencePath: "artifacts/operations/outbox_publisher_summary.json",
+      operatorChecklist: ["Display DLQ evidence after the call."],
+      requiredBackendSurface: null,
+      blockingReason: null,
+    },
+    {
+      id: "schema-migration-runner-task",
+      capabilityId: "schema-migration-runner",
+      title: "Schema migration runner",
+      area: "migration",
+      status: "cli_only",
+      executionSurface: "cli",
+      canStartFromBrowser: false,
+      requiresApproval: true,
+      primarySurface: "pnpm db:migrate",
+      sdkSurface: null,
+      apiRoute: null,
+      command: "pnpm db:migrate",
+      evidencePath: "artifacts/operations/migration_run.json",
+      operatorChecklist: ["Show singleton-lock evidence."],
+      requiredBackendSurface: "operations.admin.migrations",
+      blockingReason: "Migration execution is CLI-only.",
+    },
+    {
+      id: "infra-bootstrap-task",
+      capabilityId: "infra-bootstrap",
+      title: "Infrastructure bootstrap",
+      area: "bootstrap",
+      status: "runbook_only",
+      executionSurface: "runbook",
+      canStartFromBrowser: false,
+      requiresApproval: true,
+      primarySurface: "pnpm dev",
+      sdkSurface: null,
+      apiRoute: null,
+      command: "pnpm dev",
+      evidencePath: null,
+      operatorChecklist: ["Keep credentials outside frontend code."],
+      requiredBackendSurface: "operations.admin.bootstrap",
+      blockingReason: "Bootstrap is a runbook step.",
+    },
+  ],
+};
+const outboxTaskView = sdk.adminTaskView(adminTaskPlan.tasks[0]);
+assert.equal(outboxTaskView.badge, "Browser SDK");
+assert.equal(outboxTaskView.canRenderActionButton, true);
+assert.equal(outboxTaskView.disabledReason, null);
+const migrationTaskView = sdk.adminTaskView(adminTaskPlan.tasks[1]);
+assert.equal(migrationTaskView.badge, "CLI command");
+assert.equal(migrationTaskView.canShowCommand, true);
+assert.equal(migrationTaskView.requiresBackendSurface, true);
+assert.match(migrationTaskView.disabledReason, /CLI-only/);
+coveredHelperIds.add("helpers.adminTaskView");
+const taskPlanScreen = sdk.adminTaskPlanScreen(adminTaskPlan);
+assert.equal(taskPlanScreen.browserRunnableTaskViews.length, 1);
+assert.equal(taskPlanScreen.operatorRequiredTaskViews.length, 2);
+assert.equal(taskPlanScreen.futureBackendSurfaceTaskViews.length, 2);
+assert.equal(taskPlanScreen.migrationTaskViews[0].task.command, "pnpm db:migrate");
+assert.equal(taskPlanScreen.bootstrapTaskViews[0].task.command, "pnpm dev");
+coveredHelperIds.add("helpers.adminTaskPlanScreen");
+const adminBoard = sdk.adminOperationsBoard(adminOverview, adminTaskPlan);
+assert.equal(adminBoard.readiness.canPublishOutbox, true);
+assert.equal(adminBoard.browserRunnableTaskViews[0].task.id, "bounded-outbox-publish-task");
+assert.deepEqual(adminBoard.commandRows.map((row) => row.command), ["pnpm db:migrate", "pnpm dev"]);
+assert.deepEqual(adminBoard.requiredBackendSurfaces.map((item) => item.surface), [
+  "operations.admin.migrations",
+  "operations.admin.bootstrap",
+]);
+assert.equal(adminBoard.evidenceTaskViews.length, 2);
+assert.equal(adminBoard.hasOperatorCommands, true);
+assert.equal(adminBoard.hasRequiredBackendSurfaces, true);
+coveredHelperIds.add("helpers.adminOperationsBoard");
 assert.equal(sdk.actionLockKey("ApproveOrder", "order/1"), "ApproveOrder:order/1");
 coveredHelperIds.add("helpers.actionLockKey");
 
@@ -915,6 +2569,104 @@ const collectedItems = await sdk.collectCursorPages(async (cursor) => {
 assert.deepEqual(seenCursors, [null, "cursor-2"]);
 assert.deepEqual(collectedItems, ["first", "second"]);
 coveredHelperIds.add("helpers.collectCursorPages");
+
+const pollSnapshots = [];
+const pollDelays = [];
+const finalPollSnapshot = await sdk.pollFoundryLiteOperation(
+  async ({ attempt }) => {
+    const snapshot = attempt < 3 ? { status: "running", attempt } : { status: "succeeded", attempt };
+    pollSnapshots.push(snapshot);
+    return snapshot;
+  },
+  {
+    intervalMs: 25,
+    sleep: async (delayMs) => pollDelays.push(delayMs),
+  },
+);
+assert.deepEqual(finalPollSnapshot, { status: "succeeded", attempt: 3 });
+assert.deepEqual(pollDelays, [25, 25]);
+assert.deepEqual(
+  pollSnapshots.map((snapshot) => snapshot.status),
+  ["running", "running", "succeeded"],
+);
+await assert.rejects(
+  () =>
+    sdk.pollFoundryLiteOperation(async () => ({ status: "running" }), {
+      maxAttempts: 1,
+      sleep: async () => undefined,
+    }),
+  (error) => {
+    assert.equal(error.code, "POLLING_LIMIT_EXCEEDED");
+    return true;
+  },
+);
+coveredHelperIds.add("helpers.pollFoundryLiteOperation");
+
+const streamOpenEvents = [];
+const streamObservedEvents = [];
+responseQueue.push(
+  streamResponse([
+    'id: evt-1\nevent: progress\nretry: 1500\ndata: {"status":"running","percent":50}\n\n',
+    ': keepalive\n\n',
+    'id: evt-2\nevent: done\ndata: {"status":"succeeded"}\n\n',
+  ]),
+);
+const streamedEvents = [];
+for await (const event of sdk.streamFoundryLiteOperationEvents("/api/operations/workflows/workflow%2F1/events", {
+  baseUrl: BASE_URL,
+  token: "stream-token",
+  headers: { "X-Stream-Header": "stream-a" },
+  context: { tenantId: "tenant-stream", userId: "user-stream", roles: ["viewer"] },
+  requestIdFactory: () => "stream-request-id",
+  fetchImpl,
+  onOpen: (metadata) => streamOpenEvents.push(metadata),
+  onEvent: (metadata) => streamObservedEvents.push(metadata),
+})) {
+  streamedEvents.push(event);
+}
+assert.equal(calls.at(-1).url, `${BASE_URL}/api/operations/workflows/workflow%2F1/events`);
+assert.equal(calls.at(-1).init.method, "GET");
+assert.equal(calls.at(-1).init.headers.Accept, "text/event-stream");
+assert.equal(calls.at(-1).init.headers.Authorization, "Bearer stream-token");
+assert.equal(calls.at(-1).init.headers["X-Tenant-ID"], "tenant-stream");
+assert.equal(calls.at(-1).init.headers["X-User-ID"], "user-stream");
+assert.equal(calls.at(-1).init.headers["X-Roles"], "viewer");
+assert.equal(calls.at(-1).init.headers["X-Request-ID"], "stream-request-id");
+assert.equal(calls.at(-1).init.headers["X-Stream-Header"], "stream-a");
+assert.deepEqual(streamOpenEvents, [
+  {
+    path: "/api/operations/workflows/workflow%2F1/events",
+    status: 200,
+    ok: true,
+    requestId: "stream-response-id",
+  },
+]);
+assert.deepEqual(
+  streamedEvents.map((event) => [event.id, event.eventType, event.retryMs, event.payload.status]),
+  [
+    ["evt-1", "progress", 1500, "running"],
+    ["evt-2", "done", null, "succeeded"],
+  ],
+);
+assert.deepEqual(
+  streamObservedEvents.map((event) => event.event.eventType),
+  ["progress", "done"],
+);
+responseQueue.push(streamResponse(["event: custom\ndata: raw-payload\n\n"]));
+const parsedStreamEvents = [];
+for await (const event of sdk.streamFoundryLiteOperationEvents("/events/custom", {
+  baseUrl: BASE_URL,
+  fetchImpl,
+  parseEvent: (raw, metadata) => ({
+    ...metadata,
+    raw,
+    payload: { upper: raw.toUpperCase() },
+  }),
+})) {
+  parsedStreamEvents.push(event);
+}
+assert.deepEqual(parsedStreamEvents[0].payload, { upper: "RAW-PAYLOAD" });
+coveredHelperIds.add("helpers.streamFoundryLiteOperationEvents");
 
 const requestContractRows = matrix.surfaces.filter((row) => row.proofClass === "sdk-request-contract");
 for (const row of requestContractRows) {

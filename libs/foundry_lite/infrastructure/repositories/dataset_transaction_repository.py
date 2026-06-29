@@ -361,6 +361,27 @@ class SqlAlchemyDatasetTransactionRepository:
         )
         return cast(SyncRunRow, dict(row)) if row else None
 
+    def sync_run_by_transaction_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transaction_id: str,
+    ) -> SyncRunRow | None:
+        row = (
+            transaction.execute(
+                select(db.sync_runs).where(
+                    and_(
+                        db.sync_runs.c.tenant_id == tenant_id,
+                        db.sync_runs.c.transaction_id == transaction_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(SyncRunRow, dict(row)) if row else None
+
     def insert_dead_letter_record(self, *, transaction: Any, record: DeadLetterRecord) -> bool:
         savepoint = transaction.begin_nested()
         try:

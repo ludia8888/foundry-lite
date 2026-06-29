@@ -8,8 +8,10 @@ from typing import Any
 import pytest
 from foundry_lite.application.ports.ai_run_repository import AiContextItemRecord, AiExecutionRunRecord, AiSessionRecord
 from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionError
+from foundry_lite.application.services.aip.approval_execution_payloads import validate_request
+from foundry_lite.application.services.aip.approval_execution_types import ApprovalExecutionRequest
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import PermissionDenied
+from foundry_lite.domain.errors import ConflictDetected, PermissionDenied
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyAiRunRepository
 from sqlalchemy import func, select, update
@@ -30,22 +32,53 @@ _VIEWER_CTX = RequestContext(
 )
 
 
+def test_approval_execution_payload_rule_validates_request_shape_directly() -> None:
+    validate_request(
+        ApprovalExecutionRequest(
+            review_id="review-1",
+            expected_proposal_fingerprint="sha256:" + "1" * 64,
+            idempotency_key="approval-exec-direct",
+        )
+    )
+
+    with pytest.raises(ApprovalExecutionError) as missing_idempotency:
+        validate_request(
+            ApprovalExecutionRequest(
+                review_id="review-1",
+                expected_proposal_fingerprint="sha256:" + "1" * 64,
+                idempotency_key="",
+            )
+        )
+
+    assert missing_idempotency.value.reason == "missing_field"
+
+
 def test_approval_execution_validates_request_shape(foundry: Any) -> None:
     with pytest.raises(ApprovalExecutionError) as missing_review:
         foundry.aip.execute_approved_action(
             review_id="",
             expected_proposal_fingerprint="sha256:" + "1" * 64,
+            idempotency_key="approval-exec-shape",
             ctx=_CTX,
         )
     with pytest.raises(ApprovalExecutionError) as missing_prefix:
         foundry.aip.execute_approved_action(
             review_id="review-1",
             expected_proposal_fingerprint="1" * 64,
+            idempotency_key="approval-exec-shape",
+            ctx=_CTX,
+        )
+    with pytest.raises(ApprovalExecutionError) as missing_idempotency:
+        foundry.aip.execute_approved_action(
+            review_id="review-1",
+            expected_proposal_fingerprint="sha256:" + "1" * 64,
+            idempotency_key="",
             ctx=_CTX,
         )
 
     assert missing_review.value.reason == "missing_field"
     assert missing_prefix.value.reason == "missing_field"
+    assert missing_idempotency.value.reason == "missing_field"
 
 
 def test_approval_execution_runs_approved_proposal_once_and_links_review(foundry: Any) -> None:
@@ -56,11 +89,13 @@ def test_approval_execution_runs_approved_proposal_once_and_links_review(foundry
     result = foundry.aip.execute_approved_action(
         review_id=proposal.review_id,
         expected_proposal_fingerprint=proposal.proposal_fingerprint,
+        idempotency_key="approval-exec-once",
         ctx=_CTX,
     )
     replay = foundry.aip.execute_approved_action(
         review_id=proposal.review_id,
         expected_proposal_fingerprint=proposal.proposal_fingerprint,
+        idempotency_key="approval-exec-once",
         ctx=_CTX,
     )
 
@@ -79,6 +114,81 @@ def test_approval_execution_runs_approved_proposal_once_and_links_review(foundry
     assert relations[0]["metadata"]["proposalFingerprint"] == proposal.proposal_fingerprint
 
 
+def test_approval_execution_recovers_after_action_success_but_finish_failure(
+    foundry: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _approved_proposal(foundry, ctx)
+    service = foundry._services.approval_execution  # noqa: SLF001 - test hooks the composition boundary.
+    original_mark_succeeded = service.insight_review_repository.mark_execution_succeeded
+    before_action_runs = _table_count(foundry.engine, db.action_runs)
+    attempts = 0
+
+    def flaky_mark_succeeded(**kwargs: object) -> Mapping[str, Any] | None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("simulated review finish outage")
+        return original_mark_succeeded(**kwargs)
+
+    monkeypatch.setattr(service.insight_review_repository, "mark_execution_succeeded", flaky_mark_succeeded)
+
+    with pytest.raises(RuntimeError, match="simulated review finish outage"):
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-finish-retry",
+            ctx=_CTX,
+        )
+
+    executing_row = _review_row(foundry.engine, proposal.review_id)
+    assert executing_row["execution_status"] == "executing"
+    assert _table_count(foundry.engine, db.action_runs) == before_action_runs + 1
+
+    recovered = foundry.aip.execute_approved_action(
+        review_id=proposal.review_id,
+        expected_proposal_fingerprint=proposal.proposal_fingerprint,
+        idempotency_key="approval-exec-finish-retry",
+        ctx=_CTX,
+    )
+
+    row = _review_row(foundry.engine, proposal.review_id)
+    relations = _relations(foundry.engine, proposal.review_id, recovered.action_run_id)
+    assert row["execution_status"] == "executed"
+    assert row["approved_action_run_id"] == recovered.action_run_id
+    assert _table_count(foundry.engine, db.action_runs) == before_action_runs + 1
+    assert len(relations) == 1
+
+
+def test_approval_execution_idempotency_key_is_bound_to_request(foundry: Any) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    proposal = _approved_proposal(foundry, ctx)
+
+    result = foundry.aip.execute_approved_action(
+        review_id=proposal.review_id,
+        expected_proposal_fingerprint=proposal.proposal_fingerprint,
+        idempotency_key="approval-exec-bound",
+        ctx=_CTX,
+    )
+
+    with pytest.raises(ConflictDetected, match="different request"):
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint="sha256:" + "0" * 64,
+            idempotency_key="approval-exec-bound",
+            ctx=_CTX,
+        )
+    with pytest.raises(ConflictDetected, match="missing its idempotency claim|different request"):
+        foundry.aip.execute_approved_action(
+            review_id=proposal.review_id,
+            expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-different",
+            ctx=_CTX,
+        )
+
+    assert _review_row(foundry.engine, proposal.review_id)["approved_action_run_id"] == result.action_run_id
+
+
 def test_approval_execution_requires_approved_review_and_matching_fingerprint(foundry: Any) -> None:
     ctx = prepare_indexed_demo(foundry)
     proposal = _propose(foundry, ctx)
@@ -87,6 +197,7 @@ def test_approval_execution_requires_approved_review_and_matching_fingerprint(fo
         foundry.aip.execute_approved_action(
             review_id=proposal.review_id,
             expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-unapproved",
             ctx=_CTX,
         )
     foundry.insights.decide(proposal.review_id, decision="approved", idempotency_key="approve-p0h", ctx=_CTX)
@@ -94,6 +205,7 @@ def test_approval_execution_requires_approved_review_and_matching_fingerprint(fo
         foundry.aip.execute_approved_action(
             review_id=proposal.review_id,
             expected_proposal_fingerprint="sha256:" + "0" * 64,
+            idempotency_key="approval-exec-fingerprint",
             ctx=_CTX,
         )
 
@@ -110,6 +222,7 @@ def test_approval_execution_requires_reviewer_permission(foundry: Any) -> None:
         foundry.aip.execute_approved_action(
             review_id=proposal.review_id,
             expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-viewer",
             ctx=_VIEWER_CTX,
         )
 
@@ -137,6 +250,7 @@ def test_approval_rechecks_object_version_before_action_run(foundry: Any) -> Non
         foundry.aip.execute_approved_action(
             review_id=proposal.review_id,
             expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-version",
             ctx=_CTX,
         )
 
@@ -155,6 +269,7 @@ def test_approval_execution_rejects_expired_review_before_action(foundry: Any) -
         foundry.aip.execute_approved_action(
             review_id=proposal.review_id,
             expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-expired",
             ctx=_CTX,
         )
 
@@ -172,6 +287,7 @@ def test_approval_execution_reloads_originating_ai_run_before_action(foundry: An
         foundry.aip.execute_approved_action(
             review_id=proposal.review_id,
             expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-missing-run",
             ctx=_CTX,
         )
 
@@ -206,6 +322,7 @@ def test_approval_execution_rejects_mutated_proposal_payloads(
         foundry.aip.execute_approved_action(
             review_id=proposal.review_id,
             expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key=f"approval-exec-mutated-{expected_reason}",
             ctx=_CTX,
         )
 
@@ -223,6 +340,7 @@ def test_approval_execution_rejects_policy_version_drift(foundry: Any) -> None:
         foundry.aip.execute_approved_action(
             review_id=proposal.review_id,
             expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-policy",
             ctx=_CTX,
         )
 
@@ -246,6 +364,7 @@ def test_approval_execution_rechecks_source_access_before_action(foundry: Any, m
         foundry.aip.execute_approved_action(
             review_id=proposal.review_id,
             expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-source-access",
             ctx=_CTX,
         )
 
@@ -270,6 +389,7 @@ def test_approval_execution_marks_review_failed_when_action_fails(
         foundry.aip.execute_approved_action(
             review_id=proposal.review_id,
             expected_proposal_fingerprint=proposal.proposal_fingerprint,
+            idempotency_key="approval-exec-action-failure",
             ctx=_CTX,
         )
 

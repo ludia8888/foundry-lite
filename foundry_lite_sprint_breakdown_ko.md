@@ -42,7 +42,7 @@
 - future/deferred로 재분류된 항목은 문장 안에 그 사실을 명시한다. 구현 완료와 scope 제외를 섞어 말하지 않는다.
 - Sprint 43 Iceberg와 Sprint 44 Spark 항목은 현재 `docs/infra-ratchet.md`, `docs/infra-tricky-matrix.json`, `quality:iceberg`, `quality:spark`, `quality:infra-composition` 증거 기준으로 다시 동기화한다. 단, production cluster 운영과 분산 장애/운영 runbook은 별도 future scope다.
 - Sprint 45 Kubernetes/backup-restore 항목은 아직 구현 증거가 없으므로 `[ ]`로 남긴다. 이 미체크 상태 자체가 최신 구현 상태와 동기화된 것이다.
-- Sprint 46 이후 post-MVP 확장 순서는 [Data Platform Expansion Sprint Plan](./docs/data-platform-expansion-sprint-plan-ko.md)을 따른다. 현재는 S46 Semantic SSOT/Data Pattern Matrix가 complete이고, S47~S58C/S60~S63은 각 문서와 evidence ledger에 적힌 범위 안에서 partial/current proof를 갖는다. S61은 generated SDK와 frontend/backend surface lock, 46 route-surface request contract, 12 helper-surface contract, S62는 Dataset Explorer backend/API/SDK 시작점, S63은 Insight Review queue backend/API/SDK slice까지를 뜻하며 full visual workspace는 future scope다.
+- Sprint 46 이후 post-MVP 확장 순서는 [Data Platform Expansion Sprint Plan](./docs/data-platform-expansion-sprint-plan-ko.md)을 따른다. 현재는 S46 Semantic SSOT/Data Pattern Matrix가 complete이고, S47~S58C/S60~S64는 각 문서와 evidence ledger에 적힌 범위 안에서 partial/current proof를 갖는다. S61은 generated SDK와 Ontology-style OSDK facade, session token provider, bounded operation polling, fetch-based operation event streaming helper, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, Source onboarding recipe/hook, Source Wizard recipe/hook, Generic REST connector onboarding recipe/hook, admin readiness overview/screen/preflight/task-plan/operations-board model, bounded outbox publish admin start, frontend/backend surface lock, 114 route-surface request contract, 25 helper-surface contract, S62는 Dataset Explorer backend/API/SDK 시작점, S63은 Insight Review queue backend/API/SDK slice, S64는 Operations Recovery overview와 post-restore validation backend/API/SDK slice까지를 뜻하며 full visual workspace와 SAP/NetSuite/OAuth packaged source wizard, direct migration/worker/bootstrap browser control은 future scope다.
 
 모든 스프린트는 다음 원칙을 따른다.
 
@@ -1146,7 +1146,7 @@ DB transaction과 외부 event publish를 직접 묶지 않고 outbox pattern으
 
 **Acceptance Gate**
 
-- [x] dataset.version.committed event가 outbox에 기록된다. publisher 처리 자체는 MVP core에서 local/outbox evidence와 future event publisher boundary로 분리했다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [G18 outbox consistency](./docs/quality-gate-roadmap.md))
+- [x] dataset.version.committed event가 outbox에 기록된다. Operations-bound publisher는 pending event를 stream adapter로 발행하고 실패를 DLQ evidence로 남길 수 있으며, continuously running publisher daemon은 future event publisher boundary로 분리했다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [G18 outbox consistency](./docs/quality-gate-roadmap.md))
 - [x] publisher 실패 시 event는 pending/failed 상태와 attempts/DLQ evidence로 운영 가능하다. ([S33-A2](./docs/sprint-evidence-ledger.md#s33-a2), [VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate))
 - [x] max retry 초과 event는 dead_letter_events로 이동하고 retry path가 있다. ([S33-A2](./docs/sprint-evidence-ledger.md#s33-a2))
 - [x] 같은 event 재처리는 idempotency/correlation evidence로 보호된다. ([VERIFY-FULL-CI-GATE](./docs/sprint-evidence-ledger.md#verify-full-ci-gate), [S33-A2](./docs/sprint-evidence-ledger.md#s33-a2))
@@ -1671,7 +1671,7 @@ MVP 폐루프가 문서가 아니라 반복 가능한 자동 테스트와 데모
 
 - [x] `pnpm demo:supply-chain`은 `FOUNDRY_LITE_HOME`이 명시되지 않은 경우 `.foundry-lite-demo/` 격리 저장소에서 fresh 실행되어, 이전 로컬 DB 상태에 의존하지 않는다. ([S36-P1](./docs/sprint-evidence-ledger.md#s36-p1))
 - [x] CLI smoke regression test가 같은 supply-chain demo 명령을 두 번 연속 실행하고 두 출력 모두 JSON으로 파싱되는지 검증한다. ([S36-P2](./docs/sprint-evidence-ledger.md#s36-p2))
-- [x] `pnpm ci:gate`는 supply-chain demo smoke 산출물 `artifacts/demo/supply-chain.json`을 `python -m json.tool`로 다시 파싱해, 로그가 섞인 가짜 JSON 산출물을 release evidence로 인정하지 않는다. ([S36-P3](./docs/sprint-evidence-ledger.md#s36-p3))
+- [x] `pnpm ci:gate:runtime`/`pnpm ci:gate:all`은 supply-chain demo smoke 산출물 `artifacts/demo/supply-chain.json`을 `python -m json.tool`로 다시 파싱해, 로그가 섞인 가짜 JSON 산출물을 release evidence로 인정하지 않는다. ([S36-P3](./docs/sprint-evidence-ledger.md#s36-p3))
 - [x] `check_mvp_data_correctness.py`가 demo DB의 row count, object primary key uniqueness, Order reindex source hash, ApproveOrder idempotency evidence를 release gate에서 검증한다. ([S36-P4](./docs/sprint-evidence-ledger.md#s36-p4))
 - [x] `check_mvp_performance_smoke.py`가 CSV ingest, object index, object query, no-writeback action apply 측정 리포트를 남기며, CI fast profile과 100k/1M release profile 명령을 분리한다. ([S36-P5](./docs/sprint-evidence-ledger.md#s36-p5))
 - [x] `tests/contracts/test_mvp_testcontainers_closed_loop.py`가 Testcontainers PostgreSQL 저장소 위에서 connector snapshot → dataset commit → transform → index → action → materialization 폐쇄루프를 검증한다. ([S36-P6](./docs/sprint-evidence-ledger.md#s36-p6))
@@ -2128,7 +2128,7 @@ Sprint 46 이후의 상세 순서와 공통 Exit Checklist는 [Data Platform Exp
 | S61 | Product | Frontend Foundation + Generated SDK | 현재 API | [~] Partial |
 | S62 | Product | Object/Dataset Explorer | S61 | [~] Partial |
 | S63 | Product | Insight/Action Workspace | S61, S53, S60 | [~] Partial |
-| S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [ ] Proposed |
+| S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [~] Partial |
 
 첫 실행 순서는 `S46 -> S47 -> S48 -> S51 -> S52 -> S53`이다. Scale path는 `S49 -> S50 -> S57`, Product surface path는 `S61 -> S62 -> S63 -> S64`로 병렬 진행한다.
 

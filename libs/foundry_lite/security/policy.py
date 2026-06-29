@@ -31,8 +31,13 @@ class PolicyService:
     """Small v1 policy engine: tenant context, RBAC, and property masking."""
 
     permission_roles: dict[str, set[str]] = {
-        "dataset:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
+        "dataset:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance", "connector_ingest"},
         "dataset:write": {"admin", "data_engineer"},
+        "dataset:webhook_ingest": {"admin", "data_engineer", "connector_ingest"},
+        "source:read": {"admin", "data_engineer", "ops_manager"},
+        "source:write": {"admin", "data_engineer"},
+        "connector:read": {"admin", "data_engineer", "ops_manager"},
+        "connector:write": {"admin", "data_engineer"},
         "transform:run": {"admin", "data_engineer"},
         "ontology:read": {"admin", "data_engineer", "ops_manager", "viewer", "finance"},
         "ontology:validate": {"admin", "data_engineer"},
@@ -46,6 +51,7 @@ class PolicyService:
         "insight:read": {"admin", "data_engineer", "ops_manager", "finance"},
         "insight:create": {"admin", "data_engineer"},
         "insight:review": {"admin", "ops_manager"},
+        "media:search": {"admin", "data_engineer", "ops_manager"},
         "action:execute:ApproveOrder": {"admin", "ops_manager"},
         "materialization:run": {"admin", "data_engineer", "ops_manager"},
         # Operations exposes raw run/writeback/outbox/audit rows, so reads are

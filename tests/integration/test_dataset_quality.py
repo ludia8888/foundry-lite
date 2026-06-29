@@ -150,6 +150,109 @@ def test_contract_version_is_pinned_to_run(foundry: FoundryLite, tmp_path: Path)
     assert {row["validated_against_schema_version_id"] for row in second_results} == {schema_rows[1]["id"]}
 
 
+def test_quality_result_history_lists_dataset_commit_results(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    dataset_ref = "raw.quality_history_orders"
+    foundry.datasets.ensure(dataset_ref, ctx=ctx, primary_key=["order_id"])
+    first_csv = tmp_path / "quality_history_orders_v1.csv"
+    first_csv.write_text("order_id,amount\nO-1,100\n", encoding="utf-8")
+    second_csv = tmp_path / "quality_history_orders_v2.csv"
+    second_csv.write_text("order_id,amount\nO-2,200\n", encoding="utf-8")
+
+    first = foundry.datasets.upload_csv(dataset_ref, first_csv, ctx=ctx)
+    second = foundry.datasets.upload_csv(dataset_ref, second_csv, ctx=ctx)
+
+    history = foundry.datasets.list_quality_results(dataset_ref, limit=20, ctx=ctx)
+    limited = foundry.datasets.list_quality_results(dataset_ref, limit=1, ctx=ctx)
+    summary = foundry.datasets.get_quality_result_summary(dataset_ref, latest_limit=2, ctx=ctx)
+    transaction_ids = {row["transactionId"] for row in history["results"]}
+
+    assert history["datasetRef"] == dataset_ref
+    assert first.transaction_id in transaction_ids
+    assert second.transaction_id in transaction_ids
+    assert len(limited["results"]) == 1
+    assert all(row["checkedManifestHash"] for row in history["results"])
+    assert all(row["validatedAgainstSchemaVersionId"] for row in history["results"])
+    assert {row["checkType"] for row in history["results"]} >= {"row_count_min", "not_null", "unique"}
+    assert summary["datasetRef"] == dataset_ref
+    assert summary["totalResults"] == len(history["results"])
+    assert summary["statusCounts"] == [{"status": "PASS", "count": summary["totalResults"]}]
+    assert len(summary["latestResults"]) == 2
+    assert {row["checkType"] for row in summary["checkTypeStatusCounts"]} >= {"row_count_min", "not_null", "unique"}
+
+
+def test_persisted_quality_contract_check_blocks_later_commit(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.persisted_contract_orders", ctx=ctx, primary_key=["order_id"])
+
+    created = foundry.datasets.create_quality_contract_check(
+        "raw.persisted_contract_orders",
+        config={"type": "row_count_min", "min": 3},
+        ctx=ctx,
+    )
+    replay = foundry.datasets.create_quality_contract_check(
+        "raw.persisted_contract_orders",
+        config={"type": "row_count_min", "min": 3},
+        ctx=ctx,
+    )
+    too_small = tmp_path / "persisted_contract_orders.csv"
+    too_small.write_text("order_id,amount\nO-1,100\nO-2,200\n", encoding="utf-8")
+
+    with pytest.raises(ValidationFailed, match="dataset checks failed") as exc_info:
+        foundry.datasets.upload_csv("raw.persisted_contract_orders", too_small, ctx=ctx)
+
+    listed = foundry.datasets.list_quality_contract_checks("raw.persisted_contract_orders", ctx=ctx)
+    failures = exc_info.value.details["failures"]
+    assert created["isIdempotentReplay"] is False
+    assert replay["isIdempotentReplay"] is True
+    assert replay["check"]["id"] == created["check"]["id"]
+    assert created["check"]["id"] in [check["id"] for check in listed["checks"]]
+    assert any(
+        failure["check"] == "row_count_min" and failure["contract_status"] == "BLOCK_COMMIT" for failure in failures
+    )
+
+
+def test_updated_quality_contract_check_controls_later_commit(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    dataset_ref = "raw.updated_contract_orders"
+    foundry.datasets.ensure(dataset_ref, ctx=ctx, primary_key=["order_id"])
+    created = foundry.datasets.create_quality_contract_check(
+        dataset_ref,
+        config={"type": "row_count_min", "min": 3},
+        ctx=ctx,
+    )
+    two_rows = tmp_path / "updated_contract_orders_two.csv"
+    two_rows.write_text("order_id,amount\nO-1,100\nO-2,200\n", encoding="utf-8")
+
+    with pytest.raises(ValidationFailed, match="dataset checks failed"):
+        foundry.datasets.upload_csv(dataset_ref, two_rows, ctx=ctx)
+
+    disabled = foundry.datasets.update_quality_contract_check(
+        dataset_ref,
+        created["check"]["id"],
+        enabled=False,
+        ctx=ctx,
+    )
+    passed = foundry.datasets.upload_csv(dataset_ref, two_rows, ctx=ctx)
+    strengthened = foundry.datasets.update_quality_contract_check(
+        dataset_ref,
+        created["check"]["id"],
+        config={"type": "row_count_min", "min": 4},
+        enabled=True,
+        ctx=ctx,
+    )
+    three_rows = tmp_path / "updated_contract_orders_three.csv"
+    three_rows.write_text("order_id,amount\nO-1,100\nO-2,200\nO-3,300\n", encoding="utf-8")
+
+    with pytest.raises(ValidationFailed, match="dataset checks failed") as exc_info:
+        foundry.datasets.upload_csv(dataset_ref, three_rows, ctx=ctx)
+
+    assert disabled["enabled"] is False
+    assert passed.row_count == 2
+    assert strengthened["config"] == {"type": "row_count_min", "min": 4, "severity": "error"}
+    assert any(failure["check"] == "row_count_min" for failure in exc_info.value.details["failures"])
+
+
 def test_schema_evolution_widening_is_visible_in_transaction_metadata(
     foundry: FoundryLite,
     tmp_path: Path,

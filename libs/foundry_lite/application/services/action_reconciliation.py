@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from foundry_lite.application.action_types import ActionApplyResponse, ActionWritebackReconciliationResult
+from foundry_lite.application.action_types import (
+    ActionApplyResponse,
+    ActionWritebackQueueItem,
+    ActionWritebackQueueResult,
+    ActionWritebackReconciliationResult,
+)
 from foundry_lite.application.ports import (
     ACTION_RUN_RECONCILED,
     ActionRepository,
@@ -32,6 +37,8 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied, ValidationFailed
 from foundry_lite.security.policy import PolicyService
 
+UNRESOLVED_WRITEBACK_STATUSES = ("outcome_unknown", "compensation_required")
+
 
 @dataclass(frozen=True)
 class ActionWritebackReconciliationWorkflow:
@@ -43,6 +50,26 @@ class ActionWritebackReconciliationWorkflow:
     ontology_service: ActionOntologyLookup
     runtime_service: ActionRuntimeBoundary
     external_writeback_adapter: ExternalWritebackAdapter | None = None
+
+    def list_unresolved(
+        self,
+        *,
+        ctx: RequestContext,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> ActionWritebackQueueResult:
+        self._require_operations_read(ctx)
+        statuses = _queue_statuses(status)
+        _validate_queue_limit(limit)
+        with self.engine.begin() as conn:
+            rows = self.action_repository.list_action_writebacks(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                statuses=statuses,
+                limit=limit,
+            )
+        sensitive = self.policy.sensitive_column_names(ctx)
+        return {"items": [_queue_item(row, sensitive) for row in rows]}
 
     def reconcile(
         self,
@@ -130,6 +157,9 @@ class ActionWritebackReconciliationWorkflow:
                     decision="deny",
                 )
             raise
+
+    def _require_operations_read(self, ctx: RequestContext) -> None:
+        self.policy.require(ctx, "operations:read:summary")
 
     def _required_writeback(
         self,
@@ -282,8 +312,59 @@ def _validate_remote_success(remote_status: str, remote_resource_id: str) -> Non
 
 
 def _is_resolvable_writeback(writeback: ActionWritebackRecord, action_run: ActionRunRow) -> bool:
-    resolvable = {"outcome_unknown", "compensation_required"}
-    return writeback.status in resolvable and action_run["status"] in resolvable
+    return writeback.status in UNRESOLVED_WRITEBACK_STATUSES and action_run["status"] in UNRESOLVED_WRITEBACK_STATUSES
+
+
+def _queue_statuses(status: str | None) -> Sequence[str]:
+    if status is None:
+        return UNRESOLVED_WRITEBACK_STATUSES
+    if status not in UNRESOLVED_WRITEBACK_STATUSES:
+        raise ValidationFailed(
+            "reconciliation queue status must be unresolved",
+            details={"status": status, "allowed": list(UNRESOLVED_WRITEBACK_STATUSES)},
+        )
+    return (status,)
+
+
+def _validate_queue_limit(limit: int) -> None:
+    if limit < 1 or limit > 100:
+        raise ValidationFailed("reconciliation queue limit must be between 1 and 100", details={"limit": limit})
+
+
+def _queue_item(writeback: ActionWritebackRecord, sensitive: set[str]) -> ActionWritebackQueueItem:
+    response = _redact_mapping(writeback.response, sensitive)
+    evidence = dict(response or {})
+    return {
+        "writebackId": writeback.writeback_id,
+        "actionRunId": writeback.action_run_id,
+        "status": writeback.status,
+        "mode": writeback.mode,
+        "connectorId": writeback.connector_id,
+        "idempotencyKey": writeback.idempotency_key,
+        "attempts": writeback.attempts,
+        "createdAt": writeback.created_at,
+        "completedAt": writeback.completed_at,
+        "reconciliationDeadline": evidence.get("reconciliation_deadline"),
+        "remoteResourceId": evidence.get("remote_resource_id"),
+        "lastObservedStatus": evidence.get("last_observed_status"),
+        "compensationActionType": evidence.get("compensation_action_type"),
+        "request": _redact_mapping(writeback.request, sensitive) or {},
+        "response": response,
+    }
+
+
+def _redact_mapping(value: Mapping[str, object] | None, sensitive: set[str]) -> Mapping[str, object] | None:
+    if value is None:
+        return None
+    return {key: "***MASKED***" if key in sensitive else _redact_value(item, sensitive) for key, item in value.items()}
+
+
+def _redact_value(value: object, sensitive: set[str]) -> object:
+    if isinstance(value, Mapping):
+        return _redact_mapping(value, sensitive) or {}
+    if isinstance(value, list):
+        return [_redact_value(item, sensitive) for item in value]
+    return value
 
 
 def _reconciled_writeback_response(

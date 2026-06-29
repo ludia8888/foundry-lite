@@ -80,9 +80,12 @@ def sync_connector_snapshot(
     sync_name: str | None = None,
     cursor: Mapping[str, object] | None = None,
     rest: RestSourceConfig | None = None,
+    tx_type: str = "SNAPSHOT",
 ) -> CommitResult:
     ctx = ctx or RequestContext()
-    sync = _prepare_connector_snapshot_sync(runtime, ctx, dataset_ref, connector_name, resource_name, sync_name, cursor)
+    sync = _prepare_connector_snapshot_sync(
+        runtime, ctx, dataset_ref, connector_name, resource_name, sync_name, cursor, tx_type
+    )
     return _commit_connector_snapshot(runtime, connector_adapter, ctx, sync, connector_name, resource_name, rest)
 
 
@@ -145,13 +148,16 @@ def _prepare_connector_snapshot_sync(
     resource_name: str,
     sync_name: str | None,
     cursor: Mapping[str, object] | None,
+    tx_type: str,
 ) -> ConnectorSnapshotSync:
     runtime.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
     require_write_open(runtime.runtime_service, ctx, "sync_connector_snapshot", "dataset", dataset_ref)
     dataset = runtime.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
     resume_cursor = cursor or _committed_connector_cursor(runtime, ctx, dataset, connector_name, resource_name)
     with runtime.engine.begin() as conn:
-        plan = runtime._start_connector_sync_run(conn, ctx, dataset, connector_name, resource_name, sync_name)
+        plan = runtime._start_connector_sync_run(
+            conn, ctx, dataset, connector_name, resource_name, sync_name, tx_type=tx_type
+        )
     staged = runtime.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
     return ConnectorSnapshotSync(dataset=dataset, plan=plan, staged=staged, resume_cursor=resume_cursor)
 

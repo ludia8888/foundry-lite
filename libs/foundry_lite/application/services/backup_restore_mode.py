@@ -11,6 +11,7 @@ from foundry_lite.domain.context import RequestContext
 RESTORE_MODE_BLOCKED_EVENT = "backup_restore.restore_mode_blocked"
 RESTORE_MODE_STARTED_EVENT = "backup_restore.restore_mode_started"
 RESTORE_MODE_RESUME_APPROVED_EVENT = "backup_restore.restore_mode_resume_approved"
+POST_RESTORE_VALIDATED_EVENT = "backup_restore.post_restore_validated"
 RESTORE_MODE_EVENTS = (
     RESTORE_MODE_BLOCKED_EVENT,
     RESTORE_MODE_STARTED_EVENT,

@@ -55,6 +55,24 @@ def run(
     assert gate.collect_findings((tmp_path,)) == []
 
 
+def test_boolean_naming_accepts_camel_case_api_boolean_fields(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "api_payload.py",
+        """
+from typing import TypedDict
+
+
+class Payload(TypedDict):
+    isIdempotentReplay: bool
+    hasPermission: bool
+    requiresApproval: bool
+    shouldRetry: bool
+""",
+    )
+
+    assert gate.collect_findings((tmp_path,)) == []
+
+
 def test_boolean_naming_accepts_optional_bool_annotations(tmp_path: Path) -> None:
     _write(
         tmp_path / "options.py",

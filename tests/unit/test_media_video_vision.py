@@ -29,6 +29,7 @@ from foundry_lite.application.services.media.transactions import MediaTransactio
 from foundry_lite.application.services.media.uploads import MediaUploadInput, MediaUploadService
 from foundry_lite.application.services.media.visual_search import MediaVisualSearchService
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import PermissionDenied
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
@@ -38,6 +39,7 @@ from foundry_lite.infrastructure.adapters.local_vision_embedding import (
 )
 from foundry_lite.infrastructure.adapters.video_probe_processor import VideoSceneVisionProcessorAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 
 _VISION_SPEC = ProcessorSpec(processor="video_vision_v1", processor_version="1.0", model="clip", model_version="b32")
@@ -145,12 +147,13 @@ def env(tmp_path: Path) -> _Env:
     processing.bind_collaborators({"runtime_service": runtime})
     visual_search = MediaVisualSearchService(
         engine=engine,
+        policy=PolicyService(allow_unwired_classification_provider=True),
         media_derivative_repository=deriv,
         content_index_adapter=index,
         vision_embedding_model_adapter=vision,
     )
     visual_search.bind_collaborators({"runtime_service": runtime})
-    ctx = RequestContext()
+    ctx = RequestContext(roles=("ops_manager",))
     media_set = catalog.create_media_set(
         ctx,
         MediaSetSpec(
@@ -208,6 +211,14 @@ def test_visual_search_returns_empty_when_no_generation_is_active(env: _Env) -> 
     # No derivative indexed/promoted yet: the active generation is empty, so a CLIP-text query
     # returns no hits (and never re-reads the DB) rather than raising.
     assert env.visual_search.search_visual(env.ctx, text="a photo of a car") == []
+
+
+def test_visual_search_requires_media_search_permission(env: _Env) -> None:
+    env.process_and_index()
+    viewer = RequestContext(tenant_id=env.ctx.tenant_id, roles=("viewer",))
+
+    with pytest.raises(PermissionDenied):
+        env.visual_search.search_visual(viewer, text="a photo of a car")
 
 
 def test_visual_search_drops_a_hit_whose_source_unit_was_purged(env: _Env) -> None:

@@ -113,6 +113,7 @@ class AipWorkspace:
         *,
         review_id: str,
         expected_proposal_fingerprint: str,
+        idempotency_key: str,
         ctx: RequestContext | None = None,
     ) -> ApprovalExecutionResult:
         return self._approval_execution.execute(
@@ -120,6 +121,7 @@ class AipWorkspace:
             ApprovalExecutionRequest(
                 review_id=review_id,
                 expected_proposal_fingerprint=expected_proposal_fingerprint,
+                idempotency_key=idempotency_key,
             ),
         )
 

@@ -15,6 +15,7 @@ RuntimeJsonObject = Mapping[str, object]
 BackupRestorePreflightStatus = Literal["ready", "blocked"]
 BackupRestoreVersionStatus = Literal["valid", "missing", "corrupt"]
 BackupRestoreModeStatus = Literal["inactive", "paused", "blocked", "resume_approved"]
+BackupRestoreValidationStatus = Literal["passed", "blocked"]
 
 
 class BackupRestoreManifestIssue(TypedDict):
@@ -74,6 +75,17 @@ class BackupRestorePreflightReport(TypedDict):
     summary: RuntimeJsonObject
 
 
+class BackupRestorePreflightSummary(TypedDict):
+    """Latest preflight audit summary for recovery console overviews."""
+
+    generatedAt: str
+    backupId: str
+    status: str
+    datasetVersionCount: int
+    issueCount: int
+    activeIndexPointerCount: int
+
+
 class BackupRestoreModeReport(TypedDict):
     """Durable restore-mode traffic and publisher gate status."""
 
@@ -91,4 +103,44 @@ class BackupRestoreModeReport(TypedDict):
     blockingIssueCount: int
     reason: str
     highWatermarks: RuntimeJsonObject
+    summary: RuntimeJsonObject
+
+
+class BackupRestorePostRestoreValidationReport(TypedDict):
+    """Durable post-restore closed-loop validation evidence."""
+
+    generatedAt: str
+    tenantId: str
+    restoreId: str
+    backupId: str
+    validationId: str
+    status: BackupRestoreValidationStatus
+    preflightStatus: str
+    findings: list[RuntimeJsonObject]
+    highWatermarks: RuntimeJsonObject
+    summary: RuntimeJsonObject
+
+
+class BackupRestorePostRestoreValidationSummary(TypedDict):
+    """Latest post-restore validation audit summary for recovery overview."""
+
+    generatedAt: str
+    restoreId: str
+    backupId: str
+    validationId: str
+    status: str
+    findingCount: int
+
+
+class BackupRestoreRecoveryOverview(TypedDict):
+    """Single read model for Operations/Recovery Console status."""
+
+    generatedAt: str
+    tenantId: str
+    activeRestoreMode: BackupRestoreModeReport | None
+    latestRestoreMode: BackupRestoreModeReport | None
+    latestPreflight: BackupRestorePreflightSummary | None
+    latestPostRestoreValidation: BackupRestorePostRestoreValidationSummary | None
+    restoreTrafficGate: RuntimeJsonObject
+    requiredOperatorActions: list[str]
     summary: RuntimeJsonObject

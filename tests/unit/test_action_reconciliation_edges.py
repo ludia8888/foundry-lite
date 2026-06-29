@@ -5,6 +5,8 @@ from foundry_lite.application.ports.action_repository import ActionRunRow, Actio
 from foundry_lite.application.services.action_reconciliation import (
     _already_reconciled_result,
     _is_resolvable_writeback,
+    _queue_item,
+    _queue_statuses,
     _reconciled_result,
     _reconciled_writeback_response,
     _validate_remote_success,
@@ -63,8 +65,8 @@ def test_reconciliation_results_include_mutation_and_idempotent_replay_evidence(
         "caller-remote",
     )
 
-    assert reconciled["objectEditId"] == "edit-1"
-    assert reconciled["newObjectVersion"] == 3
+    assert reconciled.get("objectEditId") == "edit-1"
+    assert reconciled.get("newObjectVersion") == 3
     assert already == {
         "actionRunId": "run-1",
         "writebackId": "writeback-1",
@@ -78,6 +80,30 @@ def test_reconciliation_results_include_mutation_and_idempotent_replay_evidence(
 def test_terminal_action_run_is_not_treated_as_reconciliation_candidate() -> None:
     assert not _is_resolvable_writeback(_writeback(), _action_run(status="succeeded"))
     assert _is_resolvable_writeback(_writeback(), _action_run(status="outcome_unknown"))
+
+
+def test_reconciliation_queue_rejects_terminal_status_filters() -> None:
+    with pytest.raises(ValidationFailed, match="must be unresolved"):
+        _queue_statuses("reconciled")
+
+
+def test_reconciliation_queue_item_masks_sensitive_payload() -> None:
+    item = _queue_item(
+        _writeback(
+            response={
+                "last_observed_status": "unknown",
+                "remote_resource_id": None,
+                "reconciliation_deadline": "2026-06-19T00:10:00Z",
+                "margin": 42,
+            }
+        ),
+        {"margin"},
+    )
+
+    assert item["status"] == "outcome_unknown"
+    assert item["reconciliationDeadline"] == "2026-06-19T00:10:00Z"
+    assert item["response"] is not None
+    assert item["response"]["margin"] == "***MASKED***"
 
 
 def _writeback(response: dict[str, object] | None = None) -> ActionWritebackRecord:

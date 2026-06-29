@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from foundry_lite.application.ports import TransactionContext
-from foundry_lite.application.ports.adapter_failure import AdapterError
+from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
 from foundry_lite.application.ports.media_derivative_repository import (
     ContentUnitRecord,
     MediaDerivativeRecord,
@@ -171,6 +171,8 @@ class MediaProcessingService(CoreService):
                 return self.media_processor.process(request)
             except AdapterError as err:
                 return err
+            except Exception as err:
+                return _unexpected_processor_error(self.media_processor.profile_name, spec.processor, err)
 
     def _commit_derivative(
         self,
@@ -333,7 +335,7 @@ def _derivative_record(
         media_derivative_id=_new_id("mder"),
         tenant_id=ctx.tenant_id,
         source_media_item_version_id=version_id,
-        derivative_kind=result.derivative_kind if result is not None else "pdf_text",
+        derivative_kind=result.derivative_kind if result is not None else spec.processor,
         processor_spec_hash=spec_hash,
         processor_name=spec.processor,
         processor_version=spec.processor_version,
@@ -379,3 +381,15 @@ def _content_unit_records(
         )
         for unit in result.units
     ]
+
+
+def _unexpected_processor_error(adapter_profile: str, processor_name: str, err: Exception) -> AdapterError:
+    failure = AdapterFailure(
+        adapter_profile=adapter_profile,
+        operation="process",
+        kind="unknown",
+        is_retryable=False,
+        operator_message="unexpected media processor error",
+        details={"processor": processor_name, "errorType": err.__class__.__name__},
+    )
+    return AdapterError(failure)

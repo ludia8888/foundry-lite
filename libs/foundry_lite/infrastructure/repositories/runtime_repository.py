@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from foundry_lite.application.ports import (
     AuditEventRecord,
+    DeadLetterEventRecord,
     LineageEdgeRecord,
     LineageEdgeRow,
     OutboxEventRecord,
@@ -272,6 +273,82 @@ class SqlAlchemyRuntimeRepository:
         rows = transaction.execute(select(runtime_table).where(runtime_table.c.tenant_id == tenant_id)).mappings().all()
         return [cast(RuntimeRow, dict(row)) for row in rows]
 
+    def pending_outbox_events(self, *, transaction: Any, tenant_id: str, limit: int) -> list[RuntimeRow]:
+        rows = (
+            transaction.execute(
+                select(db.outbox_events)
+                .where(and_(db.outbox_events.c.tenant_id == tenant_id, db.outbox_events.c.status == "pending"))
+                .order_by(db.outbox_events.c.created_at, db.outbox_events.c.id)
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(RuntimeRow, dict(row)) for row in rows]
+
+    def mark_outbox_event_publishing(
+        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition
+    ) -> RuntimeRow | None:
+        updated = cas_status_update(
+            transaction,
+            db.outbox_events,
+            tenant_id=tenant_id,
+            row_id=event_id,
+            transition=transition,
+            values={"attempts": db.outbox_events.c.attempts + 1},
+        )
+        if not updated:
+            return None
+        return self._outbox_event_row(transaction=transaction, tenant_id=tenant_id, event_id=event_id)
+
+    def mark_outbox_event_published(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        event_id: str,
+        transition: StatusTransition,
+        published_at: str,
+    ) -> RuntimeRow | None:
+        updated = cas_status_update(
+            transaction,
+            db.outbox_events,
+            tenant_id=tenant_id,
+            row_id=event_id,
+            transition=transition,
+            values={"published_at": published_at},
+        )
+        if not updated:
+            return None
+        return self._outbox_event_row(transaction=transaction, tenant_id=tenant_id, event_id=event_id)
+
+    def mark_outbox_event_failed(
+        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition
+    ) -> RuntimeRow | None:
+        updated = cas_status_update(
+            transaction,
+            db.outbox_events,
+            tenant_id=tenant_id,
+            row_id=event_id,
+            transition=transition,
+            values={"published_at": None},
+        )
+        if not updated:
+            return None
+        return self._outbox_event_row(transaction=transaction, tenant_id=tenant_id, event_id=event_id)
+
+    def _outbox_event_row(self, *, transaction: Any, tenant_id: str, event_id: str) -> RuntimeRow | None:
+        row = (
+            transaction.execute(
+                select(db.outbox_events).where(
+                    and_(db.outbox_events.c.tenant_id == tenant_id, db.outbox_events.c.id == event_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(RuntimeRow, dict(row)) if row else None
+
     def update_outbox_event_for_retry(
         self,
         *,
@@ -509,6 +586,20 @@ class SqlAlchemyRuntimeRepository:
             raise
         savepoint.commit()
         return True
+
+    def insert_dead_letter_event(self, *, transaction: Any, record: DeadLetterEventRecord) -> None:
+        transaction.execute(
+            insert(db.dead_letter_events).values(
+                id=record.event_id,
+                tenant_id=record.tenant_id,
+                source_event_id=record.source_event_id,
+                event_type=record.event_type,
+                payload=dict(record.payload),
+                error=dict(record.error),
+                failed_at=record.failed_at,
+                retry_after=record.retry_after,
+            )
+        )
 
     def insert_lineage_edge(self, *, transaction: Any, record: LineageEdgeRecord) -> None:
         transaction.execute(

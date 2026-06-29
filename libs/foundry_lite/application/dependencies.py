@@ -27,6 +27,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.ports.citation_source import CitationSourceVerifier
 from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
+from foundry_lite.application.ports.connector_registry_repository import ConnectorRegistryRepository
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
 from foundry_lite.application.ports.destructive_development_admin import DestructiveDevelopmentAdmin
 from foundry_lite.application.ports.embedding_model import EmbeddingModelAdapter
@@ -43,7 +44,10 @@ from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
-from foundry_lite.application.ports.secret_provider import SecretProvider
+from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
+from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
+from foundry_lite.application.ports.source_management_repository import SourceManagementRepository
+from foundry_lite.application.ports.source_registry_repository import SourceRegistryRepository
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
 from foundry_lite.application.ports.tool_executor import ToolExecutor
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
@@ -68,6 +72,9 @@ class CoreDependencies:
     dataset_quality_repository: DatasetQualityRepository
     compute_adapter: ComputeAdapter
     connector_adapter: ConnectorAdapter
+    connector_registry_repository: ConnectorRegistryRepository
+    source_registry_repository: SourceRegistryRepository
+    source_management_repository: SourceManagementRepository
     metadata_repository: MetadataRepository
     destructive_development_admin: DestructiveDevelopmentAdmin
     dataset_repository: DatasetRepository
@@ -97,6 +104,8 @@ class CoreDependencies:
     context_provider: ContextProvider
     search_adapter: SearchAdapter
     secret_provider: SecretProvider
+    secret_vault: SecretVault
+    source_database_adapter: SourceDatabaseAdapter
     prompt_artifact_store: object
     citation_source_verifier: CitationSourceVerifier
     stream_adapter: StreamAdapter
