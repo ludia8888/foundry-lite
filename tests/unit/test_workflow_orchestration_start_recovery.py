@@ -13,10 +13,14 @@ from foundry_lite.infrastructure.local_runtime import create_local_core_dependen
 class _RetryableRaisingWorkflowAdapter:
     profile_name = "retryable-raising"
 
+    def __init__(self) -> None:
+        self.starts = 0
+
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(adapter_profile=self.profile_name, modes=())
 
     def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
+        self.starts += 1
         raise AdapterError(
             AdapterFailure(
                 self.profile_name,
@@ -35,6 +39,7 @@ class _PermanentRaisingWorkflowAdapter(_RetryableRaisingWorkflowAdapter):
     profile_name = "permanent-raising"
 
     def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
+        self.starts += 1
         raise RuntimeError("Authorization: Bearer raw-workflow-token")
 
 
@@ -42,6 +47,7 @@ class _SensitiveAdapterFailureWorkflowAdapter(_RetryableRaisingWorkflowAdapter):
     profile_name = "sensitive-adapter-failure"
 
     def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
+        self.starts += 1
         raise AdapterError(
             AdapterFailure(
                 self.profile_name,
@@ -55,7 +61,8 @@ class _SensitiveAdapterFailureWorkflowAdapter(_RetryableRaisingWorkflowAdapter):
 
 
 def test_retryable_workflow_start_exception_records_start_unknown(tmp_path: Path) -> None:
-    foundry = _foundry(tmp_path, _RetryableRaisingWorkflowAdapter())
+    adapter = _RetryableRaisingWorkflowAdapter()
+    foundry = _foundry(tmp_path, adapter)
 
     run = foundry.operations.start_media_processing_workflow(
         media_item_version_id="miv-start-unknown",
@@ -73,6 +80,7 @@ def test_retryable_workflow_start_exception_records_start_unknown(tmp_path: Path
     assert run["status"] == "start_unknown"
     assert run["error"] is not None and run["error"]["kind"] == "timeout"
     assert replay["status"] == "start_unknown"
+    assert adapter.starts == 2
 
 
 def test_workflow_start_exception_scrubs_adapter_failure_evidence(tmp_path: Path) -> None:
@@ -98,9 +106,16 @@ def test_workflow_start_exception_scrubs_adapter_failure_evidence(tmp_path: Path
 
 
 def test_permanent_workflow_start_exception_records_failed_not_starting(tmp_path: Path) -> None:
-    foundry = _foundry(tmp_path, _PermanentRaisingWorkflowAdapter())
+    adapter = _PermanentRaisingWorkflowAdapter()
+    foundry = _foundry(tmp_path, adapter)
 
     run = foundry.operations.start_media_processing_workflow(
+        media_item_version_id="miv-failed",
+        processor_spec={"processor": "ocr_v1"},
+        idempotency_key="wf-start-runtime-error",
+        ctx=demo_admin_context(),
+    )
+    replay = foundry.operations.start_media_processing_workflow(
         media_item_version_id="miv-failed",
         processor_spec={"processor": "ocr_v1"},
         idempotency_key="wf-start-runtime-error",
@@ -111,6 +126,8 @@ def test_permanent_workflow_start_exception_records_failed_not_starting(tmp_path
     assert run["error"] is not None
     assert run["error"]["kind"] == "unknown"
     assert run["error"]["details"] == {"errorType": "RuntimeError"}
+    assert replay["status"] == "failed"
+    assert adapter.starts == 1
 
 
 def _foundry(tmp_path: Path, adapter: WorkflowAdapter) -> FoundryLite:

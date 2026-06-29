@@ -666,7 +666,9 @@ Temporal을 독립 adapter에서 실제 Foundry-lite 업무 오케스트레이�
 > 고정한다. `ConnectorSyncWorkflow`는 Operations facade/API/generated SDK에서
 > 시작/조회할 수 있고, local/fake/Temporal profile이 같은 public
 > `ProductWorkflowRun` shape를 반환하며, audit event의 `workflowRunId`와
-> `foundryRunId`가 서로 연결된다. 실제 connector activity data-plane,
+> `foundryRunId`가 서로 연결된다. Workflow adapter start 예외는 ledger를
+> `starting`에 방치하지 않고 retryable timeout/unavailable이면 `start_unknown`,
+> permanent exception이면 `failed`로 운영 증거를 남긴다. 실제 connector activity data-plane,
 > cancel cleanup, response-loss reconciliation, continue-as-new, code upgrade
 > replay는 아직 future scope다.
 
