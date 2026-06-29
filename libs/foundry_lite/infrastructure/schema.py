@@ -111,6 +111,29 @@ dataset_transactions = Table(
     Column("metadata", JSON, nullable=False),
 )
 
+webhook_event_keys = Table(
+    "webhook_event_keys",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("dataset_id", String, nullable=False),
+    Column("connector_name", String, nullable=False),
+    Column("resource_name", String, nullable=False),
+    Column("event_id", String, nullable=False),
+    Column("transaction_id", String, nullable=False),
+    Column("committed_version_id", String, nullable=False),
+    Column("payload_hash", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    UniqueConstraint(
+        "tenant_id",
+        "dataset_id",
+        "connector_name",
+        "resource_name",
+        "event_id",
+        name="uq_webhook_event_key",
+    ),
+)
+
 dataset_versions = Table(
     "dataset_versions",
     metadata,

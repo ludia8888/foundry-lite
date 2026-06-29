@@ -4,6 +4,7 @@
 # pyright: reportUnusedImport=false
 
 from foundry_lite.application.action_types import ActionWritebackQueueResult
+from foundry_lite.application.dataset_webhook_events import WebhookEventKeyRecord, WebhookEventKeyRow
 from foundry_lite.application.ports.action_repository import (
     ActionErrorPayload,
     ActionParameters,

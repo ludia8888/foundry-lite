@@ -14,6 +14,7 @@ from foundry_lite.application.ports import (
     DatasetVersionRecord,
     DeadLetterRecord,
     SyncRunRecord,
+    WebhookEventKeyRecord,
 )
 from foundry_lite.application.ports.transaction_context import (
     SYNC_RUN_COMMITTED,
@@ -57,6 +58,7 @@ class FakeDatasetTransactionRepository:
     dead_letters_store: list[dict[str, Any]] = field(default_factory=list)
     runs: dict[tuple[DatasetRunKind, str], dict[str, Any]] = field(default_factory=dict)
     sync_runs_store: dict[str, dict[str, Any]] = field(default_factory=dict)
+    webhook_event_keys: dict[tuple[str, str, str, str, str], dict[str, Any]] = field(default_factory=dict)
 
     def create_open_transaction(self, *, transaction: Any, record: DatasetTransactionRecord) -> None:
         del transaction
@@ -141,6 +143,30 @@ class FakeDatasetTransactionRepository:
         del transaction
         self.files_store.append(record.__dict__.copy())
 
+    def insert_webhook_event_key(self, *, transaction: Any, record: WebhookEventKeyRecord) -> None:
+        del transaction
+        key = (
+            record.tenant_id,
+            record.dataset_id,
+            record.connector_name,
+            record.resource_name,
+            record.event_id,
+        )
+        if key in self.webhook_event_keys:
+            raise DatasetVersionConflictError("webhook event already exists")
+        self.webhook_event_keys[key] = {
+            "id": record.webhook_event_key_id,
+            "tenant_id": record.tenant_id,
+            "dataset_id": record.dataset_id,
+            "connector_name": record.connector_name,
+            "resource_name": record.resource_name,
+            "event_id": record.event_id,
+            "transaction_id": record.transaction_id,
+            "committed_version_id": record.committed_version_id,
+            "payload_hash": record.payload_hash,
+            "created_at": record.created_at,
+        }
+
     def commit_transaction(
         self,
         *,
@@ -210,6 +236,12 @@ class FakeDatasetTransactionRepository:
         event_id: str,
     ) -> dict[str, Any] | None:
         del transaction
+        key = (tenant_id, dataset_id, connector_name, resource_name, event_id)
+        event_key = self.webhook_event_keys.get(key)
+        if event_key is not None:
+            row = self.transactions.get(event_key["transaction_id"])
+            if row is not None and row["status"] == "COMMITTED":
+                return _transaction_with_webhook_key_metadata(dict(row), event_key)
         rows = [
             row
             for row in self.transactions.values()
@@ -377,7 +409,7 @@ class FakeDatasetTransactionRepository:
     ) -> dict[str, Any] | None:
         del transaction
         row = self._mutable_dead_letter(tenant_id, record_id)
-        if not _is_matching_replay(row, replay_run_id, replay_lease_token):
+        if row is None or not _is_matching_replay(row, replay_run_id, replay_lease_token):
             return None
         row.update(
             status="RESOLVED",
@@ -400,7 +432,7 @@ class FakeDatasetTransactionRepository:
     ) -> dict[str, Any] | None:
         del transaction
         row = self._mutable_dead_letter(tenant_id, record_id)
-        if not _is_matching_replay(row, replay_run_id, replay_lease_token):
+        if row is None or not _is_matching_replay(row, replay_run_id, replay_lease_token):
             return None
         row.update(
             status="QUARANTINED",
@@ -594,6 +626,21 @@ def _file_record() -> DatasetFileRecord:
         byte_size=100,
         content_hash="hash-demo",
         partition_values={},
+    )
+
+
+def _webhook_event_key_record(transaction_id: str, committed_version_id: str) -> WebhookEventKeyRecord:
+    return WebhookEventKeyRecord(
+        webhook_event_key_id=f"wehk_{transaction_id}",
+        tenant_id="tenant-demo",
+        dataset_id="ds_orders",
+        connector_name="mock_saas",
+        resource_name="orders",
+        event_id="evt-indexed",
+        transaction_id=transaction_id,
+        committed_version_id=committed_version_id,
+        payload_hash="hash-indexed",
+        created_at="2026-06-10T00:02:00Z",
     )
 
 
@@ -1135,6 +1182,61 @@ def test_dataset_transaction_repository_contract_finds_committed_webhook_event(
     assert found["committed_version_id"] == "dsv_webhook_1"
 
 
+def test_dataset_transaction_repository_contract_finds_indexed_webhook_event(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def commit_indexed_webhook_transaction(transaction: Any) -> dict[str, Any] | None:
+        repository.create_open_transaction(transaction=transaction, record=_transaction_record("dstx_webhook_indexed"))
+        repository.commit_transaction(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transaction_id="dstx_webhook_indexed",
+            committed_version_id="dsv_webhook_indexed",
+            schema_version=1,
+            committed_at="2026-06-10T00:02:00Z",
+            metadata={},
+        )
+        repository.insert_webhook_event_key(
+            transaction=transaction,
+            record=_webhook_event_key_record("dstx_webhook_indexed", "dsv_webhook_indexed"),
+        )
+        return repository.committed_webhook_transaction_by_event(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            dataset_id="ds_orders",
+            connector_name="mock_saas",
+            resource_name="orders",
+            event_id="evt-indexed",
+        )
+
+    found = harness.call_in_transaction(commit_indexed_webhook_transaction)
+
+    assert found is not None
+    assert found["id"] == "dstx_webhook_indexed"
+    assert found["metadata"]["webhookEvent"]["payloadHash"] == "hash-indexed"
+
+
+def test_dataset_transaction_repository_contract_rejects_duplicate_webhook_event_key(
+    harness: TransactionHarness,
+) -> None:
+    repository = harness.repository
+
+    def insert_duplicate(transaction: Any) -> None:
+        repository.insert_webhook_event_key(
+            transaction=transaction,
+            record=_webhook_event_key_record("dstx_webhook_key_1", "dsv_webhook_key_1"),
+        )
+        repository.insert_webhook_event_key(
+            transaction=transaction,
+            record=_webhook_event_key_record("dstx_webhook_key_2", "dsv_webhook_key_2"),
+        )
+
+    with pytest.raises(DatasetVersionConflictError):
+        harness.call_in_transaction(insert_duplicate)
+
+
 def test_dataset_transaction_repository_contract_locks_dataset_for_version_allocation(
     harness: TransactionHarness,
 ) -> None:
@@ -1637,7 +1739,7 @@ def test_concurrent_replay_requests_create_one_replay_run(postgres_fixture: Any)
     def request_replay(replay_run_id: str) -> dict[str, Any] | None:
         with engine.begin() as transaction:
             start.wait()
-            return repository.update_dead_letter_record_replay_requested(
+            row = repository.update_dead_letter_record_replay_requested(
                 transaction=transaction,
                 tenant_id="tenant-demo",
                 record_id="dlqr_orders_bad_1",
@@ -1647,6 +1749,7 @@ def test_concurrent_replay_requests_create_one_replay_run(postgres_fixture: Any)
                 metadata={"stream": "shipments", "lastOperation": {"operation": "retry"}},
                 backfill_plan={"nextStep": "Replay worker must re-ingest this record."},
             )
+            return dict(row) if row is not None else None
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = [
@@ -1702,6 +1805,19 @@ def _webhook_event_matches(
         and event.get("resourceName") == resource_name
         and event.get("eventId") == event_id
     )
+
+
+def _transaction_with_webhook_key_metadata(row: dict[str, Any], event_key: dict[str, Any]) -> dict[str, Any]:
+    metadata = row.get("metadata")
+    metadata_dict = dict(metadata) if isinstance(metadata, dict) else {}
+    metadata_dict["webhookEvent"] = {
+        "connectorName": event_key["connector_name"],
+        "resourceName": event_key["resource_name"],
+        "eventId": event_key["event_id"],
+        "payloadHash": event_key["payload_hash"],
+    }
+    row["metadata"] = metadata_dict
+    return row
 
 
 def test_dataset_transaction_repository_contract_sync_run_insert(harness: TransactionHarness) -> None:

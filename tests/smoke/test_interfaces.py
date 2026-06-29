@@ -705,6 +705,7 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monk
 
     preview = foundry.datasets.preview("raw.webhook_orders", ctx=ctx)
     transactions = _dataset_transactions(foundry.engine)
+    event_keys = _webhook_event_keys(foundry.engine)
     assert response.status_code == 200
     assert duplicate.status_code == 200
     assert duplicate.json()["version_id"] == response.json()["version_id"]
@@ -714,6 +715,17 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monk
     assert '"order_id":"O-9001"' in preview[0]["payload_json"]
     assert transactions[0]["tx_type"] == "APPEND"
     assert len([tx for tx in transactions if tx["tx_type"] == "APPEND"]) == 1
+    assert event_keys == [
+        {
+            "tenant_id": ctx.tenant_id,
+            "dataset_id": transactions[0]["dataset_id"],
+            "connector_name": "mock_saas",
+            "resource_name": "orders",
+            "event_id": "evt-order-9001",
+            "transaction_id": transactions[0]["id"],
+            "committed_version_id": response.json()["version_id"],
+        }
+    ]
     assert denied.status_code == 403
     assert rejected_shape.status_code == 422
     deny_events = foundry.operations.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
@@ -2766,6 +2778,22 @@ def _webhook_service_principal_signature(
 def _dataset_transactions(engine) -> list[dict[str, object]]:
     with engine.begin() as conn:
         rows = conn.execute(select(db.dataset_transactions))
+        return [dict(row) for row in rows.mappings().all()]
+
+
+def _webhook_event_keys(engine) -> list[dict[str, object]]:
+    with engine.begin() as conn:
+        rows = conn.execute(
+            select(
+                db.webhook_event_keys.c.tenant_id,
+                db.webhook_event_keys.c.dataset_id,
+                db.webhook_event_keys.c.connector_name,
+                db.webhook_event_keys.c.resource_name,
+                db.webhook_event_keys.c.event_id,
+                db.webhook_event_keys.c.transaction_id,
+                db.webhook_event_keys.c.committed_version_id,
+            )
+        )
         return [dict(row) for row in rows.mappings().all()]
 
 

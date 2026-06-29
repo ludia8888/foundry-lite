@@ -23,12 +23,14 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetTransactionManager,
     DatasetVersionLookup,
 )
+from foundry_lite.application.services.dataset.webhook_commit_metadata import (
+    WebhookCommitMetadataRecorder,
+    finalize_webhook_commit,
+)
 from foundry_lite.application.services.write_traffic_gate import require_write_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
-    DatasetCommitBlocked,
-    InvariantViolation,
     PermissionDenied,
     ValidationFailed,
 )
@@ -173,6 +175,7 @@ def _commit_or_replay_webhook_event(
         connector_name,
         resource_name,
         ingest.event_id,
+        ingest.payload_hash,
         payload,
     )
 
@@ -296,34 +299,31 @@ def _commit_webhook_event(
     connector_name: str,
     resource_name: str,
     event_id: str,
+    payload_hash: str,
     payload: Mapping[str, object],
 ) -> CommitResult:
     try:
         row = _webhook_event_row(connector_name, resource_name, event_id, payload)
         metadata = _webhook_transaction_metadata(connector_name, resource_name, event_id, payload)
         runtime._rows_to_parquet([row], staged, list(row))
-        blocked: DatasetCommitBlocked | None = None
-        with runtime.engine.begin() as conn:
-            try:
-                return runtime.dataset_transaction_service._finalize_open_transaction(
-                    conn,
-                    ctx,
-                    dataset=dataset,
-                    transaction_id=plan.transaction_id,
-                    staged_parquet=staged,
-                    run_id=plan.run_id,
-                    audit_action="webhook_append_commit",
-                    outbox_event_type="dataset.version.committed",
-                    transaction_metadata=metadata,
-                    after_persist=lambda commit_conn, result: runtime._mark_sync_run_committed(
-                        commit_conn, ctx, plan.run_id, result
-                    ),
-                )
-            except DatasetCommitBlocked as exc:
-                blocked = exc
-        if blocked is not None:
-            raise blocked
-        raise InvariantViolation("webhook finalization did not return a commit result")
+        return finalize_webhook_commit(
+            runtime,
+            ctx,
+            dataset,
+            plan,
+            staged,
+            metadata,
+            WebhookCommitMetadataRecorder(
+                runtime,
+                ctx,
+                plan.run_id,
+                dataset,
+                connector_name,
+                resource_name,
+                event_id,
+                payload_hash,
+            ),
+        )
     except Exception as exc:
         runtime._abort_connector_after_error(ctx, plan.transaction_id, plan.run_id, exc)
 
