@@ -2030,6 +2030,24 @@ trace debugging은 later slices다.
 |---|---|---|
 | Agent source preview ratchet | `quality:agent-source-previews` | Citation card가 출처 metadata 없이 opaque label만 보여주거나, preview가 raw context/prompt/tool/provider body를 노출하거나, Web Operations 사용자 흐름에서 retrieval method/security partition/source version을 확인하지 못하는 문제 차단 |
 
+### AIP P0t — Agent Inline Citation Anchor Ratchet
+
+P0t의 현재 slice는 full source document preview, multi-turn citation repair, 또는 visual trace
+debugger가 아니라, verified citation의 `claimSpan`을 운영자 답변 본문 안에서 바로 확인할 수
+있게 하는 첫 inline citation surface다. Web Operations AIP Agent answer는 model output을
+HTML로 신뢰하지 않고, answer string을 text node로 잘라 붙인 뒤 검증된 citation payload의
+bounded `claimSpan` 위치에만 `[n]` citation button을 렌더링한다. Button click은 같은 API
+응답에서 이미 `CitationService`가 검증한 citation card를 선택/focus한다. Invalid, out-of-range,
+overlapping span은 inline anchor에서 제외되어 plain text answer와 verified citation cards가
+유지된다.
+
+Full source document preview, multi-turn citation repair, and visual trace debugging은 later
+slices다.
+
+| Gate | Command | Blocks |
+|---|---|---|
+| Agent inline citation ratchet | `quality:agent-inline-citations` | Web Operations가 검증된 `claimSpan`을 답변 본문에 연결하지 못하거나, model-produced HTML/URL을 신뢰하거나, citation marker 클릭이 verified citation card로 이어지지 않는 문제 차단 |
+
 ### S60 — AI Evidence Lineage Ratchet
 
 S60의 현재 slice는 full AI/insight product가 아니라 object explain property-lineage와

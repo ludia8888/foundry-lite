@@ -244,7 +244,10 @@ content_hash, relevance_score, retrieval_method, security_partition, token_estim
   and Operations AI detail link for audit. Current P0s adds a `sourcePreview` object to each resolved
   citation, derived only from selected AI run ledger context metadata (`kind`, source ref/version/hash,
   retrieval method, relevance score, token estimate, and security partition) and rendered in Web
-  Operations without raw context text, prompt text, tool payloads, or provider bodies.
+  Operations without raw context text, prompt text, tool payloads, or provider bodies. Current P0t
+  renders verified `claimSpan` citations as inline answer anchors in Web Operations, using text nodes
+  plus bounded citation buttons that select the already-verified citation card instead of trusting
+  model-produced HTML or URLs.
 - **Tool Registry / Tool Broker (§8.8)**: `ToolSpec{tool_id, version, input_schema, output_schema,
 effect∈READ|PROPOSE_WRITE|WRITE, required_permission, confirmation_policy∈NONE|USER|HUMAN_REVIEW,
 object_type_allowlist, property_allowlist, timeout_seconds, max_result_items}`. Broker check order:
@@ -342,7 +345,8 @@ Add granular gates: `quality:ai-contracts, quality:model-gateway, quality:ai-led
 quality:model-gateway-ledger, quality:prompt-artifacts, quality:retrieval-security, quality:context-compiler, quality:tool-broker,
 quality:action-proposal, quality:approval-execution, quality:ai-operations, quality:logic-runtime,
 quality:ai-evals, quality:ai-release, quality:visual-builder, quality:builder-runtime, quality:agent-runtime,
-quality:agent-tool-loop, quality:agent-runtime-citations, quality:agent-citation-ui, quality:agent-source-previews`. Release gate splits static / unit /
+quality:agent-tool-loop, quality:agent-runtime-citations, quality:agent-citation-ui, quality:agent-source-previews,
+quality:agent-inline-citations`. Release gate splits static / unit /
 integration / **live provider smoke** (live smoke = separate lane needing credentials + cost).
 
 ## Operational failure semantics (§16.3)

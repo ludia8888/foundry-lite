@@ -244,6 +244,28 @@
         overflow-wrap: anywhere;
       }
 
+      .citation-anchor {
+        background: #fff;
+        border: 1px solid var(--accent);
+        color: var(--accent);
+        cursor: pointer;
+        display: inline-grid;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        margin-left: 4px;
+        min-height: 20px;
+        min-width: 26px;
+        padding: 3px 5px;
+        place-items: center;
+        vertical-align: text-bottom;
+      }
+
+      .citation-anchor:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
       .citation-list {
         display: grid;
         gap: 8px;
@@ -256,6 +278,11 @@
         display: grid;
         gap: 8px;
         padding: 10px 12px;
+      }
+
+      .citation-card[data-selected="true"] {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 1px var(--accent);
       }
 
       .citation-card header {
@@ -1073,7 +1100,7 @@
       }
 
       function renderAipAgentAnswer(value) {
-        aipAgentAnswer.textContent = value.answer ?? "-";
+        renderAnswerWithInlineCitations(value.answer ?? "-", value.citations);
       }
 
       function renderAipAgentCitations(rawCitations) {
@@ -1094,10 +1121,13 @@
       function citationCard(citation, index) {
         const card = document.createElement("article");
         card.className = "citation-card";
+        const order = citation.citationOrder ?? index + 1;
+        card.dataset.citationOrder = String(order);
+        card.tabIndex = -1;
         const header = document.createElement("header");
         const citationIndex = document.createElement("span");
         citationIndex.className = "citation-index";
-        citationIndex.textContent = citation.citationOrder ?? index + 1;
+        citationIndex.textContent = order;
         const title = document.createElement("span");
         title.className = "citation-title";
         title.textContent = citation.displayLabel ?? citation.sourceResourceId ?? citation.contextId ?? "Citation";
@@ -1108,6 +1138,77 @@
           card.appendChild(preview);
         }
         return card;
+      }
+
+      function renderAnswerWithInlineCitations(answer, rawCitations) {
+        const text = typeof answer === "string" && answer.length > 0 ? answer : "-";
+        const anchors = inlineCitationAnchors(text, rawCitations);
+        aipAgentAnswer.innerHTML = "";
+        if (anchors.length === 0) {
+          aipAgentAnswer.textContent = text;
+          return;
+        }
+        let cursor = 0;
+        anchors.forEach((citation) => {
+          aipAgentAnswer.appendChild(document.createTextNode(text.slice(cursor, citation.start)));
+          aipAgentAnswer.appendChild(document.createTextNode(text.slice(citation.start, citation.end)));
+          aipAgentAnswer.appendChild(citationAnchorButton(citation));
+          cursor = citation.end;
+        });
+        aipAgentAnswer.appendChild(document.createTextNode(text.slice(cursor)));
+      }
+
+      function inlineCitationAnchors(answer, rawCitations) {
+        const citations = Array.isArray(rawCitations) ? rawCitations : [];
+        let cursor = 0;
+        return citations
+          .map((citation, index) => inlineCitationCandidate(answer, citation, index))
+          .filter(Boolean)
+          .sort((left, right) => left.start - right.start || left.end - right.end || left.order - right.order)
+          .filter((citation) => {
+            if (citation.start < cursor) {
+              return false;
+            }
+            cursor = citation.end;
+            return true;
+          });
+      }
+
+      function inlineCitationCandidate(answer, citation, index) {
+        const span = citation?.claimSpan;
+        const start = span?.start;
+        const end = span?.end;
+        if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > answer.length) {
+          return null;
+        }
+        const order = citation.citationOrder ?? index + 1;
+        if (!Number.isInteger(order) || order <= 0) {
+          return null;
+        }
+        return { start, end, order };
+      }
+
+      function citationAnchorButton(citation) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "citation-anchor";
+        button.dataset.citationOrder = String(citation.order);
+        button.textContent = `[${citation.order}]`;
+        button.setAttribute("aria-label", `Citation ${citation.order}`);
+        button.addEventListener("click", () => selectCitationCard(citation.order));
+        return button;
+      }
+
+      function selectCitationCard(order) {
+        const cards = aipAgentCitations.querySelectorAll(".citation-card");
+        cards.forEach((card) => {
+          card.dataset.selected = card.dataset.citationOrder === String(order) ? "true" : "false";
+        });
+        const selected = aipAgentCitations.querySelector(`.citation-card[data-citation-order="${order}"]`);
+        if (selected) {
+          selected.scrollIntoView({ block: "nearest" });
+          selected.focus({ preventScroll: true });
+        }
       }
 
       function citationMeta(citation) {
