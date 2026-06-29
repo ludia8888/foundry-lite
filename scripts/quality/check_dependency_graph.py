@@ -195,11 +195,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--max-aggregation-fan-out",
         type=int,
-        # 26: the `infrastructure.adapters` aggregation root grows by one per new adapter; L13
+        # 30: explicit composition roots grow by one per new bounded capability; connector/source
+        # onboarding add their registry and management ports to CoreDependencies, which is
+        # intentional coupling at the dependency injection root rather than a hidden service
+        # dependency.
+        #
+        # The `infrastructure.adapters` aggregation root grows by one per new adapter; L13
         # added `LocalCompletionAdapter` (query-side HyDE/distillation completion seam) and AIP
         # P0b adds the `FakeLanguageModel` + `ProviderCompatibleLanguageModel` governed-gateway
         # seams — coupling by design at an explicit aggregation point, not accidental fan-out.
-        default=26,
+        default=30,
         help="Higher fan-out budget for explicit aggregation roots (ports/repositories __init__).",
     )
     parser.add_argument(
@@ -224,6 +229,13 @@ def main(argv: list[str] | None = None) -> int:
             # The MediaServices group composes every media bounded-context service; its
             # fan-out grows by one per new media capability (e.g. M9 access patterns), by design.
             "foundry_lite.application.services.media_service",
+            # These are explicit operator/composition roots. They assemble many bounded
+            # services or proof adapters but do not own domain rules; router purity and
+            # service dependency gates still prevent hidden DB/service coupling.
+            "apps.api.foundry_lite_api.main",
+            "foundry_lite.application.facades.operations_console",
+            "scripts.operations.run_live_media_byte_proof",
+            "scripts.operations.run_palantir_live_simulation",
         ],
     )
     args = parser.parse_args(argv)

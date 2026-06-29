@@ -1,11 +1,15 @@
+"""Stream archive commit helpers for dataset ingest."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Protocol
 
 from foundry_lite.application.ports import (
     DatasetRow,
     DatasetTransactionRow,
+    DeadLetterRecord,
     StreamArchiveConfig,
     StreamEvent,
     SyncRunRecord,
@@ -32,7 +36,7 @@ from foundry_lite.application.services.dataset.stream_archive import (
     stream_dead_letter_record,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, DatasetCommitBlocked, InvariantViolation
+from foundry_lite.domain.errors import ConflictDetected, DatasetCommitBlocked, InvariantViolation, ValidationFailed
 
 InsertStreamDeadLetters = Callable[
     [
@@ -55,11 +59,43 @@ __all__ = [
     "stream_commit_metadata",
     "stream_cursor_offset",
     "stream_dead_letter_record",
+    "commit_stream_archive",
     "ensure_stream_cursor_not_superseded",
     "finalize_stream_archive_commit",
+    "insert_stream_dead_letters",
     "lock_stream_cursor_for_commit",
     "record_stream_read_failure",
+    "write_stream_archive_batch",
 ]
+
+
+class StreamArchiveCommitBoundary(Protocol):
+    engine: TransactionManager
+    dataset_transaction_repository: DatasetTransactionRepository
+    dataset_transaction_service: DatasetTransactionManager
+    runtime_service: DatasetRuntimeBoundary
+
+    def _start_connector_sync_run(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        connector_name: str,
+        resource_name: str,
+        sync_name: str | None,
+        *,
+        tx_type: str = "SNAPSHOT",
+        source_type: str | None = None,
+        run_id: str | None = None,
+    ) -> UploadSyncPlan: ...
+
+    def _rows_to_parquet(
+        self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]
+    ) -> None: ...
+
+    def _abort_stream_after_error(
+        self, ctx: RequestContext, transaction_id: str, run_id: str, exc: Exception
+    ) -> None: ...
 
 
 def finalize_stream_archive_commit(
@@ -100,6 +136,135 @@ def finalize_stream_archive_commit(
     if blocked is not None:
         raise blocked
     raise InvariantViolation("stream archive finalization did not return a commit result")
+
+
+def commit_stream_archive(
+    service: StreamArchiveCommitBoundary,
+    ctx: RequestContext,
+    dataset: DatasetRow,
+    stream: StreamArchiveConfig,
+    events: Sequence[StreamEvent],
+    sync_name: str | None,
+    committed_transaction: DatasetTransactionRow | None,
+) -> CommitResult:
+    with service.engine.begin() as conn:
+        plan = service._start_connector_sync_run(
+            conn,
+            ctx,
+            dataset,
+            "stream",
+            stream.stream_name,
+            sync_name or f"stream:{stream.stream_name}:{stream.consumer_group}",
+            tx_type="APPEND",
+            source_type=f"stream.{stream.stream_name}",
+        )
+    staged = service.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
+    return write_stream_archive_batch(service, ctx, dataset, stream, plan, staged, events, committed_transaction)
+
+
+def write_stream_archive_batch(
+    service: StreamArchiveCommitBoundary,
+    ctx: RequestContext,
+    dataset: DatasetRow,
+    stream: StreamArchiveConfig,
+    plan: UploadSyncPlan,
+    staged: Path,
+    events: Sequence[StreamEvent],
+    committed_transaction: DatasetTransactionRow | None,
+) -> CommitResult:
+    try:
+        committed_metadata = committed_transaction["metadata"] if committed_transaction is not None else {}
+        batch = prepare_stream_archive_batch(events, stream, committed_metadata, expected_tenant_id=ctx.tenant_id)
+        try:
+            ensure_stream_archive_batch_writable(batch, stream, len(events))
+        except ValidationFailed:
+            persist_stream_dead_letters(service, ctx, dataset, stream, plan, batch.dead_letters)
+            raise
+        service._rows_to_parquet(batch.rows, staged, stream_archive_fields(stream))
+        metadata = stream_commit_metadata(dataset, stream, events, committed_transaction, batch.rows)
+        return finalize_stream_archive_commit(
+            engine=service.engine,
+            repository=service.dataset_transaction_repository,
+            transaction_service=service.dataset_transaction_service,
+            insert_dead_letters=stream_dead_letter_inserter(service),
+            ctx=ctx,
+            dataset=dataset,
+            stream=stream,
+            plan=plan,
+            staged=staged,
+            dead_letters=batch.dead_letters,
+            metadata=metadata,
+            events=events,
+            committed_transaction=committed_transaction,
+        )
+    except Exception as exc:
+        service._abort_stream_after_error(ctx, plan.transaction_id, plan.run_id, exc)
+        raise
+
+
+def stream_dead_letter_inserter(service: StreamArchiveCommitBoundary) -> InsertStreamDeadLetters:
+    def insert(
+        conn: TransactionContext,
+        insert_ctx: RequestContext,
+        insert_dataset: DatasetRow,
+        insert_stream: StreamArchiveConfig,
+        insert_plan: UploadSyncPlan,
+        dead_letters: Sequence[StreamArchiveDeadLetter],
+    ) -> None:
+        insert_stream_dead_letters(service, conn, insert_ctx, insert_dataset, insert_stream, insert_plan, dead_letters)
+
+    return insert
+
+
+def persist_stream_dead_letters(
+    service: StreamArchiveCommitBoundary,
+    ctx: RequestContext,
+    dataset: DatasetRow,
+    stream: StreamArchiveConfig,
+    plan: UploadSyncPlan,
+    dead_letters: Sequence[StreamArchiveDeadLetter],
+) -> None:
+    with service.engine.begin() as conn:
+        insert_stream_dead_letters(service, conn, ctx, dataset, stream, plan, dead_letters)
+
+
+def insert_stream_dead_letters(
+    service: StreamArchiveCommitBoundary,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    dataset: DatasetRow,
+    stream: StreamArchiveConfig,
+    plan: UploadSyncPlan,
+    dead_letters: Sequence[StreamArchiveDeadLetter],
+) -> None:
+    failed_at = _now()
+    for dead_letter in dead_letters:
+        record = stream_dead_letter_record(ctx, dataset, stream, plan, dead_letter, failed_at)
+        inserted = service.dataset_transaction_repository.insert_dead_letter_record(transaction=conn, record=record)
+        if inserted:
+            audit_stream_dead_letter(service, conn, ctx, record)
+
+
+def audit_stream_dead_letter(
+    service: StreamArchiveCommitBoundary,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    record: DeadLetterRecord,
+) -> None:
+    service.runtime_service._audit(
+        conn,
+        ctx,
+        event_type="dead_letter_record.quarantined",
+        resource_type="dead_letter_record",
+        resource_id=record.dead_letter_record_id,
+        action="record_dlq_quarantine",
+        after_ref={
+            "source_event_id": record.source_event_id,
+            "source_run_id": record.source_run_id,
+            "status": record.status,
+        },
+        correlation_id=ctx.request_id,
+    )
 
 
 def _finalize_locked_stream_transaction(

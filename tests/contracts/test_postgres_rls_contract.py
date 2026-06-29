@@ -4,6 +4,8 @@ from uuid import uuid4
 
 import pytest
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
+from foundry_lite.security.tenant_context import tenant_context
 from sqlalchemy import create_engine, insert, select, text
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,6 +46,29 @@ def test_rls_tenant_context_reset_between_pooled_connections(postgres_fixture) -
             pooled_engine, role_name
         )
         other_pid, other_rows = _visible_dataset_ids_on_pooled_connection(pooled_engine, role_name, "tenant-other")
+    finally:
+        pooled_engine.dispose()
+
+    assert demo_pid == no_tenant_pid == other_pid
+    assert demo_rows == ["dataset-demo"]
+    assert no_tenant_rows == []
+    assert other_rows == ["dataset-other"]
+
+
+def test_installed_rls_hook_uses_current_request_tenant(postgres_fixture) -> None:
+    engine = postgres_fixture.engine
+    pooled_engine = create_engine(engine.url, future=True, pool_size=1, max_overflow=0)
+    install_postgres_rls_tenant_context(pooled_engine)
+    role_name = f"foundry_lite_rls_hook_test_{uuid4().hex}"
+    _grant_rls_role(engine, role_name)
+    _seed_cross_tenant_rows(engine)
+
+    try:
+        with tenant_context("tenant-demo"):
+            demo_pid, demo_rows = _visible_dataset_ids_with_role_only(pooled_engine, role_name)
+        no_tenant_pid, no_tenant_rows = _visible_dataset_ids_with_role_only(pooled_engine, role_name)
+        with tenant_context("tenant-other"):
+            other_pid, other_rows = _visible_dataset_ids_with_role_only(pooled_engine, role_name)
     finally:
         pooled_engine.dispose()
 
@@ -169,6 +194,12 @@ def _visible_dataset_ids_on_pooled_connection(engine: Engine, role_name: str, te
 
 
 def _visible_dataset_ids_without_tenant_on_pooled_connection(engine: Engine, role_name: str) -> tuple[int, list[str]]:
+    with engine.begin() as conn:
+        conn.execute(text(f"SET LOCAL ROLE {_role_identifier(conn, role_name)}"))
+        return _backend_pid(conn), _dataset_ids(conn)
+
+
+def _visible_dataset_ids_with_role_only(engine: Engine, role_name: str) -> tuple[int, list[str]]:
     with engine.begin() as conn:
         conn.execute(text(f"SET LOCAL ROLE {_role_identifier(conn, role_name)}"))
         return _backend_pid(conn), _dataset_ids(conn)

@@ -11,7 +11,9 @@ from foundry_lite.application.ports import (
     BackupRestoreIndexPointer,
     BackupRestoreManifestIssue,
     BackupRestoreModeReport,
+    BackupRestorePostRestoreValidationReport,
     BackupRestorePreflightReport,
+    BackupRestoreRecoveryOverview,
     DatasetManifest,
     DatasetManifestFile,
     DatasetRow,
@@ -23,22 +25,25 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.backup_restore_mode import (
+    active_restore_mode_report,
     inactive_restore_mode_report,
     latest_restore_mode_report,
 )
+from foundry_lite.application.services.backup_restore_overview import recovery_overview_from_audit
 from foundry_lite.application.services.backup_restore_validation import (
+    BackupRestoreValidationMixin,
     post_restore_validation_findings,
-    restore_mode_event_type,
+    post_restore_validation_report,
     restore_mode_report,
     resume_approved_report,
 )
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound
+from foundry_lite.domain.errors import ConflictDetected
 
 
-class BackupRestoreService(CoreService):
+class BackupRestoreService(BackupRestoreValidationMixin, CoreService):
     """Build backup/restore commit-point reports and restore-mode gates."""
 
     required_dependencies = (
@@ -117,6 +122,7 @@ class BackupRestoreService(CoreService):
         current = self._approval_candidate(ctx, restore_id)
         if current["status"] == "resume_approved":
             return current
+        validation = self._required_passed_post_restore_validation(ctx, restore_id, validation_id)
         preflight = self.restore_preflight_report(ctx=ctx, backup_id=current["backupId"] or restore_id)
         findings = post_restore_validation_findings(preflight)
         if findings:
@@ -124,21 +130,42 @@ class BackupRestoreService(CoreService):
                 "post-restore validation must pass before publisher resume",
                 details={"restore_id": restore_id, "findings": findings},
             )
-        report = resume_approved_report(ctx, current, preflight, validation_id)
+        report = resume_approved_report(ctx, current, preflight, validation["validationId"])
         with self.engine.begin() as conn:
             self._audit_restore_mode(conn, ctx, report)
         return report
 
-    def _approval_candidate(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport:
-        current = self._existing_restore_mode_report(ctx, restore_id)
-        if current is None:
-            raise NotFound("restore mode not found", details={"restore_id": restore_id})
-        if current["status"] == "blocked":
-            raise ConflictDetected(
-                "blocked restore mode cannot approve publisher resume",
-                details={"restore_id": restore_id, "blockingIssueCount": current["blockingIssueCount"]},
-            )
-        return current
+    def run_post_restore_validation(
+        self,
+        restore_id: str,
+        *,
+        ctx: RequestContext | None = None,
+        validation_id: str | None = None,
+    ) -> BackupRestorePostRestoreValidationReport:
+        """Run and persist post-restore validation evidence before approval."""
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "operations:retry", "backup_restore", restore_id)
+        current = self._approval_candidate(ctx, restore_id)
+        preflight = self.restore_preflight_report(ctx=ctx, backup_id=current["backupId"] or restore_id)
+        report = post_restore_validation_report(ctx, current, preflight, validation_id)
+        with self.engine.begin() as conn:
+            self._audit_post_restore_validation(conn, ctx, report)
+        return report
+
+    def recovery_overview(self, *, ctx: RequestContext | None = None) -> BackupRestoreRecoveryOverview:
+        """Return the recovery console read model from durable evidence."""
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "operations:read:summary", "backup_restore", "recovery")
+        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        audit_events = snapshot["auditEvents"]
+        active_mode = active_restore_mode_report(audit_events)
+        latest_mode = latest_restore_mode_report(audit_events)
+        return recovery_overview_from_audit(
+            ctx,
+            active_mode=active_mode,
+            latest_mode=latest_mode,
+            audit_events=audit_events,
+        )
 
     def _dataset_version_inventory(self, ctx: RequestContext) -> list[BackupRestoreDatasetVersion]:
         entries: list[BackupRestoreDatasetVersion] = []
@@ -291,23 +318,6 @@ class BackupRestoreService(CoreService):
     def _existing_restore_mode_report(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport | None:
         snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
         return latest_restore_mode_report(snapshot["auditEvents"], restore_id=restore_id)
-
-    def _audit_restore_mode(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        report: BackupRestoreModeReport,
-    ) -> None:
-        self.runtime_service._audit(
-            conn,
-            ctx,
-            event_type=restore_mode_event_type(report),
-            resource_type="backup_restore",
-            resource_id=report["restoreId"],
-            action="operations:retry",
-            after_ref=report,
-            correlation_id=ctx.request_id,
-        )
 
 
 def _version_payload(

@@ -13,6 +13,7 @@ from foundry_lite.application.ports.media_storage import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected, NotFound
 
 
 @dataclass(frozen=True)
@@ -66,10 +67,27 @@ class MediaUploadService(CoreService):
     def complete(
         self, ctx: RequestContext, *, inputs: MediaUploadInput, upload: UploadSession, source: BinaryIO
     ) -> StagedUpload:
-        self.media_storage.write_staged(upload.staged_object_key, source)
-        staged = self.media_storage.complete_staged_upload(
-            CompleteMediaUpload(upload_id=upload.upload_id, staged_object_key=upload.staged_object_key)
-        )
+        self._require_open_transaction(ctx, inputs)
+        did_write = False
+        try:
+            self.media_storage.write_staged(upload.staged_object_key, source)
+            did_write = True
+            staged = self.media_storage.complete_staged_upload(
+                CompleteMediaUpload(upload_id=upload.upload_id, staged_object_key=upload.staged_object_key)
+            )
+            return self._persist_staged_version(ctx, inputs, upload, staged)
+        except Exception:
+            if did_write:
+                self.media_storage.delete_uncommitted(upload.staged_object_key)
+            raise
+
+    def _persist_staged_version(
+        self,
+        ctx: RequestContext,
+        inputs: MediaUploadInput,
+        upload: UploadSession,
+        staged: StagedMediaObject,
+    ) -> StagedUpload:
         now = _now()
         with self.engine.begin() as conn:
             item = self.media_repository.upsert_media_item(
@@ -88,7 +106,36 @@ class MediaUploadService(CoreService):
                 created_at=now,
             )
             existing = self.media_repository.insert_version(transaction=conn, record=record)
+        if existing is not None and existing.blob_key != upload.staged_object_key:
+            self.media_storage.delete_uncommitted(upload.staged_object_key)
         return _staged_upload(item.media_item_id, record, existing)
+
+    def _require_open_transaction(self, ctx: RequestContext, inputs: MediaUploadInput) -> None:
+        with self.engine.begin() as conn:
+            transaction = self.media_repository.transaction_by_id(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                media_transaction_id=inputs.media_transaction_id,
+            )
+        if transaction is None:
+            raise NotFound(
+                "media transaction not found",
+                details={"media_transaction_id": inputs.media_transaction_id},
+            )
+        if transaction.status != "OPEN":
+            raise ConflictDetected(
+                "media upload transaction is not open",
+                details={"media_transaction_id": inputs.media_transaction_id, "status": transaction.status},
+            )
+        if transaction.media_set_id != inputs.media_set_id:
+            raise ConflictDetected(
+                "media upload transaction belongs to a different media set",
+                details={
+                    "media_transaction_id": inputs.media_transaction_id,
+                    "transaction_media_set_id": transaction.media_set_id,
+                    "media_set_id": inputs.media_set_id,
+                },
+            )
 
 
 def _item_record(ctx: RequestContext, media_set_id: str, logical_path: str, now: str) -> MediaItemRecord:

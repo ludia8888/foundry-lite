@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypedDict
 
+from foundry_lite.application.dataset_webhook_events import WebhookEventKeyRecord
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 DatasetRunKind = Literal["sync", "transform", "materialization"]
@@ -286,6 +287,10 @@ class DatasetTransactionRepository(Protocol):
         """Persist a dataset file row inside the caller transaction."""
         ...
 
+    def insert_webhook_event_key(self, *, transaction: TransactionContext, record: WebhookEventKeyRecord) -> None:
+        """Persist a durable webhook event key for replay-safe append ingest."""
+        ...
+
     def commit_transaction(
         self,
         *,
@@ -359,6 +364,16 @@ class DatasetTransactionRepository(Protocol):
         sync_run_id: str,
     ) -> SyncRunRow | None:
         """Return one tenant-scoped sync run for replay/idempotency recovery."""
+        ...
+
+    def sync_run_by_transaction_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        transaction_id: str,
+    ) -> SyncRunRow | None:
+        """Return the sync run that produced one dataset transaction."""
         ...
 
     def insert_dead_letter_record(self, *, transaction: TransactionContext, record: DeadLetterRecord) -> bool:

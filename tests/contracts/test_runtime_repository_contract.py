@@ -10,6 +10,7 @@ from typing import Any, Protocol, cast
 import pytest
 from foundry_lite.application.ports import (
     AuditEventRecord,
+    DeadLetterEventRecord,
     LineageEdgeRecord,
     LineageEdgeRow,
     OutboxEventRecord,
@@ -27,6 +28,9 @@ from foundry_lite.application.ports import (
     WorkflowRunRow,
 )
 from foundry_lite.application.ports.transaction_context import (
+    OUTBOX_PUBLISH_FAILED,
+    OUTBOX_PUBLISHED,
+    OUTBOX_PUBLISHING,
     OUTBOX_RETRY_PENDING,
     WORKFLOW_RUN_FAILED,
     WORKFLOW_RUN_STARTING,
@@ -139,6 +143,14 @@ class FakeRuntimeRepository:
         del transaction
         return [cast(RuntimeRow, dict(row)) for row in self.tables[table] if row["tenant_id"] == tenant_id]
 
+    def pending_outbox_events(self, *, transaction: Any, tenant_id: str, limit: int) -> list[RuntimeRow]:
+        del transaction
+        pending = [
+            row for row in self.tables["outbox_events"] if row["tenant_id"] == tenant_id and row["status"] == "pending"
+        ]
+        pending.sort(key=lambda row: (str(row["created_at"]), str(row["id"])))
+        return [cast(RuntimeRow, dict(row)) for row in pending[:limit]]
+
     def runs_for_source_chain(
         self,
         *,
@@ -217,6 +229,42 @@ class FakeRuntimeRepository:
         for row in self.tables["outbox_events"]:
             if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
                 row.update(status=transition.to_status, attempts=0, published_at=None)
+                return cast(RuntimeRow, dict(row))
+        return None
+
+    def mark_outbox_event_publishing(
+        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition
+    ) -> RuntimeRow | None:
+        del transaction
+        for row in self.tables["outbox_events"]:
+            if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
+                row.update(status=transition.to_status, attempts=int(row["attempts"]) + 1)
+                return cast(RuntimeRow, dict(row))
+        return None
+
+    def mark_outbox_event_published(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        event_id: str,
+        transition: StatusTransition,
+        published_at: str,
+    ) -> RuntimeRow | None:
+        del transaction
+        for row in self.tables["outbox_events"]:
+            if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
+                row.update(status=transition.to_status, published_at=published_at)
+                return cast(RuntimeRow, dict(row))
+        return None
+
+    def mark_outbox_event_failed(
+        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition
+    ) -> RuntimeRow | None:
+        del transaction
+        for row in self.tables["outbox_events"]:
+            if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
+                row.update(status=transition.to_status, published_at=None)
                 return cast(RuntimeRow, dict(row))
         return None
 
@@ -340,6 +388,10 @@ class FakeRuntimeRepository:
             return False
         self.tables["outbox_events"].append(_outbox_row(record))
         return True
+
+    def insert_dead_letter_event(self, *, transaction: Any, record: DeadLetterEventRecord) -> None:
+        del transaction
+        self.tables["dead_letter_events"].append(_dead_letter_record_row(record))
 
     def insert_lineage_edge(self, *, transaction: Any, record: LineageEdgeRecord) -> None:
         del transaction
@@ -520,6 +572,7 @@ def _outbox_record(
     attempts: int = 0,
     published_at: str | None = None,
     idempotency_key: str = "dsv_1",
+    created_at: str = "2026-06-10T00:00:00Z",
 ) -> OutboxEventRecord:
     return OutboxEventRecord(
         event_id=event_id,
@@ -532,7 +585,7 @@ def _outbox_record(
         attempts=attempts,
         idempotency_key=idempotency_key,
         correlation_id="run_1",
-        created_at="2026-06-10T00:00:00Z",
+        created_at=created_at,
         published_at=published_at,
     )
 
@@ -759,6 +812,19 @@ def _dead_letter_row(*, event_id: str, tenant_id: str) -> dict[str, Any]:
         "error": {"message": "publisher failed"},
         "failed_at": "2026-06-10T00:00:02Z",
         "retry_after": None,
+    }
+
+
+def _dead_letter_record_row(record: DeadLetterEventRecord) -> dict[str, Any]:
+    return {
+        "id": record.event_id,
+        "tenant_id": record.tenant_id,
+        "source_event_id": record.source_event_id,
+        "event_type": record.event_type,
+        "payload": dict(record.payload),
+        "error": dict(record.error),
+        "failed_at": record.failed_at,
+        "retry_after": record.retry_after,
     }
 
 
@@ -1223,6 +1289,101 @@ def test_runtime_repository_contract_requeues_dead_letter_event(
     assert outbox["published_at"] is None
     assert deleted is True
     assert runs["deadLetterEvents"] == []
+
+
+def test_runtime_repository_contract_claims_and_publishes_outbox_event(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_outbox_event(
+            transaction=transaction,
+            record=_outbox_record(event_id="outbox_1", created_at="2026-06-10T00:00:01Z"),
+        )
+        harness.repository.insert_outbox_event(
+            transaction=transaction,
+            record=_outbox_record(
+                event_id="outbox_2",
+                created_at="2026-06-10T00:00:00Z",
+                idempotency_key="dsv_2",
+            ),
+        )
+        pending = harness.repository.pending_outbox_events(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            limit=1,
+        )
+        claimed = harness.repository.mark_outbox_event_publishing(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id=str(pending[0]["id"]),
+            transition=OUTBOX_PUBLISHING,
+        )
+        stale_claim = harness.repository.mark_outbox_event_publishing(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id=str(pending[0]["id"]),
+            transition=OUTBOX_PUBLISHING,
+        )
+        published = harness.repository.mark_outbox_event_published(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id=str(pending[0]["id"]),
+            transition=OUTBOX_PUBLISHED,
+            published_at="2026-06-10T00:00:03Z",
+        )
+
+    assert [row["id"] for row in pending] == ["outbox_2"]
+    assert claimed is not None
+    assert claimed["status"] == "publishing"
+    assert claimed["attempts"] == 1
+    assert stale_claim is None
+    assert published is not None
+    assert published["status"] == "published"
+    assert published["published_at"] == "2026-06-10T00:00:03Z"
+
+
+def test_runtime_repository_contract_fails_and_dead_letters_outbox_event(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_outbox_event(
+            transaction=transaction,
+            record=_outbox_record(event_id="outbox_1"),
+        )
+        claimed = harness.repository.mark_outbox_event_publishing(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id="outbox_1",
+            transition=OUTBOX_PUBLISHING,
+        )
+        failed = harness.repository.mark_outbox_event_failed(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id="outbox_1",
+            transition=OUTBOX_PUBLISH_FAILED,
+        )
+        harness.repository.insert_dead_letter_event(
+            transaction=transaction,
+            record=DeadLetterEventRecord(
+                event_id="dlq_1",
+                tenant_id="tenant-demo",
+                source_event_id="outbox_1",
+                event_type="dataset.version.committed",
+                payload={"versionId": "dsv_1"},
+                error={"kind": "UNAVAILABLE", "message": "stream down"},
+                failed_at="2026-06-10T00:00:03Z",
+                retry_after=None,
+            ),
+        )
+
+    runs = harness.repository.list_runs(tenant_id="tenant-demo")
+
+    assert claimed is not None
+    assert failed is not None
+    assert failed["status"] == "failed"
+    assert failed["published_at"] is None
+    assert [row["id"] for row in runs["deadLetterEvents"]] == ["dlq_1"]
+    assert runs["deadLetterEvents"][0]["error"] == {"kind": "UNAVAILABLE", "message": "stream down"}
 
 
 def test_runtime_repository_contract_tombstones_object_record_idempotently(

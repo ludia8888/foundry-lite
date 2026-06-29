@@ -49,6 +49,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
     _ffmpeg_scene_frame_paths,
 )
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 
 _VISION_SPEC = ProcessorSpec(
@@ -113,12 +114,13 @@ def env(tmp_path: Path) -> _Env:
     processing.bind_collaborators({"runtime_service": runtime})
     visual_search = MediaVisualSearchService(
         engine=engine,
+        policy=PolicyService(allow_unwired_classification_provider=True),
         media_derivative_repository=deriv,
         content_index_adapter=index,
         vision_embedding_model_adapter=vision,
     )
     visual_search.bind_collaborators({"runtime_service": runtime})
-    ctx = RequestContext()
+    ctx = RequestContext(roles=("ops_manager",))
     media_set = catalog.create_media_set(
         ctx,
         MediaSetSpec(

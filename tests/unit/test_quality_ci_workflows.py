@@ -233,11 +233,13 @@ def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
-    for lane in ("static", "coverage", "flaky", "runtime", "e2e", "release"):
+    for lane in ("local", "all", "static", "coverage", "flaky", "runtime", "e2e", "release"):
         assert f'"ci:gate:{lane}": "bash scripts/ci_gate.sh {lane}"' in package_json
         assert f"{lane})" in script
 
-    assert "Usage: bash scripts/ci_gate.sh [all|static|coverage|flaky|runtime|e2e|release]" in script
+    assert "Usage: bash scripts/ci_gate.sh [local|all|static|coverage|flaky|runtime|e2e|release]" in script
+    assert '"ci:gate": "bash scripts/ci_gate.sh local"' in package_json
+    assert "run_local_gate()" in script
     assert "run_all_gate()" in script
     assert "run_static_gate" in script
     assert "run_coverage_gate" in script
@@ -409,6 +411,7 @@ def test_external_writeback_ratchet_is_runtime_gate_step() -> None:
     assert '"quality:external-writeback"' in package_json
     assert "test_external_success_response_lost_becomes_outcome_unknown" in package_json
     assert "test_outcome_unknown_is_not_blindly_retried" in package_json
+    assert "test_protected_runtime_blocks_action_failure_injection_before_run_insert" in package_json
     assert "pnpm --silent quality:external-writeback" in script
     assert script.index("pnpm --silent quality:temporal-engine-integration") < script.index(
         "pnpm --silent quality:external-writeback"
@@ -429,6 +432,9 @@ def test_saga_reconciliation_ratchet_is_runtime_gate_step() -> None:
     assert "test_concurrent_reconciliation_has_one_winner" in package_json
     assert "test_sensitive_writeback_payload_is_masked_in_audit" in package_json
     assert "test_api_operations_reconciliation_resolves_action_writeback" in package_json
+    assert "test_action_repository_contract_lists_unresolved_writebacks" in package_json
+    assert "test_api_operations_reconciliation_queue_lists_unresolved_writebacks" in package_json
+    assert "test_reconciliation_queue_item_masks_sensitive_payload" in package_json
     assert "pnpm --silent quality:saga-reconciliation" in script
     assert script.index("pnpm --silent quality:external-writeback") < script.index(
         "pnpm --silent quality:saga-reconciliation"
@@ -446,6 +452,9 @@ def test_data_contracts_ratchet_is_runtime_gate_step() -> None:
     assert "test_commit_dataset_version_aborts_when_primary_key_check_fails" in package_json
     assert "test_schema_validation_records_reference_version" in package_json
     assert "test_contract_version_is_pinned_to_run" in package_json
+    assert "test_quality_result_history_lists_dataset_commit_results" in package_json
+    assert "test_persisted_quality_contract_check_blocks_later_commit" in package_json
+    assert "test_updated_quality_contract_check_controls_later_commit" in package_json
     assert "test_operations_run_detail_exposes_candidate_quality_report" in package_json
     assert "test_operations_run_detail_includes_failed_row_sample_for_quarantine" in package_json
     assert "test_quality_check_pins_candidate_manifest_hash" in package_json
@@ -453,7 +462,12 @@ def test_data_contracts_ratchet_is_runtime_gate_step() -> None:
     assert "test_warn_does_not_block_commit_but_is_visible" in package_json
     assert "test_quarantine_routes_bad_records_to_record_dlq" in package_json
     assert "test_insert_check_result_persists" in package_json
+    assert "test_checks_for_dataset_are_tenant_scoped_and_ordered" in package_json
+    assert "test_update_check_is_tenant_scoped_and_rewrites_definition" in package_json
     assert "test_check_results_for_transaction_is_tenant_scoped" in package_json
+    assert "test_check_results_for_dataset_are_tenant_dataset_scoped_and_limited" in package_json
+    assert "test_check_result_summary_counts_are_tenant_dataset_scoped" in package_json
+    assert "test_api_dataset_object_action_and_metrics_smoke" in package_json
     assert "pnpm --silent quality:data-contracts" in script
     assert script.index("pnpm --silent quality:saga-reconciliation") < script.index(
         "pnpm --silent quality:data-contracts"
@@ -793,6 +807,8 @@ def test_frontend_backend_surface_gate_runs_after_sdk_generation() -> None:
     assert "pnpm quality:frontend-backend-surface" in package_json
     assert '"quality:sdk-request-contract"' in package_json
     assert "pnpm --silent quality:sdk-request-contract" in package_json
+    assert '"quality:sdk-typecheck"' in package_json
+    assert "pnpm --silent quality:sdk-typecheck" in package_json
     assert '"quality:frontend-foundation"' in package_json
     assert "tests/unit/test_quality_frontend_backend_surface.py" in package_json
     assert "tests/unit/test_sdk_ts_generation.py" in package_json
@@ -826,12 +842,16 @@ def test_schema_migration_singleton_runner_is_release_gate_step() -> None:
 
     safety_step = "scripts/quality/check_schema_migrations.py"
     runner_step = "tests/unit/test_migration_runner.py"
+    live_runner_step = "pnpm --silent quality:schema-migration-runner-live"
     assert runner_step in script
     assert script.index(safety_step) < script.index(runner_step)
     assert '"db:migrate"' in package_json
     assert "scripts/operations/run_migrations.py" in package_json
     assert '"quality:schema-migration-runner"' in package_json
+    assert '"quality:schema-migration-runner-live"' in package_json
+    assert "tests/contracts/test_migration_runner_postgres_contract.py" in package_json
     assert "pnpm quality:schema-migration-runner" in package_json
+    assert live_runner_step in script
 
 
 def test_schema_evolution_gate_runs_after_data_contracts() -> None:
@@ -890,6 +910,8 @@ def test_backup_restore_preflight_gate_runs_after_slo_contracts() -> None:
     assert "tests/unit/test_backup_restore_preflight.py" in package_json
     assert "tests/smoke/test_interfaces.py" in package_json
     assert "tests/unit/test_sdk_ts_generation.py" in package_json
+    assert "post_restore_closed_loop" in package_json
+    assert "restore_resume_requires_closed_loop_validation" in package_json
 
 
 def test_auth_secret_gate_follows_restore_gate() -> None:
@@ -1054,6 +1076,8 @@ def test_ai_operations_gate_runs_after_approval_execution_gate() -> None:
     assert "tests/smoke/test_interfaces.py" in package_json
     assert "test_ai_operations_run_list_and_detail_expose_safe_ledger_trace" in package_json
     assert "api_ai_operations" in package_json
+    assert "runtime_run_cursor_is_signed_scoped_expiring_and_key_rotatable" in package_json
+    assert "protected_runtime_profile_requires_operations_cursor_secret" in package_json
 
 
 def test_logic_runtime_gate_runs_after_ai_operations_before_ai_evidence() -> None:
@@ -1261,6 +1285,21 @@ def test_agent_source_preview_gate_runs_after_agent_citation_ui_before_ai_eviden
     assert "operations_ui_record_dlq_retry_shows_result" in package_json
 
 
+def test_agent_inline_citation_gate_runs_after_source_preview_before_ai_evidence() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    agent_source_preview_step = "pnpm --silent quality:agent-source-previews"
+    agent_inline_citation_step = "pnpm --silent quality:agent-inline-citations"
+    ai_evidence_step = "pnpm --silent quality:ai-evidence"
+    assert agent_inline_citation_step in script
+    assert script.index(agent_source_preview_step) < script.index(agent_inline_citation_step)
+    assert script.index(agent_inline_citation_step) < script.index(ai_evidence_step)
+    assert '"quality:agent-inline-citations"' in package_json
+    assert "citationAnchorButton" in (ROOT / "apps" / "web" / "index.html").read_text(encoding="utf-8")
+    assert "agent_inline_citation_gate" in package_json
+
+
 def test_retrieval_orchestrator_gate_runs_after_context_compiler_before_agent_runtime() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
@@ -1297,14 +1336,39 @@ def test_insight_review_gate_runs_after_ai_evidence_gate() -> None:
 
     ai_evidence_step = "pnpm --silent quality:ai-evidence"
     insight_review_step = "pnpm --silent quality:insight-review"
+    operations_recovery_step = "pnpm --silent quality:operations-recovery"
     elasticsearch_step = "pnpm --silent quality:elasticsearch"
     assert insight_review_step in script
-    assert script.index(ai_evidence_step) < script.index(insight_review_step) < script.index(elasticsearch_step)
+    assert operations_recovery_step in script
+    assert (
+        script.index(ai_evidence_step)
+        < script.index(insight_review_step)
+        < script.index(operations_recovery_step)
+        < script.index(elasticsearch_step)
+    )
     assert '"quality:insight-review"' in package_json
     assert "tests/contracts/test_insight_review_repository_contract.py" in package_json
     assert "test_insight_review_create_is_idempotent_by_tenant_and_key" in package_json
     assert "test_insight_review_decision_has_one_terminal_winner" in package_json
     assert "test_api_insight_reviews_create_assign_and_decide_with_audit_evidence" in package_json
+
+
+def test_operations_recovery_gate_runs_after_insight_review_gate() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    insight_review_step = "pnpm --silent quality:insight-review"
+    operations_recovery_step = "pnpm --silent quality:operations-recovery"
+    elasticsearch_step = "pnpm --silent quality:elasticsearch"
+    assert operations_recovery_step in script
+    assert script.index(insight_review_step) < script.index(operations_recovery_step) < script.index(elasticsearch_step)
+    assert '"quality:operations-recovery"' in package_json
+    assert "test_backup_restore_recovery_overview_summarizes_active_restore_and_preflight" in package_json
+    assert "test_restore_resume_requires_closed_loop_validation" in package_json
+    assert "test_post_restore_closed_loop_smoke" in package_json
+    assert "test_api_backup_restore_mode_start_and_status_return_pause_gate" in package_json
+    assert "tests/sdk/request_contract.mjs" in package_json
+    assert "operations_recovery_gate" in package_json
 
 
 def test_distributed_control_plane_gate_runs_after_infra_composition() -> None:
@@ -1337,6 +1401,20 @@ def test_tier_coverage_gate_includes_app_layers() -> None:
     assert "--cov=apps/api --cov=apps/cli --cov=apps/worker" in package_json
 
 
+def test_default_ci_gate_is_fast_local_feedback_not_full_serial_release() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"ci:gate": "bash scripts/ci_gate.sh local"' in package_json
+    assert '"ci:gate:local": "bash scripts/ci_gate.sh local"' in package_json
+    assert '"ci:gate:all": "bash scripts/ci_gate.sh all"' in package_json
+    assert 'local lane="${1:-local}"' in script
+    assert "run_local_gate()" in script
+    assert "uv run pytest tests --tach --no-header -q" in script
+    assert "run_static_gate\n  run_impact_gate" in script
+    assert "run_coverage_gate\n  run_flaky_gate\n  run_runtime_gate\n  run_e2e_gate" in script
+
+
 def test_github_ci_installs_gitleaks_before_release_gate() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
@@ -1359,7 +1437,7 @@ def test_ast_grep_and_tach_are_release_gate_steps() -> None:
     tach_config = (ROOT / "tach.toml").read_text(encoding="utf-8")
 
     assert "uv run tach check --dependencies" in script
-    assert "pnpm exec sg scan -c sgconfig.yml" in script
+    assert "node scripts/quality/run_ast_grep.cjs scan -c sgconfig.yml" in script
     assert '"quality:ast-grep"' in package_json
     assert "pnpm quality:architecture" in package_json
     assert "forbid_circular_dependencies = true" in tach_config
@@ -1384,7 +1462,8 @@ def test_ast_grep_facade_magic_rule_has_a_failing_fixture(tmp_path: Path) -> Non
 
     result = subprocess.run(
         [
-            str(ROOT / "node_modules" / ".bin" / "sg"),
+            "node",
+            str(ROOT / "scripts" / "quality" / "run_ast_grep.cjs"),
             "scan",
             "--rule",
             str(ROOT / "scripts" / "quality" / "ast-grep-rules" / "no-facade-magic-dispatch.yml"),

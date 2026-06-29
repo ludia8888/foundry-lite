@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
@@ -170,6 +170,17 @@ class ActionRepository(Protocol):
         writeback_id: str,
     ) -> ActionWritebackRecord | None:
         """Return one action writeback row for tenant-scoped Operations actions."""
+        ...
+
+    def list_action_writebacks(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        statuses: Sequence[str],
+        limit: int,
+    ) -> list[ActionWritebackRecord]:
+        """Return tenant-scoped writebacks for Operations reconciliation queue views."""
         ...
 
     def reconcile_action_writeback(

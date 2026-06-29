@@ -32,8 +32,8 @@ def test_data_platform_sprint_status_rejects_label_drift(tmp_path: Path) -> None
     breakdown = tmp_path / "foundry_lite_sprint_breakdown_ko.md"
     breakdown.write_text(
         breakdown.read_text(encoding="utf-8").replace(
-            "| S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [ ] Proposed |",
-            "| S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [ ] Partial |",
+            "| S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [~] Partial |",
+            "| S64 | Product | Operations/Recovery Console | S47, S51, S52, S56, S57 | [~] Proposed |",
         ),
         encoding="utf-8",
     )
@@ -49,7 +49,7 @@ def test_data_platform_sprint_status_rejects_missing_boundary_phrase(tmp_path: P
     readme = tmp_path / "README.md"
     readme.write_text(
         readme.read_text(encoding="utf-8").replace(
-            "S46-S63 데이터 플랫폼 확장 로드맵은 현재 브랜치에서 부분 구현 중입니다.",
+            "S46-S64 데이터 플랫폼 확장 로드맵은 현재 브랜치에서 부분 구현 중입니다.",
             "S46-S64 데이터 플랫폼 확장 로드맵은 완료되었습니다.",
         ),
         encoding="utf-8",
@@ -58,7 +58,7 @@ def test_data_platform_sprint_status_rejects_missing_boundary_phrase(tmp_path: P
     findings = gate.collect_findings(tmp_path)
 
     assert any(finding.code == "missing_status_boundary_phrase" for finding in findings)
-    assert any("S46-S63" in finding.reference for finding in findings)
+    assert any("S46-S64" in finding.reference for finding in findings)
 
 
 def test_data_platform_sprint_status_writes_json_report(tmp_path: Path) -> None:
@@ -78,7 +78,7 @@ def _write_status_docs(root: Path) -> None:
     _write_sprint_plan(root / "docs" / "data-platform-expansion-sprint-plan-ko.md")
     _write_sprint_breakdown(root / "foundry_lite_sprint_breakdown_ko.md")
     (root / "README.md").write_text(
-        "S46-S63 데이터 플랫폼 확장 로드맵은 현재 브랜치에서 부분 구현 중입니다.\n"
+        "S46-S64 데이터 플랫폼 확장 로드맵은 현재 브랜치에서 부분 구현 중입니다.\n"
         "S62 visual dataset browser/preview grid/version pin/lineage graph UX remains future.\n"
         "S63 evidence panel UI, S63 action execution orchestration remain future.\n",
         encoding="utf-8",
@@ -87,6 +87,8 @@ def _write_status_docs(root: Path) -> None:
         "S61 Frontend Foundation + Generated SDK is partial.\n"
         "S62 Dataset Explorer is partial.\n"
         "S63 Insight/Action Workspace now has a partial backend/API/SDK slice.\n"
+        "S64 Operations/Recovery Console now has a partial backend/API/SDK recovery overview "
+        "and post-restore validation slice.\n"
         "full catalog-driven S62-S64 workspace UX remains future.\n",
         encoding="utf-8",
     )
@@ -95,7 +97,7 @@ def _write_status_docs(root: Path) -> None:
 def _write_sprint_plan(path: Path) -> None:
     rows = _status_rows(include_labels=False)
     path.write_text(
-        "**문서 상태:** Repo-integrated 확장 계획 / S46 완료, S47-S63 부분 구현\n"
+        "**문서 상태:** Repo-integrated 확장 계획 / S46 완료, S47-S64 부분 구현\n"
         "현재 구현 완료 여부의 source of truth는 [Implementation Status](./implementation-status.md)다.\n"
         "| Sprint | 우선순위 | 핵심 결과 | 주요 의존성 | 상태 |\n"
         "|---|---:|---|---|---|\n"

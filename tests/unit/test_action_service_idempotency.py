@@ -3,10 +3,12 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any
 
+import pytest
 from foundry_lite.application.ports.action_repository import ActionRunRecord, ActionRunRow
 from foundry_lite.application.services.action_helpers import action_request_fingerprint
 from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import PermissionDenied
 
 
 class _FakeEngine:
@@ -60,6 +62,9 @@ class _UnexpectedMutation:
 class _WriteOpenRuntime:
     """Runtime stub for a tenant that is not in restore mode (write traffic open)."""
 
+    def __init__(self) -> None:
+        self.audits: list[dict[str, object]] = []
+
     def _require_write_traffic_open(
         self,
         _ctx: RequestContext,
@@ -70,6 +75,31 @@ class _WriteOpenRuntime:
     ) -> None:
         del operation, resource_type, resource_id
         return None
+
+    def _audit(
+        self,
+        _conn: object,
+        _ctx: RequestContext,
+        *,
+        event_type: str,
+        resource_type: str,
+        resource_id: str,
+        action: str,
+        decision: str = "allow",
+        after_ref: dict[str, object] | None = None,
+        correlation_id: str | None = None,
+    ) -> None:
+        self.audits.append(
+            {
+                "event_type": event_type,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "action": action,
+                "decision": decision,
+                "after_ref": after_ref or {},
+                "correlation_id": correlation_id,
+            }
+        )
 
 
 def test_action_service_replays_when_insert_loses_idempotency_race() -> None:
@@ -94,13 +124,62 @@ def test_action_service_replays_when_insert_loses_idempotency_race() -> None:
         ctx=RequestContext(roles=("admin",)),
     )
 
-    assert response["idempotentReplay"] is True
+    assert response.get("idempotentReplay") is True
     assert response["actionRunId"] == "action_run_winner"
-    assert response["objectEditId"] == "edit_winner"
-    assert response["newObjectVersion"] == 2
+    assert response.get("objectEditId") == "edit_winner"
+    assert response.get("newObjectVersion") == 2
     assert response["target"] == {"objectType": "Order", "objectId": "O-1001"}
     assert repository.lookup_count == 1
     assert repository.insert_or_get_count == 1
+
+
+def test_protected_runtime_blocks_action_failure_injection_before_run_insert(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
+    repository = _RaceActionRepository()
+    runtime = _WriteOpenRuntime()
+    service = ActionService(engine=_FakeEngine(), policy=_AllowPolicy(), action_repository=repository)
+    service.bind_collaborators(
+        {
+            "object_indexing_service": _UnexpectedMutation(),
+            "object_records_service": _UnexpectedMutation(),
+            "ontology_service": _Ontology(),
+            "runtime_service": runtime,
+        }
+    )
+
+    with pytest.raises(PermissionDenied, match="failure injection is disabled"):
+        service.apply_action(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=1,
+            params={"reason": "Inventory confirmed"},
+            idempotency_key="same-key",
+            simulate_writeback_outcome_unknown=True,
+            ctx=RequestContext(roles=("admin",)),
+        )
+
+    assert repository.lookup_count == 0
+    assert repository.insert_or_get_count == 0
+    assert runtime.audits == [
+        {
+            "event_type": "action.failure_injection.denied",
+            "resource_type": "action_type",
+            "resource_id": "ApproveOrder",
+            "action": "apply",
+            "decision": "deny",
+            "after_ref": {
+                "runtime_profile": "production",
+                "action_api_name": "ApproveOrder",
+                "failure_injection": {
+                    "simulate_writeback_failure": False,
+                    "simulate_writeback_outcome_unknown": True,
+                    "simulate_writeback_compensation_required": False,
+                },
+            },
+            "correlation_id": None,
+        }
+    ]
 
 
 def test_action_request_fingerprint_includes_writeback_simulation_flags() -> None:

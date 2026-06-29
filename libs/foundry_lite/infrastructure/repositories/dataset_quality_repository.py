@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, func, insert, select
+from sqlalchemy import and_, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckRecord,
+    DatasetCheckResultHistoryRow,
     DatasetCheckResultRecord,
     DatasetCheckResultRow,
+    DatasetCheckResultStatusCountRow,
+    DatasetCheckResultTypeStatusCountRow,
     DatasetCheckRow,
     DatasetSchemaRecord,
     DatasetSchemaRow,
@@ -89,6 +92,66 @@ class SqlAlchemyDatasetQualityRepository:
     def insert_check(self, *, transaction: Any, record: DatasetCheckRecord) -> None:
         transaction.execute(_dataset_check_insert_or_ignore(transaction, record))
 
+    def update_check(self, *, transaction: Any, record: DatasetCheckRecord) -> bool:
+        result = transaction.execute(
+            update(db.dataset_checks)
+            .where(
+                and_(
+                    db.dataset_checks.c.tenant_id == record.tenant_id,
+                    db.dataset_checks.c.dataset_id == record.dataset_id,
+                    db.dataset_checks.c.id == record.check_id,
+                )
+            )
+            .values(**_dataset_check_values(record))
+        )
+        return bool(result.rowcount)
+
+    def check_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        check_id: str,
+    ) -> DatasetCheckRow | None:
+        row = (
+            transaction.execute(
+                select(db.dataset_checks).where(
+                    and_(
+                        db.dataset_checks.c.tenant_id == tenant_id,
+                        db.dataset_checks.c.dataset_id == dataset_id,
+                        db.dataset_checks.c.id == check_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(DatasetCheckRow, dict(row)) if row else None
+
+    def checks_for_dataset(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> list[DatasetCheckRow]:
+        rows = (
+            transaction.execute(
+                select(db.dataset_checks)
+                .where(
+                    and_(
+                        db.dataset_checks.c.tenant_id == tenant_id,
+                        db.dataset_checks.c.dataset_id == dataset_id,
+                    )
+                )
+                .order_by(db.dataset_checks.c.name, db.dataset_checks.c.id)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(DatasetCheckRow, dict(row)) for row in rows]
+
     def insert_check_result(self, *, transaction: Any, record: DatasetCheckResultRecord) -> None:
         transaction.execute(
             insert(db.dataset_check_results).values(
@@ -128,6 +191,94 @@ class SqlAlchemyDatasetQualityRepository:
             .all()
         )
         return [cast(DatasetCheckResultRow, dict(row)) for row in rows]
+
+    def check_results_for_dataset(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        limit: int,
+    ) -> list[DatasetCheckResultHistoryRow]:
+        rows = (
+            transaction.execute(
+                select(
+                    db.dataset_check_results,
+                    db.dataset_checks.c.dataset_id.label("dataset_id"),
+                    db.dataset_checks.c.name.label("check_name"),
+                    db.dataset_checks.c.check_type.label("check_type"),
+                    db.dataset_checks.c.severity.label("severity"),
+                )
+                .join(db.dataset_checks, db.dataset_check_results.c.check_id == db.dataset_checks.c.id)
+                .where(
+                    and_(
+                        db.dataset_check_results.c.tenant_id == tenant_id,
+                        db.dataset_checks.c.tenant_id == tenant_id,
+                        db.dataset_checks.c.dataset_id == dataset_id,
+                    )
+                )
+                .order_by(db.dataset_check_results.c.created_at.desc(), db.dataset_check_results.c.id.desc())
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(DatasetCheckResultHistoryRow, dict(row)) for row in rows]
+
+    def check_result_status_counts_for_dataset(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> list[DatasetCheckResultStatusCountRow]:
+        rows = (
+            transaction.execute(
+                select(
+                    db.dataset_check_results.c.status.label("status"),
+                    func.count().label("count"),
+                )
+                .join(db.dataset_checks, db.dataset_check_results.c.check_id == db.dataset_checks.c.id)
+                .where(_dataset_result_scope(tenant_id, dataset_id))
+                .group_by(db.dataset_check_results.c.status)
+                .order_by(db.dataset_check_results.c.status)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(DatasetCheckResultStatusCountRow, dict(row)) for row in rows]
+
+    def check_result_type_status_counts_for_dataset(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> list[DatasetCheckResultTypeStatusCountRow]:
+        rows = (
+            transaction.execute(
+                select(
+                    db.dataset_checks.c.check_type.label("check_type"),
+                    db.dataset_check_results.c.status.label("status"),
+                    func.count().label("count"),
+                )
+                .join(db.dataset_checks, db.dataset_check_results.c.check_id == db.dataset_checks.c.id)
+                .where(_dataset_result_scope(tenant_id, dataset_id))
+                .group_by(db.dataset_checks.c.check_type, db.dataset_check_results.c.status)
+                .order_by(db.dataset_checks.c.check_type, db.dataset_check_results.c.status)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(DatasetCheckResultTypeStatusCountRow, dict(row)) for row in rows]
+
+
+def _dataset_result_scope(tenant_id: str, dataset_id: str) -> Any:
+    return and_(
+        db.dataset_check_results.c.tenant_id == tenant_id,
+        db.dataset_checks.c.tenant_id == tenant_id,
+        db.dataset_checks.c.dataset_id == dataset_id,
+    )
 
 
 def _dataset_check_insert_or_ignore(transaction: Any, record: DatasetCheckRecord) -> Any:

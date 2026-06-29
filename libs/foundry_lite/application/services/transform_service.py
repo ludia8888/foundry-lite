@@ -1,18 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from foundry_lite.application.ports import TransactionContext
-from foundry_lite.application.ports.compute_adapter import SqlTransformPlan
-from foundry_lite.application.ports.transform_repository import (
+from foundry_lite.application.ports import (
+    SqlTransformPlan,
+    TransactionContext,
     TransformCheck,
-    TransformRecord,
     TransformRetryResult,
     TransformRow,
 )
-from foundry_lite.application.primitives import CommitResult, _new_id
+from foundry_lite.application.primitives import CommitResult
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.transform_definition_registration import TransformDefinitionRegistrationMixin
 from foundry_lite.application.services.transform_protocols import (
     TransformDatasetRegistry,
     TransformDatasetTransactions,
@@ -40,8 +41,8 @@ from foundry_lite.domain.errors import (
 )
 
 
-class TransformService(CoreService):
-    required_dependencies = ("engine", "compute_adapter", "transform_repository")
+class TransformService(TransformDefinitionRegistrationMixin, CoreService):
+    required_dependencies = ("root", "engine", "compute_adapter", "transform_repository")
     required_collaborators = (
         "dataset_registry_service",
         "dataset_transaction_service",
@@ -78,6 +79,41 @@ class TransformService(CoreService):
             mode=mode,
             language=language,
         )
+
+    def register_sql_transform(
+        self,
+        api_name: str,
+        *,
+        sql: str,
+        inputs: Mapping[str, str],
+        output_dataset_ref: str,
+        checks: Sequence[TransformCheck] | None = None,
+        ctx: RequestContext | None = None,
+        mode: str = "snapshot",
+    ) -> TransformRow:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
+        require_write_open(self.runtime_service, ctx, "register_sql_transform", "transform", api_name)
+        entrypoint = self._write_registered_sql(ctx, api_name, sql)
+        return self._register_transform_definition(
+            ctx,
+            api_name,
+            entrypoint=entrypoint,
+            inputs=inputs,
+            output_dataset_ref=output_dataset_ref,
+            checks=checks,
+            mode=mode,
+            language="sql",
+        )
+
+    def _write_registered_sql(self, ctx: RequestContext, api_name: str, sql: str) -> Path:
+        if not sql.strip():
+            raise ValidationFailed("SQL transform body is required", details={"api_name": api_name})
+        validate_sql_transform_uses_declared_inputs(sql)
+        entrypoint = _registered_sql_entrypoint(self.root, ctx.tenant_id, api_name)
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text(sql, encoding="utf-8")
+        return entrypoint
 
     def _register_transform_definition(
         self,
@@ -267,154 +303,6 @@ class TransformService(CoreService):
             adapter="compute_adapter.execute_transform",
         )
 
-    def _create_transform_definition(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        api_name: str,
-        *,
-        entrypoint: str | Path,
-        inputs: Mapping[str, str],
-        output_dataset_ref: str,
-        checks: list[dict[str, object]],
-        mode: str,
-        language: str,
-    ) -> TransformRow:
-        """Insert a new transform definition and emit its audit record."""
-        transform_id = _new_id("tf")
-        self._insert_transform_definition(
-            conn,
-            ctx,
-            transform_id,
-            api_name,
-            entrypoint=entrypoint,
-            inputs=inputs,
-            output_dataset_ref=output_dataset_ref,
-            checks=checks,
-            mode=mode,
-            language=language,
-        )
-        self._audit_transform_definition_created(conn, ctx, transform_id, api_name, output_dataset_ref)
-        row = self.transform_repository.transform_by_id(transaction=conn, transform_id=transform_id)
-        if row is None:
-            raise InvariantViolation("transform row missing after insert", details={"transform_id": transform_id})
-        return row
-
-    def _insert_transform_definition(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        transform_id: str,
-        api_name: str,
-        *,
-        entrypoint: str | Path,
-        inputs: Mapping[str, str],
-        output_dataset_ref: str,
-        checks: list[dict[str, object]],
-        mode: str,
-        language: str,
-    ) -> None:
-        self.transform_repository.insert_transform(
-            transaction=conn,
-            record=TransformRecord(
-                transform_id=transform_id,
-                tenant_id=ctx.tenant_id,
-                api_name=api_name,
-                language=language,
-                entrypoint=str(entrypoint),
-                mode=mode,
-                inputs=dict(inputs),
-                output_dataset_ref=output_dataset_ref,
-                checks=checks,
-            ),
-        )
-
-    def _audit_transform_definition_created(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        transform_id: str,
-        api_name: str,
-        output_dataset_ref: str,
-    ) -> None:
-        self.runtime_service._audit(
-            conn,
-            ctx,
-            event_type="transform.definition.created",
-            resource_type="transform",
-            resource_id=transform_id,
-            action="register",
-            after_ref={"api_name": api_name, "output_dataset_ref": output_dataset_ref},
-        )
-
-    def _update_transform_definition(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        existing: TransformRow,
-        *,
-        language: str,
-        entrypoint: str | Path,
-        mode: str,
-        inputs: Mapping[str, str],
-        output_dataset_ref: str,
-        checks: Sequence[TransformCheck],
-    ) -> None:
-        """Persist a replacement transform definition under the tenant boundary."""
-        self.transform_repository.update_transform_definition(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            transform_id=existing["id"],
-            language=language,
-            entrypoint=str(entrypoint),
-            mode=mode,
-            inputs=dict(inputs),
-            output_dataset_ref=output_dataset_ref,
-            checks=checks,
-        )
-
-    def _replace_transform_definition(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        existing: TransformRow,
-        api_name: str,
-        entrypoint: str | Path,
-        inputs: Mapping[str, str],
-        output_dataset_ref: str,
-        checks: Sequence[TransformCheck],
-        mode: str,
-        language: str,
-    ) -> TransformRow:
-        """Update an existing transform definition and emit its audit record."""
-        self._update_transform_definition(
-            conn,
-            ctx,
-            existing,
-            language=language,
-            entrypoint=entrypoint,
-            mode=mode,
-            inputs=inputs,
-            output_dataset_ref=output_dataset_ref,
-            checks=checks,
-        )
-        self.runtime_service._audit(
-            conn,
-            ctx,
-            event_type="transform.definition.updated",
-            resource_type="transform",
-            resource_id=existing["id"],
-            action="register",
-            after_ref={"api_name": api_name, "output_dataset_ref": output_dataset_ref},
-        )
-        row = self.transform_repository.transform_by_id(transaction=conn, transform_id=existing["id"])
-        if row is None:
-            raise InvariantViolation("transform row missing after update", details={"transform_id": existing["id"]})
-        return row
-
-    def _normalized_checks(self, checks: Sequence[TransformCheck] | None) -> list[dict[str, object]]:
-        return [dict(check) for check in checks or ()]
-
     def _audit_transform_retry(
         self,
         conn: TransactionContext,
@@ -493,3 +381,17 @@ def _supported_transform_language(language: str) -> str:
         "unsupported transform language",
         details={"language": language, "supported_languages": ["sql"]},
     )
+
+
+def _registered_sql_entrypoint(root: Path, tenant_id: str, api_name: str) -> Path:
+    tenant_slug = _safe_transform_path_token(tenant_id, "tenant_id")
+    slug = _safe_transform_path_token(api_name, "api_name")
+    digest = hashlib.sha256(f"{tenant_id}:{api_name}".encode()).hexdigest()[:12]
+    return root / "registered-transforms" / tenant_slug / f"{slug}-{digest}.sql"
+
+
+def _safe_transform_path_token(value: str, field_name: str) -> str:
+    token = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value).strip("._-")
+    if not token:
+        raise ValidationFailed(f"transform {field_name} must contain at least one safe character")
+    return token

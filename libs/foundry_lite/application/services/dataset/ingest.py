@@ -8,12 +8,10 @@ from foundry_lite.application.ports import (
     ConnectorAdapter,
     DatasetRow,
     DatasetTransactionRow,
-    DeadLetterRecord,
     DeadLetterRecordRow,
     RestSourceConfig,
     StreamAdapter,
     StreamArchiveConfig,
-    StreamEvent,
     SyncRunRecord,
     TransactionContext,
 )
@@ -30,16 +28,10 @@ from foundry_lite.application.services.dataset.protocols import (
     require_dataset_write_open,
 )
 from foundry_lite.application.services.dataset.stream_archive_commit import (
-    StreamArchiveDeadLetter,
-    ensure_stream_archive_batch_writable,
-    finalize_stream_archive_commit,
-    prepare_stream_archive_batch,
+    commit_stream_archive,
     read_stream_archive_events,
     record_stream_read_failure,
-    stream_archive_fields,
-    stream_commit_metadata,
     stream_cursor_offset,
-    stream_dead_letter_record,
 )
 from foundry_lite.application.upload_limits import require_csv_size_limit
 from foundry_lite.domain.context import RequestContext
@@ -133,6 +125,37 @@ class DatasetIngestService(CoreService):
             raise blocked
         raise InvariantViolation("dataset upload finalization did not return a commit result")
 
+    def _finalize_rows_batch(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        plan: UploadSyncPlan,
+        staged: Path,
+        transaction_metadata: Mapping[str, object],
+    ) -> CommitResult:
+        blocked: DatasetCommitBlocked | None = None
+        with self.engine.begin() as conn:
+            try:
+                return self.dataset_transaction_service._finalize_open_transaction(
+                    conn,
+                    ctx,
+                    dataset=dataset,
+                    transaction_id=plan.transaction_id,
+                    staged_parquet=staged,
+                    run_id=plan.run_id,
+                    audit_action="source_rows_batch_commit",
+                    outbox_event_type="dataset.version.committed",
+                    transaction_metadata=transaction_metadata,
+                    after_persist=lambda commit_conn, result: mark_sync_run_committed(
+                        self.dataset_transaction_repository, commit_conn, ctx, plan.run_id, result
+                    ),
+                )
+            except DatasetCommitBlocked as exc:
+                blocked = exc
+        if blocked is not None:
+            raise blocked
+        raise InvariantViolation("source rows batch finalization did not return a commit result")
+
     def sync_connector_snapshot(
         self,
         dataset_ref: str,
@@ -143,6 +166,7 @@ class DatasetIngestService(CoreService):
         sync_name: str | None = None,
         cursor: Mapping[str, object] | None = None,
         rest: RestSourceConfig | None = None,
+        tx_type: str = "SNAPSHOT",
     ) -> CommitResult:
         return connector_snapshot_ingest.sync_connector_snapshot(
             self,
@@ -154,7 +178,44 @@ class DatasetIngestService(CoreService):
             sync_name=sync_name,
             cursor=cursor,
             rest=rest,
+            tx_type=tx_type,
         )
+
+    def sync_rows_batch(
+        self,
+        dataset_ref: str,
+        rows: Sequence[Mapping[str, object]],
+        *,
+        fieldnames: Sequence[str],
+        ctx: RequestContext | None = None,
+        sync_name: str | None = None,
+        tx_type: str = "APPEND",
+        source_type: str = "source.batch",
+        transaction_metadata: Mapping[str, object] | None = None,
+    ) -> CommitResult | None:
+        ctx = ctx or RequestContext()
+        if not rows:
+            return None
+        self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+        require_dataset_write_open(self.runtime_service, ctx, "sync_rows_batch", "dataset", dataset_ref)
+        dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
+        with self.engine.begin() as conn:
+            plan = self._start_connector_sync_run(
+                conn,
+                ctx,
+                dataset,
+                "source",
+                sync_name or dataset_ref,
+                sync_name,
+                tx_type=tx_type,
+                source_type=source_type,
+            )
+        staged = self.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
+        try:
+            self._rows_to_parquet(rows, staged, [str(field) for field in fieldnames])
+            return self._finalize_rows_batch(ctx, dataset, plan, staged, transaction_metadata or {})
+        except Exception as exc:
+            self._abort_upload_after_error(ctx, plan.transaction_id, plan.run_id, exc, "source.sync_rows_batch")
 
     def ingest_webhook_event(
         self,
@@ -168,8 +229,10 @@ class DatasetIngestService(CoreService):
         signature_timestamp: str,
         secret: str,
         event_id: str | None = None,
+        require_service_principal_signature: bool = False,
         ctx: RequestContext | None = None,
     ) -> CommitResult:
+        ctx = ctx or RequestContext()
         return webhook_ingest.ingest_webhook_event(
             self,
             dataset_ref,
@@ -182,6 +245,13 @@ class DatasetIngestService(CoreService):
             signature_timestamp=signature_timestamp,
             secret=secret,
             event_id=event_id,
+            signature_context=_webhook_signature_context(
+                ctx,
+                dataset_ref=dataset_ref,
+                connector_name=connector_name,
+                resource_name=resource_name,
+                require_service_principal_signature=require_service_principal_signature,
+            ),
             ctx=ctx,
         )
 
@@ -213,7 +283,7 @@ class DatasetIngestService(CoreService):
             raise ValidationFailed("stream archive read failed", details={"error": str(exc)}) from exc
         if not events:
             return None
-        return self._commit_stream_archive(ctx, dataset, stream, events, sync_name, committed_transaction)
+        return commit_stream_archive(self, ctx, dataset, stream, events, sync_name, committed_transaction)
 
     def replay_dead_letter_record(
         self,
@@ -351,115 +421,6 @@ class DatasetIngestService(CoreService):
             raise exc
         raise ValidationFailed("stream archive failed", details={"error": str(exc)}) from exc
 
-    def _commit_stream_archive(
-        self,
-        ctx: RequestContext,
-        dataset: DatasetRow,
-        stream: StreamArchiveConfig,
-        events: Sequence[StreamEvent],
-        sync_name: str | None,
-        committed_transaction: DatasetTransactionRow | None,
-    ) -> CommitResult:
-        with self.engine.begin() as conn:
-            plan = self._start_connector_sync_run(
-                conn,
-                ctx,
-                dataset,
-                "stream",
-                stream.stream_name,
-                sync_name or f"stream:{stream.stream_name}:{stream.consumer_group}",
-                tx_type="APPEND",
-                source_type=f"stream.{stream.stream_name}",
-            )
-        staged = self.dataset_transaction_service._staging_file(dataset, plan.transaction_id, "part-00000.parquet")
-        return self._write_stream_archive_batch(ctx, dataset, stream, plan, staged, events, committed_transaction)
-
-    def _write_stream_archive_batch(
-        self,
-        ctx: RequestContext,
-        dataset: DatasetRow,
-        stream: StreamArchiveConfig,
-        plan: UploadSyncPlan,
-        staged: Path,
-        events: Sequence[StreamEvent],
-        committed_transaction: DatasetTransactionRow | None,
-    ) -> CommitResult:
-        try:
-            committed_metadata = committed_transaction["metadata"] if committed_transaction is not None else {}
-            batch = prepare_stream_archive_batch(events, stream, committed_metadata, expected_tenant_id=ctx.tenant_id)
-            try:
-                ensure_stream_archive_batch_writable(batch, stream, len(events))
-            except ValidationFailed:
-                self._persist_stream_dead_letters(ctx, dataset, stream, plan, batch.dead_letters)
-                raise
-            self._rows_to_parquet(batch.rows, staged, stream_archive_fields(stream))
-            metadata = stream_commit_metadata(dataset, stream, events, committed_transaction, batch.rows)
-            return finalize_stream_archive_commit(
-                engine=self.engine,
-                repository=self.dataset_transaction_repository,
-                transaction_service=self.dataset_transaction_service,
-                insert_dead_letters=self._insert_stream_dead_letters,
-                ctx=ctx,
-                dataset=dataset,
-                stream=stream,
-                plan=plan,
-                staged=staged,
-                dead_letters=batch.dead_letters,
-                metadata=metadata,
-                events=events,
-                committed_transaction=committed_transaction,
-            )
-        except Exception as exc:
-            self._abort_stream_after_error(ctx, plan.transaction_id, plan.run_id, exc)
-
-    def _persist_stream_dead_letters(
-        self,
-        ctx: RequestContext,
-        dataset: DatasetRow,
-        stream: StreamArchiveConfig,
-        plan: UploadSyncPlan,
-        dead_letters: Sequence[StreamArchiveDeadLetter],
-    ) -> None:
-        with self.engine.begin() as conn:
-            self._insert_stream_dead_letters(conn, ctx, dataset, stream, plan, dead_letters)
-
-    def _insert_stream_dead_letters(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        dataset: DatasetRow,
-        stream: StreamArchiveConfig,
-        plan: UploadSyncPlan,
-        dead_letters: Sequence[StreamArchiveDeadLetter],
-    ) -> None:
-        failed_at = _now()
-        for dead_letter in dead_letters:
-            record = stream_dead_letter_record(ctx, dataset, stream, plan, dead_letter, failed_at)
-            inserted = self.dataset_transaction_repository.insert_dead_letter_record(transaction=conn, record=record)
-            if inserted:
-                self._audit_stream_dead_letter(conn, ctx, record)
-
-    def _audit_stream_dead_letter(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        record: DeadLetterRecord,
-    ) -> None:
-        self.runtime_service._audit(
-            conn,
-            ctx,
-            event_type="dead_letter_record.quarantined",
-            resource_type="dead_letter_record",
-            resource_id=record.dead_letter_record_id,
-            action="record_dlq_quarantine",
-            after_ref={
-                "source_event_id": record.source_event_id,
-                "source_run_id": record.source_run_id,
-                "status": record.status,
-            },
-            correlation_id=ctx.request_id,
-        )
-
     def _mark_sync_run_committed(
         self,
         conn: TransactionContext,
@@ -471,3 +432,22 @@ class DatasetIngestService(CoreService):
 
     def _rows_to_parquet(self, rows: Sequence[Mapping[str, object]], target_path: Path, fieldnames: list[str]) -> None:
         self.compute_adapter.rows_to_parquet(rows, target_path, fieldnames)
+
+
+def _webhook_signature_context(
+    ctx: RequestContext,
+    *,
+    dataset_ref: str,
+    connector_name: str,
+    resource_name: str,
+    require_service_principal_signature: bool,
+) -> webhook_ingest.WebhookSignatureContext | None:
+    if not require_service_principal_signature:
+        return None
+    return webhook_ingest.WebhookSignatureContext(
+        tenant_id=ctx.tenant_id,
+        actor_user_id=ctx.actor_user_id,
+        dataset_ref=dataset_ref,
+        connector_name=connector_name,
+        resource_name=resource_name,
+    )

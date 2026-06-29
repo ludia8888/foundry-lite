@@ -14,15 +14,12 @@ from typing import Protocol, cast
 from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.insight_review_repository import InsightReviewRow
 from foundry_lite.application.primitives import _now
-from foundry_lite.application.services.aip.approval_execution_contracts import (
-    ApprovalExecutionError,
-    ApprovalExecutionRequest,
-    ApprovalExecutionResult,
-    JsonObject,
-    PreparedExecution,
-    approved_pending_proposal,
+from foundry_lite.application.services.aip.approval_execution_payloads import (
+    approved_executable_proposal,
     evidence_refs,
+    execution_request_fingerprint,
     prepared_execution,
+    require_matching_execution_claim,
     require_matching_fingerprint,
     require_not_expired,
     require_originating_tool_call,
@@ -32,13 +29,18 @@ from foundry_lite.application.services.aip.approval_execution_contracts import (
     tool_call_rows,
     validate_request,
 )
+from foundry_lite.application.services.aip.approval_execution_types import (
+    ApprovalExecutionError,
+    ApprovalExecutionRequest,
+    ApprovalExecutionResult,
+    JsonObject,
+    PreparedExecution,
+)
 from foundry_lite.application.services.aip.source_permissions import source_permission_for_type
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.insight_review_payloads import review_payload
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
-
-_PreparedExecution = PreparedExecution
 
 
 class _ActionRunner(Protocol):
@@ -137,6 +139,7 @@ class ApprovalExecutionService(CoreService):
     def execute(self, ctx: RequestContext, request: ApprovalExecutionRequest) -> ApprovalExecutionResult:
         validate_request(request)
         self._require_reviewer(ctx, request.review_id)
+        self._require_execution_key_available(ctx, request)
         existing = self._existing_executed_result(ctx, request)
         if existing is not None:
             return existing
@@ -164,6 +167,7 @@ class ApprovalExecutionService(CoreService):
             if row["execution_status"] != "executed":
                 return None
             require_matching_fingerprint(row, request.expected_proposal_fingerprint)
+            require_matching_execution_claim(row, request)
             action_run_id = required_row_text(row, "approved_action_run_id")
         return ApprovalExecutionResult(
             review_id=row["id"],
@@ -173,22 +177,31 @@ class ApprovalExecutionService(CoreService):
             review_payload=review_payload(row),
         )
 
-    def _prepare_execution(self, ctx: RequestContext, request: ApprovalExecutionRequest) -> _PreparedExecution:
+    def _prepare_execution(self, ctx: RequestContext, request: ApprovalExecutionRequest) -> PreparedExecution:
         with self.engine.begin() as transaction:
             row = self._review_row(transaction, ctx, request.review_id)
-            proposal = approved_pending_proposal(row)
+            proposal = approved_executable_proposal(row, request)
             require_matching_fingerprint(row, request.expected_proposal_fingerprint)
             prepared = prepared_execution(row, proposal)
-            self._recheck_proposal(transaction, ctx, prepared, proposal)
-            self._claim_execution(transaction, ctx, prepared.review_id)
+            self._recheck_proposal(
+                transaction,
+                ctx,
+                prepared,
+                proposal,
+                skip_target_record=row["execution_status"] == "executing",
+            )
+            if row["execution_status"] != "executing":
+                self._claim_execution(transaction, ctx, request, prepared)
         return prepared
 
     def _recheck_proposal(
         self,
         transaction: TransactionContext,
         ctx: RequestContext,
-        prepared: _PreparedExecution,
+        prepared: PreparedExecution,
         proposal: Mapping[str, object],
+        *,
+        skip_target_record: bool,
     ) -> None:
         self._require_action_permission(ctx, prepared.action_type)
         self._require_write_open(ctx, prepared.review_id)
@@ -196,14 +209,15 @@ class ApprovalExecutionService(CoreService):
         ledger = self._ledger(transaction, ctx, prepared.originating_ai_run_id)
         require_originating_tool_call(prepared, tool_call_rows(ledger))
         action = self._action_type(transaction, ctx, prepared)
-        self._target_record(transaction, ctx, action, prepared)
+        if not skip_target_record:
+            self._target_record(transaction, ctx, action, prepared)
         require_not_expired(proposal)
         require_recomputed_fingerprint(prepared, evidence_refs(proposal), cast(JsonObject, ledger["run"]))
 
     def _finish_execution(
         self,
         ctx: RequestContext,
-        prepared: _PreparedExecution,
+        prepared: PreparedExecution,
         response: Mapping[str, object],
     ) -> ApprovalExecutionResult:
         action_run_id = required_text(response, "actionRunId")
@@ -237,15 +251,37 @@ class ApprovalExecutionService(CoreService):
             raise NotFound("insight review not found", details={"review_id": review_id})
         return row
 
-    def _claim_execution(self, transaction: TransactionContext, ctx: RequestContext, review_id: str) -> None:
+    def _claim_execution(
+        self,
+        transaction: TransactionContext,
+        ctx: RequestContext,
+        request: ApprovalExecutionRequest,
+        prepared: PreparedExecution,
+    ) -> None:
         row = self.insight_review_repository.mark_execution_started(
             transaction=transaction,
             tenant_id=ctx.tenant_id,
-            review_id=review_id,
+            review_id=prepared.review_id,
+            execution_idempotency_key=request.idempotency_key,
+            execution_request_fingerprint=execution_request_fingerprint(request),
+            proposal_fingerprint=prepared.proposal_fingerprint,
             updated_at=_now(),
         )
         if row is None:
-            raise ConflictDetected("approval execution was already claimed", details={"review_id": review_id})
+            raise ConflictDetected(
+                "approval execution was already claimed",
+                details={"review_id": prepared.review_id},
+            )
+
+    def _require_execution_key_available(self, ctx: RequestContext, request: ApprovalExecutionRequest) -> None:
+        with self.engine.begin() as transaction:
+            row = self.insight_review_repository.review_by_execution_idempotency_key(
+                transaction=transaction,
+                tenant_id=ctx.tenant_id,
+                idempotency_key=request.idempotency_key,
+            )
+        if row is not None:
+            require_matching_execution_claim(row, request)
 
     def _ledger(self, transaction: TransactionContext, ctx: RequestContext, ai_run_id: str) -> Mapping[str, object]:
         ledger = self.ai_run_repository.ledger_for_run(
@@ -258,7 +294,7 @@ class ApprovalExecutionService(CoreService):
         return ledger
 
     def _action_type(
-        self, transaction: TransactionContext, ctx: RequestContext, prepared: _PreparedExecution
+        self, transaction: TransactionContext, ctx: RequestContext, prepared: PreparedExecution
     ) -> Mapping[str, object]:
         try:
             action = self.ontology_service._active_action_type(transaction, ctx, prepared.action_type)
@@ -273,7 +309,7 @@ class ApprovalExecutionService(CoreService):
         transaction: TransactionContext,
         ctx: RequestContext,
         action: Mapping[str, object],
-        prepared: _PreparedExecution,
+        prepared: PreparedExecution,
     ) -> Mapping[str, object]:
         record = self.object_records_service._object_record(
             transaction,
@@ -324,7 +360,7 @@ class ApprovalExecutionService(CoreService):
         self,
         transaction: TransactionContext,
         ctx: RequestContext,
-        prepared: _PreparedExecution,
+        prepared: PreparedExecution,
         action_run_id: str,
         response: Mapping[str, object],
     ) -> None:
@@ -355,7 +391,7 @@ class ApprovalExecutionService(CoreService):
         self,
         transaction: TransactionContext,
         ctx: RequestContext,
-        prepared: _PreparedExecution,
+        prepared: PreparedExecution,
         action_run_id: str,
     ) -> None:
         if prepared.originating_tool_call_id is None:

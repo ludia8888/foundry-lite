@@ -6,6 +6,7 @@ from typing import cast
 from foundry_lite.application.ports import (
     RuntimeRepository,
     RuntimeRow,
+    RuntimeRunPageCursor,
     RuntimeRunQueryResult,
     RuntimeRunType,
 )
@@ -23,6 +24,7 @@ OPERATIONS_RUN_MAX_LIMIT = 500
 def query_runtime_run_page(
     runtime_repository: RuntimeRepository,
     *,
+    actor_user_id: str,
     tenant_id: str,
     run_type: RuntimeRunType | None,
     status: str | None,
@@ -33,14 +35,25 @@ def query_runtime_run_page(
 ) -> RuntimeRunQueryResult:
     query_limit = _operations_run_limit(limit)
     if run_type is not None:
-        return _query_run_type(runtime_repository, tenant_id, run_type, status, since, until, query_limit, cursor)
+        return _query_run_type(
+            runtime_repository,
+            actor_user_id,
+            tenant_id,
+            run_type,
+            status,
+            since,
+            until,
+            query_limit,
+            cursor,
+        )
     if cursor:
         raise ValidationFailed("operations cursor requires runType")
-    return _query_all_run_types(runtime_repository, tenant_id, status, since, until, query_limit)
+    return _query_all_run_types(runtime_repository, actor_user_id, tenant_id, status, since, until, query_limit)
 
 
 def _query_run_type(
     runtime_repository: RuntimeRepository,
+    actor_user_id: str,
     tenant_id: str,
     run_type: RuntimeRunType,
     status: str | None,
@@ -49,7 +62,7 @@ def _query_run_type(
     limit: int,
     cursor: str | None,
 ) -> RuntimeRunQueryResult:
-    cursor_state = decode_runtime_run_cursor(cursor, run_type=run_type, status=status, since=since, until=until)
+    cursor_state = _decode_run_cursor(cursor, actor_user_id, tenant_id, run_type, status, since, until)
     rows = runtime_repository.query_run_rows(
         tenant_id=tenant_id,
         run_type=run_type,
@@ -62,12 +75,42 @@ def _query_run_type(
     result = _empty_run_query_result()
     page = rows[:limit]
     _set_run_group(result, run_type, page)
-    result["nextCursor"] = _next_run_cursor(page, len(rows) > limit, run_type, status, since, until)
+    result["nextCursor"] = _next_run_cursor(
+        page,
+        len(rows) > limit,
+        actor_user_id,
+        tenant_id,
+        run_type,
+        status,
+        since,
+        until,
+    )
     return result
+
+
+def _decode_run_cursor(
+    cursor: str | None,
+    actor_user_id: str,
+    tenant_id: str,
+    run_type: RuntimeRunType,
+    status: str | None,
+    since: str | None,
+    until: str | None,
+) -> RuntimeRunPageCursor | None:
+    return decode_runtime_run_cursor(
+        cursor,
+        actor_user_id=actor_user_id,
+        run_type=run_type,
+        status=status,
+        since=since,
+        tenant_id=tenant_id,
+        until=until,
+    )
 
 
 def _query_all_run_types(
     runtime_repository: RuntimeRepository,
+    actor_user_id: str,
     tenant_id: str,
     status: str | None,
     since: str | None,
@@ -88,7 +131,16 @@ def _query_all_run_types(
         )
         page = rows[:limit]
         _set_run_group(result, current_type, page)
-        next_cursor = _next_run_cursor(page, len(rows) > limit, current_type, status, since, until)
+        next_cursor = _next_run_cursor(
+            page,
+            len(rows) > limit,
+            actor_user_id,
+            tenant_id,
+            current_type,
+            status,
+            since,
+            until,
+        )
         if next_cursor:
             next_cursors[current_type] = next_cursor
     if next_cursors:
@@ -131,6 +183,8 @@ def _set_run_group(result: RuntimeRunQueryResult, run_type: RuntimeRunType, rows
 def _next_run_cursor(
     page: Sequence[RuntimeRow],
     has_more: bool,
+    actor_user_id: str,
+    tenant_id: str,
     run_type: RuntimeRunType,
     status: str | None,
     since: str | None,
@@ -138,4 +192,12 @@ def _next_run_cursor(
 ) -> str | None:
     if not has_more or not page:
         return None
-    return encode_runtime_run_cursor(page[-1], run_type=run_type, status=status, since=since, until=until)
+    return encode_runtime_run_cursor(
+        page[-1],
+        actor_user_id=actor_user_id,
+        run_type=run_type,
+        status=status,
+        since=since,
+        tenant_id=tenant_id,
+        until=until,
+    )

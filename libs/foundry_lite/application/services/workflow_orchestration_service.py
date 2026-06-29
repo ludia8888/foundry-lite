@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from foundry_lite.application.ports import (
+    AdapterError,
     AuditEventRecord,
     ProductWorkflowRun,
     RuntimeJsonObject,
@@ -28,6 +29,7 @@ from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRegistryLookup
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping
 from foundry_lite.application.services.runtime_service import RuntimeService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
@@ -56,11 +58,22 @@ class WorkflowOrchestrationService(CoreService):
         idempotency_key: str,
         ctx: RequestContext | None = None,
         sync_name: str | None = None,
+        config_fingerprint: str | None = None,
+        transaction_type: str = "SNAPSHOT",
     ) -> ProductWorkflowRun:
         ctx = ctx or RequestContext()
         self._require_workflow_start(ctx, dataset_ref)
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
-        request = _connector_sync_request(ctx, dataset_ref, connector_name, resource_name, idempotency_key, sync_name)
+        request = _connector_sync_request(
+            ctx,
+            dataset_ref,
+            connector_name,
+            resource_name,
+            idempotency_key,
+            sync_name,
+            config_fingerprint,
+            transaction_type,
+        )
         row = self._ensure_workflow_intent(ctx, request, dataset_id=str(dataset["id"]))
         return self._start_or_replay(ctx, request, row)
 
@@ -136,10 +149,16 @@ class WorkflowOrchestrationService(CoreService):
         claimed = self._claim_start(ctx, row["id"])
         if claimed is None:
             return _product_workflow_run_from_row(self._workflow_row_by_id(ctx, row["id"]))
-        run = self.workflow_adapter.start_workflow(request)
+        run = self._start_workflow_with_evidence(request)
         updated = self._record_adapter_result(ctx, run)
         audited = self._audit_workflow_start(ctx, updated)
         return _product_workflow_run_from_row(audited)
+
+    def _start_workflow_with_evidence(self, request: WorkflowStartRequest) -> WorkflowRun:
+        try:
+            return self.workflow_adapter.start_workflow(request)
+        except Exception as exc:
+            return _workflow_run_from_start_exception(request, self.workflow_adapter.profile_name, exc)
 
     def _claim_start(self, ctx: RequestContext, workflow_run_id_value: str) -> WorkflowRunRow | None:
         now = _now()
@@ -228,13 +247,17 @@ def _connector_sync_request(
     resource_name: str,
     idempotency_key: str,
     sync_name: str | None,
+    config_fingerprint: str | None,
+    transaction_type: str,
 ) -> WorkflowStartRequest:
     return WorkflowStartRequest(
         workflow_name=CONNECTOR_SYNC_WORKFLOW_NAME,
         tenant_id=ctx.tenant_id,
         request_id=ctx.request_id,
         idempotency_key=idempotency_key,
-        input=_connector_sync_input(dataset_ref, connector_name, resource_name, sync_name),
+        input=_connector_sync_input(
+            dataset_ref, connector_name, resource_name, sync_name, config_fingerprint, transaction_type
+        ),
     )
 
 
@@ -243,14 +266,20 @@ def _connector_sync_input(
     connector_name: str,
     resource_name: str,
     sync_name: str | None,
+    config_fingerprint: str | None,
+    transaction_type: str,
 ) -> Mapping[str, object]:
-    return {
+    payload = {
         "workflowKind": "connector_sync",
         "datasetRef": dataset_ref,
         "connectorName": connector_name,
         "resourceName": resource_name,
         "syncName": sync_name,
+        "configFingerprint": config_fingerprint,
     }
+    if transaction_type != "SNAPSHOT":
+        payload["transactionType"] = transaction_type
+    return payload
 
 
 def _media_processing_request(
@@ -324,6 +353,33 @@ def _workflow_transition_for_run(run: WorkflowRun) -> StatusTransition:
     if _is_retryable_start_unknown(run.error):
         return WORKFLOW_RUN_START_UNKNOWN
     return WORKFLOW_RUN_FAILED
+
+
+def _workflow_run_from_start_exception(
+    request: WorkflowStartRequest,
+    adapter_profile: str,
+    exc: Exception,
+) -> WorkflowRun:
+    return WorkflowRun(
+        run_id=workflow_run_id(request),
+        workflow_name=request.workflow_name,
+        status="failed",
+        output={},
+        error=_workflow_start_error_payload(adapter_profile, exc),
+    )
+
+
+def _workflow_start_error_payload(adapter_profile: str, exc: Exception) -> Mapping[str, object]:
+    if isinstance(exc, AdapterError):
+        return scrub_error_mapping(exc.failure.to_payload())
+    return {
+        "adapterProfile": adapter_profile,
+        "operation": "start_workflow",
+        "kind": "unknown",
+        "retryable": False,
+        "operatorMessage": "workflow adapter start failed",
+        "details": {"errorType": exc.__class__.__name__},
+    }
 
 
 def _is_retryable_start_unknown(error: Mapping[str, object] | None) -> bool:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
+from typing import cast
 
 from foundry_lite.application.ports import (
     RuntimeJsonObject,
@@ -14,11 +16,37 @@ from foundry_lite.application.ports.adapter_failure import AdapterError, adapter
 from foundry_lite.application.services.backup_restore_mode import (
     active_restore_mode_report as active_restore_mode_report,
 )
+from foundry_lite.application.services.runtime_redaction import redact_sensitive as redact_sensitive
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, ValidationFailed
 
 AuditWriter = Callable[..., None]
 RunRelationWriter = Callable[..., bool]
+_SECRET_KEY_PARTS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "setcookie",
+        "token",
+        "accesstoken",
+        "refreshtoken",
+        "apikey",
+        "secret",
+        "password",
+        "plaintext",
+        "prompt",
+        "compiledprompt",
+        "providerrequest",
+        "providerresponse",
+    }
+)
+_AUTHORIZATION_PATTERN = re.compile(r"\bauthorization\s*:\s*bearer\s+\S+", re.IGNORECASE)
+_BEARER_PATTERN = re.compile(r"\bbearer\s+\S+", re.IGNORECASE)
+_ASSIGNMENT_PATTERN = re.compile(
+    r"\b(authorization|token|access[_-]?token|refresh[_-]?token|api[_-]?key|secret|password)"
+    r"\s*[:=]\s*\S+",
+    re.IGNORECASE,
+)
 
 
 def runtime_error_payload(
@@ -34,6 +62,14 @@ def runtime_error_payload(
     if trace:
         payload["trace"] = trace
     return payload
+
+
+def scrub_error_mapping(value: Mapping[str, object]) -> dict[str, object]:
+    return cast(dict[str, object], _scrub_error_payload(value))
+
+
+def scrub_error_text(value: str) -> str:
+    return _scrub_text(value)
 
 
 def audit_dlq_retry(
@@ -83,14 +119,51 @@ def link_dlq_retry(
 
 def _base_error_payload(exc: Exception) -> dict[str, object]:
     if isinstance(exc, AdapterError):
-        return adapter_failure_payload(exc)
+        return scrub_error_mapping(adapter_failure_payload(exc))
     if isinstance(exc, FoundryLiteError):
         return {
             "type": exc.code,
-            "message": str(exc),
-            "details": exc.details,
+            "message": scrub_error_text(str(exc)),
+            "details": scrub_error_mapping(exc.details),
         }
-    return {"type": exc.__class__.__name__, "message": str(exc), "details": {}}
+    return {"type": exc.__class__.__name__, "message": scrub_error_text(str(exc)), "details": {}}
+
+
+def _scrub_error_payload(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): "***MASKED***" if _is_secret_key(key) else _scrub_error_payload(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_scrub_error_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_error_payload(item) for item in value)
+    if isinstance(value, str):
+        return _scrub_text(value)
+    return value
+
+
+def _scrub_text(value: str) -> str:
+    if _contains_secret_term(value):
+        return "***MASKED***"
+    scrubbed = _AUTHORIZATION_PATTERN.sub("Authorization: Bearer ***MASKED***", value)
+    scrubbed = _BEARER_PATTERN.sub("Bearer ***MASKED***", scrubbed)
+    return _ASSIGNMENT_PATTERN.sub(lambda match: f"{match.group(1)}=***MASKED***", scrubbed)
+
+
+def _is_secret_key(key: object) -> bool:
+    normalized = _normalize_secret_text(str(key))
+    return any(term in normalized for term in _SECRET_KEY_PARTS)
+
+
+def _contains_secret_term(value: str) -> bool:
+    normalized = _normalize_secret_text(value)
+    return any(term in normalized for term in _SECRET_KEY_PARTS)
+
+
+def _normalize_secret_text(value: str) -> str:
+    return "".join(char for char in value.casefold() if char.isalnum())
 
 
 def _error_trace(

@@ -21,10 +21,26 @@ ALLOWED_PREFIXES = (
     "include_",
     "is_",
     "require_",
+    "requires_",
     "should_",
     "simulate_",
     "skip_",
     "use_",
+)
+ALLOWED_CAMEL_PREFIXES = (
+    "allow",
+    "can",
+    "confirm",
+    "enable",
+    "has",
+    "include",
+    "is",
+    "require",
+    "requires",
+    "should",
+    "simulate",
+    "skip",
+    "use",
 )
 ALLOWED_EXACT_NAMES = {
     "allowed",
@@ -114,7 +130,20 @@ def _is_boolean_annotation(node: ast.AST | None) -> bool:
 
 
 def _is_allowed_boolean_name(name: str) -> bool:
-    return name in ALLOWED_EXACT_NAMES or name.startswith(ALLOWED_PREFIXES) or name.endswith(ALLOWED_SUFFIXES)
+    return (
+        name in ALLOWED_EXACT_NAMES
+        or name.startswith(ALLOWED_PREFIXES)
+        or name.endswith(ALLOWED_SUFFIXES)
+        or _has_allowed_camel_prefix(name)
+    )
+
+
+def _has_allowed_camel_prefix(name: str) -> bool:
+    return any(_starts_with_camel_prefix(name, prefix) for prefix in ALLOWED_CAMEL_PREFIXES)
+
+
+def _starts_with_camel_prefix(name: str, prefix: str) -> bool:
+    return len(name) > len(prefix) and name.startswith(prefix) and name[len(prefix)].isupper()
 
 
 class _BooleanNamingVisitor(ast.NodeVisitor):

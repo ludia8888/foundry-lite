@@ -23,6 +23,10 @@ DEFAULT_MATRIX = ROOT / "docs" / "frontend-api-sdk-surface-matrix.json"
 DEFAULT_SDK = ROOT / "packages" / "sdk-ts" / "src" / "generated.ts"
 DEFAULT_WEB = ROOT / "apps" / "web" / "index.html"
 DEFAULT_TESTS = ROOT / "tests"
+DEFAULT_FRONTEND_CONTRACT = ROOT / "docs" / "frontend-backend-surface-contract.md"
+DEFAULT_FRONTEND_COOKBOOK = ROOT / "docs" / "sdk-frontend-cookbook.md"
+DEFAULT_SCREEN_RECIPES = ROOT / "packages" / "sdk-ts" / "src" / "screen-recipes.ts"
+DEFAULT_SDK_PACKAGE = ROOT / "packages" / "sdk-ts" / "package.json"
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "frontend_backend_surface.json"
 DEFAULT_SUMMARY = ROOT / "artifacts" / "quality" / "frontend_backend_surface.md"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
@@ -52,7 +56,7 @@ FRONTEND_PROOF_CLASSES = {"sdk-request-contract"}
 SDK_HELPER_PROOF_CLASSES = {"sdk-helper-contract"}
 REQUIRED_SDK_REQUEST_CONTRACT_TEST = "test_sdk_request_contract_covers_all_frontend_surface_routes"
 REQUIRED_SDK_HELPER_CONTRACT_TEST = "test_sdk_request_contract_covers_frontend_foundation_helpers"
-EXPORT_FUNCTION_RE = re.compile(r"export\s+(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\b")
+EXPORT_FUNCTION_RE = re.compile(r"export\s+(?:async\s+)?function\*?\s+([A-Za-z_][A-Za-z0-9_]*)\b")
 FRONTEND_SURFACE_COUNT_RES = (
     re.compile(
         r"\b(?P<count>\d+)\s*(?:개\s*)?"
@@ -70,6 +74,368 @@ SDK_HELPER_COUNT_RES = (
         re.IGNORECASE,
     ),
 )
+REQUIRED_RECIPE_FRAGMENTS = {
+    "session-aware-client": (
+        "### Session-aware client",
+        "FoundryLiteProvider",
+        "useFoundryLiteClient",
+        "useFoundryLiteSessionClient",
+        "useFoundryLiteSessionStatus",
+        "useFoundryLiteScreenStatus",
+        "useFoundryLiteOsdkClient",
+        "useFoundryLiteProvidedScreenRecipes",
+        "useFoundryLiteProvidedOperatorAppShell",
+        "useFoundryLiteProvidedOperatorWorkspaceShell",
+        "createSessionTokenProvider",
+        "needsAuthentication",
+        "isPermissionDenied",
+        "canRetryLastRequest",
+        "shouldShowSkeleton",
+        "shouldRenderContent",
+    ),
+    "dataset-explorer-screen": (
+        "### Dataset explorer screen",
+        "useFoundryLiteDatasetExplorer",
+        "useFoundryLiteProvidedDatasetExplorer",
+        "previewRows",
+        "qualitySummary",
+        "client.datasets.inspect",
+        "client.operations.lineage.get",
+    ),
+    "object-action-workspace-screen": (
+        "### Object action workspace screen",
+        "useFoundryLiteObjectQuery",
+        "useFoundryLiteGenericObjectQuery",
+        "useFoundryLiteObjectActionWorkspace",
+        "useFoundryLiteProvidedObjectActionWorkspace",
+        "objectQuery",
+        "selectedObject",
+        "recommendedObject",
+        "actionForm",
+        "useFoundryLiteActionSubmit",
+        "foundryLiteActionFormView",
+        "useFoundryLiteActionForm",
+        "useFoundryLiteProvidedActionForm",
+        "parameterFields",
+        "missingFields",
+        "canSubmitAction",
+        "setParam",
+        "submit()",
+        "foundryLiteActionProposalView",
+        "useFoundryLiteActionProposalSubmit",
+        "expectedObjectVersion",
+        "selectedActionForm",
+    ),
+    "large-ontology-registry-lookup": (
+        "### Large ontology registry lookup",
+        "$Ontology.objectApiNames",
+        "getActionType",
+        "useFoundryLiteOntologyCatalog",
+        "useFoundryLiteProvidedOntologyExplorer",
+        "useFoundryLiteOntologyWorkspaceShell",
+        "useFoundryLiteProvidedOntologyWorkspaceShell",
+        "selectedActionPalette",
+        "selectedActionPaletteItems",
+        "canQuerySelectedObject",
+    ),
+    "media-review-screen": (
+        "### Media upload and search",
+        "useFoundryLiteMediaUpload",
+        "useFoundryLiteMediaProcessing",
+        "useFoundryLiteMediaSearch",
+        "useFoundryLiteProvidedMediaPipeline",
+        "servingTruthMediaItemVersionId",
+    ),
+    "aip-agent-and-builder-runs": (
+        "### AIP agent and builder runs",
+        "useFoundryLiteAipAgentRun",
+        "useFoundryLiteAipBuilderRun",
+        "useFoundryLiteProvidedAipAgentRunWithOperationsDetail",
+        "useFoundryLiteProvidedAipBuilderRunWithOperationsDetail",
+        "operationsDetail",
+        "hasOperationsDetail",
+    ),
+    "insight-review-workspace": (
+        "### Insight review workspace",
+        "createInsightReviewWorkspaceRecipe",
+        "useFoundryLiteProvidedInsightReviewQueue",
+        "useFoundryLiteInsightReviewDecision",
+        "useFoundryLiteActionProposalSubmit",
+    ),
+    "pipeline-builder-screen": (
+        "### SQL pipeline builder",
+        "useFoundryLiteSqlTransformSubmit",
+        "useFoundryLiteProvidedSqlTransformSubmit",
+        "foundryLiteSqlTransformSubmitView",
+        "client.transforms.run",
+        "outputDatasetVersionId",
+        "outputDatasetRowCount",
+        "outputManifestUri",
+    ),
+    "long-running-operation-screen": (
+        "### Long-running operation",
+        "useFoundryLiteLongRunningJob",
+        "useFoundryLiteLiveOperationTimeline",
+        "useFoundryLiteProvidedLiveOperationTimeline",
+        "pollFoundryLiteOperation",
+        "useFoundryLiteProvidedOperationEventStream",
+        "timelineItems",
+    ),
+    "operations-evidence-screen": (
+        "### Operations evidence screen",
+        "useFoundryLiteOperationsInvestigation",
+        "useFoundryLiteOperationsRunList",
+        "useFoundryLiteOperationsRunDetail",
+        "useFoundryLitePromptArtifact",
+        "client.operations.runs.promptArtifact",
+    ),
+    "record-dlq-reconciliation-screen": (
+        "### Record DLQ and reconciliation workbench",
+        "useFoundryLiteRecordDlqQueue",
+        "useFoundryLiteRecordDlqControls",
+        "useFoundryLiteWritebackReconciliationQueue",
+        "useFoundryLiteWritebackResolve",
+        "createRecordDlqOperationsRecipe",
+        "createWritebackReconciliationRecipe",
+    ),
+    "maintenance-observability-screen": (
+        "### Maintenance and observability workbench",
+        "createMaintenanceOperationsRecipe",
+        "useFoundryLiteObservabilityDetect",
+        "useFoundryLiteIcebergMaintenancePlan",
+        "useFoundryLiteMaintenanceControls",
+        "planIcebergMaintenanceReadOnly",
+    ),
+    "admin-console-screen": (
+        "### Admin readiness screen",
+        "useFoundryLiteAdminConsole",
+        "useFoundryLiteAdminTaskPlan",
+        "useFoundryLiteProvidedAdminLaunchModel",
+        "useFoundryLiteProvidedAdminLaunchpad",
+        "useFoundryLiteProvidedAdminCommandCenter",
+        "useFoundryLiteProvidedAdminInternalOperationsWorkbench",
+        "foundryLiteAdminCommandCenter",
+        "adminInternalOperationsWorkbench",
+        "operatorCommandActions",
+        "workerCommands",
+        "bootstrapCommands",
+        "operatorCommandCards",
+        "privilegedCommandCards",
+        "canCopyCommand",
+        "visibleCards",
+        "visibleCommandCards",
+        "selectedCard",
+        "selectedAreaId",
+        "readiness",
+        "sectionCounts",
+        "visibleSections",
+    ),
+    "recovery-operations-screen": (
+        "### Recovery and bounded operations controls",
+        "useFoundryLiteRecoveryOverview",
+        "useFoundryLiteOutboxPublish",
+    ),
+}
+REQUIRED_SCREEN_RECIPE_FRAGMENTS = {
+    "aggregate-screen-recipes": (
+        "createFoundryLiteScreenRecipes",
+        "loadFoundryLiteScreenRecipes",
+        "operatorWorkspace",
+        "datasetExplorer",
+        "objectActionWorkspace",
+        "adminOperations",
+    ),
+    "operator-workspace-recipe": (
+        "createOperatorWorkspaceRecipe",
+        "operatorWorkspaceHomeView",
+        "operatorWorkspaceNavigation",
+        "quickActions",
+        "attentionItems",
+        "loadHome",
+        "client.datasets.list",
+        "client.operations.runs.list",
+        "adminOperationsLaunchpad",
+        "recoveryOperations.loadRecoveryOverview",
+    ),
+    "dataset-explorer-recipe": (
+        "createDatasetExplorerRecipe",
+        "client.datasets.inspect",
+        "client.operations.lineage.get",
+    ),
+    "object-action-workspace-recipe": (
+        "createObjectActionWorkspaceRecipe",
+        "createFoundryLiteOsdkClient",
+        "createFoundryLiteOntologyIndex",
+        "getObjectType",
+        "getActionType",
+    ),
+    "media-workspace-recipe": (
+        "createMediaWorkspaceRecipe",
+        "uploadAndCommit",
+        "osdk.media",
+    ),
+    "aip-workspace-recipe": (
+        "createAipWorkspaceRecipe",
+        "client.aip.agent.run",
+        "client.operations.runs.detail",
+        "runAgentAndLoadOperationsDetail",
+    ),
+    "insight-review-workspace-recipe": (
+        "createInsightReviewWorkspaceRecipe",
+        "insightReviewQueueView",
+        "client.insights.reviews.list",
+        "client.insights.reviews.decide",
+    ),
+    "pipeline-builder-recipe": (
+        "createPipelineBuilderRecipe",
+        "client.transforms.registerSql",
+        "client.transforms.run",
+    ),
+    "long-running-operation-recipe": (
+        "createLongRunningOperationRecipe",
+        "pollFoundryLiteOperation",
+        "streamFoundryLiteOperationEvents",
+    ),
+    "operations-evidence-recipe": (
+        "createOperationsEvidenceRecipe",
+        "loadRunInvestigation",
+        "client.operations.runs.list",
+        "client.operations.runs.detail",
+        "client.operations.runs.promptArtifact",
+    ),
+    "record-dlq-recipe": (
+        "createRecordDlqOperationsRecipe",
+        "client.operations.deadLetterRecords.list",
+        "client.operations.deadLetterRecords.retry",
+        "client.operations.deadLetterRecords.bulkRetry",
+        "client.operations.deadLetterRecords.discard",
+    ),
+    "writeback-reconciliation-recipe": (
+        "createWritebackReconciliationRecipe",
+        "client.operations.reconciliation.list",
+        "client.operations.reconciliation.resolve",
+    ),
+    "maintenance-operations-recipe": (
+        "createMaintenanceOperationsRecipe",
+        "client.operations.observability.detect",
+        "client.operations.icebergMaintenance.planReadOnly",
+        "client.operations.index.replayObjectType",
+        "client.operations.transforms.retry",
+    ),
+    "admin-operations-recipe": (
+        "createAdminOperationsRecipe",
+        "adminOperationsLaunchModel",
+        "adminOperationsLaunchpad",
+        "adminCommandCenter",
+        "adminInternalOperationsWorkbench",
+        "loadLaunchModel",
+        "loadLaunchpad",
+        "loadInternalOperationsWorkbench",
+        "migrationCommands",
+        "operatorCommandCards",
+        "privilegedCommandCards",
+        "loadOperatorCommandCards",
+        "canCopyCommand",
+        "copyLabel",
+        "visibleCommandCards",
+        "selectedAreaId",
+        "readiness",
+        "visibleSections",
+        "riskLevel",
+        "adminOperationsBoard",
+        "client.operations.admin.taskPlan",
+    ),
+    "recovery-operations-recipe": (
+        "createRecoveryOperationsRecipe",
+        "client.operations.backupRestore.recoveryOverview",
+        "client.operations.backupRestore.approveResume",
+    ),
+}
+REQUIRED_FRONTEND_COOKBOOK_FRAGMENTS = {
+    "cookbook-entrypoint": (
+        "# Foundry-lite SDK Frontend Cookbook",
+        "loadFoundryLiteScreenRecipes",
+        "createOperatorWorkspaceRecipe",
+        "@foundry-lite/sdk/screen-recipes",
+    ),
+    "cookbook-session": (
+        "FoundryLiteProvider",
+        "createSessionTokenProvider",
+        "useFoundryLiteClient",
+        "useFoundryLiteSessionClient",
+        "useFoundryLiteScreenStatus",
+        "useFoundryLiteProvidedScreenRecipes",
+        "useFoundryLiteScreenRecipes",
+        "useFoundryLiteProvidedOperatorAppShell",
+        "useFoundryLiteProvidedOperatorWorkspaceHome",
+    ),
+    "cookbook-product-screens": (
+        "createOperatorWorkspaceRecipe",
+        "createDatasetExplorerRecipe",
+        "useFoundryLiteProvidedDatasetExplorer",
+        "createObjectActionWorkspaceRecipe",
+        "useFoundryLiteActionProposalSubmit",
+        "useFoundryLiteProvidedOntologyExplorer",
+        "useFoundryLiteOntologyWorkspaceShell",
+        "createMediaWorkspaceRecipe",
+        "useFoundryLiteProvidedMediaPipeline",
+        "createAipWorkspaceRecipe",
+        "useFoundryLiteProvidedAipAgentRunWithOperationsDetail",
+        "createInsightReviewWorkspaceRecipe",
+        "createPipelineBuilderRecipe",
+        "operatorWorkspace.loadHome",
+        "operatorWorkspace.loadShell",
+        "operatorWorkspaceShell",
+        "operatorWorkspaceNavigation(home).navItems",
+        "useFoundryLiteProvidedOperatorAppShell",
+        "useFoundryLiteProvidedOperatorWorkspaceShell",
+        "canRenderWorkspace",
+        "shouldShowSignIn",
+        "shouldShowPermissionDenied",
+        "reloadWorkspace",
+        "areaSurfaces",
+        "selectedSurface",
+        "primaryQuickAction",
+        "operatorHome.navigation.navItems",
+        "operatorHome.navigation.quickActions",
+    ),
+    "cookbook-operations": (
+        "createLongRunningOperationRecipe",
+        "streamOperationEvents",
+        "useFoundryLiteProvidedOperationEventStream",
+        "createOperationsEvidenceRecipe",
+        "useFoundryLiteOperationsInvestigation",
+        "useFoundryLitePromptArtifact",
+        "createRecordDlqOperationsRecipe",
+        "useFoundryLiteRecordDlqQueue",
+        "createWritebackReconciliationRecipe",
+        "useFoundryLiteWritebackReconciliationQueue",
+        "createMaintenanceOperationsRecipe",
+        "useFoundryLiteObservabilityDetect",
+        "useFoundryLiteIcebergMaintenancePlan",
+        "createAdminOperationsRecipe",
+        "useFoundryLiteProvidedAdminLaunchModel",
+        "useFoundryLiteProvidedAdminLaunchpad",
+        "useFoundryLiteProvidedAdminCommandCenter",
+        "useFoundryLiteProvidedAdminInternalOperationsWorkbench",
+        "loadLaunchModel",
+        "loadLaunchpad",
+        "loadInternalOperationsWorkbench",
+        "migrationCommands",
+        "operatorCommandCards",
+        "privilegedCommandCards",
+        "canCopyCommand",
+        "visibleCommandCards",
+        "selectedAreaId",
+        "readiness",
+        "visibleSections",
+        "createRecoveryOperationsRecipe",
+    ),
+    "cookbook-boundary": (
+        "What is current",
+        "What remains future",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -174,15 +540,39 @@ def _sdk_client_surface(sdk_path: Path) -> dict[str, Any]:
 def _sdk_surface_exists(surface: dict[str, Any], sdk_path: str) -> bool:
     parts = sdk_path.split(".")
     if len(parts) == 2:
-        group = surface.get(parts[0])
-        return isinstance(group, list) and parts[1] in group
+        return _sdk_two_part_surface_exists(surface, parts)
     if len(parts) == 3:
-        group = surface.get(parts[0])
-        if not isinstance(group, dict):
-            return False
-        methods = group.get(parts[1])
-        return isinstance(methods, list) and parts[2] in methods
+        return _sdk_three_part_surface_exists(surface, parts)
+    if len(parts) >= 4:
+        return _sdk_nested_surface_exists(surface, parts)
     return False
+
+
+def _sdk_two_part_surface_exists(surface: dict[str, Any], parts: list[str]) -> bool:
+    group = surface.get(parts[0])
+    if isinstance(group, list):
+        return parts[1] in group
+    if isinstance(group, dict):
+        methods = group.get("_self")
+        return isinstance(methods, list) and parts[1] in methods
+    return False
+
+
+def _sdk_three_part_surface_exists(surface: dict[str, Any], parts: list[str]) -> bool:
+    group = surface.get(parts[0])
+    if not isinstance(group, dict):
+        return False
+    methods = group.get(parts[1])
+    return isinstance(methods, list) and parts[2] in methods
+
+
+def _sdk_nested_surface_exists(surface: dict[str, Any], parts: list[str]) -> bool:
+    nested: Any = surface.get(parts[0])
+    for part in parts[1:-1]:
+        if not isinstance(nested, dict):
+            return False
+        nested = nested.get(part)
+    return isinstance(nested, list) and parts[-1] in nested
 
 
 def _surface_rows(matrix: dict[str, Any]) -> list[dict[str, Any]]:
@@ -671,6 +1061,167 @@ def _doc_count_claim_findings(
     return findings
 
 
+def _frontend_recipe_findings(
+    frontend_contract_path: Path,
+    *,
+    root: Path,
+) -> list[FrontendBackendSurfaceFinding]:
+    if not frontend_contract_path.exists():
+        return [
+            FrontendBackendSurfaceFinding(
+                code="frontend_recipe_contract_missing",
+                route=_repo_relative(frontend_contract_path, root=root),
+                message="Frontend SDK recipe contract document is missing.",
+                suggested_file="docs/frontend-backend-surface-contract.md",
+            )
+        ]
+    source = frontend_contract_path.read_text(encoding="utf-8")
+    findings: list[FrontendBackendSurfaceFinding] = []
+    for recipe_id, fragments in REQUIRED_RECIPE_FRAGMENTS.items():
+        missing_fragments = [fragment for fragment in fragments if fragment not in source]
+        if not missing_fragments:
+            continue
+        findings.append(
+            FrontendBackendSurfaceFinding(
+                code="frontend_recipe_missing_fragment",
+                route=recipe_id,
+                message=(
+                    "Frontend SDK recipe section is missing required fragment(s): "
+                    + ", ".join(repr(fragment) for fragment in missing_fragments)
+                ),
+                suggested_file="docs/frontend-backend-surface-contract.md",
+            )
+        )
+    return findings
+
+
+def _frontend_cookbook_findings(
+    cookbook_path: Path,
+    *,
+    root: Path,
+) -> list[FrontendBackendSurfaceFinding]:
+    if not cookbook_path.exists():
+        return [
+            FrontendBackendSurfaceFinding(
+                code="frontend_cookbook_missing",
+                route=_repo_relative(cookbook_path, root=root),
+                message="Frontend SDK cookbook document is missing.",
+                suggested_file="docs/sdk-frontend-cookbook.md",
+            )
+        ]
+    source = cookbook_path.read_text(encoding="utf-8")
+    findings: list[FrontendBackendSurfaceFinding] = []
+    for recipe_id, fragments in REQUIRED_FRONTEND_COOKBOOK_FRAGMENTS.items():
+        missing_fragments = [fragment for fragment in fragments if fragment not in source]
+        if not missing_fragments:
+            continue
+        findings.append(
+            FrontendBackendSurfaceFinding(
+                code="frontend_cookbook_missing_fragment",
+                route=recipe_id,
+                message=(
+                    "Frontend SDK cookbook is missing required fragment(s): "
+                    + ", ".join(repr(fragment) for fragment in missing_fragments)
+                ),
+                suggested_file="docs/sdk-frontend-cookbook.md",
+            )
+        )
+    return findings
+
+
+def _screen_recipe_source_findings(
+    screen_recipe_path: Path,
+    sdk_package_path: Path,
+    *,
+    root: Path,
+) -> list[FrontendBackendSurfaceFinding]:
+    findings: list[FrontendBackendSurfaceFinding] = []
+    if not screen_recipe_path.exists():
+        return [
+            FrontendBackendSurfaceFinding(
+                code="frontend_recipe_source_missing",
+                route=_repo_relative(screen_recipe_path, root=root),
+                message="Typechecked frontend SDK screen recipe source is missing.",
+                suggested_file="packages/sdk-ts/src/screen-recipes.ts",
+            )
+        ]
+    source = screen_recipe_path.read_text(encoding="utf-8")
+    findings.extend(_screen_recipe_fragment_findings(source))
+    findings.extend(_screen_recipe_raw_api_findings(source, screen_recipe_path, root=root))
+    findings.extend(_screen_recipe_package_export_findings(sdk_package_path, root=root))
+    return findings
+
+
+def _screen_recipe_fragment_findings(
+    source: str,
+) -> list[FrontendBackendSurfaceFinding]:
+    findings: list[FrontendBackendSurfaceFinding] = []
+    for recipe_id, fragments in REQUIRED_SCREEN_RECIPE_FRAGMENTS.items():
+        missing_fragments = [fragment for fragment in fragments if fragment not in source]
+        if not missing_fragments:
+            continue
+        findings.append(
+            FrontendBackendSurfaceFinding(
+                code="frontend_recipe_source_missing_fragment",
+                route=recipe_id,
+                message=(
+                    "Typechecked SDK screen recipe source is missing required fragment(s): "
+                    + ", ".join(repr(fragment) for fragment in missing_fragments)
+                ),
+                suggested_file="packages/sdk-ts/src/screen-recipes.ts",
+            )
+        )
+    return findings
+
+
+def _screen_recipe_raw_api_findings(
+    source: str,
+    screen_recipe_path: Path,
+    *,
+    root: Path,
+) -> list[FrontendBackendSurfaceFinding]:
+    findings: list[FrontendBackendSurfaceFinding] = []
+    for pattern in WEB_RAW_API_PATTERNS:
+        if pattern in source:
+            findings.append(
+                FrontendBackendSurfaceFinding(
+                    code="frontend_recipe_source_uses_raw_api",
+                    route=_repo_relative(screen_recipe_path, root=root),
+                    message=f"Typechecked SDK screen recipe contains raw API pattern {pattern!r}.",
+                    suggested_file=_repo_relative(screen_recipe_path, root=root),
+                )
+            )
+    return findings
+
+
+def _screen_recipe_package_export_findings(
+    sdk_package_path: Path,
+    *,
+    root: Path,
+) -> list[FrontendBackendSurfaceFinding]:
+    if not sdk_package_path.exists():
+        return [
+            FrontendBackendSurfaceFinding(
+                code="frontend_recipe_package_missing",
+                route=_repo_relative(sdk_package_path, root=root),
+                message="SDK package manifest is missing, so screen recipes cannot be imported.",
+                suggested_file="packages/sdk-ts/package.json",
+            )
+        ]
+    package_json = _load_json(sdk_package_path)
+    exports = package_json.get("exports")
+    if isinstance(exports, dict) and exports.get("./screen-recipes") == "./src/screen-recipes.ts":
+        return []
+    return [
+        FrontendBackendSurfaceFinding(
+            code="frontend_recipe_package_export_missing",
+            route=_repo_relative(sdk_package_path, root=root),
+            message="SDK package must export './screen-recipes' for frontend teams.",
+            suggested_file="packages/sdk-ts/package.json",
+        )
+    ]
+
+
 def _count_claim_findings_for_patterns(
     path: Path,
     line_number: int,
@@ -715,12 +1266,20 @@ def collect_findings(
     sdk_path: Path | None = None,
     web_path: Path | None = None,
     tests_root: Path | None = None,
+    frontend_contract_path: Path | None = None,
+    frontend_cookbook_path: Path | None = None,
+    screen_recipe_path: Path | None = None,
+    sdk_package_path: Path | None = None,
 ) -> list[FrontendBackendSurfaceFinding]:
-    api = api_path or root / "apps" / "api" / "foundry_lite_api" / "main.py"
-    matrix_file = matrix_path or root / "docs" / "frontend-api-sdk-surface-matrix.json"
-    sdk = sdk_path or root / "packages" / "sdk-ts" / "src" / "generated.ts"
-    web = web_path or root / "apps" / "web" / "index.html"
-    tests = tests_root or root / "tests"
+    api = _path_or(api_path, root / "apps" / "api" / "foundry_lite_api" / "main.py")
+    matrix_file = _path_or(matrix_path, root / "docs" / "frontend-api-sdk-surface-matrix.json")
+    sdk = _path_or(sdk_path, root / "packages" / "sdk-ts" / "src" / "generated.ts")
+    web = _path_or(web_path, root / "apps" / "web" / "index.html")
+    tests = _path_or(tests_root, root / "tests")
+    frontend_contract = _path_or(frontend_contract_path, root / "docs" / "frontend-backend-surface-contract.md")
+    frontend_cookbook = _path_or(frontend_cookbook_path, root / "docs" / "sdk-frontend-cookbook.md")
+    screen_recipe = _path_or(screen_recipe_path, root / "packages" / "sdk-ts" / "src" / "screen-recipes.ts")
+    sdk_package = _path_or(sdk_package_path, root / "packages" / "sdk-ts" / "package.json")
     matrix = _load_json(matrix_file)
     surface_rows = _surface_rows(matrix)
     non_frontend_rows = _non_frontend_rows(matrix)
@@ -745,7 +1304,14 @@ def collect_findings(
             expected_helper_count=len(sdk_helpers),
         )
     )
+    findings.extend(_frontend_recipe_findings(frontend_contract, root=root))
+    findings.extend(_frontend_cookbook_findings(frontend_cookbook, root=root))
+    findings.extend(_screen_recipe_source_findings(screen_recipe, sdk_package, root=root))
     return findings
+
+
+def _path_or(value: Path | None, default: Path) -> Path:
+    return value if value is not None else default
 
 
 def _write_reports(findings: list[FrontendBackendSurfaceFinding], output_path: Path, summary_path: Path) -> None:
@@ -794,6 +1360,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--sdk", type=Path, default=DEFAULT_SDK)
     parser.add_argument("--web", type=Path, default=DEFAULT_WEB)
     parser.add_argument("--tests", type=Path, default=DEFAULT_TESTS)
+    parser.add_argument("--frontend-contract", type=Path, default=DEFAULT_FRONTEND_CONTRACT)
+    parser.add_argument("--frontend-cookbook", type=Path, default=DEFAULT_FRONTEND_COOKBOOK)
+    parser.add_argument("--screen-recipes", type=Path, default=DEFAULT_SCREEN_RECIPES)
+    parser.add_argument("--sdk-package", type=Path, default=DEFAULT_SDK_PACKAGE)
     return parser.parse_args(argv)
 
 
@@ -806,6 +1376,10 @@ def main(argv: list[str] | None = None) -> int:
         sdk_path=args.sdk,
         web_path=args.web,
         tests_root=args.tests,
+        frontend_contract_path=args.frontend_contract,
+        frontend_cookbook_path=args.frontend_cookbook,
+        screen_recipe_path=args.screen_recipes,
+        sdk_package_path=args.sdk_package,
     )
     _write_reports(findings, args.output, args.summary)
     _print_findings(findings)

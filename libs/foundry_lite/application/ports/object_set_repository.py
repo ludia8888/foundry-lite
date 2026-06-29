@@ -42,6 +42,8 @@ class ObjectSetPayload(TypedDict):
     setType: str
     definition: ObjectSetDefinition
     visibility: str
+    accessScope: str
+    lifecycle: str
     ownerUserId: str
     expiresAt: str | None
     createdAt: str

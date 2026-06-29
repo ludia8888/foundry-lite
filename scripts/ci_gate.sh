@@ -11,11 +11,11 @@ mkdir -p artifacts/coverage artifacts/demo artifacts/test-results artifacts/qual
 
 usage() {
   cat <<'EOF'
-Usage: bash scripts/ci_gate.sh [all|static|coverage|flaky|runtime|e2e|release]
+Usage: bash scripts/ci_gate.sh [local|all|static|coverage|flaky|runtime|e2e|release]
 
-Lane mode lets GitHub Actions run the same release evidence in parallel without
-weakening any threshold:
-  all      local/full serial release gate, matching the historical pnpm ci:gate
+Gate modes keep local feedback fast while preserving full release evidence:
+  local    default developer gate: full static invariants plus Tach impact tests
+  all      full serial rehearsal of the parallel CI lanes
   static   format, typing, architecture, security, complexity, doc drift gates
   coverage full pytest branch coverage plus layer/public API coverage gates
   flaky    three repeated random + parallel pytest runs
@@ -238,7 +238,7 @@ run_static_gate() {
     .
 
   echo "== Static: AST-grep structural rules =="
-  pnpm exec sg scan -c sgconfig.yml
+  node scripts/quality/run_ast_grep.cjs scan -c sgconfig.yml
 
   echo "== Static: gitleaks secret scan =="
   if command -v gitleaks >/dev/null 2>&1; then
@@ -318,6 +318,21 @@ run_flaky_gate() {
     --command "uv run pytest tests -n auto --no-header -q"
 }
 
+run_impact_gate() {
+  maybe_run_testcontainers_preflight
+
+  echo "== Local: impact-scoped pytest via Tach =="
+  # Local feedback should answer "did this change break its reachable tests?"
+  # without replaying the full coverage, flaky, runtime, and browser lanes.
+  # The full suite remains protected by parallel CI lanes and ci:gate:all.
+  uv run pytest tests --tach --no-header -q
+}
+
+run_local_gate() {
+  run_static_gate
+  run_impact_gate
+}
+
 run_runtime_gate() {
   maybe_run_testcontainers_preflight
   rm -f artifacts/quality/runtime_lane_failure.json
@@ -339,6 +354,8 @@ run_runtime_gate() {
   run_runtime_step "CDC object indexing ratchet" pnpm --silent quality:cdc-object-indexing
 
   run_runtime_step "CDC continuous worker ratchet" pnpm --silent quality:cdc-continuous-worker
+
+  run_runtime_step "Outbox publisher worker ratchet" pnpm --silent quality:outbox-publisher
 
   run_runtime_step "Debezium live CDC ratchet" pnpm --silent quality:cdc-live-debezium
 
@@ -446,15 +463,21 @@ run_runtime_gate() {
 
   run_runtime_step "AIP Agent source preview ratchet" pnpm --silent quality:agent-source-previews
 
+  run_runtime_step "AIP Agent inline citation ratchet" pnpm --silent quality:agent-inline-citations
+
   run_runtime_step "AI evidence lineage ratchet" pnpm --silent quality:ai-evidence
 
   run_runtime_step "Insight review workspace ratchet" pnpm --silent quality:insight-review
+
+  run_runtime_step "Operations recovery overview ratchet" pnpm --silent quality:operations-recovery
 
   run_runtime_step "Elasticsearch deployment ratchet" pnpm --silent quality:elasticsearch
 
   run_runtime_step "S3 + Iceberg + Spark composition ratchet" pnpm --silent quality:infra-composition
 
   run_runtime_step "distributed control-plane CAS/lease/orchestration ratchet" pnpm --silent quality:distributed-control-plane
+
+  run_runtime_step "product E2E raw-to-AIP operations loop" pnpm --silent quality:product-e2e-loop
   run_runtime_root_cause_summary
 
   RUNTIME_GATE_STEP="supply-chain demo smoke"
@@ -478,6 +501,8 @@ run_runtime_gate() {
   run_runtime_step "adapter error trace keys" uv run python scripts/quality/check_adapter_error_trace_keys.py --storage-root .foundry-lite-adapter-error-gate
 
   run_runtime_step "failed mutation state consistency" uv run python scripts/quality/check_failed_mutation_state_runtime.py --storage-root .foundry-lite-failure-state-gate
+
+  run_runtime_step "schema migration PostgreSQL contention" pnpm --silent quality:schema-migration-runner-live
 
   RUNTIME_GATE_STEP="runtime diagnostics"
   echo "== Dynamic: ${RUNTIME_GATE_STEP} =="
@@ -525,7 +550,7 @@ run_release_gate() {
 }
 
 main() {
-  local lane="${1:-all}"
+  local lane="${1:-local}"
 
   if [[ "$lane" == "-h" || "$lane" == "--help" ]]; then
     usage
@@ -535,6 +560,10 @@ main() {
   ensure_release_postgres_contracts_enabled
 
   case "$lane" in
+    local)
+      run_local_gate
+      echo "Foundry-lite local quality gate passed."
+      ;;
     all)
       run_all_gate
       echo "Foundry-lite CI gate passed."

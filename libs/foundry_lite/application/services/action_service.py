@@ -6,6 +6,7 @@ from foundry_lite.application.action_types import (
     ActionApplyCommand,
     ActionApplyOutcome,
     ActionApplyResponse,
+    ActionWritebackQueueResult,
     ActionWritebackReconciliationResult,
 )
 from foundry_lite.application.ports import (
@@ -23,8 +24,10 @@ from foundry_lite.application.services.action_helpers import (
     action_replay_response,
     action_target_record_error,
     audit_idempotency_conflict,
+    failure_injection_audit_ref,
     require_action_target_api_name,
     require_action_write_open,
+    require_failure_injection_allowed,
 )
 from foundry_lite.application.services.action_reconciliation import ActionWritebackReconciliationWorkflow
 from foundry_lite.application.services.action_workflow import (
@@ -97,6 +100,7 @@ class ActionService(CoreService):
             simulate_writeback_compensation_required,
             external_writeback_uri,
         )
+        self._require_failure_injection_allowed(ctx, command)
         self._require_action_permission(ctx, command.action_api_name)
         require_action_write_open(self.runtime_service, ctx, "apply", "action_type", command.action_api_name)
         action_run_id = _new_id("action_run")
@@ -124,6 +128,16 @@ class ActionService(CoreService):
             external_writeback_uri=external_writeback_uri,
             ctx=ctx,
         )
+
+    def list_unresolved_action_writebacks(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> ActionWritebackQueueResult:
+        ctx = ctx or RequestContext()
+        return self._writeback_reconciliation_workflow().list_unresolved(ctx=ctx, status=status, limit=limit)
 
     def _run_action_command(
         self,
@@ -282,6 +296,23 @@ class ActionService(CoreService):
                     action="apply",
                     decision="deny",
                     after_ref={"permission": permission},
+                )
+            raise
+
+    def _require_failure_injection_allowed(self, ctx: RequestContext, command: ActionApplyCommand) -> None:
+        try:
+            require_failure_injection_allowed(command)
+        except PermissionDenied:
+            with self.engine.begin() as conn:
+                self.runtime_service._audit(
+                    conn,
+                    ctx,
+                    event_type="action.failure_injection.denied",
+                    resource_type="action_type",
+                    resource_id=command.action_api_name,
+                    action="apply",
+                    decision="deny",
+                    after_ref=failure_injection_audit_ref(command),
                 )
             raise
 

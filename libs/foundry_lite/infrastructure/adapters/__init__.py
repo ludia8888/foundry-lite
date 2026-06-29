@@ -55,6 +55,7 @@ from foundry_lite.infrastructure.adapters.scale_foundation import (
     LocalStreamAdapter,
     LocalWorkflowAdapter,
 )
+from foundry_lite.infrastructure.adapters.source_database import SqlAlchemySourceDatabaseAdapter
 from foundry_lite.infrastructure.adapters.spark_compute import SparkComputeAdapter
 from foundry_lite.infrastructure.adapters.temporal_workflow import (
     TemporalWorkflowAdapter,
@@ -74,6 +75,7 @@ __all__ = [
     "FakeDatasetStorageAdapter",
     "FakeComputeAdapter",
     "SparkComputeAdapter",
+    "SqlAlchemySourceDatabaseAdapter",
     "FakeSearchAdapter",
     "FakeStreamAdapter",
     "FakeWorkflowAdapter",

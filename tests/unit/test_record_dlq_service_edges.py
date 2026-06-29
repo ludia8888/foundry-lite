@@ -5,6 +5,7 @@ from typing import cast
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import DeadLetterRecordRow
+from foundry_lite.application.services.dataset.record_dlq_replay import _failure_metadata
 from foundry_lite.application.services.record_dlq_service import (
     _bulk_retry_failure,
     _bulk_retry_result,
@@ -17,7 +18,7 @@ from foundry_lite.application.services.record_dlq_service import (
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, PermissionDenied, ValidationFailed
 from foundry_lite.infrastructure import schema as db
-from sqlalchemy import select
+from sqlalchemy import Connection, select
 
 
 def test_record_dlq_status_and_retry_guards_cover_closed_edges() -> None:
@@ -88,6 +89,22 @@ def test_record_dlq_bulk_retry_result_reports_partial_success() -> None:
     ]
 
 
+def test_record_dlq_bulk_retry_failure_scrubs_secret_payload() -> None:
+    failure = _bulk_retry_failure(
+        "dlq_secret",
+        ValidationFailed("prompt: raw customer text", details={"apiKey": "plain-key", "safe": "visible"}),
+    )
+
+    assert failure == {
+        "deadLetterRecordId": "dlq_secret",
+        "code": "VALIDATION_FAILED",
+        "message": "***MASKED***",
+        "details": {"apiKey": "***MASKED***", "safe": "visible"},
+    }
+    assert "plain-key" not in str(failure)
+    assert "raw customer text" not in str(failure)
+
+
 def test_record_dlq_redacts_nested_sensitive_values() -> None:
     payload = {
         "customer": {"ssn": "123-45-6789", "name": "Ada"},
@@ -98,6 +115,17 @@ def test_record_dlq_redacts_nested_sensitive_values() -> None:
         "customer": {"ssn": "***MASKED***", "name": "Ada"},
         "events": [{"secret_token": "***MASKED***"}, {"status": "ok"}],
     }
+
+
+def test_record_dlq_replay_failure_metadata_scrubs_secret_message() -> None:
+    metadata = _failure_metadata(
+        _row(metadata={"stream": "shipments"}),
+        RequestContext(tenant_id="tenant-demo", actor_user_id="operator", request_id="req-secret"),
+        RuntimeError("Authorization: Bearer raw-record-token"),
+    )
+
+    assert metadata["lastReplayError"] == {"type": "RuntimeError", "message": "***MASKED***"}
+    assert "raw-record-token" not in str(metadata)
 
 
 def test_record_dlq_permission_denied_audit_records_deny_decision(foundry: FoundryLite) -> None:
@@ -112,8 +140,9 @@ def test_record_dlq_permission_denied_audit_records_deny_decision(foundry: Found
         foundry.operations.retry_dead_letter_record("missing-record", idempotency_key="retry-deny", ctx=ctx)
 
     with foundry.engine.begin() as conn:
+        sql_conn = cast(Connection, conn)
         row = (
-            conn.execute(select(db.audit_events).where(db.audit_events.c.event_type == "permission.denied"))
+            sql_conn.execute(select(db.audit_events).where(db.audit_events.c.event_type == "permission.denied"))
             .mappings()
             .one()
         )

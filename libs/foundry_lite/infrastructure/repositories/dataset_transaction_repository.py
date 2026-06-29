@@ -21,6 +21,7 @@ from foundry_lite.application.ports import (
     DeadLetterRecordStatus,
     SyncRunRecord,
     SyncRunRow,
+    WebhookEventKeyRecord,
 )
 from foundry_lite.application.ports.transaction_context import (
     DATASET_TRANSACTION_ABORT,
@@ -192,6 +193,31 @@ class SqlAlchemyDatasetTransactionRepository:
             )
         )
 
+    def insert_webhook_event_key(self, *, transaction: Any, record: WebhookEventKeyRecord) -> None:
+        savepoint = transaction.begin_nested()
+        try:
+            transaction.execute(
+                insert(db.webhook_event_keys).values(
+                    id=record.webhook_event_key_id,
+                    tenant_id=record.tenant_id,
+                    dataset_id=record.dataset_id,
+                    connector_name=record.connector_name,
+                    resource_name=record.resource_name,
+                    event_id=record.event_id,
+                    transaction_id=record.transaction_id,
+                    committed_version_id=record.committed_version_id,
+                    payload_hash=record.payload_hash,
+                    created_at=record.created_at,
+                )
+            )
+            savepoint.commit()
+        except IntegrityError as exc:
+            savepoint.rollback()
+            raise DatasetVersionConflictError(
+                f"webhook event already exists: {record.dataset_id}:{record.connector_name}:{record.resource_name}:"
+                f"{record.event_id}"
+            ) from exc
+
     def commit_transaction(
         self,
         *,
@@ -274,6 +300,16 @@ class SqlAlchemyDatasetTransactionRepository:
         resource_name: str,
         event_id: str,
     ) -> DatasetTransactionRow | None:
+        indexed = self._webhook_event_transaction(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            connector_name=connector_name,
+            resource_name=resource_name,
+            event_id=event_id,
+        )
+        if indexed is not None:
+            return indexed
         rows = (
             transaction.execute(
                 select(db.dataset_transactions)
@@ -294,6 +330,40 @@ class SqlAlchemyDatasetTransactionRepository:
             if _webhook_event_matches(candidate.get("metadata"), connector_name, resource_name, event_id):
                 return cast(DatasetTransactionRow, candidate)
         return None
+
+    def _webhook_event_transaction(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        connector_name: str,
+        resource_name: str,
+        event_id: str,
+    ) -> DatasetTransactionRow | None:
+        event_key = (
+            transaction.execute(
+                select(db.webhook_event_keys).where(
+                    and_(
+                        db.webhook_event_keys.c.tenant_id == tenant_id,
+                        db.webhook_event_keys.c.dataset_id == dataset_id,
+                        db.webhook_event_keys.c.connector_name == connector_name,
+                        db.webhook_event_keys.c.resource_name == resource_name,
+                        db.webhook_event_keys.c.event_id == event_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if event_key is None:
+            return None
+        row = self.transaction_by_id(transaction=transaction, transaction_id=str(event_key["transaction_id"]))
+        if row is None or row["tenant_id"] != tenant_id or row["dataset_id"] != dataset_id:
+            return None
+        if row["status"] != "COMMITTED":
+            return None
+        return cast(DatasetTransactionRow, _transaction_with_webhook_key_metadata(dict(row), dict(event_key)))
 
     def abort_open_transaction_and_fail_run(
         self,
@@ -353,6 +423,27 @@ class SqlAlchemyDatasetTransactionRepository:
                     and_(
                         db.sync_runs.c.tenant_id == tenant_id,
                         db.sync_runs.c.id == sync_run_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(SyncRunRow, dict(row)) if row else None
+
+    def sync_run_by_transaction_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transaction_id: str,
+    ) -> SyncRunRow | None:
+        row = (
+            transaction.execute(
+                select(db.sync_runs).where(
+                    and_(
+                        db.sync_runs.c.tenant_id == tenant_id,
+                        db.sync_runs.c.transaction_id == transaction_id,
                     )
                 )
             )
@@ -642,3 +733,22 @@ def _webhook_event_matches(
         and event.get("resourceName") == resource_name
         and event.get("eventId") == event_id
     )
+
+
+def _transaction_with_webhook_key_metadata(
+    row: dict[str, Any],
+    event_key: Mapping[str, object],
+) -> dict[str, Any]:
+    metadata = row.get("metadata")
+    metadata_dict = dict(metadata) if isinstance(metadata, Mapping) else {}
+    event = metadata_dict.get("webhookEvent")
+    if isinstance(event, Mapping) and isinstance(event.get("payloadHash"), str):
+        return row
+    metadata_dict["webhookEvent"] = {
+        "connectorName": event_key["connector_name"],
+        "resourceName": event_key["resource_name"],
+        "eventId": event_key["event_id"],
+        "payloadHash": event_key["payload_hash"],
+    }
+    row["metadata"] = metadata_dict
+    return row

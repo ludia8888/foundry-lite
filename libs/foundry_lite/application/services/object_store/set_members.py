@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from foundry_lite.application.services.object_store.set_protocols import SetObjectQuery
-from foundry_lite.application.services.object_store.set_types import ObjectSetMembers
+from foundry_lite.application.services.object_store.set_semantics import ObjectSetMembers
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import InvariantViolation
 

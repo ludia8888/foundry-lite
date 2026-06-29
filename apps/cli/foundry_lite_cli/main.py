@@ -197,13 +197,17 @@ def _build_parser() -> argparse.ArgumentParser:
     set_static.add_argument("name")
     set_static.add_argument("object_type")
     set_static.add_argument("--id", action="append", required=True)
-    set_static.add_argument("--visibility", default="private")
+    set_static.add_argument("--visibility")
+    set_static.add_argument("--access-scope")
+    set_static.add_argument("--lifecycle")
     set_static.add_argument("--ttl-seconds", type=int)
     set_dynamic = object_set_sub.add_parser("create-dynamic")
     set_dynamic.add_argument("name")
     set_dynamic.add_argument("object_type")
     set_dynamic.add_argument("--filter-json", required=True)
-    set_dynamic.add_argument("--visibility", default="private")
+    set_dynamic.add_argument("--visibility")
+    set_dynamic.add_argument("--access-scope")
+    set_dynamic.add_argument("--lifecycle")
     set_dynamic.add_argument("--ttl-seconds", type=int)
     object_set_sub.add_parser("cleanup-expired")
 
@@ -285,6 +289,8 @@ def _object_set_create_static(foundry: FoundryLite, ctx: RequestContext, args: a
         set_type="static",
         object_ids=args.id,
         visibility=args.visibility,
+        access_scope=args.access_scope,
+        lifecycle=args.lifecycle,
         ttl_seconds=args.ttl_seconds,
         ctx=ctx,
     )
@@ -297,6 +303,8 @@ def _object_set_create_dynamic(foundry: FoundryLite, ctx: RequestContext, args: 
         set_type="dynamic",
         filter_ast=_json_arg(args.filter_json),
         visibility=args.visibility,
+        access_scope=args.access_scope,
+        lifecycle=args.lifecycle,
         ttl_seconds=args.ttl_seconds,
         ctx=ctx,
     )

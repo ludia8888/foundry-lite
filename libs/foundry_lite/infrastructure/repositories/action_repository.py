@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from uuid import uuid4
 
@@ -169,6 +169,31 @@ class SqlAlchemyActionRepository:
             .first()
         )
         return _writeback_record_from_row(dict(row)) if row else None
+
+    def list_action_writebacks(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        statuses: Sequence[str],
+        limit: int,
+    ) -> list[ActionWritebackRecord]:
+        rows = (
+            transaction.execute(
+                select(db.action_writebacks)
+                .where(
+                    and_(
+                        db.action_writebacks.c.tenant_id == tenant_id,
+                        db.action_writebacks.c.status.in_(tuple(statuses)),
+                    )
+                )
+                .order_by(db.action_writebacks.c.created_at.desc(), db.action_writebacks.c.id.desc())
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [_writeback_record_from_row(dict(row)) for row in rows]
 
     def reconcile_action_writeback(self, *, transaction: Any, record: ActionWritebackReconciliation) -> bool:
         return cas_status_update(
