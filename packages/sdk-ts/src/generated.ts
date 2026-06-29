@@ -657,6 +657,8 @@ export type ObjectSetCreateRequest = {
   objectType: string;
   setType: string;
   visibility?: string;
+  accessScope?: string;
+  lifecycle?: string;
   ids?: string[] | null;
   filter?: Record<string, unknown> | null;
   ttlSeconds?: number | null;
@@ -668,6 +670,8 @@ export type ObjectSetPayload = {
   setType: string;
   definition: Record<string, unknown>;
   visibility: string;
+  accessScope: string;
+  lifecycle: string;
   ownerUserId: string;
   expiresAt: string | null;
   createdAt: string;

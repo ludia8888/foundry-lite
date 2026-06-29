@@ -194,7 +194,9 @@ class ObjectSetCreateRequest(BaseModel):
     name: str
     object_type: str = Field(alias="objectType")
     set_type: str = Field(alias="setType")
-    visibility: str = "private"
+    visibility: str | None = None
+    access_scope: str | None = Field(default=None, alias="accessScope")
+    lifecycle: str | None = None
     ids: list[str] | None = None
     filter_ast: JsonObject | None = Field(default=None, alias="filter")
     ttl_seconds: int | None = Field(default=None, alias="ttlSeconds")
@@ -1466,6 +1468,8 @@ def create_object_set(request: Request, payload: ObjectSetCreateRequest) -> Obje
             object_ids=payload.ids,
             filter_ast=payload.filter_ast,
             visibility=payload.visibility,
+            access_scope=payload.access_scope,
+            lifecycle=payload.lifecycle,
             ttl_seconds=payload.ttl_seconds,
             ctx=_ctx(request),
         )

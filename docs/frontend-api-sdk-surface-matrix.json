@@ -519,7 +519,7 @@
       "productArea": "object-explorer",
       "sdkSurface": "objectSets.list",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Object set reads preserve tenant/user visibility and request_id failures.",
+      "operatorEvidence": "Object set reads preserve tenant/user accessScope, lifecycle, visibility compatibility, and request_id failures.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -531,7 +531,7 @@
       "productArea": "object-explorer",
       "sdkSurface": "objectSets.create",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Object set mutation runs through application policy and audit-on-mutation gates.",
+      "operatorEvidence": "Object set mutation runs through application policy, audit-on-mutation gates, and explicit accessScope/lifecycle validation.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -543,7 +543,7 @@
       "productArea": "object-explorer",
       "sdkSurface": "objectSets.get",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Object set detail preserves membership evidence and request_id failures.",
+      "operatorEvidence": "Object set detail preserves membership evidence, accessScope/lifecycle semantics, and request_id failures.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],

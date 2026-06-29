@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Any, cast
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
@@ -33,6 +34,8 @@ def test_object_sets_static_dynamic_visibility_and_expiry(foundry: FoundryLite) 
     )
 
     assert dynamic_set["objectIds"] == ["O-1001"]
+    assert dynamic_set["accessScope"] == "private"
+    assert dynamic_set["lifecycle"] == "permanent"
     assert static_set["objectIds"] == ["O-1001"]
 
     order = foundry.objects.get("Order", "O-1001", ctx=ctx)
@@ -62,8 +65,11 @@ def test_object_sets_static_dynamic_visibility_and_expiry(foundry: FoundryLite) 
         ttl_seconds=60,
         ctx=ctx,
     )
+    assert temporary_set["visibility"] == "temporary"
+    assert temporary_set["accessScope"] == "private"
+    assert temporary_set["lifecycle"] == "temporary"
     with foundry.engine.begin() as conn:
-        conn.execute(
+        cast(Any, conn).execute(
             db.object_sets.update()
             .where(db.object_sets.c.id == temporary_set["id"])
             .values(expires_at="2000-01-01T00:00:00+00:00")
@@ -75,6 +81,41 @@ def test_object_sets_static_dynamic_visibility_and_expiry(foundry: FoundryLite) 
     assert foundry.objects.cleanup_expired_sets(ctx=ctx)["deleted"] == 1
     audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
     assert any(event["event_type"] == "object_set.expired_deleted" for event in audit_events)
+
+
+def test_object_set_access_scope_and_lifecycle_are_separate(foundry: FoundryLite) -> None:
+    admin = prepare_indexed_demo(foundry)
+    viewer = RequestContext(actor_user_id="viewer-user", roles=("viewer",))
+
+    public_temporary = foundry.objects.create_set(
+        "Public Temporary Review Orders",
+        "Order",
+        set_type="dynamic",
+        filter_ast={"property": "status", "op": "eq", "value": "REVIEW"},
+        access_scope="public",
+        lifecycle="temporary",
+        ttl_seconds=60,
+        ctx=admin,
+    )
+    public_permanent = foundry.objects.create_set(
+        "Public Permanent Snapshot",
+        "Order",
+        set_type="static",
+        object_ids=["O-1001"],
+        access_scope="public",
+        lifecycle="permanent",
+        ctx=admin,
+    )
+
+    assert public_temporary["visibility"] == "public"
+    assert public_temporary["accessScope"] == "public"
+    assert public_temporary["lifecycle"] == "temporary"
+    assert public_temporary["expiresAt"] is not None
+    assert public_permanent["visibility"] == "public"
+    assert public_permanent["accessScope"] == "public"
+    assert public_permanent["lifecycle"] == "permanent"
+    assert public_permanent["expiresAt"] is None
+    assert foundry.objects.get_set(public_temporary["id"], ctx=viewer)["accessScope"] == "public"
 
 
 def test_static_object_set_rechecks_object_permission(foundry: FoundryLite) -> None:
@@ -90,6 +131,7 @@ def test_static_object_set_rechecks_object_permission(foundry: FoundryLite) -> N
     viewer = RequestContext(actor_user_id="viewer-user", roles=("viewer",))
 
     payload = foundry.objects.get_set(static_set["id"], ctx=viewer)
+    assert "items" in payload
     item = payload["items"][0]
 
     assert payload["objectIds"] == ["O-1001"]
@@ -256,6 +298,39 @@ def test_object_set_definition_validation(foundry: FoundryLite) -> None:
             "set_type": "dynamic",
             "filter_ast": valid_filter,
             "ttl_seconds": 0,
+        },
+        {
+            "name": "Bad Access Scope",
+            "set_type": "dynamic",
+            "filter_ast": valid_filter,
+            "access_scope": "team",
+        },
+        {
+            "name": "Bad Lifecycle",
+            "set_type": "dynamic",
+            "filter_ast": valid_filter,
+            "lifecycle": "forever",
+        },
+        {
+            "name": "Temporary Without TTL",
+            "set_type": "dynamic",
+            "filter_ast": valid_filter,
+            "lifecycle": "temporary",
+        },
+        {
+            "name": "Permanent With TTL",
+            "set_type": "dynamic",
+            "filter_ast": valid_filter,
+            "lifecycle": "permanent",
+            "ttl_seconds": 60,
+        },
+        {
+            "name": "Visibility Access Conflict",
+            "set_type": "dynamic",
+            "filter_ast": valid_filter,
+            "visibility": "temporary",
+            "access_scope": "public",
+            "ttl_seconds": 60,
         },
         {
             "name": "Definition Mismatch",

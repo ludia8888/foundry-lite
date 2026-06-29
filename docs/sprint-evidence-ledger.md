@@ -341,6 +341,7 @@ No Sprint 02A Scale Foundation evidence item remains open in the current checkou
 | `S21-A4`    | unauthorized users cannot see another user's private set     | `OBJECT-SETS`; `MVP-CORE`                                                                                     | Done           |
 | `S21-A5`    | expired temporary sets are hidden or cleanup candidates      | `OBJECT-SETS`                                                                                                 | Done           |
 | `S21-A6`    | dynamic set paging does not bypass Object Query page limit   | `PR-4`; `S36A-A7`; `VERIFY-DYNAMIC-OBJECT-SET-PAGE-LIMIT`; `test_dynamic_object_set_cannot_bypass_page_limit` | Done           |
+| `S21-A7`    | object set access scope and lifecycle are not mixed          | `tests/unit/test_object_sets.py::test_object_set_access_scope_and_lifecycle_are_separate`; `tests/unit/test_object_sets.py::test_object_set_definition_validation` | Done. `accessScope` and `lifecycle` are explicit payload fields; legacy `visibility` conflicts fail closed. |
 
 ## Sprint 22 - Dataset/Ontology/Object Minimal UI Vertical Slice
 

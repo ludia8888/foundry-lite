@@ -1668,12 +1668,17 @@ create table object_sets (
   object_type_id uuid not null,
   set_type text not null, -- static | dynamic
   definition jsonb not null, -- ids or query filter AST
-  visibility text not null, -- temporary | permanent
+  visibility text not null, -- legacy compatibility: private | public | temporary | permanent
   owner_user_id uuid,
   expires_at timestamptz,
   created_at timestamptz not null default now()
 );
 ```
+
+현재 API/CLI/SDK 계약은 `visibility`를 하위호환 필드로 유지하되, 새 호출과 응답에서
+공개 범위는 `accessScope`(`private` | `public`), 수명은 `lifecycle`(`temporary` | `permanent`)로
+분리한다. `temporary` lifecycle은 `ttlSeconds`가 있어야 하고, `permanent` lifecycle은
+`ttlSeconds`와 같이 쓸 수 없다.
 
 Static object set:
 

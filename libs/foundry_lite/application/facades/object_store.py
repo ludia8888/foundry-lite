@@ -136,7 +136,9 @@ class ObjectStore:
         definition: Mapping[str, object] | None = None,
         object_ids: list[str] | None = None,
         filter_ast: Mapping[str, object] | None = None,
-        visibility: str = "private",
+        visibility: str | None = None,
+        access_scope: str | None = None,
+        lifecycle: str | None = None,
         ttl_seconds: int | None = None,
     ) -> ObjectSetPayload:
         return self._objects.sets.create_object_set(
@@ -148,6 +150,8 @@ class ObjectStore:
             object_ids=object_ids,
             filter_ast=filter_ast,
             visibility=visibility,
+            access_scope=access_scope,
+            lifecycle=lifecycle,
             ttl_seconds=ttl_seconds,
         )
 

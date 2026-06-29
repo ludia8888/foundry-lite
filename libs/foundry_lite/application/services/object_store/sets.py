@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta
 from typing import cast
 
 from foundry_lite.application.ports import (
@@ -23,18 +22,21 @@ from foundry_lite.application.services.object_store.set_protocols import (
     SetOntologyLookup,
     SetRuntimeBoundary,
 )
-from foundry_lite.application.services.object_store.set_types import (
+from foundry_lite.application.services.object_store.set_semantics import (
     NormalizedObjectSetDefinition,
     ObjectSetMembers,
+    object_set_access_scope,
+    object_set_definition_from_inputs,
+    object_set_expires_at,
+    object_set_is_expired,
+    object_set_lifecycle,
+    object_set_storage_visibility,
 )
 from foundry_lite.application.services.write_traffic_gate import require_write_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 
 OBJECT_SET_TYPES = {"static", "dynamic"}
-OBJECT_SET_VISIBILITIES = {"private", "public", "temporary", "permanent"}
-PUBLIC_OBJECT_SET_VISIBILITIES = {"public", "permanent"}
-PRIVATE_OBJECT_SET_VISIBILITIES = {"private", "temporary"}
 
 
 class ObjectSetsService(CoreService):
@@ -58,12 +60,13 @@ class ObjectSetsService(CoreService):
         definition: Mapping[str, object] | None = None,
         object_ids: list[str] | None = None,
         filter_ast: Mapping[str, object] | None = None,
-        visibility: str = "private",
+        visibility: str | None = None,
+        access_scope: str | None = None,
+        lifecycle: str | None = None,
         ttl_seconds: int | None = None,
     ) -> ObjectSetPayload:
         ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "object:set:manage", "object_set", name)
-        require_write_open(self.runtime_service, ctx, "create_object_set", "object_set", name)
+        self._require_object_set_create(ctx, name)
         normalized = self._normalize_object_set_definition(
             name,
             set_type=set_type,
@@ -71,8 +74,24 @@ class ObjectSetsService(CoreService):
             object_ids=object_ids,
             filter_ast=filter_ast,
             visibility=visibility,
+            access_scope=access_scope,
+            lifecycle=lifecycle,
             ttl_seconds=ttl_seconds,
         )
+        return self._persist_object_set(ctx, name, object_type_api_name, set_type, normalized)
+
+    def _require_object_set_create(self, ctx: RequestContext, name: str) -> None:
+        self.runtime_service._require_or_audit(ctx, "object:set:manage", "object_set", name)
+        require_write_open(self.runtime_service, ctx, "create_object_set", "object_set", name)
+
+    def _persist_object_set(
+        self,
+        ctx: RequestContext,
+        name: str,
+        object_type_api_name: str,
+        set_type: str,
+        normalized: NormalizedObjectSetDefinition,
+    ) -> ObjectSetPayload:
         with self.engine.begin() as conn:
             object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
             self._validate_object_set_definition(conn, ctx, object_type, normalized)
@@ -83,7 +102,7 @@ class ObjectSetsService(CoreService):
                 object_type=object_type,
                 set_type=set_type,
                 definition=normalized["definition"],
-                visibility=visibility,
+                visibility=normalized["visibility"],
                 expires_at=normalized["expires_at"],
             )
             self._emit_object_set_created_events(conn, ctx, set_id, name.strip(), object_type_api_name, set_type)
@@ -183,7 +202,7 @@ class ObjectSetsService(CoreService):
         require_write_open(self.runtime_service, ctx, "cleanup_expired_object_sets", "object_set", "expired")
         with self.engine.begin() as conn:
             rows = self.object_set_repository.object_sets(transaction=conn, tenant_id=ctx.tenant_id)
-            expired_ids = [row["id"] for row in rows if self._object_set_is_expired(row)]
+            expired_ids = [row["id"] for row in rows if object_set_is_expired(row)]
             if expired_ids:
                 self.object_set_repository.delete_object_sets(
                     transaction=conn,
@@ -219,44 +238,29 @@ class ObjectSetsService(CoreService):
         definition: Mapping[str, object] | None,
         object_ids: list[str] | None,
         filter_ast: Mapping[str, object] | None,
-        visibility: str,
+        visibility: str | None,
+        access_scope: str | None,
+        lifecycle: str | None,
         ttl_seconds: int | None,
     ) -> NormalizedObjectSetDefinition:
         if not name.strip():
             raise ValidationFailed("object set name is required")
         if set_type not in OBJECT_SET_TYPES:
             raise ValidationFailed("unsupported object set type", details={"set_type": set_type})
-        if visibility not in OBJECT_SET_VISIBILITIES:
-            raise ValidationFailed("unsupported object set visibility", details={"visibility": visibility})
         if ttl_seconds is not None and ttl_seconds <= 0:
             raise ValidationFailed("ttl_seconds must be positive", details={"ttl_seconds": ttl_seconds})
-        normalized_definition = self._definition_from_inputs(set_type, definition, object_ids, filter_ast)
+        storage_visibility = object_set_storage_visibility(
+            visibility=visibility,
+            access_scope=access_scope,
+            lifecycle=lifecycle,
+            ttl_seconds=ttl_seconds,
+        )
+        normalized_definition = object_set_definition_from_inputs(set_type, definition, object_ids, filter_ast)
         return {
             "definition": normalized_definition,
-            "expires_at": self._expires_at(ttl_seconds),
+            "visibility": storage_visibility,
+            "expires_at": object_set_expires_at(ttl_seconds),
         }
-
-    def _definition_from_inputs(
-        self,
-        set_type: str,
-        definition: Mapping[str, object] | None,
-        object_ids: list[str] | None,
-        filter_ast: Mapping[str, object] | None,
-    ) -> ObjectSetDefinition:
-        if definition is not None:
-            normalized: ObjectSetDefinition = dict(definition)
-            if set_type == "static" and set(normalized) == {"ids"}:
-                return normalized
-            if set_type == "dynamic" and set(normalized) == {"filter"}:
-                return normalized
-            raise ValidationFailed(
-                "object set definition does not match set type",
-                details={"set_type": set_type, "definition": normalized},
-            )
-        if set_type == "static":
-            ids = object_ids or []
-            return {"ids": ids}
-        return {"filter": dict(filter_ast or {})}
 
     def _validate_object_set_definition(
         self,
@@ -366,6 +370,8 @@ class ObjectSetsService(CoreService):
             "setType": row["set_type"],
             "definition": row["definition"],
             "visibility": row["visibility"],
+            "accessScope": object_set_access_scope(row["visibility"]),
+            "lifecycle": object_set_lifecycle(row),
             "ownerUserId": row["owner_user_id"],
             "expiresAt": row["expires_at"],
             "createdAt": row["created_at"],
@@ -440,11 +446,7 @@ class ObjectSetsService(CoreService):
             tenant_id=ctx.tenant_id,
             set_id=set_id,
         )
-        if (
-            normalized is None
-            or self._object_set_is_expired(normalized)
-            or not self._can_read_object_set(ctx, normalized)
-        ):
+        if normalized is None or object_set_is_expired(normalized) or not self._can_read_object_set(ctx, normalized):
             return None
         return normalized
 
@@ -464,25 +466,14 @@ class ObjectSetsService(CoreService):
             tenant_id=ctx.tenant_id,
             object_type_id=object_type_id,
         )
-        return [row for row in rows if not self._object_set_is_expired(row) and self._can_read_object_set(ctx, row)]
+        return [row for row in rows if not object_set_is_expired(row) and self._can_read_object_set(ctx, row)]
 
     def _can_read_object_set(self, ctx: RequestContext, row: ObjectSetRow) -> bool:
-        if row["visibility"] in PUBLIC_OBJECT_SET_VISIBILITIES:
+        if object_set_access_scope(row["visibility"]) == "public":
             return True
-        if row["visibility"] in PRIVATE_OBJECT_SET_VISIBILITIES and row["owner_user_id"] == ctx.actor_user_id:
+        if row["owner_user_id"] == ctx.actor_user_id:
             return True
         return ctx.has_role("admin")
-
-    def _object_set_is_expired(self, row: ObjectSetRow) -> bool:
-        expires_at = row["expires_at"]
-        if not expires_at:
-            return False
-        return datetime.fromisoformat(expires_at) <= datetime.now().astimezone()
-
-    def _expires_at(self, ttl_seconds: int | None) -> str | None:
-        if ttl_seconds is None:
-            return None
-        return (datetime.now().astimezone() + timedelta(seconds=ttl_seconds)).isoformat()
 
     def _object_type_by_id(
         self, conn: TransactionContext, ctx: RequestContext, object_type_id: str
