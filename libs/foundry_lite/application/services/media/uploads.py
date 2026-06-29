@@ -117,7 +117,11 @@ class MediaUploadService(CoreService):
                 tenant_id=ctx.tenant_id,
                 media_transaction_id=inputs.media_transaction_id,
             )
-            media_sets = self.media_repository.get_media_sets(transaction=conn, ids=[inputs.media_set_id])
+            media_sets = self.media_repository.get_media_sets(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                ids=[inputs.media_set_id],
+            )
         if transaction is None:
             raise NotFound(
                 "media transaction not found",

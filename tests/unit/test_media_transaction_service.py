@@ -325,6 +325,24 @@ def test_upload_rejects_transaction_from_different_media_set_before_storage_writ
     assert media.storage.stat(session.staged_object_key).is_present is False
 
 
+def test_catalog_lookup_does_not_expose_other_tenant_media_set(media: _MediaEnv) -> None:
+    other_ctx = RequestContext(tenant_id="tenant-other", actor_user_id="user-other")
+    other = media.catalog.create_media_set(
+        other_ctx,
+        MediaSetSpec(
+            namespace="legal",
+            name="other-contracts",
+            schema_type="document",
+            primary_format="pdf",
+            allowed_input_formats=("pdf",),
+            classification="confidential",
+        ),
+    )
+
+    with pytest.raises(NotFound, match="media set not found"):
+        media.catalog.get_media_set(media.ctx, media_set_id=other.media_set_id)
+
+
 def test_upload_rejects_schema_type_mismatch_before_storage_write(media: _MediaEnv) -> None:
     tx = media.open_tx("idem-schema-mismatch")
     session = media.upload.initiate(

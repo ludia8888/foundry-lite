@@ -81,7 +81,11 @@ class VirtualMediaSetService(CoreService):
 
     def _virtual_media_set(self, ctx: RequestContext, media_set_id: str) -> object:
         with self.engine.begin() as conn:
-            found = self.media_repository.get_media_sets(transaction=conn, ids=[media_set_id])
+            found = self.media_repository.get_media_sets(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                ids=[media_set_id],
+            )
         if not found:
             raise NotFound("media set not found", details={"media_set_id": media_set_id})
         media_set = found[0]

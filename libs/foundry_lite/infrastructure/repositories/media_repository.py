@@ -42,10 +42,21 @@ class SqlAlchemyMediaRepository:
         transaction.execute(insert(db.media_sets).values(tenant_id=record.tenant_id, **_media_set_values(record)))
         return None
 
-    def get_media_sets(self, *, transaction: Any, ids: list[str]) -> list[MediaSetRecord]:
+    def get_media_sets(self, *, transaction: Any, tenant_id: str, ids: list[str]) -> list[MediaSetRecord]:
         if not ids:
             return []
-        rows = transaction.execute(select(db.media_sets).where(db.media_sets.c.id.in_(ids))).mappings().all()
+        rows = (
+            transaction.execute(
+                select(db.media_sets).where(
+                    and_(
+                        db.media_sets.c.tenant_id == tenant_id,
+                        db.media_sets.c.id.in_(ids),
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
         return [_media_set_from_row(row) for row in rows]
 
     def media_set_by_ref(self, *, transaction: Any, tenant_id: str, namespace: str, name: str) -> MediaSetRecord | None:
