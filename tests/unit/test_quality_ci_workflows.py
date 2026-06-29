@@ -743,6 +743,26 @@ def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() 
     assert "run: pnpm ci:gate:e2e" in workflow
 
 
+def test_release_gate_installs_live_media_prerequisites_before_release_gate() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    required_steps = (
+        "Install Tesseract OCR and FFmpeg",
+        "Cache faster-whisper and fastembed models",
+        "Pre-fetch faster-whisper tiny model",
+        "Pre-fetch fastembed embedding model",
+        "Pre-fetch fastembed CLIP vision/text models",
+        "Run release evidence gate",
+    )
+    for step in required_steps:
+        assert step in workflow
+
+    assert "sudo apt-get update && sudo apt-get install -y tesseract-ocr ffmpeg" in workflow
+    assert "hf-models-whisper-tiny-bge-small-clip-vit-b32-v1" in workflow
+    assert workflow.index("Install Tesseract OCR and FFmpeg") < workflow.index("Run release evidence gate")
+    assert workflow.index("Pre-fetch fastembed CLIP vision/text models") < workflow.index("Run release evidence gate")
+
+
 def test_media_active_covered_gate_runs_after_live_media_lanes() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
