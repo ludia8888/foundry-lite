@@ -15,9 +15,11 @@ from typing import cast
 import pytest
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
+from foundry_lite.application.ports.auth_provider import Credentials, Principal
 from foundry_lite.application.upload_limits import WEBHOOK_BODY_LIMIT_ENV
 from foundry_lite.domain.context import RequestContext, demo_admin_context
-from foundry_lite.domain.errors import ExternalOutcomeUnknown, NotFound, ValidationFailed
+from foundry_lite.domain.errors import ExternalOutcomeUnknown, NotFound, PermissionDenied, ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter, RestPullConnectorAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -793,6 +795,78 @@ def test_api_webhook_service_principal_auth_records_service_actor(foundry, monke
     assert len(append_transactions) == 1
     assert append_transactions[0]["created_by"] == actor_user_id
     assert preview[0]["event_id"] == "evt-order-service-principal"
+
+
+def test_api_webhook_ingest_service_principal_bypasses_strict_user_auth_provider(foundry, monkeypatch) -> None:
+    class RejectingAuthProvider:
+        @property
+        def profile_name(self) -> str:
+            return "strict-test-auth"
+
+        def failure_contract(self) -> AdapterFailureContract:
+            return AdapterFailureContract(
+                adapter_profile=self.profile_name,
+                modes=(
+                    AdapterFailureMode(
+                        operation="authenticate",
+                        kind="authentication",
+                        is_retryable=False,
+                        operator_message="strict test auth rejects direct user auth",
+                    ),
+                ),
+            )
+
+        def authenticate(self, _credentials: Credentials) -> Principal:
+            raise PermissionDenied("user auth should not run for signed service-principal webhook")
+
+        def anonymous(self) -> Principal:
+            raise PermissionDenied("anonymous auth should not run for signed service-principal webhook")
+
+    ctx = demo_admin_context()
+    secret = "local-webhook-secret"
+    dataset_ref = "raw.webhook_service_oidc_orders"
+    connector_name = "mock_saas"
+    resource_name = "orders"
+    service_principal = "mock-saas-webhook"
+    actor_user_id = f"{api_main.WEBHOOK_SERVICE_ACTOR_PREFIX}{service_principal}"
+    body = b'{"order_id":"O-9102","status":"PENDING"}'
+    timestamp = _webhook_timestamp()
+    headers = {
+        "Content-Type": "application/json",
+        api_main.WEBHOOK_SERVICE_TENANT_HEADER: ctx.tenant_id,
+        api_main.WEBHOOK_SERVICE_PRINCIPAL_HEADER: service_principal,
+        "X-Foundry-Lite-Timestamp": timestamp,
+        "X-Foundry-Lite-Event-ID": "evt-order-service-principal-oidc",
+        "X-Foundry-Lite-Signature": _webhook_service_principal_signature(
+            body,
+            secret,
+            timestamp,
+            tenant_id=ctx.tenant_id,
+            actor_user_id=actor_user_id,
+            dataset_ref=dataset_ref,
+            connector_name=connector_name,
+            resource_name=resource_name,
+        ),
+    }
+    foundry.datasets.ensure(dataset_ref, ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_main, "auth_provider", RejectingAuthProvider())
+    monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
+
+    response = TestClient(app).post(
+        f"/api/connectors/webhooks/{connector_name}/{resource_name}",
+        params={"datasetRef": dataset_ref},
+        headers=headers,
+        content=body,
+    )
+
+    transactions = _dataset_transactions(foundry.engine)
+    append_transactions = [tx for tx in transactions if tx["tx_type"] == "APPEND"]
+    preview = foundry.datasets.preview(dataset_ref, ctx=ctx)
+    assert response.status_code == 200
+    assert len(append_transactions) == 1
+    assert append_transactions[0]["created_by"] == actor_user_id
+    assert preview[0]["event_id"] == "evt-order-service-principal-oidc"
 
 
 def test_api_webhook_rejects_oversized_body_before_commit(foundry, monkeypatch) -> None:

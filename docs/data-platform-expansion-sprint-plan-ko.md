@@ -1316,6 +1316,11 @@ quality:backup-restore
   claim(기본 `client_id`)이 있으면 `service-account:<client_id>` actor로 인증한다.
   이 경우에도 tenant claim은 필수이며, header tenant override는 통하지 않는다.
   Service account registry, scope policy, credential rotation, revocation은 future다.
+- [x] service-principal webhook ingest: 외부 SaaS callback은 일반 user `Authorization`
+  또는 anonymous auth에 의존하지 않고 `X-Foundry-Lite-Service-Principal` /
+  `X-Foundry-Lite-Tenant-ID`와 service-principal HMAC signature로 내부
+  `service-principal:*` actor를 만든다. Full service-account registry와 scope policy는
+  future다.
 - [~] group/role mapping: 현재는 `roles` claim을 `Principal.roles`로 매핑한다.
   IdP group-to-role policy, SCIM/group sync, tenant별 role mapping은 future다.
 - [~] session revocation policy: `FOUNDRY_LITE_OIDC_REVOKED_JTIS_JSON`로 local
@@ -1363,6 +1368,7 @@ quality:auth-secrets
 - [x] `test_secret_never_appears_in_operator_evidence`
 - [x] `test_env_secret_provider_resolves_named_secret_from_alias`
 - [x] `test_api_webhook_ingest_verifies_signature_and_appends_dataset`
+- [x] `test_api_webhook_ingest_service_principal_bypasses_strict_user_auth_provider`
 
 ---
 

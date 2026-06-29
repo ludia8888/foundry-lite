@@ -931,6 +931,7 @@ def test_auth_secret_gate_follows_restore_gate() -> None:
     assert "tests/contracts/test_rest_connector_adapter_contract.py" in package_json
     assert "tests/contracts/test_auth_provider_contract.py" in package_json
     assert "tests/smoke/test_interfaces.py" in package_json
+    assert "webhook_ingest_service_principal" in package_json
 
 
 def test_privacy_gate_runs_after_auth_secret_gate() -> None:

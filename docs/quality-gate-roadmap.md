@@ -1598,7 +1598,8 @@ local/dev secret을 조회한다. `quality:auth-secrets`는 token 검증, tenant
 service-account mapping, local revoked-`jti` denylist,
 JWKS refresh/cache,
 secret redaction, webhook signing key provider boundary, REST connector secretRef
-refresh-on-snapshot, adapter failure taxonomy,
+refresh-on-snapshot, strict user AuthProvider와 분리된 service-principal webhook ingest,
+adapter failure taxonomy,
 AuthProvider startup guard가 끊기지 않는지 함께 검증한다. Live OIDC discovery fetch,
 JWKS URI polling/TTL/key retirement, service-account registry/scope policy,
 IdP introspection/refresh-token revocation, cloud/Vault secret manager,
