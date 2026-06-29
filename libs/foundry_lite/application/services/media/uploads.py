@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import BinaryIO
 
-from foundry_lite.application.ports.media_repository import MediaItemRecord, MediaItemVersionRecord
+from foundry_lite.application.ports.media_repository import MediaItemRecord, MediaItemVersionRecord, MediaSetRecord
 from foundry_lite.application.ports.media_storage import (
     CompleteMediaUpload,
     InitiateMediaUpload,
@@ -13,7 +13,7 @@ from foundry_lite.application.ports.media_storage import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound
+from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
 
 @dataclass(frozen=True)
@@ -117,6 +117,7 @@ class MediaUploadService(CoreService):
                 tenant_id=ctx.tenant_id,
                 media_transaction_id=inputs.media_transaction_id,
             )
+            media_sets = self.media_repository.get_media_sets(transaction=conn, ids=[inputs.media_set_id])
         if transaction is None:
             raise NotFound(
                 "media transaction not found",
@@ -136,6 +137,9 @@ class MediaUploadService(CoreService):
                     "media_set_id": inputs.media_set_id,
                 },
             )
+        if not media_sets:
+            raise NotFound("media set not found", details={"media_set_id": inputs.media_set_id})
+        _require_media_set_accepts_upload(inputs, media_sets[0])
 
 
 def _item_record(ctx: RequestContext, media_set_id: str, logical_path: str, now: str) -> MediaItemRecord:
@@ -149,6 +153,27 @@ def _item_record(ctx: RequestContext, media_set_id: str, logical_path: str, now:
         created_at=now,
         updated_at=now,
     )
+
+
+def _require_media_set_accepts_upload(inputs: MediaUploadInput, media_set: MediaSetRecord) -> None:
+    if inputs.schema_type != media_set.schema_type:
+        raise ValidationFailed(
+            "media upload schema type does not match media set",
+            details={
+                "media_set_id": inputs.media_set_id,
+                "expected_schema_type": media_set.schema_type,
+                "schema_type": inputs.schema_type,
+            },
+        )
+    if inputs.format not in media_set.allowed_input_formats:
+        raise ValidationFailed(
+            "media upload format is not allowed for media set",
+            details={
+                "media_set_id": inputs.media_set_id,
+                "allowed_input_formats": list(media_set.allowed_input_formats),
+                "format": inputs.format,
+            },
+        )
 
 
 def _staged_version_record(

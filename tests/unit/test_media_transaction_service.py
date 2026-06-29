@@ -325,6 +325,62 @@ def test_upload_rejects_transaction_from_different_media_set_before_storage_writ
     assert media.storage.stat(session.staged_object_key).is_present is False
 
 
+def test_upload_rejects_schema_type_mismatch_before_storage_write(media: _MediaEnv) -> None:
+    tx = media.open_tx("idem-schema-mismatch")
+    session = media.upload.initiate(
+        media.ctx,
+        media_set_id=media.media_set_id,
+        logical_path="/contracts/schema-mismatch.png",
+        supplied_mime_type="image/png",
+    )
+
+    with pytest.raises(ValidationFailed, match="schema type does not match"):
+        media.upload.complete(
+            media.ctx,
+            inputs=MediaUploadInput(
+                media_set_id=media.media_set_id,
+                media_transaction_id=tx,
+                logical_path="/contracts/schema-mismatch.png",
+                supplied_mime_type="image/png",
+                schema_type="image",
+                format="png",
+                security_envelope={"tenantId": media.ctx.tenant_id, "classification": "confidential"},
+            ),
+            upload=session,
+            source=io.BytesIO(b"not a contract pdf"),
+        )
+
+    assert media.storage.stat(session.staged_object_key).is_present is False
+
+
+def test_upload_rejects_disallowed_format_before_storage_write(media: _MediaEnv) -> None:
+    tx = media.open_tx("idem-format-mismatch")
+    session = media.upload.initiate(
+        media.ctx,
+        media_set_id=media.media_set_id,
+        logical_path="/contracts/format-mismatch.txt",
+        supplied_mime_type="text/plain",
+    )
+
+    with pytest.raises(ValidationFailed, match="format is not allowed"):
+        media.upload.complete(
+            media.ctx,
+            inputs=MediaUploadInput(
+                media_set_id=media.media_set_id,
+                media_transaction_id=tx,
+                logical_path="/contracts/format-mismatch.txt",
+                supplied_mime_type="text/plain",
+                schema_type="document",
+                format="txt",
+                security_envelope={"tenantId": media.ctx.tenant_id, "classification": "confidential"},
+            ),
+            upload=session,
+            source=io.BytesIO(b"not an allowed contract format"),
+        )
+
+    assert media.storage.stat(session.staged_object_key).is_present is False
+
+
 def test_upload_deletes_staged_blob_when_metadata_insert_fails(
     media: _MediaEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
