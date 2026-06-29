@@ -2,17 +2,25 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from contextlib import contextmanager
+from typing import cast
 
 import pytest
 from foundry_lite.application.ports import (
     RuntimeRow,
     RuntimeRowsTable,
     RuntimeRunPageCursor,
+    RuntimeRunRelationRecord,
     RuntimeRunRelationRow,
     RuntimeRunSnapshot,
     RuntimeRunType,
 )
-from foundry_lite.application.services.runtime_run_cursors import encode_runtime_run_cursor
+from foundry_lite.application.services.runtime_run_cursors import (
+    OPERATIONS_CURSOR_SIGNING_KEY_ENV,
+    OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV,
+    OPERATIONS_CURSOR_SIGNING_KEYS_JSON_ENV,
+    decode_runtime_run_cursor,
+    encode_runtime_run_cursor,
+)
 from foundry_lite.application.services.runtime_service import RuntimeService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
@@ -197,7 +205,7 @@ class _RetryDeadLetterRepository:
         return None
 
     def insert_run_relation(self, **kwargs: object) -> bool:
-        record = kwargs["record"]
+        record = cast(RuntimeRunRelationRecord, kwargs["record"])
         self.relations.append(
             {
                 "source_run_type": record.source_run_type,
@@ -242,18 +250,19 @@ def test_runtime_service_query_runs_uses_db_keyset_page_and_opaque_cursor() -> N
         status="succeeded",
         limit=1,
     )
+    next_cursor = first.get("nextCursor")
+    assert isinstance(next_cursor, str)
     second = service.query_runs(
         ctx=RequestContext(roles=("ops_manager",)),
         run_type="action",
         status="succeeded",
         limit=1,
-        cursor=first["nextCursor"],
+        cursor=next_cursor,
     )
 
     assert repository.requested_limits == [2, 2]
     assert [row["id"] for row in first["actionRuns"]] == ["action_c"]
     assert [row["id"] for row in second["actionRuns"]] == ["action_b"]
-    assert isinstance(first["nextCursor"], str)
 
 
 def test_runtime_service_query_runs_builds_group_next_cursors() -> None:
@@ -273,7 +282,9 @@ def test_runtime_service_query_runs_builds_group_next_cursors() -> None:
     assert [row["id"] for row in result["workflowRuns"]] == ["workflow_b"]
     assert [row["id"] for row in result["aiRuns"]] == ["ai_b"]
     assert [row["id"] for row in result["auditEvents"]] == ["audit_b"]
-    assert set(result["nextCursors"]) == set(repository.requested_types)
+    next_cursors = result.get("nextCursors")
+    assert isinstance(next_cursors, dict)
+    assert set(next_cursors) == set(repository.requested_types)
 
 
 def test_runtime_service_query_runs_rejects_bad_cursor_and_large_limit() -> None:
@@ -294,9 +305,11 @@ def test_runtime_service_query_runs_rejects_bad_cursor_and_large_limit() -> None
 def test_runtime_service_query_runs_rejects_cursor_shape_mismatch() -> None:
     cursor = encode_runtime_run_cursor(
         _runtime_row("action_c", "2026-06-10T00:00:02Z"),
+        actor_user_id=_OPERATOR.actor_user_id,
         run_type="action",
         status="succeeded",
         since=None,
+        tenant_id=_OPERATOR.tenant_id,
         until=None,
     )
     service = _runtime_service(_PagedRuntimeRepository())
@@ -308,11 +321,103 @@ def test_runtime_service_query_runs_rejects_cursor_shape_mismatch() -> None:
     with pytest.raises(ValidationFailed):
         encode_runtime_run_cursor(
             {"id": "run_without_timestamp"},
+            actor_user_id=_OPERATOR.actor_user_id,
             run_type="action",
             status=None,
             since=None,
+            tenant_id=_OPERATOR.tenant_id,
             until=None,
         )
+
+
+def test_runtime_run_cursor_is_signed_scoped_expiring_and_key_rotatable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV, "ops-key-1")
+    monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ENV, "ops-secret-1")
+    cursor = encode_runtime_run_cursor(
+        _runtime_row("action_c", "2026-06-10T00:00:02Z"),
+        actor_user_id="operator-a",
+        run_type="action",
+        status="succeeded",
+        since=None,
+        tenant_id="tenant-a",
+        until=None,
+        now_epoch=100,
+    )
+
+    assert cursor.startswith("orc2.")
+    assert decode_runtime_run_cursor(
+        cursor,
+        actor_user_id="operator-a",
+        run_type="action",
+        status="succeeded",
+        since=None,
+        tenant_id="tenant-a",
+        until=None,
+        now_epoch=100,
+    ) == {"timestamp": "2026-06-10T00:00:02Z", "run_id": "action_c"}
+
+    with pytest.raises(ValidationFailed, match="tenant"):
+        decode_runtime_run_cursor(
+            cursor,
+            actor_user_id="operator-a",
+            run_type="action",
+            status="succeeded",
+            since=None,
+            tenant_id="tenant-b",
+            until=None,
+            now_epoch=100,
+        )
+    with pytest.raises(ValidationFailed, match="user"):
+        decode_runtime_run_cursor(
+            cursor,
+            actor_user_id="operator-b",
+            run_type="action",
+            status="succeeded",
+            since=None,
+            tenant_id="tenant-a",
+            until=None,
+            now_epoch=100,
+        )
+    with pytest.raises(ValidationFailed, match="expired"):
+        decode_runtime_run_cursor(
+            cursor,
+            actor_user_id="operator-a",
+            run_type="action",
+            status="succeeded",
+            since=None,
+            tenant_id="tenant-a",
+            until=None,
+            now_epoch=1001,
+        )
+    with pytest.raises(ValidationFailed, match="invalid operations cursor"):
+        decode_runtime_run_cursor(
+            cursor[:-1] + ("A" if cursor[-1] != "A" else "B"),
+            actor_user_id="operator-a",
+            run_type="action",
+            status="succeeded",
+            since=None,
+            tenant_id="tenant-a",
+            until=None,
+            now_epoch=100,
+        )
+
+    monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV, "ops-key-2")
+    monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ENV, "ops-secret-2")
+    monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEYS_JSON_ENV, '{"ops-key-1":"ops-secret-1"}')
+    decoded_after_rotation = decode_runtime_run_cursor(
+        cursor,
+        actor_user_id="operator-a",
+        run_type="action",
+        status="succeeded",
+        since=None,
+        tenant_id="tenant-a",
+        until=None,
+        now_epoch=100,
+    )
+    assert decoded_after_rotation is not None
+    assert decoded_after_rotation["run_id"] == "action_c"
 
 
 def test_runtime_service_observability_report_reads_tenant_snapshot() -> None:

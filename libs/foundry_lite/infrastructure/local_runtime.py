@@ -20,6 +20,7 @@ from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.services.object_store.query_cursor import (
     require_object_query_cursor_signing_key_for_runtime,
 )
+from foundry_lite.application.services.runtime_run_cursors import require_operations_cursor_signing_key_for_runtime
 from foundry_lite.infrastructure.adapters import (
     AsrProcessorAdapter,
     DuckDBComputeAdapter,
@@ -147,6 +148,7 @@ def create_local_core_dependencies(
     """Build the local composition root used by CLI, API, tests, and demos."""
 
     require_object_query_cursor_signing_key_for_runtime()
+    require_operations_cursor_signing_key_for_runtime()
     root = Path(storage_root or ".foundry-lite").resolve()
     root.mkdir(parents=True, exist_ok=True)
     object_storage_root = root / "object-storage"

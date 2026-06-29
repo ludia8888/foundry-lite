@@ -148,6 +148,7 @@ class RuntimeService(CoreService):
         parsed_type = optional_run_type(run_type)
         page = query_runtime_run_page(
             self.runtime_repository,
+            actor_user_id=ctx.actor_user_id,
             tenant_id=ctx.tenant_id,
             run_type=parsed_type,
             status=status,

@@ -104,12 +104,16 @@ def test_runtime_error_payload_scrubs_secrets_from_messages_and_details() -> Non
 def test_runtime_operations_redacts_denylisted_json_keys_recursively() -> None:
     payload = {
         "safe": "visible",
+        "inputTokens": 128,
+        "outputTokens": 64,
         "providerRequest": {"body": "raw"},
         "nested": [{"apiKey": "plain-key"}, {"compiledPrompt": "raw prompt"}],
     }
 
     assert redact_sensitive(payload, set()) == {
         "safe": "visible",
+        "inputTokens": 128,
+        "outputTokens": 64,
         "providerRequest": "***MASKED***",
         "nested": [{"apiKey": "***REDACTED***"}, {"compiledPrompt": "***MASKED***"}],
     }

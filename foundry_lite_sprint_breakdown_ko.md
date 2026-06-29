@@ -1718,21 +1718,21 @@ Sprint 00~36으로 닫은 MVP 폐루프를 바로 v1.5 connector/streaming 확�
 - [x] Object Query cursor는 raw object_id나 변조된 base64 payload를 `ValidationFailed`로 거절한다. ([S36A-A5](./docs/sprint-evidence-ledger.md#s36a-a5))
 - [x] Object Query는 존재하지 않는 filter/order property를 `ValidationFailed`로 거절하고, 숫자 property 문자열 값도 fake/SQLite/Postgres contract에서 같은 순서로 page 처리한다. ([S36A-A6](./docs/sprint-evidence-ledger.md#s36a-a6))
 - [x] Dynamic Object Set은 `Object Query` page limit 안에서 cursor로 전체 membership을 이어 읽는다. ([S36A-A7](./docs/sprint-evidence-ledger.md#s36a-a7))
-- [x] Operations runs API/CLI/UI는 cursor 기반으로 page를 나누고 대량 run fixture에서도 일정한 응답 크기를 유지한다. ([S36A-A8](./docs/sprint-evidence-ledger.md#s36a-a8))
+- [x] Operations runs API/CLI/UI는 서명된 tenant/user/expiry/key-id 바인딩 cursor 기반으로 page를 나누고 대량 run fixture에서도 일정한 응답 크기를 유지한다. ([S36A-A8](./docs/sprint-evidence-ledger.md#s36a-a8))
 - [x] production auth profile에서 header-trust provider를 쓰면 startup이 실패하고, local/demo profile에서는 명시적으로만 허용된다. ([S36A-A9](./docs/sprint-evidence-ledger.md#s36a-a9))
 - [x] SDK package output과 browser output이 같은 object/action method surface를 노출하는지 테스트가 검증한다. ([S36A-A10](./docs/sprint-evidence-ledger.md#s36a-a10))
 - [x] 동일 Idempotency-Key라도 요청 본문이 다르면 기존 action_run replay가 아니라 conflict로 막는다. ([S36A-A11](./docs/sprint-evidence-ledger.md#s36a-a11))
 
 **Demo / Proof**
 
-동시 action replay, dataset version allocation lock, metadata persistence failure cleanup, DB-backed object query keyset paging, API/CLI operations cursor paging, production auth profile startup, SDK generation parity를 각각 작은 재현 테스트로 보여준다.
+동시 action replay, dataset version allocation lock, metadata persistence failure cleanup, DB-backed object query keyset paging, API/CLI operations signed cursor paging, production auth profile startup, SDK generation parity를 각각 작은 재현 테스트로 보여준다.
 
 **이러면 성공으로 치지 않는다**
 
 - idempotency unique 충돌을 일반 DB 에러 또는 임시 retry로만 처리한다.
 - dataset commit이 version_number를 max+1로 계산하면서 lock/unique conflict cleanup 전략이 없다.
 - object query나 operations 목록이 DB에서 page를 자르지 않고 애플리케이션 메모리에서 전체 목록을 자른다.
-- operations cursor가 timestamp와 run id tie-breaker 없이 단순 run id만 담거나, query shape이 다른 요청에 재사용된다.
+- operations cursor가 timestamp/run id tie-breaker, query shape, tenant/user scope, expiry, key id, signature 없이 단순 run id만 담거나, 다른 요청/사용자/tenant에 재사용된다.
 - dynamic object set이 Object Query page limit을 피하려고 내부에서 큰 limit 값을 직접 요청한다.
 - object query cursor가 sort key, query shape checksum, `object_id` tie-breaker, tamper check 없이 단순 object id만 담거나 raw object_id cursor를 허용한다.
 - 운영 배포에서 header-trust 인증이 실수로 켜질 수 있다.

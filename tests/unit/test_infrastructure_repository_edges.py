@@ -10,6 +10,10 @@ from foundry_lite.application.services.object_store.query_cursor import (
     CURSOR_SIGNING_KEY_ENV,
     CURSOR_SIGNING_KEY_ID_ENV,
 )
+from foundry_lite.application.services.runtime_run_cursors import (
+    OPERATIONS_CURSOR_SIGNING_KEY_ENV,
+    OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV,
+)
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.local_runtime import (
     _ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV,
@@ -103,6 +107,8 @@ def test_protected_runtime_profile_disables_create_all_schema_mutation(
     monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "production-cursor-secret")
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ID_ENV, "prod-key-2026-06")
+    monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ENV, "production-operations-cursor-secret")
+    monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV, "prod-operations-key-2026-06")
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "prod")
 
     with pytest.raises(SchemaMutationDisabledError, match="run Alembic migrations"):
@@ -133,6 +139,20 @@ def test_protected_runtime_profile_requires_object_query_cursor_key_id(
 
     with pytest.raises(ValidationFailed, match="cursor signing key id"):
         create_local_core_dependencies(storage_root=tmp_path / "missing-cursor-key-id")
+
+
+def test_protected_runtime_profile_requires_operations_cursor_secret(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
+    monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "production-cursor-secret")
+    monkeypatch.setenv(CURSOR_SIGNING_KEY_ID_ENV, "prod-key-2026-06")
+    monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV, "prod-operations-key-2026-06")
+    monkeypatch.delenv(OPERATIONS_CURSOR_SIGNING_KEY_ENV, raising=False)
+
+    with pytest.raises(ValidationFailed, match="operations cursor signing key"):
+        create_local_core_dependencies(storage_root=tmp_path / "missing-operations-cursor-secret")
 
 
 def test_object_change_sequence_rejects_unknown_dialect() -> None:

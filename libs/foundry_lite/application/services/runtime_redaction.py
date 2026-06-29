@@ -27,6 +27,13 @@ OPERATIONS_FORBIDDEN_JSON_KEYS = frozenset(
         "providerresponse",
     }
 )
+OPERATIONS_TOKEN_COUNT_KEYS = frozenset(
+    {
+        "inputtokens",
+        "outputtokens",
+        "totaltokens",
+    }
+)
 
 
 def redact_sensitive(value: object, sensitive: set[str]) -> object:
@@ -53,6 +60,8 @@ def _should_redact_json_key(key: object, sensitive: set[str], normalized_sensiti
     normalized = _normalize_json_key(key)
     if normalized in normalized_sensitive:
         return True
+    if normalized in OPERATIONS_TOKEN_COUNT_KEYS:
+        return False
     if normalized in OPERATIONS_FORBIDDEN_JSON_KEYS:
         return True
     return any(term in normalized for term in OPERATIONS_FORBIDDEN_JSON_KEY_PARTS)

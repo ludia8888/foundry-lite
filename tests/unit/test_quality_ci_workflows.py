@@ -1076,6 +1076,8 @@ def test_ai_operations_gate_runs_after_approval_execution_gate() -> None:
     assert "tests/smoke/test_interfaces.py" in package_json
     assert "test_ai_operations_run_list_and_detail_expose_safe_ledger_trace" in package_json
     assert "api_ai_operations" in package_json
+    assert "runtime_run_cursor_is_signed_scoped_expiring_and_key_rotatable" in package_json
+    assert "protected_runtime_profile_requires_operations_cursor_secret" in package_json
 
 
 def test_logic_runtime_gate_runs_after_ai_operations_before_ai_evidence() -> None:
