@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 
 import pytest
-from foundry_lite.application.ports import ObjectRecordRow
+from foundry_lite.application.ports import ObjectOrderBy, ObjectRecordRow
 from foundry_lite.application.services.object_store.query import ObjectQueryService
+from foundry_lite.application.services.object_store.query_cursor import (
+    CURSOR_SIGNING_KEY_ENV,
+    CURSOR_SIGNING_KEY_ID_ENV,
+    CURSOR_SIGNING_KEYS_JSON_ENV,
+    CURSOR_TTL_SECONDS_ENV,
+    decode_object_query_cursor,
+    encode_object_query_cursor,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -56,7 +65,9 @@ class _PagedObjectRepository:
         raise AssertionError("object query must not read the full row set")
 
     def query_active_object_rows(self, **kwargs: object) -> list[ObjectRecordRow]:
-        self.requested_limit = int(kwargs["limit"])
+        limit = kwargs["limit"]
+        assert isinstance(limit, int)
+        self.requested_limit = limit
         self.requested_property_object_type_id = kwargs.get("property_object_type_id")
         return [_object_row("O-1", 10.0), _object_row("O-2", 9.0)]
 
@@ -159,6 +170,102 @@ def test_object_query_cursor_rejects_active_index_version_change() -> None:
             order_by=[{"property": "amount", "direction": "desc"}],
             cursor=cursor,
             ctx=RequestContext(roles=("viewer",)),
+        )
+
+
+def test_object_query_cursor_rejects_cross_tenant_or_user_reuse() -> None:
+    service = _object_query_service(_PagedObjectRepository())
+    first_page = service.query_objects(
+        "Order",
+        filter_ast={"property": "amount", "op": "gte", "value": 5.0},
+        order_by=[{"property": "amount", "direction": "desc"}],
+        limit=1,
+        ctx=RequestContext(tenant_id="tenant-a", actor_user_id="user-a", roles=("viewer",)),
+    )
+
+    with pytest.raises(ValidationFailed, match="tenant"):
+        service.query_objects(
+            "Order",
+            filter_ast={"property": "amount", "op": "gte", "value": 5.0},
+            order_by=[{"property": "amount", "direction": "desc"}],
+            cursor=str(first_page["nextCursor"]),
+            ctx=RequestContext(tenant_id="tenant-b", actor_user_id="user-a", roles=("viewer",)),
+        )
+    with pytest.raises(ValidationFailed, match="user"):
+        service.query_objects(
+            "Order",
+            filter_ast={"property": "amount", "op": "gte", "value": 5.0},
+            order_by=[{"property": "amount", "direction": "desc"}],
+            cursor=str(first_page["nextCursor"]),
+            ctx=RequestContext(tenant_id="tenant-a", actor_user_id="user-b", roles=("viewer",)),
+        )
+
+
+def test_object_query_cursor_expires_and_supports_key_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
+    order_by: list[ObjectOrderBy] = [{"property": "amount", "direction": "desc"}]
+    filter_ast = {"property": "amount", "op": "gte", "value": 5.0}
+    row = _object_row("O-1", 10.0)
+    monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "old-secret")
+    monkeypatch.setenv(CURSOR_SIGNING_KEY_ID_ENV, "old-key")
+    monkeypatch.setenv(CURSOR_TTL_SECONDS_ENV, "10")
+
+    cursor = encode_object_query_cursor(
+        row,
+        order_by,
+        filter_ast,
+        "active",
+        actor_user_id="user-a",
+        tenant_id="tenant-a",
+        now_epoch=100,
+    )
+
+    assert decode_object_query_cursor(
+        cursor,
+        order_by,
+        filter_ast,
+        "active",
+        actor_user_id="user-a",
+        tenant_id="tenant-a",
+        now_epoch=110,
+    )
+    with pytest.raises(ValidationFailed, match="expired"):
+        decode_object_query_cursor(
+            cursor,
+            order_by,
+            filter_ast,
+            "active",
+            actor_user_id="user-a",
+            tenant_id="tenant-a",
+            now_epoch=111,
+        )
+
+    monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "new-secret")
+    monkeypatch.setenv(CURSOR_SIGNING_KEY_ID_ENV, "new-key")
+    monkeypatch.setenv(
+        CURSOR_SIGNING_KEYS_JSON_ENV,
+        json.dumps({"old-key": "old-secret", "new-key": "new-secret"}),
+    )
+
+    assert decode_object_query_cursor(
+        cursor,
+        order_by,
+        filter_ast,
+        "active",
+        actor_user_id="user-a",
+        tenant_id="tenant-a",
+        now_epoch=105,
+    )
+
+    monkeypatch.setenv(CURSOR_SIGNING_KEYS_JSON_ENV, json.dumps({"new-key": "new-secret"}))
+    with pytest.raises(ValidationFailed, match="invalid object query cursor"):
+        decode_object_query_cursor(
+            cursor,
+            order_by,
+            filter_ast,
+            "active",
+            actor_user_id="user-a",
+            tenant_id="tenant-a",
+            now_epoch=105,
         )
 
 

@@ -732,11 +732,13 @@
 
 ## 4.6 Object Query / Object Set / Link
 
-### T1-018 — Object Query cursor is not signed
+### T1-018 — Object Query cursor is not signed or scoped
 
-- [ ] **Condition:** cursor token에 HMAC이 없고 user가 object_id/offset을 조작한다.
-- [ ] **Guardrail:** cursor는 signed opaque token으로 만든다.
-- [ ] **Regression Test:** `test_object_query_cursor_signed_tamper_proof_query_shape_bound`
+- [x] **Condition:** cursor token에 HMAC이 없거나 tenant/user/query/index/expiry/key id가 묶이지 않아 user가 object_id/offset을 조작하거나 다른 scope에서 재사용한다.
+- [x] **Guardrail:** cursor는 signed opaque token으로 만들고 tenant id, actor user id, query shape, active index version, key id, expiry를 서명 payload에 포함한다.
+- [x] **Regression Test:** `test_object_query_cursor_signed_tamper_proof_query_shape_bound`
+- [x] **Regression Test:** `test_object_query_cursor_rejects_cross_tenant_or_user_reuse`
+- [x] **Regression Test:** `test_object_query_cursor_expires_and_supports_key_rotation`
 
 ### T1-019 — Object Query uses memory slicing
 
@@ -1151,7 +1153,7 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 ## F. Object Query / Object Set / Link
 
 - [x] F1. cursor token은 HMAC으로 tamper-proof이다.
-- [ ] F2. cursor token은 tenant/user/query_shape/index_version에 묶인다.
+- [x] F2. cursor token은 tenant/user/query_shape/index_version에 묶인다.
 - [ ] F3. cursor from old ontology version reuse를 처리한다.
 - [ ] F4. cursor from old search index reuse를 처리한다.
 - [ ] F5. mutable sort key pagination 전략이 있다.
@@ -1365,6 +1367,8 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 - [x] `test_production_refuses_dev_header_trust_auth`
 - [x] `test_worker_requires_tenant_context_for_background_jobs`
 - [x] `test_object_query_cursor_signed_tamper_proof_query_shape_bound`
+- [x] `test_object_query_cursor_rejects_cross_tenant_or_user_reuse`
+- [x] `test_object_query_cursor_expires_and_supports_key_rotation`
 - [x] `test_object_query_db_backed_keyset_no_memory_slice`
 - [x] `test_object_query_numeric_property_casts_for_sort_and_filter`
 - [ ] `test_object_query_mutable_sort_key_does_not_duplicate_or_skip`

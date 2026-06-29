@@ -18,6 +18,7 @@ from foundry_lite.application.foundry import (
     _required_row,
 )
 from foundry_lite.application.safe_expression import evaluate_safe_expression
+from foundry_lite.application.services.object_store.query_cursor import CURSOR_PREFIX
 from foundry_lite.application.upload_limits import (
     DEFAULT_MAX_WEBHOOK_BODY_BYTES,
     WEBHOOK_BODY_LIMIT_ENV,
@@ -133,13 +134,12 @@ def test_query_objects_filter_sort_cursor_and_invalid_op(foundry: FoundryLite) -
 
 
 def _tampered_cursor(cursor: str) -> str:
-    prefix = "oqc1."
-    encoded = cursor.removeprefix(prefix)
+    encoded = cursor.removeprefix(CURSOR_PREFIX)
     padded = encoded + "=" * (-len(encoded) % 4)
     payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
     payload["objectId"] = "O-0000"
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return prefix + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return CURSOR_PREFIX + base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
 def test_dataset_not_found_duplicate_reset_preview_and_transform_update(

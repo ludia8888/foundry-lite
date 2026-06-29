@@ -6,7 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 from foundry_lite.application.ports.action_repository import ActionRunRecord
-from foundry_lite.application.services.object_store.query_cursor import CURSOR_SIGNING_KEY_ENV
+from foundry_lite.application.services.object_store.query_cursor import (
+    CURSOR_SIGNING_KEY_ENV,
+    CURSOR_SIGNING_KEY_ID_ENV,
+)
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.local_runtime import (
     _ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV,
@@ -23,6 +26,7 @@ from foundry_lite.infrastructure.repositories import SchemaMutationDisabledError
 from foundry_lite.infrastructure.repositories.action_repository import SqlAlchemyActionRepository
 from foundry_lite.infrastructure.repositories.dataset_transaction_repository import _webhook_event_matches
 from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
+from foundry_lite.infrastructure.secrets.env import EnvSecretProvider
 
 
 @dataclass
@@ -53,7 +57,7 @@ def test_runtime_adapter_factories_fail_closed_for_unknown_profiles(tmp_path: Pa
     with pytest.raises(ValueError, match="unknown compute profile"):
         _compute_adapter("typo-profile")
     with pytest.raises(ValueError, match="unknown adapter profile"):
-        _connector_adapter("typo-profile")
+        _connector_adapter("typo-profile", EnvSecretProvider())
     with pytest.raises(ValueError, match="unknown adapter profile"):
         _stream_adapter("typo-profile")
     with pytest.raises(ValueError, match="unknown workflow profile"):
@@ -98,6 +102,7 @@ def test_protected_runtime_profile_disables_create_all_schema_mutation(
 ) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "production-cursor-secret")
+    monkeypatch.setenv(CURSOR_SIGNING_KEY_ID_ENV, "prod-key-2026-06")
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "prod")
 
     with pytest.raises(SchemaMutationDisabledError, match="run Alembic migrations"):
@@ -116,6 +121,18 @@ def test_protected_runtime_profile_requires_object_query_cursor_secret(
 
     with pytest.raises(ValidationFailed, match="cursor signing key"):
         create_local_core_dependencies(storage_root=tmp_path / "missing-cursor-secret")
+
+
+def test_protected_runtime_profile_requires_object_query_cursor_key_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
+    monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "production-cursor-secret")
+    monkeypatch.delenv(CURSOR_SIGNING_KEY_ID_ENV, raising=False)
+
+    with pytest.raises(ValidationFailed, match="cursor signing key id"):
+        create_local_core_dependencies(storage_root=tmp_path / "missing-cursor-key-id")
 
 
 def test_object_change_sequence_rejects_unknown_dialect() -> None:

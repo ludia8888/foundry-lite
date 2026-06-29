@@ -176,7 +176,7 @@ class ObjectQueryService(CoreService):
         page = records[:query_limit]
         return {
             "items": [self._object_query_item(ctx, object_type_api_name, row) for row in page],
-            "nextCursor": _next_cursor(records, page, normalized_order_by, filter_ast, active_index_version),
+            "nextCursor": _next_cursor(records, page, normalized_order_by, filter_ast, active_index_version, ctx),
         }
 
     def _search_route(
@@ -221,7 +221,14 @@ class ObjectQueryService(CoreService):
                 object_type_id=object_type["id"],
             )
             self._validate_query_shape(conn, ctx, object_type_api_name, object_type["id"], filter_ast, order_by)
-            cursor_state = decode_object_query_cursor(cursor, order_by, filter_ast, active_index_version)
+            cursor_state = decode_object_query_cursor(
+                cursor,
+                order_by,
+                filter_ast,
+                active_index_version,
+                actor_user_id=ctx.actor_user_id,
+                tenant_id=ctx.tenant_id,
+            )
             records = self.object_read_repository.query_active_object_rows(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
@@ -369,10 +376,18 @@ def _next_cursor(
     order_by: Sequence[ObjectOrderBy],
     filter_ast: Mapping[str, object] | None,
     active_index_version: str,
+    ctx: RequestContext,
 ) -> str | None:
     if len(records) <= len(page) or not page:
         return None
-    return encode_object_query_cursor(page[-1], order_by, filter_ast, active_index_version)
+    return encode_object_query_cursor(
+        page[-1],
+        order_by,
+        filter_ast,
+        active_index_version,
+        actor_user_id=ctx.actor_user_id,
+        tenant_id=ctx.tenant_id,
+    )
 
 
 def _lineage_payload(rows: Sequence[LineageEdgeRow]) -> list[dict[str, object]]:
