@@ -106,6 +106,8 @@ def test_runtime_operations_redacts_denylisted_json_keys_recursively() -> None:
         "safe": "visible",
         "inputTokens": 128,
         "outputTokens": 64,
+        "authorization_decision": "pending_human_review",
+        "authorizationHeader": "Bearer raw-token",
         "providerRequest": {"body": "raw"},
         "nested": [{"apiKey": "plain-key"}, {"compiledPrompt": "raw prompt"}],
     }
@@ -114,6 +116,8 @@ def test_runtime_operations_redacts_denylisted_json_keys_recursively() -> None:
         "safe": "visible",
         "inputTokens": 128,
         "outputTokens": 64,
+        "authorization_decision": "pending_human_review",
+        "authorizationHeader": "***MASKED***",
         "providerRequest": "***MASKED***",
         "nested": [{"apiKey": "***REDACTED***"}, {"compiledPrompt": "***MASKED***"}],
     }
