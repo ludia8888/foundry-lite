@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from typing import Protocol
 
@@ -21,7 +22,16 @@ from foundry_lite.application.ports.action_repository import (
 )
 from foundry_lite.application.primitives import MOCK_WRITEBACK_CONNECTOR, _json_hash
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, ExternalSystemError, InvariantViolation, ValidationFailed
+from foundry_lite.domain.errors import (
+    ConflictDetected,
+    ExternalSystemError,
+    InvariantViolation,
+    PermissionDenied,
+    ValidationFailed,
+)
+
+RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
+PROTECTED_RUNTIME_PROFILES = frozenset({"production", "prod", "staging", "stage"})
 
 
 class SupportsErrorPayload(Protocol):
@@ -117,6 +127,30 @@ def action_command(
     )
 
 
+def require_failure_injection_allowed(command: ActionApplyCommand) -> None:
+    """Block test/demo failure injection from protected runtime profiles."""
+    runtime_profile = _runtime_profile(os.environ)
+    if not _uses_failure_injection(command) or runtime_profile not in PROTECTED_RUNTIME_PROFILES:
+        return
+    raise PermissionDenied(
+        "action writeback failure injection is disabled for protected runtime profiles",
+        details={
+            "runtime_profile": runtime_profile,
+            "action_api_name": command.action_api_name,
+            "failure_injection": _failure_injection_flags(command),
+        },
+    )
+
+
+def failure_injection_audit_ref(command: ActionApplyCommand) -> Mapping[str, object]:
+    """Return safe audit evidence for a denied failure-injection request."""
+    return {
+        "runtime_profile": _runtime_profile(os.environ),
+        "action_api_name": command.action_api_name,
+        "failure_injection": _failure_injection_flags(command),
+    }
+
+
 def action_request_fingerprint(
     *,
     action_api_name: str,
@@ -141,6 +175,23 @@ def action_request_fingerprint(
             "simulateWritebackOutcomeUnknown": simulate_writeback_outcome_unknown,
         }
     )
+
+
+def _uses_failure_injection(command: ActionApplyCommand) -> bool:
+    return any(_failure_injection_flags(command).values())
+
+
+def _failure_injection_flags(command: ActionApplyCommand) -> dict[str, bool]:
+    return {
+        "simulate_writeback_failure": command.simulate_writeback_failure,
+        "simulate_writeback_outcome_unknown": command.simulate_writeback_outcome_unknown,
+        "simulate_writeback_compensation_required": command.simulate_writeback_compensation_required,
+    }
+
+
+def _runtime_profile(environ: Mapping[str, str]) -> str:
+    value = environ.get(RUNTIME_PROFILE_ENV, "local")
+    return value.strip().casefold().replace("_", "-")
 
 
 def action_replay_response(existing: ActionRunRow) -> ActionApplyResponse:

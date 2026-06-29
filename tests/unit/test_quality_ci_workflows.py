@@ -411,6 +411,7 @@ def test_external_writeback_ratchet_is_runtime_gate_step() -> None:
     assert '"quality:external-writeback"' in package_json
     assert "test_external_success_response_lost_becomes_outcome_unknown" in package_json
     assert "test_outcome_unknown_is_not_blindly_retried" in package_json
+    assert "test_protected_runtime_blocks_action_failure_injection_before_run_insert" in package_json
     assert "pnpm --silent quality:external-writeback" in script
     assert script.index("pnpm --silent quality:temporal-engine-integration") < script.index(
         "pnpm --silent quality:external-writeback"
