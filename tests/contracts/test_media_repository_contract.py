@@ -25,10 +25,15 @@ def media_repo(request: pytest.FixtureRequest, tmp_path: Path) -> tuple[SqlAlche
     return SqlAlchemyMediaRepository(postgres_fixture.engine), postgres_fixture.engine
 
 
-def _media_set(media_set_id: str = "ms-1", *, name: str = "contracts") -> MediaSetRecord:
+def _media_set(
+    media_set_id: str = "ms-1",
+    *,
+    tenant_id: str = "tenant-demo",
+    name: str = "contracts",
+) -> MediaSetRecord:
     return MediaSetRecord(
         media_set_id=media_set_id,
-        tenant_id="tenant-demo",
+        tenant_id=tenant_id,
         namespace="legal",
         name=name,
         schema_type="document",
@@ -122,7 +127,34 @@ def test_media_set_create_is_idempotent_and_tenant_scoped(
             repo.media_set_by_ref(transaction=conn, tenant_id="tenant-other", namespace="legal", name="contracts")
             is None
         )
-        assert {record.media_set_id for record in repo.get_media_sets(transaction=conn, ids=["ms-1"])} == {"ms-1"}
+        assert {
+            record.media_set_id
+            for record in repo.get_media_sets(
+                transaction=conn,
+                tenant_id="tenant-demo",
+                ids=["ms-1"],
+            )
+        } == {"ms-1"}
+        assert repo.get_media_sets(transaction=conn, tenant_id="tenant-other", ids=["ms-1"]) == []
+
+
+def test_media_set_lookup_by_id_is_tenant_scoped(
+    media_repo: tuple[SqlAlchemyMediaRepository, Engine],
+) -> None:
+    repo, engine = media_repo
+    with engine.begin() as conn:
+        repo.create_media_set_or_get_existing(transaction=conn, record=_media_set())
+        repo.create_media_set_or_get_existing(
+            transaction=conn,
+            record=_media_set("ms-other", tenant_id="tenant-other", name="other-contracts"),
+        )
+
+    with engine.begin() as conn:
+        tenant_demo = repo.get_media_sets(transaction=conn, tenant_id="tenant-demo", ids=["ms-1", "ms-other"])
+        tenant_other = repo.get_media_sets(transaction=conn, tenant_id="tenant-other", ids=["ms-1", "ms-other"])
+
+    assert [record.media_set_id for record in tenant_demo] == ["ms-1"]
+    assert [record.media_set_id for record in tenant_other] == ["ms-other"]
 
 
 def test_media_transaction_commit_is_cas_and_idempotent(

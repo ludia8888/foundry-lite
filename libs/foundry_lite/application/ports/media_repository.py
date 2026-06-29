@@ -133,8 +133,10 @@ class MediaRepository(Protocol):
         """Insert a media set, returning the existing winner on (tenant, namespace, name) conflict."""
         ...
 
-    def get_media_sets(self, *, transaction: TransactionContext, ids: list[str]) -> list[MediaSetRecord]:
-        """Return media set rows for the given ids (batch-first to avoid N+1)."""
+    def get_media_sets(
+        self, *, transaction: TransactionContext, tenant_id: str, ids: list[str]
+    ) -> list[MediaSetRecord]:
+        """Return tenant-scoped media set rows for the given ids (batch-first to avoid N+1)."""
         ...
 
     def media_set_by_ref(
