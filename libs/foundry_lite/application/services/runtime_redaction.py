@@ -13,7 +13,16 @@ OPERATIONS_FORBIDDEN_JSON_KEY_PARTS = frozenset(
         "accesstoken",
         "refreshtoken",
         "apikey",
+        "clientsecret",
+        "connectionstring",
+        "databaseurl",
+        "dsn",
+        "headervalue",
+        "hmac",
+        "jwt",
+        "privatekey",
         "secret",
+        "signature",
         "password",
     }
 )
@@ -21,6 +30,7 @@ OPERATIONS_FORBIDDEN_JSON_KEYS = frozenset(
     {
         "actionproposal",
         "compiledprompt",
+        "credentials",
         "plaintext",
         "prompt",
         "providerrequest",
@@ -78,7 +88,24 @@ def _redacted_value(key: object, value: object) -> str:
     if value == "***REDACTED***":
         return "***REDACTED***"
     normalized = _normalize_json_key(key)
-    if any(term in normalized for term in ("apikey", "password", "secret", "token")):
+    if any(
+        term in normalized
+        for term in (
+            "apikey",
+            "clientsecret",
+            "connectionstring",
+            "databaseurl",
+            "dsn",
+            "headervalue",
+            "hmac",
+            "jwt",
+            "password",
+            "privatekey",
+            "secret",
+            "signature",
+            "token",
+        )
+    ):
         return "***REDACTED***"
     return "***MASKED***"
 
