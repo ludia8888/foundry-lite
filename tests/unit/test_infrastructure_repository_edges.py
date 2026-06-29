@@ -60,7 +60,7 @@ def test_runtime_adapter_factories_fail_closed_for_unknown_profiles(tmp_path: Pa
         _dataset_storage_adapter("typo-profile", tmp_path)
     with pytest.raises(ValueError, match="unknown compute profile"):
         _compute_adapter("typo-profile")
-    with pytest.raises(ValueError, match="unknown adapter profile"):
+    with pytest.raises(ValueError, match="unknown connector profile"):
         _connector_adapter("typo-profile", EnvSecretProvider())
     with pytest.raises(ValueError, match="unknown adapter profile"):
         _stream_adapter("typo-profile")
