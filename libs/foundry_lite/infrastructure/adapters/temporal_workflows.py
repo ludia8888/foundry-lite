@@ -38,6 +38,9 @@ FOUNDRY_WORKFLOW_NAME = "FoundryWorkflow"
 #: First product workflow type used by S52 Temporal engine integration.
 CONNECTOR_SYNC_WORKFLOW_NAME = "ConnectorSyncWorkflow"
 
+#: Activity name the connector workflow runs; a worker binds it to a real sync driver.
+CONNECTOR_SYNC_ACTIVITY_NAME = "run_connector_sync_step"
+
 #: Media processing product workflow type (L5: the first product-driven Temporal use case).
 MEDIA_PROCESSING_WORKFLOW_NAME = "MediaProcessingWorkflow"
 
@@ -71,6 +74,12 @@ async def run_workflow_step(payload: dict[str, Any]) -> dict[str, Any]:
     return {"processed": True, **payload}
 
 
+@activity.defn(name=CONNECTOR_SYNC_ACTIVITY_NAME)
+async def run_connector_sync_step(payload: dict[str, Any]) -> dict[str, Any]:
+    """Default connector-sync activity for workers that have not bound a real driver yet."""
+    return {"processed": True, **payload}
+
+
 @workflow.defn(name=FOUNDRY_WORKFLOW_NAME)
 class FoundryWorkflow:
     """Representative Foundry-lite durable workflow: run a single processing step."""
@@ -92,9 +101,9 @@ class ConnectorSyncWorkflow:
 
     @workflow.run
     async def run(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Run the first connector-sync workflow step through Temporal."""
+        """Run connector sync through the worker-bound activity driver."""
         return await workflow.execute_activity(
-            run_workflow_step,
+            CONNECTOR_SYNC_ACTIVITY_NAME,
             payload,
             start_to_close_timeout=timedelta(seconds=60),
             retry_policy=_ACTIVITY_RETRY,
@@ -121,6 +130,18 @@ class MediaProcessingWorkflow:
             start_to_close_timeout=timedelta(seconds=120),
             retry_policy=_ACTIVITY_RETRY,
         )
+
+
+class ConnectorSyncActivities:
+    """Worker-side activity that drives the real connector snapshot commit."""
+
+    def __init__(self, driver: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+        self._driver = driver
+
+    @activity.defn(name=CONNECTOR_SYNC_ACTIVITY_NAME)
+    async def run_connector_sync_step(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Trigger connector snapshot ingest and return the committed dataset evidence."""
+        return self._driver(payload)
 
 
 class MediaProcessingActivities:

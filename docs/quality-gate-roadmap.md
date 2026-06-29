@@ -414,7 +414,7 @@ Additional tracked scenario:
 - 알 수 없는 scenario 이름이나 잘못된 marker shape는 fail한다.
 - 결과는 `artifacts/quality/integration_scenario_markers.json`에 남긴다.
 - package script: `pnpm quality:integration-scenarios`
-- release gate: `pnpm ci:gate`
+- release/CI gate: `pnpm ci:gate:static`; full local rehearsal remains `pnpm ci:gate:all`
 
 Self-test: `tests/unit/test_quality_integration_scenario_markers.py`가 7/7 정상 통과,
 missing scenario 실패, unknown scenario 실패, invalid marker 실패, JSON report 생성을
@@ -548,8 +548,8 @@ detailed sprint plan, main sprint breakdown, README, implementation status에서
 
 - `docs/data-platform-expansion-sprint-plan-ko.md`의 S46-S64 table은 expected token을 유지해야 한다.
 - `foundry_lite_sprint_breakdown_ko.md`의 S46-S64 table은 expected token과 label을 함께 유지해야 한다.
-- README, detailed sprint plan, implementation status는 S46 complete, S47-S63 partial,
-  S59/S64 proposed/future boundary를 드러내는 high-level phrase를 유지해야 한다.
+- README, detailed sprint plan, implementation status는 S46 complete, S47-S64 partial
+  boundary를 드러내는 high-level phrase를 유지해야 한다.
 - 결과는 `artifacts/quality/data_platform_sprint_status.json`에 남긴다.
 
 Self-test: `tests/unit/test_quality_data_platform_sprint_status.py`가 현재 repo 통과, token drift
@@ -1113,12 +1113,13 @@ not yet in `ci_gate.sh`. Either a future mutmut release or a migration to
 | `pytest-xdist`    | **race / 공유 자원 충돌** — 같은 파일 경로/env var/tmp 디렉토리에 두 테스트가 동시 쓰기. `-n auto`로 매 게이트 실행마다 검증. |
 
 `ci_gate.sh`는 (a) coverage 측정용 pytest 1회 + (b) G19
-`check_flaky_detector.py`가 소유한 `-n auto` parallel pytest 3회를 둘 다 돈다.
-로컬 `pnpm ci:gate`는 사람이 한 번에 전체 release evidence를 확인하도록 이 둘을
-직렬로 실행한다. GitHub Actions에서는 같은 스크립트를 `coverage` lane과 `flaky`
-lane으로 분리해 동시에 실행한다. 반복 횟수, coverage threshold, 실패 조건은 그대로
-두며, 마지막 `quality-gate` aggregate job이 두 lane을 포함한 모든 quality lane의
-성공을 확인한다.
+`check_flaky_detector.py`가 소유한 `-n auto` parallel pytest 3회를 둘 다 보존한다.
+다만 기본 로컬 `pnpm ci:gate`는 full release evidence를 직렬로 모두 재생하지 않고
+정적 불변식과 Tach impact-scoped pytest를 먼저 실행한다. 전체 직렬 리허설은
+`pnpm ci:gate:all`, release-grade 장시간 증거는 `pnpm ci:gate:release`가 맡는다.
+GitHub Actions에서는 같은 스크립트를 `coverage` lane과 `flaky` lane으로 분리해 동시에
+실행한다. 반복 횟수, coverage threshold, 실패 조건은 그대로 두며, 마지막 `quality-gate`
+aggregate job이 두 lane을 포함한 모든 quality lane의 성공을 확인한다.
 
 parallel run은 coverage 산출 없이 통과/실패와 반복 결과 안정성을 본다.
 
@@ -1185,7 +1186,7 @@ method-registry magic dispatch로 돌아가는 것을 차단한다.
 
 실행:
 
-- 로컬/CI release gate: `pnpm exec sg scan -c sgconfig.yml`
+- 로컬/CI release gate: `node scripts/quality/run_ast_grep.cjs scan -c sgconfig.yml`
 - package script: `pnpm quality:ast-grep`
 - Self-test: `tests/unit/test_quality_ci_workflows.py`가 임시 facade fixture에
   `__getattr__`를 심고, AST-grep가 실제 error finding을 내는지 검증한다.
@@ -1410,16 +1411,18 @@ SIGTERM finish-or-abort proof는 다음 S51 slice로 남긴다.
 
 ### S52 — Temporal Engine Integration
 
-S52의 첫 runtime ratchet은 full connector data-plane workflow가 아니라 product workflow
-control-plane 계약을 고정한다. `quality:temporal-engine-integration`은
+S52의 runtime ratchet은 product workflow control-plane 계약과 worker-bound local connector
+snapshot commit activity proof를 고정한다. `quality:temporal-engine-integration`은
 `ConnectorSyncWorkflow`가 Operations facade/API/generated SDK에서 stable
 `Idempotency-Key` 기반 workflow id로 시작되는지, local/fake workflow adapter와 Temporal
 time-skipping worker가 같은 `ProductWorkflowRun` shape를 반환하는지, 그리고
 Operations audit detail이 `workflowRunId`와 `foundryRunId`를 서로 연결해 Temporal 내부
-로그 없이도 운영자가 추적할 수 있는지 검증한다. 실제 connector page
-fetch/staging/quality/commit/cursor advance activity chain, cancel cleanup,
-activity completion response-loss reconciliation, continue-as-new, workflow code
-upgrade replay, managed Temporal worker operations는 다음 S52 slice로 남긴다.
+로그 없이도 운영자가 추적할 수 있는지 검증한다. 같은 product connector test는
+Temporal worker activity가 local connector snapshot을 normal Dataset ingest boundary로
+commit하고 workflow output에 committed version evidence를 남기는지도 검증한다.
+Production connector packaging/config persistence, cancel cleanup, activity completion
+response-loss reconciliation, continue-as-new, workflow code upgrade replay, managed Temporal
+worker operations는 다음 S52 slice로 남긴다.
 
 | 게이트                              | 명령                                  | Root cause                                                                                                                                                   |
 | ----------------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -1427,27 +1430,33 @@ upgrade replay, managed Temporal worker operations는 다음 S52 slice로 남긴
 
 ### S53 — External Writeback + Saga/Reconciliation
 
-S53의 첫 runtime ratchet은 실제 CRM/ERP connector나 full saga worker가 아니라
-외부 응답 유실과 simulated external success/local mutation failure를 안전한 first-class
-상태로 고정한다. `quality:external-writeback`은
-simulated before-commit writeback에서 response loss/timeout 성격의 상황이
-`failed`로 오분류되지 않고 `outcome_unknown` action run, writeback row, error detail,
-audit evidence로 남는지 검증한다. 같은 `Idempotency-Key` replay는 새 writeback을
-발행하지 않고 기존 unknown run을 반환해야 한다. `quality:saga-reconciliation`은
-simulated external success 뒤 local mutation failure가 `compensation_required` action
-run/writeback/audit evidence로 남고 same-key replay가 두 번째 writeback을 만들지 않는지
-검증한다. 같은 gate는 operator가 확인한 remote success evidence를 resolve API/SDK로
-제출하면 원래 local object mutation을 따라잡고 action/writeback을 `reconciled`로 닫으며
-concurrent resolve는 한 winner만 남기는지도 검증한다. 또한 sensitive action parameter가
-reconciliation 처리에는 사용되지만 Operations/audit evidence에 raw로 노출되지 않는지
-검증한다. Real vendor API call, vendor
-remote lookup, compensation worker execution, persistent reconciliation queue,
+S53의 첫 runtime ratchet은 외부 응답 유실과 simulated external success/local mutation
+failure를 안전한 first-class 상태로 고정했다. `quality:external-writeback`은
+simulated before-commit writeback에서 response loss/timeout 성격의 상황이 `failed`로
+오분류되지 않고 `outcome_unknown` action run, writeback row, error detail, audit evidence로
+남는지 검증한다. 같은 `Idempotency-Key` replay는 새 writeback을 발행하지 않고 기존
+unknown run을 반환해야 한다. `quality:saga-reconciliation`은 simulated external success 뒤
+local mutation failure가 `compensation_required` action run/writeback/audit evidence로 남고
+same-key replay가 두 번째 writeback을 만들지 않는지 검증한다. 같은 gate는 operator가
+확인한 remote success evidence를 resolve API/SDK로 제출하면 원래 local object mutation을
+따라잡고 action/writeback을 `reconciled`로 닫으며 concurrent resolve는 한 winner만
+남기는지도 검증한다. 또한 sensitive action parameter가 reconciliation 처리에는 사용되지만
+Operations/audit evidence에 raw로 노출되지 않는지 검증한다.
+
+L8 runtime ratchet은 실제 CRM/ERP 전용 connector 패키지가 아니라 현재 repo의 real
+external system proof로 `ExternalWritebackAdapter`와 `S3ExternalWritebackAdapter`를 추가했다.
+`quality:action-writeback-live`는 live MinIO에 대한 real PUT/HEAD를 통해 connection timeout이
+`outcome_unknown`으로 남는지, real write가 landed 된 뒤 local mutation commit이 실패하면
+`compensation_required`로 남는지, 그리고 `reconcile_action_writeback`이 real `remote_lookup`으로
+그 writeback을 닫고 local mutation을 한 번만 적용하는지 검증한다. ERP-specific connector
+packaging, autonomous compensation worker execution, persistent reconciliation queue,
 compensation approval, operator UI는 다음 S53 slice로 남긴다.
 
 | 게이트                             | 명령                          | Root cause                                                                                                                                                                                                                                        |
 | ---------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | External writeback outcome ratchet | `quality:external-writeback`  | 외부 시스템에 이미 반영됐을 수도 있는 요청을 실패로 착각해 무작정 재시도하거나, outcome-unknown 증거 없이 local state만 남기는 문제 차단                                                                                                          |
 | Saga reconciliation ratchet        | `quality:saga-reconciliation` | 외부 시스템 성공 뒤 local state가 바뀌지 않은 divergence를 숨기거나 같은 idempotency key replay/동시 reconcile로 두 번째 writeback 또는 두 번째 local mutation을 만들거나, 민감 writeback parameter를 audit/Operations에 raw로 노출하는 문제 차단 |
+| Live external writeback ratchet    | `quality:action-writeback-live` | simulated flag가 아니라 real adapter timeout/landed-write/local-failure/remote-lookup 경로를 live MinIO로 검증해 실제 외부 side effect가 실패/보상 상태로 오분류되지 않게 차단 |
 
 ### S54 — Data Quality Contracts
 
@@ -1467,12 +1476,17 @@ failure가 `BLOCK_COMMIT`으로 표면화되는지도 검증한다. 또한 row-l
 commit하는지도 검증한다. Operations run detail이 같은 transaction의 quality
 summary/schema reference/checked manifest hash/check result와 data-quality quarantine
 failed-row sample을 노출하는지도 검증한다.
-Full DataContract CRUD, owner notification, dedicated failed-row sample UI, quality
-history/trend, production DB schema race proof는 다음 S54 slice로 남긴다.
+Persisted quality contract check definition이 API/SDK에서 create/list/update되고 enabled/config 변경이
+다음 dataset commit validation에 적용되는지도 검증한다.
+Dataset quality result history와 summary가 dataset 단위 API/SDK surface에서 persisted commit-time
+check result, manifest hash, schema-version reference, run id, transaction id,
+status/check-type count evidence를 잃지 않는지도 검증한다.
+Full versioned DataContract object CRUD, owner notification, dedicated failed-row sample UI,
+trend UI, production DB schema race proof는 다음 S54 slice로 남긴다.
 
 | 게이트                        | 명령                     | Root cause                                                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Data quality contract ratchet | `quality:data-contracts` | dataset quality check가 어떤 candidate/schema version을 기준으로 통과했는지 잃어버리거나 historical run reference가 새 schema version으로 오염되거나 warning을 hard failure처럼 막거나 검사 후 candidate tamper/hard failure를 commit하거나 row-level quarantine record를 조용히 유실하거나 Operations run detail에서 품질 리포트/failed-row sample 증거가 사라지는 문제 차단 |
+| Data quality contract ratchet | `quality:data-contracts` | dataset quality check가 어떤 candidate/schema version을 기준으로 통과했는지 잃어버리거나 historical run reference가 새 schema version으로 오염되거나 warning을 hard failure처럼 막거나 검사 후 candidate tamper/hard failure를 commit하거나 row-level quarantine record를 조용히 유실하거나 Operations run detail에서 품질 리포트/failed-row sample 증거가 사라지거나 persisted check definition create/list/update API/SDK surface 또는 이후 commit validation 반영이 빠지거나 dataset quality result history/summary API/SDK surface가 persisted run evidence나 status/check-type count evidence를 잃는 문제 차단 |
 
 ### S55 — DB/Dataset/Ontology Schema Migration
 
@@ -1485,9 +1499,9 @@ forward-fix/restore-runbook-first 정책으로 명시 실패하는지 검증한�
 Fresh-DB Alembic parity와 SQLAlchemy metadata fingerprint는 기존
 `test_migrations_to_head_match_metadata_tables_and_columns`와
 `quality:schema-revision`이 계속 맡는다. 두 번째 S55 slice는 전용 `db:migrate`
-runner와 `quality:schema-migration-runner`를 추가해 앱/worker startup이 migration을
+runner와 `quality:schema-migration-runner`/`quality:schema-migration-runner-live`를 추가해 앱/worker startup이 migration을
 숨겨 실행하지 않고, 한 DB에서 동시에 뜬 migration job 중 하나만 Alembic을 실행하는지
-검증한다. PostgreSQL은 advisory lock 경로를 쓰고, 로컬 proof는 SQLite `BEGIN IMMEDIATE`
+검증한다. PostgreSQL은 advisory lock 경로를 쓰고, live PostgreSQL contention proof는 실제 Postgres 연결에서 한 runner만 migration callback을 실행하고 다른 runner가 `lock_busy` evidence를 남기는지 확인한다. 로컬 proof는 SQLite `BEGIN IMMEDIATE`
 DB lock으로 같은 위험을 재현한다. 세 번째 S55 slice인 expand-contract guard도 같은
 `quality:schema-migrations` 안에 들어간다. 모든 migration은 `migration_phase`와
 `release_compatibility`를 선언해야 하고, expand 단계는 `old_and_new_app` window에서
@@ -1505,7 +1519,7 @@ change로 남고, numeric widening/deprecated field/non-null default backfill은
 rename/removal, object type removal/primary-key change, link endpoint/backing change,
 required action parameter 추가 같은 consumer/SDK-breaking 변경을 activation 전에 막고,
 deprecated property와 object reindex 필요 변경은 audit/outbox evidence로 남긴다.
-Live PostgreSQL contention proof, full old/new app deployment window, 실제 ontology
+full old/new app deployment window, 실제 ontology
 migration executor, 실제 backfill worker, progress update API, rollback/restore
 runbook은 후속 S55 slice다.
 Runner evidence slice는 `db:migrate`가 성공, lock busy, 실패 결과를
@@ -1516,7 +1530,7 @@ password-masked JSON artifact로 남기게 해 operator가 실패 revision, lock
 | 게이트                                 | 명령                              | Root cause                                                                                                                                                                           |
 | -------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Schema migration safety ratchet        | `quality:schema-migrations`       | Alembic history가 여러 head로 갈라지거나 revision id가 drift되거나 destructive downgrade가 운영 rollback처럼 남아 production data loss 위험을 만드는 문제 차단                       |
-| Schema migration singleton runner      | `quality:schema-migration-runner` | API/worker/app startup 여러 개가 동시에 migration을 실행해 schema lock, partial migration, app/schema mismatch를 만드는 문제 차단                                                    |
+| Schema migration singleton runner      | `quality:schema-migration-runner`; `quality:schema-migration-runner-live` | API/worker/app startup 여러 개가 동시에 migration을 실행해 schema lock, partial migration, app/schema mismatch를 만드는 문제 차단                                                    |
 | Schema migration expand-contract guard | `quality:schema-migrations`       | expand 단계에서 old app/write path를 깨는 drop/alter/rename, 기본값 없는 NOT NULL 컬럼, 검토 불가능한 SQL, 준비 안 된 contract cleanup이 들어오는 문제 차단                          |
 | Schema migration release-window guard  | `quality:schema-migrations`       | migration phase와 rolling-deploy compatibility window가 어긋나 old/new app 공존 기간을 리뷰할 기준이 사라지는 문제 차단                                                              |
 | AI tenant RLS migration guard          | `quality:schema-migrations`       | 기존 DB가 Alembic upgrade로 새 AI tenant table을 받는 경로에서 PostgreSQL RLS/tenant policy 없이 테이블만 생성되어 tenant isolation 방어 밖에 남는 문제 차단                          |
@@ -1559,7 +1573,7 @@ start/status가 `is_serving_traffic_open=false`와 `is_outbox_publisher_paused=t
 dead-letter retry/reprocess entry와 주요 platform write traffic이 차단되는지, post-restore 폐루프 증거가 없으면
 `resume_approved`가 거절되고 검증 통과 후 현재 retry/reprocess entrypoint가 다시 열리는지,
 그리고 generated SDK surface가 유지되는지 검증한다. 실제 backup artifact 생성,
-real outbox publisher pause/resume executor, 자동 restore smoke 실행은 후속 S57 slice다.
+always-on outbox publisher daemon pause/resume automation, 자동 restore smoke 실행은 후속 S57 slice다.
 
 | 게이트                                                         | 명령                     | Root cause                                                                                                                                                                                                                                                                                                   |
 | -------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -2047,7 +2061,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 46개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 57개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 12개 SDK helper의 retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key
@@ -2079,6 +2093,27 @@ decision에 한 winner만 있는지, API create/assign/decision이 duplicate req
 | 게이트                                  | 명령                     | Root cause                                                                                                                                                                                 |
 | --------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Insight Review backend/API/SDK contract | `quality:insight-review` | Insight queue가 화면-only 상태로 남거나, 같은 idempotency key가 중복 review를 만들거나, approve/reject가 덮어써지거나, 운영자가 audit에서 review mutation 원인을 추적하지 못하는 문제 차단 |
+
+### S64 — Operations/Recovery Console Backend/API/SDK Contract
+
+S64의 현재 slice는 full visual Operations/Recovery Console이 아니라, S57 restore
+evidence를 화면이 읽을 수 있는 read model과 resume 전 검증 evidence로 묶는 backend/API/SDK
+계약이다. `BackupRestoreService.recovery_overview`는 latest preflight summary, active
+restore-mode traffic gate, latest restore status, latest post-restore validation, and
+required operator next actions를 runtime/audit evidence에서 재구성한다.
+`BackupRestoreService.run_post_restore_validation`은 같은 closed-loop 기준을 별도 durable
+`backup_restore.post_restore_validated` audit evidence로 남긴 뒤 `approve_restore_resume`이
+그 validation id를 요구하게 만든다. `GET /api/operations/recovery/overview`,
+`POST /api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation`, and
+generated `client.operations.backupRestore.recoveryOverview()` /
+`client.operations.backupRestore.postRestoreValidation()`는 이 상태판과 검증을 named SDK-only
+surface로 노출하고, `quality:operations-recovery`는 application method, API smoke, generated
+SDK, browser request contract, and runtime lane wiring을 함께 검증한다. Run console UI,
+recovery dashboard, alert timeline, workflow cancel/reconcile executor는 후속 S64 slice다.
+
+| 게이트                                  | 명령                          | Root cause                                                                                                                                              |
+| --------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Operations Recovery validation/overview contract | `quality:operations-recovery` | restore/preflight/traffic-gate/validation evidence가 흩어져 운영자가 DB/audit logs를 직접 열어야 하거나, frontend가 raw API path로 복구 상태와 재개 검증을 조립하는 문제 차단 |
 
 | 도구                             | 분류 | 효과                                                                           |
 | -------------------------------- | ---- | ------------------------------------------------------------------------------ |
@@ -2116,7 +2151,8 @@ README를 다시 만들지 않는다. 비개발자식으로 말하면,
 
 | 실행 위치      | 명령/잡            | 역할                                                                              |
 | -------------- | ------------------ | --------------------------------------------------------------------------------- |
-| 로컬           | `pnpm ci:gate`     | 전체 release evidence를 직렬로 실행한다.                                          |
+| 로컬           | `pnpm ci:gate`     | 정적 불변식과 Tach impact-scoped pytest를 실행해 빠른 피드백을 준다.              |
+| 로컬           | `pnpm ci:gate:all` | GitHub 병렬 lane과 같은 release evidence를 직렬로 리허설한다.                    |
 | GitHub Actions | `quality-static`   | 정적 분석, 타입, 아키텍처, 문서 drift, 보안/복잡도 gate를 실행한다.               |
 | GitHub Actions | `quality-coverage` | 전체 pytest branch coverage, tier/public API coverage를 확인한다.                 |
 | GitHub Actions | `quality-flaky`    | 전체 pytest suite를 반복 실행해 outcome 흔들림을 차단한다.                        |

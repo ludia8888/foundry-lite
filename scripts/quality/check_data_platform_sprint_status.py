@@ -64,7 +64,7 @@ EXPECTED_SPRINTS = (
     SprintExpectation("S61", "[~]", "Partial"),
     SprintExpectation("S62", "[~]", "Partial"),
     SprintExpectation("S63", "[~]", "Partial"),
-    SprintExpectation("S64", "[ ]", "Proposed"),
+    SprintExpectation("S64", "[~]", "Partial"),
 )
 
 STATUS_TABLES = (
@@ -74,11 +74,11 @@ STATUS_TABLES = (
 
 REQUIRED_STATUS_PHRASES = {
     SPRINT_PLAN: (
-        "S46 완료, S47-S63 부분 구현",
+        "S46 완료, S47-S64 부분 구현",
         "현재 구현 완료 여부의 source of truth는 [Implementation Status]",
     ),
     README: (
-        "S46-S63 데이터 플랫폼 확장 로드맵은 현재 브랜치에서 부분 구현 중입니다.",
+        "S46-S64 데이터 플랫폼 확장 로드맵은 현재 브랜치에서 부분 구현 중입니다.",
         "S62 visual dataset browser/preview grid/version pin/lineage graph UX",
         "S63 evidence panel UI, S63 action execution orchestration",
     ),
@@ -86,6 +86,8 @@ REQUIRED_STATUS_PHRASES = {
         "S61 Frontend Foundation + Generated SDK is partial",
         "S62 Dataset Explorer is partial",
         "S63 Insight/Action Workspace now has a partial backend/API/SDK slice",
+        "S64 Operations/Recovery Console now has a partial backend/API/SDK recovery overview "
+        "and post-restore validation slice",
         "full catalog-driven S62-S64 workspace UX",
     ),
 }
@@ -248,7 +250,7 @@ def _phrase_findings(path: Path, phrases: tuple[str, ...], *, root: Path) -> lis
             "missing_status_boundary_phrase",
             path,
             phrase,
-            "High-level docs must preserve the S46 complete, S47-S63 partial, S64 proposed/future boundary.",
+            "High-level docs must preserve the S46 complete, S47-S64 partial boundary.",
             root=root,
         )
         for phrase in phrases

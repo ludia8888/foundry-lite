@@ -159,6 +159,50 @@ await expectSdkCall(
     path: "/api/datasets/clean%20space/orders%2Fdaily/inspect?version=version%2F1",
   },
 );
+await expectSdkCall("datasets.qualityChecks.list", () => client.datasets.qualityChecks.list("clean", "orders"), {
+  path: "/api/datasets/clean/orders/quality-contract/checks",
+});
+await expectSdkCall(
+  "datasets.qualityChecks.create",
+  () =>
+    client.datasets.qualityChecks.create("clean space", "orders/daily", {
+      config: { type: "row_count_min", min: 3 },
+      severity: "warn",
+    }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/checks",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { config: { type: "row_count_min", min: 3 }, severity: "warn" },
+  },
+);
+await expectSdkCall(
+  "datasets.qualityChecks.update",
+  () =>
+    client.datasets.qualityChecks.update("clean space", "orders/daily", "check/1", {
+      enabled: false,
+    }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/checks/check%2F1",
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: { enabled: false },
+  },
+);
+await expectSdkCall(
+  "datasets.qualityResults.list",
+  () => client.datasets.qualityResults.list("clean space", "orders/daily", { limit: 5 }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/results?limit=5",
+  },
+);
+await expectSdkCall(
+  "datasets.qualityResults.summary",
+  () => client.datasets.qualityResults.summary("clean space", "orders/daily", { latestLimit: 3 }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/results/summary?latest_limit=3",
+  },
+);
 await expectSdkCall("ontology.catalog", () => client.ontology.catalog(), {
   path: "/api/ontology/catalog",
 });
@@ -562,6 +606,16 @@ await expectSdkCall("operations.backup-restore.status", () => client.operations.
   path: "/api/operations/backup-restore/restore-mode/restore%2F1",
 });
 await expectSdkCall(
+  "operations.backup-restore.post-restore-validation",
+  () => client.operations.backupRestore.postRestoreValidation("restore/1", { validationId: "validation-1" }),
+  {
+    path: "/api/operations/backup-restore/restore-mode/restore%2F1/post-restore-validation",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { validationId: "validation-1" },
+  },
+);
+await expectSdkCall(
   "operations.backup-restore.approve-resume",
   () => client.operations.backupRestore.approveResume("restore/1", { validationId: "validation-1" }),
   {
@@ -571,6 +625,9 @@ await expectSdkCall(
     body: { validationId: "validation-1" },
   },
 );
+await expectSdkCall("operations.recovery.overview", () => client.operations.backupRestore.recoveryOverview(), {
+  path: "/api/operations/recovery/overview",
+});
 await expectSdkCall("operations.runs.detail", () => client.operations.runs.detail("index", "run/1"), {
   path: "/api/operations/runs/index/run%2F1",
 });
@@ -621,6 +678,13 @@ assertMissingIdempotencyFailFast(
 await expectSdkCall("operations.workflows.get", () => client.operations.workflows.get("workflow/1"), {
   path: "/api/operations/workflows/workflow%2F1",
 });
+await expectSdkCall(
+  "operations.reconciliation.list",
+  () => client.operations.reconciliation.list({ status: "outcome_unknown", limit: 25 }),
+  {
+    path: "/api/operations/reconciliation/writebacks?status=outcome_unknown&limit=25",
+  },
+);
 await expectSdkCall(
   "operations.reconciliation.resolve",
   () =>
@@ -718,6 +782,35 @@ await expectSdkCall("operations.transforms.retry", () => client.operations.trans
 await expectSdkCall("materializations.run", () => client.materializations.run("Daily Orders"), {
   path: "/api/materializations/Daily%20Orders/run",
   method: "POST",
+});
+await expectSdkCall(
+  "media.content.search",
+  () =>
+    client.media.content.search({
+      text: "invoice 4242",
+      topK: 5,
+      allowedClassifications: ["public", "internal"],
+    }),
+  {
+    path: "/api/media/content/search",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      text: "invoice 4242",
+      topK: 5,
+      allowedClassifications: ["public", "internal"],
+    },
+  },
+);
+await expectSdkCall(
+  "media.processing-runs.list",
+  () => client.media.processingRuns.list({ sourceMediaItemVersionId: "media/version-1", limit: 12 }),
+  {
+    path: "/api/media/processing-runs?sourceMediaItemVersionId=media%2Fversion-1&limit=12",
+  },
+);
+await expectSdkCall("media.processing-runs.get", () => client.media.processingRuns.get("media/run-1"), {
+  path: "/api/media/processing-runs/media%2Frun-1",
 });
 await expectSdkCall(
   "actions.generated.apply",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
@@ -144,6 +144,23 @@ class FakeActionRepository:
                 return _writeback_record_from_row(row)
         return None
 
+    def list_action_writebacks(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        statuses: Sequence[str],
+        limit: int,
+    ) -> list[ActionWritebackRecord]:
+        del transaction
+        status_set = set(statuses)
+        rows = [
+            _writeback_record_from_row(row)
+            for row in self.action_writebacks
+            if row["tenant_id"] == tenant_id and row["status"] in status_set
+        ]
+        return sorted(rows, key=lambda row: (row.created_at, row.writeback_id), reverse=True)[:limit]
+
     def reconcile_action_writeback(self, *, transaction: Any, record: ActionWritebackReconciliation) -> bool:
         del transaction
         for row in self.action_writebacks:
@@ -151,7 +168,7 @@ class FakeActionRepository:
                 row["tenant_id"] == record.tenant_id
                 and row["id"] == record.writeback_id
                 and row["action_run_id"] == record.action_run_id
-                and row["status"] == "outcome_unknown"
+                and row["status"] in {"outcome_unknown", "compensation_required"}
             ):
                 row.update(status="reconciled", response=record.response, completed_at=record.completed_at)
                 return True
@@ -300,14 +317,17 @@ def _action_run_row(record: ActionRunRecord) -> ActionRunRow:
 def _writeback_record(
     writeback_id: str = "wb_1",
     *,
+    tenant_id: str = "tenant-demo",
+    action_run_id: str = "arun_1",
     status: str = "succeeded",
     request: dict[str, Any] | None = None,
     response: dict[str, Any] | None = None,
+    created_at: str = "2026-06-10T00:00:01Z",
 ) -> ActionWritebackRecord:
     return ActionWritebackRecord(
         writeback_id=writeback_id,
-        tenant_id="tenant-demo",
-        action_run_id="arun_1",
+        tenant_id=tenant_id,
+        action_run_id=action_run_id,
         mode="before_commit",
         connector_id="mock_erp",
         request=request or {"connector": "mock_erp", "simulated": True},
@@ -315,7 +335,7 @@ def _writeback_record(
         status=status,
         idempotency_key="idem-1",
         attempts=1,
-        created_at="2026-06-10T00:00:01Z",
+        created_at=created_at,
         completed_at="2026-06-10T00:00:02Z",
     )
 
@@ -794,6 +814,44 @@ def test_action_repository_contract_persists_compensation_required_writeback_fie
     assert writebacks[0]["status"] == "compensation_required"
     assert writebacks[0]["request"] == request
     assert writebacks[0]["response"] == response
+
+
+def test_action_repository_contract_lists_unresolved_writebacks(harness: ActionHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
+        harness.repository.insert_action_writeback(
+            transaction=transaction,
+            record=_writeback_record(
+                writeback_id="wb_old",
+                status="outcome_unknown",
+                created_at="2026-06-10T00:00:01Z",
+            ),
+        )
+        harness.repository.insert_action_writeback(
+            transaction=transaction,
+            record=_writeback_record(
+                writeback_id="wb_new",
+                status="compensation_required",
+                created_at="2026-06-10T00:00:03Z",
+            ),
+        )
+        harness.repository.insert_action_writeback(
+            transaction=transaction,
+            record=_writeback_record(writeback_id="wb_failed", status="failed"),
+        )
+        harness.repository.insert_action_writeback(
+            transaction=transaction,
+            record=_writeback_record(writeback_id="wb_other", tenant_id="tenant-other", status="outcome_unknown"),
+        )
+        rows = harness.repository.list_action_writebacks(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            statuses=("outcome_unknown", "compensation_required"),
+            limit=2,
+        )
+
+    assert [row.writeback_id for row in rows] == ["wb_new", "wb_old"]
+    assert {row.status for row in rows} == {"outcome_unknown", "compensation_required"}
 
 
 def test_action_repository_contract_updates_object_target_and_records_edit(harness: ActionHarness) -> None:

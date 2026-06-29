@@ -43,12 +43,23 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "datasets: {" in generated
     assert "export type Dataset = {" in generated
     assert "export type DatasetInspectionPayload = {" in generated
+    assert "export type DatasetQualityContractCheck = {" in generated
     assert "list(): Promise<Dataset[]>;" in generated
     assert "versions(namespace: string, name: string): Promise<DatasetVersion[]>;" in generated
     assert (
         "preview(namespace: string, name: string, options?: DatasetPreviewOptions): Promise<TabularRow[]>;" in generated
     )
     assert "inspect(namespace: string, name: string, options?: DatasetInspectOptions)" in generated
+    assert "qualityChecks: {" in generated
+    assert "list(namespace: string, name: string): Promise<DatasetQualityContractCheckList>;" in generated
+    assert "create(namespace: string, name: string, payload: DatasetQualityContractCheckCreateRequest)" in generated
+    assert "export type DatasetQualityContractCheckUpdateRequest = {" in generated
+    assert "update(namespace: string, name: string, checkId: string" in generated
+    assert "export type DatasetQualityResultHistory = {" in generated
+    assert "export type DatasetQualityResultSummary = {" in generated
+    assert "qualityResults: {" in generated
+    assert "list(namespace: string, name: string, options?: DatasetQualityResultHistoryOptions)" in generated
+    assert "summary(namespace: string, name: string, options?: DatasetQualityResultSummaryOptions)" in generated
     assert "ontology: {" in generated
     assert "export type OntologyCatalog = {" in generated
     assert "catalog(): Promise<OntologyCatalog>;" in generated
@@ -59,6 +70,13 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type AipBuilderRunResult = {" in generated
     assert "export type AipAgentRunRequest = {" in generated
     assert "export type AipAgentRunResult = {" in generated
+    assert "export type ContentSearchRequest = {" in generated
+    assert "export type ContentSearchHit = {" in generated
+    assert "export type MediaProcessingRun = {" in generated
+    assert "media: {" in generated
+    assert "search(payload: ContentSearchRequest): Promise<ContentSearchHit[]>;" in generated
+    assert "list(filters?: MediaProcessingRunListFilters): Promise<MediaProcessingRun[]>;" in generated
+    assert "get(runId: string): Promise<MediaProcessingRun>;" in generated
     assert "aip: {" in generated
     assert "validate(payload: AipBuilderValidateRequest): Promise<AipBuilderValidationResult>;" in generated
     assert "run(payload: AipBuilderRunRequest): Promise<AipBuilderRunResult>;" in generated
@@ -91,7 +109,11 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "preflight(payload?: BackupRestorePreflightRequest): Promise<BackupRestorePreflightReport>;" in generated
     assert "startRestoreMode(payload?: BackupRestoreModeStartRequest): Promise<BackupRestoreModeReport>;" in generated
     assert "restoreModeStatus(restoreId: string): Promise<BackupRestoreModeReport>;" in generated
+    assert "postRestoreValidation(restoreId: string, payload?: BackupRestorePostRestoreValidationRequest)" in generated
     assert "approveResume(restoreId: string, payload?: BackupRestoreResumeApprovalRequest):" in generated
+    assert "recoveryOverview(): Promise<BackupRestoreRecoveryOverview>;" in generated
+    assert "export type BackupRestorePostRestoreValidationReport = {" in generated
+    assert "export type BackupRestoreRecoveryOverview = {" in generated
     assert "export type ObservabilityDetectorConfig = {" in generated
     assert "detect(payload: ObservabilityDetectRequest): Promise<ObservabilityReport>;" in generated
     assert "deadLetterRecords: {" in generated
@@ -115,6 +137,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "transforms: {" in generated
     assert "retry(runId: string): Promise<TransformRetryResult>;" in generated
     assert "reconciliation: {" in generated
+    assert "list(filters?: ActionWritebackQueueFilters): Promise<ActionWritebackQueueResult>;" in generated
     assert "resolve(writebackId: string, payload: ActionWritebackReconciliationRequest):" in generated
     assert "workflows: {" in generated
     assert "startConnectorSync(payload: ConnectorSyncWorkflowStartRequest" in generated
@@ -157,7 +180,11 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert browser_surface == expected_surface
     assert ts_surface == browser_surface
     assert ts_surface["system"] == ["health"]
-    assert ts_surface["datasets"] == ["list", "versions", "preview", "inspect"]
+    assert ts_surface["datasets"] == {
+        "_self": ["list", "versions", "preview", "inspect"],
+        "qualityChecks": ["list", "create", "update"],
+        "qualityResults": ["list", "summary"],
+    }
     assert ts_surface["ontology"] == ["catalog", "validate"]
     assert ts_surface["aip"] == {"builder": ["validate", "run"], "agent": ["run"]}
     assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide"]}
@@ -165,15 +192,23 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert objects_surface["generic"] == ["get", "query", "links"]
     assert ts_surface["objectSets"] == ["list", "create", "get"]
     assert ts_surface["materializations"] == ["run"]
+    assert ts_surface["media"] == {"content": ["search"], "processingRuns": ["list", "get"]}
     assert ts_surface["operations"] == {
-        "backupRestore": ["preflight", "startRestoreMode", "restoreModeStatus", "approveResume"],
+        "backupRestore": [
+            "preflight",
+            "startRestoreMode",
+            "restoreModeStatus",
+            "postRestoreValidation",
+            "approveResume",
+            "recoveryOverview",
+        ],
         "deadLetterEvents": ["retry"],
         "deadLetterRecords": ["list", "get", "retry", "bulkRetry", "discard"],
         "icebergMaintenance": ["planReadOnly", "plan"],
         "index": ["replayObjectType", "replayFailedRun"],
         "lineage": ["get"],
         "observability": ["detect"],
-        "reconciliation": ["resolve"],
+        "reconciliation": ["list", "resolve"],
         "runs": ["list", "detail", "promptArtifact"],
         "transforms": ["retry"],
         "workflows": ["startConnectorSync", "get"],
@@ -207,6 +242,11 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "insights: {",
         "reviews: {",
         "aip: {",
+        "media: {",
+        "content: {",
+        "search: (payload) => request(`/api/media/content/search`, {",
+        "processingRuns: {",
+        "get: (runId) => request(`/api/media/processing-runs/${encodeURIComponent(runId)}`),",
         "builder: {",
         "validate: (payload) => request(`/api/aip/builder/validate`, {",
         "run: (payload) => request(`/api/aip/builder/run`, {",

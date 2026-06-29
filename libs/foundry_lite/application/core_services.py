@@ -29,6 +29,7 @@ from foundry_lite.application.services.runtime_bundle import (
     ErasureService,
     IcebergMaintenanceService,
     InsightReviewService,
+    OutboxPublisherService,
     RecordDlqService,
     RuntimeService,
     WorkflowOrchestrationService,
@@ -61,6 +62,7 @@ __all__ = [
     "ObjectServices",
     "OntologySearchService",
     "OntologyService",
+    "OutboxPublisherService",
     "RecordDlqService",
     "RuntimeService",
     "TransformService",
@@ -101,6 +103,7 @@ class CoreServices:
     object_store: ObjectServices
     ontology: OntologyService
     ontology_search: OntologySearchService
+    outbox_publisher: OutboxPublisherService
     record_dlq: RecordDlqService
     runtime: RuntimeService
     transform: TransformService
@@ -122,7 +125,6 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
     object_store = ObjectServices.create(dependencies)
     ontology = build_service(OntologyService, dependencies)
     ontology_search = build_service(OntologySearchService, dependencies)
-    record_dlq = build_service(RecordDlqService, dependencies)
     return service_type(
         action=build_service(ActionService, dependencies),
         agent_runtime=build_service(AgentRuntimeService, dependencies),
@@ -148,7 +150,8 @@ def _new_core_services(service_type: type[CoreServices], dependencies: CoreDepen
         object_store=object_store,
         ontology=ontology,
         ontology_search=ontology_search,
-        record_dlq=record_dlq,
+        outbox_publisher=build_service(OutboxPublisherService, dependencies),
+        record_dlq=build_service(RecordDlqService, dependencies),
         runtime=build_service(RuntimeService, dependencies),
         transform=build_service(TransformService, dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies),
@@ -187,6 +190,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         *services.object_store.items(),
         services.ontology,
         services.ontology_search,
+        services.outbox_publisher,
         services.record_dlq,
         services.runtime,
         services.transform,
@@ -225,6 +229,7 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "object_search_service": services.object_store.search,
         "object_sets_service": services.object_store.sets,
         "ontology_service": services.ontology,
+        "outbox_publisher_service": services.outbox_publisher,
         "record_dlq_service": services.record_dlq,
         "runtime_service": services.runtime,
         "tool_broker_service": services.tool_broker,

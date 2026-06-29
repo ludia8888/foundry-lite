@@ -157,6 +157,39 @@ def test_restore_mode_blocks_platform_write_traffic(foundry: FoundryLite, tmp_pa
     )
 
 
+def test_backup_restore_recovery_overview_summarizes_active_restore_and_preflight(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.restore_overview", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.restore_overview", _csv(tmp_path, "overview.csv"), ctx=ctx)
+
+    mode = foundry.operations.start_restore_mode(
+        ctx=ctx,
+        backup_id="backup-overview",
+        restore_id="restore-overview",
+    )
+    overview = foundry.operations.recovery_overview(ctx=ctx)
+
+    assert overview["activeRestoreMode"] == mode
+    assert overview["latestRestoreMode"] == mode
+    assert overview["latestPreflight"] is not None
+    assert overview["latestPostRestoreValidation"] is None
+    assert overview["latestPreflight"]["backupId"] == "backup-overview"
+    assert overview["latestPreflight"]["status"] == "ready"
+    assert overview["restoreTrafficGate"]["activeRestoreId"] == "restore-overview"
+    assert overview["restoreTrafficGate"]["isWriteTrafficPaused"] is True
+    assert overview["restoreTrafficGate"]["isOutboxPublisherPaused"] is True
+    assert overview["restoreTrafficGate"]["isServingTrafficOpen"] is False
+    assert overview["summary"]["activeRestoreMode"] is True
+    assert overview["summary"]["preflightStatus"] == "ready"
+    assert overview["requiredOperatorActions"] == [
+        "run_post_restore_closed_loop_validation",
+        "approve_restore_resume",
+    ]
+
+
 def test_operations_retry_dead_letter_event_checks_permission_before_materialization(foundry: FoundryLite) -> None:
     ctx = demo_admin_context()
     foundry.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
@@ -186,6 +219,19 @@ def test_restore_resume_requires_closed_loop_validation(foundry: FoundryLite, tm
 
     foundry.operations.start_restore_mode(ctx=ctx, backup_id="backup-validation", restore_id="restore-validation")
 
+    validation = foundry.operations.run_post_restore_validation(
+        "restore-validation",
+        ctx=ctx,
+        validation_id="closed-loop-missing",
+    )
+
+    assert validation["status"] == "blocked"
+    assert validation["validationId"] == "closed-loop-missing"
+    assert {finding["check"] for finding in validation["findings"]} == {
+        "object_index_pointer",
+        "actionRuns",
+        "materializationRuns",
+    }
     with pytest.raises(ConflictDetected, match="post-restore validation must pass"):
         foundry.operations.approve_restore_resume("restore-validation", ctx=ctx, validation_id="closed-loop-missing")
 
@@ -195,6 +241,12 @@ def test_post_restore_closed_loop_smoke(foundry: FoundryLite) -> None:
     _apply_action_and_materialize(foundry, ctx)
     _seed_dead_letter_event(foundry, outbox_id="outbox_restore_resume", dlq_id="dlq_restore_resume")
     foundry.operations.start_restore_mode(ctx=ctx, backup_id="backup-resume", restore_id="restore-resume")
+    validation = foundry.operations.run_post_restore_validation(
+        "restore-resume",
+        ctx=ctx,
+        validation_id="closed-loop-resume",
+    )
+    overview = foundry.operations.recovery_overview(ctx=ctx)
 
     approved = foundry.operations.approve_restore_resume(
         "restore-resume",
@@ -203,6 +255,11 @@ def test_post_restore_closed_loop_smoke(foundry: FoundryLite) -> None:
     )
     retry = foundry.operations.retry_dead_letter_event("dlq_restore_resume", ctx=ctx)
 
+    assert validation["status"] == "passed"
+    assert validation["summary"]["outboxResumeEligible"] is True
+    assert overview["latestPostRestoreValidation"] is not None
+    assert overview["latestPostRestoreValidation"]["validationId"] == "closed-loop-resume"
+    assert overview["requiredOperatorActions"] == ["approve_restore_resume"]
     assert approved["status"] == "resume_approved"
     assert approved["is_outbox_publisher_paused"] is False
     assert approved["is_serving_traffic_open"] is True
@@ -217,6 +274,11 @@ def test_outbox_retry_stays_blocked_when_any_restore_mode_remains_active(foundry
     _seed_dead_letter_event(foundry, outbox_id="outbox_restore_overlap", dlq_id="dlq_restore_overlap")
     restore_a = foundry.operations.start_restore_mode(ctx=ctx, backup_id="backup-a", restore_id="restore-a")
     foundry.operations.start_restore_mode(ctx=ctx, backup_id="backup-b", restore_id="restore-b")
+    foundry.operations.run_post_restore_validation(
+        "restore-b",
+        ctx=ctx,
+        validation_id="closed-loop-restore-b",
+    )
     approved_b = foundry.operations.approve_restore_resume(
         "restore-b",
         ctx=ctx,

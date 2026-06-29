@@ -6,6 +6,7 @@ from foundry_lite.application.action_types import (
     ActionApplyCommand,
     ActionApplyOutcome,
     ActionApplyResponse,
+    ActionWritebackQueueResult,
     ActionWritebackReconciliationResult,
 )
 from foundry_lite.application.ports import (
@@ -124,6 +125,16 @@ class ActionService(CoreService):
             external_writeback_uri=external_writeback_uri,
             ctx=ctx,
         )
+
+    def list_unresolved_action_writebacks(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> ActionWritebackQueueResult:
+        ctx = ctx or RequestContext()
+        return self._writeback_reconciliation_workflow().list_unresolved(ctx=ctx, status=status, limit=limit)
 
     def _run_action_command(
         self,

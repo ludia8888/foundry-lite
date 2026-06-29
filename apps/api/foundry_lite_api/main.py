@@ -9,12 +9,23 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from foundry_lite.application.action_types import ActionApplyResponse, ActionWritebackReconciliationResult
+from foundry_lite.application.action_types import (
+    ActionApplyResponse,
+    ActionWritebackQueueResult,
+    ActionWritebackReconciliationResult,
+)
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
     BackupRestoreModeReport,
+    BackupRestorePostRestoreValidationReport,
     BackupRestorePreflightReport,
+    BackupRestoreRecoveryOverview,
     DatasetInspectionPayload,
+    DatasetQualityContractCheck,
+    DatasetQualityContractCheckCreateResult,
+    DatasetQualityContractCheckList,
+    DatasetQualityResultHistory,
+    DatasetQualityResultSummary,
     DatasetRow,
     DatasetVersionRow,
     DeadLetterRecordBulkRetryResult,
@@ -39,6 +50,8 @@ from foundry_lite.application.ports import (
     TabularRow,
     TransformRetryResult,
 )
+from foundry_lite.application.ports.content_index import ContentSearchHit, HybridContentQuery
+from foundry_lite.application.ports.media_derivative_repository import MediaProcessingRunRecord
 from foundry_lite.application.upload_limits import max_webhook_body_bytes
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
@@ -115,7 +128,29 @@ class BackupRestoreModeStartRequest(BaseModel):
     restore_id: str | None = Field(default=None, alias="restoreId")
 
 
+class DatasetQualityContractCheckCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    config: JsonObject
+    severity: str | None = None
+    enabled: bool = True
+
+
+class DatasetQualityContractCheckUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    config: JsonObject | None = None
+    severity: str | None = None
+    enabled: bool | None = None
+
+
 class BackupRestoreResumeApprovalRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    validation_id: str | None = Field(default=None, alias="validationId")
+
+
+class BackupRestorePostRestoreValidationRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     validation_id: str | None = Field(default=None, alias="validationId")
@@ -156,6 +191,14 @@ class ObjectQueryRequest(BaseModel):
     limit: int = 50
     cursor: str | None = None
     search_text: str | None = Field(default=None, alias="search")
+
+
+class ContentSearchRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    text: str | None = None
+    top_k: int = Field(default=10, alias="topK", ge=1, le=50)
+    allowed_classifications: list[str] | None = Field(default=None, alias="allowedClassifications")
 
 
 class WebhookPayloadRequest(BaseModel):
@@ -485,6 +528,88 @@ def inspect_dataset(request: Request, namespace: str, name: str, version: str = 
         raise _handle_error(exc, request) from exc
 
 
+@app.get("/api/datasets/{namespace}/{name}/quality-contract/checks")
+def list_dataset_quality_contract_checks(
+    request: Request,
+    namespace: str,
+    name: str,
+) -> DatasetQualityContractCheckList:
+    try:
+        return foundry.datasets.list_quality_contract_checks(f"{namespace}.{name}", ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/datasets/{namespace}/{name}/quality-contract/results")
+def list_dataset_quality_results(
+    request: Request,
+    namespace: str,
+    name: str,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> DatasetQualityResultHistory:
+    try:
+        return foundry.datasets.list_quality_results(f"{namespace}.{name}", limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/datasets/{namespace}/{name}/quality-contract/results/summary")
+def get_dataset_quality_result_summary(
+    request: Request,
+    namespace: str,
+    name: str,
+    latest_limit: int = Query(default=5, ge=1, le=20),
+) -> DatasetQualityResultSummary:
+    try:
+        return foundry.datasets.get_quality_result_summary(
+            f"{namespace}.{name}",
+            latest_limit=latest_limit,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/datasets/{namespace}/{name}/quality-contract/checks")
+def create_dataset_quality_contract_check(
+    request: Request,
+    namespace: str,
+    name: str,
+    payload: DatasetQualityContractCheckCreateRequest,
+) -> DatasetQualityContractCheckCreateResult:
+    try:
+        return foundry.datasets.create_quality_contract_check(
+            f"{namespace}.{name}",
+            config=payload.config,
+            severity=payload.severity,
+            enabled=payload.enabled,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.patch("/api/datasets/{namespace}/{name}/quality-contract/checks/{check_id}")
+def update_dataset_quality_contract_check(
+    request: Request,
+    namespace: str,
+    name: str,
+    check_id: str,
+    payload: DatasetQualityContractCheckUpdateRequest,
+) -> DatasetQualityContractCheck:
+    try:
+        return foundry.datasets.update_quality_contract_check(
+            f"{namespace}.{name}",
+            check_id,
+            config=payload.config,
+            severity=payload.severity,
+            enabled=payload.enabled,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.get("/api/ontology/catalog")
 def ontology_catalog(request: Request) -> OntologyCatalogResult:
     try:
@@ -526,6 +651,48 @@ def run_aip_agent(request: Request, payload: AipAgentRunRequest) -> JsonObject:
         ctx=_ctx(request),
     )
     return result.to_payload()
+
+
+@app.post("/api/media/content/search")
+def search_media_content(request: Request, payload: ContentSearchRequest) -> list[ContentSearchHit]:
+    try:
+        return foundry.media.search_content(
+            _ctx(request),
+            query=HybridContentQuery(
+                tenant_id="",
+                text=payload.text,
+                top_k=payload.top_k,
+                allowed_classifications=(
+                    tuple(payload.allowed_classifications) if payload.allowed_classifications is not None else None
+                ),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/media/processing-runs")
+def list_media_processing_runs(
+    request: Request,
+    source_media_item_version_id: str | None = Query(default=None, alias="sourceMediaItemVersionId"),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> list[MediaProcessingRunRecord]:
+    try:
+        return foundry.media.list_media_runs(
+            _ctx(request),
+            source_media_item_version_id=source_media_item_version_id,
+            limit=limit,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/media/processing-runs/{run_id}")
+def get_media_processing_run(request: Request, run_id: str) -> MediaProcessingRunRecord:
+    try:
+        return foundry.media.media_run_detail(_ctx(request), media_processing_run_id=run_id)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
 
 
 @app.get("/api/objects/{object_type}/{object_id}")
@@ -768,6 +935,22 @@ def get_backup_restore_mode_status(request: Request, restore_id: str) -> BackupR
         raise _handle_error(exc, request) from exc
 
 
+@app.post("/api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation")
+def run_backup_restore_post_restore_validation(
+    request: Request,
+    restore_id: str,
+    payload: BackupRestorePostRestoreValidationRequest,
+) -> BackupRestorePostRestoreValidationReport:
+    try:
+        return foundry.operations.run_post_restore_validation(
+            restore_id,
+            ctx=_ctx(request),
+            validation_id=payload.validation_id,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.post("/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume")
 def approve_backup_restore_resume(
     request: Request,
@@ -780,6 +963,14 @@ def approve_backup_restore_resume(
             ctx=_ctx(request),
             validation_id=payload.validation_id,
         )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/recovery/overview")
+def get_operations_recovery_overview(request: Request) -> BackupRestoreRecoveryOverview:
+    try:
+        return foundry.operations.recovery_overview(ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -824,6 +1015,18 @@ def start_connector_sync_workflow(
 def get_product_workflow_run(request: Request, workflow_run_id: str) -> ProductWorkflowRun:
     try:
         return foundry.operations.product_workflow_run(workflow_run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/reconciliation/writebacks")
+def list_action_writeback_reconciliation_queue(
+    request: Request,
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> ActionWritebackQueueResult:
+    try:
+        return foundry.operations.list_unresolved_action_writebacks(status=status, limit=limit, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

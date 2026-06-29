@@ -112,6 +112,7 @@ class FoundryLite:
             services.iceberg_maintenance,
             services.workflow,
             services.prompt_artifact,
+            services.outbox_publisher,
         )
         self.demo = SupplyChainDemo(services.demo, reset_fresh=lambda: self.reset(confirm_dev=True))
 

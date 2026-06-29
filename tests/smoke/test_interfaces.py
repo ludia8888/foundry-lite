@@ -446,10 +446,19 @@ def test_api_backup_restore_mode_start_and_status_return_pause_gate(monkeypatch)
             assert restore_id == "restore-api"
             return _restore_mode_payload(ctx.tenant_id)
 
+        def run_post_restore_validation(self, restore_id, *, ctx, validation_id):
+            assert restore_id == "restore-api"
+            assert validation_id == "closed-loop-api"
+            return _post_restore_validation_payload(ctx.tenant_id)
+
         def approve_restore_resume(self, restore_id, *, ctx, validation_id):
             assert restore_id == "restore-api"
             assert validation_id == "closed-loop-api"
             return _restore_mode_payload(ctx.tenant_id, status="resume_approved")
+
+        def recovery_overview(self, *, ctx):
+            mode = _restore_mode_payload(ctx.tenant_id)
+            return _recovery_overview_payload(ctx.tenant_id, mode)
 
     class FakeFoundry:
         operations = FakeOperations()
@@ -463,19 +472,31 @@ def test_api_backup_restore_mode_start_and_status_return_pause_gate(monkeypatch)
         json={"backupId": "backup-api", "restoreId": "restore-api"},
     )
     status = client.get("/api/operations/backup-restore/restore-mode/restore-api", headers=headers)
+    validation = client.post(
+        "/api/operations/backup-restore/restore-mode/restore-api/post-restore-validation",
+        headers=headers,
+        json={"validationId": "closed-loop-api"},
+    )
     approved = client.post(
         "/api/operations/backup-restore/restore-mode/restore-api/approve-resume",
         headers=headers,
         json={"validationId": "closed-loop-api"},
     )
+    overview = client.get("/api/operations/recovery/overview", headers=headers)
 
     assert started.status_code == 200
     assert status.status_code == 200
+    assert validation.status_code == 200
     assert approved.status_code == 200
+    assert overview.status_code == 200
     assert started.json()["is_outbox_publisher_paused"] is True
     assert status.json()["is_serving_traffic_open"] is False
+    assert validation.json()["status"] == "passed"
+    assert validation.json()["validationId"] == "closed-loop-api"
     assert approved.json()["status"] == "resume_approved"
     assert approved.json()["is_outbox_publisher_paused"] is False
+    assert overview.json()["activeRestoreMode"]["restoreId"] == "restore-api"
+    assert overview.json()["restoreTrafficGate"]["isWriteTrafficPaused"] is True
 
 
 def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monkeypatch) -> None:
@@ -1189,6 +1210,48 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert inspected.json()["version"]["version_number"] == 1
     assert inspected.json()["manifest"]["files"][0]["row_count"] == 3
 
+    contract_check = client.post(
+        "/api/datasets/clean/orders/quality-contract/checks",
+        headers=headers,
+        json={"config": {"type": "row_count_min", "min": 0}, "severity": "warn"},
+    )
+    contract_replay = client.post(
+        "/api/datasets/clean/orders/quality-contract/checks",
+        headers=headers,
+        json={"config": {"type": "row_count_min", "min": 0}, "severity": "warn"},
+    )
+    contract_update = client.patch(
+        f"/api/datasets/clean/orders/quality-contract/checks/{contract_check.json()['check']['id']}",
+        headers=headers,
+        json={"enabled": False},
+    )
+    contract_list = client.get("/api/datasets/clean/orders/quality-contract/checks", headers=headers)
+    quality_results = client.get("/api/datasets/clean/orders/quality-contract/results?limit=5", headers=headers)
+    quality_summary = client.get(
+        "/api/datasets/clean/orders/quality-contract/results/summary?latest_limit=3",
+        headers=headers,
+    )
+    assert contract_check.status_code == 200
+    assert contract_check.json()["isIdempotentReplay"] is False
+    assert contract_replay.status_code == 200
+    assert contract_replay.json()["isIdempotentReplay"] is True
+    assert contract_replay.json()["check"]["id"] == contract_check.json()["check"]["id"]
+    assert contract_update.status_code == 200
+    assert contract_update.json()["enabled"] is False
+    assert contract_list.status_code == 200
+    assert contract_list.json()["datasetRef"] == "clean.orders"
+    check_id = contract_check.json()["check"]["id"]
+    assert check_id in {row["id"] for row in contract_list.json()["checks"]}
+    assert any(row["id"] == check_id and row["enabled"] is False for row in contract_list.json()["checks"])
+    assert quality_results.status_code == 200
+    assert quality_results.json()["datasetRef"] == "clean.orders"
+    assert quality_results.json()["results"]
+    assert all(row["transactionId"] for row in quality_results.json()["results"])
+    assert quality_summary.status_code == 200
+    assert quality_summary.json()["datasetRef"] == "clean.orders"
+    assert quality_summary.json()["totalResults"] >= len(quality_summary.json()["latestResults"])
+    assert quality_summary.json()["statusCounts"]
+
     valid_ontology = Path("examples/supply-chain-demo/ontology/order-customer.yaml").read_text(encoding="utf-8")
     ontology_validation = client.post("/api/ontology/validate", headers=headers, json={"yaml": valid_ontology})
     assert ontology_validation.status_code == 200
@@ -1641,6 +1704,45 @@ def test_api_operations_reconciliation_resolves_action_writeback(foundry, monkey
     assert foundry.objects.get("Order", "O-1001", ctx=ctx)["properties"]["status"] == "APPROVED"
 
 
+def test_api_operations_reconciliation_queue_lists_unresolved_writebacks(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "api-reconcile-queue"
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "API queue evidence"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_outcome_unknown=True,
+            ctx=ctx,
+        )
+    monkeypatch.setattr(api_main, "foundry", foundry)
+
+    queued = TestClient(app).get(
+        "/api/operations/reconciliation/writebacks?status=outcome_unknown&limit=5",
+        headers=headers,
+    )
+
+    assert queued.status_code == 200
+    items = queued.json()["items"]
+    assert [item["idempotencyKey"] for item in items] == [idempotency_key]
+    assert items[0]["status"] == "outcome_unknown"
+    assert items[0]["lastObservedStatus"] == "unknown"
+
+    resolved = TestClient(app).post(
+        f"/api/operations/reconciliation/{items[0]['writebackId']}/resolve",
+        headers=headers,
+        json={"remoteStatus": "succeeded", "remoteResourceId": f"mock-resource-{idempotency_key}"},
+    )
+    after = TestClient(app).get("/api/operations/reconciliation/writebacks", headers=headers)
+    assert resolved.status_code == 200
+    assert after.json()["items"] == []
+
+
 def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     class _Datasets:
         def list_versions(self, *_args, **_kwargs):
@@ -1682,6 +1784,9 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
 
         def restore_mode_status(self, *_args, **_kwargs):
             raise ValidationFailed("restore mode status is unavailable")
+
+        def run_post_restore_validation(self, *_args, **_kwargs):
+            raise ValidationFailed("post-restore validation is unavailable")
 
         def approve_restore_resume(self, *_args, **_kwargs):
             raise ValidationFailed("restore resume approval is unavailable")
@@ -1799,6 +1904,13 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     restore_status = client.get("/api/operations/backup-restore/restore-mode/restore-error")
     assert restore_status.status_code == 400
     assert "request_id" in restore_status.json()["detail"]
+
+    restore_validation = client.post(
+        "/api/operations/backup-restore/restore-mode/restore-error/post-restore-validation",
+        json={"validationId": "restore-error-validation"},
+    )
+    assert restore_validation.status_code == 400
+    assert "request_id" in restore_validation.json()["detail"]
 
     restore_approval = client.post(
         "/api/operations/backup-restore/restore-mode/restore-error/approve-resume",
@@ -2179,6 +2291,60 @@ def _restore_mode_payload(tenant_id: str, *, status: str = "paused") -> dict[str
         "reason": "restore mode started with write traffic and outbox publisher paused",
         "highWatermarks": {},
         "summary": {"activeRestoreMode": not is_resumed},
+    }
+
+
+def _post_restore_validation_payload(tenant_id: str) -> dict[str, object]:
+    return {
+        "generatedAt": "2026-06-19T01:00:30Z",
+        "tenantId": tenant_id,
+        "restoreId": "restore-api",
+        "backupId": "backup-api",
+        "validationId": "closed-loop-api",
+        "status": "passed",
+        "preflightStatus": "ready",
+        "findings": [],
+        "highWatermarks": {},
+        "summary": {
+            "validationId": "closed-loop-api",
+            "postRestoreValidation": "dataset_object_action_materialization_closed_loop",
+            "findingCount": 0,
+            "outboxResumeEligible": True,
+        },
+    }
+
+
+def _recovery_overview_payload(tenant_id: str, mode: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "generatedAt": "2026-06-19T01:01:00Z",
+        "tenantId": tenant_id,
+        "activeRestoreMode": mode,
+        "latestRestoreMode": mode,
+        "latestPreflight": {
+            "generatedAt": "2026-06-19T01:00:00Z",
+            "backupId": "backup-api",
+            "status": "ready",
+            "datasetVersionCount": 1,
+            "issueCount": 0,
+            "activeIndexPointerCount": 1,
+        },
+        "latestPostRestoreValidation": None,
+        "restoreTrafficGate": {
+            "isWriteTrafficPaused": True,
+            "isOutboxPublisherPaused": True,
+            "isServingTrafficOpen": False,
+            "activeRestoreId": "restore-api",
+            "reason": "restore mode started with write traffic and outbox publisher paused",
+        },
+        "requiredOperatorActions": ["run_post_restore_closed_loop_validation", "approve_restore_resume"],
+        "summary": {
+            "activeRestoreMode": True,
+            "latestRestoreStatus": "paused",
+            "preflightStatus": "ready",
+            "postRestoreValidationStatus": "not_run",
+            "blockingIssueCount": 0,
+            "requiredOperatorActionCount": 2,
+        },
     }
 
 

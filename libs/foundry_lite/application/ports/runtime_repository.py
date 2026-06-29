@@ -1,3 +1,5 @@
+# pyright: reportUnusedImport=false
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -6,29 +8,19 @@ from typing import Literal, NotRequired, Protocol, TypedDict
 
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 from foundry_lite.application.ports.workflow_adapter import WorkflowRunRecord, WorkflowRunRow
-from foundry_lite.application.runtime_repository_backup_restore import (
-    BackupRestoreDatasetVersion as BackupRestoreDatasetVersion,
-)
-from foundry_lite.application.runtime_repository_backup_restore import (
-    BackupRestoreIndexPointer as BackupRestoreIndexPointer,
-)
-from foundry_lite.application.runtime_repository_backup_restore import (
-    BackupRestoreManifestIssue as BackupRestoreManifestIssue,
-)
-from foundry_lite.application.runtime_repository_backup_restore import (
-    BackupRestoreModeReport as BackupRestoreModeReport,
-)
-from foundry_lite.application.runtime_repository_backup_restore import (
-    BackupRestoreModeStatus as BackupRestoreModeStatus,
-)
-from foundry_lite.application.runtime_repository_backup_restore import (
-    BackupRestorePreflightReport as BackupRestorePreflightReport,
-)
-from foundry_lite.application.runtime_repository_backup_restore import (
-    BackupRestorePreflightStatus as BackupRestorePreflightStatus,
-)
-from foundry_lite.application.runtime_repository_backup_restore import (
-    BackupRestoreVersionStatus as BackupRestoreVersionStatus,
+from foundry_lite.application.runtime_repository_backup_restore import (  # noqa: F401
+    BackupRestoreDatasetVersion,
+    BackupRestoreIndexPointer,
+    BackupRestoreManifestIssue,
+    BackupRestoreModeReport,
+    BackupRestoreModeStatus,
+    BackupRestorePostRestoreValidationReport,
+    BackupRestorePostRestoreValidationSummary,
+    BackupRestorePreflightReport,
+    BackupRestorePreflightStatus,
+    BackupRestorePreflightSummary,
+    BackupRestoreRecoveryOverview,
+    BackupRestoreVersionStatus,
 )
 
 RuntimeLookupTable = Literal["transforms", "materializations"]
@@ -100,6 +92,18 @@ class OutboxEventRecord:
     correlation_id: str
     created_at: str
     published_at: str | None
+
+
+@dataclass(frozen=True)
+class DeadLetterEventRecord:
+    event_id: str
+    tenant_id: str
+    source_event_id: str | None
+    event_type: str
+    payload: RuntimeJsonObject
+    error: RuntimeJsonObject
+    failed_at: str
+    retry_after: str | None
 
 
 @dataclass(frozen=True)
@@ -405,6 +409,34 @@ class RuntimeRepository(Protocol):
         """Return rows by tenant from an allowlisted runtime table."""
         ...
 
+    def pending_outbox_events(self, *, transaction: TransactionContext, tenant_id: str, limit: int) -> list[RuntimeRow]:
+        """Return bounded pending outbox rows in publish order."""
+        ...
+
+    def mark_outbox_event_publishing(
+        self, *, transaction: TransactionContext, tenant_id: str, event_id: str, transition: StatusTransition
+    ) -> RuntimeRow | None:
+        """CAS a pending outbox row into the publishing claim state."""
+        ...
+
+    def mark_outbox_event_published(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        event_id: str,
+        transition: StatusTransition,
+        published_at: str,
+    ) -> RuntimeRow | None:
+        """CAS a publishing outbox row into the published terminal state."""
+        ...
+
+    def mark_outbox_event_failed(
+        self, *, transaction: TransactionContext, tenant_id: str, event_id: str, transition: StatusTransition
+    ) -> RuntimeRow | None:
+        """CAS a publishing outbox row into the failed terminal state."""
+        ...
+
     def update_outbox_event_for_retry(
         self,
         *,
@@ -479,6 +511,10 @@ class RuntimeRepository(Protocol):
 
     def insert_outbox_event(self, *, transaction: TransactionContext, record: OutboxEventRecord) -> bool:
         """Persist an outbox event, returning False for idempotent duplicates."""
+        ...
+
+    def insert_dead_letter_event(self, *, transaction: TransactionContext, record: DeadLetterEventRecord) -> None:
+        """Persist a failed outbox publish event for operator retry."""
         ...
 
     def insert_lineage_edge(self, *, transaction: TransactionContext, record: LineageEdgeRecord) -> None:

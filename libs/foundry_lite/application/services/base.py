@@ -82,6 +82,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "object_search_service": "ObjectSearchService",
     "object_sets_service": "ObjectSetsService",
     "ontology_service": "OntologyService",
+    "outbox_publisher_service": "OutboxPublisherService",
     "record_dlq_service": "RecordDlqService",
     "runtime_service": "RuntimeService",
     "tool_broker_service": "ToolBrokerService",

@@ -183,6 +183,14 @@ def test_frontend_backend_surface_requires_helper_contract_test(tmp_path: Path) 
     assert any(finding.code == "sdk_helper_missing_request_contract_test" for finding in findings)
 
 
+def test_frontend_backend_surface_accepts_nested_sdk_surface_metadata() -> None:
+    surface = {"datasets": {"_self": ["preview"], "qualityChecks": ["list", "create"]}}
+
+    assert gate._sdk_surface_exists(surface, "datasets.preview")
+    assert gate._sdk_surface_exists(surface, "datasets.qualityChecks.list")
+    assert not gate._sdk_surface_exists(surface, "datasets.qualityChecks.delete")
+
+
 def _collect(root: Path) -> list[gate.FrontendBackendSurfaceFinding]:
     return gate.collect_findings(
         root,

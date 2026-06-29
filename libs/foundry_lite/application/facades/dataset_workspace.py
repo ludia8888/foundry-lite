@@ -5,6 +5,11 @@ from pathlib import Path
 
 from foundry_lite.application.ports import (
     DatasetInspectionPayload,
+    DatasetQualityContractCheck,
+    DatasetQualityContractCheckCreateResult,
+    DatasetQualityContractCheckList,
+    DatasetQualityResultHistory,
+    DatasetQualityResultSummary,
     DatasetRow,
     DatasetVersionRow,
     RestSourceConfig,
@@ -108,6 +113,73 @@ class DatasetWorkspace:
         self, dataset_ref: str, *, ctx: RequestContext | None = None, version: str = "latest"
     ) -> DatasetInspectionPayload:
         return self._datasets.registry.inspect_dataset(dataset_ref, ctx=ctx, version=version)
+
+    def list_quality_contract_checks(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> DatasetQualityContractCheckList:
+        dataset = self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
+        return self._datasets.quality.list_contract_checks(dataset, ctx=ctx)
+
+    def list_quality_results(
+        self,
+        dataset_ref: str,
+        *,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> DatasetQualityResultHistory:
+        dataset = self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
+        return self._datasets.quality.list_quality_results(dataset, limit=limit, ctx=ctx)
+
+    def get_quality_result_summary(
+        self,
+        dataset_ref: str,
+        *,
+        latest_limit: int = 5,
+        ctx: RequestContext | None = None,
+    ) -> DatasetQualityResultSummary:
+        dataset = self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
+        return self._datasets.quality.get_quality_result_summary(dataset, latest_limit=latest_limit, ctx=ctx)
+
+    def create_quality_contract_check(
+        self,
+        dataset_ref: str,
+        *,
+        config: Mapping[str, object],
+        severity: str | None = None,
+        enabled: bool = True,
+        ctx: RequestContext | None = None,
+    ) -> DatasetQualityContractCheckCreateResult:
+        dataset = self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
+        return self._datasets.quality.create_contract_check(
+            dataset,
+            config=config,
+            severity=severity,
+            enabled=enabled,
+            ctx=ctx,
+        )
+
+    def update_quality_contract_check(
+        self,
+        dataset_ref: str,
+        check_id: str,
+        *,
+        config: Mapping[str, object] | None = None,
+        severity: str | None = None,
+        enabled: bool | None = None,
+        ctx: RequestContext | None = None,
+    ) -> DatasetQualityContractCheck:
+        dataset = self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
+        return self._datasets.quality.update_contract_check(
+            dataset,
+            check_id,
+            config=config,
+            severity=severity,
+            enabled=enabled,
+            ctx=ctx,
+        )
 
     def upload_csv(
         self,

@@ -175,7 +175,12 @@ def _sdk_surface_exists(surface: dict[str, Any], sdk_path: str) -> bool:
     parts = sdk_path.split(".")
     if len(parts) == 2:
         group = surface.get(parts[0])
-        return isinstance(group, list) and parts[1] in group
+        if isinstance(group, list):
+            return parts[1] in group
+        if isinstance(group, dict):
+            methods = group.get("_self")
+            return isinstance(methods, list) and parts[1] in methods
+        return False
     if len(parts) == 3:
         group = surface.get(parts[0])
         if not isinstance(group, dict):

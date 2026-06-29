@@ -1,5 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+allowBuilds:
+  "@ast-grep/cli": true
 onlyBuiltDependencies:
   - "@ast-grep/cli"

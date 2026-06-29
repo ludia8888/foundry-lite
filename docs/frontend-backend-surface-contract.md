@@ -58,6 +58,7 @@ SDK helper, 파일을 봐야 하는지 남긴다.
 | Object Sets | `client.objectSets.list/create/get(...)` |
 | Actions | generated `client.actions.ApproveOrder.apply(...)` |
 | Materializations | `client.materializations.run(...)` |
+| Media/Content | `client.media.content.search(...)`, `client.media.processingRuns.list/get(...)` |
 | Operations | run list/detail, AI prompt artifact access, lineage get, transform retry, index replay, outbox DLQ retry, Record DLQ controls |
 | Platform Ops | observability detect, backup/restore, reconciliation, workflows, Iceberg maintenance `planReadOnly`/`plan` |
 | Insights | `client.insights.reviews.list/create/get/assign/decide(...)` |
@@ -83,6 +84,7 @@ operator-evidence note, and helper request-contract proof test.
 | Stale-version conflict UI | SDK `classifyFoundryLiteError(...)` can identify `stale_object_version`; the human-facing compare/refresh flow remains product work. |
 | Permission-denied masking UX | SDK `classifyFoundryLiteError(...)` can identify `permission_denied`; dedicated masked-field/role guidance UX remains product work. |
 | Full catalog-driven workspace UX | `ontology.catalog()` and dataset list/inspect give the frontend active metadata entrypoints, but S62-S64 screens still need richer drill-down flows. |
+| Full media upload/processing workspace UX | Content search and media processing run list/detail are current SDK surfaces. Browser upload flows, media-set catalog management, processor launch UX, preview rendering controls, visual search UI, and retention/legal-hold screens remain product work. |
 | Insight review workspace UI | `insight_reviews` persistence, `/api/insights/reviews`, generated `client.insights.reviews.*`, idempotent create/assign/decision, terminal decision conflict, and audit evidence are current. Evidence viewer UI, action execution orchestration, approval policy UI, and rich review workspace screens remain product work. |
 
 ## Completion Meaning
@@ -92,7 +94,7 @@ operator-evidence note, and helper request-contract proof test.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 46 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 57 frontend route surfaces
 -> browser SDK helper-contract proof for 12 frontend foundation helpers
 -> documentation count claims checked against the matrix and generated SDK helper list
 -> Web named-SDK-only usage

@@ -64,6 +64,66 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "datasets.qualityChecks.list",
+      "route": "GET /api/datasets/{namespace}/{name}/quality-contract/checks",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityChecks.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Persisted dataset quality contract checks are listed through the dataset boundary and applied by later dataset commits when enabled.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityChecks.create",
+      "route": "POST /api/datasets/{namespace}/{name}/quality-contract/checks",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityChecks.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Creating a quality contract check is idempotent by canonical check config, leaves audit evidence, and affects later dataset commit validation.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityChecks.update",
+      "route": "PATCH /api/datasets/{namespace}/{name}/quality-contract/checks/{check_id}",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityChecks.update",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Updating a quality contract check leaves audit evidence, and changed enabled/config state affects later dataset commit validation.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityResults.list",
+      "route": "GET /api/datasets/{namespace}/{name}/quality-contract/results",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityResults.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Dataset quality result history returns persisted commit-time check results with manifest hash, schema-version reference, run id, transaction id, status, and check metadata.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityResults.summary",
+      "route": "GET /api/datasets/{namespace}/{name}/quality-contract/results/summary",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityResults.summary",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Dataset quality result summary returns persisted commit-time check result counts by status and check type plus latest run evidence for trend/reporting surfaces.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "ontology.catalog",
       "route": "GET /api/ontology/catalog",
       "productArea": "ontology",
@@ -331,12 +391,36 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "operations.backup-restore.post-restore-validation",
+      "route": "POST /api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.backupRestore.postRestoreValidation",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Post-restore validation leaves durable audit evidence before resume approval can reopen retry/reprocess entrypoints.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.backup-restore.approve-resume",
       "route": "POST /api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
       "productArea": "operations-console",
       "sdkSurface": "operations.backupRestore.approveResume",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Resume approval leaves audit evidence and requires post-restore validation artifacts.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.recovery.overview",
+      "route": "GET /api/operations/recovery/overview",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.backupRestore.recoveryOverview",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Recovery overview joins latest preflight, active restore-mode traffic gates, and next operator actions into one read model.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -386,6 +470,18 @@
       "sdkSurface": "operations.workflows.get",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Workflow status returns durable output/error payload and foundry run linkage.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.reconciliation.list",
+      "route": "GET /api/operations/reconciliation/writebacks",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.reconciliation.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Unresolved action writebacks are available as a tenant-scoped reconciliation queue with status/deadline/remote evidence and redacted payloads.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -544,6 +640,42 @@
       "sdkSurface": "materializations.run",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Materialization run result exposes dataset transaction/version identity and manifest evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.content.search",
+      "route": "POST /api/media/content/search",
+      "productArea": "media-content-explorer",
+      "sdkSurface": "media.content.search",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Content search re-reads authoritative content_units rows after index lookup, keeps tenant/classification filtering, and returns source media version plus content unit citation ids.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.processing-runs.list",
+      "route": "GET /api/media/processing-runs",
+      "productArea": "media-content-explorer",
+      "sdkSurface": "media.processingRuns.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Media processing run list returns tenant-scoped OCR/ASR/video processing evidence rows, optionally filtered by immutable source media item version.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.processing-runs.get",
+      "route": "GET /api/media/processing-runs/{run_id}",
+      "productArea": "media-content-explorer",
+      "sdkSurface": "media.processingRuns.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Media processing run detail exposes the durable processing run status, derivative pointer, and typed failure fields for operator follow-up.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],

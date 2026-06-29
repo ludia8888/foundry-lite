@@ -160,7 +160,7 @@
       "riskTier": "P1",
       "owner": "metadata-runtime",
       "owningDoc": "docs/quality-gate-roadmap.md",
-      "reason": "The schema revision guard protects SQLAlchemy metadata snapshots, fresh Alembic upgrade parity proves a blank DB can reach the current table/column shape, S55 schema migration safety keeps Alembic history single-headed, blocks destructive downgrade schema operations, and now requires phase-tagged expand migrations to declare an old-and-new-app release compatibility window. S55 migration runner proof keeps Alembic execution behind a dedicated singleton DB lock and leaves password-masked operator evidence when a migration attempt fails. Dataset schema evolution proof now blocks rename/drop/narrowing-style consumer breaks, records widening/deprecated-field warnings, and creates deterministic backfill progress metadata. Ontology migration proof now blocks property/object/link/action parameter breaking changes before activation, records object reindex plans, and checks generated SDK compatibility. Live PostgreSQL contention proof, full old/new app deployment windows, actual ontology migration executors/reindex workers, real backfill execution, and rollback/restore runbook rehearsal remain broader S55 work.",
+      "reason": "The schema revision guard protects SQLAlchemy metadata snapshots, fresh Alembic upgrade parity proves a blank DB can reach the current table/column shape, S55 schema migration safety keeps Alembic history single-headed, blocks destructive downgrade schema operations, and now requires phase-tagged expand migrations to declare an old-and-new-app release compatibility window. S55 migration runner proof keeps Alembic execution behind a dedicated singleton DB lock, proves live PostgreSQL advisory-lock contention has one migration callback winner with `lock_busy` evidence for the concurrent runner, and leaves password-masked operator evidence when a migration attempt fails. Dataset schema evolution proof now blocks rename/drop/narrowing-style consumer breaks, records widening/deprecated-field warnings, and creates deterministic backfill progress metadata. Ontology migration proof now blocks property/object/link/action parameter breaking changes before activation, records object reindex plans, and checks generated SDK compatibility. full old/new app deployment windows, actual ontology migration executors/reindex workers, real backfill execution, and rollback/restore runbook rehearsal remain broader S55 work.",
       "activeInfraRefs": [],
       "proofLevel": "L1",
       "evidenceRefs": [
@@ -362,7 +362,7 @@
       "riskTier": "P0",
       "owner": "workflow-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "ConnectorSyncWorkflow now has a product workflow control-plane path through Operations/API/SDK with local/fake/Temporal contract proof and audit-linked ProductWorkflowRun evidence. Real connector activity data-plane execution, cancellation cleanup, response-loss reconciliation, continue-as-new, upgrade replay, and managed worker operations remain future work.",
+      "reason": "ConnectorSyncWorkflow now has a product workflow control-plane path through Operations/API/SDK with local/fake/Temporal contract proof, audit-linked ProductWorkflowRun evidence, and a worker-bound Temporal activity proof that commits a local connector snapshot through the normal Dataset ingest boundary. Cancellation cleanup, response-loss reconciliation, continue-as-new, upgrade replay, managed worker operations, and production connector packaging remain future work.",
       "activeInfraRefs": [
         "temporal"
       ],
@@ -393,7 +393,7 @@
       "riskTier": "P0",
       "owner": "action-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "S53 now has simulated before-commit writeback slices where response loss becomes outcome_unknown, external success followed by local mutation failure becomes compensation_required, and operator-provided remote-success resolve catches up the local object mutation while closing action/writeback evidence as reconciled. Same-idempotency-key replay does not blindly issue another writeback, concurrent reconcile has one winner, and sensitive writeback parameters stay masked in Operations/audit surfaces. Real vendor APIs, vendor remote lookup, compensation worker execution, persistent reconciliation queue, and operator approval remain future work.",
+      "reason": "S53 now has simulated before-commit writeback slices plus an L8 real S3/MinIO adapter slice. Simulated response loss and real adapter timeouts become outcome_unknown, simulated external success and real landed writes followed by local mutation failure become compensation_required, and operator-provided remote-success or real adapter remote_lookup catches up the local object mutation while closing action/writeback evidence as reconciled. Same-idempotency-key replay does not blindly issue another writeback, concurrent reconcile has one winner, and sensitive writeback parameters stay masked in Operations/audit surfaces. ERP-specific connector packaging, autonomous compensation worker execution, persistent reconciliation queue, and operator approval remain future work.",
       "activeInfraRefs": [
       ],
       "proofLevel": "L2",
@@ -404,6 +404,8 @@
         "test_external_success_local_failure_requires_compensation",
         "test_compensation_is_idempotent",
         "test_action_repository_contract_persists_compensation_required_writeback_fields",
+        "test_action_external_timeout_is_outcome_unknown_not_failed",
+        "test_action_external_success_local_failure_requires_real_compensation",
         "test_reconciliation_resolves_remote_success",
         "test_concurrent_reconciliation_has_one_winner",
         "test_sensitive_writeback_payload_is_masked_in_audit",
@@ -411,12 +413,12 @@
         "test_api_operations_reconciliation_resolves_action_writeback"
       ],
       "futureTests": [
-        "test_reconciliation_uses_real_remote_lookup_before_resolve",
         "test_reconciliation_queue_requires_operator_approval_for_sensitive_writeback",
+        "test_autonomous_compensation_worker_drains_unresolved_writebacks",
         "test_ai_agent_cannot_call_vendor_api_directly"
       ],
       "readmeAliases": [
-        "Real external ERP/webhook writeback",
+        "Real S3/MinIO external writeback",
         "external writeback saga"
       ]
     },
@@ -427,7 +429,7 @@
       "riskTier": "P1",
       "owner": "dataset-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "S54 first slices record the staged candidate fingerprint and schema row/version used by dataset quality check results through checked_manifest_hash, validated_against_schema_version_id, and validated_against_schema_version. Historical check results stay pinned to the schema row/version used by that run after later schema versions are created. Successful check rows are stored as PASS, warning severity failures are visible as non-blocking WARN, and staged candidate tamper or commit-time hard failure is rejected as BLOCK_COMMIT before storage commit. Row-level not_null/unique quarantine checks route failed records to tenant-scoped Record DLQ as DATA_QUALITY_CONTRACT, rewrite the staged candidate to clean records, and revalidate before commit. Operations run detail exposes the transaction-scoped quality summary, schema references, checked manifest hashes, check results, and up to 5 data-quality quarantine failed-row samples. Full DataContract CRUD, owner notification, dedicated failed-row sample UI, quality history/trend, and production DB schema race proof remain future work.",
+      "reason": "S54 first slices record the staged candidate fingerprint and schema row/version used by dataset quality check results through checked_manifest_hash, validated_against_schema_version_id, and validated_against_schema_version. Historical check results stay pinned to the schema row/version used by that run after later schema versions are created. Successful check rows are stored as PASS, warning severity failures are visible as non-blocking WARN, and staged candidate tamper or commit-time hard failure is rejected as BLOCK_COMMIT before storage commit. Row-level not_null/unique quarantine checks route failed records to tenant-scoped Record DLQ as DATA_QUALITY_CONTRACT, rewrite the staged candidate to clean records, and revalidate before commit. Operations run detail exposes the transaction-scoped quality summary, schema references, checked manifest hashes, check results, and up to 5 data-quality quarantine failed-row samples. Persisted quality contract check definitions are create/list/update visible through API/SDK, enabled/config changes are applied by later dataset commit validation, and dataset quality result history and summary are API/SDK visible with persisted run evidence, status counts, check-type counts, and latest result evidence. Full versioned DataContract object CRUD, owner notification, dedicated failed-row sample UI, quality result trend UI, and production DB schema race proof remain future work.",
       "activeInfraRefs": [
       ],
       "proofLevel": "L2",

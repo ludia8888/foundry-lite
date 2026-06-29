@@ -51,6 +51,95 @@ class DatasetCheckResultRow(TypedDict):
     created_at: str
 
 
+class DatasetCheckResultHistoryRow(TypedDict):
+    id: str
+    tenant_id: str
+    dataset_id: str
+    check_id: str
+    check_name: str
+    check_type: str
+    severity: str
+    run_id: str
+    transaction_id: str
+    checked_manifest_hash: str
+    validated_against_schema_version_id: str
+    validated_against_schema_version: int
+    status: str
+    details: DatasetCheckResult
+    created_at: str
+
+
+class DatasetCheckResultStatusCountRow(TypedDict):
+    status: str
+    count: int
+
+
+class DatasetCheckResultTypeStatusCountRow(TypedDict):
+    check_type: str
+    status: str
+    count: int
+
+
+class DatasetQualityContractCheck(TypedDict):
+    id: str
+    datasetId: str
+    name: str
+    checkType: str
+    config: DatasetCheckConfig
+    severity: str
+    enabled: bool
+
+
+class DatasetQualityContractCheckCreateResult(TypedDict):
+    check: DatasetQualityContractCheck
+    isIdempotentReplay: bool
+
+
+class DatasetQualityContractCheckList(TypedDict):
+    datasetRef: str
+    checks: list[DatasetQualityContractCheck]
+
+
+class DatasetQualityResultHistoryItem(TypedDict):
+    id: str
+    checkId: str
+    checkName: str
+    checkType: str
+    severity: str
+    runId: str
+    transactionId: str
+    checkedManifestHash: str
+    validatedAgainstSchemaVersionId: str
+    validatedAgainstSchemaVersion: int
+    status: str
+    details: DatasetCheckResult
+    createdAt: str
+
+
+class DatasetQualityResultHistory(TypedDict):
+    datasetRef: str
+    results: list[DatasetQualityResultHistoryItem]
+
+
+class DatasetQualityResultStatusCount(TypedDict):
+    status: str
+    count: int
+
+
+class DatasetQualityResultTypeStatusCount(TypedDict):
+    checkType: str
+    status: str
+    count: int
+
+
+class DatasetQualityResultSummary(TypedDict):
+    datasetRef: str
+    totalResults: int
+    statusCounts: list[DatasetQualityResultStatusCount]
+    checkTypeStatusCounts: list[DatasetQualityResultTypeStatusCount]
+    latestResults: list[DatasetQualityResultHistoryItem]
+
+
 @dataclass(frozen=True)
 class DatasetSchemaRecord:
     schema_id: str
@@ -124,6 +213,31 @@ class DatasetQualityRepository(Protocol):
         """Persist one dataset check definition inside the caller transaction."""
         ...
 
+    def update_check(self, *, transaction: TransactionContext, record: DatasetCheckRecord) -> bool:
+        """Update one tenant-scoped dataset check definition inside the caller transaction."""
+        ...
+
+    def check_by_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+        check_id: str,
+    ) -> DatasetCheckRow | None:
+        """Return one tenant-scoped dataset quality contract check definition."""
+        ...
+
+    def checks_for_dataset(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> list[DatasetCheckRow]:
+        """Return tenant-scoped quality contract check definitions for one dataset."""
+        ...
+
     def insert_check_result(self, *, transaction: TransactionContext, record: DatasetCheckResultRecord) -> None:
         """Persist one dataset check result inside the caller transaction."""
         ...
@@ -136,4 +250,35 @@ class DatasetQualityRepository(Protocol):
         transaction_id: str,
     ) -> list[DatasetCheckResultRow]:
         """Return tenant-scoped quality results for one dataset transaction."""
+        ...
+
+    def check_results_for_dataset(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+        limit: int,
+    ) -> list[DatasetCheckResultHistoryRow]:
+        """Return newest tenant-scoped quality result history for one dataset."""
+        ...
+
+    def check_result_status_counts_for_dataset(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> list[DatasetCheckResultStatusCountRow]:
+        """Return tenant-scoped quality result counts by status for one dataset."""
+        ...
+
+    def check_result_type_status_counts_for_dataset(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> list[DatasetCheckResultTypeStatusCountRow]:
+        """Return tenant-scoped quality result counts by check type and status."""
         ...

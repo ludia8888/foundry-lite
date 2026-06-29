@@ -146,9 +146,9 @@ backend/API/SDK/audit evidence를 함께 확인한다.
   AGENTS gate briefing이 빠지지
   않게 막는다.
 - `check_data_platform_sprint_status.py`는 S46-S64 status table과 README/roadmap/status 문서의
-  high-level boundary가 서로 달라지지 않게 막는다. 현재 잠긴 의미는 S46 complete, S47-S63
-  partial, S59/S64 proposed/future다.
-- S61은 더 이상 단순 request wrapper만이 아니다. 현재는 named SDK namespaces, 46개 route
+  high-level boundary가 서로 달라지지 않게 막는다. 현재 잠긴 의미는 S46 complete, S47-S64
+  partial, S59 proposed/future다.
+- S61은 더 이상 단순 request wrapper만이 아니다. 현재는 named SDK namespaces, 57개 route
   surface, `requiresIdempotencyKey` mutation marker, 12개 matrix-locked safety helpers, browser
   request/helper contract, documentation count-claim guard, and Web named-SDK-only rule까지 포함하는
   partial frontend foundation이다.
@@ -157,5 +157,5 @@ backend/API/SDK/audit evidence를 함께 확인한다.
 - S63은 full Insight/Action Workspace가 아니다. 하지만 durable Insight Review queue storage,
   idempotent create/assign/decision, terminal decision conflict, generated SDK, and audit evidence는
   current partial이다.
-- Temporal은 adapter ratchet plus S52 `ConnectorSyncWorkflow` control-plane proof가 current다.
-  Full connector activity data-plane execution and managed worker operations remain future.
+- Temporal은 adapter ratchet plus S52 `ConnectorSyncWorkflow` control-plane proof와 worker-bound local connector snapshot commit proof가 current다.
+  Managed worker operations, cancellation/reconciliation, workflow upgrade replay, and production connector packaging remain future.

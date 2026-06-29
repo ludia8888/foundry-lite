@@ -5,8 +5,11 @@ from typing import Protocol
 
 from foundry_lite.application.core_retry import retry_materialization_name, retry_materialization_result
 from foundry_lite.application.ports import (
+    ActionWritebackQueueResult,
     BackupRestoreModeReport,
+    BackupRestorePostRestoreValidationReport,
     BackupRestorePreflightReport,
+    BackupRestoreRecoveryOverview,
     DeadLetterRecordBulkRetryResult,
     DeadLetterRecordDiscardResult,
     DeadLetterRecordRetryResult,
@@ -29,6 +32,7 @@ from foundry_lite.application.services.iceberg_maintenance_service import (
     IcebergMaintenanceService,
 )
 from foundry_lite.application.services.materialization_service import MaterializationService
+from foundry_lite.application.services.outbox_publisher_service import OutboxPublishBatchResult
 from foundry_lite.application.services.record_dlq_service import RecordDlqService
 from foundry_lite.application.services.runtime_service import RuntimeService
 from foundry_lite.application.services.workflow_orchestration_service import WorkflowOrchestrationService
@@ -37,6 +41,14 @@ from foundry_lite.observability.tracing import trace_public_methods
 
 
 class ActionWritebackReconciler(Protocol):
+    def list_unresolved_action_writebacks(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> ActionWritebackQueueResult: ...
+
     def reconcile_action_writeback(
         self,
         writeback_id: str,
@@ -79,6 +91,16 @@ class BackupRestoreReporter(Protocol):
         validation_id: str | None = None,
     ) -> BackupRestoreModeReport: ...
 
+    def run_post_restore_validation(
+        self,
+        restore_id: str,
+        *,
+        ctx: RequestContext | None = None,
+        validation_id: str | None = None,
+    ) -> BackupRestorePostRestoreValidationReport: ...
+
+    def recovery_overview(self, *, ctx: RequestContext | None = None) -> BackupRestoreRecoveryOverview: ...
+
 
 class PromptArtifactReadPayload(Protocol):
     @property
@@ -103,6 +125,16 @@ class PromptArtifactReader(Protocol):
     ) -> PromptArtifactReadPayload: ...
 
 
+class OutboxPublisher(Protocol):
+    def publish_pending_outbox(
+        self,
+        *,
+        ctx: RequestContext | None = None,
+        stream_name: str = "foundry-lite-outbox",
+        limit: int = 100,
+    ) -> OutboxPublishBatchResult: ...
+
+
 @trace_public_methods
 class OperationsConsole:
     """Operations bounded context: run inspection, lineage, retries, and DLQ reprocessing."""
@@ -117,6 +149,7 @@ class OperationsConsole:
         iceberg_maintenance: IcebergMaintenanceService,
         workflow: WorkflowOrchestrationService,
         prompt_artifact: PromptArtifactReader,
+        outbox_publisher: OutboxPublisher,
     ) -> None:
         self._action = action
         self._runtime = runtime
@@ -126,6 +159,7 @@ class OperationsConsole:
         self._iceberg_maintenance = iceberg_maintenance
         self._workflow = workflow
         self._prompt_artifact = prompt_artifact
+        self._outbox_publisher = outbox_publisher
 
     def lineage(self, resource_id: str, *, ctx: RequestContext | None = None) -> list[LineageEdgeRow]:
         resolved_ctx = ctx or RequestContext()
@@ -210,6 +244,15 @@ class OperationsConsole:
         resolved_ctx = ctx or RequestContext()
         return self._prompt_artifact.read_prompt_artifact(resolved_ctx, artifact_id=artifact_id, ai_run_id=run_id)
 
+    def publish_pending_outbox(
+        self,
+        *,
+        ctx: RequestContext | None = None,
+        stream_name: str = "foundry-lite-outbox",
+        limit: int = 100,
+    ) -> OutboxPublishBatchResult:
+        return self._outbox_publisher.publish_pending_outbox(ctx=ctx, stream_name=stream_name, limit=limit)
+
     def restore_preflight_report(
         self,
         *,
@@ -243,6 +286,18 @@ class OperationsConsole:
         validation_id: str | None = None,
     ) -> BackupRestoreModeReport:
         return self._backup_restore.approve_restore_resume(restore_id, ctx=ctx, validation_id=validation_id)
+
+    def run_post_restore_validation(
+        self,
+        restore_id: str,
+        *,
+        ctx: RequestContext | None = None,
+        validation_id: str | None = None,
+    ) -> BackupRestorePostRestoreValidationReport:
+        return self._backup_restore.run_post_restore_validation(restore_id, ctx=ctx, validation_id=validation_id)
+
+    def recovery_overview(self, *, ctx: RequestContext | None = None) -> BackupRestoreRecoveryOverview:
+        return self._backup_restore.recovery_overview(ctx=ctx)
 
     def list_dead_letter_records(
         self,
@@ -376,6 +431,15 @@ class OperationsConsole:
             external_writeback_uri=external_writeback_uri,
             ctx=ctx,
         )
+
+    def list_unresolved_action_writebacks(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> ActionWritebackQueueResult:
+        return self._action.list_unresolved_action_writebacks(status=status, limit=limit, ctx=ctx)
 
     def retry_dead_letter_event(self, event_id: str, *, ctx: RequestContext | None = None) -> RuntimeRetryResult:
         ctx = ctx or RequestContext()
