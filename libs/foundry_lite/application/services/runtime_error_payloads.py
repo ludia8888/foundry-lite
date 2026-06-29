@@ -31,7 +31,17 @@ _SECRET_KEY_PARTS = frozenset(
         "accesstoken",
         "refreshtoken",
         "apikey",
+        "clientsecret",
+        "connectionstring",
+        "credentials",
+        "databaseurl",
+        "dsn",
+        "headervalue",
+        "hmac",
+        "jwt",
+        "privatekey",
         "secret",
+        "signature",
         "password",
         "plaintext",
         "prompt",
@@ -43,7 +53,9 @@ _SECRET_KEY_PARTS = frozenset(
 _AUTHORIZATION_PATTERN = re.compile(r"\bauthorization\s*:\s*bearer\s+\S+", re.IGNORECASE)
 _BEARER_PATTERN = re.compile(r"\bbearer\s+\S+", re.IGNORECASE)
 _ASSIGNMENT_PATTERN = re.compile(
-    r"\b(authorization|token|access[_-]?token|refresh[_-]?token|api[_-]?key|secret|password)"
+    r"\b(authorization|token|access[_-]?token|refresh[_-]?token|api[_-]?key|client[_-]?secret|"
+    r"connection[_-]?string|credentials?|database[_-]?url|dsn|header[_-]?value|hmac|jwt|"
+    r"private[_-]?key|secret|signature|password)"
     r"\s*[:=]\s*\S+",
     re.IGNORECASE,
 )

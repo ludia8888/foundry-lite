@@ -104,23 +104,71 @@ def test_runtime_error_payload_scrubs_secrets_from_messages_and_details() -> Non
 def test_runtime_operations_redacts_denylisted_json_keys_recursively() -> None:
     payload = {
         "safe": "visible",
+        "credentialName": "erp_db",
         "inputTokens": 128,
         "outputTokens": 64,
         "authorization_decision": "pending_human_review",
         "authorizationHeader": "Bearer raw-token",
+        "clientSecret": "raw-client-secret",
+        "connectionString": "postgres://user:pass@db/orders",
+        "databaseUrl": "postgres://user:pass@db/orders",
+        "dsn": "postgres://user:pass@db/orders",
+        "headerValue": "X-Api-Key raw-key",
+        "jwt": "raw.jwt.token",
+        "privateKey": "raw-private-key",
+        "webhookSignature": "sha256=raw-signature",
+        "credentials": {"username": "ada", "password": "raw-password"},
         "providerRequest": {"body": "raw"},
         "nested": [{"apiKey": "plain-key"}, {"compiledPrompt": "raw prompt"}],
     }
 
     assert redact_sensitive(payload, set()) == {
         "safe": "visible",
+        "credentialName": "erp_db",
         "inputTokens": 128,
         "outputTokens": 64,
         "authorization_decision": "pending_human_review",
         "authorizationHeader": "***MASKED***",
+        "clientSecret": "***REDACTED***",
+        "connectionString": "***REDACTED***",
+        "databaseUrl": "***REDACTED***",
+        "dsn": "***REDACTED***",
+        "headerValue": "***REDACTED***",
+        "jwt": "***REDACTED***",
+        "privateKey": "***REDACTED***",
+        "webhookSignature": "***REDACTED***",
+        "credentials": "***MASKED***",
         "providerRequest": "***MASKED***",
         "nested": [{"apiKey": "***REDACTED***"}, {"compiledPrompt": "***MASKED***"}],
     }
+
+
+def test_runtime_error_payload_scrubs_connection_and_credential_fields() -> None:
+    payload = runtime_error_payload(
+        ValidationFailed(
+            "connectionString=postgres://user:pass@db/orders",
+            details={
+                "credentialName": "erp_db",
+                "clientSecret": "raw-client-secret",
+                "privateKey": "raw-private-key",
+                "databaseUrl": "postgres://user:pass@db/orders",
+                "credentials": {"username": "ada", "password": "raw-password"},
+            },
+        )
+    )
+
+    assert payload["message"] == "***MASKED***"
+    assert payload["details"] == {
+        "credentialName": "erp_db",
+        "clientSecret": "***MASKED***",
+        "privateKey": "***MASKED***",
+        "databaseUrl": "***MASKED***",
+        "credentials": "***MASKED***",
+    }
+    assert "raw-client-secret" not in str(payload)
+    assert "raw-private-key" not in str(payload)
+    assert "raw-password" not in str(payload)
+    assert "postgres://user:pass@db/orders" not in str(payload)
 
 
 class _DeadLetterPlanRepository:
