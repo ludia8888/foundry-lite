@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import cast
 
 from foundry_lite.application.ports import (
@@ -20,6 +20,13 @@ from foundry_lite.application.ports import (
     RuntimeRunType,
 )
 from foundry_lite.application.services.observability_skew import skew_measurement
+from foundry_lite.application.services.observability_time import (
+    parse_optional_time,
+    parse_time,
+    raw_seconds_between,
+    seconds_between,
+    skewed_measurement,
+)
 from foundry_lite.application.services.runtime_run_queries import RUN_GROUPS, row_references, row_status
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -82,7 +89,7 @@ def _flow_interruption_incident(
     successful = [row for row in rows if _is_success(row)]
     latest = _latest_row(successful)
     latest_at = _row_timestamp(latest) if latest is not None else None
-    gap = _seconds_between(latest_at, _parse_time(observed_at)) if latest_at is not None else None
+    gap = seconds_between(latest_at, parse_time(observed_at)) if latest_at is not None else None
     cadence = _required_int(config, "expectedCadenceSeconds")
     if gap is not None and gap <= cadence:
         return None
@@ -112,6 +119,10 @@ def _lag_incident(
     measured = [(row, value) for row, value in candidates if value is not None]
     if not measured:
         return None
+    skewed = skewed_measurement(measured)
+    if skewed is not None:
+        row, lag_seconds = skewed
+        return _clock_skew_incident(config, observed_at, row, lag_seconds, "event time is after processing time")
     row, lag_seconds = max(measured, key=lambda item: item[1])
     threshold = _required_int(config, "thresholdSeconds")
     if lag_seconds <= threshold:
@@ -169,6 +180,10 @@ def _slo_incident(
     slow = [(row, value) for row, value in measured if value is not None]
     if not slow:
         return None
+    skewed = skewed_measurement(slow)
+    if skewed is not None:
+        row, duration = skewed
+        return _clock_skew_incident(config, observed_at, row, duration, "runtime completed before it started")
     row, duration = max(slow, key=lambda item: item[1])
     threshold = _required_int(config, "thresholdSeconds")
     if duration <= threshold:
@@ -179,6 +194,32 @@ def _slo_incident(
         "datasetVersionId": row.get("committed_version_id") or row.get("output_version_id"),
     }
     return _incident(config, observed_at, "SLO threshold breached", evidence, [_link_for_row(row, _run_type(config))])
+
+
+def _clock_skew_incident(
+    config: ObservabilityDetectorConfig,
+    observed_at: str,
+    row: RuntimeRow,
+    measured_seconds: float,
+    reason: str,
+) -> ObservabilityIncident:
+    evidence = {
+        "reason": reason,
+        "measuredSeconds": measured_seconds,
+        "clockSkewSeconds": abs(measured_seconds),
+        "references": row_references(row),
+        "sourceEventTime": row.get("event_time") or row.get("source_event_time"),
+        "processingTime": row.get("processed_at") or row.get("completed_at") or row.get("created_at"),
+        "startedAt": row.get("started_at") or row.get("created_at"),
+        "finishedAt": row.get("finished_at") or row.get("completed_at"),
+    }
+    return _incident(
+        config,
+        observed_at,
+        "runtime clock skew detected",
+        evidence,
+        [_link_for_row(row, _run_type(config))],
+    )
 
 
 def _append_incident(
@@ -205,12 +246,12 @@ def _cooldown_suppressed(
     cooldown = int(config.get("cooldownSeconds", 0))
     if cooldown <= 0:
         return None
-    current = _parse_time(observed_at)
+    current = parse_time(observed_at)
     for previous_incident in previous:
         if previous_incident.get("dedupeKey") != incident["dedupeKey"]:
             continue
-        previous_at = _parse_optional_time(previous_incident.get("lastObservedAt"))
-        if previous_at is not None and _seconds_between(previous_at, current) <= cooldown:
+        previous_at = parse_optional_time(previous_incident.get("lastObservedAt"))
+        if previous_at is not None and seconds_between(previous_at, current) <= cooldown:
             suppressed = dict(incident)
             suppressed["status"] = "suppressed"
             suppressed["evidence"] = {**incident["evidence"], "suppressionReason": "cooldown"}
@@ -324,7 +365,7 @@ def _row_timestamp(row: RuntimeRow | None) -> datetime | None:
     if row is None:
         return None
     for key in ("finished_at", "completed_at", "published_at", "created_at", "processed_at"):
-        parsed = _parse_optional_time(row.get(key))
+        parsed = parse_optional_time(row.get(key))
         if parsed is not None:
             return parsed
     return None
@@ -334,22 +375,18 @@ def _duration_seconds(row: RuntimeRow) -> float | None:
     explicit = _numeric(row.get("duration_seconds"))
     if explicit is not None:
         return explicit
-    started = _parse_optional_time(row.get("started_at") or row.get("created_at"))
-    finished = _parse_optional_time(row.get("finished_at") or row.get("completed_at"))
-    return _seconds_between(started, finished) if started is not None and finished is not None else None
+    started = parse_optional_time(row.get("started_at") or row.get("created_at"))
+    finished = parse_optional_time(row.get("finished_at") or row.get("completed_at"))
+    return raw_seconds_between(started, finished) if started is not None and finished is not None else None
 
 
 def _lag_seconds(row: RuntimeRow) -> float | None:
     explicit = _numeric(row.get("event_time_lag_seconds") or row.get("lag_seconds"))
     if explicit is not None:
         return explicit
-    event_time = _parse_optional_time(row.get("event_time") or row.get("source_event_time"))
-    processed = _parse_optional_time(row.get("processed_at") or row.get("completed_at") or row.get("created_at"))
-    return _seconds_between(event_time, processed) if event_time is not None and processed is not None else None
-
-
-def _seconds_between(started: datetime, finished: datetime) -> float:
-    return max(0.0, (finished - started).total_seconds())
+    event_time = parse_optional_time(row.get("event_time") or row.get("source_event_time"))
+    processed = parse_optional_time(row.get("processed_at") or row.get("completed_at") or row.get("created_at"))
+    return raw_seconds_between(event_time, processed) if event_time is not None and processed is not None else None
 
 
 def _link_for_row(row: RuntimeRow, run_type: RuntimeRunType | None = None) -> RuntimeRunLink:
@@ -457,13 +494,3 @@ def _required_float(config: Mapping[str, object], key: str) -> float:
 
 def _numeric(value: object) -> float | None:
     return float(value) if isinstance(value, int | float) else None
-
-
-def _parse_time(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
-
-
-def _parse_optional_time(value: object) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    return _parse_time(value)

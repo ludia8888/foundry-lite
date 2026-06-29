@@ -666,7 +666,9 @@ Temporal을 독립 adapter에서 실제 Foundry-lite 업무 오케스트레이�
 > 고정한다. `ConnectorSyncWorkflow`는 Operations facade/API/generated SDK에서
 > 시작/조회할 수 있고, local/fake/Temporal profile이 같은 public
 > `ProductWorkflowRun` shape를 반환하며, audit event의 `workflowRunId`와
-> `foundryRunId`가 서로 연결된다. 실제 connector activity data-plane,
+> `foundryRunId`가 서로 연결된다. Workflow adapter start 예외는 ledger를
+> `starting`에 방치하지 않고 retryable timeout/unavailable이면 `start_unknown`,
+> permanent exception이면 `failed`로 운영 증거를 남긴다. 실제 connector activity data-plane,
 > cancel cleanup, response-loss reconciliation, continue-as-new, code upgrade
 > replay는 아직 future scope다.
 
@@ -1134,6 +1136,9 @@ quality:ontology-migrations
 
 - [~] source event time ↔ processing time: detector가 `event_time`/`source_event_time`과
   `processed_at`/`completed_at`을 분리해 lag evidence로 남긴다.
+- [~] clock-skew guard: source event time이 processing time보다 미래이거나 run
+  `finished_at`이 `started_at`보다 앞서면 값을 0초로 숨기지 않고
+  `clockSkewSeconds` evidence가 있는 active incident로 남긴다.
 - [ ] broker latest offset ↔ committed offset
 - [ ] REST cursor observation lag
 
@@ -1182,6 +1187,7 @@ quality:slo-contracts
 
 - [x] `test_missing_data_triggers_flow_interruption`
 - [x] `test_lag_alert_uses_event_and_processing_time_separately`
+- [x] `test_observability_clock_skew_is_reported_instead_of_clamped`
 - [x] `test_skew_detector_ignores_expected_seasonality`
 - [x] `test_sla_alert_carries_run_and_dataset_refs`
 - [x] `test_alert_dedup_prevents_alarm_storm`

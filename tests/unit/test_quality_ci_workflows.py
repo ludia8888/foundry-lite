@@ -398,6 +398,9 @@ def test_temporal_engine_integration_ratchet_is_runtime_gate_step() -> None:
     assert '"quality:temporal-engine-integration"' in package_json
     assert "test_product_connector_sync_workflow_runs_through_temporal_and_audits" in package_json
     assert "test_api_operations_workflow_start_status_and_audit" in package_json
+    assert "tests/unit/test_workflow_orchestration_start_recovery.py" in package_json
+    assert "test_retryable_workflow_start_exception_records_start_unknown" in package_json
+    assert "test_permanent_workflow_start_exception_records_failed_not_starting" in package_json
     assert "pnpm --silent quality:temporal-engine-integration" in script
     assert script.index("pnpm --silent quality:temporal") < script.index(
         "pnpm --silent quality:temporal-engine-integration"

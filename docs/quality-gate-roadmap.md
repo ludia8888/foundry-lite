@@ -1422,7 +1422,10 @@ time-skipping worker가 같은 `ProductWorkflowRun` shape를 반환하는지, �
 Operations audit detail이 `workflowRunId`와 `foundryRunId`를 서로 연결해 Temporal 내부
 로그 없이도 운영자가 추적할 수 있는지 검증한다. 같은 product connector test는
 Temporal worker activity가 local connector snapshot을 normal Dataset ingest boundary로
-commit하고 workflow output에 committed version evidence를 남기는지도 검증한다.
+commit하고 workflow output에 committed version evidence를 남기는지도 검증한다. Workflow
+adapter start exception 회귀 테스트는 retryable timeout/unavailable을 `start_unknown`으로
+남겨 재시도 가능하게 만들고, permanent exception은 `failed`로 닫아 `starting` stuck을 막으며,
+adapter failure evidence를 scrub한다.
 Production connector packaging/config persistence, cancel cleanup, activity completion
 response-loss reconciliation, continue-as-new, workflow code upgrade replay, managed Temporal
 worker operations는 다음 S52 slice로 남긴다.
