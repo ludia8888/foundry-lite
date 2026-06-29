@@ -40,6 +40,27 @@ class TransformPipeline:
             language=language,
         )
 
+    def register_sql(
+        self,
+        api_name: str,
+        *,
+        sql: str,
+        inputs: Mapping[str, str],
+        output_dataset_ref: str,
+        checks: Sequence[TransformCheck] | None = None,
+        ctx: RequestContext | None = None,
+        mode: str = "snapshot",
+    ) -> TransformRow:
+        return self._transform.register_sql_transform(
+            api_name,
+            sql=sql,
+            inputs=inputs,
+            output_dataset_ref=output_dataset_ref,
+            checks=checks,
+            ctx=ctx,
+            mode=mode,
+        )
+
     def run(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         return self._transform.run_transform(api_name, ctx=ctx)
 

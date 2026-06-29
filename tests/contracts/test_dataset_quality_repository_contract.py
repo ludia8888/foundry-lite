@@ -9,8 +9,11 @@ from typing import Any, Protocol, cast
 import pytest
 from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckRecord,
+    DatasetCheckResultHistoryRow,
     DatasetCheckResultRecord,
     DatasetCheckResultRow,
+    DatasetCheckResultStatusCountRow,
+    DatasetCheckResultTypeStatusCountRow,
     DatasetCheckRow,
     DatasetQualityRepository,
     DatasetSchemaRecord,
@@ -108,6 +111,52 @@ class FakeDatasetQualityRepository:
             }
         )
 
+    def update_check(self, *, transaction: Any, record: DatasetCheckRecord) -> bool:
+        del transaction
+        for row in self.checks:
+            if (
+                row["tenant_id"] == record.tenant_id
+                and row["dataset_id"] == record.dataset_id
+                and row["id"] == record.check_id
+            ):
+                row.update(
+                    name=record.name,
+                    check_type=record.check_type,
+                    config=dict(record.config),
+                    severity=record.severity,
+                    enabled=record.enabled,
+                )
+                return True
+        return False
+
+    def check_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        check_id: str,
+    ) -> DatasetCheckRow | None:
+        del transaction
+        for row in self.checks:
+            if row["tenant_id"] == tenant_id and row["dataset_id"] == dataset_id and row["id"] == check_id:
+                return cast(DatasetCheckRow, dict(row))
+        return None
+
+    def checks_for_dataset(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> list[DatasetCheckRow]:
+        del transaction
+        return [
+            cast(DatasetCheckRow, dict(row))
+            for row in sorted(self.checks, key=lambda item: (item["name"], item["id"]))
+            if row["tenant_id"] == tenant_id and row["dataset_id"] == dataset_id
+        ]
+
     def insert_check_result(self, *, transaction: Any, record: DatasetCheckResultRecord) -> None:
         del transaction
         self.check_results.append(
@@ -138,6 +187,67 @@ class FakeDatasetQualityRepository:
             cast(DatasetCheckResultRow, dict(row))
             for row in sorted(self.check_results, key=lambda item: (item["created_at"], item["id"]))
             if row["tenant_id"] == tenant_id and row["transaction_id"] == transaction_id
+        ]
+
+    def check_results_for_dataset(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        limit: int,
+    ) -> list[DatasetCheckResultHistoryRow]:
+        del transaction
+        check_rows = {
+            row["id"]: row for row in self.checks if row["tenant_id"] == tenant_id and row["dataset_id"] == dataset_id
+        }
+        rows = [
+            _history_row(row, check_rows[row["check_id"]])
+            for row in self.check_results
+            if row["tenant_id"] == tenant_id and row["check_id"] in check_rows
+        ]
+        return sorted(rows, key=lambda item: (item["created_at"], item["id"]), reverse=True)[:limit]
+
+    def check_result_status_counts_for_dataset(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> list[DatasetCheckResultStatusCountRow]:
+        del transaction
+        rows = self.check_results_for_dataset(
+            transaction=None,
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            limit=len(self.check_results),
+        )
+        counts: dict[str, int] = {}
+        for row in rows:
+            counts[row["status"]] = counts.get(row["status"], 0) + 1
+        return [cast(DatasetCheckResultStatusCountRow, {"status": key, "count": counts[key]}) for key in sorted(counts)]
+
+    def check_result_type_status_counts_for_dataset(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+    ) -> list[DatasetCheckResultTypeStatusCountRow]:
+        del transaction
+        rows = self.check_results_for_dataset(
+            transaction=None,
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            limit=len(self.check_results),
+        )
+        counts: dict[tuple[str, str], int] = {}
+        for row in rows:
+            key = (row["check_type"], row["status"])
+            counts[key] = counts.get(key, 0) + 1
+        return [
+            cast(DatasetCheckResultTypeStatusCountRow, {"check_type": key[0], "status": key[1], "count": counts[key]})
+            for key in sorted(counts)
         ]
 
 
@@ -236,19 +346,42 @@ def _check_record(check_id: str = "check_a", name: str = '{"type":"unique"}') ->
     )
 
 
-def _check_result_record(check_id: str = "check_a") -> DatasetCheckResultRecord:
+def _check_result_record(
+    check_id: str = "check_a",
+    *,
+    check_result_id: str = "cr_a",
+    tenant_id: str = "tenant-test",
+    transaction_id: str = "dstx_test",
+    created_at: str = "2026-06-10T00:00:00Z",
+    status: str = "PASS",
+    details: dict[str, object] | None = None,
+) -> DatasetCheckResultRecord:
+    result_details = details or {"status": "passed", "contract_status": status}
     return DatasetCheckResultRecord(
-        check_result_id="cr_a",
-        tenant_id="tenant-test",
+        check_result_id=check_result_id,
+        tenant_id=tenant_id,
         check_id=check_id,
-        run_id="run_test",
-        transaction_id="dstx_test",
+        run_id=f"run_{check_result_id}",
+        transaction_id=transaction_id,
         checked_manifest_hash="candidate_hash_v1",
         validated_against_schema_version_id="schema_v1",
         validated_against_schema_version=1,
-        status="PASS",
-        details={"status": "passed", "contract_status": "PASS"},
-        created_at="2026-06-10T00:00:00Z",
+        status=status,
+        details=result_details,
+        created_at=created_at,
+    )
+
+
+def _history_row(row: dict[str, Any], check: dict[str, Any]) -> DatasetCheckResultHistoryRow:
+    return cast(
+        DatasetCheckResultHistoryRow,
+        {
+            **dict(row),
+            "dataset_id": check["dataset_id"],
+            "check_name": check["name"],
+            "check_type": check["check_type"],
+            "severity": check["severity"],
+        },
     )
 
 
@@ -334,6 +467,103 @@ def test_insert_check_is_idempotent_by_tenant_dataset_and_name(harness: QualityH
     assert len(matching_rows) == 1
     assert found is not None
     assert found["id"] == "check_first"
+
+
+def test_checks_for_dataset_are_tenant_scoped_and_ordered(harness: QualityHarness) -> None:
+    if isinstance(harness, SqlAlchemyDatasetQualityHarness):
+        with harness.engine.begin() as conn:
+            conn.execute(
+                db.tenants.insert().values(
+                    id="tenant-other",
+                    name="Other",
+                    created_at="2026-06-10T00:00:00Z",
+                )
+            )
+    first = _check_record(check_id="check_b", name="b-check")
+    second = _check_record(check_id="check_a", name="a-check")
+    other_dataset = _check_record(check_id="check_other_dataset", name="c-check")
+    other_dataset = DatasetCheckRecord(
+        check_id=other_dataset.check_id,
+        tenant_id=other_dataset.tenant_id,
+        dataset_id="ds_other",
+        name=other_dataset.name,
+        check_type=other_dataset.check_type,
+        config=other_dataset.config,
+        severity=other_dataset.severity,
+        enabled=other_dataset.enabled,
+    )
+    other_tenant = DatasetCheckRecord(
+        check_id="check_other_tenant",
+        tenant_id="tenant-other",
+        dataset_id="ds_test",
+        name="a-check",
+        check_type="unique",
+        config={"type": "unique", "column": "id"},
+        severity="error",
+        enabled=True,
+    )
+    with harness.transaction() as txn:
+        harness.repository.insert_check(transaction=txn, record=first)
+        harness.repository.insert_check(transaction=txn, record=second)
+        harness.repository.insert_check(transaction=txn, record=other_dataset)
+        harness.repository.insert_check(transaction=txn, record=other_tenant)
+        rows = harness.repository.checks_for_dataset(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+        )
+        found = harness.repository.check_by_id(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+            check_id="check_a",
+        )
+
+    assert [row["id"] for row in rows] == ["check_a", "check_b"]
+    assert found is not None
+    assert found["name"] == "a-check"
+
+
+def test_update_check_is_tenant_scoped_and_rewrites_definition(harness: QualityHarness) -> None:
+    record = _check_record()
+    updated = DatasetCheckRecord(
+        check_id=record.check_id,
+        tenant_id=record.tenant_id,
+        dataset_id=record.dataset_id,
+        name='{"min":5,"type":"row_count_min"}',
+        check_type="row_count_min",
+        config={"type": "row_count_min", "min": 5, "severity": "warn"},
+        severity="warn",
+        enabled=False,
+    )
+    wrong_tenant = DatasetCheckRecord(
+        check_id=record.check_id,
+        tenant_id="tenant-other",
+        dataset_id=record.dataset_id,
+        name=updated.name,
+        check_type=updated.check_type,
+        config=updated.config,
+        severity=updated.severity,
+        enabled=updated.enabled,
+    )
+
+    with harness.transaction() as txn:
+        harness.repository.insert_check(transaction=txn, record=record)
+        assert not harness.repository.update_check(transaction=txn, record=wrong_tenant)
+        assert harness.repository.update_check(transaction=txn, record=updated)
+        found = harness.repository.check_by_id(
+            transaction=txn,
+            tenant_id=record.tenant_id,
+            dataset_id=record.dataset_id,
+            check_id=record.check_id,
+        )
+
+    assert found is not None
+    assert found["name"] == updated.name
+    assert found["check_type"] == "row_count_min"
+    assert found["config"] == {"type": "row_count_min", "min": 5, "severity": "warn"}
+    assert found["severity"] == "warn"
+    assert found["enabled"] is False
 
 
 def test_check_by_name_isolated_by_tenant(harness: QualityHarness) -> None:
@@ -431,3 +661,173 @@ def test_check_results_for_transaction_is_tenant_scoped(harness: QualityHarness)
             transaction_id="dstx_test",
         )
     assert [row["id"] for row in found] == ["cr_a"]
+
+
+def test_check_results_for_dataset_are_tenant_dataset_scoped_and_limited(harness: QualityHarness) -> None:
+    row_count_check = DatasetCheckRecord(
+        check_id="check_b",
+        tenant_id="tenant-test",
+        dataset_id="ds_test",
+        name='{"min":1,"type":"row_count_min"}',
+        check_type="row_count_min",
+        config={"type": "row_count_min", "min": 1},
+        severity="error",
+        enabled=True,
+    )
+    other_dataset_check = DatasetCheckRecord(
+        check_id="check_other_dataset",
+        tenant_id="tenant-test",
+        dataset_id="ds_other",
+        name="other-dataset",
+        check_type="unique",
+        config={"type": "unique", "column": "id"},
+        severity="error",
+        enabled=True,
+    )
+    other_tenant_check = DatasetCheckRecord(
+        check_id="check_other_tenant",
+        tenant_id="tenant-other",
+        dataset_id="ds_test",
+        name="other-tenant",
+        check_type="unique",
+        config={"type": "unique", "column": "id"},
+        severity="error",
+        enabled=True,
+    )
+
+    with harness.transaction() as txn:
+        harness.repository.insert_check(transaction=txn, record=_check_record())
+        harness.repository.insert_check(transaction=txn, record=row_count_check)
+        harness.repository.insert_check(transaction=txn, record=other_dataset_check)
+        harness.repository.insert_check(transaction=txn, record=other_tenant_check)
+        harness.repository.insert_check_result(
+            transaction=txn,
+            record=_check_result_record(check_result_id="cr_old", created_at="2026-06-10T00:00:00Z"),
+        )
+        harness.repository.insert_check_result(
+            transaction=txn,
+            record=_check_result_record(
+                "check_b",
+                check_result_id="cr_new",
+                transaction_id="dstx_new",
+                created_at="2026-06-10T00:00:02Z",
+            ),
+        )
+        harness.repository.insert_check_result(
+            transaction=txn,
+            record=_check_result_record(
+                "check_other_dataset",
+                check_result_id="cr_other_dataset",
+                transaction_id="dstx_other_dataset",
+                created_at="2026-06-10T00:00:03Z",
+            ),
+        )
+        harness.repository.insert_check_result(
+            transaction=txn,
+            record=_check_result_record(
+                "check_other_tenant",
+                check_result_id="cr_other_tenant",
+                tenant_id="tenant-other",
+                transaction_id="dstx_other_tenant",
+                created_at="2026-06-10T00:00:04Z",
+            ),
+        )
+        rows = harness.repository.check_results_for_dataset(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+            limit=10,
+        )
+        limited = harness.repository.check_results_for_dataset(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+            limit=1,
+        )
+
+    assert [row["id"] for row in rows] == ["cr_new", "cr_old"]
+    assert [row["id"] for row in limited] == ["cr_new"]
+    assert rows[0]["check_name"] == row_count_check.name
+    assert rows[0]["check_type"] == "row_count_min"
+    assert rows[0]["dataset_id"] == "ds_test"
+
+
+def test_check_result_summary_counts_are_tenant_dataset_scoped(harness: QualityHarness) -> None:
+    row_count_check = DatasetCheckRecord(
+        check_id="check_b",
+        tenant_id="tenant-test",
+        dataset_id="ds_test",
+        name='{"min":1,"type":"row_count_min"}',
+        check_type="row_count_min",
+        config={"type": "row_count_min", "min": 1},
+        severity="warn",
+        enabled=True,
+    )
+    other_dataset_check = DatasetCheckRecord(
+        check_id="check_other_dataset",
+        tenant_id="tenant-test",
+        dataset_id="ds_other",
+        name="other-dataset",
+        check_type="unique",
+        config={"type": "unique", "column": "id"},
+        severity="error",
+        enabled=True,
+    )
+    other_tenant_check = DatasetCheckRecord(
+        check_id="check_other_tenant",
+        tenant_id="tenant-other",
+        dataset_id="ds_test",
+        name="other-tenant",
+        check_type="unique",
+        config={"type": "unique", "column": "id"},
+        severity="error",
+        enabled=True,
+    )
+
+    with harness.transaction() as txn:
+        harness.repository.insert_check(transaction=txn, record=_check_record())
+        harness.repository.insert_check(transaction=txn, record=row_count_check)
+        harness.repository.insert_check(transaction=txn, record=other_dataset_check)
+        harness.repository.insert_check(transaction=txn, record=other_tenant_check)
+        harness.repository.insert_check_result(transaction=txn, record=_check_result_record())
+        harness.repository.insert_check_result(
+            transaction=txn,
+            record=_check_result_record("check_b", check_result_id="cr_warn", status="WARN"),
+        )
+        harness.repository.insert_check_result(
+            transaction=txn,
+            record=_check_result_record("check_b", check_result_id="cr_block", status="BLOCK_COMMIT"),
+        )
+        harness.repository.insert_check_result(
+            transaction=txn,
+            record=_check_result_record("check_other_dataset", check_result_id="cr_other_dataset"),
+        )
+        harness.repository.insert_check_result(
+            transaction=txn,
+            record=_check_result_record(
+                "check_other_tenant",
+                check_result_id="cr_other_tenant",
+                tenant_id="tenant-other",
+            ),
+        )
+        status_counts = harness.repository.check_result_status_counts_for_dataset(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+        )
+        type_counts = harness.repository.check_result_type_status_counts_for_dataset(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+        )
+
+    assert status_counts == [
+        {"status": "BLOCK_COMMIT", "count": 1},
+        {"status": "PASS", "count": 1},
+        {"status": "WARN", "count": 1},
+    ]
+    assert type_counts == [
+        {"check_type": "row_count_min", "status": "BLOCK_COMMIT", "count": 1},
+        {"check_type": "row_count_min", "status": "WARN", "count": 1},
+        {"check_type": "unique", "status": "PASS", "count": 1},
+    ]

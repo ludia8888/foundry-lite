@@ -35,10 +35,12 @@ except ImportError:  # pragma: no cover - Windows fallback; CI/dev are POSIX.
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.ports import ConnectorSnapshot
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.workflow_adapter import WorkflowStartRequest
 from foundry_lite.application.services.workflow_orchestration_service import CONNECTOR_SYNC_WORKFLOW_NAME
 from foundry_lite.domain.context import demo_admin_context
+from foundry_lite.infrastructure.adapters.scale_foundation import LocalConnectorAdapter
 from foundry_lite.infrastructure.adapters.temporal_workflow import (
     TemporalWorkflowAdapter,
     TemporalWorkflowAdapterConfig,
@@ -47,9 +49,11 @@ from foundry_lite.infrastructure.adapters.temporal_workflow import _temporal_wor
 from foundry_lite.infrastructure.adapters.temporal_workflows import (
     FOUNDRY_TASK_QUEUE,
     FOUNDRY_WORKFLOW_NAME,
+    ConnectorSyncActivities,
     ConnectorSyncWorkflow,
     FoundryWorkflow,
     foundry_sandbox_runner,
+    run_connector_sync_step,
     run_workflow_step,
 )
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -108,7 +112,7 @@ class FailingWorkflow:
 
 
 _ALL_WORKFLOWS = [FoundryWorkflow, ConnectorSyncWorkflow, FlakyWorkflow, SleepyWorkflow, FailingWorkflow]
-_ALL_ACTIVITIES = [run_workflow_step, flaky_step]
+_ALL_ACTIVITIES: list[Callable[..., Any]] = [run_workflow_step, run_connector_sync_step, flaky_step]
 _TEMPORAL_TEST_SERVER_LOCK = "foundry-lite-temporal-test-server-download.lock"
 
 
@@ -201,6 +205,26 @@ async def _harness(*, execution_timeout_seconds: int = 300):
                     task_queue=FOUNDRY_TASK_QUEUE,
                     execution_timeout_seconds=execution_timeout_seconds,
                 ),
+                client=env.client,
+            )
+            yield env, adapter
+
+
+@asynccontextmanager
+async def _connector_sync_harness(driver: Callable[[dict[str, Any]], dict[str, Any]]):
+    """Boot a worker whose connector-sync activity calls the real ingest driver."""
+    with _temporal_test_server_download_lock():
+        env_context = await WorkflowEnvironment.start_time_skipping()
+    async with env_context as env:
+        async with Worker(
+            env.client,
+            task_queue=FOUNDRY_TASK_QUEUE,
+            workflows=_ALL_WORKFLOWS,
+            activities=[run_workflow_step, ConnectorSyncActivities(driver).run_connector_sync_step, flaky_step],
+            workflow_runner=foundry_sandbox_runner(),
+        ):
+            adapter = TemporalWorkflowAdapter(
+                TemporalWorkflowAdapterConfig(task_queue=FOUNDRY_TASK_QUEUE),
                 client=env.client,
             )
             yield env, adapter
@@ -467,20 +491,54 @@ def test_sync_start_workflow_bridges_to_async_core() -> None:
 
 def test_product_connector_sync_workflow_runs_through_temporal_and_audits(tmp_path: Path) -> None:
     async def body() -> None:
-        async with _harness() as (env, _adapter):
-            address = env.client.service_client.config.target_host
-            temporal_adapter = TemporalWorkflowAdapter(
-                TemporalWorkflowAdapterConfig(address=address, task_queue=FOUNDRY_TASK_QUEUE)
+        ctx = demo_admin_context()
+        foundry: FoundryLite | None = None
+
+        def driver(payload: dict[str, Any]) -> dict[str, Any]:
+            assert foundry is not None
+            sync_name_value = payload.get("syncName")
+            result = foundry.datasets.sync_connector_snapshot(
+                str(payload["datasetRef"]),
+                connector_name=str(payload["connectorName"]),
+                resource_name=str(payload["resourceName"]),
+                sync_name=sync_name_value if isinstance(sync_name_value, str) else None,
+                ctx=ctx,
             )
+            return {
+                "workflowKind": "connector_sync",
+                "datasetRef": result.dataset_ref,
+                "committedVersionId": result.version_id,
+                "versionNumber": result.version_number,
+                "rowCount": result.row_count,
+            }
+
+        async with _connector_sync_harness(driver) as (_env, temporal_adapter):
             dependencies = create_local_core_dependencies(storage_root=tmp_path / "temporal-product")
-            foundry = FoundryLite(dependencies=replace(dependencies, workflow_adapter=temporal_adapter))
-            ctx = demo_admin_context()
+            connector_adapter = LocalConnectorAdapter(
+                {
+                    (ctx.tenant_id, "local", "orders"): ConnectorSnapshot(
+                        connector_name="local",
+                        resource_name="orders",
+                        rows=({"order_id": "O-9001", "amount": 321},),
+                        schema={"columns": ["order_id", "amount"]},
+                        cursor={"cursor": "done"},
+                        source_watermark="workflow-test",
+                    )
+                }
+            )
+            foundry = FoundryLite(
+                dependencies=replace(
+                    dependencies,
+                    connector_adapter=connector_adapter,
+                    workflow_adapter=temporal_adapter,
+                )
+            )
             foundry.datasets.ensure("raw.workflow_orders", ctx=ctx, primary_key=["order_id"])
 
             run = await asyncio.to_thread(
                 foundry.operations.start_connector_sync_workflow,
                 "raw.workflow_orders",
-                connector_name="rest",
+                connector_name="local",
                 resource_name="orders",
                 idempotency_key="temporal-connector-sync-orders",
                 ctx=ctx,
@@ -496,14 +554,17 @@ def test_product_connector_sync_workflow_runs_through_temporal_and_audits(tmp_pa
             assert run["workflowName"] == CONNECTOR_SYNC_WORKFLOW_NAME
             assert run["workflowProfile"] == "temporal"
             assert run["status"] == "succeeded"
-            output = cast(Mapping[str, object], run["output"])
+            output = run["output"]
             assert output["workflowKind"] == "connector_sync"
             assert output["datasetRef"] == "raw.workflow_orders"
+            assert output["rowCount"] == 1
             assert lookup["workflowRunId"] == run["workflowRunId"]
             assert lookup["idempotencyKey"] == "temporal-connector-sync-orders"
             assert run["foundryRunId"] is not None
+            preview = foundry.datasets.preview("raw.workflow_orders", ctx=ctx)
+            assert preview[0]["order_id"] == "O-9001"
             detail = foundry.operations.run_detail("audit", str(run["foundryRunId"]), ctx=ctx)
-            row = cast(Mapping[str, object], detail["row"])
+            row = detail["row"]
             after_ref = cast(Mapping[str, object], row["after_ref"])
             assert row["resource_id"] == run["workflowRunId"]
             assert after_ref["workflowRunId"] == run["workflowRunId"]

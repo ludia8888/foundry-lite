@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Final, Protocol, runtime_checkable
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
 
-__all__ = ["REDACTED_VALUE", "SecretProvider", "SecretValue"]
+__all__ = ["REDACTED_VALUE", "SecretProvider", "SecretValue", "SecretVault"]
 
 REDACTED_VALUE: Final = "***REDACTED***"
 
@@ -38,4 +39,19 @@ class SecretProvider(Protocol):
 
     def get_secret(self, name: str, *, version: str | None = None) -> SecretValue:
         """Resolve the current or explicitly versioned secret without exposing the value."""
+        ...
+
+
+@runtime_checkable
+class SecretVault(SecretProvider, Protocol):
+    """Resolve and write named secrets without exposing stored values."""
+
+    def put_secret(
+        self,
+        name: str,
+        value: str,
+        *,
+        metadata: Mapping[str, object] | None = None,
+    ) -> SecretValue:
+        """Store a secret and return only its redacted identity/version metadata to callers."""
         ...

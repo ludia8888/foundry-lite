@@ -61,6 +61,8 @@ class _FakeRuntime:
 @dataclass(frozen=True)
 class _MediaEnv:
     ctx: RequestContext
+    repo: SqlAlchemyMediaRepository
+    storage: LocalMediaStorageAdapter
     catalog: MediaCatalogService
     upload: MediaUploadService
     transaction: MediaTransactionService
@@ -118,6 +120,8 @@ def media(tmp_path: Path) -> _MediaEnv:
     )
     return _MediaEnv(
         ctx=ctx,
+        repo=repo,
+        storage=storage,
         catalog=catalog,
         upload=upload,
         transaction=transaction,
@@ -248,6 +252,140 @@ def test_commit_is_idempotent_when_already_committed(media: _MediaEnv) -> None:
     assert replay.committed_version_ids == first.committed_version_ids == (staged.media_item_version_id,)
     # A replay of an already-committed transaction re-emits no events.
     assert media.runtime.outboxes == []
+
+
+def test_upload_rejects_missing_transaction_before_storage_write(media: _MediaEnv) -> None:
+    session = media.upload.initiate(
+        media.ctx,
+        media_set_id=media.media_set_id,
+        logical_path="/contracts/missing-tx.pdf",
+        supplied_mime_type="application/pdf",
+    )
+
+    with pytest.raises(NotFound):
+        media.upload.complete(
+            media.ctx,
+            inputs=media._inputs("mtx-missing", "/contracts/missing-tx.pdf"),
+            upload=session,
+            source=io.BytesIO(b"%PDF-1.4 missing"),
+        )
+
+    assert media.storage.stat(session.staged_object_key).is_present is False
+
+
+def test_upload_rejects_closed_transaction_before_storage_write(media: _MediaEnv) -> None:
+    tx = media.open_tx("idem-closed")
+    media.transaction.abort(media.ctx, media_transaction_id=tx, error={"reason": "closed"})
+    session = media.upload.initiate(
+        media.ctx,
+        media_set_id=media.media_set_id,
+        logical_path="/contracts/closed.pdf",
+        supplied_mime_type="application/pdf",
+    )
+
+    with pytest.raises(ConflictDetected, match="not open"):
+        media.upload.complete(
+            media.ctx,
+            inputs=media._inputs(tx, "/contracts/closed.pdf"),
+            upload=session,
+            source=io.BytesIO(b"%PDF-1.4 closed"),
+        )
+
+    assert media.storage.stat(session.staged_object_key).is_present is False
+
+
+def test_upload_rejects_transaction_from_different_media_set_before_storage_write(media: _MediaEnv) -> None:
+    other = media.catalog.create_media_set(
+        media.ctx,
+        MediaSetSpec(
+            namespace="legal",
+            name="images",
+            schema_type="image",
+            primary_format="png",
+            allowed_input_formats=("png",),
+            classification="confidential",
+        ),
+    )
+    other_tx = media.transaction.open(media.ctx, media_set_id=other.media_set_id, idempotency_key="idem-other-set")
+    session = media.upload.initiate(
+        media.ctx,
+        media_set_id=media.media_set_id,
+        logical_path="/contracts/wrong-set.pdf",
+        supplied_mime_type="application/pdf",
+    )
+
+    with pytest.raises(ConflictDetected, match="different media set"):
+        media.upload.complete(
+            media.ctx,
+            inputs=media._inputs(other_tx, "/contracts/wrong-set.pdf"),
+            upload=session,
+            source=io.BytesIO(b"%PDF-1.4 wrong set"),
+        )
+
+    assert media.storage.stat(session.staged_object_key).is_present is False
+
+
+def test_upload_deletes_staged_blob_when_metadata_insert_fails(
+    media: _MediaEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tx = media.open_tx("idem-insert-fails")
+    session = media.upload.initiate(
+        media.ctx,
+        media_set_id=media.media_set_id,
+        logical_path="/contracts/insert-fails.pdf",
+        supplied_mime_type="application/pdf",
+    )
+
+    def fail_insert_version(**_kwargs: object) -> object:
+        raise RuntimeError("metadata insert failed")
+
+    monkeypatch.setattr(media.repo, "insert_version", fail_insert_version)
+
+    with pytest.raises(RuntimeError, match="metadata insert failed"):
+        media.upload.complete(
+            media.ctx,
+            inputs=media._inputs(tx, "/contracts/insert-fails.pdf"),
+            upload=session,
+            source=io.BytesIO(b"%PDF-1.4 insert fails"),
+        )
+
+    assert media.storage.stat(session.staged_object_key).is_present is False
+
+
+def test_upload_deletes_new_blob_when_repository_returns_existing_winner(
+    media: _MediaEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tx = media.open_tx("idem-existing-winner")
+    first = media.stage(tx, logical_path="/contracts/winner.pdf", body=b"%PDF-1.4 first")
+    with media.upload.engine.begin() as conn:
+        existing = media.repo.media_item_version_by_id(
+            transaction=conn,
+            tenant_id=media.ctx.tenant_id,
+            media_item_version_id=first.media_item_version_id,
+        )
+    assert existing is not None
+    session = media.upload.initiate(
+        media.ctx,
+        media_set_id=media.media_set_id,
+        logical_path="/contracts/winner.pdf",
+        supplied_mime_type="application/pdf",
+    )
+
+    def return_existing_version(**_kwargs: object) -> object:
+        return existing
+
+    monkeypatch.setattr(media.repo, "insert_version", return_existing_version)
+
+    duplicate = media.upload.complete(
+        media.ctx,
+        inputs=media._inputs(tx, "/contracts/winner.pdf"),
+        upload=session,
+        source=io.BytesIO(b"%PDF-1.4 second"),
+    )
+
+    assert duplicate.is_duplicate is True
+    assert duplicate.media_item_version_id == first.media_item_version_id
+    assert media.storage.stat(session.staged_object_key).is_present is False
 
 
 def test_commit_unknown_transaction_raises_not_found(media: _MediaEnv) -> None:

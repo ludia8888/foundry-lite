@@ -4,28 +4,31 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
+from argparse import Namespace
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.ports.language_model import ModelRequest, ModelResponse, ModelToolCall
-from foundry_lite.application.services.aip.approval_execution_contracts import ApprovalExecutionError
 from foundry_lite.application.upload_limits import WEBHOOK_BODY_LIMIT_ENV
-from foundry_lite.domain.context import demo_admin_context
+from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ExternalOutcomeUnknown, NotFound, ValidationFailed
 from foundry_lite.infrastructure import schema as db
-from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter
+from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter, RestPullConnectorAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from foundry_lite.infrastructure.secrets import EnvSecretProvider
 from foundry_lite_api import main as api_main
 from foundry_lite_api.main import _header_or_request, app, healthz
 from foundry_lite_cli.main import _dispatch, _fresh_supply_chain_demo, _json_arg, _params, _storage_root_for_args, main
-from sqlalchemy import create_engine, func, insert, select
+from sqlalchemy import create_engine, insert, select
 
 from tests.conftest import prepare_indexed_demo
+from tests.contracts.test_rest_connector_adapter_contract import MockRestServer
 
 
 def test_api_healthz_returns_ok() -> None:
@@ -233,6 +236,161 @@ def test_api_object_set_create_and_query(foundry, monkeypatch) -> None:
     )
     assert fetched.status_code == 200
     assert fetched.json()["name"] == "Pending Orders"
+
+
+def test_source_csv_upload_api_commits_and_lists_source(monkeypatch, tmp_path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    ctx = demo_admin_context()
+    headers = {
+        "X-Tenant-ID": ctx.tenant_id,
+        "X-User-ID": ctx.actor_user_id,
+        "X-Roles": ",".join(ctx.roles),
+        "Idempotency-Key": "api-source-csv-upload",
+    }
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/sources/csv/uploads",
+        headers=headers,
+        data={
+            "sourceName": "api_orders_csv",
+            "displayName": "API Orders CSV",
+            "datasetRef": "raw.api_orders",
+            "syncName": "api-orders-first-sync",
+            "primaryKey": json.dumps(["order_id"]),
+        },
+        files={"file": ("orders.csv", b"order_id,amount\nO-1,10\n", "text/csv")},
+    )
+    read_headers = {key: value for key, value in headers.items() if key != "Idempotency-Key"}
+    listing = client.get("/api/sources", headers=read_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"]["kind"] == "csv_upload"
+    assert body["commitResult"]["rowCount"] == 1
+    assert body["operationsPath"].startswith("/api/operations/runs/sync/")
+    assert [row["sourceName"] for row in listing.json()] == ["api_orders_csv"]
+
+
+def test_api_source_wizard_explore_and_managed_sync_run(monkeypatch, tmp_path) -> None:
+    source_db = tmp_path / "customer_erp.db"
+    conn = sqlite3.connect(source_db)
+    conn.execute("CREATE TABLE orders (id INTEGER PRIMARY KEY, order_no TEXT, amount REAL)")
+    conn.executemany(
+        "INSERT INTO orders (id, order_no, amount) VALUES (?, ?, ?)",
+        [(1, "O-1001", 10.5), (2, "O-1002", 22.0), (3, "O-1003", 33.25)],
+    )
+    conn.commit()
+    conn.close()
+
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    ctx = demo_admin_context()
+    base_headers = {
+        "X-Tenant-ID": ctx.tenant_id,
+        "X-User-ID": ctx.actor_user_id,
+        "X-Roles": ",".join(ctx.roles),
+    }
+    client = TestClient(app)
+
+    templates = client.get("/api/sources/templates", headers=base_headers)
+    credential = client.post(
+        "/api/sources/credentials",
+        headers={**base_headers, "Idempotency-Key": "api-source-credential"},
+        json={
+            "credentialName": "api_erp_db",
+            "displayName": "API ERP DB",
+            "kind": "postgres_jdbc",
+            "authScheme": "database_url",
+            "secretValue": f"sqlite:///{source_db}",
+        },
+    )
+    secret_ref = credential.json()["secretRef"]["name"]
+    agent = client.post(
+        "/api/sources/agents",
+        headers={**base_headers, "Idempotency-Key": "api-source-agent"},
+        json={
+            "agentId": "api_customer_agent",
+            "displayName": "API Customer Agent",
+            "mode": "agent_proxy",
+            "capabilities": {"jdbc": True},
+            "networkSummary": {"region": "customer-dmz"},
+        },
+    )
+    heartbeat = client.post("/api/sources/agents/api_customer_agent/heartbeat", headers=base_headers)
+    network_policy = client.post(
+        "/api/sources/network-policies",
+        headers={**base_headers, "Idempotency-Key": "api-source-network"},
+        json={
+            "policyName": "api_customer_erp",
+            "displayName": "API Customer ERP",
+            "mode": "agent_proxy",
+            "agentId": "api_customer_agent",
+            "allowedHosts": ["erp.customer.local"],
+        },
+    )
+    exploration = client.post(
+        "/api/sources/explore",
+        headers=base_headers,
+        json={
+            "sourceName": "api_customer_erp",
+            "sourceType": "postgres_jdbc",
+            "request": {
+                "databaseUrlSecretRef": secret_ref,
+                "tableName": "orders",
+                "checkpointColumn": "id",
+                "sampleLimit": 2,
+            },
+        },
+    )
+    managed_sync = client.post(
+        "/api/sources/managed-syncs",
+        headers={**base_headers, "Idempotency-Key": "api-source-managed-sync"},
+        json={
+            "syncName": "api_orders_incremental",
+            "sourceName": "api_customer_erp",
+            "displayName": "API Orders incremental",
+            "sourceType": "postgres_jdbc",
+            "capability": "batch",
+            "mode": "APPEND",
+            "targetDatasetRef": "raw.api_managed_orders",
+            "schedule": {"mode": "manual"},
+            "configSummary": {
+                "databaseUrlSecretRef": secret_ref,
+                "tableName": "orders",
+                "checkpointColumn": "id",
+                "batchLimit": 2,
+            },
+        },
+    )
+    started = client.post(
+        "/api/sources/managed-syncs/api_orders_incremental/runs/start",
+        headers={**base_headers, "Idempotency-Key": "api-source-managed-run-1"},
+        json={"triggerType": "manual", "batchLimit": 2},
+    )
+    replay = client.post(
+        "/api/sources/managed-syncs/api_orders_incremental/runs/start",
+        headers={**base_headers, "Idempotency-Key": "api-source-managed-run-1"},
+        json={"triggerType": "manual", "batchLimit": 2},
+    )
+    preview = client.get("/api/datasets/raw/api_managed_orders/preview", headers=base_headers)
+
+    assert templates.status_code == 200
+    assert credential.status_code == 200
+    assert credential.json()["secretRef"]["value"] == "***REDACTED***"
+    assert "sqlite:///" not in credential.text
+    assert agent.status_code == 200
+    assert heartbeat.json()["status"] == "online"
+    assert network_policy.json()["agentId"] == "api_customer_agent"
+    assert exploration.json()["status"] == "succeeded"
+    assert len(exploration.json()["resultSummary"]["sample"]) == 2
+    assert managed_sync.status_code == 200
+    assert managed_sync.json()["mode"] == "APPEND"
+    assert started.status_code == 200
+    assert started.json()["checkpointEnd"] == {"checkpointColumn": "id", "lastValue": 2}
+    assert replay.json()["runId"] == started.json()["runId"]
+    assert len(preview.json()) == 2
 
 
 def test_api_ontology_catalog_returns_active_object_action_and_link_metadata(foundry, monkeypatch) -> None:
@@ -448,10 +606,19 @@ def test_api_backup_restore_mode_start_and_status_return_pause_gate(monkeypatch)
             assert restore_id == "restore-api"
             return _restore_mode_payload(ctx.tenant_id)
 
+        def run_post_restore_validation(self, restore_id, *, ctx, validation_id):
+            assert restore_id == "restore-api"
+            assert validation_id == "closed-loop-api"
+            return _post_restore_validation_payload(ctx.tenant_id)
+
         def approve_restore_resume(self, restore_id, *, ctx, validation_id):
             assert restore_id == "restore-api"
             assert validation_id == "closed-loop-api"
             return _restore_mode_payload(ctx.tenant_id, status="resume_approved")
+
+        def recovery_overview(self, *, ctx):
+            mode = _restore_mode_payload(ctx.tenant_id)
+            return _recovery_overview_payload(ctx.tenant_id, mode)
 
     class FakeFoundry:
         operations = FakeOperations()
@@ -465,19 +632,31 @@ def test_api_backup_restore_mode_start_and_status_return_pause_gate(monkeypatch)
         json={"backupId": "backup-api", "restoreId": "restore-api"},
     )
     status = client.get("/api/operations/backup-restore/restore-mode/restore-api", headers=headers)
+    validation = client.post(
+        "/api/operations/backup-restore/restore-mode/restore-api/post-restore-validation",
+        headers=headers,
+        json={"validationId": "closed-loop-api"},
+    )
     approved = client.post(
         "/api/operations/backup-restore/restore-mode/restore-api/approve-resume",
         headers=headers,
         json={"validationId": "closed-loop-api"},
     )
+    overview = client.get("/api/operations/recovery/overview", headers=headers)
 
     assert started.status_code == 200
     assert status.status_code == 200
+    assert validation.status_code == 200
     assert approved.status_code == 200
+    assert overview.status_code == 200
     assert started.json()["is_outbox_publisher_paused"] is True
     assert status.json()["is_serving_traffic_open"] is False
+    assert validation.json()["status"] == "passed"
+    assert validation.json()["validationId"] == "closed-loop-api"
     assert approved.json()["status"] == "resume_approved"
     assert approved.json()["is_outbox_publisher_paused"] is False
+    assert overview.json()["activeRestoreMode"]["restoreId"] == "restore-api"
+    assert overview.json()["restoreTrafficGate"]["isWriteTrafficPaused"] is True
 
 
 def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monkeypatch) -> None:
@@ -539,6 +718,69 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monk
     assert rejected_shape.status_code == 422
     deny_events = foundry.operations.query_runs(ctx=ctx, run_type="audit", status="deny")["auditEvents"]
     assert deny_events[0]["action"] == "webhook:ingest"
+
+
+def test_api_webhook_service_principal_auth_records_service_actor(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    secret = "local-webhook-secret"
+    dataset_ref = "raw.webhook_service_orders"
+    connector_name = "mock_saas"
+    resource_name = "orders"
+    service_principal = "mock-saas-webhook"
+    actor_user_id = f"{api_main.WEBHOOK_SERVICE_ACTOR_PREFIX}{service_principal}"
+    body = b'{"order_id":"O-9101","status":"PENDING"}'
+    timestamp = _webhook_timestamp()
+    headers = {
+        "Content-Type": "application/json",
+        api_main.WEBHOOK_SERVICE_TENANT_HEADER: ctx.tenant_id,
+        api_main.WEBHOOK_SERVICE_PRINCIPAL_HEADER: service_principal,
+        "X-Foundry-Lite-Timestamp": timestamp,
+        "X-Foundry-Lite-Event-ID": "evt-order-service-principal",
+    }
+    signed_headers = {
+        **headers,
+        "X-Foundry-Lite-Signature": _webhook_service_principal_signature(
+            body,
+            secret,
+            timestamp,
+            tenant_id=ctx.tenant_id,
+            actor_user_id=actor_user_id,
+            dataset_ref=dataset_ref,
+            connector_name=connector_name,
+            resource_name=resource_name,
+        ),
+    }
+    legacy_signed_headers = {
+        **headers,
+        "X-Foundry-Lite-Event-ID": "evt-order-legacy-signature",
+        "X-Foundry-Lite-Signature": _webhook_signature(body, secret, timestamp),
+    }
+    foundry.datasets.ensure(dataset_ref, ctx=ctx, primary_key=["event_id"])
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
+    client = TestClient(app)
+
+    legacy_denied = client.post(
+        f"/api/connectors/webhooks/{connector_name}/{resource_name}",
+        params={"datasetRef": dataset_ref},
+        headers=legacy_signed_headers,
+        content=body,
+    )
+    accepted = client.post(
+        f"/api/connectors/webhooks/{connector_name}/{resource_name}",
+        params={"datasetRef": dataset_ref},
+        headers=signed_headers,
+        content=body,
+    )
+
+    transactions = _dataset_transactions(foundry.engine)
+    append_transactions = [tx for tx in transactions if tx["tx_type"] == "APPEND"]
+    preview = foundry.datasets.preview(dataset_ref, ctx=ctx)
+    assert legacy_denied.status_code == 403
+    assert accepted.status_code == 200
+    assert len(append_transactions) == 1
+    assert append_transactions[0]["created_by"] == actor_user_id
+    assert preview[0]["event_id"] == "evt-order-service-principal"
 
 
 def test_api_webhook_rejects_oversized_body_before_commit(foundry, monkeypatch) -> None:
@@ -795,7 +1037,7 @@ def test_api_operations_runs_cursor_pages_action_runs(foundry, monkeypatch) -> N
 def test_api_ai_operations_run_detail_returns_safe_ledger_payload(monkeypatch) -> None:
     class AiOperations:
         def run_detail(self, run_type: str, run_id: str, **kwargs: object) -> dict[str, object]:
-            ctx = kwargs["ctx"]
+            ctx = cast(RequestContext, kwargs["ctx"])
             assert run_type == "ai"
             assert run_id == "ai-run-ops"
             assert "ops_manager" in ctx.roles
@@ -1091,390 +1333,174 @@ def test_api_aip_agent_run_calls_model_and_links_operations_detail(foundry, monk
     assert "Explain Order O-1001 for the operator." in {message["content"] for message in prompt_payload["messages"]}
 
 
-def test_api_aip_agent_run_executes_brokered_tool_loop(foundry, monkeypatch) -> None:
-    prepare_indexed_demo(foundry)
+def test_api_aip_eval_and_release_surface_persists_gate_evidence(foundry, monkeypatch) -> None:
     monkeypatch.setattr(api_main, "foundry", foundry)
-    foundry._services.model_gateway.language_model_adapter = _ToolLoopLanguageModel()
-    headers = {
-        "X-Tenant-ID": "tenant-demo",
-        "X-User-ID": "ops-user",
-        "X-Roles": "admin,data_engineer,ops_manager",
-    }
     client = TestClient(app)
+    headers = {"X-Tenant-ID": "tenant-demo", "X-User-ID": "ops-user", "X-Roles": "admin,ops_manager"}
 
-    response = client.post(
-        "/api/aip/agent/run",
+    eval_response = client.post(
+        "/api/aip/evals/run",
         headers=headers,
         json={
-            "agentRunId": "agent-api-tool-loop-1",
+            "evalRunId": "eval-api-release-smoke",
+            "suiteApiName": "release-gate",
+            "suiteVersion": "v1",
+            "suiteDescription": "API release gate smoke",
             "agentVersionId": "agent.order-ops.v1",
-            "modelAlias": "default-completion",
-            "promptVersionId": "prompt-order-copilot@v1",
-            "userMessage": "Check Order O-1001 with a governed tool.",
-            "agentInstruction": "Use brokered tools only.",
-            "securityPartition": "tenant-demo:internal",
-            "allowedSecurityPartitions": ["tenant-demo:internal"],
-            "stateJson": {"objectType": "Order", "objectId": "O-1001"},
-            "modelAllowedClassifications": ["public", "internal"],
-            "maxModelCalls": 2,
-            "maxLoopIterations": 2,
-            "maxToolCalls": 1,
-            "toolManifest": [_agent_tool_spec_payload()],
-            "agentAllowedTools": ["ontology.get_object"],
-        },
-    )
-
-    body = response.json()
-    assert response.status_code == 200
-    assert body["runStatus"] == "succeeded"
-    assert body["answer"] == "The governed object tool checked O-1001."
-
-    detail = client.get(f"/api/operations/runs/ai/{body['aiRunId']}", headers=headers)
-    detail_body = detail.json()
-    assert detail.status_code == 200
-    assert detail_body["ai"]["summary"]["modelCallCount"] == 2
-    assert detail_body["ai"]["summary"]["toolCallCount"] == 1
-    assert detail_body["ai"]["summary"]["promptArtifactCount"] == 2
-    assert detail_body["ai"]["toolCalls"][0]["tool_id"] == "ontology.get_object"
-    assert "brokered_tool_result" not in json.dumps(detail_body, sort_keys=True)
-
-
-def test_api_aip_agent_run_proposes_action_for_human_review(foundry, monkeypatch) -> None:
-    ctx = prepare_indexed_demo(foundry)
-    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
-    monkeypatch.setattr(api_main, "foundry", foundry)
-    foundry._services.model_gateway.language_model_adapter = _ActionProposalLanguageModel(
-        expected_object_version=int(order["objectVersion"])
-    )
-    headers = {
-        "X-Tenant-ID": "tenant-demo",
-        "X-User-ID": "ops-user",
-        "X-Roles": "admin,data_engineer,ops_manager",
-    }
-    client = TestClient(app)
-
-    response = client.post(
-        "/api/aip/agent/run",
-        headers=headers,
-        json={
-            "agentRunId": "agent-api-action-proposal-1",
-            "agentVersionId": "agent.order-ops.v1",
-            "modelAlias": "default-completion",
-            "promptVersionId": "prompt-order-copilot@v1",
-            "userMessage": "Propose approval for Order O-1001 if evidence supports it.",
-            "agentInstruction": "Create action proposals for human review; do not execute writes.",
-            "securityPartition": "tenant-demo:internal",
-            "allowedSecurityPartitions": ["tenant-demo:internal"],
-            "stateJson": {"objectType": "Order", "objectId": "O-1001"},
-            "modelAllowedClassifications": ["public", "internal"],
-            "maxModelCalls": 2,
-            "maxLoopIterations": 2,
-            "maxToolCalls": 1,
-            "toolManifest": [_agent_action_proposal_tool_spec_payload()],
-            "agentAllowedTools": ["action.propose"],
-            "agentAllowedActions": ["ApproveOrder"],
-        },
-    )
-
-    body = response.json()
-    assert response.status_code == 200
-    assert body["runStatus"] == "succeeded"
-    assert "awaiting human review" in body["answer"]
-    assert body["usage"]["actionProposalCount"] == 1
-
-    detail_body = client.get(f"/api/operations/runs/ai/{body['aiRunId']}", headers=headers).json()
-    review_listing = client.get("/api/insights/reviews?status=pending", headers=headers).json()
-    review = review_listing["items"][0]
-    assert detail_body["ai"]["summary"]["modelCallCount"] == 1
-    assert detail_body["ai"]["summary"]["toolCallCount"] == 1
-    assert detail_body["ai"]["toolCalls"][0]["tool_id"] == "action.propose"
-    assert detail_body["ai"]["toolCalls"][0]["status"] == "pending_review"
-    assert detail_body["ai"]["toolCalls"][0]["result_hash"] == review["proposalFingerprint"]
-    assert review["originatingAiRunId"] == body["aiRunId"]
-    assert review["executionStatus"] == "pending_review"
-    assert _table_count(foundry.engine, db.action_runs) == 0
-    assert "Inventory confirmed" not in json.dumps(detail_body, sort_keys=True)
-
-
-def test_api_aip_agent_run_proposal_can_be_approved_and_executed(foundry, monkeypatch) -> None:
-    ctx = prepare_indexed_demo(foundry)
-    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
-    monkeypatch.setattr(api_main, "foundry", foundry)
-    foundry._services.model_gateway.language_model_adapter = _ActionProposalLanguageModel(
-        expected_object_version=int(order["objectVersion"])
-    )
-    headers = {
-        "X-Tenant-ID": "tenant-demo",
-        "X-User-ID": "ops-user",
-        "X-Roles": "admin,data_engineer,ops_manager",
-    }
-    client = TestClient(app)
-
-    run = client.post(
-        "/api/aip/agent/run",
-        headers=headers,
-        json={
-            "agentRunId": "agent-api-action-execution-1",
-            "agentVersionId": "agent.order-ops.v1",
-            "modelAlias": "default-completion",
-            "promptVersionId": "prompt-order-copilot@v1",
-            "userMessage": "Propose approval for Order O-1001 if evidence supports it.",
-            "agentInstruction": "Create action proposals for human review; do not execute writes.",
-            "securityPartition": "tenant-demo:internal",
-            "allowedSecurityPartitions": ["tenant-demo:internal"],
-            "stateJson": {"objectType": "Order", "objectId": "O-1001"},
-            "modelAllowedClassifications": ["public", "internal"],
-            "maxModelCalls": 2,
-            "maxLoopIterations": 2,
-            "maxToolCalls": 1,
-            "toolManifest": [_agent_action_proposal_tool_spec_payload()],
-            "agentAllowedTools": ["action.propose"],
-            "agentAllowedActions": ["ApproveOrder"],
-        },
-    )
-    review = client.get("/api/insights/reviews?status=pending", headers=headers).json()["items"][0]
-    approved = client.post(
-        f"/api/insights/reviews/{review['id']}/decision",
-        headers={**headers, "Idempotency-Key": "approve-agent-proposal-api"},
-        json={"decision": "approved", "comment": "Evidence checked"},
-    )
-    executed = client.post(
-        f"/api/insights/reviews/{review['id']}/execute-action",
-        headers={**headers, "Idempotency-Key": "execute-agent-proposal-api"},
-        json={"expectedProposalFingerprint": review["proposalFingerprint"]},
-    )
-    replayed = client.post(
-        f"/api/insights/reviews/{review['id']}/execute-action",
-        headers={**headers, "Idempotency-Key": "execute-agent-proposal-api"},
-        json={"expectedProposalFingerprint": review["proposalFingerprint"]},
-    )
-
-    assert run.status_code == 200
-    assert approved.status_code == 200
-    assert executed.status_code == 200
-    assert replayed.status_code == 200
-    executed_body = executed.json()
-    replayed_body = replayed.json()
-    detail_body = client.get(f"/api/operations/runs/ai/{run.json()['aiRunId']}", headers=headers).json()
-    updated_order = foundry.objects.get("Order", "O-1001", ctx=ctx)
-    assert executed_body["review"]["executionStatus"] == "executed"
-    assert executed_body["review"]["approvedActionRunId"] == executed_body["actionRunId"]
-    assert replayed_body["actionRunId"] == executed_body["actionRunId"]
-    assert replayed_body["actionResponse"]["idempotentReplay"] is True
-    assert replayed_body["review"]["approvedActionRunId"] == executed_body["actionRunId"]
-    assert detail_body["ai"]["toolCalls"][0]["linked_action_run_id"] == executed_body["actionRunId"]
-    assert detail_body["ai"]["toolCalls"][0]["result_hash"] == review["proposalFingerprint"]
-    assert updated_order["objectVersion"] == 2
-    assert _table_count(foundry.engine, db.action_runs) == 1
-
-
-def test_api_aip_agent_run_proposal_can_be_approved_and_executed_rejects_empty_idempotency(monkeypatch) -> None:
-    class _Aip:
-        def execute_approved_action(self, *_args, **_kwargs):
-            raise AssertionError("empty idempotency key should fail before approval execution")
-
-    class FailingCore:
-        aip = _Aip()
-
-    monkeypatch.setattr(api_main, "foundry", FailingCore())
-    response = TestClient(app).post(
-        "/api/insights/reviews/review-1/execute-action",
-        headers={"Idempotency-Key": ""},
-        json={"expectedProposalFingerprint": "sha256:" + ("a" * 64)},
-    )
-
-    assert response.status_code == 400
-    assert response.json()["detail"]["code"] == "MISSING_IDEMPOTENCY_KEY"
-    assert "request_id" in response.json()["detail"]
-
-
-@pytest.mark.parametrize(
-    ("reason", "expected_status"),
-    [
-        ("action_not_found", 404),
-        ("fingerprint_mismatch", 409),
-        ("policy_denied", 403),
-        ("not_action_proposal", 400),
-    ],
-)
-def test_api_aip_agent_run_proposal_can_be_approved_and_executed_maps_execution_errors(
-    monkeypatch, reason: str, expected_status: int
-) -> None:
-    class _Aip:
-        def execute_approved_action(self, *_args, **_kwargs):
-            raise ApprovalExecutionError(reason, "approval execution failed")
-
-    class FailingCore:
-        aip = _Aip()
-
-    monkeypatch.setattr(api_main, "foundry", FailingCore())
-    response = TestClient(app).post(
-        "/api/insights/reviews/review-1/execute-action",
-        headers={"Idempotency-Key": f"execute-error-{reason}"},
-        json={"expectedProposalFingerprint": "sha256:" + ("a" * 64)},
-    )
-
-    detail = response.json()["detail"]
-    assert response.status_code == expected_status
-    assert detail["code"] == reason.upper()
-    assert detail["details"] == {"reason": reason}
-    assert "request_id" in detail
-
-
-class _ToolLoopLanguageModel:
-    profile_name = "smoke-tool-loop-language-model"
-
-    def complete(self, request: ModelRequest) -> ModelResponse:
-        if request.model_call_attempt == 1:
-            return ModelResponse(
-                provider="fake",
-                resolved_model_id="",
-                resolved_model_revision="",
-                content="Need a governed object lookup.",
-                finish_reason="tool_calls",
-                input_tokens=3,
-                output_tokens=3,
-                normalized_tool_calls=(
-                    ModelToolCall(
-                        tool_name="ontology.get_object",
-                        arguments_json=json.dumps(
-                            {
-                                "object_type": "Order",
-                                "object_id": "O-1001",
-                                "property_names": ["orderId", "status"],
-                            },
-                            sort_keys=True,
-                        ),
-                    ),
-                ),
-                provider_request_id="smoke-tool-loop-1",
-            )
-        return ModelResponse(
-            provider="fake",
-            resolved_model_id="",
-            resolved_model_revision="",
-            content="The governed object tool checked O-1001.",
-            finish_reason="stop",
-            input_tokens=5,
-            output_tokens=6,
-            normalized_tool_calls=(),
-            provider_request_id="smoke-tool-loop-2",
-        )
-
-
-class _ActionProposalLanguageModel:
-    profile_name = "smoke-action-proposal-language-model"
-
-    def __init__(self, *, expected_object_version: int) -> None:
-        self._expected_object_version = expected_object_version
-
-    def complete(self, request: ModelRequest) -> ModelResponse:
-        return ModelResponse(
-            provider="fake",
-            resolved_model_id="",
-            resolved_model_revision="",
-            content="Need a governed action proposal.",
-            finish_reason="tool_calls",
-            input_tokens=4,
-            output_tokens=4,
-            normalized_tool_calls=(
-                ModelToolCall(
-                    tool_name="action.propose",
-                    arguments_json=json.dumps(
-                        {
-                            "actionType": "ApproveOrder",
-                            "targetObjectType": "Order",
-                            "targetObjectId": "O-1001",
-                            "expectedObjectVersion": self._expected_object_version,
-                            "parameters": {"reason": "Inventory confirmed"},
-                            "evidenceContextIds": [_first_agent_context_id(request)],
-                            "expiresAt": "2999-01-01T00:00:00+00:00",
-                            "claimText": "Approve O-1001 based on selected AI evidence.",
-                        },
-                        sort_keys=True,
-                    ),
-                ),
-            ),
-            provider_request_id="smoke-action-proposal-1",
-        )
-
-
-def _agent_tool_spec_payload() -> dict[str, object]:
-    return {
-        "toolId": "ontology.get_object",
-        "version": "2026-06-25",
-        "inputSchema": {
-            "type": "object",
-            "required": ["object_type", "object_id"],
-            "properties": {
-                "object_type": {"type": "string"},
-                "object_id": {"type": "string"},
-                "property_names": {"type": "array"},
-            },
-            "additionalProperties": False,
-        },
-        "outputSchema": {"type": "object"},
-        "effect": "READ",
-        "requiredPermission": "object:read",
-        "confirmationPolicy": "NONE",
-        "objectTypeAllowlist": ["Order"],
-        "propertyAllowlist": ["orderId", "status"],
-        "resultClassification": "internal",
-        "status": "published",
-    }
-
-
-def _agent_action_proposal_tool_spec_payload() -> dict[str, object]:
-    return {
-        "toolId": "action.propose",
-        "version": "2026-06-26",
-        "inputSchema": {
-            "type": "object",
-            "required": [
-                "actionType",
-                "targetObjectType",
-                "targetObjectId",
-                "expectedObjectVersion",
-                "parameters",
-                "evidenceContextIds",
-                "expiresAt",
-                "claimText",
+            "candidateReleaseChannel": "dev",
+            "cases": [
+                {
+                    "caseApiName": "answer-ok",
+                    "axis": "answer",
+                    "inputJson": {"question": "status"},
+                    "expectedJson": {"answer": "ok"},
+                    "actualJson": {"answer": "ok", "extra": "ignored"},
+                    "tags": ["api-smoke"],
+                }
             ],
-            "properties": {
-                "actionType": {"type": "string"},
-                "targetObjectType": {"type": "string"},
-                "targetObjectId": {"type": "string"},
-                "expectedObjectVersion": {"type": "integer"},
-                "parameters": {"type": "object"},
-                "evidenceContextIds": {"type": "array"},
-                "expiresAt": {"type": "string"},
-                "claimText": {"type": "string"},
-            },
-            "additionalProperties": False,
+            "minScore": 1,
+            "requiredAxes": ["answer"],
         },
-        "outputSchema": {"type": "object"},
-        "effect": "PROPOSE_WRITE",
-        "requiredPermission": "insight:create",
-        "confirmationPolicy": "HUMAN_REVIEW",
-        "objectTypeAllowlist": ["Order"],
-        "propertyAllowlist": [],
-        "resultClassification": "internal",
-        "status": "published",
+    )
+
+    eval_body = eval_response.json()
+    assert eval_response.status_code == 200
+    assert eval_body["eval_run_id"] == "eval-api-release-smoke"
+    assert eval_body["status"] == "passed"
+    assert eval_body["is_passed"] is True
+
+    promotion = client.post(
+        "/api/aip/releases/promote",
+        headers=headers,
+        json={
+            "agentVersionId": "agent.order-ops.v1",
+            "targetReleaseChannel": "dev",
+            "evalRunId": "eval-api-release-smoke",
+            "policyVersion": "release-policy-v1",
+        },
+    )
+
+    promotion_body = promotion.json()
+    assert promotion.status_code == 200
+    assert promotion_body["agent_version_id"] == "agent.order-ops.v1"
+    assert promotion_body["release_channel"] == "dev"
+    assert promotion_body["status"] == "active"
+
+
+def test_api_media_upload_commit_and_reference_surface(foundry, monkeypatch) -> None:
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    client = TestClient(app)
+    headers = {
+        "X-Tenant-ID": "tenant-demo",
+        "X-User-ID": "media-operator",
+        "X-Roles": "admin,data_engineer,ops_manager",
     }
 
+    media_set = client.post(
+        "/api/media/sets",
+        headers=headers,
+        json={
+            "namespace": "raw",
+            "name": "operator-images",
+            "schemaType": "image",
+            "primaryFormat": "png",
+            "allowedInputFormats": ["png"],
+            "classification": "internal",
+        },
+    )
+    media_set_body = media_set.json()
+    assert media_set.status_code == 200
+    assert media_set_body["schema_type"] == "image"
 
-def _first_agent_context_id(request: ModelRequest) -> str:
-    system = request.messages[0].content
-    marker = "## citation_mapping\n"
-    start = system.index(marker) + len(marker)
-    end = system.find("\n\n## ", start)
-    payload = json.loads(system[start:] if end == -1 else system[start:end])
-    return str(payload["citations"][0]["context_id"])
+    media_set_id = media_set_body["media_set_id"]
+    transaction = client.post(
+        f"/api/media/sets/{media_set_id}/transactions",
+        headers={**headers, "Idempotency-Key": "media-api-open-smoke"},
+        json={"mode": "APPEND"},
+    )
+    assert transaction.status_code == 200
+    media_transaction_id = transaction.json()["mediaTransactionId"]
+
+    upload = client.post(
+        f"/api/media/sets/{media_set_id}/transactions/{media_transaction_id}/uploads",
+        headers=headers,
+        data={
+            "logicalPath": "/ops/scan.png",
+            "schemaType": "image",
+            "format": "png",
+            "suppliedMimeType": "image/png",
+            "securityEnvelope": json.dumps(
+                {"tenant_id": "tenant-demo", "classification": "internal", "policy_version": "v1"}
+            ),
+            "probeMetadata": json.dumps({"width": 1, "height": 1}),
+        },
+        files={"file": ("scan.png", b"operator-image-bytes", "image/png")},
+    )
+    upload_body = upload.json()
+    assert upload.status_code == 200
+    assert upload_body["media_item_version_id"].startswith("mver_")
+
+    commit = client.post(f"/api/media/transactions/{media_transaction_id}/commit", headers=headers)
+    commit_body = commit.json()
+    assert commit.status_code == 200
+    assert commit_body["committed_version_ids"] == [upload_body["media_item_version_id"]]
+
+    bind = client.post(
+        "/api/media/references/bind",
+        headers={**headers, "Idempotency-Key": "media-api-bind-smoke"},
+        json={
+            "holderType": "Order",
+            "holderId": "O-1001",
+            "propertyName": "sourceDocument",
+            "mediaItemVersionId": upload_body["media_item_version_id"],
+        },
+    )
+    assert bind.status_code == 200
+    assert bind.json()["media_item_version_id"] == upload_body["media_item_version_id"]
+
+    resolved = client.get(
+        "/api/media/references/resolve",
+        headers=headers,
+        params={
+            "holderType": "Order",
+            "holderId": "O-1001",
+            "propertyName": "sourceDocument",
+            "allowedClassifications": "internal",
+        },
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["media_item_version_id"] == upload_body["media_item_version_id"]
 
 
-def _table_count(engine, table) -> int:
-    with engine.begin() as conn:
-        return int(conn.execute(select(func.count()).select_from(table)).scalar_one())
+def test_api_transform_sql_register_writes_server_managed_entrypoint(foundry, monkeypatch) -> None:
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    headers = {
+        "X-Tenant-ID": "tenant-demo",
+        "X-User-ID": "pipeline-builder",
+        "X-Roles": "admin,data_engineer,ops_manager",
+    }
+
+    response = TestClient(app).post(
+        "/api/transforms/sql",
+        headers=headers,
+        json={
+            "apiName": "api_transform_smoke",
+            "sql": "select * from {{ input('raw.orders') }}",
+            "inputs": {"raw.orders": "raw.orders"},
+            "outputDatasetRef": "clean.orders_api_smoke",
+            "checks": [{"type": "row_count_min", "min": 1}],
+            "mode": "snapshot",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    entrypoint = Path(body["entrypoint"])
+    assert body["api_name"] == "api_transform_smoke"
+    assert body["language"] == "sql"
+    assert entrypoint.exists()
+    assert foundry.root in entrypoint.parents
+    assert entrypoint.read_text(encoding="utf-8") == "select * from {{ input('raw.orders') }}"
 
 
 def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:
@@ -1577,6 +1603,48 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert inspected.json()["version"]["version_number"] == 1
     assert inspected.json()["manifest"]["files"][0]["row_count"] == 3
 
+    contract_check = client.post(
+        "/api/datasets/clean/orders/quality-contract/checks",
+        headers=headers,
+        json={"config": {"type": "row_count_min", "min": 0}, "severity": "warn"},
+    )
+    contract_replay = client.post(
+        "/api/datasets/clean/orders/quality-contract/checks",
+        headers=headers,
+        json={"config": {"type": "row_count_min", "min": 0}, "severity": "warn"},
+    )
+    contract_update = client.patch(
+        f"/api/datasets/clean/orders/quality-contract/checks/{contract_check.json()['check']['id']}",
+        headers=headers,
+        json={"enabled": False},
+    )
+    contract_list = client.get("/api/datasets/clean/orders/quality-contract/checks", headers=headers)
+    quality_results = client.get("/api/datasets/clean/orders/quality-contract/results?limit=5", headers=headers)
+    quality_summary = client.get(
+        "/api/datasets/clean/orders/quality-contract/results/summary?latest_limit=3",
+        headers=headers,
+    )
+    assert contract_check.status_code == 200
+    assert contract_check.json()["isIdempotentReplay"] is False
+    assert contract_replay.status_code == 200
+    assert contract_replay.json()["isIdempotentReplay"] is True
+    assert contract_replay.json()["check"]["id"] == contract_check.json()["check"]["id"]
+    assert contract_update.status_code == 200
+    assert contract_update.json()["enabled"] is False
+    assert contract_list.status_code == 200
+    assert contract_list.json()["datasetRef"] == "clean.orders"
+    check_id = contract_check.json()["check"]["id"]
+    assert check_id in {row["id"] for row in contract_list.json()["checks"]}
+    assert any(row["id"] == check_id and row["enabled"] is False for row in contract_list.json()["checks"])
+    assert quality_results.status_code == 200
+    assert quality_results.json()["datasetRef"] == "clean.orders"
+    assert quality_results.json()["results"]
+    assert all(row["transactionId"] for row in quality_results.json()["results"])
+    assert quality_summary.status_code == 200
+    assert quality_summary.json()["datasetRef"] == "clean.orders"
+    assert quality_summary.json()["totalResults"] >= len(quality_summary.json()["latestResults"])
+    assert quality_summary.json()["statusCounts"]
+
     valid_ontology = Path("examples/supply-chain-demo/ontology/order-customer.yaml").read_text(encoding="utf-8")
     ontology_validation = client.post("/api/ontology/validate", headers=headers, json={"yaml": valid_ontology})
     assert ontology_validation.status_code == 200
@@ -1610,7 +1678,7 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert links.json()[0]["to"]["objectType"] == "Customer"
     assert links.json()[0]["to"]["objectId"] == "C-100"
 
-    source_run_detail = client.get(source_run["operationPath"], headers=headers)
+    source_run_detail = client.get(cast(str, source_run["operationPath"]), headers=headers)
     assert source_run_detail.status_code == 200
     assert source_run_detail.json()["runType"] == "index"
     assert source_run_detail.json()["runId"] == source_run["runId"]
@@ -1876,6 +1944,52 @@ def test_api_operations_retry_dead_letter_event_keeps_dlq_when_reprocess_fails(f
     assert outbox["attempts"] == 3
 
 
+def test_api_operations_outbox_publish_pending_batch(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    _seed_pending_outbox(foundry.engine, tenant_id=ctx.tenant_id, event_id="outbox_api_publish")
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    client = TestClient(app)
+    headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
+
+    response = client.post(
+        "/api/operations/outbox/publish",
+        headers=headers,
+        json={"streamName": "ops-outbox", "limit": 10},
+    )
+    runs = client.get("/api/operations/runs", headers=headers).json()
+    payload = response.json()
+    published = _runtime_row(runs["outboxEvents"], "outbox_api_publish")
+
+    assert response.status_code == 200
+    assert payload["requested"] == 1
+    assert payload["published"] == 1
+    assert payload["failed"] == 0
+    assert payload["eventIds"] == ["outbox_api_publish"]
+    assert published["status"] == "published"
+    assert published["published_at"] is not None
+    assert any(row["event_type"] == "outbox_event.published" for row in runs["auditEvents"])
+
+
+def test_api_operations_admin_overview_lists_current_and_future_admin_surfaces(foundry, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    client = TestClient(app)
+    headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
+
+    response = client.get("/api/operations/admin/overview", headers=headers)
+    payload = response.json()
+    capabilities = {row["id"]: row for row in payload["capabilities"]}
+
+    assert response.status_code == 200
+    assert payload["summary"]["apiAvailable"] == 2
+    assert capabilities["operations-admin-overview"]["sdkSurface"] == "operations.admin.overview"
+    assert capabilities["bounded-outbox-publish"]["apiRoute"] == "POST /api/operations/outbox/publish"
+    assert capabilities["schema-migration-runner"]["status"] == "cli_only"
+    assert capabilities["schema-migration-runner"]["command"] == "pnpm db:migrate"
+    assert capabilities["infra-bootstrap"]["status"] == "runbook_only"
+    assert capabilities["full-visual-operations-workspace"]["status"] == "future"
+
+
 def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundry, monkeypatch) -> None:
     ctx = demo_admin_context()
     foundry.datasets.ensure("raw.shipment_cdc", ctx=ctx, primary_key=["event_id"])
@@ -1991,6 +2105,75 @@ def test_api_operations_workflow_start_status_and_audit(foundry, monkeypatch) ->
     assert detail.json()["row"]["after_ref"]["workflowRunId"] == started.json()["workflowRunId"]
 
 
+def test_api_connector_onboarding_create_test_start_and_fetch_workflow(tmp_path, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    secret_provider = EnvSecretProvider(environ={"FOUNDRY_LITE_SECRET_ERP_TOKEN": "token-v1"})
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    foundry = FoundryLite(
+        dependencies=replace(
+            dependencies,
+            connector_adapter=RestPullConnectorAdapter(secret_provider=secret_provider),
+            secret_provider=secret_provider,
+        )
+    )
+    monkeypatch.setattr(api_main, "foundry", foundry)
+    client = TestClient(app)
+    headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
+
+    with MockRestServer() as server:
+        created = client.post(
+            "/api/connectors/connections",
+            headers={**headers, "Idempotency-Key": "api-create-erp"},
+            json={
+                "connectorName": "erp",
+                "displayName": "ERP",
+                "baseUrl": server.base_url,
+                "auth": {"mode": "bearer", "tokenSecretRef": "erp-token"},
+                "rateLimitPerMinute": 60,
+                "allowPrivateNetwork": True,
+            },
+        )
+        upserted = client.put(
+            "/api/connectors/connections/erp/resources/orders",
+            headers={**headers, "Idempotency-Key": "api-upsert-erp-orders"},
+            json={
+                "datasetRef": "raw.erp_orders",
+                "resourcePath": "/orders",
+                "pagination": {
+                    "strategy": "cursor",
+                    "itemsPath": "items",
+                    "nextCursorPath": "nextCursor",
+                    "cursorQueryParam": "cursor",
+                    "cursorKey": "cursor",
+                },
+                "schemaColumns": ["order_id", "amount"],
+                "primaryKey": ["order_id"],
+            },
+        )
+        tested = client.post("/api/connectors/connections/erp/resources/orders/test", headers=headers)
+        started = client.post(
+            "/api/connectors/connections/erp/resources/orders/sync/start",
+            headers={**headers, "Idempotency-Key": "api-start-erp-orders"},
+            json={"syncName": "erp-orders-first-sync"},
+        )
+
+    listed = client.get("/api/connectors/connections", headers=headers)
+    fetched = client.get("/api/connectors/connections/erp", headers=headers)
+    workflow = client.get(f"/api/operations/workflows/{started.json()['workflowRunId']}", headers=headers)
+
+    assert created.status_code == 200
+    assert upserted.status_code == 200
+    assert tested.status_code == 200
+    assert started.status_code == 200
+    assert listed.json()[0]["connectorName"] == "erp"
+    assert fetched.json()["resources"][0]["resourceName"] == "orders"
+    assert tested.json()["status"] == "succeeded"
+    assert tested.json()["rowCount"] == 1
+    assert started.json()["workflowName"] == "ConnectorSyncWorkflow"
+    assert started.json()["output"]["configFingerprint"].startswith("sha256:")
+    assert workflow.json()["workflowRunId"] == started.json()["workflowRunId"]
+
+
 def test_api_operations_reconciliation_resolves_action_writeback(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
     headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
@@ -2029,6 +2212,45 @@ def test_api_operations_reconciliation_resolves_action_writeback(foundry, monkey
     assert foundry.objects.get("Order", "O-1001", ctx=ctx)["properties"]["status"] == "APPROVED"
 
 
+def test_api_operations_reconciliation_queue_lists_unresolved_writebacks(foundry, monkeypatch) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "api-reconcile-queue"
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "API queue evidence"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_outcome_unknown=True,
+            ctx=ctx,
+        )
+    monkeypatch.setattr(api_main, "foundry", foundry)
+
+    queued = TestClient(app).get(
+        "/api/operations/reconciliation/writebacks?status=outcome_unknown&limit=5",
+        headers=headers,
+    )
+
+    assert queued.status_code == 200
+    items = queued.json()["items"]
+    assert [item["idempotencyKey"] for item in items] == [idempotency_key]
+    assert items[0]["status"] == "outcome_unknown"
+    assert items[0]["lastObservedStatus"] == "unknown"
+
+    resolved = TestClient(app).post(
+        f"/api/operations/reconciliation/{items[0]['writebackId']}/resolve",
+        headers=headers,
+        json={"remoteStatus": "succeeded", "remoteResourceId": f"mock-resource-{idempotency_key}"},
+    )
+    after = TestClient(app).get("/api/operations/reconciliation/writebacks", headers=headers)
+    assert resolved.status_code == 200
+    assert after.json()["items"] == []
+
+
 def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     class _Datasets:
         def list_versions(self, *_args, **_kwargs):
@@ -2059,6 +2281,9 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
         def retry_dead_letter_event(self, *_args, **_kwargs):
             raise ValidationFailed("dead-letter event is not retryable")
 
+        def publish_pending_outbox(self, *_args, **_kwargs):
+            raise ValidationFailed("outbox publish is unavailable")
+
         def plan_iceberg_maintenance(self, *_args, **_kwargs):
             raise ValidationFailed("Iceberg maintenance is unavailable")
 
@@ -2070,6 +2295,9 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
 
         def restore_mode_status(self, *_args, **_kwargs):
             raise ValidationFailed("restore mode status is unavailable")
+
+        def run_post_restore_validation(self, *_args, **_kwargs):
+            raise ValidationFailed("post-restore validation is unavailable")
 
         def approve_restore_resume(self, *_args, **_kwargs):
             raise ValidationFailed("restore resume approval is unavailable")
@@ -2157,6 +2385,10 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     assert retry.status_code == 400
     assert "request_id" in retry.json()["detail"]
 
+    outbox_publish = client.post("/api/operations/outbox/publish", json={"streamName": "ops-outbox"})
+    assert outbox_publish.status_code == 400
+    assert "request_id" in outbox_publish.json()["detail"]
+
     replay = client.post("/api/operations/index/Missing/replay")
     assert replay.status_code == 404
     assert "request_id" in replay.json()["detail"]
@@ -2187,6 +2419,13 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     restore_status = client.get("/api/operations/backup-restore/restore-mode/restore-error")
     assert restore_status.status_code == 400
     assert "request_id" in restore_status.json()["detail"]
+
+    restore_validation = client.post(
+        "/api/operations/backup-restore/restore-mode/restore-error/post-restore-validation",
+        json={"validationId": "restore-error-validation"},
+    )
+    assert restore_validation.status_code == 400
+    assert "request_id" in restore_validation.json()["detail"]
 
     restore_approval = client.post(
         "/api/operations/backup-restore/restore-mode/restore-error/approve-resume",
@@ -2433,30 +2672,30 @@ def test_cli_argument_helpers_reject_invalid_values(monkeypatch) -> None:
     with pytest.raises(SystemExit):
         _json_arg("[]")
 
-    args = type("Args", (), {"group": "demo", "command": "run-supply-chain", "fresh": True, "reuse_state": True})()
+    args = Namespace(group="demo", command="run-supply-chain", fresh=True, reuse_state=True)
     with pytest.raises(SystemExit):
         _fresh_supply_chain_demo(args)
 
-    args = type("Args", (), {"group": "demo", "command": "run-supply-chain", "fresh": True, "reuse_state": False})()
+    args = Namespace(group="demo", command="run-supply-chain", fresh=True, reuse_state=False)
     assert _fresh_supply_chain_demo(args) is True
 
     monkeypatch.setenv("FOUNDRY_LITE_DB_URL", "postgresql://prod.example/foundry")
     with pytest.raises(SystemExit, match="Refusing fresh supply-chain demo reset"):
         _fresh_supply_chain_demo(args)
 
-    args = type("Args", (), {"group": "demo", "command": "run-supply-chain", "fresh": False, "reuse_state": True})()
+    args = Namespace(group="demo", command="run-supply-chain", fresh=False, reuse_state=True)
     assert _fresh_supply_chain_demo(args) is False
 
     monkeypatch.setenv("FOUNDRY_LITE_DB_URL", "sqlite:///tmp/foundry-lite-demo.db")
-    args = type("Args", (), {"group": "demo", "command": "run-supply-chain", "fresh": True, "reuse_state": False})()
+    args = Namespace(group="demo", command="run-supply-chain", fresh=True, reuse_state=False)
     assert _fresh_supply_chain_demo(args) is True
 
     monkeypatch.delenv("FOUNDRY_LITE_DB_URL", raising=False)
     monkeypatch.setenv("FOUNDRY_LITE_HOME", "/tmp/flite-test")
-    args = type("Args", (), {"group": "demo", "command": "run-supply-chain", "fresh": False, "reuse_state": False})()
+    args = Namespace(group="demo", command="run-supply-chain", fresh=False, reuse_state=False)
     assert _fresh_supply_chain_demo(args) is False
 
-    non_demo = type("Args", (), {"group": "dataset", "command": "versions"})()
+    non_demo = Namespace(group="dataset", command="versions")
     assert _fresh_supply_chain_demo(non_demo) is False
     assert _storage_root_for_args(non_demo) is None
 
@@ -2499,6 +2738,31 @@ def _webhook_signature(body: bytes, secret: str, timestamp: str) -> str:
     return f"sha256={digest}"
 
 
+def _webhook_service_principal_signature(
+    body: bytes,
+    secret: str,
+    timestamp: str,
+    *,
+    tenant_id: str,
+    actor_user_id: str,
+    dataset_ref: str,
+    connector_name: str,
+    resource_name: str,
+) -> str:
+    fields = (
+        "foundry-lite-webhook-service-principal-v1",
+        timestamp,
+        tenant_id,
+        actor_user_id,
+        dataset_ref,
+        connector_name,
+        resource_name,
+    )
+    signed_payload = b"\0".join(field.encode("utf-8") for field in fields) + b"\0" + body
+    digest = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
+
+
 def _dataset_transactions(engine) -> list[dict[str, object]]:
     with engine.begin() as conn:
         rows = conn.execute(select(db.dataset_transactions))
@@ -2510,7 +2774,7 @@ def _source_run_link(links: list[dict[str, object]], *, run_type: str) -> dict[s
 
 
 def test_cli_dispatch_rejects_unsupported_command(foundry) -> None:
-    args = type("Args", (), {"group": "unknown", "command": "nope"})()
+    args = Namespace(group="unknown", command="nope")
     with pytest.raises(SystemExit):
         _dispatch(foundry, demo_admin_context(), args)
 
@@ -2549,6 +2813,26 @@ def _seed_dead_letter_event(
         )
 
 
+def _seed_pending_outbox(engine, *, tenant_id: str, event_id: str) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            insert(db.outbox_events).values(
+                id=event_id,
+                tenant_id=tenant_id,
+                event_type="dataset.version.committed",
+                aggregate_type="dataset_version",
+                aggregate_id=f"dsv_{event_id}",
+                payload={"versionId": f"dsv_{event_id}"},
+                status="pending",
+                attempts=0,
+                idempotency_key=event_id,
+                correlation_id=event_id,
+                created_at="2026-06-10T00:00:00Z",
+                published_at=None,
+            )
+        )
+
+
 def _restore_mode_payload(tenant_id: str, *, status: str = "paused") -> dict[str, object]:
     is_resumed = status == "resume_approved"
     return {
@@ -2567,6 +2851,60 @@ def _restore_mode_payload(tenant_id: str, *, status: str = "paused") -> dict[str
         "reason": "restore mode started with write traffic and outbox publisher paused",
         "highWatermarks": {},
         "summary": {"activeRestoreMode": not is_resumed},
+    }
+
+
+def _post_restore_validation_payload(tenant_id: str) -> dict[str, object]:
+    return {
+        "generatedAt": "2026-06-19T01:00:30Z",
+        "tenantId": tenant_id,
+        "restoreId": "restore-api",
+        "backupId": "backup-api",
+        "validationId": "closed-loop-api",
+        "status": "passed",
+        "preflightStatus": "ready",
+        "findings": [],
+        "highWatermarks": {},
+        "summary": {
+            "validationId": "closed-loop-api",
+            "postRestoreValidation": "dataset_object_action_materialization_closed_loop",
+            "findingCount": 0,
+            "outboxResumeEligible": True,
+        },
+    }
+
+
+def _recovery_overview_payload(tenant_id: str, mode: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "generatedAt": "2026-06-19T01:01:00Z",
+        "tenantId": tenant_id,
+        "activeRestoreMode": mode,
+        "latestRestoreMode": mode,
+        "latestPreflight": {
+            "generatedAt": "2026-06-19T01:00:00Z",
+            "backupId": "backup-api",
+            "status": "ready",
+            "datasetVersionCount": 1,
+            "issueCount": 0,
+            "activeIndexPointerCount": 1,
+        },
+        "latestPostRestoreValidation": None,
+        "restoreTrafficGate": {
+            "isWriteTrafficPaused": True,
+            "isOutboxPublisherPaused": True,
+            "isServingTrafficOpen": False,
+            "activeRestoreId": "restore-api",
+            "reason": "restore mode started with write traffic and outbox publisher paused",
+        },
+        "requiredOperatorActions": ["run_post_restore_closed_loop_validation", "approve_restore_resume"],
+        "summary": {
+            "activeRestoreMode": True,
+            "latestRestoreStatus": "paused",
+            "preflightStatus": "ready",
+            "postRestoreValidationStatus": "not_run",
+            "blockingIssueCount": 0,
+            "requiredOperatorActionCount": 2,
+        },
     }
 
 

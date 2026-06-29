@@ -11,6 +11,7 @@ from foundry_lite.application.ports import (
     AiRunRepository,
     ComputeAdapter,
     ConnectorAdapter,
+    ConnectorRegistryRepository,
     DatasetQualityRepository,
     DatasetRepository,
     DatasetStorageAdapter,
@@ -45,11 +46,15 @@ from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
-from foundry_lite.application.ports.secret_provider import SecretProvider
+from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
+from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
+from foundry_lite.application.ports.source_management_repository import SourceManagementRepository
+from foundry_lite.application.ports.source_registry_repository import SourceRegistryRepository
 from foundry_lite.application.ports.tool_executor import ToolExecutor
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
 from foundry_lite.security.policy import PolicyService
+from foundry_lite.security.tenant_context import bind_tenant_context_public_methods
 
 CollaboratorMap = Mapping[str, object]
 
@@ -60,9 +65,14 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "backup_restore_service": "BackupRestoreService",
     "builder_runtime_service": "BuilderRuntimeService",
     "citation_service": "CitationService",
+    "connector_onboarding_service": "ConnectorOnboardingService",
+    "source_management_service": "SourceManagementService",
+    "source_onboarding_service": "SourceOnboardingService",
     "context_compiler_service": "ContextCompilerService",
     "content_retrieval_service": "DefaultContentRetrievalService",
     "media_visual_search_service": "MediaVisualSearchService",
+    "media_transaction_service": "MediaTransactionService",
+    "media_upload_service": "MediaUploadService",
     "dataset_ingest_service": "DatasetIngestService",
     "dataset_quality_service": "DatasetQualityService",
     "dataset_registry_service": "DatasetRegistryService",
@@ -82,6 +92,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "object_search_service": "ObjectSearchService",
     "object_sets_service": "ObjectSetsService",
     "ontology_service": "OntologyService",
+    "outbox_publisher_service": "OutboxPublisherService",
     "record_dlq_service": "RecordDlqService",
     "runtime_service": "RuntimeService",
     "tool_broker_service": "ToolBrokerService",
@@ -109,6 +120,9 @@ class CoreService:
     storage_root: Path
     compute_adapter: ComputeAdapter
     connector_adapter: ConnectorAdapter
+    connector_registry_repository: ConnectorRegistryRepository
+    source_management_repository: SourceManagementRepository
+    source_registry_repository: SourceRegistryRepository
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
@@ -119,6 +133,9 @@ class CoreService:
     runtime_repository: RuntimeRepository
     erasure_repository: ErasureRepository
     search_adapter: SearchAdapter
+    secret_provider: SecretProvider
+    secret_vault: SecretVault
+    source_database_adapter: SourceDatabaseAdapter
     stream_adapter: StreamAdapter
     workflow_adapter: WorkflowAdapter
     dataset_storage: DatasetStorageAdapter
@@ -138,7 +155,6 @@ class CoreService:
     model_registry_repository: ModelRegistryRepository
     context_provider: ContextProvider
     citation_source_verifier: CitationSourceVerifier
-    secret_provider: SecretProvider
     prompt_artifact_store: object
     tool_executor: ToolExecutor
     engine: TransactionManager
@@ -154,6 +170,7 @@ class CoreService:
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
+        bind_tenant_context_public_methods(cls, include_inherited=False)
         trace_direct_public_methods(cls)
 
     def __init__(self, **dependencies: object) -> None:

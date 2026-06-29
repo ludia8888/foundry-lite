@@ -26,6 +26,28 @@ class ActionWritebackReconciliationResult(TypedDict):
     alreadyReconciled: NotRequired[bool]
 
 
+class ActionWritebackQueueItem(TypedDict):
+    writebackId: str
+    actionRunId: str
+    status: str
+    mode: str
+    connectorId: str
+    idempotencyKey: str
+    attempts: int
+    createdAt: str
+    completedAt: str | None
+    reconciliationDeadline: object
+    remoteResourceId: object
+    lastObservedStatus: object
+    compensationActionType: object
+    request: Mapping[str, object]
+    response: Mapping[str, object] | None
+
+
+class ActionWritebackQueueResult(TypedDict):
+    items: list[ActionWritebackQueueItem]
+
+
 @dataclass(frozen=True)
 class ActionApplyCommand:
     action_api_name: str

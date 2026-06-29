@@ -1,20 +1,34 @@
 from __future__ import annotations
 
+import json
 import os
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass
 from typing import Protocol, cast
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from foundry_lite.application.action_types import ActionApplyResponse, ActionWritebackReconciliationResult
+from foundry_lite.application.action_types import (
+    ActionApplyResponse,
+    ActionWritebackQueueResult,
+    ActionWritebackReconciliationResult,
+)
+from foundry_lite.application.admin_overview import AdminReadinessOverview, AdminTaskPlan
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
     BackupRestoreModeReport,
+    BackupRestorePostRestoreValidationReport,
     BackupRestorePreflightReport,
+    BackupRestoreRecoveryOverview,
     DatasetInspectionPayload,
+    DatasetQualityContractCheck,
+    DatasetQualityContractCheckCreateResult,
+    DatasetQualityContractCheckList,
+    DatasetQualityResultHistory,
+    DatasetQualityResultSummary,
     DatasetRow,
     DatasetVersionRow,
     DeadLetterRecordBulkRetryResult,
@@ -38,7 +52,13 @@ from foundry_lite.application.ports import (
     RuntimeRunQueryResult,
     TabularRow,
     TransformRetryResult,
+    TransformRow,
 )
+from foundry_lite.application.ports.content_index import HybridContentQuery
+from foundry_lite.application.ports.media_processor import ProcessorSpec
+from foundry_lite.application.primitives import CommitResult
+from foundry_lite.application.services.aip.eval_types import AiEvalError, EvalCaseInput
+from foundry_lite.application.services.source_onboarding_config import SourceUpload
 from foundry_lite.application.upload_limits import max_webhook_body_bytes
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
@@ -75,6 +95,9 @@ instrument_sqlalchemy_engine(foundry.engine)
 
 JsonObject = dict[str, object]
 ValidationErrorPayload = dict[str, object]
+MEDIA_UPLOAD_FILE = File(...)
+SOURCE_BATCH_FILES = File(...)
+MEDIA_REFERENCE_ALLOWED_CLASSIFICATIONS_QUERY = Query(default=None, alias="allowedClassifications")
 
 
 class PromptArtifactPayload(Protocol):
@@ -92,23 +115,6 @@ class PromptArtifactPayload(Protocol):
 
     @property
     def plaintext(self) -> str: ...
-
-
-class ApprovalExecutionPayload(Protocol):
-    @property
-    def review_id(self) -> str: ...
-
-    @property
-    def proposal_fingerprint(self) -> str: ...
-
-    @property
-    def action_run_id(self) -> str: ...
-
-    @property
-    def action_response(self) -> Mapping[str, object]: ...
-
-    @property
-    def review_payload(self) -> Mapping[str, object]: ...
 
 
 class ObservabilityDetectRequest(BaseModel):
@@ -132,10 +138,39 @@ class BackupRestoreModeStartRequest(BaseModel):
     restore_id: str | None = Field(default=None, alias="restoreId")
 
 
+class DatasetQualityContractCheckCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    config: JsonObject
+    severity: str | None = None
+    enabled: bool = True
+
+
+class DatasetQualityContractCheckUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    config: JsonObject | None = None
+    severity: str | None = None
+    enabled: bool | None = None
+
+
 class BackupRestoreResumeApprovalRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     validation_id: str | None = Field(default=None, alias="validationId")
+
+
+class BackupRestorePostRestoreValidationRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    validation_id: str | None = Field(default=None, alias="validationId")
+
+
+class OutboxPublishRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    stream_name: str = Field(default="foundry-lite-outbox", alias="streamName")
+    limit: int = Field(default=100, ge=1, le=500)
 
 
 class ActionTargetRequest(BaseModel):
@@ -284,6 +319,119 @@ class AipAgentRunRequest(BaseModel):
     agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
 
 
+class AipEvalCaseRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    case_api_name: str = Field(alias="caseApiName")
+    axis: str
+    input_json: JsonObject = Field(default_factory=dict, alias="inputJson")
+    expected_json: JsonObject = Field(default_factory=dict, alias="expectedJson")
+    actual_json: JsonObject = Field(default_factory=dict, alias="actualJson")
+    rubric_json: JsonObject = Field(default_factory=dict, alias="rubricJson")
+    tags: list[str] = Field(default_factory=list)
+    sample_index: int = Field(default=1, alias="sampleIndex")
+    evaluator: str = "exact_subset_v1"
+    weight: float = 1.0
+
+
+class AipEvalRunRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    eval_run_id: str = Field(alias="evalRunId")
+    suite_api_name: str = Field(alias="suiteApiName")
+    suite_version: str = Field(alias="suiteVersion")
+    suite_description: str = Field(default="", alias="suiteDescription")
+    agent_version_id: str = Field(alias="agentVersionId")
+    candidate_release_channel: str = Field(alias="candidateReleaseChannel")
+    cases: list[AipEvalCaseRequest]
+    min_score: float = Field(default=1.0, alias="minScore")
+    required_axes: list[str] = Field(default_factory=list, alias="requiredAxes")
+
+
+class AipReleasePromotionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_version_id: str = Field(alias="agentVersionId")
+    target_release_channel: str = Field(alias="targetReleaseChannel")
+    eval_run_id: str = Field(alias="evalRunId")
+    policy_version: str = Field(default="release-policy-v1", alias="policyVersion")
+
+
+class MediaSetCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    namespace: str
+    name: str
+    schema_type: str = Field(alias="schemaType")
+    primary_format: str = Field(alias="primaryFormat")
+    allowed_input_formats: list[str] = Field(alias="allowedInputFormats")
+    classification: str
+    transaction_policy: str = Field(default="transactional", alias="transactionPolicy")
+    storage_profile: str = Field(default="local", alias="storageProfile")
+    processing_profile: str = Field(default="local", alias="processingProfile")
+    retention_policy_id: str | None = Field(default=None, alias="retentionPolicyId")
+
+
+class MediaOpenTransactionRequest(BaseModel):
+    mode: str = "APPEND"
+
+
+class MediaProcessRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    processor: str
+    processor_version: str = Field(alias="processorVersion")
+    model: str | None = None
+    model_version: str | None = Field(default=None, alias="modelVersion")
+    parameters: JsonObject = Field(default_factory=dict)
+
+
+class MediaIndexDerivativeRequest(BaseModel):
+    generation: str
+
+
+class MediaVisualPromoteRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_active: str = Field(alias="expectedActive")
+    generation: str
+
+
+class MediaSearchRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    text: str | None = None
+    top_k: int = Field(default=10, alias="topK")
+    allowed_classifications: list[str] | None = Field(default=None, alias="allowedClassifications")
+
+
+class MediaVisualSearchRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    text: str
+    top_k: int = Field(default=10, alias="topK")
+
+
+class MediaBindReferenceRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    holder_type: str = Field(alias="holderType")
+    holder_id: str = Field(alias="holderId")
+    property_name: str = Field(alias="propertyName")
+    media_item_version_id: str = Field(alias="mediaItemVersionId")
+
+
+class TransformSqlRegisterRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    api_name: str = Field(alias="apiName")
+    sql: str
+    inputs: dict[str, str]
+    output_dataset_ref: str = Field(alias="outputDatasetRef")
+    checks: list[JsonObject] = Field(default_factory=list)
+    mode: str = "snapshot"
+
+
 class DeadLetterBulkRetryRequest(BaseModel):
     ids: list[str]
 
@@ -295,6 +443,173 @@ class ConnectorSyncWorkflowStartRequest(BaseModel):
     connector_name: str = Field(alias="connectorName")
     resource_name: str = Field(alias="resourceName")
     sync_name: str | None = Field(default=None, alias="syncName")
+
+
+class RestConnectorAuthRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    mode: str = "none"
+    token_secret_ref: str | None = Field(default=None, alias="tokenSecretRef")
+    header_name: str | None = Field(default=None, alias="headerName")
+    header_value_secret_ref: str | None = Field(default=None, alias="headerValueSecretRef")
+    token: str | None = None
+    header_value: str | None = Field(default=None, alias="headerValue")
+
+
+class RestConnectorPaginationRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    items_path: str = Field(default="items", alias="itemsPath")
+    next_cursor_path: str = Field(default="nextCursor", alias="nextCursorPath")
+    cursor_query_param: str = Field(default="cursor", alias="cursorQueryParam")
+    cursor_key: str = Field(default="cursor", alias="cursorKey")
+    strategy: str = "cursor"
+
+
+class RestConnectorConnectionCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    connector_name: str = Field(alias="connectorName")
+    display_name: str = Field(alias="displayName")
+    base_url: str = Field(alias="baseUrl")
+    auth: RestConnectorAuthRequest = Field(default_factory=RestConnectorAuthRequest)
+    rate_limit_per_minute: int | None = Field(default=None, alias="rateLimitPerMinute")
+    allow_private_network: bool = Field(default=False, alias="allowPrivateNetwork")
+
+
+class RestConnectorConnectionUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    display_name: str | None = Field(default=None, alias="displayName")
+    base_url: str | None = Field(default=None, alias="baseUrl")
+    auth: RestConnectorAuthRequest | None = None
+    rate_limit_per_minute: int | None = Field(default=None, alias="rateLimitPerMinute")
+    allow_private_network: bool | None = Field(default=None, alias="allowPrivateNetwork")
+    status: str | None = None
+
+
+class RestConnectorResourceUpsertRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    dataset_ref: str = Field(alias="datasetRef")
+    resource_path: str = Field(alias="resourcePath")
+    pagination: RestConnectorPaginationRequest = Field(default_factory=RestConnectorPaginationRequest)
+    schema_columns: list[str] = Field(default_factory=list, alias="schemaColumns")
+    primary_key: list[str] = Field(default_factory=list, alias="primaryKey")
+
+
+class ConnectorResourceSyncStartRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    sync_name: str | None = Field(default=None, alias="syncName")
+
+
+class SourceWebhookListenerCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_name: str = Field(alias="sourceName")
+    display_name: str = Field(alias="displayName")
+    dataset_ref: str = Field(alias="datasetRef")
+    connector_name: str = Field(alias="connectorName")
+    resource_name: str = Field(alias="resourceName")
+    signing_secret_ref: str = Field(alias="signingSecretRef")
+
+
+class SourceDebeziumCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_name: str = Field(alias="sourceName")
+    display_name: str = Field(alias="displayName")
+    dataset_ref: str = Field(alias="datasetRef")
+    stream_name: str = Field(alias="streamName")
+    topic: str
+    consumer_group: str = Field(default="foundry-lite-cdc", alias="consumerGroup")
+    secret_refs: JsonObject = Field(default_factory=dict, alias="secretRefs")
+
+
+class SourceDebeziumSyncStartRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_config_fingerprint: str | None = Field(default=None, alias="expectedConfigFingerprint")
+    after_offset: int | None = Field(default=None, alias="afterOffset")
+    limit: int | None = None
+
+
+class SourceCredentialCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    credential_name: str = Field(alias="credentialName")
+    display_name: str = Field(alias="displayName")
+    kind: str
+    auth_scheme: str = Field(alias="authScheme")
+    secret_value: str = Field(alias="secretValue")
+    secret_name: str | None = Field(default=None, alias="secretName")
+
+
+class SourceAgentRegisterRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    agent_id: str = Field(alias="agentId")
+    display_name: str = Field(alias="displayName")
+    mode: str
+    capabilities: JsonObject = Field(default_factory=dict)
+    network_summary: JsonObject = Field(default_factory=dict, alias="networkSummary")
+
+
+class SourceNetworkPolicyCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    policy_name: str = Field(alias="policyName")
+    display_name: str = Field(alias="displayName")
+    mode: str
+    agent_id: str | None = Field(default=None, alias="agentId")
+    allowed_hosts: list[str] = Field(default_factory=list, alias="allowedHosts")
+
+
+class SourceExploreRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_name: str = Field(alias="sourceName")
+    source_type: str = Field(alias="sourceType")
+    request: JsonObject = Field(default_factory=dict)
+
+
+class SourceManagedSyncCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    sync_name: str = Field(alias="syncName")
+    source_name: str = Field(alias="sourceName")
+    display_name: str = Field(alias="displayName")
+    source_type: str = Field(alias="sourceType")
+    capability: str
+    mode: str = "APPEND"
+    target_dataset_ref: str | None = Field(default=None, alias="targetDatasetRef")
+    target_media_set_id: str | None = Field(default=None, alias="targetMediaSetId")
+    schedule: JsonObject = Field(default_factory=dict)
+    config_summary: JsonObject = Field(default_factory=dict, alias="configSummary")
+
+
+class SourceManagedSyncRunStartRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    trigger_type: str = Field(default="manual", alias="triggerType")
+    batch_limit: int | None = Field(default=None, alias="batchLimit")
+
+
+class SourceBatchFileManifestItem(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    file_name: str = Field(alias="fileName")
+    dataset_ref: str = Field(alias="datasetRef")
+
+
+class SourceBatchFileManifest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    source_name: str = Field(alias="sourceName")
+    display_name: str = Field(alias="displayName")
+    sync_name: str | None = Field(default=None, alias="syncName")
+    files: list[SourceBatchFileManifestItem]
 
 
 class ActionWritebackReconciliationRequest(BaseModel):
@@ -327,7 +642,7 @@ class InsightReviewDecisionRequest(BaseModel):
     comment: str | None = None
 
 
-class InsightReviewExecuteActionRequest(BaseModel):
+class ApprovalExecutionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     expected_proposal_fingerprint: str = Field(alias="expectedProposalFingerprint")
@@ -335,6 +650,16 @@ class InsightReviewExecuteActionRequest(BaseModel):
 
 WEBHOOK_SIGNING_KEY_ENV = "FOUNDRY_LITE_WEBHOOK_SIGNING_KEY"
 WEBHOOK_SIGNING_KEY_NAME = "webhook_signing_key"
+WEBHOOK_SERVICE_PRINCIPAL_HEADER = "X-Foundry-Lite-Service-Principal"
+WEBHOOK_SERVICE_TENANT_HEADER = "X-Foundry-Lite-Tenant-ID"
+WEBHOOK_SERVICE_ROLE = "connector_ingest"
+WEBHOOK_SERVICE_ACTOR_PREFIX = "service-principal:"
+
+
+@dataclass(frozen=True)
+class WebhookRequestContext:
+    ctx: RequestContext
+    require_service_principal_signature: bool
 
 
 @app.middleware("http")
@@ -503,16 +828,6 @@ def _prompt_artifact_payload(result: PromptArtifactPayload) -> dict[str, object]
     }
 
 
-def _approval_execution_payload(result: ApprovalExecutionPayload) -> dict[str, object]:
-    return {
-        "reviewId": result.review_id,
-        "proposalFingerprint": result.proposal_fingerprint,
-        "actionRunId": result.action_run_id,
-        "actionResponse": dict(result.action_response),
-        "review": dict(result.review_payload),
-    }
-
-
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
@@ -552,6 +867,88 @@ def list_dataset_versions(request: Request, namespace: str, name: str) -> list[D
 def inspect_dataset(request: Request, namespace: str, name: str, version: str = "latest") -> DatasetInspectionPayload:
     try:
         return foundry.datasets.inspect(f"{namespace}.{name}", version=version, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/datasets/{namespace}/{name}/quality-contract/checks")
+def list_dataset_quality_contract_checks(
+    request: Request,
+    namespace: str,
+    name: str,
+) -> DatasetQualityContractCheckList:
+    try:
+        return foundry.datasets.list_quality_contract_checks(f"{namespace}.{name}", ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/datasets/{namespace}/{name}/quality-contract/results")
+def list_dataset_quality_results(
+    request: Request,
+    namespace: str,
+    name: str,
+    limit: int = Query(default=50, ge=1, le=100),
+) -> DatasetQualityResultHistory:
+    try:
+        return foundry.datasets.list_quality_results(f"{namespace}.{name}", limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/datasets/{namespace}/{name}/quality-contract/results/summary")
+def get_dataset_quality_result_summary(
+    request: Request,
+    namespace: str,
+    name: str,
+    latest_limit: int = Query(default=5, ge=1, le=20),
+) -> DatasetQualityResultSummary:
+    try:
+        return foundry.datasets.get_quality_result_summary(
+            f"{namespace}.{name}",
+            latest_limit=latest_limit,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/datasets/{namespace}/{name}/quality-contract/checks")
+def create_dataset_quality_contract_check(
+    request: Request,
+    namespace: str,
+    name: str,
+    payload: DatasetQualityContractCheckCreateRequest,
+) -> DatasetQualityContractCheckCreateResult:
+    try:
+        return foundry.datasets.create_quality_contract_check(
+            f"{namespace}.{name}",
+            config=payload.config,
+            severity=payload.severity,
+            enabled=payload.enabled,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.patch("/api/datasets/{namespace}/{name}/quality-contract/checks/{check_id}")
+def update_dataset_quality_contract_check(
+    request: Request,
+    namespace: str,
+    name: str,
+    check_id: str,
+    payload: DatasetQualityContractCheckUpdateRequest,
+) -> DatasetQualityContractCheck:
+    try:
+        return foundry.datasets.update_quality_contract_check(
+            f"{namespace}.{name}",
+            check_id,
+            config=payload.config,
+            severity=payload.severity,
+            enabled=payload.enabled,
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -597,6 +994,305 @@ def run_aip_agent(request: Request, payload: AipAgentRunRequest) -> JsonObject:
         ctx=_ctx(request),
     )
     return result.to_payload()
+
+
+@app.post("/api/aip/evals/run")
+def run_aip_eval(request: Request, payload: AipEvalRunRequest) -> JsonObject:
+    try:
+        result = foundry.aip.run_eval(
+            eval_run_id=payload.eval_run_id,
+            suite_api_name=payload.suite_api_name,
+            suite_version=payload.suite_version,
+            suite_description=payload.suite_description,
+            agent_version_id=payload.agent_version_id,
+            candidate_release_channel=payload.candidate_release_channel,
+            cases=tuple(_eval_case(case) for case in payload.cases),
+            min_score=payload.min_score,
+            required_axes=tuple(payload.required_axes),
+            ctx=_ctx(request),
+        )
+        return cast(JsonObject, asdict(result))
+    except AiEvalError as exc:
+        raise _handle_error(_aip_eval_validation_error(exc), request) from exc
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/aip/releases/promote")
+def promote_aip_release(request: Request, payload: AipReleasePromotionRequest) -> JsonObject:
+    try:
+        result = foundry.aip.promote_agent_release(
+            agent_version_id=payload.agent_version_id,
+            target_release_channel=payload.target_release_channel,
+            eval_run_id=payload.eval_run_id,
+            policy_version=payload.policy_version,
+            ctx=_ctx(request),
+        )
+        return cast(JsonObject, asdict(result))
+    except AiEvalError as exc:
+        raise _handle_error(_aip_eval_validation_error(exc), request) from exc
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/sets")
+def create_media_set(request: Request, payload: MediaSetCreateRequest) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            asdict(
+                foundry.media.create_media_set(
+                    _ctx(request),
+                    namespace=payload.namespace,
+                    name=payload.name,
+                    schema_type=payload.schema_type,
+                    primary_format=payload.primary_format,
+                    allowed_input_formats=tuple(payload.allowed_input_formats),
+                    classification=payload.classification,
+                    transaction_policy=payload.transaction_policy,
+                    storage_profile=payload.storage_profile,
+                    processing_profile=payload.processing_profile,
+                    retention_policy_id=payload.retention_policy_id,
+                )
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/media/sets/{media_set_id}")
+def get_media_set(request: Request, media_set_id: str) -> JsonObject:
+    try:
+        return cast(JsonObject, asdict(foundry.media.get_media_set(_ctx(request), media_set_id=media_set_id)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/sets/{media_set_id}/transactions")
+def open_media_transaction(
+    request: Request,
+    media_set_id: str,
+    payload: MediaOpenTransactionRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        media_transaction_id = foundry.media.open_transaction(
+            _ctx(request), media_set_id=media_set_id, idempotency_key=idempotency_key, mode=payload.mode
+        )
+        return {"mediaTransactionId": media_transaction_id}
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/sets/{media_set_id}/transactions/{media_transaction_id}/uploads")
+def upload_media_file(
+    request: Request,
+    media_set_id: str,
+    media_transaction_id: str,
+    logical_path: str = Form(..., alias="logicalPath"),
+    schema_type: str = Form(..., alias="schemaType"),
+    format: str = Form(...),
+    file: UploadFile = MEDIA_UPLOAD_FILE,
+    supplied_mime_type: str | None = Form(default=None, alias="suppliedMimeType"),
+    security_envelope: str = Form(default="{}", alias="securityEnvelope"),
+    probe_metadata: str | None = Form(default=None, alias="probeMetadata"),
+) -> JsonObject:
+    try:
+        file.file.seek(0)
+        staged = foundry.media.upload(
+            _ctx(request),
+            media_set_id=media_set_id,
+            media_transaction_id=media_transaction_id,
+            logical_path=logical_path,
+            source=file.file,
+            supplied_mime_type=supplied_mime_type or file.content_type or "application/octet-stream",
+            schema_type=schema_type,
+            format=format,
+            security_envelope=_json_form_object(security_envelope, "securityEnvelope"),
+            probe_metadata=_optional_json_form_object(probe_metadata, "probeMetadata"),
+        )
+        return cast(JsonObject, asdict(staged))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/transactions/{media_transaction_id}/commit")
+def commit_media_transaction(request: Request, media_transaction_id: str) -> JsonObject:
+    try:
+        return cast(JsonObject, asdict(foundry.media.commit(_ctx(request), media_transaction_id=media_transaction_id)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/versions/{media_item_version_id}/process")
+def process_media_version(request: Request, media_item_version_id: str, payload: MediaProcessRequest) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            asdict(
+                foundry.media.process(
+                    _ctx(request), media_item_version_id=media_item_version_id, spec=_processor_spec(payload)
+                )
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/media/derivatives/{media_derivative_id}")
+def get_media_derivative(request: Request, media_derivative_id: str) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            asdict(foundry.media.resolve_derivative(_ctx(request), media_derivative_id=media_derivative_id)),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/derivatives/{media_derivative_id}/index")
+def index_media_derivative(
+    request: Request, media_derivative_id: str, payload: MediaIndexDerivativeRequest
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            asdict(
+                foundry.media.index_derivative(
+                    _ctx(request), media_derivative_id=media_derivative_id, generation=payload.generation
+                )
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/content/search")
+def search_media_content(request: Request, payload: MediaSearchRequest) -> list[JsonObject]:
+    try:
+        query = HybridContentQuery(
+            tenant_id=_ctx(request).tenant_id,
+            text=payload.text,
+            top_k=payload.top_k,
+            allowed_classifications=_optional_tuple(payload.allowed_classifications),
+        )
+        return [cast(JsonObject, asdict(hit)) for hit in foundry.media.search_content(_ctx(request), query=query)]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/visual/derivatives/{media_derivative_id}/index")
+def index_media_visual_derivative(
+    request: Request,
+    media_derivative_id: str,
+    payload: MediaIndexDerivativeRequest,
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            asdict(
+                foundry.media.index_visual_derivative(
+                    _ctx(request),
+                    media_derivative_id=media_derivative_id,
+                    generation=payload.generation,
+                )
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/visual/generations/promote")
+def promote_media_visual_generation(request: Request, payload: MediaVisualPromoteRequest) -> JsonObject:
+    try:
+        foundry.media.promote_visual_generation(
+            _ctx(request),
+            expected_active=payload.expected_active,
+            generation=payload.generation,
+        )
+        return {"status": "ok", "generation": payload.generation}
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/visual/search")
+def search_media_visual(request: Request, payload: MediaVisualSearchRequest) -> list[JsonObject]:
+    try:
+        hits = foundry.media.search_visual(_ctx(request), text=payload.text, top_k=payload.top_k)
+        return [cast(JsonObject, asdict(hit)) for hit in hits]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/media/processing-runs")
+def list_media_processing_runs(
+    request: Request,
+    source_media_item_version_id: str | None = Query(default=None, alias="sourceMediaItemVersionId"),
+    limit: int = Query(default=50),
+) -> list[JsonObject]:
+    try:
+        runs = foundry.media.list_media_runs(
+            _ctx(request), source_media_item_version_id=source_media_item_version_id, limit=limit
+        )
+        return [cast(JsonObject, asdict(run)) for run in runs]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/media/processing-runs/{media_processing_run_id}")
+def get_media_processing_run(request: Request, media_processing_run_id: str) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            asdict(foundry.media.media_run_detail(_ctx(request), media_processing_run_id=media_processing_run_id)),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/media/references/bind")
+def bind_media_reference(
+    request: Request,
+    payload: MediaBindReferenceRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            asdict(
+                foundry.media.bind_reference(
+                    _ctx(request),
+                    holder_type=payload.holder_type,
+                    holder_id=payload.holder_id,
+                    property_name=payload.property_name,
+                    media_item_version_id=payload.media_item_version_id,
+                    idempotency_key=idempotency_key,
+                )
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/media/references/resolve")
+def resolve_media_reference(
+    request: Request,
+    holder_type: str = Query(alias="holderType"),
+    holder_id: str = Query(alias="holderId"),
+    property_name: str = Query(alias="propertyName"),
+    allowed_classifications: list[str] | None = MEDIA_REFERENCE_ALLOWED_CLASSIFICATIONS_QUERY,
+) -> JsonObject | None:
+    try:
+        resolved = foundry.media.resolve_bound_reference(
+            _ctx(request),
+            holder_type=holder_type,
+            holder_id=holder_id,
+            property_name=property_name,
+            allowed_classifications=_optional_tuple(allowed_classifications),
+        )
+        return cast(JsonObject, asdict(resolved)) if resolved is not None else None
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
 
 
 @app.get("/api/objects/{object_type}/{object_id}")
@@ -722,10 +1418,11 @@ def decide_insight_review(
 
 
 @app.post("/api/insights/reviews/{review_id}/execute-action")
-def execute_insight_review_action(
+@app.post("/api/insights/reviews/{review_id}/execute-approved-action")
+def execute_approved_action(
     request: Request,
     review_id: str,
-    payload: InsightReviewExecuteActionRequest,
+    payload: ApprovalExecutionRequest,
     idempotency_key: str = Header(alias="Idempotency-Key"),
 ) -> JsonObject:
     if not idempotency_key:
@@ -740,9 +1437,10 @@ def execute_insight_review_action(
         result = foundry.aip.execute_approved_action(
             review_id=review_id,
             expected_proposal_fingerprint=payload.expected_proposal_fingerprint,
+            idempotency_key=idempotency_key,
             ctx=_ctx(request),
         )
-        return _approval_execution_payload(result)
+        return cast(JsonObject, asdict(result))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -865,6 +1563,22 @@ def get_backup_restore_mode_status(request: Request, restore_id: str) -> BackupR
         raise _handle_error(exc, request) from exc
 
 
+@app.post("/api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation")
+def run_backup_restore_post_restore_validation(
+    request: Request,
+    restore_id: str,
+    payload: BackupRestorePostRestoreValidationRequest,
+) -> BackupRestorePostRestoreValidationReport:
+    try:
+        return foundry.operations.run_post_restore_validation(
+            restore_id,
+            ctx=_ctx(request),
+            validation_id=payload.validation_id,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.post("/api/operations/backup-restore/restore-mode/{restore_id}/approve-resume")
 def approve_backup_restore_resume(
     request: Request,
@@ -877,6 +1591,45 @@ def approve_backup_restore_resume(
             ctx=_ctx(request),
             validation_id=payload.validation_id,
         )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/outbox/publish")
+def publish_pending_outbox(request: Request, payload: OutboxPublishRequest) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.operations.publish_pending_outbox(
+                ctx=_ctx(request),
+                stream_name=payload.stream_name,
+                limit=payload.limit,
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/admin/overview")
+def get_operations_admin_overview(request: Request) -> AdminReadinessOverview:
+    try:
+        return foundry.operations.admin_readiness_overview(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/admin/task-plan")
+def get_operations_admin_task_plan(request: Request) -> AdminTaskPlan:
+    try:
+        return foundry.operations.admin_task_plan(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/recovery/overview")
+def get_operations_recovery_overview(request: Request) -> BackupRestoreRecoveryOverview:
+    try:
+        return foundry.operations.recovery_overview(ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -921,6 +1674,543 @@ def start_connector_sync_workflow(
 def get_product_workflow_run(request: Request, workflow_run_id: str) -> ProductWorkflowRun:
     try:
         return foundry.operations.product_workflow_run(workflow_run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources")
+def list_sources(request: Request) -> list[JsonObject]:
+    try:
+        return foundry.sources.list_sources(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/templates")
+def list_source_templates(request: Request) -> list[JsonObject]:
+    try:
+        return foundry.sources.list_templates(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/credentials")
+def create_source_credential(
+    request: Request,
+    payload: SourceCredentialCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.sources.create_credential(
+            credential_name=payload.credential_name,
+            display_name=payload.display_name,
+            kind=payload.kind,
+            auth_scheme=payload.auth_scheme,
+            secret_value=payload.secret_value,
+            secret_name=payload.secret_name,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/credentials")
+def list_source_credentials(request: Request) -> list[JsonObject]:
+    try:
+        return foundry.sources.list_credentials(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/credentials/{credential_name}")
+def get_source_credential(request: Request, credential_name: str) -> JsonObject:
+    try:
+        return foundry.sources.get_credential(credential_name, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/agents")
+def register_source_agent(
+    request: Request,
+    payload: SourceAgentRegisterRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.sources.register_agent(
+            agent_id=payload.agent_id,
+            display_name=payload.display_name,
+            mode=payload.mode,
+            capabilities=payload.capabilities,
+            network_summary=payload.network_summary,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/agents")
+def list_source_agents(request: Request) -> list[JsonObject]:
+    try:
+        return foundry.sources.list_agents(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/agents/{agent_id}/heartbeat")
+def heartbeat_source_agent(request: Request, agent_id: str) -> JsonObject:
+    try:
+        return foundry.sources.heartbeat_agent(agent_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/network-policies")
+def create_source_network_policy(
+    request: Request,
+    payload: SourceNetworkPolicyCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.sources.create_network_policy(
+            policy_name=payload.policy_name,
+            display_name=payload.display_name,
+            mode=payload.mode,
+            agent_id=payload.agent_id,
+            allowed_hosts=payload.allowed_hosts,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/network-policies")
+def list_source_network_policies(request: Request) -> list[JsonObject]:
+    try:
+        return foundry.sources.list_network_policies(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/explore")
+def explore_source(request: Request, payload: SourceExploreRequest) -> JsonObject:
+    try:
+        return foundry.sources.explore_source(
+            source_name=payload.source_name,
+            source_type=payload.source_type,
+            request=payload.request,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/managed-syncs")
+def create_source_managed_sync(
+    request: Request,
+    payload: SourceManagedSyncCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.sources.create_managed_sync(
+            sync_name=payload.sync_name,
+            source_name=payload.source_name,
+            display_name=payload.display_name,
+            source_type=payload.source_type,
+            capability=payload.capability,
+            mode=payload.mode,
+            target_dataset_ref=payload.target_dataset_ref,
+            target_media_set_id=payload.target_media_set_id,
+            schedule=payload.schedule,
+            config_summary=payload.config_summary,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/managed-syncs")
+def list_source_managed_syncs(request: Request) -> list[JsonObject]:
+    try:
+        return foundry.sources.list_managed_syncs(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/managed-syncs/{sync_name}")
+def get_source_managed_sync(request: Request, sync_name: str) -> JsonObject:
+    try:
+        return foundry.sources.get_managed_sync(sync_name, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/managed-syncs/{sync_name}/runs/start")
+def start_source_managed_sync_run(
+    request: Request,
+    sync_name: str,
+    payload: SourceManagedSyncRunStartRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.sources.start_managed_sync_run(
+            sync_name,
+            trigger_type=payload.trigger_type,
+            batch_limit=payload.batch_limit,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/managed-syncs/{sync_name}/runs")
+def list_source_managed_sync_runs(request: Request, sync_name: str) -> list[JsonObject]:
+    try:
+        return foundry.sources.list_managed_sync_runs(sync_name, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/managed-sync-runs/{run_id}")
+def get_source_managed_sync_run(request: Request, run_id: str) -> JsonObject:
+    try:
+        return foundry.sources.get_managed_sync_run(run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/csv/uploads")
+def upload_csv_source(
+    request: Request,
+    source_name: str = Form(..., alias="sourceName"),
+    display_name: str = Form(..., alias="displayName"),
+    dataset_ref: str = Form(..., alias="datasetRef"),
+    sync_name: str | None = Form(default=None, alias="syncName"),
+    primary_key: str = Form(default="[]", alias="primaryKey"),
+    file: UploadFile = MEDIA_UPLOAD_FILE,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        file.file.seek(0)
+        return foundry.sources.upload_csv(
+            source_name=source_name,
+            display_name=display_name,
+            dataset_ref=dataset_ref,
+            file_name=file.filename or "upload.csv",
+            source=file.file,
+            sync_name=sync_name,
+            primary_key=_json_form_string_list(primary_key, "primaryKey"),
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/batch-files/uploads")
+def upload_batch_file_source(
+    request: Request,
+    manifest: str = Form(...),
+    files: list[UploadFile] = SOURCE_BATCH_FILES,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        parsed = _source_batch_manifest(manifest)
+        uploads = _source_batch_uploads(parsed, files)
+        return foundry.sources.upload_batch_files(
+            source_name=parsed.source_name,
+            display_name=parsed.display_name,
+            uploads=uploads,
+            sync_name=parsed.sync_name,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/webhook-listeners")
+def create_webhook_listener_source(
+    request: Request,
+    payload: SourceWebhookListenerCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        inbound_url = str(
+            request.url_for(
+                "ingest_source_webhook_listener_event",
+                source_name=payload.source_name,
+            )
+        )
+        return foundry.sources.create_webhook_listener(
+            source_name=payload.source_name,
+            display_name=payload.display_name,
+            dataset_ref=payload.dataset_ref,
+            connector_name=payload.connector_name,
+            resource_name=payload.resource_name,
+            signing_secret_ref=payload.signing_secret_ref,
+            inbound_url=inbound_url,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/webhook-listeners/{source_name}")
+def get_webhook_listener_source(request: Request, source_name: str) -> JsonObject:
+    try:
+        source = foundry.sources.get_source(source_name, ctx=_ctx(request))
+        if source.get("kind") != "webhook_listener":
+            raise ValidationFailed("source is not a webhook listener", details={"sourceName": source_name})
+        return source
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/webhook-listeners/{source_name}/events")
+async def ingest_source_webhook_listener_event(
+    request: Request,
+    source_name: str,
+    signature: str = Header(alias="X-Foundry-Lite-Signature"),
+    signature_timestamp: str = Header(alias="X-Foundry-Lite-Timestamp"),
+    event_id: str | None = Header(default=None, alias="X-Foundry-Lite-Event-ID"),
+    service_principal: str | None = Header(default=None, alias=WEBHOOK_SERVICE_PRINCIPAL_HEADER),
+    service_tenant_id: str | None = Header(default=None, alias=WEBHOOK_SERVICE_TENANT_HEADER),
+) -> JsonObject:
+    try:
+        raw_body = await _bounded_webhook_body(request)
+        payload = _webhook_payload_request(raw_body)
+        webhook_ctx = _webhook_request_context(
+            request,
+            service_principal=service_principal,
+            service_tenant_id=service_tenant_id,
+        )
+        return foundry.sources.ingest_webhook_listener_event(
+            source_name,
+            payload=_webhook_payload(payload),
+            raw_body=raw_body,
+            signature=signature,
+            signature_timestamp=signature_timestamp,
+            event_id=event_id,
+            require_service_principal_signature=webhook_ctx.require_service_principal_signature,
+            ctx=webhook_ctx.ctx,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/cdc/debezium")
+def create_debezium_source(
+    request: Request,
+    payload: SourceDebeziumCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.sources.create_debezium_source(
+            source_name=payload.source_name,
+            display_name=payload.display_name,
+            dataset_ref=payload.dataset_ref,
+            stream_name=payload.stream_name,
+            topic=payload.topic,
+            consumer_group=payload.consumer_group,
+            secret_refs=payload.secret_refs,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/cdc/debezium/{source_name}/sync/start")
+def start_debezium_source_sync(
+    request: Request,
+    source_name: str,
+    payload: SourceDebeziumSyncStartRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.sources.start_debezium_sync(
+            source_name,
+            expected_config_fingerprint=payload.expected_config_fingerprint,
+            after_offset=payload.after_offset,
+            limit=payload.limit,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/media/uploads")
+def upload_media_source(
+    request: Request,
+    source_name: str = Form(..., alias="sourceName"),
+    display_name: str = Form(..., alias="displayName"),
+    media_set_id: str = Form(..., alias="mediaSetId"),
+    logical_path: str = Form(..., alias="logicalPath"),
+    schema_type: str = Form(..., alias="schemaType"),
+    format: str = Form(...),
+    file: UploadFile = MEDIA_UPLOAD_FILE,
+    supplied_mime_type: str | None = Form(default=None, alias="suppliedMimeType"),
+    security_envelope: str = Form(default="{}", alias="securityEnvelope"),
+    probe_metadata: str | None = Form(default=None, alias="probeMetadata"),
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        file.file.seek(0)
+        return foundry.sources.upload_media(
+            source_name=source_name,
+            display_name=display_name,
+            media_set_id=media_set_id,
+            logical_path=logical_path,
+            file_name=file.filename or logical_path,
+            source=file.file,
+            supplied_mime_type=supplied_mime_type or file.content_type or "application/octet-stream",
+            schema_type=schema_type,
+            format=format,
+            security_envelope=_json_form_object(security_envelope, "securityEnvelope"),
+            probe_metadata=_optional_json_form_object(probe_metadata, "probeMetadata"),
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/{source_name}")
+def get_source(request: Request, source_name: str) -> JsonObject:
+    try:
+        return foundry.sources.get_source(source_name, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/connectors/connections")
+def create_connector_connection(
+    request: Request,
+    payload: RestConnectorConnectionCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.connectors.create_connection(
+            connector_name=payload.connector_name,
+            display_name=payload.display_name,
+            base_url=payload.base_url,
+            auth=_connector_auth_payload(payload.auth),
+            rate_limit_per_minute=payload.rate_limit_per_minute,
+            allow_private_network=payload.allow_private_network,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/connectors/connections")
+def list_connector_connections(request: Request) -> list[JsonObject]:
+    try:
+        return foundry.connectors.list_connections(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/connectors/connections/{connector_name}")
+def get_connector_connection(request: Request, connector_name: str) -> JsonObject:
+    try:
+        return foundry.connectors.get_connection(connector_name, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.patch("/api/connectors/connections/{connector_name}")
+def update_connector_connection(
+    request: Request,
+    connector_name: str,
+    payload: RestConnectorConnectionUpdateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.connectors.update_connection(
+            connector_name,
+            display_name=payload.display_name,
+            base_url=payload.base_url,
+            auth=_connector_auth_payload(payload.auth) if payload.auth is not None else None,
+            rate_limit_per_minute=payload.rate_limit_per_minute,
+            allow_private_network=payload.allow_private_network,
+            status=payload.status,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.put("/api/connectors/connections/{connector_name}/resources/{resource_name}")
+def upsert_connector_resource(
+    request: Request,
+    connector_name: str,
+    resource_name: str,
+    payload: RestConnectorResourceUpsertRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return foundry.connectors.upsert_resource(
+            connector_name,
+            resource_name,
+            dataset_ref=payload.dataset_ref,
+            resource_path=payload.resource_path,
+            pagination=_connector_pagination_payload(payload.pagination),
+            schema_columns=payload.schema_columns,
+            primary_key=payload.primary_key,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/connectors/connections/{connector_name}/resources/{resource_name}/test")
+def test_connector_resource(request: Request, connector_name: str, resource_name: str) -> JsonObject:
+    try:
+        return foundry.connectors.test_resource(connector_name, resource_name, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/connectors/connections/{connector_name}/resources/{resource_name}/sync/start")
+def start_connector_resource_sync(
+    request: Request,
+    connector_name: str,
+    resource_name: str,
+    payload: ConnectorResourceSyncStartRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> ProductWorkflowRun:
+    try:
+        return foundry.connectors.start_resource_sync(
+            connector_name,
+            resource_name,
+            sync_name=payload.sync_name,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/reconciliation/writebacks")
+def list_action_writeback_reconciliation_queue(
+    request: Request,
+    status: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+) -> ActionWritebackQueueResult:
+    try:
+        return foundry.operations.list_unresolved_action_writebacks(status=status, limit=limit, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -1090,6 +2380,30 @@ def retry_failed_transform_run(request: Request, run_id: str) -> TransformRetryR
         raise _handle_error(exc, request) from exc
 
 
+@app.post("/api/transforms/sql")
+def register_sql_transform(request: Request, payload: TransformSqlRegisterRequest) -> TransformRow:
+    try:
+        return foundry.transforms.register_sql(
+            payload.api_name,
+            sql=payload.sql,
+            inputs=payload.inputs,
+            output_dataset_ref=payload.output_dataset_ref,
+            checks=payload.checks,
+            mode=payload.mode,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/transforms/{api_name}/run")
+def run_transform(request: Request, api_name: str) -> JsonObject:
+    try:
+        return _commit_result_payload(foundry.transforms.run(api_name, ctx=_ctx(request)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.post("/api/materializations/{api_name}/run")
 def run_materialization(request: Request, api_name: str) -> JsonObject:
     try:
@@ -1117,11 +2431,18 @@ async def ingest_webhook(
     signature: str = Header(alias="X-Foundry-Lite-Signature"),
     signature_timestamp: str = Header(alias="X-Foundry-Lite-Timestamp"),
     event_id: str | None = Header(default=None, alias="X-Foundry-Lite-Event-ID"),
+    service_principal: str | None = Header(default=None, alias=WEBHOOK_SERVICE_PRINCIPAL_HEADER),
+    service_tenant_id: str | None = Header(default=None, alias=WEBHOOK_SERVICE_TENANT_HEADER),
 ):
     try:
         raw_body = await _bounded_webhook_body(request)
         payload = _webhook_payload_request(raw_body)
-        ctx = _ctx(request)
+        webhook_ctx = _webhook_request_context(
+            request,
+            service_principal=service_principal,
+            service_tenant_id=service_tenant_id,
+        )
+        ctx = webhook_ctx.ctx
         return foundry.datasets.ingest_webhook_event(
             dataset_ref,
             connector_name=connector_name,
@@ -1132,6 +2453,7 @@ async def ingest_webhook(
             signature_timestamp=signature_timestamp,
             secret=_webhook_signing_key(ctx, dataset_ref, connector_name, resource_name),
             event_id=event_id,
+            require_service_principal_signature=webhook_ctx.require_service_principal_signature,
             ctx=ctx,
         )
     except FoundryLiteError as exc:
@@ -1157,6 +2479,99 @@ def apply_action(
         )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
+
+
+def _eval_case(payload: AipEvalCaseRequest) -> EvalCaseInput:
+    return EvalCaseInput(
+        case_api_name=payload.case_api_name,
+        axis=payload.axis,
+        input_json=payload.input_json,
+        expected_json=payload.expected_json,
+        actual_json=payload.actual_json,
+        rubric_json=payload.rubric_json,
+        tags=tuple(payload.tags),
+        sample_index=payload.sample_index,
+        evaluator=payload.evaluator,
+        weight=payload.weight,
+    )
+
+
+def _aip_eval_validation_error(exc: AiEvalError) -> ValidationFailed:
+    return ValidationFailed("AIP eval request failed", details={"reason": exc.reason, "detail": exc.detail})
+
+
+def _processor_spec(payload: MediaProcessRequest) -> ProcessorSpec:
+    return ProcessorSpec(
+        processor=payload.processor,
+        processor_version=payload.processor_version,
+        model=payload.model,
+        model_version=payload.model_version,
+        parameters=payload.parameters,
+    )
+
+
+def _json_form_object(value: str, field_name: str) -> JsonObject:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValidationFailed("form field must be a JSON object", details={"field": field_name}) from exc
+    if not isinstance(parsed, dict):
+        raise ValidationFailed("form field must be a JSON object", details={"field": field_name})
+    return {str(key): item for key, item in parsed.items()}
+
+
+def _optional_json_form_object(value: str | None, field_name: str) -> JsonObject | None:
+    if value is None or not value.strip():
+        return None
+    return _json_form_object(value, field_name)
+
+
+def _json_form_string_list(value: str, field_name: str) -> list[str]:
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValidationFailed("form field must be a JSON string array", details={"field": field_name}) from exc
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        raise ValidationFailed("form field must be a JSON string array", details={"field": field_name})
+    return [item for item in parsed if item]
+
+
+def _source_batch_manifest(value: str) -> SourceBatchFileManifest:
+    try:
+        return SourceBatchFileManifest.model_validate_json(value)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+
+
+def _source_batch_uploads(manifest: SourceBatchFileManifest, files: list[UploadFile]) -> list[SourceUpload]:
+    by_name = {file.filename or f"file-{index}": file for index, file in enumerate(files)}
+    uploads: list[SourceUpload] = []
+    for item in manifest.files:
+        upload = by_name.get(item.file_name)
+        if upload is None:
+            raise ValidationFailed(
+                "batch file manifest references a missing upload", details={"fileName": item.file_name}
+            )
+        upload.file.seek(0)
+        uploads.append(SourceUpload(file_name=item.file_name, dataset_ref=item.dataset_ref, source=upload.file))
+    return uploads
+
+
+def _optional_tuple(values: list[str] | None) -> tuple[str, ...] | None:
+    return tuple(values) if values is not None else None
+
+
+def _commit_result_payload(result: CommitResult) -> JsonObject:
+    return {
+        "dataset_id": result.dataset_id,
+        "dataset_ref": result.dataset_ref,
+        "transaction_id": result.transaction_id,
+        "version_id": result.version_id,
+        "version_number": result.version_number,
+        "row_count": result.row_count,
+        "manifest_uri": result.manifest_uri,
+        "schema_hash": result.schema_hash,
+    }
 
 
 async def _bounded_webhook_body(request: Request) -> bytes:
@@ -1204,6 +2619,47 @@ def _webhook_payload_request(raw_body: bytes) -> WebhookPayloadRequest:
 
 def _webhook_payload(value: WebhookPayloadRequest) -> JsonObject:
     return {str(key): item for key, item in (value.model_extra or {}).items()}
+
+
+def _webhook_request_context(
+    request: Request,
+    *,
+    service_principal: str | None,
+    service_tenant_id: str | None,
+) -> WebhookRequestContext:
+    principal_id = _webhook_identity_header(service_principal, WEBHOOK_SERVICE_PRINCIPAL_HEADER)
+    tenant_id = _webhook_identity_header(service_tenant_id, WEBHOOK_SERVICE_TENANT_HEADER)
+    if principal_id is None and tenant_id is None:
+        return WebhookRequestContext(ctx=_ctx(request), require_service_principal_signature=False)
+    if principal_id is None or tenant_id is None:
+        raise ValidationFailed(
+            "webhook service-principal auth requires tenant and principal headers",
+            details={"required_headers": [WEBHOOK_SERVICE_TENANT_HEADER, WEBHOOK_SERVICE_PRINCIPAL_HEADER]},
+        )
+    ctx = RequestContext(
+        tenant_id=tenant_id,
+        actor_user_id=f"{WEBHOOK_SERVICE_ACTOR_PREFIX}{principal_id}",
+        request_id=_request_id(request, f"api-{time.time_ns()}"),
+        roles=(WEBHOOK_SERVICE_ROLE,),
+    )
+    return WebhookRequestContext(ctx=ctx, require_service_principal_signature=True)
+
+
+def _webhook_identity_header(value: str | None, header_name: str) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if normalized == "" or any(char.isspace() for char in normalized):
+        raise ValidationFailed("invalid webhook service-principal header", details={"header": header_name})
+    return normalized
+
+
+def _connector_auth_payload(value: RestConnectorAuthRequest) -> JsonObject:
+    return cast(JsonObject, value.model_dump(by_alias=True, exclude_none=True))
+
+
+def _connector_pagination_payload(value: RestConnectorPaginationRequest) -> JsonObject:
+    return cast(JsonObject, value.model_dump(by_alias=True))
 
 
 def _webhook_signing_key(

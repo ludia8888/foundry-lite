@@ -53,6 +53,25 @@ class SqlAlchemyInsightReviewRepository:
         )
         return cast(InsightReviewRow, dict(row)) if row else None
 
+    def review_by_execution_idempotency_key(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        idempotency_key: str,
+    ) -> InsightReviewRow | None:
+        rows = (
+            transaction.execute(select(db.insight_reviews).where(db.insight_reviews.c.tenant_id == tenant_id))
+            .mappings()
+            .all()
+        )
+        for row in rows:
+            record = cast(InsightReviewRow, dict(row))
+            claim = _approval_execution_claim(record)
+            if claim.get("idempotencyKey") == idempotency_key:
+                return record
+        return None
+
     def list_reviews(
         self,
         *,
@@ -138,8 +157,20 @@ class SqlAlchemyInsightReviewRepository:
         transaction: Any,
         tenant_id: str,
         review_id: str,
+        execution_idempotency_key: str,
+        execution_request_fingerprint: str,
+        proposal_fingerprint: str,
         updated_at: str,
     ) -> InsightReviewRow | None:
+        row = self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+        if row is None:
+            return None
+        metadata = _metadata_with_execution_claim(
+            row,
+            idempotency_key=execution_idempotency_key,
+            request_fingerprint=execution_request_fingerprint,
+            proposal_fingerprint=proposal_fingerprint,
+        )
         updated = transaction.execute(
             update(db.insight_reviews)
             .where(
@@ -150,7 +181,7 @@ class SqlAlchemyInsightReviewRepository:
                     db.insight_reviews.c.execution_status == "pending_review",
                 )
             )
-            .values(execution_status="executing", updated_at=updated_at)
+            .values(execution_status="executing", review_metadata=metadata, updated_at=updated_at)
         )
         if updated.rowcount != 1:
             return None
@@ -263,6 +294,27 @@ def _insight_review_values(record: InsightReviewRecord) -> dict[str, object]:
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
+
+
+def _approval_execution_claim(row: InsightReviewRow) -> dict[str, object]:
+    value = dict(row["review_metadata"]).get("approvalExecution")
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _metadata_with_execution_claim(
+    row: InsightReviewRow,
+    *,
+    idempotency_key: str,
+    request_fingerprint: str,
+    proposal_fingerprint: str,
+) -> dict[str, object]:
+    metadata = dict(row["review_metadata"])
+    metadata["approvalExecution"] = {
+        "idempotencyKey": idempotency_key,
+        "requestFingerprint": request_fingerprint,
+        "proposalFingerprint": proposal_fingerprint,
+    }
+    return metadata
 
 
 def _insight_review_insert_or_ignore(transaction: Any, record: InsightReviewRecord) -> Any:

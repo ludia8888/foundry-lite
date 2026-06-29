@@ -14,6 +14,7 @@ from foundry_lite.application.ports.media_processor import MediaProcessorAdapter
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.ontology_repository import PropertyClassificationRow
 from foundry_lite.application.ports.search_adapter import SearchAdapter
+from foundry_lite.application.ports.secret_provider import SecretProvider
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.services.object_store.query_cursor import (
@@ -48,6 +49,7 @@ from foundry_lite.infrastructure.adapters import (
     LocalWorkflowAdapter,
     OcrProcessorAdapter,
     PdfTextProcessorAdapter,
+    RestPullConnectorAdapter,
     S3DatasetStorageAdapter,
     S3DatasetStorageAdapterConfig,
     S3ExternalMediaReader,
@@ -55,6 +57,7 @@ from foundry_lite.infrastructure.adapters import (
     S3MediaStorageAdapter,
     S3MediaStorageConfig,
     SparkComputeAdapter,
+    SqlAlchemySourceDatabaseAdapter,
     TemporalWorkflowAdapter,
     TemporalWorkflowAdapterConfig,
     VideoProbeProcessorAdapter,
@@ -82,10 +85,12 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
     _ffmpeg_scene_frame_paths,
     _ffprobe_video_probe_runner,
 )
+from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
     SqlAlchemyAiEvalRepository,
     SqlAlchemyAiRunRepository,
+    SqlAlchemyConnectorRegistryRepository,
     SqlAlchemyDatasetQualityRepository,
     SqlAlchemyDatasetRepository,
     SqlAlchemyDatasetTransactionRepository,
@@ -105,9 +110,11 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyObjectSetRepository,
     SqlAlchemyOntologyRepository,
     SqlAlchemyRuntimeRepository,
+    SqlAlchemySourceManagementRepository,
+    SqlAlchemySourceRegistryRepository,
     SqlAlchemyTransformRepository,
 )
-from foundry_lite.infrastructure.secrets import secret_provider_from_env
+from foundry_lite.infrastructure.secrets import local_secret_vault_provider, secret_provider_from_env
 from foundry_lite.security.policy import ClassificationProvider, PolicyService
 
 _RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
@@ -165,13 +172,16 @@ def create_local_core_dependencies(
     # retrieval stays byte-for-byte unchanged. A real local-LLM engine is a future deferred section.
     completion_model_adapter = LocalCompletionAdapter()
     compute_adapter = _compute_adapter(adapter_profile)
-    connector_adapter = _connector_adapter(adapter_profile)
+    env_secret_provider = secret_provider_from_env()
+    secret_vault = local_secret_vault_provider(root, fallback=env_secret_provider)
+    secret_provider = secret_vault
+    connector_adapter = _connector_adapter(adapter_profile, secret_provider)
     search_adapter = _search_adapter(adapter_profile)
     stream_adapter = _stream_adapter(adapter_profile)
     workflow_adapter = _workflow_adapter(adapter_profile)
-    secret_provider = secret_provider_from_env()
     database_url = db_url or f"sqlite:///{root / 'foundry-lite.db'}"
     engine = create_engine(database_url, future=True)
+    install_postgres_rls_tenant_context(engine)
     ontology_repository = SqlAlchemyOntologyRepository(engine)
     allow_schema_mutation = _schema_mutation_allowed_from_env()
     return CoreDependencies(
@@ -188,6 +198,9 @@ def create_local_core_dependencies(
         dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),
         compute_adapter=compute_adapter,
         connector_adapter=connector_adapter,
+        connector_registry_repository=SqlAlchemyConnectorRegistryRepository(engine),
+        source_registry_repository=SqlAlchemySourceRegistryRepository(engine),
+        source_management_repository=SqlAlchemySourceManagementRepository(engine),
         metadata_repository=SqlAlchemyMetadataRepository(
             engine,
             allow_schema_mutation=allow_schema_mutation,
@@ -225,6 +238,8 @@ def create_local_core_dependencies(
         context_provider=FakeContextProvider(),
         search_adapter=search_adapter,
         secret_provider=secret_provider,
+        secret_vault=secret_vault,
+        source_database_adapter=SqlAlchemySourceDatabaseAdapter(),
         prompt_artifact_store=LocalPromptArtifactStore(
             prompt_artifacts_root,
             secret_provider,
@@ -342,12 +357,20 @@ def _compute_adapter(adapter_profile: str) -> DuckDBComputeAdapter:
     raise ValueError(f"unknown compute profile: {compute_profile}")
 
 
-def _connector_adapter(adapter_profile: str) -> LocalConnectorAdapter:
+def _connector_adapter(
+    adapter_profile: str,
+    secret_provider: SecretProvider,
+) -> LocalConnectorAdapter | RestPullConnectorAdapter:
+    connector_profile = os.getenv("FOUNDRY_LITE_CONNECTOR_PROFILE", adapter_profile)
+    if connector_profile == "rest":
+        return RestPullConnectorAdapter(secret_provider=secret_provider)
     if adapter_profile in {"local", "s3-storage", "iceberg"}:
         return LocalConnectorAdapter()
-    if adapter_profile == "fake-storage":
+    if connector_profile in {"local", "s3-storage", "iceberg"}:
+        return LocalConnectorAdapter()
+    if connector_profile == "fake-storage":
         return FakeConnectorAdapter()
-    raise ValueError(f"unknown adapter profile: {adapter_profile}")
+    raise ValueError(f"unknown connector profile: {connector_profile}")
 
 
 def _search_adapter(adapter_profile: str) -> SearchAdapter:

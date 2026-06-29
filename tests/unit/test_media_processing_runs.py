@@ -32,6 +32,7 @@ from foundry_lite.domain.errors import NotFound
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
+from sqlalchemy import select
 
 _SPEC = ProcessorSpec(processor="ocr_v1", processor_version="1.0", model="tesseract", model_version="5.3.0")
 
@@ -76,11 +77,24 @@ class _FailingProcessor:
         raise AdapterError(AdapterFailure("fake-fail", "process", "validation", False, "undecodable_image"))
 
 
+class _UnexpectedProcessor:
+    profile_name = "fake-unexpected"
+
+    def failure_contract(self) -> object: ...
+
+    def supports(self, request: MediaProcessingRequest) -> bool:
+        return True
+
+    def process(self, request: MediaProcessingRequest) -> MediaProcessingResult:
+        raise RuntimeError("Authorization: Bearer raw-secret-token")
+
+
 @dataclass(frozen=True)
 class _Env:
     ctx: RequestContext
     ok_processing: MediaProcessingService
     failing_processing: MediaProcessingService
+    unexpected_processing: MediaProcessingService
     engine: object
     version_id: str
 
@@ -149,6 +163,7 @@ def env(tmp_path: Path) -> _Env:
         ctx=ctx,
         ok_processing=_processing(engine, repo, deriv, storage, _OkProcessor()),
         failing_processing=_processing(engine, repo, deriv, storage, _FailingProcessor()),
+        unexpected_processing=_processing(engine, repo, deriv, storage, _UnexpectedProcessor()),
         engine=engine,
         version_id=staged.media_item_version_id,
     )
@@ -175,6 +190,29 @@ def test_failure_records_a_failed_run_and_no_committed_derivative_is_visible(env
     # The run is evidence, not truth: the recorded FAILED derivative is never serving-truth.
     with pytest.raises(NotFound):
         env.failing_processing.resolve_derivative(env.ctx, media_derivative_id=outcome.media_derivative_id)
+
+
+def test_unexpected_processor_exception_records_failed_run_without_pdf_text_kind(env: _Env) -> None:
+    outcome = env.unexpected_processing.process(env.ctx, media_item_version_id=env.version_id, spec=_SPEC)
+    runs = env.unexpected_processing.list_media_runs(env.ctx, source_media_item_version_id=env.version_id)
+    run = runs[0]
+    with env.engine.begin() as conn:  # type: ignore[attr-defined]
+        derivative = (
+            conn.execute(select(db.media_derivatives).where(db.media_derivatives.c.id == outcome.media_derivative_id))
+            .mappings()
+            .one()
+        )
+
+    assert outcome.status == "failed"
+    assert outcome.error is not None
+    assert outcome.error["kind"] == "unknown"
+    assert outcome.error["operatorMessage"] == "unexpected media processor error"
+    assert run.status == "FAILED"
+    assert run.failure_kind == "unknown"
+    assert run.failure_reason == "unexpected media processor error"
+    assert derivative["derivative_kind"] == _SPEC.processor
+    with pytest.raises(NotFound):
+        env.unexpected_processing.resolve_derivative(env.ctx, media_derivative_id=outcome.media_derivative_id)
 
 
 def test_media_run_detail_is_tenant_scoped(env: _Env) -> None:

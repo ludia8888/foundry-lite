@@ -3,6 +3,7 @@
 from foundry_lite.infrastructure.repositories.action_repository import SqlAlchemyActionRepository
 from foundry_lite.infrastructure.repositories.ai_eval_repository import SqlAlchemyAiEvalRepository
 from foundry_lite.infrastructure.repositories.ai_run_repository import SqlAlchemyAiRunRepository
+from foundry_lite.infrastructure.repositories.connector_registry_repository import SqlAlchemyConnectorRegistryRepository
 from foundry_lite.infrastructure.repositories.dataset_quality_repository import SqlAlchemyDatasetQualityRepository
 from foundry_lite.infrastructure.repositories.dataset_repository import SqlAlchemyDatasetRepository
 from foundry_lite.infrastructure.repositories.dataset_transaction_repository import (
@@ -31,6 +32,8 @@ from foundry_lite.infrastructure.repositories.object_read_repository import SqlA
 from foundry_lite.infrastructure.repositories.object_set_repository import SqlAlchemyObjectSetRepository
 from foundry_lite.infrastructure.repositories.ontology_repository import SqlAlchemyOntologyRepository
 from foundry_lite.infrastructure.repositories.runtime_repository import SqlAlchemyRuntimeRepository
+from foundry_lite.infrastructure.repositories.source_management_repository import SqlAlchemySourceManagementRepository
+from foundry_lite.infrastructure.repositories.source_registry_repository import SqlAlchemySourceRegistryRepository
 from foundry_lite.infrastructure.repositories.transform_repository import SqlAlchemyTransformRepository
 
 __all__ = [
@@ -38,6 +41,7 @@ __all__ = [
     "SqlAlchemyAiEvalRepository",
     "SqlAlchemyAiRunRepository",
     "SqlAlchemyDatasetQualityRepository",
+    "SqlAlchemyConnectorRegistryRepository",
     "SqlAlchemyDatasetRepository",
     "SqlAlchemyDatasetTransactionRepository",
     "SqlAlchemyDatasetVersionRepository",
@@ -57,5 +61,7 @@ __all__ = [
     "SqlAlchemyOntologyRepository",
     "SqlAlchemyErasureRepository",
     "SqlAlchemyRuntimeRepository",
+    "SqlAlchemySourceRegistryRepository",
+    "SqlAlchemySourceManagementRepository",
     "SqlAlchemyTransformRepository",
 ]

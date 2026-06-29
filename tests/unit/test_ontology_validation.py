@@ -128,6 +128,40 @@ objectTypes:
     assert exc_info.value.details == {"objectType": "Order"}
 
 
+def test_ontology_definition_validation_rejects_duplicate_link_api_name() -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    definition["linkTypes"] = [
+        {
+            "apiName": "OrderCustomer",
+            "from": "Order",
+            "to": "Order",
+            "backing": {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "customer_id"},
+        },
+        {
+            "apiName": "OrderCustomer",
+            "from": "Order",
+            "to": "Order",
+            "backing": {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "customer_id"},
+        },
+    ]
+
+    with pytest.raises(ValidationFailed, match="duplicate link apiName") as exc_info:
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+    assert exc_info.value.details == {"linkType": "OrderCustomer"}
+
+
+def test_ontology_definition_validation_rejects_duplicate_action_api_name() -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    action = _first_action(definition)
+    definition["actionTypes"] = [action, dict(action)]
+
+    with pytest.raises(ValidationFailed, match="duplicate action apiName") as exc_info:
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+    assert exc_info.value.details == {"actionType": "ApproveOrder"}
+
+
 def test_persisted_validation_rejects_uneditable_action_mutation() -> None:
     properties = [_property_row("orderId", "order_id", editable=False), _property_row("status", "source_status")]
     action = _action_row(property_name="orderId")

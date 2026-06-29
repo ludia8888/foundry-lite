@@ -42,6 +42,7 @@ from foundry_lite.application.services.runtime_detail_payload import (
 from foundry_lite.application.services.runtime_error_payloads import (
     dead_letter_retry_plan,
     link_dlq_retry,
+    redact_sensitive,
     require_outbox_retry_open,
     require_write_traffic_open,
     runtime_error_payload,
@@ -61,26 +62,6 @@ from foundry_lite.application.services.runtime_run_queries import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, PermissionDenied
-
-_OPERATIONS_FORBIDDEN_JSON_KEYS = frozenset({"actionproposal"})
-
-
-def _redact_sensitive(value: object, sensitive: set[str]) -> object:
-    if isinstance(value, Mapping):
-        return {
-            key: "***MASKED***"
-            if key in sensitive or _is_forbidden_operations_key(key)
-            else _redact_sensitive(item, sensitive)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_sensitive(item, sensitive) for item in value]
-    return value
-
-
-def _is_forbidden_operations_key(key: object) -> bool:
-    normalized = "".join(char for char in str(key).lower() if char.isalnum())
-    return normalized in _OPERATIONS_FORBIDDEN_JSON_KEYS
 
 
 class RuntimeService(CoreService):
@@ -149,7 +130,7 @@ class RuntimeService(CoreService):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "operations:read:summary")
         snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id, limit=OPERATIONS_RUN_MAX_LIMIT)
-        return cast(RuntimeRunSnapshot, _redact_sensitive(snapshot, self.policy.sensitive_column_names(ctx)))
+        return cast(RuntimeRunSnapshot, redact_sensitive(snapshot, self.policy.sensitive_column_names(ctx)))
 
     def query_runs(
         self,
@@ -175,7 +156,7 @@ class RuntimeService(CoreService):
             limit=limit,
             cursor=cursor,
         )
-        return cast(RuntimeRunQueryResult, _redact_sensitive(page, self.policy.sensitive_column_names(ctx)))
+        return cast(RuntimeRunQueryResult, redact_sensitive(page, self.policy.sensitive_column_names(ctx)))
 
     def observability_report(
         self,
@@ -194,7 +175,7 @@ class RuntimeService(CoreService):
             previous_incidents=previous_incidents,
             observed_at=observed_at or _now(),
         )
-        return cast(ObservabilityReport, _redact_sensitive(report, self.policy.sensitive_column_names(ctx)))
+        return cast(ObservabilityReport, redact_sensitive(report, self.policy.sensitive_column_names(ctx)))
 
     def run_detail(self, run_type: str, run_id: str, *, ctx: RequestContext | None = None) -> RuntimeRunDetail:
         ctx = ctx or RequestContext()
@@ -231,7 +212,7 @@ class RuntimeService(CoreService):
         )
         if ai_payload is not None:
             detail["ai"] = ai_payload
-        return cast(RuntimeRunDetail, _redact_sensitive(detail, self.policy.sensitive_column_names(ctx)))
+        return cast(RuntimeRunDetail, redact_sensitive(detail, self.policy.sensitive_column_names(ctx)))
 
     def dead_letter_event_retry_plan(
         self,

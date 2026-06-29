@@ -103,9 +103,11 @@ def validate_ontology_definition(
 ) -> None:
     """Validate a YAML ontology definition without persisting it."""
     object_defs = _object_definitions_by_api(definition)
+    link_defs = _link_definitions_by_api(definition)
+    _action_definitions_by_api(definition)
     for object_def in object_defs.values():
         _validate_yaml_object_type(conn, ctx, definition, object_def, dataset_columns_for_ref)
-    for link_def in mapping_sequence(definition, "linkTypes"):
+    for link_def in link_defs.values():
         _validate_yaml_link(conn, ctx, link_def, object_defs, dataset_columns_for_ref)
 
 
@@ -200,6 +202,26 @@ def _property_definitions_by_api(object_def: YamlObject) -> dict[str, YamlObject
             raise ValidationFailed("duplicate property apiName", details={"property": prop_api})
         property_defs[prop_api] = prop
     return property_defs
+
+
+def _link_definitions_by_api(definition: YamlObject) -> dict[str, YamlObject]:
+    link_defs: dict[str, YamlObject] = {}
+    for item in mapping_sequence(definition, "linkTypes"):
+        api_name = required_str(item, "apiName")
+        if api_name in link_defs:
+            raise ValidationFailed("duplicate link apiName", details={"linkType": api_name})
+        link_defs[api_name] = item
+    return link_defs
+
+
+def _action_definitions_by_api(definition: YamlObject) -> dict[str, YamlObject]:
+    action_defs: dict[str, YamlObject] = {}
+    for item in mapping_sequence(definition, "actionTypes"):
+        api_name = required_str(item, "apiName")
+        if api_name in action_defs:
+            raise ValidationFailed("duplicate action apiName", details={"actionType": api_name})
+        action_defs[api_name] = item
+    return action_defs
 
 
 def _validate_yaml_primary_key(

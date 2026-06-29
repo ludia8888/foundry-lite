@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn, Protocol
@@ -43,6 +44,16 @@ _WEBHOOK_VOLATILE_KEYS = frozenset(
         "ts",
     }
 )
+_SERVICE_PRINCIPAL_SIGNING_VERSION = "foundry-lite-webhook-service-principal-v1"
+
+
+@dataclass(frozen=True)
+class WebhookSignatureContext:
+    tenant_id: str
+    actor_user_id: str
+    dataset_ref: str
+    connector_name: str
+    resource_name: str
 
 
 class WebhookIngestRuntime(Protocol):
@@ -99,6 +110,7 @@ def ingest_webhook_event(
     signature_timestamp: str,
     secret: str,
     event_id: str | None = None,
+    signature_context: WebhookSignatureContext | None = None,
     ctx: RequestContext | None = None,
 ) -> CommitResult:
     ctx = ctx or RequestContext()
@@ -114,6 +126,7 @@ def ingest_webhook_event(
         signature_timestamp,
         secret,
         event_id,
+        signature_context,
     )
     return _commit_or_replay_webhook_event(
         runtime,
@@ -176,6 +189,7 @@ def _prepare_webhook_ingest(
     signature_timestamp: str,
     secret: str,
     event_id: str | None,
+    signature_context: WebhookSignatureContext | None,
 ) -> WebhookIngest:
     _require_valid_webhook_signature(
         runtime,
@@ -187,8 +201,9 @@ def _prepare_webhook_ingest(
         signature,
         signature_timestamp,
         secret,
+        signature_context,
     )
-    runtime.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
+    runtime.runtime_service._require_or_audit(ctx, "dataset:webhook_ingest", "dataset", dataset_ref)
     require_write_open(runtime.runtime_service, ctx, "ingest_webhook_event", "dataset", dataset_ref)
     dataset = runtime.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
     normalized_event_id = _webhook_event_id(connector_name, resource_name, payload, event_id)
@@ -206,9 +221,10 @@ def _require_valid_webhook_signature(
     signature: str,
     signature_timestamp: str,
     secret: str,
+    signature_context: WebhookSignatureContext | None,
 ) -> None:
     try:
-        if _webhook_signature_valid(raw_body, signature, signature_timestamp, secret):
+        if _webhook_signature_valid(raw_body, signature, signature_timestamp, secret, signature_context):
             return
     except PermissionDenied:
         _audit_webhook_signature_denied(runtime, ctx, dataset_ref, connector_name, resource_name)
@@ -332,13 +348,38 @@ def _audit_webhook_signature_denied(
         )
 
 
-def _webhook_signature_valid(raw_body: bytes, signature: str, signature_timestamp: str, secret: str) -> bool:
+def _webhook_signature_valid(
+    raw_body: bytes,
+    signature: str,
+    signature_timestamp: str,
+    secret: str,
+    signature_context: WebhookSignatureContext | None = None,
+) -> bool:
     if not secret:
         raise ValidationFailed("webhook secret is not configured")
     _require_fresh_webhook_timestamp(signature_timestamp)
-    signed_payload = signature_timestamp.encode("utf-8") + b"." + raw_body
+    signed_payload = _webhook_signed_payload(raw_body, signature_timestamp, signature_context)
     expected = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
     return hmac.compare_digest(signature, f"sha256={expected}")
+
+
+def _webhook_signed_payload(
+    raw_body: bytes,
+    signature_timestamp: str,
+    signature_context: WebhookSignatureContext | None,
+) -> bytes:
+    if signature_context is None:
+        return signature_timestamp.encode("utf-8") + b"." + raw_body
+    fields = (
+        _SERVICE_PRINCIPAL_SIGNING_VERSION,
+        signature_timestamp,
+        signature_context.tenant_id,
+        signature_context.actor_user_id,
+        signature_context.dataset_ref,
+        signature_context.connector_name,
+        signature_context.resource_name,
+    )
+    return b"\0".join(field.encode("utf-8") for field in fields) + b"\0" + raw_body
 
 
 def _require_fresh_webhook_timestamp(signature_timestamp: str) -> None:

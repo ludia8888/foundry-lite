@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure
 from foundry_lite.application.services.runtime_error_payloads import dead_letter_retry_plan, runtime_error_payload
+from foundry_lite.application.services.runtime_redaction import redact_sensitive
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
 
@@ -71,6 +72,42 @@ def test_runtime_error_payload_prefers_explicit_correlation_for_adapter_error() 
     assert payload["adapterFailure"]["retryable"] is True
     assert payload["trace"]["correlation_id"] == "corr-1"
     assert "run_id" not in payload["trace"]
+
+
+def test_runtime_error_payload_scrubs_secrets_from_messages_and_details() -> None:
+    payload = runtime_error_payload(
+        RuntimeError("Authorization: Bearer raw-token prompt: reveal customer data"),
+        RequestContext(tenant_id="tenant-a", actor_user_id="user-a", request_id="req-a"),
+    )
+    domain_payload = runtime_error_payload(
+        ValidationFailed(
+            "invalid prompt: raw customer text",
+            details={"apiKey": "plain-key", "safe": "visible", "nested": {"providerResponse": "raw"}},
+        )
+    )
+
+    assert payload["message"] == "***MASKED***"
+    assert "raw-token" not in str(payload)
+    assert domain_payload["message"] == "***MASKED***"
+    assert domain_payload["details"] == {
+        "apiKey": "***MASKED***",
+        "safe": "visible",
+        "nested": {"providerResponse": "***MASKED***"},
+    }
+
+
+def test_runtime_operations_redacts_denylisted_json_keys_recursively() -> None:
+    payload = {
+        "safe": "visible",
+        "providerRequest": {"body": "raw"},
+        "nested": [{"apiKey": "plain-key"}, {"compiledPrompt": "raw prompt"}],
+    }
+
+    assert redact_sensitive(payload, set()) == {
+        "safe": "visible",
+        "providerRequest": "***MASKED***",
+        "nested": [{"apiKey": "***MASKED***"}, {"compiledPrompt": "***MASKED***"}],
+    }
 
 
 class _DeadLetterPlanRepository:

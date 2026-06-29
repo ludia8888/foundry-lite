@@ -95,6 +95,16 @@ class InsightReviewRepository(Protocol):
         """Return one tenant-scoped insight review."""
         ...
 
+    def review_by_execution_idempotency_key(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        idempotency_key: str,
+    ) -> InsightReviewRow | None:
+        """Return the review that owns one approval-execution idempotency key."""
+        ...
+
     def list_reviews(
         self,
         *,
@@ -140,6 +150,9 @@ class InsightReviewRepository(Protocol):
         transaction: TransactionContext,
         tenant_id: str,
         review_id: str,
+        execution_idempotency_key: str,
+        execution_request_fingerprint: str,
+        proposal_fingerprint: str,
         updated_at: str,
     ) -> InsightReviewRow | None:
         """Move an approved action proposal review into executing state."""

@@ -17,6 +17,7 @@ from foundry_lite.application.services.media.retention import RetentionPurgeSumm
 from foundry_lite.application.services.media.transactions import MediaCommitResult
 from foundry_lite.application.services.media.uploads import MediaUploadInput, StagedUpload
 from foundry_lite.application.services.media.virtual_sets import ExternalResolution
+from foundry_lite.application.services.media.visual_search import VisualIndexingOutcome
 from foundry_lite.application.services.media_service import MediaServices
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.observability.tracing import trace_public_methods
@@ -150,6 +151,21 @@ class MediaWorkspace:
 
     def search_content(self, ctx: RequestContext, *, query: HybridContentQuery) -> list[ContentSearchHit]:
         return self._media.retrieval.search_content(ctx, query=query)
+
+    def index_visual_derivative(
+        self, ctx: RequestContext, *, media_derivative_id: str, generation: str
+    ) -> VisualIndexingOutcome:
+        return self._media.visual_search.index_visual_derivative(
+            ctx,
+            media_derivative_id=media_derivative_id,
+            generation=generation,
+        )
+
+    def promote_visual_generation(self, ctx: RequestContext, *, expected_active: str, generation: str) -> None:
+        self._media.visual_search.promote(ctx, expected_active=expected_active, generation=generation)
+
+    def search_visual(self, ctx: RequestContext, *, text: str, top_k: int = 10) -> list[ContentSearchHit]:
+        return self._media.visual_search.search_visual(ctx, text=text, top_k=top_k)
 
     def bind_reference(
         self,

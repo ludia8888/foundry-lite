@@ -64,6 +64,66 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "datasets.qualityChecks.list",
+      "route": "GET /api/datasets/{namespace}/{name}/quality-contract/checks",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityChecks.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Persisted dataset quality contract checks are listed through the dataset boundary and applied by later dataset commits when enabled.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityChecks.create",
+      "route": "POST /api/datasets/{namespace}/{name}/quality-contract/checks",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityChecks.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Creating a quality contract check is idempotent by canonical check config, leaves audit evidence, and affects later dataset commit validation.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityChecks.update",
+      "route": "PATCH /api/datasets/{namespace}/{name}/quality-contract/checks/{check_id}",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityChecks.update",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Updating a quality contract check leaves audit evidence, and changed enabled/config state affects later dataset commit validation.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityResults.list",
+      "route": "GET /api/datasets/{namespace}/{name}/quality-contract/results",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityResults.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Dataset quality result history returns persisted commit-time check results with manifest hash, schema-version reference, run id, transaction id, status, and check metadata.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityResults.summary",
+      "route": "GET /api/datasets/{namespace}/{name}/quality-contract/results/summary",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityResults.summary",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Dataset quality result summary returns persisted commit-time check result counts by status and check type plus latest run evidence for trend/reporting surfaces.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "ontology.catalog",
       "route": "GET /api/ontology/catalog",
       "productArea": "ontology",
@@ -117,7 +177,225 @@
       "productArea": "aip-agent-runtime",
       "sdkSurface": "aip.agent.run",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "AIP Agent Runtime retrieves authorized context, compiles a governed prompt, calls Model Gateway, can execute one explicitly allowed read tool only through ToolBroker, can route one action.propose tool to pending human review without direct writes, and links the run to AI Operations detail with context/model/tool/proposal/usage evidence.",
+      "operatorEvidence": "AIP Agent Runtime retrieves authorized context, compiles a governed prompt, calls Model Gateway, and links the read-only model turn to an AI Operations run detail with context/model/usage evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.evals.run",
+      "route": "POST /api/aip/evals/run",
+      "productArea": "aip-evals-release",
+      "sdkSurface": "aip.evals.run",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AIP eval runs persist deterministic suite/case/result evidence and write ai.eval_run.completed audit/outbox evidence before release promotion.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "aip.releases.promote",
+      "route": "POST /api/aip/releases/promote",
+      "productArea": "aip-evals-release",
+      "sdkSurface": "aip.releases.promote",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "AIP release promotion is gated by a passed eval run and leaves ai.agent_release.promoted audit/outbox evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.sets.create",
+      "route": "POST /api/media/sets",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.sets.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Media set creation stores tenant-scoped catalog metadata used by later immutable media transactions and media-reference bindings.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.sets.get",
+      "route": "GET /api/media/sets/{media_set_id}",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.sets.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Media set reads return the catalog row that scopes upload, processing, and retrieval policy decisions.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.transactions.open",
+      "route": "POST /api/media/sets/{media_set_id}/transactions",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.transactions.open",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Opening a media transaction requires Idempotency-Key and returns the durable mediaTransactionId used for byte staging and commit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.transactions.upload",
+      "route": "POST /api/media/sets/{media_set_id}/transactions/{media_transaction_id}/uploads",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.transactions.upload",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Media upload stages real file bytes into an open transaction and returns the immutable staged mediaItemVersionId before serving truth is committed.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.transactions.commit",
+      "route": "POST /api/media/transactions/{media_transaction_id}/commit",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.transactions.commit",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Media commit atomically flips staged versions to COMMITTED, advances logical-path heads, and writes media.transaction.committed audit/outbox evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.versions.process",
+      "route": "POST /api/media/versions/{media_item_version_id}/process",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.versions.process",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Media processing is pinned to one committed mediaItemVersionId and returns derivative/run evidence for OCR, ASR, video, or image processors.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.derivatives.get",
+      "route": "GET /api/media/derivatives/{media_derivative_id}",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.derivatives.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Committed derivative reads expose the processing output pinned to its source media version and processor spec hash.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.derivatives.index",
+      "route": "POST /api/media/derivatives/{media_derivative_id}/index",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.derivatives.index",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Derivative indexing projects committed content units into a named search generation while content units remain the serving truth.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.content.search",
+      "route": "POST /api/media/content/search",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.content.search",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Content search re-reads authoritative content units and returns source media version, content unit, text hash, and classification citation evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.visual.indexDerivative",
+      "route": "POST /api/media/visual/derivatives/{media_derivative_id}/index",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.visual.indexDerivative",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Visual derivative indexing projects committed frame embeddings into a CLIP-pinned generation while derivative/content-unit DB rows remain serving truth.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.visual.promoteGeneration",
+      "route": "POST /api/media/visual/generations/promote",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.visual.promoteGeneration",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Visual generation promotion records audit evidence before a CLIP visual generation becomes the active query source.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.visual.search",
+      "route": "POST /api/media/visual/search",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.visual.search",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Visual search requires media:search RBAC, embeds the text query through the CLIP text tower, and returns only authoritative tenant-scoped content-unit hits.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.processing-runs.list",
+      "route": "GET /api/media/processing-runs",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.processingRuns.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Media processing run list shows newest processing attempts, including FAILED rows that operators can inspect without treating run status as serving truth.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.processing-runs.get",
+      "route": "GET /api/media/processing-runs/{media_processing_run_id}",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.processingRuns.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Media processing run detail returns the specific run evidence, derivative pointer, and typed failure reason for an operator drill-down.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.references.bind",
+      "route": "POST /api/media/references/bind",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.references.bind",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Media reference binding requires Idempotency-Key and pins an Ontology holder property to one immutable mediaItemVersionId.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "media.references.resolve",
+      "route": "GET /api/media/references/resolve",
+      "productArea": "media-content-plane",
+      "sdkSurface": "media.references.resolve",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Media reference resolution applies classification clearance and returns the exact immutable media reference currently bound to an Ontology holder property.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -187,13 +465,13 @@
       "proofClass": "sdk-request-contract"
     },
     {
-      "id": "insights.reviews.execute",
-      "route": "POST /api/insights/reviews/{review_id}/execute-action",
+      "id": "insights.reviews.executeApprovedAction",
+      "route": "POST /api/insights/reviews/{review_id}/execute-approved-action",
       "productArea": "insight-action-workspace",
-      "sdkSurface": "insights.reviews.execute",
+      "sdkSurface": "insights.reviews.executeApprovedAction",
       "rawRequestPolicy": "named-sdk-only",
       "requiresIdempotencyKey": true,
-      "operatorEvidence": "Approved AI action proposal execution requires Idempotency-Key, rechecks the exact proposal fingerprint, executes through ApprovalExecutionService/ActionService, links review to action run, and back-links the originating AI action.propose tool call to the action run.",
+      "operatorEvidence": "Approval execution requires Idempotency-Key, persists the execution claim, recovers same-key retries after action success, and rejects key reuse for a different request.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -272,6 +550,30 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "transforms.register-sql",
+      "route": "POST /api/transforms/sql",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "transforms.registerSql",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "SQL transform registration stores the SQL body as a server-managed artifact after permission/restore-mode guards, then writes transform.definition audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "transforms.run",
+      "route": "POST /api/transforms/{api_name}/run",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "transforms.run",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Transform run returns committed dataset version/transaction/manifest identity and leaves transform run lineage evidence in Operations.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.runs.list",
       "route": "GET /api/operations/runs",
       "productArea": "operations-console",
@@ -302,6 +604,30 @@
       "sdkSurface": "operations.observability.detect",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Detector reports carry incident evidence links, thresholds, and active/suppressed status.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.admin.overview",
+      "route": "GET /api/operations/admin/overview",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.admin.overview",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Admin overview separates current API surfaces, worker entrypoints, CLI-only migration execution, runbook-only bootstrap, and future visual workspace scope, including executionSurface, canStartFromBrowser, approval, checklist, and blockingReason fields so frontend admin screens do not overclaim backend control.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.admin.task-plan",
+      "route": "GET /api/operations/admin/task-plan",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.admin.taskPlan",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Admin task plan turns migration, worker daemon, infra bootstrap, bounded outbox, and future workspace capabilities into screen-ready tasks with browser-run, operator-approval, command, checklist, required-backend-surface, and blocking evidence fields.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -344,12 +670,48 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "operations.backup-restore.post-restore-validation",
+      "route": "POST /api/operations/backup-restore/restore-mode/{restore_id}/post-restore-validation",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.backupRestore.postRestoreValidation",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Post-restore validation leaves durable audit evidence before resume approval can reopen retry/reprocess entrypoints.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.backup-restore.approve-resume",
       "route": "POST /api/operations/backup-restore/restore-mode/{restore_id}/approve-resume",
       "productArea": "operations-console",
       "sdkSurface": "operations.backupRestore.approveResume",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Resume approval leaves audit evidence and requires post-restore validation artifacts.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.recovery.overview",
+      "route": "GET /api/operations/recovery/overview",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.backupRestore.recoveryOverview",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Recovery overview joins latest preflight, active restore-mode traffic gates, and next operator actions into one read model.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.outbox.publish-pending",
+      "route": "POST /api/operations/outbox/publish",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.outbox.publishPending",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Bounded admin outbox publish returns requested/published/failed/skipped counts plus event ids and DLQ ids, while the backend operation leaves durable outbox status and audit evidence.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -380,6 +742,456 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "connectors.connections.create",
+      "route": "POST /api/connectors/connections",
+      "productArea": "connector-onboarding",
+      "sdkSurface": "connectors.connections.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Connection create requires Idempotency-Key, stores only secretRef auth metadata, returns configFingerprint, and writes connector.connection.created audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "connectors.connections.list",
+      "route": "GET /api/connectors/connections",
+      "productArea": "connector-onboarding",
+      "sdkSurface": "connectors.connections.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Connection list is tenant-scoped and returns saved REST connector configuration fingerprints plus registered resources without raw secret values.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "connectors.connections.get",
+      "route": "GET /api/connectors/connections/{connector_name}",
+      "productArea": "connector-onboarding",
+      "sdkSurface": "connectors.connections.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Connection get is tenant-scoped and returns one connector with resource configuration and configFingerprint evidence without raw secret values.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "connectors.connections.update",
+      "route": "PATCH /api/connectors/connections/{connector_name}",
+      "productArea": "connector-onboarding",
+      "sdkSurface": "connectors.connections.update",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Connection update requires Idempotency-Key, rewrites configFingerprint, keeps auth secretRef-only, and writes connector.connection.updated audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "connectors.resources.upsert",
+      "route": "PUT /api/connectors/connections/{connector_name}/resources/{resource_name}",
+      "productArea": "connector-onboarding",
+      "sdkSurface": "connectors.resources.upsert",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Resource upsert requires Idempotency-Key, ensures the target dataset, rejects primary-key mismatch, returns resource configFingerprint, and writes connector.resource.upserted audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "connectors.resources.test",
+      "route": "POST /api/connectors/connections/{connector_name}/resources/{resource_name}/test",
+      "productArea": "connector-onboarding",
+      "sdkSurface": "connectors.resources.test",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Resource test reads the external REST source, returns schema/sample/error evidence, writes connector.resource.tested audit evidence, and does not create a dataset commit.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "connectors.resources.start-sync",
+      "route": "POST /api/connectors/connections/{connector_name}/resources/{resource_name}/sync/start",
+      "productArea": "connector-onboarding",
+      "sdkSurface": "connectors.resources.startSync",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Resource sync start requires Idempotency-Key and stores datasetRef, connectorName, resourceName, syncName, and configFingerprint in the workflow input for fail-closed activity execution.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.list",
+      "route": "GET /api/sources",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Unified Source list is tenant-scoped and merges product Source registry rows with REST connector read models without exposing raw secret values.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.get",
+      "route": "GET /api/sources/{source_name}",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Source get returns one tenant-scoped Source read model with configFingerprint, safe configSummary, last commit/workflow pointers, and operationsPath when available.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.templates.list",
+      "route": "GET /api/sources/templates",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.templates.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Source Wizard template list returns product source types, capability hints, credential modes, network modes, exploration support, and managed run modes so a frontend can render the first connection choice without raw route calls.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.credentials.create",
+      "route": "POST /api/sources/credentials",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.credentials.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Source credential create requires Idempotency-Key, stores the secret in the local vault, persists only the secretRef/version and safe configFingerprint, and returns a redacted credential view.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.credentials.list",
+      "route": "GET /api/sources/credentials",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.credentials.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Credential list is tenant-scoped and returns credential names, status, fingerprints, and redacted secretRefs without exposing raw secret values.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.credentials.get",
+      "route": "GET /api/sources/credentials/{credential_name}",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.credentials.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Credential get returns one tenant-scoped, redacted credential view with configFingerprint and secretRef metadata only.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.agents.register",
+      "route": "POST /api/sources/agents",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.agents.register",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Source agent register requires Idempotency-Key and records customer-network/VPN agent capabilities, network summary, heartbeat status, and configFingerprint for private source access demos.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.agents.list",
+      "route": "GET /api/sources/agents",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.agents.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Agent list is tenant-scoped and shows registered source agents, network summaries, capabilities, and last heartbeat evidence for private network readiness.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.agents.heartbeat",
+      "route": "POST /api/sources/agents/{agent_id}/heartbeat",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.agents.heartbeat",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Agent heartbeat updates lastHeartbeatAt and gives the wizard live readiness evidence before using an agent-proxy network policy.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.networkPolicies.create",
+      "route": "POST /api/sources/network-policies",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.networkPolicies.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Network policy create requires Idempotency-Key and stores direct or agent_proxy access policy, allowed host summary, agent linkage, and configFingerprint for source connection evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.networkPolicies.list",
+      "route": "GET /api/sources/network-policies",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.networkPolicies.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Network policy list is tenant-scoped and returns safe policy summaries so a frontend can show which source paths are direct or agent-proxied.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.exploration.run",
+      "route": "POST /api/sources/explore",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.exploration.run",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Source exploration reads the external source for schema/sample evidence, records an explorationRunId and operationsPath, and does not create a dataset commit.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.create",
+      "route": "POST /api/sources/managed-syncs",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Managed sync create requires Idempotency-Key, stores Source-to-dataset/media target, capability, mode, schedule summary, safe configSummary, checkpoint, and configFingerprint.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.list",
+      "route": "GET /api/sources/managed-syncs",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Managed sync list returns tenant-scoped sync definitions with last run/workflow pointers and checkpoints for operational dashboards.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.get",
+      "route": "GET /api/sources/managed-syncs/{sync_name}",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Managed sync get returns one sync definition with configFingerprint, checkpoint, target dataset/media set, and last run pointers for resume/retry decisions.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.startRun",
+      "route": "POST /api/sources/managed-syncs/{sync_name}/runs/start",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.startRun",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Managed sync run start requires Idempotency-Key, creates/replays a sync run, captures checkpoint start/end, dataset version or workflowRunId, result/error payload, and operationsPath evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.listRuns",
+      "route": "GET /api/sources/managed-syncs/{sync_name}/runs",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.listRuns",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Managed sync run list returns operational history for one sync, including status, checkpoints, workflow/dataset version pointers, and error evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.managedSyncs.getRun",
+      "route": "GET /api/sources/managed-sync-runs/{run_id}",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.managedSyncs.getRun",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Managed sync run get returns a durable run evidence row with request, checkpoint, commit/workflow, operationsPath, and redacted error details.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.csv.upload",
+      "route": "POST /api/sources/csv/uploads",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.csv.upload",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "CSV upload requires Idempotency-Key, sends browser file bytes as multipart, commits through the dataset transaction path, returns commitResult and operationsPath evidence, and stores a content-hash Source fingerprint.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.batchFiles.upload",
+      "route": "POST /api/sources/batch-files/uploads",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.batchFiles.upload",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Batch file upload requires Idempotency-Key, sends a manifest plus repeated file parts, commits each browser-provided file under one Source intent, and records commitResults in Source lastCommitRef.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.webhookListeners.create",
+      "route": "POST /api/sources/webhook-listeners",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.webhookListeners.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Webhook listener create requires Idempotency-Key, stores listener URL, dataset target, connector/resource names, and signingSecretRef only; raw signing keys are never accepted or returned.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.webhookListeners.get",
+      "route": "GET /api/sources/webhook-listeners/{source_name}",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.webhookListeners.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Webhook listener get returns safe listener metadata and required headers for inbound integration without exposing signing secret values.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.cdc.debezium.create",
+      "route": "POST /api/sources/cdc/debezium",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.cdc.debezium.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Debezium Source create requires Idempotency-Key, persists stream/topic/consumer group and secretRefs only, ensures the target dataset, and returns Source configFingerprint evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.cdc.debezium.startSync",
+      "route": "POST /api/sources/cdc/debezium/{source_name}/sync/start",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.cdc.debezium.startSync",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Debezium sync start requires Idempotency-Key, can fail closed on expectedConfigFingerprint mismatch, and invokes the stream archive path with operations evidence when events commit.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.media.uploadAndCommit",
+      "route": "POST /api/sources/media/uploads",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.media.uploadAndCommit",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Media source upload requires Idempotency-Key, sends browser file bytes as multipart, wraps media transaction open/upload/commit, returns immutable mediaItemVersionId, and stores safe Source commit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.rest.createConnection",
+      "route": "POST /api/connectors/connections",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.rest.createConnection",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "REST Source create is a product-language wrapper over connector onboarding; it requires Idempotency-Key and keeps REST auth secretRef-only.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.rest.upsertResource",
+      "route": "PUT /api/connectors/connections/{connector_name}/resources/{resource_name}",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.rest.upsertResource",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "REST Source resource upsert wraps connector resource onboarding, requires Idempotency-Key, ensures the target dataset, and returns resource configFingerprint evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.rest.test",
+      "route": "POST /api/connectors/connections/{connector_name}/resources/{resource_name}/test",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.rest.test",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "REST Source test wraps connector testResource and returns schema/sample/error evidence without committing dataset data.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.rest.startSync",
+      "route": "POST /api/connectors/connections/{connector_name}/resources/{resource_name}/sync/start",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.rest.startSync",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "REST Source startSync wraps connector workflow start, requires Idempotency-Key, and preserves workflow input configFingerprint fail-closed evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.workflows.start-connector-sync",
       "route": "POST /api/operations/workflows/connector-sync/start",
       "productArea": "operations-console",
@@ -399,6 +1211,18 @@
       "sdkSurface": "operations.workflows.get",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Workflow status returns durable output/error payload and foundry run linkage.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.reconciliation.list",
+      "route": "GET /api/operations/reconciliation/writebacks",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.reconciliation.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Unresolved action writebacks are available as a tenant-scoped reconciliation queue with status/deadline/remote evidence and redacted payloads.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -578,6 +1402,56 @@
   ],
   "sdkHelpers": [
     {
+      "id": "helpers.adminCapabilityView",
+      "sdkHelper": "adminCapabilityView",
+      "productArea": "operations-console",
+      "operatorEvidence": "Admin capability cards derive browser-action, worker-entrypoint, CLI, runbook, future rendering, approval, checklist, and blocking states from one SDK helper instead of screen-local safety guesses.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.adminOperationsBoard",
+      "sdkHelper": "adminOperationsBoard",
+      "productArea": "operations-console",
+      "operatorEvidence": "Admin operations boards combine admin overview and task-plan truth into browser-runnable controls, operator command rows, evidence rows, required backend surfaces, migration, worker, bootstrap, and future sections without screen-local safety guesses.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.adminReadinessScreen",
+      "sdkHelper": "adminReadinessScreen",
+      "productArea": "operations-console",
+      "operatorEvidence": "Admin overview screens receive grouped API/worker/CLI/runbook/future capability state plus outbox readiness and blocked-operation preflight fields from one SDK screen model.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.adminTaskView",
+      "sdkHelper": "adminTaskView",
+      "productArea": "operations-console",
+      "operatorEvidence": "Admin task cards derive browser-run button state, command visibility, approval, backend-surface requirements, checklist, and disabled reason from one SDK helper instead of per-screen guesses.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.adminTaskPlanScreen",
+      "sdkHelper": "adminTaskPlanScreen",
+      "productArea": "operations-console",
+      "operatorEvidence": "Admin task-plan screens receive grouped browser-runnable, operator-required, future-backend-surface, worker, migration, and bootstrap task views from one SDK screen model.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
       "id": "helpers.actionLockKey",
       "sdkHelper": "actionLockKey",
       "productArea": "frontend-foundation",
@@ -628,6 +1502,36 @@
       "proofClass": "sdk-helper-contract"
     },
     {
+      "id": "helpers.createFoundryLiteOsdkClient",
+      "sdkHelper": "createFoundryLiteOsdkClient",
+      "productArea": "frontend-foundation",
+      "operatorEvidence": "Ontology-style frontend callers use object/action/media resources through one typed facade while still routing through the generated named SDK methods.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.createFoundryLiteOntologyIndex",
+      "sdkHelper": "createFoundryLiteOntologyIndex",
+      "productArea": "frontend-foundation",
+      "operatorEvidence": "Large ontology workspaces merge the generated SDK registry with the live catalog so screens can search object/action types, group actions by target object, and flag dynamic-only or static-only type drift without raw API-name scatter.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.createSessionTokenProvider",
+      "sdkHelper": "createSessionTokenProvider",
+      "productArea": "frontend-foundation",
+      "operatorEvidence": "Session-aware frontend clients resolve a fresh bearer token through one SDK token provider before each request instead of hand-building Authorization headers in screens.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
       "id": "helpers.createRequestId",
       "sdkHelper": "createRequestId",
       "productArea": "frontend-foundation",
@@ -642,6 +1546,36 @@
       "sdkHelper": "expectedObjectVersion",
       "productArea": "frontend-foundation",
       "operatorEvidence": "Action screens read expected object versions from one helper before stale-version protected mutations.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.getActionType",
+      "sdkHelper": "getActionType",
+      "productArea": "frontend-foundation",
+      "operatorEvidence": "Large ontology workspaces can look up generated action metadata from the SDK registry instead of scattering action API name strings through screens.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.getObjectType",
+      "sdkHelper": "getObjectType",
+      "productArea": "frontend-foundation",
+      "operatorEvidence": "Large ontology workspaces can look up generated object metadata from the SDK registry instead of scattering object API name strings through screens.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.groupAdminCapabilities",
+      "sdkHelper": "groupAdminCapabilities",
+      "productArea": "operations-console",
+      "operatorEvidence": "Admin screens group capability rows by backend safety status without reimplementing status buckets in each frontend.",
       "proofTests": [
         "test_sdk_request_contract_covers_frontend_foundation_helpers"
       ],
@@ -678,6 +1612,26 @@
       "proofClass": "sdk-helper-contract"
     },
     {
+      "id": "helpers.pollFoundryLiteOperation",
+      "sdkHelper": "pollFoundryLiteOperation",
+      "productArea": "frontend-foundation",
+      "operatorEvidence": "Long-running operation screens use one bounded polling contract with terminal-state detection and snapshot callbacks instead of unbounded screen-local loops.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.streamFoundryLiteOperationEvents",
+      "sdkHelper": "streamFoundryLiteOperationEvents",
+      "productArea": "frontend-foundation",
+      "operatorEvidence": "Streaming operation screens consume server-sent event frames through one fetch-based SDK helper that preserves token, tenant, role, request-id, abort, and typed event parsing behavior.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
       "id": "helpers.requestContextHeaders",
       "sdkHelper": "requestContextHeaders",
       "productArea": "frontend-foundation",
@@ -708,6 +1662,16 @@
       "route": "POST /api/connectors/webhooks/{connector_name}/{resource_name}",
       "accessClass": "server-to-server-ingest",
       "reason": "Webhook ingest is signed connector ingress and should not be callable from the browser frontend."
+    },
+    {
+      "route": "POST /api/insights/reviews/{review_id}/execute-action",
+      "accessClass": "backward-compatible-alias",
+      "reason": "Legacy approved-action execution route kept for compatibility; new frontend SDK callers use client.insights.reviews.executeApprovedAction(...)."
+    },
+    {
+      "route": "POST /api/sources/webhook-listeners/{source_name}/events",
+      "accessClass": "server-to-server-ingest",
+      "reason": "Source webhook listener event ingest is a signed external-system callback, not a browser frontend SDK control."
     }
   ]
 }

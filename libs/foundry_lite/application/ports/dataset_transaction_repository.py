@@ -361,6 +361,16 @@ class DatasetTransactionRepository(Protocol):
         """Return one tenant-scoped sync run for replay/idempotency recovery."""
         ...
 
+    def sync_run_by_transaction_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        transaction_id: str,
+    ) -> SyncRunRow | None:
+        """Return the sync run that produced one dataset transaction."""
+        ...
+
     def insert_dead_letter_record(self, *, transaction: TransactionContext, record: DeadLetterRecord) -> bool:
         """Persist one tenant-scoped bad input record, returning False for an idempotent duplicate."""
         ...
