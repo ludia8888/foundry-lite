@@ -114,10 +114,15 @@ def validate_ontology_definition(
 def _object_definitions_by_api(definition: YamlObject) -> dict[str, YamlObject]:
     """Return object definitions keyed by API name, rejecting duplicates."""
     object_defs: dict[str, YamlObject] = {}
+    seen_api_names: dict[str, str] = {}
     for item in mapping_sequence(definition, "objectTypes"):
         api_name = required_str(item, "apiName")
-        if api_name in object_defs:
-            raise ValidationFailed("duplicate object apiName", details={"objectType": api_name})
+        _ensure_unique_api_name(
+            api_name,
+            seen_api_names=seen_api_names,
+            message="duplicate object apiName",
+            details_key="objectType",
+        )
         object_defs[api_name] = item
     return object_defs
 
@@ -196,32 +201,65 @@ def _validate_yaml_object_backing(object_def: YamlObject) -> None:
 def _property_definitions_by_api(object_def: YamlObject) -> dict[str, YamlObject]:
     """Return property definitions keyed by API name, rejecting duplicates."""
     property_defs: dict[str, YamlObject] = {}
+    seen_api_names: dict[str, str] = {}
     for prop in mapping_sequence(object_def, "properties"):
         prop_api = required_str(prop, "apiName")
-        if prop_api in property_defs:
-            raise ValidationFailed("duplicate property apiName", details={"property": prop_api})
+        _ensure_unique_api_name(
+            prop_api,
+            seen_api_names=seen_api_names,
+            message="duplicate property apiName",
+            details_key="property",
+        )
         property_defs[prop_api] = prop
     return property_defs
 
 
 def _link_definitions_by_api(definition: YamlObject) -> dict[str, YamlObject]:
     link_defs: dict[str, YamlObject] = {}
+    seen_api_names: dict[str, str] = {}
     for item in mapping_sequence(definition, "linkTypes"):
         api_name = required_str(item, "apiName")
-        if api_name in link_defs:
-            raise ValidationFailed("duplicate link apiName", details={"linkType": api_name})
+        _ensure_unique_api_name(
+            api_name,
+            seen_api_names=seen_api_names,
+            message="duplicate link apiName",
+            details_key="linkType",
+        )
         link_defs[api_name] = item
     return link_defs
 
 
 def _action_definitions_by_api(definition: YamlObject) -> dict[str, YamlObject]:
     action_defs: dict[str, YamlObject] = {}
+    seen_api_names: dict[str, str] = {}
     for item in mapping_sequence(definition, "actionTypes"):
         api_name = required_str(item, "apiName")
-        if api_name in action_defs:
-            raise ValidationFailed("duplicate action apiName", details={"actionType": api_name})
+        _ensure_unique_api_name(
+            api_name,
+            seen_api_names=seen_api_names,
+            message="duplicate action apiName",
+            details_key="actionType",
+        )
         action_defs[api_name] = item
     return action_defs
+
+
+def _ensure_unique_api_name(
+    api_name: str,
+    *,
+    seen_api_names: dict[str, str],
+    message: str,
+    details_key: str,
+) -> None:
+    normalized_api_name = api_name.casefold()
+    existing_api_name = seen_api_names.get(normalized_api_name)
+    if existing_api_name is None:
+        seen_api_names[normalized_api_name] = api_name
+        return
+    details: dict[str, object] = {details_key: api_name}
+    if existing_api_name != api_name:
+        details["conflictsWith"] = existing_api_name
+    raise ValidationFailed(message, details=details)
 
 
 def _validate_yaml_primary_key(

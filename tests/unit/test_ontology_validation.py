@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
@@ -160,6 +160,45 @@ def test_ontology_definition_validation_rejects_duplicate_action_api_name() -> N
         validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
 
     assert exc_info.value.details == {"actionType": "ApproveOrder"}
+
+
+@pytest.mark.parametrize(
+    ("mutate_definition", "message", "details"),
+    [
+        (
+            lambda definition: _append_case_variant_object_type(definition),
+            "duplicate object apiName",
+            {"objectType": "order", "conflictsWith": "Order"},
+        ),
+        (
+            lambda definition: _append_case_variant_property(definition),
+            "duplicate property apiName",
+            {"property": "STATUS", "conflictsWith": "status"},
+        ),
+        (
+            lambda definition: _append_case_variant_link_type(definition),
+            "duplicate link apiName",
+            {"linkType": "ordercustomer", "conflictsWith": "OrderCustomer"},
+        ),
+        (
+            lambda definition: _append_case_variant_action_type(definition),
+            "duplicate action apiName",
+            {"actionType": "approveorder", "conflictsWith": "ApproveOrder"},
+        ),
+    ],
+)
+def test_ontology_definition_validation_rejects_case_insensitive_duplicate_api_names(
+    mutate_definition: Callable[[dict[str, object]], None],
+    message: str,
+    details: dict[str, object],
+) -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    mutate_definition(definition)
+
+    with pytest.raises(ValidationFailed, match=message) as exc_info:
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+    assert exc_info.value.details == details
 
 
 def test_persisted_validation_rejects_uneditable_action_mutation() -> None:
@@ -368,6 +407,51 @@ def _first_action(definition: dict[str, object]) -> dict[str, object]:
     item = action_types[0]
     assert isinstance(item, dict)
     return item
+
+
+def _append_case_variant_object_type(definition: dict[str, object]) -> None:
+    object_types = definition["objectTypes"]
+    assert isinstance(object_types, list)
+    object_types.append(
+        {
+            "apiName": "order",
+            "primaryKey": "orderId",
+            "backing": {"dataset": "clean.orders"},
+            "properties": [{"apiName": "orderId", "type": "string", "column": "order_id"}],
+        }
+    )
+
+
+def _append_case_variant_property(definition: dict[str, object]) -> None:
+    properties = _first_object_type(definition)["properties"]
+    assert isinstance(properties, list)
+    properties.append({"apiName": "STATUS", "type": "string", "column": "source_status"})
+
+
+def _append_case_variant_link_type(definition: dict[str, object]) -> None:
+    definition["linkTypes"] = [
+        {
+            "apiName": "OrderCustomer",
+            "from": "Order",
+            "to": "Order",
+            "backing": {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "customer_id"},
+        },
+        {
+            "apiName": "ordercustomer",
+            "from": "Order",
+            "to": "Order",
+            "backing": {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "customer_id"},
+        },
+    ]
+
+
+def _append_case_variant_action_type(definition: dict[str, object]) -> None:
+    action_types = definition["actionTypes"]
+    assert isinstance(action_types, list)
+    action = _first_action(definition)
+    duplicate = dict(action)
+    duplicate["apiName"] = "approveorder"
+    action_types.append(duplicate)
 
 
 def _set_object_backing_mode(definition: dict[str, object]) -> str:
