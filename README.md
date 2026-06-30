@@ -85,7 +85,7 @@ flowchart LR
 | 영역 | 현재 가능한 것 | 대표 입구 |
 | --- | --- | --- |
 | Dataset | CSV upload, versioned commit, preview, inspect, schema evolution warning/blocking, quality check definition and result history | `foundry.datasets`, FastAPI dataset endpoints, `client.datasets` |
-| Source onboarding | CSV, batch file, signed webhook listener, Debezium-shaped CDC start, media upload, Generic REST source wrapper, credential/agent/network policy read models | `foundry.sources`, FastAPI source endpoints, `client.sources` |
+| Source onboarding | CSV, batch file, signed webhook listener, Debezium-shaped CDC start, media upload, Generic REST source wrapper, scheduled managed sync, credential/agent/network policy read models | `foundry.sources`, FastAPI source endpoints, `client.sources` |
 | Connector onboarding | tenant-scoped REST connection/resource registry, resource test without commit, connector sync workflow start | `foundry.connectors`, FastAPI connector endpoints, `client.connectors` |
 | Transform and lineage | SQL transform registration/run, input/output version lineage, failed transform retry, OpenLineage-compatible evidence | `foundry.transforms`, FastAPI transform endpoints, `client.transforms` |
 | Ontology and objects | ontology YAML validation/catalog, object get/query/link traversal, object sets, active index pointer, shadow reindex proof | `foundry.ontology`, `foundry.objects`, FastAPI ontology/object endpoints |
@@ -93,7 +93,7 @@ flowchart LR
 | Operations | run list/detail, prompt artifact access, DLQ retry/discard, outbox publish start, reconciliation queue/resolve, observability detect, backup/restore preflight and restore-mode gates | `foundry.operations`, FastAPI operations endpoints, `client.operations` |
 | Media and content | media set transaction/upload/commit, processing runs, OCR, ASR, PDF/image/video processors, derivative indexing, content search, visual search, object media binding, retention/legal hold purge proof | `foundry.media`, FastAPI media endpoints, `client.media` |
 | AIP and AI evidence | model gateway ledger, prompt artifacts, context compiler, tool broker, retrieval orchestration, agent runtime, builder validate/run, eval run, release promote, citation/evidence references | `foundry.aip`, FastAPI AIP endpoints, `client.aip` |
-| Frontend SDK | 114 frontend route surface request contracts, 25 SDK helper contracts, 28 idempotency-required mutation surfaces, screen recipes for source, dataset, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
+| Frontend SDK | 116 frontend route surface request contracts, 25 SDK helper contracts, 28 idempotency-required mutation surfaces, screen recipes for source, dataset, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
 
 ## 아직 아닌 것
 
@@ -106,6 +106,7 @@ flowchart LR
 | S62 visual dataset browser/preview grid/version pin/lineage graph UX | Dataset Explorer backend/API/SDK proof는 있지만 이 시각 UX는 future입니다. |
 | S63 evidence panel UI, S63 action execution orchestration | Insight Review queue backend/API/SDK proof는 있지만 완전한 evidence panel과 action orchestration UI는 future입니다. |
 | vendor-specific SAP/NetSuite/OAuth connectors | Generic REST, webhook, CDC proof는 있지만 production vendor-specific packaged connector 범위는 future입니다. |
+| visual scheduler UI and production scheduler operations | Source managed sync schedule API/SDK와 `worker:source-scheduler` proof는 있지만 브라우저에서 데몬을 직접 운영하는 UI와 Kubernetes lease/fencing 운영 패키징은 future입니다. |
 | cloud Vault, full secret rotation, live OIDC discovery lifecycle | local JWT/OIDC and SecretProvider proof는 있지만 cloud-grade lifecycle은 future입니다. |
 | automatic restore smoke, full backup artifact restore executor, recovery dashboard | preflight, restore-mode, validation, approval evidence는 있지만 자동 복구 실행기는 future입니다. |
 | autonomous compensation worker and approval UI | external writeback outcome-unknown, compensation-required, reconciliation proof는 있지만 자율 보상 worker는 future입니다. |
@@ -210,7 +211,7 @@ pnpm --silent quality:sdk-request-contract
 pnpm --silent quality:frontend-foundation
 ```
 
-프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 114개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
+프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 116개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
 
 ## Runtime profile
 
@@ -238,6 +239,7 @@ Worker entrypoint는 아래처럼 분리되어 있습니다.
 
 ```bash
 pnpm worker:stream-archive
+pnpm worker:source-scheduler
 pnpm worker:outbox-publisher
 ```
 

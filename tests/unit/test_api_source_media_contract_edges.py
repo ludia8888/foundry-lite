@@ -1153,12 +1153,14 @@ def test_media_and_source_facades_delegate_remaining_edges() -> None:
 
             return call
 
-    source = SourceWorkspace(FacadeDelegate(), FacadeDelegate())
+    source = SourceWorkspace(FacadeDelegate(), FacadeDelegate(), FacadeDelegate())
     assert source.list_credentials(ctx=ctx)["called"] == "list_credentials"
     assert source.list_agents(ctx=ctx)["called"] == "list_agents"
     assert source.list_network_policies(ctx=ctx)["called"] == "list_network_policies"
     assert source.list_managed_syncs(ctx=ctx)["called"] == "list_managed_syncs"
     assert source.get_managed_sync("sync", ctx=ctx)["called"] == "get_managed_sync"
+    assert source.preview_due_managed_syncs(ctx=ctx)["called"] == "preview_due_managed_syncs"
+    assert source.run_due_managed_syncs(ctx=ctx, max_runs=2)["called"] == "run_due_managed_syncs"
     assert (
         source.upload_batch_files(
             source_name="batch",

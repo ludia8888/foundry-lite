@@ -6,6 +6,7 @@ from typing import BinaryIO
 from foundry_lite.application.services.source_management_service import SourceManagementService
 from foundry_lite.application.services.source_onboarding_config import SourceUpload
 from foundry_lite.application.services.source_onboarding_service import SourceOnboardingService
+from foundry_lite.application.services.source_scheduler_service import SourceSchedulerService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.observability.tracing import trace_public_methods
 
@@ -14,9 +15,15 @@ from foundry_lite.observability.tracing import trace_public_methods
 class SourceWorkspace:
     """Product-facing Source onboarding facade for browser and SDK flows."""
 
-    def __init__(self, onboarding: SourceOnboardingService, management: SourceManagementService) -> None:
+    def __init__(
+        self,
+        onboarding: SourceOnboardingService,
+        management: SourceManagementService,
+        scheduler: SourceSchedulerService,
+    ) -> None:
         self._onboarding = onboarding
         self._management = management
+        self._scheduler = scheduler
 
     def list_templates(self, *, ctx: RequestContext | None = None) -> list[dict[str, object]]:
         return self._management.list_templates(ctx=ctx)
@@ -178,6 +185,22 @@ class SourceWorkspace:
 
     def get_managed_sync_run(self, run_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self._management.get_managed_sync_run(run_id, ctx=ctx)
+
+    def preview_due_managed_syncs(
+        self,
+        *,
+        ctx: RequestContext | None = None,
+        max_runs: int = 50,
+    ) -> dict[str, object]:
+        return self._scheduler.preview_due_managed_syncs(ctx=ctx, max_runs=max_runs)
+
+    def run_due_managed_syncs(
+        self,
+        *,
+        ctx: RequestContext | None = None,
+        max_runs: int = 50,
+    ) -> dict[str, object]:
+        return self._scheduler.run_due_managed_syncs(ctx=ctx, max_runs=max_runs)
 
     def upload_csv(
         self,

@@ -376,7 +376,36 @@ def test_api_source_wizard_explore_and_managed_sync_run(monkeypatch, tmp_path) -
         headers={**base_headers, "Idempotency-Key": "api-source-managed-run-1"},
         json={"triggerType": "manual", "batchLimit": 2},
     )
+    scheduled_sync = client.post(
+        "/api/sources/managed-syncs",
+        headers={**base_headers, "Idempotency-Key": "api-source-scheduled-sync"},
+        json={
+            "syncName": "api_orders_scheduler",
+            "sourceName": "api_customer_erp",
+            "displayName": "API Orders scheduler",
+            "sourceType": "postgres_jdbc",
+            "capability": "batch",
+            "mode": "APPEND",
+            "targetDatasetRef": "raw.api_scheduled_orders",
+            "schedule": {
+                "mode": "interval",
+                "everySeconds": 60,
+                "startAt": "2026-01-01T00:00:00Z",
+                "batchLimit": 1,
+            },
+            "configSummary": {
+                "databaseUrlSecretRef": secret_ref,
+                "tableName": "orders",
+                "checkpointColumn": "id",
+                "batchLimit": 1,
+            },
+        },
+    )
+    due = client.get("/api/sources/scheduler/due?maxRuns=5", headers=base_headers)
+    scheduled_tick = client.post("/api/sources/scheduler/tick", headers=base_headers, json={"maxRuns": 5})
+    repeated_tick = client.post("/api/sources/scheduler/tick", headers=base_headers, json={"maxRuns": 5})
     preview = client.get("/api/datasets/raw/api_managed_orders/preview", headers=base_headers)
+    scheduled_preview = client.get("/api/datasets/raw/api_scheduled_orders/preview", headers=base_headers)
 
     assert templates.status_code == 200
     assert credential.status_code == 200
@@ -392,7 +421,14 @@ def test_api_source_wizard_explore_and_managed_sync_run(monkeypatch, tmp_path) -
     assert started.status_code == 200
     assert started.json()["checkpointEnd"] == {"checkpointColumn": "id", "lastValue": 2}
     assert replay.json()["runId"] == started.json()["runId"]
+    assert scheduled_sync.status_code == 200
+    assert any(row["syncName"] == "api_orders_scheduler" for row in due.json()["due"])
+    assert scheduled_tick.status_code == 200
+    assert scheduled_tick.json()["started"][0]["run"]["triggerType"] == "scheduled"
+    assert repeated_tick.json()["started"] == []
+    assert any(row["reason"] == "slot_already_started" for row in repeated_tick.json()["skipped"])
     assert len(preview.json()) == 2
+    assert len(scheduled_preview.json()) == 1
 
 
 def test_api_ontology_catalog_returns_active_object_action_and_link_metadata(foundry, monkeypatch) -> None:

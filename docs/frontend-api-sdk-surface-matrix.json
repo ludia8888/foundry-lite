@@ -1051,6 +1051,30 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "sources.scheduler.previewDue",
+      "route": "GET /api/sources/scheduler/due",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.scheduler.previewDue",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Scheduler due preview evaluates active managed sync schedules without starting runs and returns due/skip reasons, slot idempotency keys, next due timestamps, and maxRuns evidence for Source Wizard scheduling controls.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.scheduler.tick",
+      "route": "POST /api/sources/scheduler/tick",
+      "productArea": "source-wizard",
+      "sdkSurface": "sources.scheduler.tick",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Scheduler tick evaluates active managed sync schedules, reconciles terminal workflow-backed source runs, starts due scheduled runs through the managed sync boundary, and returns started/skipped evidence for daemon or operator execution.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "sources.csv.upload",
       "route": "POST /api/sources/csv/uploads",
       "productArea": "source-onboarding",

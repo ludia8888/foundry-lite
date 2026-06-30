@@ -61,7 +61,7 @@ SDK helper, 파일을 봐야 하는지 남긴다.
 | Operations | run list/detail, AI prompt artifact access, admin overview, lineage get, transform retry, index replay, bounded outbox publish, outbox DLQ retry, Record DLQ controls |
 | Platform Ops | observability detect, backup/restore, reconciliation, workflows, Iceberg maintenance `planReadOnly`/`plan` |
 | Connectors | `client.connectors.connections.create/list/get/update(...)`, `client.connectors.resources.upsert/test/startSync(...)` |
-| Sources | `client.sources.list/get(...)`, `client.sources.templates.list(...)`, `client.sources.credentials.create/list/get(...)`, `client.sources.agents.register/list/heartbeat(...)`, `client.sources.networkPolicies.create/list(...)`, `client.sources.exploration.run(...)`, `client.sources.managedSyncs.create/list/get/startRun/listRuns/getRun(...)`, `client.sources.csv.upload(...)`, `client.sources.batchFiles.upload(...)`, `client.sources.webhookListeners.create/get(...)`, `client.sources.cdc.debezium.create/startSync(...)`, `client.sources.media.uploadAndCommit(...)`, `client.sources.rest.createConnection/upsertResource/test/startSync(...)` |
+| Sources | `client.sources.list/get(...)`, `client.sources.templates.list(...)`, `client.sources.credentials.create/list/get(...)`, `client.sources.agents.register/list/heartbeat(...)`, `client.sources.networkPolicies.create/list(...)`, `client.sources.exploration.run(...)`, `client.sources.managedSyncs.create/list/get/startRun/listRuns/getRun(...)`, `client.sources.scheduler.previewDue/tick(...)`, `client.sources.csv.upload(...)`, `client.sources.batchFiles.upload(...)`, `client.sources.webhookListeners.create/get(...)`, `client.sources.cdc.debezium.create/startSync(...)`, `client.sources.media.uploadAndCommit(...)`, `client.sources.rest.createConnection/upsertResource/test/startSync(...)` |
 | Insights | `client.insights.reviews.list/create/get/assign/decide(...)` |
 | AIP | `client.aip.builder.validate(...)`, `client.aip.builder.run(...)`, `client.aip.agent.run(...)` |
 | Safety Helpers | `createFoundryLiteClient(...)`, `createSessionTokenProvider(...)`, `createRequestId(...)`, `requestContextHeaders(...)`, `normalizeFoundryLiteError(...)`, `isRetryableFoundryLiteError(...)`, `retryWithBackoff(...)`, `pollFoundryLiteOperation(...)`, `streamFoundryLiteOperationEvents(...)`, `collectCursorPages(...)`, `createInFlightActionLock()`, `createFoundryLiteOntologyIndex(...)`, `adminOperationsBoard(...)`, `getObjectType(...)`, `getActionType(...)`, `actionLockKey(...)`, `idempotencyKey(...)`, `expectedObjectVersion(...)`, `classifyFoundryLiteError(...)` |
@@ -145,7 +145,7 @@ route switch from SDK state instead of hard-coding the Data/Ontology/Operations/
 
 `client.sources` is the product-facing "first data source" surface. It gives one screen language for Source Wizard
 templates, credential vault references, customer-network agents, network policies, source exploration, managed sync
-runs, browser CSV upload, browser batch-file upload, inbound webhook listeners, Debezium CDC source setup, media
+runs, scheduled managed sync due preview/tick, browser CSV upload, browser batch-file upload, inbound webhook listeners, Debezium CDC source setup, media
 upload/commit, and REST source wrappers. Existing `client.connectors` and `client.media` remain available for
 lower-level callers, but new frontend onboarding screens should start with `client.sources` and the source recipes.
 
@@ -267,7 +267,7 @@ The recipe phases are `select_kind`, `configure_source`, `test_source`, `upload_
 uploads commit dataset versions through the dataset transaction path; media upload commits immutable media versions and
 returns the serving-truth `mediaItemVersionId`; Debezium starts a bounded CDC sync with fingerprint fail-closed
 behavior; REST source wrappers call the Generic REST connector onboarding surface without forcing screen code to use
-connector language first. Remote directory crawling, scheduler UI, managed Debezium Connect operations, cloud secret
+connector language first. Source schedule evaluation/tick is available through API/SDK and `worker:source-scheduler`; remote directory crawling, visual scheduler UI, managed Debezium Connect operations, cloud secret
 manager, OAuth authorization flow, and SAP/NetSuite packaged source wizards remain future scope.
 
 ### Connector onboarding
@@ -330,8 +330,9 @@ Connector auth is secretRef-only. SDK request types expose `tokenSecretRef` and 
 raw `headerValue` are rejected before registry persistence. `testResource` reads the external source and returns
 schema/sample/error evidence without dataset commit. `startSync` starts the existing `ConnectorSyncWorkflow`, records
 `datasetRef`, `connectorName`, `resourceName`, `syncName`, and `configFingerprint`, and the activity fails closed if
-the saved registry fingerprint changed after workflow start. SAP/NetSuite adapter packaging, OAuth authorization flow,
-recurring scheduler, cloud/Vault secret manager and secret rotation, and CDC/Debezium onboarding remain future scope.
+the saved registry fingerprint changed after workflow start. Source managed syncs can now be evaluated and ticked by
+the Source scheduler API/SDK/worker; SAP/NetSuite adapter packaging, OAuth authorization flow, connector-specific visual
+scheduler UI, cloud/Vault secret manager and secret rotation, and CDC/Debezium onboarding remain future scope.
 
 ### Session-aware client
 
@@ -1611,7 +1612,7 @@ browser actions.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 114 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 116 frontend route surfaces
 -> browser SDK helper-contract proof for 25 frontend foundation helpers
 -> SDK TypeScript typecheck for package entrypoints, generated types, optional React helpers, and screen recipes
 -> `@foundry-lite/sdk/screen-recipes` importable recipe builders for core product screens

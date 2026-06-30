@@ -110,7 +110,11 @@ class FoundryLite:
         self.insights = InsightReviewWorkspace(services.insight_review)
         self.media = MediaWorkspace(services.media)
         self.connectors = ConnectorWorkspace(services.connector_onboarding)
-        self.sources = SourceWorkspace(services.source_onboarding, services.source_management)
+        self.sources = SourceWorkspace(
+            services.source_onboarding,
+            services.source_management,
+            services.source_scheduler,
+        )
         self.erasure = ErasureGateway(services.erasure)
         self.operations = OperationsConsole(
             services.action,
