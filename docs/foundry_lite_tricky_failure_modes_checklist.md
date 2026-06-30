@@ -1124,7 +1124,7 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 ## D. Ontology / Schema / SDK
 
 - [ ] D1. draft import partial failure가 rollback된다.
-- [ ] D2. apiName case-insensitive duplicate를 검증한다.
+- [x] D2. apiName case-insensitive duplicate를 검증한다. (`test_ontology_definition_validation_rejects_case_insensitive_duplicate_api_names`)
 - [ ] D3. active ontology row direct update가 불가능하다.
 - [ ] D4. property type cast가 precision loss를 만들지 않는다.
 - [ ] D5. primaryKey nullable=false와 actual data health check가 연결된다.
