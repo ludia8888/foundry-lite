@@ -598,6 +598,12 @@ class SourceManagedSyncRunStartRequest(BaseModel):
     batch_limit: int | None = Field(default=None, alias="batchLimit")
 
 
+class SourceSchedulerTickRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    max_runs: int = Field(default=50, ge=1, le=500, alias="maxRuns")
+
+
 class SourceBatchFileManifestItem(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -1884,6 +1890,25 @@ def list_source_managed_sync_runs(request: Request, sync_name: str) -> list[Json
 def get_source_managed_sync_run(request: Request, run_id: str) -> JsonObject:
     try:
         return foundry.sources.get_managed_sync_run(run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/sources/scheduler/due")
+def preview_source_scheduler_due(
+    request: Request,
+    max_runs: int = Query(default=50, ge=1, le=500, alias="maxRuns"),
+) -> JsonObject:
+    try:
+        return foundry.sources.preview_due_managed_syncs(ctx=_ctx(request), max_runs=max_runs)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/sources/scheduler/tick")
+def run_source_scheduler_tick(request: Request, payload: SourceSchedulerTickRequest) -> JsonObject:
+    try:
+        return foundry.sources.run_due_managed_syncs(ctx=_ctx(request), max_runs=payload.max_runs)
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

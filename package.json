@@ -25,6 +25,7 @@
     "fault:local:stress": "PYTHONPATH=.:libs:apps/worker:apps/cli:apps/api uv run python scripts/operations/run_local_fault_lab.py --level stress",
     "worker:stream-archive": "PYTHONPATH=.:libs:apps/worker:apps/cli:apps/api uv run python -m foundry_lite_worker.stream_archive",
     "worker:outbox-publisher": "PYTHONPATH=.:libs:apps/worker:apps/cli:apps/api uv run python -m foundry_lite_worker.outbox_publisher",
+    "worker:source-scheduler": "PYTHONPATH=.:libs:apps/worker:apps/cli:apps/api uv run python -m foundry_lite_worker.source_scheduler",
     "quality:complexity": "uv run radon cc libs apps scripts -s -a && uv run xenon --max-absolute B --max-modules B --max-average A libs apps scripts",
     "quality:architecture": "uv run python scripts/quality/check_dependency_graph.py && uv run tach check --dependencies",
     "quality:infra-boundaries": "uv run python scripts/quality/check_infra_import_boundary.py --max-application-imports 0 && uv run python scripts/quality/check_service_dependencies.py && uv run python scripts/quality/check_service_call_graph.py --max-depth 7 --max-fan-out 10",

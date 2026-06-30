@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -109,6 +110,70 @@ def test_source_wizard_explores_customer_erp_and_runs_managed_append_sync(tmp_pa
     assert len(foundry.datasets.preview("raw.orders", ctx=ctx)) == 2
     assert foundry.sources.list_managed_sync_runs("orders_incremental", ctx=ctx)[0]["runId"] == first_run["runId"]
     assert foundry.sources.get_managed_sync_run(cast(str, first_run["runId"]), ctx=ctx)["status"] == "succeeded"
+
+
+def test_source_scheduler_interval_starts_due_managed_sync_once_per_slot(tmp_path: Path) -> None:
+    source_db = _sqlite_customer_erp(tmp_path)
+    foundry = _foundry(tmp_path)
+    ctx = demo_admin_context()
+    secret_ref = _create_source_database_secret(foundry, source_db, ctx)
+    foundry.sources.create_managed_sync(
+        sync_name="orders_hourly",
+        source_name="customer_erp",
+        display_name="Orders hourly",
+        source_type="postgres_jdbc",
+        capability="batch",
+        mode="APPEND",
+        target_dataset_ref="raw.scheduled_orders",
+        schedule={"mode": "interval", "everySeconds": 3600, "startAt": "2020-01-01T00:00:00Z", "batchLimit": 1},
+        config_summary={
+            "databaseUrlSecretRef": secret_ref["name"],
+            "tableName": "orders",
+            "checkpointColumn": "id",
+        },
+        idempotency_key="source-sync-scheduled-orders",
+        ctx=ctx,
+    )
+
+    preview = foundry.sources.preview_due_managed_syncs(ctx=ctx)
+    first_tick = foundry.sources.run_due_managed_syncs(ctx=ctx)
+    second_tick = foundry.sources.run_due_managed_syncs(ctx=ctx)
+
+    assert len(cast(list[object], preview["due"])) == 1
+    assert len(cast(list[object], first_tick["started"])) == 1
+    assert len(cast(list[object], second_tick["started"])) == 0
+    assert cast(dict[str, object], second_tick["skipped"][0])["reason"] == "slot_already_started"
+    assert foundry.datasets.preview("raw.scheduled_orders", ctx=ctx)[0]["id"] == 1
+    assert foundry.sources.list_managed_sync_runs("orders_hourly", ctx=ctx)[0]["triggerType"] == "scheduled"
+
+
+def test_source_scheduler_cron_schedule_decision_uses_minute_slot(tmp_path: Path) -> None:
+    source_db = _sqlite_customer_erp(tmp_path)
+    foundry = _foundry(tmp_path)
+    ctx = demo_admin_context()
+    secret_ref = _create_source_database_secret(foundry, source_db, ctx)
+    foundry.sources.create_managed_sync(
+        sync_name="orders_cron",
+        source_name="customer_erp",
+        display_name="Orders cron",
+        source_type="postgres_jdbc",
+        capability="batch",
+        mode="APPEND",
+        target_dataset_ref="raw.cron_orders",
+        schedule={"mode": "cron", "cron": "* * * * *", "startAt": "2020-01-01T00:00:00Z"},
+        config_summary={"databaseUrlSecretRef": secret_ref["name"], "tableName": "orders"},
+        idempotency_key="source-sync-cron-orders",
+        ctx=ctx,
+    )
+
+    expected_before = _minute_slot()
+    tick = foundry.sources.run_due_managed_syncs(ctx=ctx)
+    expected_after = _minute_slot()
+
+    started = cast(list[dict[str, object]], tick["started"])
+    decision = cast(dict[str, object], started[0]["decision"])
+    assert decision["slotStart"] in {expected_before, expected_after}
+    assert cast(dict[str, object], started[0]["run"])["triggerType"] == "scheduled"
 
 
 def test_source_csv_upload_commits_dataset_and_registers_source(tmp_path: Path) -> None:
@@ -228,6 +293,23 @@ def test_source_media_upload_wraps_media_transaction_commit(tmp_path: Path) -> N
 
 def _foundry(tmp_path: Path) -> FoundryLite:
     return FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+
+
+def _create_source_database_secret(foundry: FoundryLite, source_db: Path, ctx) -> dict[str, object]:
+    credential = foundry.sources.create_credential(
+        credential_name=f"erp_db_{source_db.stem}",
+        display_name="Customer ERP DB",
+        kind="postgres_jdbc",
+        auth_scheme="database_url",
+        secret_value=f"sqlite:///{source_db}",
+        idempotency_key=f"source-credential-{source_db.stem}",
+        ctx=ctx,
+    )
+    return cast(dict[str, object], credential["secretRef"])
+
+
+def _minute_slot() -> str:
+    return datetime.now(UTC).replace(second=0, microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _sqlite_customer_erp(tmp_path: Path) -> Path:

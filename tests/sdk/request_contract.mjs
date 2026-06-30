@@ -1480,6 +1480,15 @@ await expectSdkCall("sources.managedSyncs.listRuns", () => client.sources.manage
 await expectSdkCall("sources.managedSyncs.getRun", () => client.sources.managedSyncs.getRun("run/source/1"), {
   path: "/api/sources/managed-sync-runs/run%2Fsource%2F1",
 });
+await expectSdkCall("sources.scheduler.previewDue", () => client.sources.scheduler.previewDue({ maxRuns: 25 }), {
+  path: "/api/sources/scheduler/due?maxRuns=25",
+});
+await expectSdkCall("sources.scheduler.tick", () => client.sources.scheduler.tick({ maxRuns: 25 }), {
+  path: "/api/sources/scheduler/tick",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: { maxRuns: 25 },
+});
 await expectSdkCall(
   "sources.csv.upload",
   () =>

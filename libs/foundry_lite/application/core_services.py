@@ -38,6 +38,7 @@ from foundry_lite.application.services.runtime_bundle import (
 )
 from foundry_lite.application.services.source_management_service import SourceManagementService
 from foundry_lite.application.services.source_onboarding_service import SourceOnboardingService
+from foundry_lite.application.services.source_scheduler_service import SourceSchedulerService
 from foundry_lite.application.services.transform_service import TransformService
 
 __all__ = [
@@ -72,6 +73,7 @@ __all__ = [
     "RuntimeService",
     "SourceManagementService",
     "SourceOnboardingService",
+    "SourceSchedulerService",
     "TransformService",
     "WorkflowOrchestrationService",
 ]
@@ -85,6 +87,7 @@ class _SharedCoreServices(TypedDict):
     media: MediaServices
     object_store: ObjectServices
     source_management: SourceManagementService
+    source_scheduler: SourceSchedulerService
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,7 @@ class CoreServices:
     builder_runtime: BuilderRuntimeService
     connector_onboarding: ConnectorOnboardingService
     source_management: SourceManagementService
+    source_scheduler: SourceSchedulerService
     source_onboarding: SourceOnboardingService
     context_compiler: ContextCompilerService
     dataset: DatasetServices
@@ -150,6 +154,7 @@ def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices
         "media": MediaServices.create(dependencies),
         "object_store": ObjectServices.create(dependencies),
         "source_management": build_service(SourceManagementService, dependencies),
+        "source_scheduler": build_service(SourceSchedulerService, dependencies),
     }
 
 
@@ -167,6 +172,7 @@ def _compose_core_services(
         builder_runtime=build_service(BuilderRuntimeService, dependencies),
         connector_onboarding=build_service(ConnectorOnboardingService, dependencies),
         source_management=shared["source_management"],
+        source_scheduler=shared["source_scheduler"],
         source_onboarding=build_service(SourceOnboardingService, dependencies),
         context_compiler=build_service(ContextCompilerService, dependencies),
         dataset=shared["dataset"],
@@ -210,6 +216,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.builder_runtime,
         services.connector_onboarding,
         services.source_management,
+        services.source_scheduler,
         services.source_onboarding,
         services.context_compiler,
         *services.dataset.items(),
