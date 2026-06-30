@@ -222,12 +222,14 @@
 - [x] **Trigger:** multipart upload 중 network timeout 또는 process crash.
 - [x] **Failure:** Parquet footer가 깨지거나 일부 row만 존재한다.
 - [x] **Guardrail:** upload complete 후 byte_size/content_hash를 재검증한다.
-- [ ] **Guardrail:** Parquet footer validation을 수행한다. _(범위 결정: storage 계약은 byte-fidelity(size+content_hash)이며 truncation/손상은 매 read hash 검증으로 잡힌다. parquet 구조(footer/magic bytes) 유효성은 compute/read 레이어(DuckDB `read_parquet`) 소관 — S3 storage ratchet 밖, 별도 compute hardening으로 이관. 조용히 건너뛴 것이 아니라 명시적 deferral.)_
+- [x] **Guardrail:** S3 storage boundary에서 Parquet footer를 직접 열어 읽고 manifest row_count와 실제 parquet metadata row count를 대조한다. 깨진 footer나 row_count mismatch는 `commit_staged_file/validation` 비재시도 AdapterError로 fail closed한다.
 - [x] **Guardrail:** writer row_count만 믿지 않고 S3 read-back byte_size/content_hash를 검증한다 (commit뿐 아니라 매 read마다 `_verify_local_copy`).
 - [x] **Guardrail:** 진짜 multipart 중단 시 `list_objects_v2`에 안 잡히는 orphan part를 `_abort_multipart_uploads`로 정리한다.
 - [x] **Regression Test:** `test_s3_partial_multipart_upload_never_becomes_committed_version`
 - [x] **Regression Test:** `test_s3_real_multipart_upload_failure_aborts_orphaned_parts`
 - [x] **Regression Test:** `test_s3_read_path_detects_truncated_data_object`
+- [x] **Regression Test:** `test_s3_commit_rejects_unreadable_parquet_footer_and_cleans_up`
+- [x] **Regression Test:** `test_s3_commit_rejects_parquet_row_count_mismatch_and_cleans_up`
 - [x] **Regression Test:** `test_s3_retry_after_storage_timeout_does_not_duplicate_version`
 - [x] **Regression Test (엔진 경유 운영 노출):** `test_s3_real_multipart_interrupt_during_upload_is_visible_in_operations`
 
