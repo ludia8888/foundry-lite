@@ -15,6 +15,8 @@ from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckResultStatusCountRow,
     DatasetCheckResultTypeStatusCountRow,
     DatasetCheckRow,
+    DatasetQualityContractVersionRecord,
+    DatasetQualityContractVersionRow,
     DatasetQualityRepository,
     DatasetSchemaRecord,
     DatasetSchemaRow,
@@ -37,12 +39,15 @@ class QualityHarness(Protocol):
 
     def check_result_rows(self) -> list[dict[str, Any]]: ...
 
+    def contract_version_rows(self) -> list[dict[str, Any]]: ...
+
 
 @dataclass
 class FakeDatasetQualityRepository:
     schemas: list[dict[str, Any]] = field(default_factory=list)
     checks: list[dict[str, Any]] = field(default_factory=list)
     check_results: list[dict[str, Any]] = field(default_factory=list)
+    contract_versions: list[dict[str, Any]] = field(default_factory=list)
 
     def schema_by_hash(
         self,
@@ -61,6 +66,13 @@ class FakeDatasetQualityRepository:
         del transaction
         versions = [row["version"] for row in self.schemas if row["dataset_id"] == dataset_id]
         return max(versions) if versions else None
+
+    def latest_schema(self, *, transaction: Any, dataset_id: str) -> DatasetSchemaRow | None:
+        del transaction
+        rows = [row for row in self.schemas if row["dataset_id"] == dataset_id]
+        if not rows:
+            return None
+        return cast(DatasetSchemaRow, dict(sorted(rows, key=lambda item: item["version"], reverse=True)[0]))
 
     def insert_schema(self, *, transaction: Any, record: DatasetSchemaRecord) -> None:
         del transaction
@@ -164,6 +176,7 @@ class FakeDatasetQualityRepository:
                 "id": record.check_result_id,
                 "tenant_id": record.tenant_id,
                 "check_id": record.check_id,
+                "data_contract_version_id": record.data_contract_version_id,
                 "run_id": record.run_id,
                 "transaction_id": record.transaction_id,
                 "checked_manifest_hash": record.checked_manifest_hash,
@@ -174,6 +187,113 @@ class FakeDatasetQualityRepository:
                 "created_at": record.created_at,
             }
         )
+
+    def latest_contract_version_number(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        contract_key: str,
+    ) -> int | None:
+        del transaction
+        versions = [
+            row["version"] for row in self.contract_versions if _same_contract(row, tenant_id, dataset_id, contract_key)
+        ]
+        return max(versions) if versions else None
+
+    def insert_contract_version(
+        self,
+        *,
+        transaction: Any,
+        record: DatasetQualityContractVersionRecord,
+    ) -> None:
+        del transaction
+        self.contract_versions.append(
+            {
+                "id": record.contract_version_id,
+                "tenant_id": record.tenant_id,
+                "dataset_id": record.dataset_id,
+                "contract_key": record.contract_key,
+                "version": record.version,
+                "status": record.status,
+                "owner_user_id": record.owner_user_id,
+                "description": record.description,
+                "checks_snapshot": [dict(item) for item in record.checks_snapshot],
+                "schema_version_id": record.schema_version_id,
+                "schema_version": record.schema_version,
+                "created_at": record.created_at,
+                "activated_at": record.activated_at,
+            }
+        )
+
+    def contract_version_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        contract_version_id: str,
+    ) -> DatasetQualityContractVersionRow | None:
+        del transaction
+        for row in self.contract_versions:
+            if row["tenant_id"] == tenant_id and row["dataset_id"] == dataset_id and row["id"] == contract_version_id:
+                return cast(DatasetQualityContractVersionRow, dict(row))
+        return None
+
+    def contract_versions_for_dataset(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        limit: int,
+    ) -> list[DatasetQualityContractVersionRow]:
+        del transaction
+        rows = [
+            row for row in self.contract_versions if row["tenant_id"] == tenant_id and row["dataset_id"] == dataset_id
+        ]
+        ordered = sorted(rows, key=lambda item: (item["contract_key"], -int(item["version"])))
+        return [cast(DatasetQualityContractVersionRow, dict(row)) for row in ordered[:limit]]
+
+    def active_contract_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        contract_key: str,
+    ) -> DatasetQualityContractVersionRow | None:
+        del transaction
+        rows = [
+            row
+            for row in self.contract_versions
+            if _same_contract(row, tenant_id, dataset_id, contract_key) and row["status"] == "ACTIVE"
+        ]
+        if not rows:
+            return None
+        return cast(DatasetQualityContractVersionRow, dict(sorted(rows, key=lambda item: item["version"])[-1]))
+
+    def activate_contract_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        contract_key: str,
+        contract_version_id: str,
+        activated_at: str,
+    ) -> bool:
+        del transaction
+        matched = False
+        for row in self.contract_versions:
+            if _same_contract(row, tenant_id, dataset_id, contract_key) and row["status"] == "ACTIVE":
+                row["status"] = "SUPERSEDED"
+            if _same_contract(row, tenant_id, dataset_id, contract_key) and row["id"] == contract_version_id:
+                row["status"] = "ACTIVE"
+                row["activated_at"] = activated_at
+                matched = True
+        return matched
 
     def check_results_for_transaction(
         self,
@@ -268,6 +388,9 @@ class FakeDatasetQualityHarness:
     def check_result_rows(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self.repository.check_results]
 
+    def contract_version_rows(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.repository.contract_versions]
+
 
 @dataclass
 class SqlAlchemyDatasetQualityHarness:
@@ -305,6 +428,10 @@ class SqlAlchemyDatasetQualityHarness:
         with self.engine.begin() as conn:
             return [dict(row) for row in conn.execute(select(db.dataset_check_results)).mappings().all()]
 
+    def contract_version_rows(self) -> list[dict[str, Any]]:
+        with self.engine.begin() as conn:
+            return [dict(row) for row in conn.execute(select(db.dataset_quality_contract_versions)).mappings().all()]
+
 
 @pytest.fixture(params=["fake", "sqlalchemy", "postgres"])
 def harness(
@@ -331,6 +458,10 @@ def _schema_record(version: int = 1, schema_hash: str = "hash-a") -> DatasetSche
         schema_hash=schema_hash,
         created_at="2026-06-10T00:00:00Z",
     )
+
+
+def _same_contract(row: dict[str, Any], tenant_id: str, dataset_id: str, contract_key: str) -> bool:
+    return row["tenant_id"] == tenant_id and row["dataset_id"] == dataset_id and row["contract_key"] == contract_key
 
 
 def _check_record(check_id: str = "check_a", name: str = '{"type":"unique"}') -> DatasetCheckRecord:
@@ -369,6 +500,40 @@ def _check_result_record(
         status=status,
         details=result_details,
         created_at=created_at,
+    )
+
+
+def _contract_version_record(
+    contract_version_id: str = "dqcv_a",
+    *,
+    version: int = 1,
+    status: str = "DRAFT",
+    tenant_id: str = "tenant-test",
+    dataset_id: str = "ds_test",
+    contract_key: str = "default",
+) -> DatasetQualityContractVersionRecord:
+    return DatasetQualityContractVersionRecord(
+        contract_version_id=contract_version_id,
+        tenant_id=tenant_id,
+        dataset_id=dataset_id,
+        contract_key=contract_key,
+        version=version,
+        status=status,
+        owner_user_id="owner-a",
+        description="orders contract",
+        checks_snapshot=[
+            {
+                "checkId": "check_a",
+                "name": "unique-id",
+                "checkType": "unique",
+                "config": {"type": "unique", "column": "id"},
+                "severity": "error",
+                "enabled": True,
+            }
+        ],
+        schema_version_id="schema_v1",
+        schema_version=1,
+        created_at="2026-06-10T00:00:00Z",
     )
 
 
@@ -414,6 +579,16 @@ def test_latest_schema_version_returns_highest(harness: QualityHarness) -> None:
         harness.repository.insert_schema(transaction=txn, record=_schema_record(version=2, schema_hash="h2"))
         latest = harness.repository.latest_schema_version(transaction=txn, dataset_id="ds_test")
     assert latest == 3
+
+
+def test_latest_schema_returns_highest_row(harness: QualityHarness) -> None:
+    with harness.transaction() as txn:
+        harness.repository.insert_schema(transaction=txn, record=_schema_record(version=1, schema_hash="h1"))
+        harness.repository.insert_schema(transaction=txn, record=_schema_record(version=3, schema_hash="h3"))
+        latest = harness.repository.latest_schema(transaction=txn, dataset_id="ds_test")
+    assert latest is not None
+    assert latest["id"] == "schema_v3"
+    assert latest["version"] == 3
 
 
 def test_check_by_name_returns_none_when_absent(harness: QualityHarness) -> None:
@@ -620,12 +795,96 @@ def test_insert_check_result_persists(harness: QualityHarness) -> None:
     assert len(rows) == 1
     assert rows[0]["status"] == "PASS"
     assert rows[0]["check_id"] == "check_a"
+    assert rows[0]["data_contract_version_id"] is None
     assert rows[0]["checked_manifest_hash"] == "candidate_hash_v1"
     assert rows[0]["validated_against_schema_version_id"] == "schema_v1"
     assert rows[0]["validated_against_schema_version"] == 1
     assert rows[0]["details"] == {"status": "passed", "contract_status": "PASS"}
     assert len(found) == 1
     assert found[0]["id"] == "cr_a"
+
+
+def test_contract_versions_round_trip_and_activate_one_winner(harness: QualityHarness) -> None:
+    first = _contract_version_record("dqcv_first", version=1)
+    second = _contract_version_record("dqcv_second", version=2)
+
+    with harness.transaction() as txn:
+        harness.repository.insert_contract_version(transaction=txn, record=first)
+        harness.repository.insert_contract_version(transaction=txn, record=second)
+        latest_version = harness.repository.latest_contract_version_number(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+            contract_key="default",
+        )
+        first_activated = harness.repository.activate_contract_version(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+            contract_key="default",
+            contract_version_id="dqcv_first",
+            activated_at="2026-06-10T01:00:00Z",
+        )
+        second_activated = harness.repository.activate_contract_version(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+            contract_key="default",
+            contract_version_id="dqcv_second",
+            activated_at="2026-06-10T02:00:00Z",
+        )
+        active = harness.repository.active_contract_version(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+            contract_key="default",
+        )
+        listed = harness.repository.contract_versions_for_dataset(
+            transaction=txn,
+            tenant_id="tenant-test",
+            dataset_id="ds_test",
+            limit=10,
+        )
+
+    rows = {row["id"]: row for row in harness.contract_version_rows()}
+    assert latest_version == 2
+    assert first_activated and second_activated
+    assert active is not None and active["id"] == "dqcv_second"
+    assert [row["id"] for row in listed] == ["dqcv_second", "dqcv_first"]
+    assert rows["dqcv_first"]["status"] == "SUPERSEDED"
+    assert rows["dqcv_second"]["status"] == "ACTIVE"
+    assert rows["dqcv_second"]["checks_snapshot"][0]["config"] == {"type": "unique", "column": "id"}
+
+
+def test_check_result_can_reference_contract_version(harness: QualityHarness) -> None:
+    record = _check_result_record()
+    with harness.transaction() as txn:
+        harness.repository.insert_check(transaction=txn, record=_check_record())
+        harness.repository.insert_contract_version(transaction=txn, record=_contract_version_record())
+        harness.repository.insert_check_result(
+            transaction=txn,
+            record=DatasetCheckResultRecord(
+                check_result_id=record.check_result_id,
+                tenant_id=record.tenant_id,
+                check_id=record.check_id,
+                run_id=record.run_id,
+                transaction_id=record.transaction_id,
+                checked_manifest_hash=record.checked_manifest_hash,
+                validated_against_schema_version_id=record.validated_against_schema_version_id,
+                validated_against_schema_version=record.validated_against_schema_version,
+                status=record.status,
+                details=record.details,
+                created_at=record.created_at,
+                data_contract_version_id="dqcv_a",
+            ),
+        )
+        found = harness.repository.check_results_for_transaction(
+            transaction=txn,
+            tenant_id="tenant-test",
+            transaction_id="dstx_test",
+        )
+
+    assert found[0]["data_contract_version_id"] == "dqcv_a"
 
 
 def test_check_results_for_transaction_is_tenant_scoped(harness: QualityHarness) -> None:

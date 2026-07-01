@@ -233,7 +233,7 @@ def _candidate_property_changes(
     if optional_bool(candidate_property, "deprecated", False):
         changes.append(warning_property_deprecated(object_api_name, api_name))
     if _property_requires_reindex(current_property, candidate_property):
-        changes.append(warning_property_reindex(object_api_name, api_name))
+        changes.append(warning_property_reindex(object_api_name, api_name, current_property, candidate_property))
     return changes
 
 

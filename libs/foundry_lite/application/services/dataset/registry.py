@@ -1,3 +1,5 @@
+"""Application service helpers for registry workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

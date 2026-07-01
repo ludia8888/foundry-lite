@@ -1,3 +1,5 @@
+"""Application port contract for content retrieval."""
+
 from __future__ import annotations
 
 from typing import Protocol

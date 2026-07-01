@@ -1,3 +1,5 @@
+"""SQLAlchemy repository adapter for action repository persistence."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

@@ -2,27 +2,27 @@ from __future__ import annotations
 
 import pytest
 from foundry_lite.application.ports.action_repository import ActionRunRow, ActionWritebackRecord
-from foundry_lite.application.services.action_reconciliation import (
-    _already_reconciled_result,
-    _is_resolvable_writeback,
-    _queue_item,
-    _queue_statuses,
-    _reconciled_result,
-    _reconciled_writeback_response,
-    _validate_remote_success,
+from foundry_lite.application.services.action_reconciliation_helpers import (
+    already_reconciled_result,
+    is_resolvable_writeback,
+    queue_item,
+    queue_statuses,
+    reconciled_result,
+    reconciled_writeback_response,
+    validate_remote_success,
 )
 from foundry_lite.domain.errors import ValidationFailed
 
 
 def test_validate_remote_success_rejects_unresolved_remote_outcomes() -> None:
     with pytest.raises(ValidationFailed, match="only remote success"):
-        _validate_remote_success("failed", "crm-1")
+        validate_remote_success("failed", "crm-1")
     with pytest.raises(ValidationFailed, match="remote resource id is required"):
-        _validate_remote_success("succeeded", "")
+        validate_remote_success("succeeded", "")
 
 
 def test_reconciled_writeback_response_preserves_vendor_evidence() -> None:
-    response = _reconciled_writeback_response(
+    response = reconciled_writeback_response(
         _writeback(response={"vendorTraceId": "trace-1", "status_code": 202}),
         "succeeded",
         "remote-1",
@@ -41,7 +41,7 @@ def test_reconciled_writeback_response_preserves_vendor_evidence() -> None:
 
 
 def test_reconciliation_results_include_mutation_and_idempotent_replay_evidence() -> None:
-    reconciled = _reconciled_result(
+    reconciled = reconciled_result(
         "run-1",
         "writeback-1",
         "succeeded",
@@ -54,7 +54,7 @@ def test_reconciliation_results_include_mutation_and_idempotent_replay_evidence(
             "newObjectVersion": 3,
         },
     )
-    already = _already_reconciled_result(
+    already = already_reconciled_result(
         _writeback(
             response={
                 "last_observed_status": "succeeded",
@@ -78,17 +78,19 @@ def test_reconciliation_results_include_mutation_and_idempotent_replay_evidence(
 
 
 def test_terminal_action_run_is_not_treated_as_reconciliation_candidate() -> None:
-    assert not _is_resolvable_writeback(_writeback(), _action_run(status="succeeded"))
-    assert _is_resolvable_writeback(_writeback(), _action_run(status="outcome_unknown"))
+    assert not is_resolvable_writeback(_writeback(), _action_run(status="succeeded"))
+    assert is_resolvable_writeback(_writeback(), _action_run(status="outcome_unknown"))
+    assert not is_resolvable_writeback(_writeback(status="retryable"), _action_run(status="retryable"))
 
 
 def test_reconciliation_queue_rejects_terminal_status_filters() -> None:
     with pytest.raises(ValidationFailed, match="must be unresolved"):
-        _queue_statuses("reconciled")
+        queue_statuses("reconciled")
+    assert queue_statuses("retryable") == ("retryable",)
 
 
 def test_reconciliation_queue_item_masks_sensitive_payload() -> None:
-    item = _queue_item(
+    item = queue_item(
         _writeback(
             response={
                 "last_observed_status": "unknown",
@@ -106,7 +108,7 @@ def test_reconciliation_queue_item_masks_sensitive_payload() -> None:
     assert item["response"]["margin"] == "***MASKED***"
 
 
-def _writeback(response: dict[str, object] | None = None) -> ActionWritebackRecord:
+def _writeback(response: dict[str, object] | None = None, status: str = "outcome_unknown") -> ActionWritebackRecord:
     return ActionWritebackRecord(
         writeback_id="writeback-1",
         tenant_id="tenant-demo",
@@ -115,7 +117,7 @@ def _writeback(response: dict[str, object] | None = None) -> ActionWritebackReco
         connector_id="crm",
         request={"customerId": "customer-1"},
         response=response,
-        status="outcome_unknown",
+        status=status,
         idempotency_key="idem-1",
         attempts=1,
         created_at="2026-06-19T00:00:00Z",

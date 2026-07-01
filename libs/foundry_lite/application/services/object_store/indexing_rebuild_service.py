@@ -1,3 +1,5 @@
+"""Application service helpers for indexing rebuild service workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence

@@ -1,3 +1,5 @@
+"""Application port contract for dataset version repository."""
+
 from __future__ import annotations
 
 from typing import Protocol, TypedDict

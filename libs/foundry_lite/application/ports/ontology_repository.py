@@ -1,3 +1,5 @@
+"""Application port contract for ontology repository."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -418,6 +420,27 @@ class OntologyRepository(Protocol):
         api_name: str,
     ) -> ObjectTypeRow | None:
         """Return one object type in a version by API name."""
+        ...
+
+    def object_type_by_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_id: str,
+    ) -> ObjectTypeRow | None:
+        """Return one object type by immutable id."""
+        ...
+
+    def update_object_type_config(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_id: str,
+        config: OntologyJsonObject,
+    ) -> bool:
+        """Replace one object type config within a tenant boundary."""
         ...
 
     def enabled_action_type_for_version(

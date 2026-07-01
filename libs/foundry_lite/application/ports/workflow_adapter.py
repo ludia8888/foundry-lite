@@ -1,3 +1,5 @@
+"""Application port contract for workflow adapter."""
+
 from __future__ import annotations
 
 import hashlib
@@ -19,6 +21,7 @@ WorkflowLedgerStatus = Literal[
     "start_unknown",
 ]
 ProductWorkflowStatus = WorkflowStatus | WorkflowLedgerStatus
+_REQUEST_FINGERPRINT_IGNORED_INPUT_KEYS = frozenset({"workflowDefinitionVersion"})
 
 
 @dataclass(frozen=True)
@@ -119,6 +122,10 @@ class WorkflowAdapter(Protocol):
         """Return a tenant-scoped workflow run, or None when the adapter has no record."""
         ...
 
+    def cancel_workflow(self, tenant_id: str, run_id: str, *, reason: str | None = None) -> WorkflowRun | None:
+        """Cancel a tenant-scoped workflow run, or None when the adapter has no record."""
+        ...
+
 
 def workflow_run_id(request: WorkflowStartRequest) -> str:
     tenant = _stable_id_part(request.tenant_id)
@@ -139,10 +146,14 @@ def workflow_request_fingerprint(request: WorkflowStartRequest) -> str:
         "workflowName": request.workflow_name,
         "tenantId": request.tenant_id,
         "idempotencyKey": request.idempotency_key,
-        "input": dict(request.input),
+        "input": _request_fingerprint_input(request.input),
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _request_fingerprint_input(input_payload: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in input_payload.items() if key not in _REQUEST_FINGERPRINT_IGNORED_INPUT_KEYS}
 
 
 def _stable_id_part(value: str) -> str:

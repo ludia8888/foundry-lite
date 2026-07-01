@@ -25,6 +25,7 @@ def quality_report_for_transaction(
         "summary": _summary(check_results),
         "schemaReferences": _schema_references(check_results),
         "checkedManifestHashes": _checked_manifest_hashes(check_results),
+        "dataContractVersionIds": _data_contract_version_ids(check_results),
         "results": [_result_payload(row) for row in check_results],
         "failedRowSampleCount": len(failed_row_samples),
         "failedRowSamples": [_failed_row_sample(row) for row in failed_row_samples[:5]],
@@ -61,10 +62,15 @@ def _checked_manifest_hashes(rows: Sequence[DatasetCheckResultRow]) -> list[str]
     return sorted({row["checked_manifest_hash"] for row in rows})
 
 
+def _data_contract_version_ids(rows: Sequence[DatasetCheckResultRow]) -> list[str]:
+    return sorted({value for row in rows if (value := row["data_contract_version_id"])})
+
+
 def _result_payload(row: DatasetCheckResultRow) -> RuntimeJsonObject:
     return {
         "id": row["id"],
         "checkId": row["check_id"],
+        "dataContractVersionId": row["data_contract_version_id"],
         "runId": row["run_id"],
         "status": row["status"],
         "checkedManifestHash": row["checked_manifest_hash"],

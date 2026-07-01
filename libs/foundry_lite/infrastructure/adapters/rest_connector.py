@@ -1,3 +1,5 @@
+"""Infrastructure adapter implementation for rest connector."""
+
 from __future__ import annotations
 
 import json

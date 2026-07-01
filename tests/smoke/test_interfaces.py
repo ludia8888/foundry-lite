@@ -17,6 +17,13 @@ from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.ports.auth_provider import Credentials, Principal
+from foundry_lite.application.ports.external_writeback_adapter import (
+    ExternalWritebackPayload,
+    ExternalWriteTarget,
+    RemoteOutcome,
+    RemoteOutcomeStatus,
+    WriteReceipt,
+)
 from foundry_lite.application.upload_limits import WEBHOOK_BODY_LIMIT_ENV
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ExternalOutcomeUnknown, NotFound, PermissionDenied, ValidationFailed
@@ -29,8 +36,24 @@ from foundry_lite_api.main import _header_or_request, app, healthz
 from foundry_lite_cli.main import _dispatch, _fresh_supply_chain_demo, _json_arg, _params, _storage_root_for_args, main
 from sqlalchemy import create_engine, insert, select
 
-from tests.conftest import prepare_indexed_demo
+from tests.conftest import DEMO_ROOT, prepare_indexed_demo
 from tests.contracts.test_rest_connector_adapter_contract import MockRestServer
+
+
+class _MemoryExternalWritebackAdapter:
+    profile_name = "memory-external-writeback"
+
+    def __init__(self) -> None:
+        self.lookup_count = 0
+
+    def write(self, target: ExternalWriteTarget, payload: ExternalWritebackPayload) -> WriteReceipt:
+        del target, payload
+        return WriteReceipt(status=RemoteOutcomeStatus.AMBIGUOUS)
+
+    def remote_lookup(self, target: ExternalWriteTarget) -> RemoteOutcome:
+        del target
+        self.lookup_count += 1
+        return RemoteOutcome(status=RemoteOutcomeStatus.LANDED, remote_resource_id="remote-sensitive-writeback")
 
 
 def test_api_healthz_returns_ok() -> None:
@@ -50,6 +73,47 @@ def test_api_without_role_headers_cannot_apply_action() -> None:
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+
+def test_api_action_validate_route_does_not_require_idempotency(monkeypatch) -> None:
+    class FakeActions:
+        def validate(self, action_type, **kwargs):
+            assert action_type == "ApproveOrder"
+            assert kwargs["object_type"] == "Order"
+            assert kwargs["object_id"] == "O-1001"
+            assert kwargs["expected_object_version"] == 1
+            assert kwargs["params"] == {"reason": "Inventory confirmed"}
+            return {
+                "actionApiName": action_type,
+                "result": "VALID",
+                "target": {
+                    "result": "VALID",
+                    "objectType": "Order",
+                    "objectId": "O-1001",
+                    "expectedObjectVersion": 1,
+                    "currentObjectVersion": 1,
+                    "issues": [],
+                },
+                "parameters": {"reason": {"result": "VALID", "required": True, "issues": []}},
+                "submissionCriteria": [],
+            }
+
+    class FakeFoundry:
+        actions = FakeActions()
+
+    monkeypatch.setattr(api_main, "foundry", FakeFoundry())
+    response = TestClient(app).post(
+        "/api/actions/ApproveOrder/validate",
+        json={
+            "target": {"objectType": "Order", "objectId": "O-1001"},
+            "expectedObjectVersion": 1,
+            "params": {"reason": "Inventory confirmed"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == "VALID"
+    assert response.headers["X-Request-ID"]
 
 
 def test_api_action_target_shape_is_validated_before_core(monkeypatch) -> None:
@@ -145,7 +209,22 @@ def test_api_read_endpoint_domain_errors_preserve_request_id(monkeypatch) -> Non
         def observability_report(self, **_kwargs):
             raise ValidationFailed("observability failed")
 
+        def record_observability_report(self, **_kwargs):
+            raise ValidationFailed("observability record failed")
+
+        def list_observability_incidents(self, **_kwargs):
+            raise ValidationFailed("observability incidents failed")
+
+        def acknowledge_observability_incident(self, *_args, **_kwargs):
+            raise ValidationFailed("observability acknowledge failed")
+
+        def resolve_observability_incident(self, *_args, **_kwargs):
+            raise ValidationFailed("observability resolve failed")
+
         def plan_iceberg_maintenance(self, *_args, **_kwargs):
+            raise ValidationFailed("maintenance failed")
+
+        def run_iceberg_maintenance(self, *_args, **_kwargs):
             raise ValidationFailed("maintenance failed")
 
     class FailingFoundry:
@@ -166,7 +245,12 @@ def test_api_read_endpoint_domain_errors_preserve_request_id(monkeypatch) -> Non
         ("post", "/api/insights/reviews/review-1/assign", {}, {"assigneeUserId": "ops-reviewer"}),
         ("get", "/api/operations/lineage", {"resourceId": "version-1"}, None),
         ("post", "/api/operations/observability/detect", {}, {"configs": []}),
+        ("post", "/api/operations/observability/detect-and-record", {}, {"configs": []}),
+        ("get", "/api/operations/observability/incidents", {"status": "open"}, None),
+        ("post", "/api/operations/observability/incidents/incident-1/acknowledge", {}, None),
+        ("post", "/api/operations/observability/incidents/incident-1/resolve", {}, {"reason": "fixed"}),
         ("get", "/api/operations/maintenance/iceberg", {"datasetRef": "clean.orders"}, None),
+        ("post", "/api/operations/maintenance/iceberg/clean.orders/run", {}, None),
     ]
 
     for method, path, params, payload in requests:
@@ -587,6 +671,82 @@ def test_api_observability_detect_returns_active_incident_report(monkeypatch) ->
     assert response.json()["activeIncidents"][0]["detectorId"] == "raw-orders-flow"
 
 
+def test_api_observability_incident_lifecycle_routes(monkeypatch) -> None:
+    incident = {
+        "id": "incident:raw-orders-flow",
+        "detectorId": "raw-orders-flow",
+        "detectorType": "flow_interruption",
+        "configVersion": "s56-v2",
+        "status": "open",
+        "severity": "warning",
+        "owner": "data-platform",
+        "message": "missing data beyond expected cadence",
+        "dedupeKey": "raw-orders-flow:flow_interruption:dataset:raw.orders",
+        "firstObservedAt": "2026-06-19T00:15:00Z",
+        "lastObservedAt": "2026-06-19T00:15:00Z",
+        "occurrenceCount": 1,
+        "evidence": {"failedRunCount": 0},
+        "evidenceLinks": [],
+        "threshold": {"expectedCadenceSeconds": 300},
+    }
+
+    class FakeOperations:
+        def record_observability_report(self, *, ctx, configs, observed_at):
+            assert ctx.actor_user_id == "ops-user"
+            assert configs[0]["detectorId"] == "raw-orders-flow"
+            assert observed_at == "2026-06-19T00:15:00Z"
+            return {
+                "generatedAt": observed_at,
+                "configurationVersion": "s56-v2",
+                "activeIncidents": [],
+                "suppressedIncidents": [],
+                "storedIncidents": [incident],
+                "summary": {"stored": 1},
+            }
+
+        def list_observability_incidents(self, *, ctx, status, limit):
+            assert ctx.actor_user_id == "ops-user"
+            assert status == "open"
+            assert limit == 25
+            return [incident]
+
+        def acknowledge_observability_incident(self, incident_id, *, ctx):
+            assert incident_id == "incident:raw-orders-flow"
+            return {**incident, "status": "acknowledged", "acknowledgedBy": ctx.actor_user_id}
+
+        def resolve_observability_incident(self, incident_id, *, ctx, reason):
+            assert incident_id == "incident:raw-orders-flow"
+            assert reason == "source recovered"
+            return {**incident, "status": "resolved", "resolvedBy": ctx.actor_user_id}
+
+    class FakeFoundry:
+        operations = FakeOperations()
+
+    monkeypatch.setattr(api_main, "foundry", FakeFoundry())
+    client = TestClient(app)
+    headers = {"X-User-ID": "ops-user", "X-Roles": "ops_manager"}
+    recorded = client.post(
+        "/api/operations/observability/detect-and-record",
+        headers=headers,
+        json={"observedAt": "2026-06-19T00:15:00Z", "configs": [{"detectorId": "raw-orders-flow"}]},
+    )
+    listed = client.get("/api/operations/observability/incidents?status=open&limit=25", headers=headers)
+    acknowledged = client.post(
+        "/api/operations/observability/incidents/incident:raw-orders-flow/acknowledge",
+        headers=headers,
+    )
+    resolved = client.post(
+        "/api/operations/observability/incidents/incident:raw-orders-flow/resolve",
+        headers=headers,
+        json={"reason": "source recovered"},
+    )
+
+    assert recorded.json()["storedIncidents"][0]["id"] == "incident:raw-orders-flow"
+    assert listed.json()[0]["status"] == "open"
+    assert acknowledged.json()["status"] == "acknowledged"
+    assert resolved.json()["status"] == "resolved"
+
+
 def test_api_backup_restore_preflight_returns_commit_point_report(monkeypatch) -> None:
     class FakeOperations:
         def restore_preflight_report(self, *, ctx, backup_id):
@@ -617,19 +777,96 @@ def test_api_backup_restore_preflight_returns_commit_point_report(monkeypatch) -
                 "summary": {"issueCount": 1},
             }
 
+        def create_backup_artifact(self, *, ctx, backup_id):
+            assert ctx.actor_user_id == "ops-user"
+            assert backup_id == "backup-api"
+            return _backup_artifact_receipt(ctx.tenant_id, backup_id)
+
+        def restore_from_backup_artifact(
+            self,
+            *,
+            ctx,
+            artifact_ref,
+            artifact_hash,
+            restore_id,
+            validation_id,
+            should_run_post_restore_validation,
+        ):
+            assert artifact_ref == "/tmp/foundry-lite/backup-artifacts/backup-api.json"
+            assert artifact_hash == "sha256:backup-api"
+            assert restore_id == "restore-api"
+            assert validation_id == "closed-loop-api"
+            assert should_run_post_restore_validation is True
+            return _backup_artifact_restore_payload(ctx.tenant_id)
+
+        def execute_backup_artifact_restore(
+            self,
+            *,
+            ctx,
+            artifact_ref,
+            artifact_hash,
+            restore_id,
+            validation_id,
+            should_run_post_restore_validation,
+        ):
+            assert artifact_ref == "/tmp/foundry-lite/backup-artifacts/backup-api.json"
+            assert artifact_hash == "sha256:backup-api"
+            assert restore_id == "restore-api"
+            assert validation_id == "closed-loop-api"
+            assert should_run_post_restore_validation is False
+            payload = _backup_artifact_restore_payload(ctx.tenant_id)
+            payload["executionMode"] = "historical_artifact_dataset_head_restore"
+            payload["isHistoricalRepointExecuted"] = True
+            payload["restoreTransactionCount"] = 1
+            return payload
+
     class FakeFoundry:
         operations = FakeOperations()
 
     monkeypatch.setattr(api_main, "foundry", FakeFoundry())
-    response = TestClient(app).post(
+    client = TestClient(app)
+    response = client.post(
         "/api/operations/backup-restore/preflight",
         headers={"X-User-ID": "ops-user", "X-Roles": "ops_manager"},
         json={"backupId": "backup-api"},
     )
+    artifact = client.post(
+        "/api/operations/backup-restore/artifacts",
+        headers={"X-User-ID": "ops-user", "X-Roles": "ops_manager"},
+        json={"backupId": "backup-api"},
+    )
+    restored = client.post(
+        "/api/operations/backup-restore/artifacts/restore",
+        headers={"X-User-ID": "ops-user", "X-Roles": "ops_manager"},
+        json={
+            "artifactRef": "/tmp/foundry-lite/backup-artifacts/backup-api.json",
+            "artifactHash": "sha256:backup-api",
+            "restoreId": "restore-api",
+            "validationId": "closed-loop-api",
+        },
+    )
+    executed = client.post(
+        "/api/operations/backup-restore/artifacts/restore/execute",
+        headers={"X-User-ID": "ops-user", "X-Roles": "ops_manager"},
+        json={
+            "artifactRef": "/tmp/foundry-lite/backup-artifacts/backup-api.json",
+            "artifactHash": "sha256:backup-api",
+            "restoreId": "restore-api",
+            "validationId": "closed-loop-api",
+            "runPostRestoreValidation": False,
+        },
+    )
 
     assert response.status_code == 200
+    assert artifact.status_code == 200
+    assert restored.status_code == 200
+    assert executed.status_code == 200
     assert response.json()["status"] == "blocked"
     assert response.json()["issues"][0]["code"] == "committed_manifest_missing"
+    assert artifact.json()["backupArtifactId"] == "backup-artifact-api"
+    assert restored.json()["status"] == "validated"
+    assert executed.json()["restoreTransactionCount"] == 1
+    assert restored.json()["summary"]["nextStep"] == "approve_restore_resume"
 
 
 def test_api_backup_restore_mode_start_and_status_return_pause_gate(monkeypatch) -> None:
@@ -1625,6 +1862,39 @@ def test_api_transform_sql_register_writes_server_managed_entrypoint(foundry, mo
     assert entrypoint.read_text(encoding="utf-8") == "select * from {{ input('raw.orders') }}"
 
 
+def test_api_transform_scheduler_preview_and_tick(monkeypatch) -> None:
+    class _Transforms:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, int, str]] = []
+
+        def preview_due(self, *, ctx, max_runs):
+            self.calls.append(("preview", max_runs, ctx.tenant_id))
+            return {"status": "evaluated", "evaluated": 1, "due": [], "started": [], "skipped": [], "maxRuns": max_runs}
+
+        def run_due(self, *, ctx, max_runs):
+            self.calls.append(("tick", max_runs, ctx.tenant_id))
+            return {"status": "evaluated", "evaluated": 1, "due": [], "started": [], "skipped": [], "maxRuns": max_runs}
+
+    class _Foundry:
+        transforms = _Transforms()
+
+    monkeypatch.setattr(api_main, "foundry", _Foundry())
+    client = TestClient(app)
+    headers = {"X-Tenant-ID": "tenant-transform-scheduler", "X-Roles": "admin,data_engineer"}
+
+    preview = client.get("/api/transforms/scheduler/due?maxRuns=7", headers=headers)
+    tick = client.post("/api/transforms/scheduler/tick", headers=headers, json={"maxRuns": 3})
+
+    assert preview.status_code == 200
+    assert tick.status_code == 200
+    assert preview.json()["maxRuns"] == 7
+    assert tick.json()["maxRuns"] == 3
+    assert _Foundry.transforms.calls == [
+        ("preview", 7, "tenant-transform-scheduler"),
+        ("tick", 3, "tenant-transform-scheduler"),
+    ]
+
+
 def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
     monkeypatch.setattr(api_main, "foundry", foundry)
@@ -1740,6 +2010,21 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
         headers=headers,
         json={"enabled": False},
     )
+    contract_version = client.post(
+        "/api/datasets/clean/orders/quality-contract/contracts",
+        headers=headers,
+        json={"ownerUserId": "data-owner", "description": "orders quality contract"},
+    )
+    contract_version_id = contract_version.json()["contractVersion"]["id"]
+    contract_version_get = client.get(
+        f"/api/datasets/clean/orders/quality-contract/contracts/{contract_version_id}",
+        headers=headers,
+    )
+    contract_version_activate = client.post(
+        f"/api/datasets/clean/orders/quality-contract/contracts/{contract_version_id}/activate",
+        headers=headers,
+    )
+    contract_versions = client.get("/api/datasets/clean/orders/quality-contract/contracts?limit=5", headers=headers)
     contract_list = client.get("/api/datasets/clean/orders/quality-contract/checks", headers=headers)
     quality_results = client.get("/api/datasets/clean/orders/quality-contract/results?limit=5", headers=headers)
     quality_summary = client.get(
@@ -1753,6 +2038,14 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert contract_replay.json()["check"]["id"] == contract_check.json()["check"]["id"]
     assert contract_update.status_code == 200
     assert contract_update.json()["enabled"] is False
+    assert contract_version.status_code == 200
+    assert contract_version.json()["contractVersion"]["version"] == 1
+    assert contract_version_get.status_code == 200
+    assert contract_version_get.json()["id"] == contract_version_id
+    assert contract_version_activate.status_code == 200
+    assert contract_version_activate.json()["status"] == "ACTIVE"
+    assert contract_versions.status_code == 200
+    assert contract_versions.json()["contractVersions"][0]["id"] == contract_version_id
     assert contract_list.status_code == 200
     assert contract_list.json()["datasetRef"] == "clean.orders"
     check_id = contract_check.json()["check"]["id"]
@@ -2194,6 +2487,43 @@ def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundr
     assert any(row["event_type"] == "dead_letter_record.discarded" for row in audits)
 
 
+def test_api_transform_dead_letter_retry_requires_idempotency_key(monkeypatch) -> None:
+    class _Transforms:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, str]] = []
+
+        def retry_dead_letter_record(self, record_id, *, idempotency_key, ctx):
+            self.calls.append((record_id, idempotency_key, ctx.tenant_id))
+            return {
+                "deadLetterRecordId": record_id,
+                "status": "RESOLVED",
+                "replayStatus": "SUCCEEDED",
+                "replayRunId": "transform_dlq_replay_api",
+                "transformRunId": "transform_run_api",
+                "isIdempotentReplay": False,
+                "replayDatasetVersionId": "version_api",
+                "rowCount": 3,
+                "error": None,
+                "downstreamBackfillPlan": {},
+            }
+
+    class _Foundry:
+        transforms = _Transforms()
+
+    monkeypatch.setattr(api_main, "foundry", _Foundry())
+    client = TestClient(app)
+    missing = client.post("/api/operations/dead-letter-records/dlqr_api_transform/retry-transform")
+    response = client.post(
+        "/api/operations/dead-letter-records/dlqr_api_transform/retry-transform",
+        headers={"Idempotency-Key": "transform-dlq-api-key", "X-Tenant-ID": "tenant-api"},
+    )
+
+    assert missing.status_code == 422
+    assert response.status_code == 200
+    assert response.json()["transformRunId"] == "transform_run_api"
+    assert _Foundry.transforms.calls == [("dlqr_api_transform", "transform-dlq-api-key", "tenant-api")]
+
+
 def test_api_operations_workflow_start_status_and_audit(foundry, monkeypatch) -> None:
     ctx = demo_admin_context()
     headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
@@ -2373,6 +2703,49 @@ def test_api_operations_reconciliation_queue_lists_unresolved_writebacks(foundry
     assert after.json()["items"] == []
 
 
+def test_api_operations_reconciliation_approval_releases_sensitive_writeback(
+    foundry,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    ctx = _prepare_demo_with_margin_action(foundry, tmp_path)
+    headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
+    adapter = _MemoryExternalWritebackAdapter()
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "api-reconcile-approval-release"
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "AdjustMargin",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"margin": 3333.33},
+            idempotency_key=idempotency_key,
+            external_writeback_uri="memory://erp/orders/O-1001/margin",
+            ctx=ctx,
+        )
+    writeback = [
+        row
+        for row in foundry.operations.list_runs(ctx=ctx)["actionWritebacks"]
+        if row["idempotency_key"] == idempotency_key
+    ][0]
+    monkeypatch.setattr(api_main, "foundry", foundry)
+
+    response = TestClient(app).post(
+        f"/api/operations/reconciliation/{writeback['id']}/approve-recovery",
+        headers=headers,
+        json={"approvalId": "api-approval-1", "reason": "finance reviewed sensitive writeback"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["decision"] == "reconciled"
+    assert response.json()["approvalId"] == "api-approval-1"
+    assert response.json()["approvalReason"] == "sensitive_action_parameter"
+    assert adapter.lookup_count == 1
+    assert foundry.objects.get("Order", "O-1001", ctx=ctx)["properties"]["margin"] == 3333.33
+
+
 def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     class _Datasets:
         def list_versions(self, *_args, **_kwargs):
@@ -2409,8 +2782,14 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
         def plan_iceberg_maintenance(self, *_args, **_kwargs):
             raise ValidationFailed("Iceberg maintenance is unavailable")
 
+        def run_iceberg_maintenance(self, *_args, **_kwargs):
+            raise ValidationFailed("Iceberg maintenance is unavailable")
+
         def restore_preflight_report(self, *_args, **_kwargs):
             raise ValidationFailed("restore preflight is unavailable")
+
+        def restore_from_backup_artifact(self, *_args, **_kwargs):
+            raise ValidationFailed("backup artifact restore is unavailable")
 
         def start_restore_mode(self, *_args, **_kwargs):
             raise ValidationFailed("restore mode is unavailable")
@@ -2430,9 +2809,15 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
         def product_workflow_run(self, *_args, **_kwargs):
             raise NotFound("workflow run not found")
 
+        def cancel_product_workflow(self, *_args, **_kwargs):
+            raise NotFound("workflow run not found")
+
     class _Objects:
         def reindex(self, *_args, **_kwargs):
             raise NotFound("object type not found")
+
+        def reindex_ontology_migration(self, *_args, **_kwargs):
+            raise ValidationFailed("ontology object reindex key is not pending")
 
         def replay_index_run(self, *_args, **_kwargs):
             raise ValidationFailed("index run is not failed")
@@ -2515,6 +2900,13 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     assert replay.status_code == 404
     assert "request_id" in replay.json()["detail"]
 
+    ontology_reindex = client.post(
+        "/api/operations/index/Missing/ontology-reindex",
+        json={"reindexKey": "object_reindex:Missing:abc123"},
+    )
+    assert ontology_reindex.status_code == 400
+    assert "request_id" in ontology_reindex.json()["detail"]
+
     replay_run = client.post("/api/operations/runs/index/not-failed/replay")
     assert replay_run.status_code == 400
     assert "request_id" in replay_run.json()["detail"]
@@ -2527,9 +2919,20 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     assert maintenance.status_code == 400
     assert "request_id" in maintenance.json()["detail"]
 
+    maintenance_run = client.post("/api/operations/maintenance/iceberg/raw.orders/run")
+    assert maintenance_run.status_code == 400
+    assert "request_id" in maintenance_run.json()["detail"]
+
     restore_preflight = client.post("/api/operations/backup-restore/preflight", json={"backupId": "backup-error"})
     assert restore_preflight.status_code == 400
     assert "request_id" in restore_preflight.json()["detail"]
+
+    artifact_restore = client.post(
+        "/api/operations/backup-restore/artifacts/restore",
+        json={"artifactRef": "/tmp/missing-artifact.json", "artifactHash": "sha256:missing"},
+    )
+    assert artifact_restore.status_code == 400
+    assert "request_id" in artifact_restore.json()["detail"]
 
     restore_start = client.post(
         "/api/operations/backup-restore/restore-mode/start",
@@ -2567,6 +2970,10 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
     workflow_detail = client.get("/api/operations/workflows/missing")
     assert workflow_detail.status_code == 404
     assert "request_id" in workflow_detail.json()["detail"]
+
+    workflow_cancel = client.post("/api/operations/workflows/missing/cancel", json={"reason": "operator stop"})
+    assert workflow_cancel.status_code == 404
+    assert "request_id" in workflow_cancel.json()["detail"]
 
 
 def test_api_object_set_errors_preserve_request_id(monkeypatch) -> None:
@@ -2992,6 +3399,55 @@ def _restore_mode_payload(tenant_id: str, *, status: str = "paused") -> dict[str
     }
 
 
+def _backup_artifact_receipt(tenant_id: str, backup_id: str) -> dict[str, object]:
+    return {
+        "generatedAt": "2026-06-19T01:00:00Z",
+        "tenantId": tenant_id,
+        "backupId": backup_id,
+        "backupArtifactId": "backup-artifact-api",
+        "status": "created",
+        "artifactRef": "/tmp/foundry-lite/backup-artifacts/backup-api.json",
+        "artifactHash": "sha256:backup-api",
+        "payloadByteSize": 256,
+        "manifestFormat": "foundry-lite.backup-artifact.v1",
+        "preflightStatus": "ready",
+        "datasetVersionCount": 1,
+        "issueCount": 0,
+        "isIdempotentReplay": False,
+        "restoreModeStartPath": "/api/operations/backup-restore/restore-mode/start",
+        "summary": {"canStartRestoreMode": True},
+    }
+
+
+def _backup_artifact_restore_payload(tenant_id: str) -> dict[str, object]:
+    mode = _restore_mode_payload(tenant_id)
+    validation = _post_restore_validation_payload(tenant_id)
+    return {
+        "generatedAt": "2026-06-19T01:00:45Z",
+        "tenantId": tenant_id,
+        "backupId": "backup-api",
+        "restoreId": "restore-api",
+        "status": "validated",
+        "artifactRef": "/tmp/foundry-lite/backup-artifacts/backup-api.json",
+        "artifactHash": "sha256:backup-api",
+        "manifestFormat": "foundry-lite.backup-artifact.v1",
+        "executionMode": "verified_current_commit_point_restore_mode",
+        "isArtifactVerified": True,
+        "isHistoricalRepointExecuted": False,
+        "preflightStatus": "ready",
+        "restoreModeStatus": "paused",
+        "postRestoreValidationStatus": "passed",
+        "datasetVersionCount": 1,
+        "blockingIssueCount": 0,
+        "findings": [],
+        "restoreMode": mode,
+        "postRestoreValidation": validation,
+        "restoredDatasetVersions": [],
+        "restoreTransactionCount": 0,
+        "summary": {"nextStep": "approve_restore_resume"},
+    }
+
+
 def _post_restore_validation_payload(tenant_id: str) -> dict[str, object]:
     return {
         "generatedAt": "2026-06-19T01:00:30Z",
@@ -3167,6 +3623,53 @@ def _seed_failed_transform_run(engine, *, tenant_id: str, run_id: str) -> dict[s
 
 def _runtime_row(rows: list[dict[str, object]], row_id: str) -> dict[str, object]:
     return next(row for row in rows if row["id"] == row_id)
+
+
+def _prepare_demo_with_margin_action(foundry: FoundryLite, tmp_path: Path) -> RequestContext:
+    ctx = demo_admin_context()
+    ontology_path = _margin_action_ontology(tmp_path)
+    foundry.demo.seed_files()
+    foundry.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.demo.register_transforms(ctx)
+    foundry.datasets.upload_csv("raw.erp_orders", str(DEMO_ROOT / "data" / "orders.csv"), ctx=ctx)
+    foundry.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
+    foundry.transforms.run("clean_orders", ctx=ctx)
+    foundry.transforms.run("clean_customers", ctx=ctx)
+    foundry.ontology.apply(str(ontology_path), ctx=ctx)
+    foundry.objects.reindex("Order", ctx=ctx)
+    return ctx
+
+
+def _margin_action_ontology(tmp_path: Path) -> Path:
+    ontology = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
+    ontology = ontology.replace(
+        "      - apiName: margin\n        column: margin\n        type: float\n        classification: finance",
+        "      - apiName: margin\n"
+        "        column: margin\n"
+        "        type: float\n"
+        "        classification: finance\n"
+        "        editable: true\n"
+        "        editPolicy: edit_wins",
+    )
+    ontology = f"""{ontology}
+  - apiName: AdjustMargin
+    displayName: Adjust margin
+    target: Order
+    parameters:
+      - apiName: margin
+        type: float
+        required: true
+    mutations:
+      - type: setProperty
+        property: margin
+        valueFrom: params.margin
+"""
+    path = tmp_path / "order-customer-margin-action.yaml"
+    path.write_text(ontology, encoding="utf-8")
+    return path
 
 
 def _audit_event_types(engine, resource_type: str) -> list[str]:

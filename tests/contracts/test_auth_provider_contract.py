@@ -27,6 +27,7 @@ from foundry_lite.infrastructure.auth import (
     HeaderTrustAuthProvider,
     JwtOidcAuthConfig,
     JwtOidcAuthProvider,
+    LocalOAuthTokenIssuer,
     auth_provider_from_env,
 )
 from jwt.algorithms import RSAAlgorithm
@@ -64,6 +65,25 @@ def test_header_trust_authenticate_round_trips_headers() -> None:
         actor_user_id="user-7",
         roles=("admin", "data_engineer"),
     )
+
+
+def test_header_trust_authenticate_round_trips_osdk_application_scope_headers() -> None:
+    provider = HeaderTrustAuthProvider()
+
+    principal = provider.authenticate(
+        {
+            HEADER_TENANT_KEY: "tenant-A",
+            HEADER_USER_KEY: "user-7",
+            HEADER_ROLES_KEY: "admin",
+            "X-Foundry-Lite-App-ID": "osdk_app_orders",
+            "X-Foundry-Lite-Client-ID": "orders-web-client",
+            "X-Foundry-Lite-Scopes": "osdk:object:Order:read, osdk:object:Order:subscribe",
+        }
+    )
+
+    assert principal.application_id == "osdk_app_orders"
+    assert principal.client_id == "orders-web-client"
+    assert principal.token_scopes == ("osdk:object:Order:read", "osdk:object:Order:subscribe")
 
 
 def test_header_trust_authenticate_is_case_insensitive() -> None:
@@ -110,6 +130,58 @@ def test_jwt_auth_provider_maps_verified_token_to_principal() -> None:
     principal = provider.authenticate({"Authorization": f"Bearer {token}"})
 
     assert principal == Principal(tenant_id="tenant-A", actor_user_id="user-oidc", roles=("admin", "ops_manager"))
+
+
+def test_jwt_auth_provider_extracts_application_claims() -> None:
+    private_key, jwk = _rsa_key("kid-osdk")
+    provider = _jwt_provider({"keys": [jwk]})
+    token = _jwt_token(
+        private_key,
+        "kid-osdk",
+        client_id="orders-web-client",
+        extra_claims={
+            "osdk_app_id": "osdk_app_orders",
+            "scp": ["osdk:object:Order:read", "osdk:object:Order:subscribe"],
+        },
+    )
+
+    principal = provider.authenticate({"Authorization": f"Bearer {token}"})
+
+    assert principal.application_id == "osdk_app_orders"
+    assert principal.client_id == "orders-web-client"
+    assert principal.token_scopes == ("osdk:object:Order:read", "osdk:object:Order:subscribe")
+
+
+def test_jwt_auth_provider_extracts_local_oauth_session_claims(tmp_path) -> None:
+    issuer = LocalOAuthTokenIssuer.from_key_path(tmp_path / "oauth-private-key.pem")
+    provider = JwtOidcAuthProvider(
+        JwtOidcAuthConfig(
+            issuer=issuer.issuer,
+            audience=issuer.audience,
+            jwks=issuer.public_jwks(),
+        )
+    )
+    token = issuer.issue_access_token(
+        {
+            "tenant_id": "tenant-osdk",
+            "actor_user_id": "user-osdk",
+            "roles": ["admin", "data_engineer"],
+            "application_id": "osdk_app_orders",
+            "client_id": "orders-web-client",
+            "scopes": ["osdk:object:Order:read", "osdk:object:Order:subscribe"],
+            "session_id": "session-1",
+        },
+        ttl_seconds=900,
+    )
+
+    principal = provider.authenticate({"Authorization": f"Bearer {token['accessToken']}"})
+
+    assert principal.tenant_id == "tenant-osdk"
+    assert principal.actor_user_id == "user-osdk"
+    assert principal.roles == ("admin", "data_engineer")
+    assert principal.application_id == "osdk_app_orders"
+    assert principal.client_id == "orders-web-client"
+    assert principal.token_scopes == ("osdk:object:Order:read", "osdk:object:Order:subscribe")
 
 
 def test_expired_or_wrong_audience_jwt_is_denied() -> None:
@@ -213,6 +285,7 @@ def test_service_account_is_tenant_scoped() -> None:
         tenant_id="tenant-A",
         actor_user_id="service-account:connector-sync",
         roles=("data_engineer",),
+        client_id="connector-sync",
     )
 
     tenantless = _jwt_token(private_key, "kid-service", subject=None, client_id="connector-sync", tenant_id=None)

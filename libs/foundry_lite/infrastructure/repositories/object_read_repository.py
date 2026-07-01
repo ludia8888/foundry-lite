@@ -1,3 +1,5 @@
+"""SQLAlchemy repository adapter for object read repository persistence."""
+
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
@@ -127,6 +129,28 @@ class SqlAlchemyObjectReadRepository:
             .all()
         )
         return [cast(ObjectLinkRow, dict(row)) for row in rows]
+
+    def latest_object_change_sequence(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        include_deleted: bool = True,
+    ) -> int:
+        row = transaction.execute(
+            select(func.max(db.object_records.c.object_change_sequence)).where(
+                and_(
+                    *_active_object_conditions(
+                        tenant_id,
+                        object_type_api_name,
+                        None,
+                        include_deleted=include_deleted,
+                    )
+                )
+            )
+        ).scalar_one_or_none()
+        return int(row or 0)
 
     def active_links_to(
         self,

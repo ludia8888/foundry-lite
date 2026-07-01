@@ -61,6 +61,20 @@ class _FailedButResultUnavailableHandle:
         raise ConnectionError("terminal failure lookup unavailable")
 
 
+class _CancelledHandle:
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    async def cancel(self) -> None:
+        self.cancelled = True
+
+    async def describe(self) -> _Description:
+        return _Description(WorkflowExecutionStatus.CANCELED)
+
+    async def result(self) -> dict[str, object]:
+        return {}
+
+
 def test_sync_workflow_run_bridge_uses_async_core() -> None:
     adapter = TemporalWorkflowAdapter(client=_LookupClient(_CompletedHandle()))
     request = _workflow_request("tenant-demo", "EdgeWorkflow", "sync-lookup")
@@ -115,6 +129,24 @@ def test_workflow_run_result_fetch_failure_raises_retryable_adapter_error() -> N
         assert failure.kind == "unavailable"
         assert failure.is_retryable is True
         assert failure.details["workflowId"] == workflow_run_id(request)
+
+    asyncio.run(body())
+
+
+def test_cancel_workflow_returns_operator_cancellation_evidence() -> None:
+    async def body() -> None:
+        handle = _CancelledHandle()
+        adapter = TemporalWorkflowAdapter(client=_LookupClient(handle))
+        request = _workflow_request("tenant-demo", "EdgeWorkflow", "cancel-me")
+
+        assert await adapter.cancel_workflow_async("other-tenant", workflow_run_id(request), reason="ignored") is None
+        run = await adapter.cancel_workflow_async(request.tenant_id, workflow_run_id(request), reason="operator asked")
+
+        assert handle.cancelled is True
+        assert run is not None
+        assert run.status == "cancelled"
+        assert run.output["cancellation"]["reason"] == "operator asked"
+        assert run.output["cancellation"]["cleanup"]["datasetStaging"] == "adapter_confirmed"
 
     asyncio.run(body())
 

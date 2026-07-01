@@ -1,3 +1,5 @@
+"""Application service helpers for transform runs workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -6,7 +8,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import cast
 
-from foundry_lite.application.ports import TRANSFORM_RUN_SUCCEEDED, TransactionContext
+from foundry_lite.application.ports import TRANSFORM_RUN_SUCCEEDED, InputFilePaths, TransactionContext
 from foundry_lite.application.ports.dataset_repository import DatasetRow
 from foundry_lite.application.ports.transform_repository import (
     TransformRepository,
@@ -15,15 +17,22 @@ from foundry_lite.application.ports.transform_repository import (
     TransformRunRow,
 )
 from foundry_lite.application.primitives import INPUT_PATTERN, CommitResult, _new_id, _now
+from foundry_lite.application.services.transform_partition_pushdown import (
+    infer_sql_partition_filters as infer_sql_partition_filters,
+)
 from foundry_lite.application.services.transform_protocols import (
     TransformDatasetRegistry,
     TransformDatasetTransactions,
     TransformDatasetVersions,
 )
+from foundry_lite.application.services.transform_sql_guards import (
+    validate_sql_transform_uses_declared_inputs as validate_sql_transform_uses_declared_inputs,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
-SUPPORTED_TRANSFORM_OUTPUT_MODES = ("snapshot",)
+SUPPORTED_TRANSFORM_OUTPUT_MODES = ("snapshot", "append")
+TRANSFORM_OUTPUT_MODE_ALIASES = {"incremental": "append"}
 
 
 @dataclass(frozen=True)
@@ -31,8 +40,11 @@ class TransformRunPlan:
     """Transaction and runtime identifiers for one transform execution."""
 
     transform_id: str
+    language: str
     entrypoint: str
     sql_template: str
+    python_source: str | None
+    python_function: str | None
     checks: list[dict[str, object]]
     output_dataset: DatasetRow
     input_versions: dict[str, str]
@@ -40,6 +52,15 @@ class TransformRunPlan:
     transaction_id: str
     run_id: str
     retry_of_run_id: str | None = None
+
+
+@dataclass(frozen=True)
+class TransformSource:
+    """Source code snapshot used for one transform execution."""
+
+    sql_template: str
+    python_source: str | None = None
+    python_function: str | None = None
 
 
 def start_transform_run(
@@ -53,11 +74,12 @@ def start_transform_run(
     transform_repository: TransformRepository,
 ) -> TransformRunPlan:
     transform = _get_transform(conn, ctx, api_name, transform_repository)
-    sql_template = _read_transform_sql_template(str(transform["entrypoint"]))
+    language = str(transform["language"])
+    source = _read_transform_source(str(transform["entrypoint"]), language)
     input_versions = _resolve_transform_inputs(
         conn,
         ctx,
-        sql_template,
+        source.sql_template,
         transform["inputs"],
         dataset_registry_service,
         dataset_version_service,
@@ -66,7 +88,7 @@ def start_transform_run(
         conn=conn,
         ctx=ctx,
         transform=transform,
-        sql_template=sql_template,
+        source=source,
         input_versions=input_versions,
         dataset_registry_service=dataset_registry_service,
         dataset_transaction_service=dataset_transaction_service,
@@ -86,12 +108,12 @@ def start_failed_transform_retry(
     failed_run = _failed_transform_run(conn, ctx, transform_run_id, transform_repository)
     snapshot = _required_run_definition_snapshot(failed_run, transform_run_id)
     transform = _transform_from_run_snapshot(failed_run, ctx, transform_run_id, snapshot)
-    sql_template = _required_snapshot_string(snapshot, "sql_template", transform_run_id)
+    source = _source_from_run_snapshot(snapshot, transform_run_id)
     return _open_transform_run(
         conn=conn,
         ctx=ctx,
         transform=transform,
-        sql_template=sql_template,
+        source=source,
         input_versions=dict(failed_run["input_versions"]),
         dataset_registry_service=dataset_registry_service,
         dataset_transaction_service=dataset_transaction_service,
@@ -105,7 +127,7 @@ def _open_transform_run(
     conn: TransactionContext,
     ctx: RequestContext,
     transform: TransformRow,
-    sql_template: str,
+    source: TransformSource,
     input_versions: dict[str, str],
     dataset_registry_service: TransformDatasetRegistry,
     dataset_transaction_service: TransformDatasetTransactions,
@@ -119,11 +141,14 @@ def _open_transform_run(
         output_dataset,
         output_transaction_type_for_mode(str(transform["mode"])),
     )
-    definition_snapshot = _definition_snapshot(transform, sql_template)
+    definition_snapshot = _definition_snapshot(transform, source)
     plan = TransformRunPlan(
         transform_id=str(transform["id"]),
+        language=str(transform["language"]),
         entrypoint=str(transform["entrypoint"]),
-        sql_template=sql_template,
+        sql_template=source.sql_template,
+        python_source=source.python_source,
+        python_function=source.python_function,
         checks=[dict(check) for check in transform["checks"]],
         output_dataset=output_dataset,
         input_versions=input_versions,
@@ -234,27 +259,80 @@ def _resolve_transform_inputs(
     return resolved
 
 
+def transform_input_paths_by_ref(
+    plan: TransformRunPlan,
+    *,
+    dataset_transaction_service: TransformDatasetTransactions,
+    dataset_version_service: TransformDatasetVersions,
+    partition_filters: Mapping[str, Mapping[str, object]],
+) -> dict[str, InputFilePaths]:
+    return {
+        dataset_ref: tuple(
+            _version_input_paths(
+                dataset_transaction_service,
+                dataset_version_service,
+                version_id,
+                partition_filters.get(dataset_ref),
+            )
+        )
+        for dataset_ref, version_id in plan.input_versions.items()
+    }
+
+
+def _version_input_paths(
+    dataset_transaction_service: TransformDatasetTransactions,
+    dataset_version_service: TransformDatasetVersions,
+    version_id: str,
+    partition_filter: Mapping[str, object] | None,
+) -> list[Path]:
+    version = dataset_version_service._get_version_by_id(version_id)
+    if not partition_filter:
+        return dataset_transaction_service._version_file_paths(version)
+    paths = dataset_transaction_service._version_file_paths(version, partition_filter=partition_filter)
+    return paths if paths else dataset_transaction_service._version_file_paths(version)
+
+
 def _read_transform_sql_template(entrypoint: str) -> str:
     return Path(entrypoint).read_text(encoding="utf-8")
 
 
+def _read_transform_source(entrypoint: str, language: str) -> TransformSource:
+    if language == "sql":
+        return TransformSource(sql_template=_read_transform_sql_template(entrypoint))
+    if language == "python":
+        path, function_name = _python_entrypoint_parts(entrypoint)
+        return TransformSource(
+            sql_template="",
+            python_source=Path(path).read_text(encoding="utf-8"),
+            python_function=function_name,
+        )
+    raise ValidationFailed("unsupported transform language", details={"language": language})
+
+
+def _python_entrypoint_parts(entrypoint: str) -> tuple[str, str | None]:
+    path, separator, function_name = entrypoint.partition(":")
+    if separator and not function_name.strip():
+        raise ValidationFailed("Python transform entrypoint function is empty", details={"entrypoint": entrypoint})
+    return path, function_name.strip() or None
+
+
 def normalize_transform_output_mode(mode: str) -> str:
-    normalized = mode.strip().lower()
+    raw = mode.strip().lower()
+    normalized = TRANSFORM_OUTPUT_MODE_ALIASES.get(raw, raw)
     if normalized in SUPPORTED_TRANSFORM_OUTPUT_MODES:
         return normalized
     raise ValidationFailed(
         "unsupported transform output mode",
-        details={"mode": mode, "supported_modes": list(SUPPORTED_TRANSFORM_OUTPUT_MODES)},
+        details={"mode": mode, "supported_modes": ["snapshot", "append", "incremental"]},
     )
 
 
 def output_transaction_type_for_mode(mode: str) -> str:
-    normalize_transform_output_mode(mode)
-    return "SNAPSHOT"
+    return "APPEND" if normalize_transform_output_mode(mode) == "append" else "SNAPSHOT"
 
 
-def _definition_snapshot(transform: TransformRow, sql_template: str) -> dict[str, object]:
-    return {
+def _definition_snapshot(transform: TransformRow, source: TransformSource) -> dict[str, object]:
+    snapshot: dict[str, object] = {
         "api_name": str(transform["api_name"]),
         "checks": [dict(check) for check in transform["checks"]],
         "entrypoint": str(transform["entrypoint"]),
@@ -262,9 +340,29 @@ def _definition_snapshot(transform: TransformRow, sql_template: str) -> dict[str
         "language": str(transform["language"]),
         "mode": str(transform["mode"]),
         "output_dataset_ref": str(transform["output_dataset_ref"]),
-        "sql_template": sql_template,
-        "sql_template_sha256": sha256(sql_template.encode("utf-8")).hexdigest(),
     }
+    if str(transform["language"]) == "python":
+        python_source = source.python_source or ""
+        snapshot["python_source"] = python_source
+        snapshot["python_source_sha256"] = sha256(python_source.encode("utf-8")).hexdigest()
+        snapshot["python_function"] = source.python_function
+    else:
+        snapshot["sql_template"] = source.sql_template
+        snapshot["sql_template_sha256"] = sha256(source.sql_template.encode("utf-8")).hexdigest()
+    return snapshot
+
+
+def _source_from_run_snapshot(snapshot: Mapping[str, object], transform_run_id: str) -> TransformSource:
+    language = _required_snapshot_string(snapshot, "language", transform_run_id)
+    if language == "python":
+        return TransformSource(
+            sql_template="",
+            python_source=_required_snapshot_string(snapshot, "python_source", transform_run_id),
+            python_function=_optional_snapshot_string(snapshot, "python_function"),
+        )
+    return TransformSource(
+        sql_template=_required_snapshot_string(snapshot, "sql_template", transform_run_id),
+    )
 
 
 def _transform_from_run_snapshot(
@@ -310,6 +408,11 @@ def _required_snapshot_string(snapshot: Mapping[str, object], key: str, transfor
             details={"transform_run_id": transform_run_id, "missing": key},
         )
     return value
+
+
+def _optional_snapshot_string(snapshot: Mapping[str, object], key: str) -> str | None:
+    value = snapshot.get(key)
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def _required_snapshot_string_mapping(

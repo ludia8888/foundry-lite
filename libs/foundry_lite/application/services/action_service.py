@@ -1,19 +1,23 @@
+"""Application service helpers for action service workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Protocol
 
 from foundry_lite.application.action_types import (
     ActionApplyCommand,
     ActionApplyOutcome,
     ActionApplyResponse,
-    ActionWritebackQueueResult,
-    ActionWritebackReconciliationResult,
+    ActionValidationResponse,
 )
 from foundry_lite.application.ports import (
     ActionRunRecord,
     ActionRunRow,
     ActionTypeRow,
     ObjectRecordRow,
+    OsdkResourceOperation,
+    OsdkResourceType,
     TransactionContext,
 )
 from foundry_lite.application.primitives import _new_id, _now
@@ -24,24 +28,24 @@ from foundry_lite.application.services.action_helpers import (
     action_replay_response,
     action_target_record_error,
     audit_idempotency_conflict,
-    failure_injection_audit_ref,
     require_action_target_api_name,
     require_action_write_open,
-    require_failure_injection_allowed,
 )
-from foundry_lite.application.services.action_reconciliation import ActionWritebackReconciliationWorkflow
+from foundry_lite.application.services.action_permission_guards import (
+    require_action_permission,
+    require_failure_injection_for_command,
+)
+from foundry_lite.application.services.action_validation import action_validation_response
 from foundry_lite.application.services.action_workflow import (
     ActionMutationUnitOfWork,
     ActionObjectIndexer,
     ActionObjectRecordLookup,
     ActionOntologyLookup,
     ActionRuntimeBoundary,
-    ActionWritebackRecorder,
-    ExternalWritebackAdapter,
     LocalCommitFailed,
-    RealExternalWritebackRunner,
     WriteReceipt,
 )
+from foundry_lite.application.services.action_writeback_operations import ActionWritebackOperationsMixin
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -49,28 +53,35 @@ from foundry_lite.domain.errors import (
     InvariantViolation,
     NotFound,
     PermissionDenied,
+    ValidationFailed,
 )
 
 
-class ActionService(CoreService):
+class _OsdkScopeBoundary(Protocol):
+    def require_resource_scope(
+        self,
+        ctx: RequestContext,
+        *,
+        resource_type: OsdkResourceType,
+        resource_api_name: str,
+        operation: OsdkResourceOperation,
+    ) -> None: ...
+
+
+class ActionService(ActionWritebackOperationsMixin, CoreService):
     required_dependencies = ("engine", "policy", "action_repository")
     required_collaborators = (
         "object_indexing_service",
         "object_records_service",
         "ontology_service",
+        "osdk_application_service",
         "runtime_service",
     )
     object_indexing_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
     ontology_service: ActionOntologyLookup
+    osdk_application_service: _OsdkScopeBoundary
     runtime_service: ActionRuntimeBoundary
-    # Optional real external-writeback adapter (L8). Default None keeps the simulated path
-    # the only exercised one; a live profile/test injects a real adapter via set_external_writeback_adapter.
-    _external_writeback_adapter: ExternalWritebackAdapter | None = None
-
-    def set_external_writeback_adapter(self, adapter: ExternalWritebackAdapter) -> None:
-        """Inject a real external-writeback adapter so action writebacks reach a real vendor system."""
-        self._external_writeback_adapter = adapter
 
     def apply_action(
         self,
@@ -83,12 +94,15 @@ class ActionService(CoreService):
         idempotency_key: str,
         ctx: RequestContext | None = None,
         simulate_writeback_failure: bool = False,
+        simulate_writeback_retryable: bool = False,
         simulate_writeback_outcome_unknown: bool = False,
         simulate_writeback_compensation_required: bool = False,
         external_writeback_uri: str | None = None,
     ) -> ActionApplyResponse:
         ctx = ctx or RequestContext()
-        command = action_command(
+        if not idempotency_key:
+            raise ValidationFailed("idempotency key is required")
+        command = self._action_command_from_request(
             action_api_name,
             object_type,
             object_id,
@@ -96,13 +110,12 @@ class ActionService(CoreService):
             params,
             idempotency_key,
             simulate_writeback_failure,
+            simulate_writeback_retryable,
             simulate_writeback_outcome_unknown,
             simulate_writeback_compensation_required,
             external_writeback_uri,
         )
-        self._require_failure_injection_allowed(ctx, command)
-        self._require_action_permission(ctx, command.action_api_name)
-        require_action_write_open(self.runtime_service, ctx, "apply", "action_type", command.action_api_name)
+        self._authorize_action_apply(ctx, command)
         action_run_id = _new_id("action_run")
         outcome = self._run_action_command(ctx, command, action_run_id)
         if outcome.deferred_error is not None:
@@ -111,33 +124,72 @@ class ActionService(CoreService):
             raise InvariantViolation("action did not produce a response")
         return outcome.response
 
-    def reconcile_action_writeback(
+    def _action_command_from_request(
         self,
-        writeback_id: str,
-        *,
-        remote_status: str | None = None,
-        remote_resource_id: str | None = None,
-        external_writeback_uri: str | None = None,
-        ctx: RequestContext | None = None,
-    ) -> ActionWritebackReconciliationResult:
-        ctx = ctx or RequestContext()
-        return self._writeback_reconciliation_workflow().reconcile(
-            writeback_id,
-            remote_status=remote_status,
-            remote_resource_id=remote_resource_id,
-            external_writeback_uri=external_writeback_uri,
-            ctx=ctx,
+        action_api_name: str,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
+        idempotency_key: str,
+        simulate_writeback_failure: bool,
+        simulate_writeback_retryable: bool,
+        simulate_writeback_outcome_unknown: bool,
+        simulate_writeback_compensation_required: bool,
+        external_writeback_uri: str | None,
+    ) -> ActionApplyCommand:
+        return action_command(
+            action_api_name,
+            object_type,
+            object_id,
+            expected_object_version,
+            params,
+            idempotency_key,
+            simulate_writeback_failure,
+            simulate_writeback_retryable,
+            simulate_writeback_outcome_unknown,
+            simulate_writeback_compensation_required,
+            external_writeback_uri,
         )
 
-    def list_unresolved_action_writebacks(
+    def _authorize_action_apply(self, ctx: RequestContext, command: ActionApplyCommand) -> None:
+        require_failure_injection_for_command(self.engine, self.runtime_service, ctx, command)
+        require_action_permission(self.engine, self.policy, self.runtime_service, ctx, command.action_api_name)
+        self._require_action_scope(ctx, command.action_api_name, "execute")
+        require_action_write_open(self.runtime_service, ctx, "apply", "action_type", command.action_api_name)
+
+    def validate_action(
         self,
+        action_api_name: str,
         *,
-        status: str | None = None,
-        limit: int = 50,
+        object_type: str,
+        object_id: str,
+        expected_object_version: int,
+        params: Mapping[str, object],
         ctx: RequestContext | None = None,
-    ) -> ActionWritebackQueueResult:
+    ) -> ActionValidationResponse:
         ctx = ctx or RequestContext()
-        return self._writeback_reconciliation_workflow().list_unresolved(ctx=ctx, status=status, limit=limit)
+        require_action_permission(
+            self.engine, self.policy, self.runtime_service, ctx, action_api_name, action="validate"
+        )
+        self._require_action_scope(ctx, action_api_name, "validate")
+        with self.engine.begin() as conn:
+            action_type = self.ontology_service._active_action_type(conn, ctx, action_api_name)
+            require_action_target_api_name(action_type, object_type)
+            record = self.object_records_service._object_record(conn, ctx, object_type, object_id)
+            if record is not None and (error := action_target_record_error(action_type, record)) is not None:
+                raise error
+            return action_validation_response(action_type, record, expected_object_version, params)
+
+    def _require_action_scope(
+        self, ctx: RequestContext, action_api_name: str, operation: OsdkResourceOperation
+    ) -> None:
+        self.osdk_application_service.require_resource_scope(
+            ctx,
+            resource_type="action",
+            resource_api_name=action_api_name,
+            operation=operation,
+        )
 
     def _run_action_command(
         self,
@@ -239,7 +291,7 @@ class ActionService(CoreService):
         record: ObjectRecordRow,
     ) -> ActionApplyOutcome:
         def commit() -> ActionApplyResponse:
-            return self._commit_action_mutations(
+            return self._mutation_unit_of_work().commit(
                 conn,
                 ctx,
                 action_type=action_type,
@@ -280,41 +332,6 @@ class ActionService(CoreService):
                 return replay
             error = runner.record_compensation_required(conn, ctx, action_run_id, command, receipt)
         return ActionApplyOutcome(deferred_error=error)
-
-    def _require_action_permission(self, ctx: RequestContext, action_api_name: str) -> None:
-        permission = f"action:execute:{action_api_name}"
-        try:
-            self.policy.require(ctx, permission)
-        except PermissionDenied:
-            with self.engine.begin() as conn:
-                self.runtime_service._audit(
-                    conn,
-                    ctx,
-                    event_type="permission.denied",
-                    resource_type="action_type",
-                    resource_id=action_api_name,
-                    action="apply",
-                    decision="deny",
-                    after_ref={"permission": permission},
-                )
-            raise
-
-    def _require_failure_injection_allowed(self, ctx: RequestContext, command: ActionApplyCommand) -> None:
-        try:
-            require_failure_injection_allowed(command)
-        except PermissionDenied:
-            with self.engine.begin() as conn:
-                self.runtime_service._audit(
-                    conn,
-                    ctx,
-                    event_type="action.failure_injection.denied",
-                    resource_type="action_type",
-                    resource_id=command.action_api_name,
-                    action="apply",
-                    decision="deny",
-                    after_ref=failure_injection_audit_ref(command),
-                )
-            raise
 
     def _existing_action_run(
         self,
@@ -435,59 +452,10 @@ class ActionService(CoreService):
             correlation_id=action_run_id,
         )
 
-    def _commit_action_mutations(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        *,
-        action_type: ActionTypeRow,
-        action_run_id: str,
-        record: ObjectRecordRow,
-        params: Mapping[str, object],
-        idempotency_key: str,
-    ) -> ActionApplyResponse:
-        return self._mutation_unit_of_work().commit(
-            conn,
-            ctx,
-            action_type=action_type,
-            action_run_id=action_run_id,
-            record=record,
-            params=params,
-            idempotency_key=idempotency_key,
-        )
-
-    def _writeback_recorder(self) -> ActionWritebackRecorder:
-        return ActionWritebackRecorder(
-            action_repository=self.action_repository,
-            runtime_service=self.runtime_service,
-        )
-
-    def _real_writeback_runner(self, command: ActionApplyCommand) -> RealExternalWritebackRunner | None:
-        adapter = self._external_writeback_adapter
-        if adapter is None or command.external_writeback_uri is None:
-            return None
-        return RealExternalWritebackRunner(
-            adapter=adapter,
-            action_repository=self.action_repository,
-            runtime_service=self.runtime_service,
-        )
-
     def _mutation_unit_of_work(self) -> ActionMutationUnitOfWork:
         return ActionMutationUnitOfWork(
             action_repository=self.action_repository,
             object_indexing_service=self.object_indexing_service,
             runtime_service=self.runtime_service,
             policy=self.policy,
-        )
-
-    def _writeback_reconciliation_workflow(self) -> ActionWritebackReconciliationWorkflow:
-        return ActionWritebackReconciliationWorkflow(
-            engine=self.engine,
-            policy=self.policy,
-            action_repository=self.action_repository,
-            object_indexing_service=self.object_indexing_service,
-            object_records_service=self.object_records_service,
-            ontology_service=self.ontology_service,
-            runtime_service=self.runtime_service,
-            external_writeback_adapter=self._external_writeback_adapter,
         )

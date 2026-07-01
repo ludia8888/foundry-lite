@@ -100,6 +100,54 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "datasets.qualityContracts.list",
+      "route": "GET /api/datasets/{namespace}/{name}/quality-contract/contracts",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityContracts.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Versioned dataset quality contracts list contract version, activation status, owner, schema reference, and snapshotted check evidence through the dataset boundary.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityContracts.create",
+      "route": "POST /api/datasets/{namespace}/{name}/quality-contract/contracts",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityContracts.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Creating a dataset quality contract version snapshots current check definitions and latest schema reference, then audits dataset_quality_contract.version_created.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityContracts.get",
+      "route": "GET /api/datasets/{namespace}/{name}/quality-contract/contracts/{contract_version_id}",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityContracts.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Fetching one dataset quality contract version returns immutable check snapshot and schema reference evidence for run investigation.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "datasets.qualityContracts.activate",
+      "route": "POST /api/datasets/{namespace}/{name}/quality-contract/contracts/{contract_version_id}/activate",
+      "productArea": "data-quality-contracts",
+      "sdkSurface": "datasets.qualityContracts.activate",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Activating a dataset quality contract version supersedes the previous active version, audits dataset_quality_contract.version_activated, and pins later commit checks to that version snapshot.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "datasets.qualityResults.list",
       "route": "GET /api/datasets/{namespace}/{name}/quality-contract/results",
       "productArea": "data-quality-contracts",
@@ -514,6 +562,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "objects.generic.subscribe",
+      "route": "POST /api/objects/{object_type}/subscriptions/stream",
+      "productArea": "object-explorer",
+      "sdkSurface": "objects.generic.subscribe",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "ObjectSet subscription streams send a masked snapshot, watermark, object_changed events, and out_of_date evidence through the same object query permission path.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "object-sets.list",
       "route": "GET /api/object-sets",
       "productArea": "object-explorer",
@@ -574,6 +634,30 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "transforms.scheduler.previewDue",
+      "route": "GET /api/transforms/scheduler/due",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "transforms.previewDue",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Transform scheduler preview compares registered snapshot transforms against latest input dataset versions and returns due/skip reasons without starting runs.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "transforms.scheduler.tick",
+      "route": "POST /api/transforms/scheduler/tick",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "transforms.tick",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Transform scheduler tick starts bounded snapshot rebuilds only when latest input dataset versions differ from the latest successful transform run, while append/incremental transforms stay fail-closed for manual execution.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.runs.list",
       "route": "GET /api/operations/runs",
       "productArea": "operations-console",
@@ -610,6 +694,54 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "operations.observability.detect-and-record",
+      "route": "POST /api/operations/observability/detect-and-record",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.observability.detectAndRecord",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Detector reports can be recorded into durable observability_incidents rows with audit/outbox evidence while preserving the read-only detect route.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.observability.list-incidents",
+      "route": "GET /api/operations/observability/incidents",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.observability.listIncidents",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Stored incidents are listed by tenant and lifecycle status for recovery-console evidence without raw route construction.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.observability.acknowledge-incident",
+      "route": "POST /api/operations/observability/incidents/{incident_id}/acknowledge",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.observability.acknowledgeIncident",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Operators can acknowledge a stored incident through a typed SDK method that records lifecycle audit/outbox evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.observability.resolve-incident",
+      "route": "POST /api/operations/observability/incidents/{incident_id}/resolve",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.observability.resolveIncident",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Operators can resolve a stored incident with a reason while preserving recurrence/reopen evidence for later detector runs.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.admin.overview",
       "route": "GET /api/operations/admin/overview",
       "productArea": "operations-console",
@@ -640,6 +772,42 @@
       "sdkSurface": "operations.backupRestore.preflight",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Preflight report includes dataset/storage mismatch issues, restore gates, high-watermarks, and audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.backup-restore.create-artifact",
+      "route": "POST /api/operations/backup-restore/artifacts",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.backupRestore.createArtifact",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Backup artifact creation persists a ready preflight report as an immutable local restore artifact, returns a content hash receipt, rejects blocked preflight evidence, replays the same backup id receipt idempotently, and keeps the artifact store immutable against same-id payload overwrite.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.backup-restore.restore-artifact",
+      "route": "POST /api/operations/backup-restore/artifacts/restore",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.backupRestore.restoreArtifact",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Verified artifact restore entrypoint reads the immutable artifact, verifies its receipt hash, checks that artifact versions still match the current serving head, starts restore-mode only when safe, and records post-restore validation evidence without claiming execution on this validation-only route.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.backup-restore.execute-artifact-restore",
+      "route": "POST /api/operations/backup-restore/artifacts/restore/execute",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.backupRestore.executeArtifactRestore",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Historical artifact restore execution verifies the immutable backup artifact, copies the sealed source dataset files into new snapshot dataset versions, commits restore transactions as the latest serving heads, and returns restored dataset version evidence without deleting later versions.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -824,6 +992,291 @@
       "rawRequestPolicy": "named-sdk-only",
       "requiresIdempotencyKey": true,
       "operatorEvidence": "Resource sync start requires Idempotency-Key and stores datasetRef, connectorName, resourceName, syncName, and configFingerprint in the workflow input for fail-closed activity execution.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.create",
+      "route": "POST /api/developer-console/osdk-applications",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "OSDK application creation requires Idempotency-Key, stores app/client/resource grants tenant-scoped, and audits osdk.application.created.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.list",
+      "route": "GET /api/developer-console/osdk-applications",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "OSDK applications list is tenant-scoped and exposes app/client/resource registry state without raw secret material.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.get",
+      "route": "GET /api/developer-console/osdk-applications/{app_id}",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "OSDK application get returns current active clients and granted ontology resources for app/resource-scope review.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.updateResources",
+      "route": "PUT /api/developer-console/osdk-applications/{app_id}/resources",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.updateResources",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "OSDK application resource updates require Idempotency-Key, replace app grants atomically, and audit osdk.application.resources_updated.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.create",
+      "route": "POST /api/developer-console/osdk-applications/{app_id}/sdk-versions",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "SDK version creation requires Idempotency-Key, snapshots app resource scope, applies semver compatibility policy, writes local TS/Python artifact hash, and audits release status.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.list",
+      "route": "GET /api/developer-console/osdk-applications/{app_id}/sdk-versions",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "SDK version list returns local release history, compatibility decision, ontology fingerprint, resource snapshot, and artifact hash references.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.get",
+      "route": "GET /api/developer-console/osdk-applications/{app_id}/sdk-versions/{version_id}",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "SDK version get returns one release row with its local artifact metadata for compatibility and package audit review.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.artifact",
+      "route": "GET /api/developer-console/osdk-applications/{app_id}/sdk-versions/{version_id}/artifacts/{artifact_kind}",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.artifact",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "SDK artifact read returns the local registry artifact content and DB-persisted sha256 hash for release verification.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "auth.osdkOAuth.authorize",
+      "route": "GET /api/auth/osdk/oauth/authorize",
+      "productArea": "auth",
+      "sdkSurface": "auth.osdkOAuth.authorize",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Local OSDK OAuth authorize validates active app/client, redirect URI, PKCE challenge, and requested resource scopes before returning a short-lived code without storing raw code material.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "auth.osdkOAuth.token",
+      "route": "POST /api/auth/osdk/oauth/token",
+      "productArea": "auth",
+      "sdkSurface": "auth.osdkOAuth.token",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Local OSDK OAuth token exchange verifies one-time authorization code plus PKCE and returns a JWT access token with tenant/user/app/client/scope claims plus rotating refresh token.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "auth.osdkOAuth.refresh",
+      "route": "POST /api/auth/osdk/oauth/refresh",
+      "productArea": "auth",
+      "sdkSurface": "auth.osdkOAuth.refresh",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Local OSDK OAuth refresh rotates the hashed refresh token, denies reuse, and emits raw-token-free audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "auth.osdkOAuth.revoke",
+      "route": "POST /api/auth/osdk/oauth/revoke",
+      "productArea": "auth",
+      "sdkSurface": "auth.osdkOAuth.revoke",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Local OSDK OAuth revoke closes the refresh token and session so later refresh attempts fail closed without exposing raw token values.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.createClient",
+      "route": "POST /api/developer-console/osdk-applications/{app_id}/clients",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.createClient",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Developer Console client creation requires Idempotency-Key and stores redirect URIs, allowed scopes, active status, and token TTLs tenant-scoped for local OAuth sessions.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.listClients",
+      "route": "GET /api/developer-console/osdk-applications/{app_id}/clients",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.listClients",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Developer Console client list returns registered OSDK OAuth clients and scope metadata for one tenant-scoped app.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.updateClient",
+      "route": "PUT /api/developer-console/osdk-applications/{app_id}/clients/{client_row_id}",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.updateClient",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Developer Console client update requires Idempotency-Key and changes redirect URIs, allowed scopes, TTLs, and status with audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.osdkApplications.deactivateClient",
+      "route": "POST /api/developer-console/osdk-applications/{app_id}/clients/{client_row_id}/deactivate",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.osdkApplications.deactivateClient",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Developer Console client deactivation requires Idempotency-Key, fail-closes new OAuth authorization for that client, and leaves audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.promote",
+      "route": "POST /api/developer-console/osdk-applications/{app_id}/sdk-versions/{version_id}/channels/{channel}",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.promote",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "SDK channel promotion requires Idempotency-Key and assigns a released TS/Python SDK version to stable, beta, or latest with tenant-scoped audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.channels",
+      "route": "GET /api/developer-console/osdk-applications/{app_id}/sdk-release-channels",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.channels",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "SDK release channel list exposes channel to version assignment for local install and compatibility review.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.createCompatibilityWindow",
+      "route": "POST /api/developer-console/osdk-applications/{app_id}/sdk-compatibility-windows",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.createCompatibilityWindow",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "SDK compatibility window creation requires Idempotency-Key, records old-to-new version support, and lets removed app scopes remain as deprecated grants until supportedUntil.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.compatibilityWindows",
+      "route": "GET /api/developer-console/osdk-applications/{app_id}/sdk-compatibility-windows",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.compatibilityWindows",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "SDK compatibility window list shows active old/new support intervals for app developers and release operators.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.installMetadata",
+      "route": "GET /api/developer-console/osdk-applications/{app_id}/sdk-install-metadata",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.installMetadata",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "SDK install metadata combines version rows, release channels, and compatibility windows for local package installation workflows.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.downloadToken",
+      "route": "POST /api/developer-console/osdk-applications/{app_id}/sdk-versions/{version_id}/artifacts/{artifact_kind}/download-token",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.downloadToken",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "SDK artifact download token creation requires Idempotency-Key and returns a short-lived scoped token while only token hashes are persisted.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "developerConsole.sdkVersions.artifactByDownloadToken",
+      "route": "GET /api/developer-console/osdk-release-artifacts/download/{download_token}",
+      "productArea": "developer-console",
+      "sdkSurface": "developerConsole.sdkVersions.artifactByDownloadToken",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "SDK artifact download by scoped token returns local registry bytes once and marks the token used without exposing token hashes.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -1241,6 +1694,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "operations.workflows.cancel",
+      "route": "POST /api/operations/workflows/{workflow_run_id}/cancel",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.workflows.cancel",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Workflow cancel returns cancelled ledger state and durable cleanup/audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.reconciliation.list",
       "route": "GET /api/operations/reconciliation/writebacks",
       "productArea": "operations-console",
@@ -1265,6 +1730,30 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "operations.reconciliation.resolve-external-uri",
+      "route": "POST /api/operations/reconciliation/{writeback_id}/resolve",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.reconciliation.resolve",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Reconciliation can resolve by externalWritebackUri so worker/API callers use a real remote lookup instead of only operator-supplied remote status.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.reconciliation.approveRecovery",
+      "route": "POST /api/operations/reconciliation/{writeback_id}/approve-recovery",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.reconciliation.approveRecovery",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Sensitive action writeback recovery can be released only through an explicit approval payload, preserving writeback/action ids, approval id, policy reason, and recovery result evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.iceberg-maintenance.plan-get",
       "route": "GET /api/operations/maintenance/iceberg",
       "productArea": "operations-console",
@@ -1283,6 +1772,18 @@
       "sdkSurface": "operations.icebergMaintenance.plan",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Iceberg maintenance plan reports protected/deletable snapshots and audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "operations.iceberg-maintenance.run",
+      "route": "POST /api/operations/maintenance/iceberg/{dataset_ref}/run",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.icebergMaintenance.run",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Iceberg maintenance run reports compaction row-hash preservation, expired snapshots, protected snapshots, and orphan cleanup file evidence.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -1339,6 +1840,19 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "operations.dead-letter-records.retry-transform",
+      "route": "POST /api/operations/dead-letter-records/{record_id}/retry-transform",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.deadLetterRecords.retryTransform",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Transform DLQ retry requires Idempotency-Key and reruns the owning snapshot transform instead of replaying one row into the output.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.dead-letter-records.discard",
       "route": "POST /api/operations/dead-letter-records/{record_id}/discard",
       "productArea": "operations-console",
@@ -1387,6 +1901,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "operations.index.replay-ontology-reindex",
+      "route": "POST /api/operations/index/{object_type}/ontology-reindex",
+      "productArea": "operations-console",
+      "sdkSurface": "operations.index.replayOntologyReindex",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology migration object reindex returns the completed object_reindex key, index_run_id, changed fields, idempotent replay flag, and serving contract status.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.transforms.retry",
       "route": "POST /api/operations/runs/transform/{run_id}/retry",
       "productArea": "operations-console",
@@ -1405,6 +1931,18 @@
       "sdkSurface": "materializations.run",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "Materialization run result exposes dataset transaction/version identity and manifest evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.generated.validate",
+      "route": "POST /api/actions/{action_type}/validate",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.ApproveOrder.validate",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Generated action validation calls reuse the action permission, target version, parameter, and precondition boundary without creating an action run or requiring an Idempotency-Key.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -1640,6 +2178,36 @@
       "sdkHelper": "pollFoundryLiteOperation",
       "productArea": "frontend-foundation",
       "operatorEvidence": "Long-running operation screens use one bounded polling contract with terminal-state detection and snapshot callbacks instead of unbounded screen-local loops.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.sdkOntologyDriftReport",
+      "sdkHelper": "sdkOntologyDriftReport",
+      "productArea": "frontend-foundation",
+      "operatorEvidence": "Ontology workspaces can compare a live catalog against the generated OSDK package fingerprint and object/action/link names before exposing dynamic-only resources as typed SDK paths.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.sdkPackageManifest",
+      "sdkHelper": "sdkPackageManifest",
+      "productArea": "frontend-foundation",
+      "operatorEvidence": "Generated SDK consumers can display the package version, ontology scope, source, and fingerprint that produced the current OSDK package.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_frontend_foundation_helpers"
+      ],
+      "proofClass": "sdk-helper-contract"
+    },
+    {
+      "id": "helpers.assertFoundryLiteSdkFresh",
+      "sdkHelper": "assertFoundryLiteSdkFresh",
+      "productArea": "frontend-foundation",
+      "operatorEvidence": "Developer-facing tools can fail closed with OSDK_SDK_REGENERATION_REQUIRED when the provided ontology catalog no longer matches the generated SDK package.",
       "proofTests": [
         "test_sdk_request_contract_covers_frontend_foundation_helpers"
       ],

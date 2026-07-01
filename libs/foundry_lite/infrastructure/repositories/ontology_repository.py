@@ -1,8 +1,11 @@
+"""SQLAlchemy repository adapter for ontology repository persistence."""
+
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
-from sqlalchemy import and_, func, insert, select
+from sqlalchemy import and_, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.ontology_repository import (
@@ -283,6 +286,39 @@ class SqlAlchemyOntologyRepository:
             .first()
         )
         return cast(ObjectTypeRow, dict(row)) if row else None
+
+    def object_type_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+    ) -> ObjectTypeRow | None:
+        row = (
+            transaction.execute(
+                select(db.object_types).where(
+                    and_(db.object_types.c.tenant_id == tenant_id, db.object_types.c.id == object_type_id)
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(ObjectTypeRow, dict(row)) if row else None
+
+    def update_object_type_config(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        config: Mapping[str, object],
+    ) -> bool:
+        result = transaction.execute(
+            update(db.object_types)
+            .where(and_(db.object_types.c.tenant_id == tenant_id, db.object_types.c.id == object_type_id))
+            .values(config=dict(config))
+        )
+        return bool(result.rowcount)
 
     def enabled_action_type_for_version(
         self,

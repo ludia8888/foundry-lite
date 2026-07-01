@@ -1112,6 +1112,10 @@ const plan = await maintenance.planIcebergMaintenanceReadOnly("clean.orders", {
   retentionMinSnapshots: 3,
 });
 await maintenance.requestIcebergMaintenancePlan("clean.orders", { branch: "main" });
+await client.operations.icebergMaintenance.run("clean.orders", {
+  branch: "main",
+  retentionMinSnapshots: 3,
+});
 await maintenance.replayObjectTypeIndex("Order");
 await maintenance.replayFailedIndexRun(indexRunId);
 await maintenance.retryTransformRun(transformRunId);
@@ -1145,9 +1149,9 @@ await maintenanceControls.replayFailedIndexRun.execute({ runId: indexRunId });
 await maintenanceControls.retryTransformRun.execute({ runId: transformRunId });
 ```
 
-Current boundary: this is observability detection, maintenance planning evidence, index replay, and transform retry.
-It does not execute Iceberg compaction/expiration, run database migrations, manage long-running worker daemons, or
-bootstrap infrastructure from a browser.
+Current boundary: this is observability detection, maintenance planning/run evidence, index replay, and transform retry.
+It does not provide a full Iceberg retention policy console, run database migrations, manage long-running worker
+daemons, or bootstrap infrastructure from a browser.
 
 ## Admin And Recovery Console
 
@@ -1171,6 +1175,18 @@ const internalWorkbench = await admin.loadInternalOperationsWorkbench({
   includeBlocked: true,
 });
 const recoveryOverview = await recovery.loadRecoveryOverview();
+const verifiedRestore = await recovery.restoreArtifact({
+  artifactRef: "/var/foundry-lite/backups/tenant-demo/backup.json",
+  artifactHash: "sha256:...",
+  restoreId: "restore-2026-07-01",
+  validationId: "post-restore-2026-07-01",
+});
+const executedRestore = await recovery.executeArtifactRestore({
+  artifactRef: verifiedRestore.artifactRef,
+  artifactHash: verifiedRestore.artifactHash,
+  restoreId: "restore-2026-07-01",
+  runPostRestoreValidation: false,
+});
 
 if (launchModel.hasBrowserActions) {
   renderBrowserActions(launchModel.browserActions);
@@ -1186,6 +1202,7 @@ renderInternalOperationsReadiness(internalWorkbench.readiness);
 renderPrivilegedCommands(internalWorkbench.privilegedCommandCards);
 renderVisibleCommands(internalWorkbench.visibleCommandCards);
 renderRecoveryOverview(recoveryOverview);
+renderRestoreEvidence(verifiedRestore);
 ```
 
 React admin screens under `FoundryLiteProvider` can load the same launch model without rebuilding the grouping logic.
@@ -1275,7 +1292,25 @@ worker, or bootstrap work is browser-safe.
 ## Current Boundary
 
 What is current: SDK request/error/session helpers, generated named API methods, OSDK-style object/action/media facade,
-screen recipe builders, React screen-state hooks, request/helper contract proof, and documentation gates.
+TypeScript ObjectSet `where({ status: { $eq: "PENDING" } })` / `orderBy({ amount: "desc" })` /
+`aggregate({ select: { count: { $count: "unordered" } }, groupBy: { region: "exact" } })` / `$pageSize`
+request aliases with fail-fast property/operator/aggregate validation, generated TS instance `$link` traversal such as
+`order.$link.customer.fetchPage(...)`, bound instance action calls such as
+`order.$actions.approveOrder.validateAction(params)` and
+`order.$actions.approveOrder.applyAction(params, { idempotencyKey, onCacheRefresh })`, a Python application OSDK mirror through
+`foundry(Order).where(status={"eq": "PENDING"}).fetch_page(...)`,
+`foundry(Customer).aggregate({"select": {"count": {"$count": "unordered"}}, "group_by": {"region": "exact"}})`, and
+`foundry(ApproveOrder).validate_action(...)`, `foundry(ApproveOrder).apply_action(..., idempotency_key=...)`, TS/Python SDK package manifest plus live-catalog
+drift report/assert helpers that tell a developer when SDK regeneration is required, Developer Console-lite app/resource/client
+grants, JWT claim app-scope headers, local OAuth authorization-code/PKCE/token/refresh/revoke lifecycle, local TS/Python SDK
+version artifacts with channels/compatibility windows/download tokens, ObjectSet WebSocket `.subscribe(...)` with SSE/fetch-stream
+fallback, at-least-once subscription semantics, reconnect/resume cursor, backpressure guard, rate-limit normalization,
+browser CORS/WebSocket Origin/security threat-model proof, screen recipe builders, React screen-state hooks, request/helper
+contract proof, and documentation gates.
 
-What remains future: polished visual components, full login/session UI, server push route implementation, visual
-timeline components, direct browser execution for migration/worker/bootstrap, and complete S62-S64 workspace UX.
+What remains future: polished visual components, full login/session UI, broader visual server-push timeline components,
+richer aggregate functions/server-side aggregate execution, richer multi-hop/batched link traversal, polished action validation/edit-return
+visual UX beyond the current validation/edit/cache hints, external NPM/PyPI publishing, visual Developer Console UI, OAuth
+external IdP introspection/refresh-token revocation, direct browser execution for migration/worker/bootstrap,
+exactly-once subscription delivery, Palantir-grade external package lifecycle/deployment compatibility windows, and complete
+S62-S64 workspace UX.

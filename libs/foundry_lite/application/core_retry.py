@@ -1,3 +1,5 @@
+"""Application-layer models and helpers for core retry."""
+
 from __future__ import annotations
 
 from foundry_lite.application.ports import RuntimeRetryMaterializationResult, RuntimeRetryPlan

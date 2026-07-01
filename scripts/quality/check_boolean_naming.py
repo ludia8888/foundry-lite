@@ -52,7 +52,9 @@ ALLOWED_EXACT_NAMES = {
     "gate_pass",
     "indexed",
     "initialized",
+    "matched",
     "nullable",
+    "required",
     "searchable",
 }
 ALLOWED_SUFFIXES = (

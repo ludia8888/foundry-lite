@@ -1,3 +1,5 @@
+"""Application-layer models and helpers for primitives."""
+
 from __future__ import annotations
 
 import csv

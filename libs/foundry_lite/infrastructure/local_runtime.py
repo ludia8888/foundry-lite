@@ -1,3 +1,5 @@
+"""Infrastructure support for local runtime."""
+
 from __future__ import annotations
 
 import os
@@ -37,6 +39,7 @@ from foundry_lite.infrastructure.adapters import (
     IcebergDatasetStorageAdapter,
     IcebergDatasetStorageAdapterConfig,
     ImageProcessorAdapter,
+    LocalBackupArtifactStore,
     LocalCompletionAdapter,
     LocalConnectorAdapter,
     LocalContentIndexAdapter,
@@ -86,6 +89,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import (
     _ffmpeg_scene_frame_paths,
     _ffprobe_video_probe_runner,
 )
+from foundry_lite.infrastructure.auth import LocalOAuthTokenIssuer
 from foundry_lite.infrastructure.postgres_rls import install_postgres_rls_tenant_context
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyActionRepository,
@@ -106,10 +110,12 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyMediaRepository,
     SqlAlchemyMetadataRepository,
     SqlAlchemyModelRegistryRepository,
+    SqlAlchemyOAuthSessionRepository,
     SqlAlchemyObjectIndexRepository,
     SqlAlchemyObjectReadRepository,
     SqlAlchemyObjectSetRepository,
     SqlAlchemyOntologyRepository,
+    SqlAlchemyOsdkApplicationRepository,
     SqlAlchemyRuntimeRepository,
     SqlAlchemySourceManagementRepository,
     SqlAlchemySourceRegistryRepository,
@@ -157,6 +163,8 @@ def create_local_core_dependencies(
     media_storage_root.mkdir(parents=True, exist_ok=True)
     prompt_artifacts_root = root / "prompt-artifacts"
     prompt_artifacts_root.mkdir(parents=True, exist_ok=True)
+    backup_artifacts_root = root / "backup-artifacts"
+    backup_artifacts_root.mkdir(parents=True, exist_ok=True)
 
     storage_adapter = _dataset_storage_adapter(adapter_profile, object_storage_root)
     media_storage = _media_storage_adapter(adapter_profile, media_storage_root)
@@ -218,6 +226,9 @@ def create_local_core_dependencies(
         object_index_repository=SqlAlchemyObjectIndexRepository(engine),
         object_read_repository=SqlAlchemyObjectReadRepository(engine),
         object_set_repository=SqlAlchemyObjectSetRepository(engine),
+        osdk_application_repository=SqlAlchemyOsdkApplicationRepository(engine),
+        oauth_session_repository=SqlAlchemyOAuthSessionRepository(engine),
+        oauth_token_issuer=LocalOAuthTokenIssuer.from_key_path(root / "oauth-private-key.pem"),
         runtime_repository=SqlAlchemyRuntimeRepository(engine),
         erasure_repository=SqlAlchemyErasureRepository(engine),
         media_repository=SqlAlchemyMediaRepository(engine),
@@ -251,6 +262,7 @@ def create_local_core_dependencies(
         stream_adapter=stream_adapter,
         tool_executor=FakeToolExecutor(),
         workflow_adapter=workflow_adapter,
+        backup_artifact_store=LocalBackupArtifactStore(backup_artifacts_root),
     )
 
 

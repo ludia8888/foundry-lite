@@ -13,7 +13,7 @@ from foundry_lite.application.services.ontology_migration_types import (
     ActionParameterMap,
     OntologyMigrationChange,
 )
-from foundry_lite.application.services.ontology_yaml import YamlObject, required_str
+from foundry_lite.application.services.ontology_yaml import YamlObject, optional_str, required_str
 
 
 def blocked_object_removed(api_name: str) -> OntologyMigrationChange:
@@ -88,13 +88,22 @@ def warning_property_deprecated(object_api_name: str, api_name: str) -> Ontology
     )
 
 
-def warning_property_reindex(object_api_name: str, api_name: str) -> OntologyMigrationChange:
+def warning_property_reindex(
+    object_api_name: str,
+    api_name: str,
+    current: PropertyTypeRow,
+    candidate: YamlObject,
+) -> OntologyMigrationChange:
     """Return a warning change for a property mapping that needs reindexing."""
     return _warning(
         "property_mapping_changed",
         f"objectTypes.{object_api_name}.properties.{api_name}.column",
         "property backing changed and the active object index needs a deterministic rebuild",
         has_object_reindex_requirement=True,
+        details={
+            "previousColumn": current["column_name"],
+            "nextColumn": optional_str(candidate, "column"),
+        },
     )
 
 
@@ -250,6 +259,7 @@ def _warning(
     reason: str,
     *,
     has_object_reindex_requirement: bool = False,
+    details: Mapping[str, object] | None = None,
 ) -> OntologyMigrationChange:
     return OntologyMigrationChange(
         kind,
@@ -257,4 +267,5 @@ def _warning(
         "warning",
         reason,
         has_object_reindex_requirement=has_object_reindex_requirement,
+        details=details or {},
     )

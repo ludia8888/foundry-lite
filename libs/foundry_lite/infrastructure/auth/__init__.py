@@ -8,6 +8,7 @@ from foundry_lite.infrastructure.auth.local import (
     DemoAuthProvider,
     HeaderTrustAuthProvider,
 )
+from foundry_lite.infrastructure.auth.oauth_token_issuer import LocalOAuthTokenIssuer
 from foundry_lite.infrastructure.auth.oidc import (
     AUTHORIZATION_HEADER,
     OIDC_AUDIENCE_ENV,
@@ -46,6 +47,7 @@ __all__ = [
     "HeaderTrustAuthProvider",
     "JwtOidcAuthConfig",
     "JwtOidcAuthProvider",
+    "LocalOAuthTokenIssuer",
     "OIDC_AUDIENCE_ENV",
     "OIDC_DISCOVERY_JSON_ENV",
     "OIDC_ISSUER_ENV",

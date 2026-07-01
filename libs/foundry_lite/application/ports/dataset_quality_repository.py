@@ -1,3 +1,5 @@
+"""Application port contract for dataset quality repository."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -41,6 +43,7 @@ class DatasetCheckResultRow(TypedDict):
     id: str
     tenant_id: str
     check_id: str
+    data_contract_version_id: str | None
     run_id: str
     transaction_id: str
     checked_manifest_hash: str
@@ -56,6 +59,7 @@ class DatasetCheckResultHistoryRow(TypedDict):
     tenant_id: str
     dataset_id: str
     check_id: str
+    data_contract_version_id: str | None
     check_name: str
     check_type: str
     severity: str
@@ -67,6 +71,31 @@ class DatasetCheckResultHistoryRow(TypedDict):
     status: str
     details: DatasetCheckResult
     created_at: str
+
+
+class DatasetQualityContractCheckSnapshot(TypedDict):
+    checkId: str
+    name: str
+    checkType: str
+    config: DatasetCheckConfig
+    severity: str
+    enabled: bool
+
+
+class DatasetQualityContractVersionRow(TypedDict):
+    id: str
+    tenant_id: str
+    dataset_id: str
+    contract_key: str
+    version: int
+    status: str
+    owner_user_id: str | None
+    description: str | None
+    checks_snapshot: list[DatasetQualityContractCheckSnapshot]
+    schema_version_id: str | None
+    schema_version: int | None
+    created_at: str
+    activated_at: str | None
 
 
 class DatasetCheckResultStatusCountRow(TypedDict):
@@ -103,6 +132,7 @@ class DatasetQualityContractCheckList(TypedDict):
 class DatasetQualityResultHistoryItem(TypedDict):
     id: str
     checkId: str
+    dataContractVersionId: str | None
     checkName: str
     checkType: str
     severity: str
@@ -140,6 +170,32 @@ class DatasetQualityResultSummary(TypedDict):
     latestResults: list[DatasetQualityResultHistoryItem]
 
 
+class DatasetQualityContractVersion(TypedDict):
+    id: str
+    datasetId: str
+    datasetRef: str
+    contractKey: str
+    version: int
+    status: str
+    ownerUserId: str | None
+    description: str | None
+    checks: list[DatasetQualityContractCheck]
+    schemaVersionId: str | None
+    schemaVersion: int | None
+    createdAt: str
+    activatedAt: str | None
+
+
+class DatasetQualityContractVersionCreateResult(TypedDict):
+    contractVersion: DatasetQualityContractVersion
+    isIdempotentReplay: bool
+
+
+class DatasetQualityContractVersionList(TypedDict):
+    datasetRef: str
+    contractVersions: list[DatasetQualityContractVersion]
+
+
 @dataclass(frozen=True)
 class DatasetSchemaRecord:
     schema_id: str
@@ -175,6 +231,24 @@ class DatasetCheckResultRecord:
     status: str
     details: DatasetCheckResult
     created_at: str
+    data_contract_version_id: str | None = None
+
+
+@dataclass(frozen=True)
+class DatasetQualityContractVersionRecord:
+    contract_version_id: str
+    tenant_id: str
+    dataset_id: str
+    contract_key: str
+    version: int
+    status: str
+    owner_user_id: str | None
+    description: str | None
+    checks_snapshot: list[DatasetQualityContractCheckSnapshot]
+    schema_version_id: str | None
+    schema_version: int | None
+    created_at: str
+    activated_at: str | None = None
 
 
 class DatasetQualityRepository(Protocol):
@@ -192,6 +266,10 @@ class DatasetQualityRepository(Protocol):
 
     def latest_schema_version(self, *, transaction: TransactionContext, dataset_id: str) -> int | None:
         """Return the highest schema version number for a dataset, or None when no schemas exist."""
+        ...
+
+    def latest_schema(self, *, transaction: TransactionContext, dataset_id: str) -> DatasetSchemaRow | None:
+        """Return the newest schema row for a dataset, or None when no schemas exist."""
         ...
 
     def insert_schema(self, *, transaction: TransactionContext, record: DatasetSchemaRecord) -> None:
@@ -240,6 +318,72 @@ class DatasetQualityRepository(Protocol):
 
     def insert_check_result(self, *, transaction: TransactionContext, record: DatasetCheckResultRecord) -> None:
         """Persist one dataset check result inside the caller transaction."""
+        ...
+
+    def latest_contract_version_number(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+        contract_key: str,
+    ) -> int | None:
+        """Return the highest contract version number for one tenant dataset contract."""
+        ...
+
+    def insert_contract_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        record: DatasetQualityContractVersionRecord,
+    ) -> None:
+        """Persist one immutable dataset quality contract version."""
+        ...
+
+    def contract_version_by_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+        contract_version_id: str,
+    ) -> DatasetQualityContractVersionRow | None:
+        """Return one tenant-scoped dataset quality contract version."""
+        ...
+
+    def contract_versions_for_dataset(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+        limit: int,
+    ) -> list[DatasetQualityContractVersionRow]:
+        """Return newest tenant-scoped quality contract versions for one dataset."""
+        ...
+
+    def active_contract_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+        contract_key: str,
+    ) -> DatasetQualityContractVersionRow | None:
+        """Return the active version for one tenant dataset contract key, if any."""
+        ...
+
+    def activate_contract_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        dataset_id: str,
+        contract_key: str,
+        contract_version_id: str,
+        activated_at: str,
+    ) -> bool:
+        """Mark one contract version active and supersede older active versions."""
         ...
 
     def check_results_for_transaction(

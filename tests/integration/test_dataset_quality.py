@@ -253,6 +253,115 @@ def test_updated_quality_contract_check_controls_later_commit(foundry: FoundryLi
     assert any(failure["check"] == "row_count_min" for failure in exc_info.value.details["failures"])
 
 
+def test_active_data_contract_version_pins_check_snapshot(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    dataset_ref = "raw.versioned_contract_orders"
+    foundry.datasets.ensure(dataset_ref, ctx=ctx, primary_key=["order_id"])
+    created = foundry.datasets.create_quality_contract_check(
+        dataset_ref,
+        config={"type": "row_count_min", "min": 2},
+        ctx=ctx,
+    )
+    version_result = foundry.datasets.create_data_contract_version(
+        dataset_ref,
+        owner_user_id="data-owner",
+        description="minimum two order rows",
+        ctx=ctx,
+    )
+    contract_version = version_result["contractVersion"]
+    activated = foundry.datasets.activate_data_contract_version(dataset_ref, contract_version["id"], ctx=ctx)
+    foundry.datasets.update_quality_contract_check(
+        dataset_ref,
+        created["check"]["id"],
+        config={"type": "row_count_min", "min": 4},
+        ctx=ctx,
+    )
+    two_rows = tmp_path / "versioned_contract_orders.csv"
+    two_rows.write_text("order_id,amount\nO-1,100\nO-2,200\n", encoding="utf-8")
+
+    committed = foundry.datasets.upload_csv(dataset_ref, two_rows, ctx=ctx)
+    versions = foundry.datasets.list_data_contract_versions(dataset_ref, ctx=ctx)
+    fetched = foundry.datasets.get_data_contract_version(dataset_ref, contract_version["id"], ctx=ctx)
+    history = foundry.datasets.list_quality_results(dataset_ref, limit=20, ctx=ctx)
+    sync_run = next(
+        run
+        for run in foundry.operations.list_runs(ctx=ctx)["syncRuns"]
+        if run["committed_version_id"] == committed.version_id
+    )
+    detail = foundry.operations.run_detail("sync", str(sync_run["id"]), ctx=ctx)
+
+    with foundry.engine.begin() as conn:
+        check_results = _check_results_for_transaction(conn, committed.transaction_id)
+
+    assert version_result["isIdempotentReplay"] is False
+    assert activated["status"] == "ACTIVE"
+    assert fetched["checks"][0]["config"] == {"type": "row_count_min", "min": 2}
+    assert versions["contractVersions"][0]["id"] == contract_version["id"]
+    assert committed.row_count == 2
+    assert {row["data_contract_version_id"] for row in check_results} == {contract_version["id"]}
+    assert {row["dataContractVersionId"] for row in history["results"]} == {contract_version["id"]}
+    assert detail["quality"]["dataContractVersionIds"] == [contract_version["id"]]
+
+
+def test_active_data_contract_version_pins_accepted_values_policy(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    dataset_ref = "raw.contract_policy_orders"
+    foundry.datasets.ensure(dataset_ref, ctx=ctx, primary_key=["order_id"])
+    with pytest.raises(ValidationFailed, match="accepted values check requires values"):
+        foundry.datasets.create_quality_contract_check(
+            dataset_ref,
+            config={"type": "accepted_values", "column": "status", "values": []},
+            ctx=ctx,
+        )
+    created = foundry.datasets.create_quality_contract_check(
+        dataset_ref,
+        config={"type": "accepted_values", "column": "status", "values": ["PENDING", "APPROVED"]},
+        ctx=ctx,
+    )
+    first_version = foundry.datasets.create_data_contract_version(
+        dataset_ref,
+        owner_user_id="data-owner",
+        description="initial order status policy",
+        ctx=ctx,
+    )["contractVersion"]
+    foundry.datasets.activate_data_contract_version(dataset_ref, first_version["id"], ctx=ctx)
+    foundry.datasets.update_quality_contract_check(
+        dataset_ref,
+        created["check"]["id"],
+        config={"type": "accepted_values", "column": "status", "values": ["PENDING", "APPROVED", "CANCELLED"]},
+        ctx=ctx,
+    )
+    cancelled_order = tmp_path / "contract_policy_cancelled.csv"
+    cancelled_order.write_text("order_id,status\nO-1,CANCELLED\n", encoding="utf-8")
+
+    with pytest.raises(ValidationFailed, match="dataset checks failed") as exc_info:
+        foundry.datasets.upload_csv(dataset_ref, cancelled_order, ctx=ctx)
+
+    second_version = foundry.datasets.create_data_contract_version(
+        dataset_ref,
+        owner_user_id="data-owner",
+        description="allow cancelled orders",
+        ctx=ctx,
+    )["contractVersion"]
+    foundry.datasets.activate_data_contract_version(dataset_ref, second_version["id"], ctx=ctx)
+    committed = foundry.datasets.upload_csv(dataset_ref, cancelled_order, ctx=ctx)
+    with foundry.engine.begin() as conn:
+        check_results = _check_results_for_transaction(conn, committed.transaction_id)
+    accepted_result = next(row for row in check_results if row["details"]["check"] == "accepted_values")
+
+    failure = next(item for item in exc_info.value.details["failures"] if item["check"] == "accepted_values")
+    assert failure["contract_status"] == "BLOCK_COMMIT"
+    assert failure["invalid_count"] == 1
+    assert failure["sample_invalid_values"] == ["CANCELLED"]
+    preview = foundry.datasets.preview(dataset_ref, ctx=ctx)
+    assert [(row["order_id"], row["status"]) for row in preview] == [("O-1", "CANCELLED")]
+    assert accepted_result["data_contract_version_id"] == second_version["id"]
+    assert accepted_result["status"] == "PASS"
+
+
 def test_schema_evolution_widening_is_visible_in_transaction_metadata(
     foundry: FoundryLite,
     tmp_path: Path,

@@ -1,6 +1,8 @@
+"""Application service helpers for ingest workflows."""
+
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import NoReturn
 
@@ -12,6 +14,7 @@ from foundry_lite.application.ports import (
     RestSourceConfig,
     StreamAdapter,
     StreamArchiveConfig,
+    StreamEvent,
     SyncRunRecord,
     TransactionContext,
 )
@@ -30,6 +33,7 @@ from foundry_lite.application.services.dataset.protocols import (
 from foundry_lite.application.services.dataset.stream_archive_commit import (
     commit_stream_archive,
     read_stream_archive_events,
+    record_stream_pre_commit_failure,
     record_stream_read_failure,
     stream_cursor_offset,
 )
@@ -167,6 +171,7 @@ class DatasetIngestService(CoreService):
         cursor: Mapping[str, object] | None = None,
         rest: RestSourceConfig | None = None,
         tx_type: str = "SNAPSHOT",
+        run_id: str | None = None,
     ) -> CommitResult:
         return connector_snapshot_ingest.sync_connector_snapshot(
             self,
@@ -179,6 +184,7 @@ class DatasetIngestService(CoreService):
             cursor=cursor,
             rest=rest,
             tx_type=tx_type,
+            run_id=run_id,
         )
 
     def sync_rows_batch(
@@ -263,6 +269,7 @@ class DatasetIngestService(CoreService):
         ctx: RequestContext | None = None,
         after_offset: int | None = None,
         sync_name: str | None = None,
+        pre_commit_check: Callable[[Sequence[StreamEvent]], None] | None = None,
     ) -> CommitResult | None:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
@@ -271,8 +278,22 @@ class DatasetIngestService(CoreService):
         committed_transaction = self._committed_stream_transaction(ctx, dataset)
         committed_metadata = committed_transaction["metadata"] if committed_transaction is not None else {}
         resume_offset = after_offset if after_offset is not None else stream_cursor_offset(committed_metadata, stream)
+        events = self._read_stream_archive_events(ctx, dataset, stream, sync_name, resume_offset)
+        if not events:
+            return None
+        self._run_stream_pre_commit_check(ctx, dataset, stream, sync_name, events, pre_commit_check)
+        return commit_stream_archive(self, ctx, dataset, stream, events, sync_name, committed_transaction)
+
+    def _read_stream_archive_events(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        stream: StreamArchiveConfig,
+        sync_name: str | None,
+        resume_offset: int | None,
+    ) -> Sequence[StreamEvent]:
         try:
-            events = read_stream_archive_events(self.stream_adapter, stream, resume_offset)
+            return read_stream_archive_events(self.stream_adapter, stream, resume_offset)
         except Exception as exc:
             repository = self.dataset_transaction_repository
             record_stream_read_failure(
@@ -281,9 +302,31 @@ class DatasetIngestService(CoreService):
             if isinstance(exc, FoundryLiteError):
                 raise
             raise ValidationFailed("stream archive read failed", details={"error": str(exc)}) from exc
-        if not events:
-            return None
-        return commit_stream_archive(self, ctx, dataset, stream, events, sync_name, committed_transaction)
+
+    def _run_stream_pre_commit_check(
+        self,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        stream: StreamArchiveConfig,
+        sync_name: str | None,
+        events: Sequence[StreamEvent],
+        pre_commit_check: Callable[[Sequence[StreamEvent]], None] | None,
+    ) -> None:
+        try:
+            if pre_commit_check is not None:
+                pre_commit_check(events)
+        except Exception as exc:
+            record_stream_pre_commit_failure(
+                self.engine,
+                self.dataset_transaction_repository,
+                self.runtime_service,
+                ctx,
+                dataset,
+                stream,
+                sync_name,
+                exc,
+            )
+            raise
 
     def replay_dead_letter_record(
         self,

@@ -21,6 +21,14 @@ from foundry_lite.application.services.aip.tool_broker import (
     ToolBrokerService,
     ToolCallRequest,
     ToolSpec,
+    _bounded_output,
+    _check_object_scope,
+    _check_output_bytes,
+    _check_timeout_budget,
+    _mask_output,
+    _requested_properties,
+    _validated_arguments,
+    is_direct_vendor_tool_id,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -62,6 +70,25 @@ def test_generic_executor_tool_is_denied_before_executor_call() -> None:
         _broker(executor).execute(_CTX, _request(tool_id="shell_execute", agent_allowed_tools=("shell_execute",)))
 
     assert excinfo.value.reason == "not_published"
+    assert executor.calls == 0
+
+
+def test_tool_broker_rejects_direct_vendor_api_tool_even_when_manifest_published() -> None:
+    executor = _SpyExecutor()
+    spec = _vendor_api_spec()
+
+    with pytest.raises(ToolBrokerError) as excinfo:
+        _broker(executor).execute(
+            _CTX,
+            _request(
+                spec=spec,
+                tool_id="http.request",
+                arguments_json='{"url":"https://api.vendor.example/orders"}',
+                agent_allowed_tools=("http.request",),
+            ),
+        )
+
+    assert excinfo.value.reason == "direct_vendor_tool_denied"
     assert executor.calls == 0
 
 
@@ -125,6 +152,62 @@ def test_tool_broker_enforces_result_item_limit() -> None:
 
     assert excinfo.value.reason == "budget_exceeded"
     assert executor.calls == 1
+
+
+def test_tool_broker_schema_and_budget_helpers_cover_fail_closed_edges() -> None:
+    spec = _spec()
+
+    with pytest.raises(ToolBrokerError, match="valid JSON"):
+        _validated_arguments(spec, "{bad-json")
+    with pytest.raises(ToolBrokerError, match="JSON object"):
+        _validated_arguments(spec, "[]")
+    with pytest.raises(ToolBrokerError, match="required must be a list"):
+        _validated_arguments(
+            ToolSpec(
+                **{
+                    **spec.__dict__,
+                    "input_schema": {"type": "object", "required": "object_id", "properties": {}},
+                }
+            ),
+            "{}",
+        )
+    with pytest.raises(ToolBrokerError, match="properties must be an object"):
+        _validated_arguments(
+            ToolSpec(
+                **{
+                    **spec.__dict__,
+                    "input_schema": {"type": "object", "properties": [], "additionalProperties": True},
+                }
+            ),
+            "{}",
+        )
+    with pytest.raises(ToolBrokerError, match="does not match type"):
+        _validated_arguments(spec, '{"object_type":"PurchaseOrder","object_id":"PO-1","property_names":"id"}')
+    with pytest.raises(ToolBrokerError, match="not allowlisted"):
+        _check_object_scope(spec, {"object_type": "Invoice", "object_id": "I-1", "property_names": ["id"]})
+    timeout_spec = ToolSpec(**{**spec.__dict__, "timeout_seconds": 99})
+    with pytest.raises(ToolBrokerError, match="tool timeout"):
+        _check_timeout_budget(_request(spec=timeout_spec), timeout_spec)
+    with pytest.raises(ToolBrokerError, match="tool result exceeds"):
+        _check_output_bytes(_request(), {"payload": "x" * 5000})
+
+    assert is_direct_vendor_tool_id("https-post")
+    assert _requested_properties({"properties": {"id": True, 1: True}}) == {"id"}
+
+
+def test_tool_broker_masks_item_outputs_and_accepts_bounded_result() -> None:
+    output = {
+        "items": [
+            {"object_type": "PurchaseOrder", "properties": {"id": "PO-1", "margin": 5}},
+            "not-an-object",
+        ]
+    }
+    masked = _mask_output(_CTX, PolicyService(_classification_provider), output)
+    bounded = _bounded_output(_CTX, _request(), _spec(), {"ok": True}, PolicyService(_classification_provider))
+
+    assert masked["items"][0]["properties"]["margin"] == "***MASKED***"
+    assert masked["items"][1] == "not-an-object"
+    assert bounded == {"ok": True}
 
 
 def test_local_runtime_composes_tool_broker_with_safe_fake_executor(tmp_path: Path) -> None:
@@ -197,6 +280,24 @@ def _spec(
         property_allowlist=("id", "status", "supplier", "margin"),
         result_classification=result_classification,
         max_result_items=max_result_items,
+    )
+
+
+def _vendor_api_spec() -> ToolSpec:
+    return ToolSpec(
+        tool_id="http.request",
+        version="2026-06-25",
+        input_schema={
+            "type": "object",
+            "required": ["url"],
+            "additionalProperties": False,
+            "properties": {"url": {"type": "string"}},
+        },
+        output_schema={"type": "object"},
+        effect="READ",
+        required_permission="object:read",
+        confirmation_policy="NONE",
+        result_classification="internal",
     )
 
 

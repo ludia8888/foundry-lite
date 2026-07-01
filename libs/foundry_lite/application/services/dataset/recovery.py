@@ -1,3 +1,5 @@
+"""Application service helpers for recovery workflows."""
+
 from __future__ import annotations
 
 from foundry_lite.application.ports import DatasetTransactionRow

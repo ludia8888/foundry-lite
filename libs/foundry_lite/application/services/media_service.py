@@ -1,3 +1,5 @@
+"""Application service helpers for media service workflows."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

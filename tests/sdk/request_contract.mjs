@@ -80,6 +80,9 @@ const client = sdk.createFoundryLiteClient({
     tenantId: "tenant-a",
     userId: "user-a",
     roles: ["operator", "admin"],
+    applicationId: "osdk-app-orders",
+    clientId: "client-orders",
+    scopes: ["osdk:object:Order:read", "osdk:object:Order:subscribe"],
   },
   requestIdFactory: () => REQUEST_ID,
   fetchImpl,
@@ -92,10 +95,17 @@ assert.equal(sdk.Order.apiName, "Order");
 assert.equal(sdk.Order.primaryKey, "orderId");
 assert.deepEqual(sdk.$Ontology.objectApiNames, ["Order", "Customer"]);
 assert.deepEqual(sdk.$Ontology.actionApiNames, ["ApproveOrder"]);
+assert.deepEqual(sdk.$Ontology.linkApiNames, ["OrderCustomer"]);
 assert.equal(osdk.objects.Order, sdk.Order);
 assert.equal(osdk.actions.ApproveOrder, sdk.ApproveOrder);
 assert.equal(sdk.getObjectType("Order"), sdk.Order);
 assert.equal(sdk.getActionType("ApproveOrder"), sdk.ApproveOrder);
+const sdkManifest = sdk.sdkPackageManifest();
+assert.equal(sdkManifest.packageName, "@foundry-lite/sdk");
+assert.equal(sdkManifest.packageVersion, "0.1.0");
+assert.equal(sdkManifest.ontologyFingerprint, sdk.ONTOLOGY_CONTRACT_FINGERPRINT);
+assert.deepEqual(sdkManifest.objectApiNames, ["Order", "Customer"]);
+assert.deepEqual(sdkManifest.linkApiNames, ["OrderCustomer"]);
 const staticOntologyIndex = sdk.createFoundryLiteOntologyIndex();
 assert.equal(staticOntologyIndex.objectCount, 2);
 assert.equal(staticOntologyIndex.getObjectView("Order").generatedObjectType, sdk.Order);
@@ -196,6 +206,58 @@ const liveOntologyCatalog = {
   ],
   linkTypes: [],
 };
+const matchingOntologyCatalog = {
+  ontologyVersionId: "ontology/1",
+  versionNumber: 7,
+  status: "active",
+  createdAt: "2026-06-28T00:00:00Z",
+  activatedAt: "2026-06-28T00:01:00Z",
+  ontologyContractFingerprint: sdk.ONTOLOGY_CONTRACT_FINGERPRINT,
+  objectTypes: [
+    liveOntologyCatalog.objectTypes[0],
+    {
+      apiName: "Customer",
+      displayName: "Customer",
+      description: "Supply chain customer",
+      primaryKeyProperty: "customerId",
+      backing: {},
+      config: {},
+      properties: [
+        {
+          apiName: "customerId",
+          displayName: "Customer ID",
+          dataType: "string",
+          nullable: false,
+          indexed: true,
+          searchable: true,
+          editable: false,
+          classification: null,
+          source: "column",
+          columnName: "customer_id",
+          editPolicy: "read_only",
+          derivation: null,
+        },
+      ],
+      actions: [],
+    },
+  ],
+  linkTypes: [
+    {
+      apiName: "OrderCustomer",
+      displayName: "Order belongs to Customer",
+      fromObjectType: "Order",
+      toObjectType: "Customer",
+      cardinality: "many_to_one",
+      backing: {},
+    },
+  ],
+};
+const freshSdkReport = sdk.sdkOntologyDriftReport(matchingOntologyCatalog);
+assert.equal(freshSdkReport.requiresSdkRegeneration, false);
+assert.equal(freshSdkReport.isFingerprintMatched, true);
+assert.deepEqual(freshSdkReport.reasonCodes, []);
+assert.deepEqual(freshSdkReport.liveObjectApiNames, ["Customer", "Order"]);
+assert.equal(sdk.assertFoundryLiteSdkFresh(matchingOntologyCatalog).requiresSdkRegeneration, false);
 const liveOntologyIndex = sdk.createFoundryLiteOntologyIndex(liveOntologyCatalog);
 assert.equal(liveOntologyIndex.objectCount, 3);
 assert.equal(liveOntologyIndex.actionCount, 2);
@@ -216,10 +278,25 @@ assert.deepEqual(liveOntologyIndex.findActionTypes("approve").map((view) => view
 assert.throws(() => liveOntologyIndex.getActionView("MissingAction"), {
   code: "UNKNOWN_ONTOLOGY_ACTION_VIEW",
 });
+const staleSdkReport = sdk.sdkOntologyDriftReport(liveOntologyCatalog);
+assert.equal(staleSdkReport.requiresSdkRegeneration, true);
+assert.equal(staleSdkReport.isFingerprintMatched, null);
+assert.deepEqual(staleSdkReport.dynamicOnlyObjectApiNames, ["SupplierRisk"]);
+assert.deepEqual(staleSdkReport.staticOnlyObjectApiNames, ["Customer"]);
+assert.deepEqual(staleSdkReport.dynamicOnlyActionApiNames, ["EscalateSupplier"]);
+assert.deepEqual(staleSdkReport.staticOnlyLinkApiNames, ["OrderCustomer"]);
+assert.ok(staleSdkReport.reasonCodes.includes("DYNAMIC_OBJECT_TYPES"));
+assert.ok(staleSdkReport.reasonCodes.includes("STATIC_LINK_TYPES"));
+assert.throws(() => sdk.assertFoundryLiteSdkFresh(liveOntologyCatalog), {
+  code: "OSDK_SDK_REGENERATION_REQUIRED",
+});
 coveredHelperIds.add("helpers.createFoundryLiteOsdkClient");
 coveredHelperIds.add("helpers.createFoundryLiteOntologyIndex");
 coveredHelperIds.add("helpers.getObjectType");
 coveredHelperIds.add("helpers.getActionType");
+coveredHelperIds.add("helpers.sdkPackageManifest");
+coveredHelperIds.add("helpers.sdkOntologyDriftReport");
+coveredHelperIds.add("helpers.assertFoundryLiteSdkFresh");
 
 let sessionTokenCalls = 0;
 const sessionClient = sdk.createFoundryLiteClient({
@@ -243,6 +320,13 @@ function assertBaseHeaders(headers, surfaceId) {
   assert.equal(headers["X-Tenant-ID"], "tenant-a", surfaceId);
   assert.equal(headers["X-User-ID"], "user-a", surfaceId);
   assert.equal(headers["X-Roles"], "operator,admin", surfaceId);
+  assert.equal(headers["X-Foundry-Lite-App-ID"], "osdk-app-orders", surfaceId);
+  assert.equal(headers["X-Foundry-Lite-Client-ID"], "client-orders", surfaceId);
+  assert.equal(
+    headers["X-Foundry-Lite-Scopes"],
+    "osdk:object:Order:read osdk:object:Order:subscribe",
+    surfaceId,
+  );
   assert.equal(headers["X-Request-ID"], REQUEST_ID, surfaceId);
   assert.equal(headers.Authorization, "Bearer token-a", surfaceId);
   assert.equal(headers["X-Static-Header"], "static-a", surfaceId);
@@ -336,6 +420,21 @@ function assertMissingIdempotencyFailFast(surfaceId, invoke, operationName) {
   coveredMissingIdempotencySurfaceIds.add(surfaceId);
 }
 
+async function assertOsdkFailFast(surfaceId, invoke, expectedCode) {
+  const beforeCalls = calls.length;
+  await assert.rejects(
+    invoke,
+    (error) => {
+      assert.equal(error.name, "FoundryLiteApiError", surfaceId);
+      assert.equal(error.code, expectedCode, surfaceId);
+      assert.equal(error.retryable, false, surfaceId);
+      return true;
+    },
+    surfaceId,
+  );
+  assert.equal(calls.length, beforeCalls, surfaceId);
+}
+
 await expectSdkCall("system.health", () => client.system.health(), {
   path: "/healthz",
 });
@@ -397,6 +496,42 @@ await expectSdkCall(
   () => client.datasets.qualityResults.summary("clean space", "orders/daily", { latestLimit: 3 }),
   {
     path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/results/summary?latest_limit=3",
+  },
+);
+await expectSdkCall(
+  "datasets.qualityContracts.list",
+  () => client.datasets.qualityContracts.list("clean space", "orders/daily", { limit: 5 }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/contracts?limit=5",
+  },
+);
+await expectSdkCall(
+  "datasets.qualityContracts.create",
+  () =>
+    client.datasets.qualityContracts.create("clean space", "orders/daily", {
+      ownerUserId: "data-owner",
+      description: "orders quality contract",
+    }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/contracts",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { ownerUserId: "data-owner", description: "orders quality contract" },
+  },
+);
+await expectSdkCall(
+  "datasets.qualityContracts.get",
+  () => client.datasets.qualityContracts.get("clean space", "orders/daily", "dqcv/1"),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/contracts/dqcv%2F1",
+  },
+);
+await expectSdkCall(
+  "datasets.qualityContracts.activate",
+  () => client.datasets.qualityContracts.activate("clean space", "orders/daily", "dqcv/1"),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/quality-contract/contracts/dqcv%2F1/activate",
+    method: "POST",
   },
 );
 await expectSdkCall("ontology.catalog", () => client.ontology.catalog(), {
@@ -1121,6 +1256,387 @@ await expectSdkCall(
     body: { filter: { property: "status", op: "eq", value: "PENDING" }, limit: 2 },
   },
 );
+await expectSdkCall(
+  "objects.generic.query",
+  () =>
+    osdk(sdk.Order)
+      .where({ status: { $eq: "PENDING" } })
+      .orderBy({ amount: "desc" })
+      .fetchPage({ $pageSize: 2, $pageToken: "cursor/next" }),
+  {
+    path: "/api/objects/Order/query",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      filter: { property: "status", op: "eq", value: "PENDING" },
+      orderBy: [{ property: "amount", direction: "desc" }],
+      limit: 2,
+      cursor: "cursor/next",
+    },
+  },
+);
+responseQueue.push(
+  streamResponse([
+    'event: snapshot\ndata: {"event":"snapshot","items":[],"watermark":11}\n\n',
+    (
+      'event: object_changed\ndata: {"event":"object_changed","state":"ADDED_OR_UPDATED",' +
+      '"object":{"objectType":"Order","objectId":"O-200","objectVersion":2,' +
+      '"properties":{"orderId":"O-200","status":"PENDING"}},"watermark":12}\n\n'
+    ),
+  ]),
+);
+{
+  const beforeCalls = calls.length;
+  const beforeTelemetry = telemetry.length;
+  const snapshots = [];
+  const changes = [];
+  const handle = osdk(sdk.Order)
+    .where({ status: { $eq: "PENDING" } })
+    .subscribe(
+      {
+        onSuccessfulSubscription: (event) => snapshots.push(event),
+        onChange: (event) => changes.push(event),
+      },
+      { pageSize: 3, maxEvents: 2, transport: "sse" },
+    );
+  await handle.closed;
+  assert.equal(calls.length, beforeCalls + 1, "objects.generic.subscribe");
+  assert.equal(telemetry.length, beforeTelemetry, "objects.generic.subscribe");
+  assert.equal(snapshots[0].watermark, 11);
+  assert.equal(changes[0].object.objectId, "O-200");
+  assertRequest(calls.at(-1), {
+    surfaceId: "objects.generic.subscribe",
+    path: "/api/objects/Order/subscriptions/stream",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      filter: { property: "status", op: "eq", value: "PENDING" },
+      orderBy: null,
+      properties: null,
+      pageSize: 3,
+      lastSeenObjectChangeSequence: null,
+      maxEvents: 2,
+    },
+  });
+  coveredSurfaceIds.add("objects.generic.subscribe");
+}
+{
+  class ResumeWebSocket {
+    static instances = [];
+
+    constructor(url, protocols) {
+      this.url = url;
+      this.protocols = protocols;
+      this.sentBodies = [];
+      ResumeWebSocket.instances.push(this);
+      queueMicrotask(() => this.onopen?.());
+    }
+
+    send(body) {
+      const parsed = JSON.parse(body);
+      this.sentBodies.push(parsed);
+      if (ResumeWebSocket.instances.length === 1) {
+        this.onmessage?.({ data: JSON.stringify({ event: "snapshot", items: [], watermark: 7 }) });
+        this.onerror?.(new Error("network drop"));
+        return;
+      }
+      this.onmessage?.({
+        data: JSON.stringify({
+          event: "object_changed",
+          state: "ADDED_OR_UPDATED",
+          object: { objectType: "Order", objectId: "O-201", objectVersion: 3, properties: {} },
+          watermark: 9,
+        }),
+      });
+      this.onclose?.({ code: 1000 });
+    }
+
+    close() {
+      this.onclose?.({ code: 1000 });
+    }
+  }
+
+  const events = [];
+  for await (const event of client.objects.generic.subscribe(
+    "Order",
+    { filter: { property: "status", op: "eq", value: "PENDING" } },
+    { transport: "websocket", webSocketImpl: ResumeWebSocket, maxReconnectAttempts: 1 },
+  )) {
+    events.push(event.payload);
+  }
+
+  assert.equal(ResumeWebSocket.instances.length, 2, "subscription websocket reconnect count");
+  assert.equal(ResumeWebSocket.instances[0].url, "wss://foundry.example/api/objects/Order/subscriptions/ws");
+  assert.deepEqual(ResumeWebSocket.instances[0].protocols, ["foundry-lite", "bearer.token-a"]);
+  assert.equal(ResumeWebSocket.instances[0].sentBodies[0].lastSeenObjectChangeSequence, undefined);
+  assert.equal(ResumeWebSocket.instances[1].sentBodies[0].lastSeenObjectChangeSequence, 7);
+  assert.equal(JSON.stringify(ResumeWebSocket.instances[1].sentBodies).includes("token-a"), false);
+  assert.deepEqual(events.map((event) => event.event), ["snapshot", "object_changed"]);
+}
+{
+  class BackpressureWebSocket {
+    constructor() {
+      queueMicrotask(() => this.onopen?.());
+    }
+
+    send() {
+      this.onmessage?.({ data: JSON.stringify({ event: "snapshot", items: [], watermark: 1 }) });
+      this.onmessage?.({ data: JSON.stringify({ event: "heartbeat", watermark: 1 }) });
+    }
+
+    close() {
+      this.onclose?.({ code: 1008 });
+    }
+  }
+
+  await assert.rejects(
+    async () => {
+      for await (const _event of client.objects.generic.subscribe("Order", {}, {
+        transport: "websocket",
+        webSocketImpl: BackpressureWebSocket,
+        backpressureLimit: 1,
+        reconnect: false,
+      })) {
+        // The first event may be delivered, but the second queued event must trip backpressure.
+      }
+    },
+    (error) => {
+      assert.equal(error.name, "FoundryLiteApiError", "subscription backpressure error type");
+      assert.equal(error.code, "BACKPRESSURE_LIMIT_EXCEEDED", "subscription backpressure code");
+      assert.equal(error.retryable, false, "subscription backpressure retryable");
+      return true;
+    },
+  );
+}
+{
+  class RateLimitedWebSocket {
+    constructor() {
+      queueMicrotask(() => this.onopen?.());
+    }
+
+    send() {
+      this.onmessage?.({
+        data: JSON.stringify({
+          event: "error",
+          error: { code: "RATE_LIMITED", message: "slow down", details: { retryAfterSeconds: 5 } },
+        }),
+      });
+      this.onclose?.({ code: 1008 });
+    }
+
+    close() {
+      this.onclose?.({ code: 1008 });
+    }
+  }
+
+  const beforeCalls = calls.length;
+  await assert.rejects(
+    async () => {
+      for await (const _event of client.objects.generic.subscribe("Order", {}, {
+        transport: "auto",
+        webSocketImpl: RateLimitedWebSocket,
+      })) {
+        // RATE_LIMITED is terminal and must not hide behind SSE fallback.
+      }
+    },
+    (error) => {
+      assert.equal(error.name, "FoundryLiteApiError", "subscription rate-limit error type");
+      assert.equal(error.code, "RATE_LIMITED", "subscription rate-limit code");
+      assert.equal(error.status, 429, "subscription rate-limit status");
+      assert.equal(error.retryable, true, "subscription rate-limit retryable");
+      return true;
+    },
+  );
+  assert.equal(calls.length, beforeCalls, "subscription rate-limit no SSE fallback");
+}
+await assertOsdkFailFast(
+  "osdk.objectset.invalid-property",
+  async () => osdk(sdk.Order).where({ missing: { $eq: "x" } }).fetchPage(),
+  "INVALID_OSDK_FILTER_PROPERTY",
+);
+await assertOsdkFailFast(
+  "osdk.objectset.invalid-operator",
+  async () => osdk(sdk.Order).where({ status: { $startsWith: "P" } }).fetchPage(),
+  "INVALID_OSDK_FILTER_OPERATOR",
+);
+await assertOsdkFailFast(
+  "osdk.objectset.invalid-order-property",
+  async () => osdk(sdk.Order).orderBy({ missing: "asc" }).fetchPage(),
+  "INVALID_OSDK_ORDER_PROPERTY",
+);
+responseQueue.push(
+  okResponse({
+    items: [
+      {
+        objectType: "Customer",
+        objectId: "C-100",
+        objectVersion: 3,
+        properties: { customerId: "C-100", region: "NA" },
+      },
+    ],
+    nextCursor: "customers/page/2",
+  }),
+  okResponse({
+    items: [
+      {
+        objectType: "Customer",
+        objectId: "C-101",
+        objectVersion: 4,
+        properties: { customerId: "C-101", region: "EU" },
+      },
+    ],
+    nextCursor: null,
+  }),
+);
+{
+  const beforeCalls = calls.length;
+  const aggregateResult = await osdk(sdk.Customer)
+    .where({ region: { $in: ["NA", "EU"] } })
+    .aggregate({ select: { count: { $count: "unordered" } }, groupBy: { region: "exact" } });
+  assert.equal(calls.length, beforeCalls + 2);
+  assert.deepEqual(
+    Object.fromEntries(
+      aggregateResult.data.map((bucket) => [bucket.group.region, bucket.metrics[0].value]),
+    ),
+    { NA: 1, EU: 1 },
+  );
+  assertRequest(calls[beforeCalls], {
+    surfaceId: "osdk.objectset.aggregate.page1",
+    path: "/api/objects/Customer/query",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      filter: { property: "region", op: "in", value: ["NA", "EU"] },
+      orderBy: [{ property: "region", direction: "asc" }],
+      limit: 500,
+    },
+  });
+  assertRequest(calls[beforeCalls + 1], {
+    surfaceId: "osdk.objectset.aggregate.page2",
+    path: "/api/objects/Customer/query",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      filter: { property: "region", op: "in", value: ["NA", "EU"] },
+      orderBy: [{ property: "region", direction: "asc" }],
+      limit: 500,
+      cursor: "customers/page/2",
+    },
+  });
+}
+await assertOsdkFailFast(
+  "osdk.objectset.aggregate.invalid-groupby-property",
+  async () =>
+    osdk(sdk.Order).aggregate({ select: { count: { $count: "unordered" } }, groupBy: { region: "exact" } }),
+  "INVALID_OSDK_AGGREGATE_GROUPBY_PROPERTY",
+);
+await assertOsdkFailFast(
+  "osdk.objectset.aggregate.unsupported-operator",
+  async () => osdk(sdk.Order).aggregate({ select: { sumAmount: { amount: { $sum: "unordered" } } } }),
+  "INVALID_OSDK_AGGREGATE_SELECT",
+);
+responseQueue.push(
+  okResponse({
+    objectType: "Order",
+    objectId: "O-1001",
+    objectVersion: 7,
+    properties: { orderId: "O-1001", customerId: "C-100", status: "PENDING" },
+  }),
+  okResponse([
+    {
+      linkType: "OrderCustomer",
+      from: { objectType: "Order", objectId: "O-1001" },
+      to: { objectType: "Customer", objectId: "C-100", properties: { customerId: "C-100" } },
+    },
+  ]),
+  okResponse({
+    objectType: "Customer",
+    objectId: "C-100",
+    objectVersion: 3,
+    properties: { customerId: "C-100", region: "EMEA" },
+  }),
+);
+{
+  const beforeCalls = calls.length;
+  const order = await osdk(sdk.Order).fetchOne("O-1001");
+  const customers = await order.$link.customer.fetchPage({ $pageSize: 1 });
+  assert.equal(customers.data[0].objectId, "C-100");
+  assert.equal(customers.data[0].$link.order !== undefined, true);
+  assert.equal(calls.length, beforeCalls + 3);
+  assertRequest(calls[beforeCalls], {
+    surfaceId: "osdk.object-instance.fetchOne",
+    path: "/api/objects/Order/O-1001",
+  });
+  assertRequest(calls[beforeCalls + 1], {
+    surfaceId: "osdk.object-instance.link.customer",
+    path: "/api/objects/Order/O-1001/links/OrderCustomer",
+  });
+  assertRequest(calls[beforeCalls + 2], {
+    surfaceId: "osdk.object-instance.link.customer.target",
+    path: "/api/objects/Customer/C-100",
+  });
+  responseQueue.push(okResponse({
+    actionApiName: "ApproveOrder",
+    result: "VALID",
+    target: {
+      result: "VALID",
+      objectType: "Order",
+      objectId: "O-1001",
+      expectedObjectVersion: 7,
+      currentObjectVersion: 7,
+      issues: [],
+    },
+    parameters: { reason: { result: "VALID", required: true, issues: [] } },
+    submissionCriteria: [],
+  }));
+  const actionValidation = await order.$actions.approveOrder.validateAction(
+    { reason: "approved through bound action" },
+  );
+  assert.equal(actionValidation.result, "VALID");
+  assertRequest(calls.at(-1), {
+    surfaceId: "osdk.object-instance.actions.approveOrder.validate",
+    path: "/api/actions/ApproveOrder/validate",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      target: { objectType: "Order", objectId: "O-1001" },
+      expectedObjectVersion: 7,
+      params: { reason: "approved through bound action" },
+    },
+  });
+  let boundActionCacheRefresh = null;
+  responseQueue.push(okResponse({
+    actionRunId: "action-run/osdk-bound",
+    status: "succeeded",
+    target: { objectType: "Order", objectId: "O-1001" },
+    cacheRefresh: {
+      objectKeys: ["objects:Order:O-1001"],
+      objectTypeKeys: ["objects:Order:query"],
+      actionRunKeys: ["actions:runs:action-run/osdk-bound"],
+    },
+  }));
+  await order.$actions.approveOrder.applyAction(
+    { reason: "approved through bound action" },
+    { idempotencyKey: "bound-action-key", onCacheRefresh: (hint) => { boundActionCacheRefresh = hint; } },
+  );
+  assert.deepEqual(boundActionCacheRefresh.objectKeys, ["objects:Order:O-1001"]);
+  assertRequest(calls.at(-1), {
+    surfaceId: "osdk.object-instance.actions.approveOrder",
+    path: "/api/actions/ApproveOrder/apply",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "bound-action-key" },
+    body: {
+      target: { objectType: "Order", objectId: "O-1001" },
+      expectedObjectVersion: 7,
+      params: { reason: "approved through bound action" },
+    },
+  });
+  await assertOsdkFailFast(
+    "osdk.object-instance.actions.missing-idempotency",
+    async () => order.$actions.approveOrder.applyAction({ reason: "missing key" }),
+    "MISSING_IDEMPOTENCY_KEY",
+  );
+}
 await expectSdkCall("object-sets.list", () => client.objectSets.list({ objectType: "Order Item" }), {
   path: "/api/object-sets?objectType=Order%20Item",
 });
@@ -1183,6 +1699,15 @@ await expectSdkCall("transforms.run", () => client.transforms.run("clean_orders_
   path: "/api/transforms/clean_orders_from_web/run",
   method: "POST",
 });
+await expectSdkCall("transforms.scheduler.previewDue", () => client.transforms.previewDue({ maxRuns: 10 }), {
+  path: "/api/transforms/scheduler/due?maxRuns=10",
+});
+await expectSdkCall("transforms.scheduler.tick", () => client.transforms.tick({ maxRuns: 10 }), {
+  path: "/api/transforms/scheduler/tick",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: { maxRuns: 10 },
+});
 await expectSdkCall(
   "operations.runs.list",
   () =>
@@ -1206,12 +1731,101 @@ await expectSdkCall("operations.observability.detect", () => client.operations.o
   headers: { "Content-Type": "application/json" },
   body: { configs: [] },
 });
+await expectSdkCall(
+  "operations.observability.detect-and-record",
+  () => client.operations.observability.detectAndRecord({ configs: [] }),
+  {
+    path: "/api/operations/observability/detect-and-record",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { configs: [] },
+  },
+);
+await expectSdkCall(
+  "operations.observability.list-incidents",
+  () => client.operations.observability.listIncidents({ status: "open", limit: 25 }),
+  {
+    path: "/api/operations/observability/incidents?status=open&limit=25",
+  },
+);
+await expectSdkCall(
+  "operations.observability.acknowledge-incident",
+  () => client.operations.observability.acknowledgeIncident("incident/raw orders"),
+  {
+    path: "/api/operations/observability/incidents/incident%2Fraw%20orders/acknowledge",
+    method: "POST",
+  },
+);
+await expectSdkCall(
+  "operations.observability.resolve-incident",
+  () => client.operations.observability.resolveIncident("incident/raw orders", { reason: "source recovered" }),
+  {
+    path: "/api/operations/observability/incidents/incident%2Fraw%20orders/resolve",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { reason: "source recovered" },
+  },
+);
 await expectSdkCall("operations.backup-restore.preflight", () => client.operations.backupRestore.preflight({ backupId: "b1" }), {
   path: "/api/operations/backup-restore/preflight",
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: { backupId: "b1" },
 });
+await expectSdkCall(
+  "operations.backup-restore.create-artifact",
+  () => client.operations.backupRestore.createArtifact({ backupId: "b1" }),
+  {
+    path: "/api/operations/backup-restore/artifacts",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { backupId: "b1" },
+  },
+);
+await expectSdkCall(
+  "operations.backup-restore.restore-artifact",
+  () =>
+    client.operations.backupRestore.restoreArtifact({
+      artifactRef: "/tmp/foundry-lite/backup.json",
+      artifactHash: "sha256:backup-json",
+      restoreId: "restore/1",
+      validationId: "validation-1",
+    }),
+  {
+    path: "/api/operations/backup-restore/artifacts/restore",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      artifactRef: "/tmp/foundry-lite/backup.json",
+      artifactHash: "sha256:backup-json",
+      restoreId: "restore/1",
+      validationId: "validation-1",
+    },
+  },
+);
+await expectSdkCall(
+  "operations.backup-restore.execute-artifact-restore",
+  () =>
+    client.operations.backupRestore.executeArtifactRestore({
+      artifactRef: "/tmp/foundry-lite/backup.json",
+      artifactHash: "sha256:backup-json",
+      restoreId: "restore/1",
+      validationId: "validation-1",
+      runPostRestoreValidation: false,
+    }),
+  {
+    path: "/api/operations/backup-restore/artifacts/restore/execute",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      artifactRef: "/tmp/foundry-lite/backup.json",
+      artifactHash: "sha256:backup-json",
+      restoreId: "restore/1",
+      validationId: "validation-1",
+      runPostRestoreValidation: false,
+    },
+  },
+);
 await expectSdkCall(
   "operations.backup-restore.start",
   () => client.operations.backupRestore.startRestoreMode({ backupId: "b1", restoreId: "r1" }),
@@ -2010,6 +2624,400 @@ assertMissingIdempotencyFailFast(
   "connectors.resources.startSync",
 );
 await expectSdkCall(
+  "auth.osdkOAuth.authorize",
+  () =>
+    client.auth.osdkOAuth.authorize({
+      clientId: "orders-web",
+      redirectUri: "https://orders.example.test/callback",
+      codeChallenge: "challenge",
+      scopes: ["osdk:object:Order:read", "osdk:object:Order:subscribe"],
+      state: "abc",
+    }),
+  {
+    path:
+      "/api/auth/osdk/oauth/authorize?clientId=orders-web&redirectUri=https%3A%2F%2Forders.example.test%2Fcallback" +
+      "&codeChallenge=challenge&codeChallengeMethod=S256" +
+      "&scope=osdk%3Aobject%3AOrder%3Aread+osdk%3Aobject%3AOrder%3Asubscribe&state=abc",
+  },
+);
+await expectSdkCall(
+  "auth.osdkOAuth.token",
+  () =>
+    client.auth.osdkOAuth.token({
+      clientId: "orders-web",
+      code: "code-1",
+      redirectUri: "https://orders.example.test/callback",
+      codeVerifier: "verifier",
+    }),
+  {
+    path: "/api/auth/osdk/oauth/token",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      clientId: "orders-web",
+      code: "code-1",
+      redirectUri: "https://orders.example.test/callback",
+      codeVerifier: "verifier",
+    },
+  },
+);
+await expectSdkCall(
+  "auth.osdkOAuth.refresh",
+  () => client.auth.osdkOAuth.refresh({ refreshToken: "refresh-1" }),
+  {
+    path: "/api/auth/osdk/oauth/refresh",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { refreshToken: "refresh-1" },
+  },
+);
+await expectSdkCall(
+  "auth.osdkOAuth.revoke",
+  () => client.auth.osdkOAuth.revoke({ refreshToken: "refresh-2" }),
+  {
+    path: "/api/auth/osdk/oauth/revoke",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { refreshToken: "refresh-2" },
+  },
+);
+await expectSdkCall(
+  "developerConsole.osdkApplications.create",
+  () =>
+    client.developerConsole.osdkApplications.create(
+      {
+        appId: "app/orders",
+        displayName: "Orders App",
+        description: "Order workflow OSDK app",
+        clientId: "orders-web-client",
+        resources: [
+          {
+            resourceType: "object",
+            resourceApiName: "Order",
+            scopes: ["osdk:object:Order:read", "osdk:object:Order:subscribe"],
+          },
+        ],
+      },
+      { idempotencyKey: "osdk-app-create-key" },
+    ),
+  {
+    path: "/api/developer-console/osdk-applications",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-app-create-key" },
+    body: {
+      appId: "app/orders",
+      displayName: "Orders App",
+      description: "Order workflow OSDK app",
+      clientId: "orders-web-client",
+      resources: [
+        {
+          resourceType: "object",
+          resourceApiName: "Order",
+          scopes: ["osdk:object:Order:read", "osdk:object:Order:subscribe"],
+        },
+      ],
+    },
+  },
+);
+await expectSdkCall("developerConsole.osdkApplications.list", () => client.developerConsole.osdkApplications.list(), {
+  path: "/api/developer-console/osdk-applications",
+});
+await expectSdkCall(
+  "developerConsole.osdkApplications.get",
+  () => client.developerConsole.osdkApplications.get("app/orders"),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders",
+  },
+);
+await expectSdkCall(
+  "developerConsole.osdkApplications.updateResources",
+  () =>
+    client.developerConsole.osdkApplications.updateResources(
+      "app/orders",
+      {
+        resources: [
+          { resourceType: "object", resourceApiName: "Order", scopes: ["osdk:object:Order:read"] },
+          { resourceType: "action", resourceApiName: "ApproveOrder", scopes: ["osdk:action:ApproveOrder:execute"] },
+        ],
+      },
+      { idempotencyKey: "osdk-app-resources-key" },
+    ),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/resources",
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-app-resources-key" },
+    body: {
+      resources: [
+        { resourceType: "object", resourceApiName: "Order", scopes: ["osdk:object:Order:read"] },
+        { resourceType: "action", resourceApiName: "ApproveOrder", scopes: ["osdk:action:ApproveOrder:execute"] },
+      ],
+    },
+  },
+);
+await expectSdkCall(
+  "developerConsole.osdkApplications.createClient",
+  () =>
+    client.developerConsole.osdkApplications.createClient(
+      "app/orders",
+      {
+        clientId: "orders-web",
+        redirectUris: ["https://orders.example.test/callback"],
+        allowedScopes: ["osdk:object:Order:read"],
+        accessTokenTtlSeconds: 600,
+        refreshTokenTtlSeconds: 3600,
+      },
+      { idempotencyKey: "osdk-client-create-key" },
+    ),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/clients",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-client-create-key" },
+    body: {
+      clientId: "orders-web",
+      redirectUris: ["https://orders.example.test/callback"],
+      allowedScopes: ["osdk:object:Order:read"],
+      accessTokenTtlSeconds: 600,
+      refreshTokenTtlSeconds: 3600,
+    },
+  },
+);
+await expectSdkCall(
+  "developerConsole.osdkApplications.listClients",
+  () => client.developerConsole.osdkApplications.listClients("app/orders"),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/clients",
+  },
+);
+await expectSdkCall(
+  "developerConsole.osdkApplications.updateClient",
+  () =>
+    client.developerConsole.osdkApplications.updateClient(
+      "app/orders",
+      "client-row/1",
+      {
+        clientId: "orders-web",
+        redirectUris: ["https://orders.example.test/new-callback"],
+        allowedScopes: ["osdk:object:Order:read"],
+        status: "active",
+      },
+      { idempotencyKey: "osdk-client-update-key" },
+    ),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/clients/client-row%2F1",
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-client-update-key" },
+    body: {
+      clientId: "orders-web",
+      redirectUris: ["https://orders.example.test/new-callback"],
+      allowedScopes: ["osdk:object:Order:read"],
+      status: "active",
+    },
+  },
+);
+await expectSdkCall(
+  "developerConsole.osdkApplications.deactivateClient",
+  () =>
+    client.developerConsole.osdkApplications.deactivateClient("app/orders", "client-row/1", {
+      idempotencyKey: "osdk-client-deactivate-key",
+    }),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/clients/client-row%2F1/deactivate",
+    method: "POST",
+    headers: { "Idempotency-Key": "osdk-client-deactivate-key" },
+  },
+);
+await expectSdkCall(
+  "developerConsole.sdkVersions.create",
+  () =>
+    client.developerConsole.sdkVersions.create(
+      "app/orders",
+      {
+        language: "typescript",
+        packageName: "@acme/orders-osdk",
+        semver: "0.2.0",
+        requestedBump: "minor",
+      },
+      { idempotencyKey: "osdk-sdk-version-key" },
+    ),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/sdk-versions",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-sdk-version-key" },
+    body: {
+      language: "typescript",
+      packageName: "@acme/orders-osdk",
+      semver: "0.2.0",
+      requestedBump: "minor",
+    },
+  },
+);
+await expectSdkCall("developerConsole.sdkVersions.list", () => client.developerConsole.sdkVersions.list("app/orders"), {
+  path: "/api/developer-console/osdk-applications/app%2Forders/sdk-versions",
+});
+await expectSdkCall(
+  "developerConsole.sdkVersions.get",
+  () => client.developerConsole.sdkVersions.get("app/orders", "sdk-version/1"),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/sdk-versions/sdk-version%2F1",
+  },
+);
+await expectSdkCall(
+  "developerConsole.sdkVersions.artifact",
+  () => client.developerConsole.sdkVersions.artifact("app/orders", "sdk-version/1", "typescript"),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/sdk-versions/sdk-version%2F1/artifacts/typescript",
+  },
+);
+await expectSdkCall(
+  "developerConsole.sdkVersions.promote",
+  () =>
+    client.developerConsole.sdkVersions.promote("app/orders", "sdk-version/1", "stable", {
+      idempotencyKey: "osdk-sdk-promote-key",
+    }),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/sdk-versions/sdk-version%2F1/channels/stable",
+    method: "POST",
+    headers: { "Idempotency-Key": "osdk-sdk-promote-key" },
+  },
+);
+await expectSdkCall(
+  "developerConsole.sdkVersions.channels",
+  () => client.developerConsole.sdkVersions.channels("app/orders", { language: "typescript" }),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/sdk-release-channels?language=typescript",
+  },
+);
+await expectSdkCall(
+  "developerConsole.sdkVersions.createCompatibilityWindow",
+  () =>
+    client.developerConsole.sdkVersions.createCompatibilityWindow(
+      "app/orders",
+      {
+        fromVersionId: "sdk-version/1",
+        toVersionId: "sdk-version/2",
+        supportedUntil: "2099-01-01T00:00:00+00:00",
+      },
+      { idempotencyKey: "osdk-sdk-window-key" },
+    ),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/sdk-compatibility-windows",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-sdk-window-key" },
+    body: {
+      fromVersionId: "sdk-version/1",
+      toVersionId: "sdk-version/2",
+      supportedUntil: "2099-01-01T00:00:00+00:00",
+    },
+  },
+);
+await expectSdkCall(
+  "developerConsole.sdkVersions.compatibilityWindows",
+  () => client.developerConsole.sdkVersions.compatibilityWindows("app/orders"),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/sdk-compatibility-windows",
+  },
+);
+await expectSdkCall(
+  "developerConsole.sdkVersions.installMetadata",
+  () => client.developerConsole.sdkVersions.installMetadata("app/orders"),
+  {
+    path: "/api/developer-console/osdk-applications/app%2Forders/sdk-install-metadata",
+  },
+);
+await expectSdkCall(
+  "developerConsole.sdkVersions.downloadToken",
+  () =>
+    client.developerConsole.sdkVersions.downloadToken(
+      "app/orders",
+      "sdk-version/1",
+      "typescript",
+      { ttlSeconds: 60 },
+      { idempotencyKey: "osdk-sdk-download-key" },
+    ),
+  {
+    path:
+      "/api/developer-console/osdk-applications/app%2Forders/sdk-versions/" +
+      "sdk-version%2F1/artifacts/typescript/download-token",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "osdk-sdk-download-key" },
+    body: { ttlSeconds: 60 },
+  },
+);
+await expectSdkCall(
+  "developerConsole.sdkVersions.artifactByDownloadToken",
+  () => client.developerConsole.sdkVersions.artifactByDownloadToken("download/token"),
+  {
+    path: "/api/developer-console/osdk-release-artifacts/download/download%2Ftoken",
+  },
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.osdkApplications.create",
+  () =>
+    client.developerConsole.osdkApplications.create({
+      appId: "app/orders",
+      displayName: "Orders App",
+      resources: [],
+    }),
+  "developerConsole.osdkApplications.create",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.osdkApplications.updateResources",
+  () =>
+    client.developerConsole.osdkApplications.updateResources("app/orders", {
+      resources: [{ resourceType: "object", resourceApiName: "Order", scopes: ["osdk:object:Order:read"] }],
+    }),
+  "developerConsole.osdkApplications.updateResources",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.sdkVersions.create",
+  () => client.developerConsole.sdkVersions.create("app/orders", { language: "python", requestedBump: "minor" }),
+  "developerConsole.sdkVersions.create",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.osdkApplications.createClient",
+  () =>
+    client.developerConsole.osdkApplications.createClient("app/orders", {
+      clientId: "orders-web",
+      redirectUris: ["https://orders.example.test/callback"],
+      allowedScopes: ["osdk:object:Order:read"],
+    }),
+  "developerConsole.osdkApplications.createClient",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.osdkApplications.updateClient",
+  () =>
+    client.developerConsole.osdkApplications.updateClient("app/orders", "client-row/1", {
+      clientId: "orders-web",
+      redirectUris: ["https://orders.example.test/callback"],
+      allowedScopes: ["osdk:object:Order:read"],
+    }),
+  "developerConsole.osdkApplications.updateClient",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.osdkApplications.deactivateClient",
+  () => client.developerConsole.osdkApplications.deactivateClient("app/orders", "client-row/1"),
+  "developerConsole.osdkApplications.deactivateClient",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.sdkVersions.promote",
+  () => client.developerConsole.sdkVersions.promote("app/orders", "sdk-version/1", "stable"),
+  "developerConsole.sdkVersions.promote",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.sdkVersions.createCompatibilityWindow",
+  () =>
+    client.developerConsole.sdkVersions.createCompatibilityWindow("app/orders", {
+      fromVersionId: "sdk-version/1",
+      toVersionId: "sdk-version/2",
+    }),
+  "developerConsole.sdkVersions.createCompatibilityWindow",
+);
+assertMissingIdempotencyFailFast(
+  "developerConsole.sdkVersions.downloadToken",
+  () => client.developerConsole.sdkVersions.downloadToken("app/orders", "sdk-version/1", "typescript"),
+  "developerConsole.sdkVersions.downloadToken",
+);
+await expectSdkCall(
   "operations.workflows.start-connector-sync",
   () =>
     client.operations.workflows.startConnectorSync(
@@ -2047,10 +3055,27 @@ await expectSdkCall("operations.workflows.get", () => client.operations.workflow
   path: "/api/operations/workflows/workflow%2F1",
 });
 await expectSdkCall(
+  "operations.workflows.cancel",
+  () => client.operations.workflows.cancel("workflow/1", { reason: "operator requested stop" }),
+  {
+    path: "/api/operations/workflows/workflow%2F1/cancel",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { reason: "operator requested stop" },
+  },
+);
+await expectSdkCall(
   "operations.reconciliation.list",
   () => client.operations.reconciliation.list({ status: "outcome_unknown", limit: 25 }),
   {
     path: "/api/operations/reconciliation/writebacks?status=outcome_unknown&limit=25",
+  },
+);
+await expectSdkCall(
+  "operations.reconciliation.list",
+  () => client.operations.reconciliation.list({ status: "retryable", limit: 10 }),
+  {
+    path: "/api/operations/reconciliation/writebacks?status=retryable&limit=10",
   },
 );
 await expectSdkCall(
@@ -2065,6 +3090,38 @@ await expectSdkCall(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: { remoteStatus: "succeeded", remoteResourceId: "remote-1" },
+  },
+);
+await expectSdkCall(
+  "operations.reconciliation.resolve-external-uri",
+  () =>
+    client.operations.reconciliation.resolve("writeback/2", {
+      externalWritebackUri: "s3://erp-writebacks/order/O-1001",
+    }),
+  {
+    path: "/api/operations/reconciliation/writeback%2F2/resolve",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { externalWritebackUri: "s3://erp-writebacks/order/O-1001" },
+  },
+);
+await expectSdkCall(
+  "operations.reconciliation.approveRecovery",
+  () =>
+    client.operations.reconciliation.approveRecovery("writeback/3", {
+      approvalId: "approval-1",
+      reason: "operator reviewed sensitive writeback",
+      externalWritebackUri: "s3://erp-writebacks/order/O-1001",
+    }),
+  {
+    path: "/api/operations/reconciliation/writeback%2F3/approve-recovery",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      approvalId: "approval-1",
+      reason: "operator reviewed sensitive writeback",
+      externalWritebackUri: "s3://erp-writebacks/order/O-1001",
+    },
   },
 );
 await expectSdkCall(
@@ -2100,6 +3157,23 @@ await expectSdkCall(
     method: "POST",
   },
 );
+await expectSdkCall(
+  "operations.iceberg-maintenance.run",
+  () =>
+    client.operations.icebergMaintenance.run("raw/orders", {
+      branch: "dev",
+      smallFileThresholdBytes: 512,
+      fileCountThreshold: 7,
+      readAmplificationThreshold: 4.5,
+      retentionMinSnapshots: 5,
+    }),
+  {
+    path:
+      "/api/operations/maintenance/iceberg/raw%2Forders/run?branch=dev&smallFileThresholdBytes=512" +
+      "&fileCountThreshold=7&readAmplificationThreshold=4.5&retentionMinSnapshots=5",
+    method: "POST",
+  },
+);
 await expectSdkCall("operations.dead-letter-records.list", () => client.operations.deadLetterRecords.list({ status: "QUARANTINED" }), {
   path: "/api/operations/dead-letter-records?status=QUARANTINED",
 });
@@ -2127,6 +3201,20 @@ assertMissingIdempotencyFailFast(
   () => client.operations.deadLetterRecords.retry("dlq/1"),
   "operations.deadLetterRecords.retry",
 );
+await expectSdkCall(
+  "operations.dead-letter-records.retry-transform",
+  () => client.operations.deadLetterRecords.retryTransform("dlq/1", { idempotencyKey: "retry-transform-key" }),
+  {
+    path: "/api/operations/dead-letter-records/dlq%2F1/retry-transform",
+    method: "POST",
+    headers: { "Idempotency-Key": "retry-transform-key" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "operations.dead-letter-records.retry-transform",
+  () => client.operations.deadLetterRecords.retryTransform("dlq/1"),
+  "operations.deadLetterRecords.retryTransform",
+);
 await expectSdkCall("operations.dead-letter-records.discard", () => client.operations.deadLetterRecords.discard("dlq/1"), {
   path: "/api/operations/dead-letter-records/dlq%2F1/discard",
   method: "POST",
@@ -2143,6 +3231,15 @@ await expectSdkCall("operations.index.replay-failed-run", () => client.operation
   path: "/api/operations/runs/index/run%2F1/replay",
   method: "POST",
 });
+await expectSdkCall(
+  "operations.index.replay-ontology-reindex",
+  () => client.operations.index.replayOntologyReindex("Order Item", { reindexKey: "object_reindex:Order:abc123" }),
+  {
+    path: "/api/operations/index/Order%20Item/ontology-reindex",
+    method: "POST",
+    body: { reindexKey: "object_reindex:Order:abc123" },
+  },
+);
 await expectSdkCall("operations.transforms.retry", () => client.operations.transforms.retry("transform/1"), {
   path: "/api/operations/runs/transform/transform%2F1/retry",
   method: "POST",
@@ -2151,6 +3248,25 @@ await expectSdkCall("materializations.run", () => client.materializations.run("D
   path: "/api/materializations/Daily%20Orders/run",
   method: "POST",
 });
+await expectSdkCall(
+  "actions.generated.validate",
+  () =>
+    client.actions.ApproveOrder.validate({
+      objectId: "order/1",
+      expectedObjectVersion: 7,
+      params: { reason: "approved" },
+    }),
+  {
+    path: "/api/actions/ApproveOrder/validate",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      target: { objectType: "Order", objectId: "order/1" },
+      expectedObjectVersion: 7,
+      params: { reason: "approved" },
+    },
+  },
+);
 await expectSdkCall(
   "actions.generated.apply",
   () =>
@@ -2245,6 +3361,32 @@ assert.deepEqual(telemetry.at(-1), {
   errorCode: "TEMPORAL_UNAVAILABLE",
   retryable: true,
 });
+responseQueue.push(
+  errorResponse(
+    429,
+    {
+      detail: {
+        code: "RATE_LIMITED",
+        message: "Too many OAuth refresh requests",
+        details: { retryAfterSeconds: 7 },
+        request_id: "rate-limit-error-id",
+      },
+    },
+    { "X-Request-ID": "transport-rate-id" },
+  ),
+);
+await assert.rejects(
+  () => client.auth.osdkOAuth.refresh({ refreshToken: "refresh-rate-limited" }),
+  (error) => {
+    assert.equal(error.name, "FoundryLiteApiError");
+    assert.equal(error.status, 429);
+    assert.equal(error.code, "RATE_LIMITED");
+    assert.equal(error.requestId, "rate-limit-error-id");
+    assert.equal(error.retryable, true);
+    assert.deepEqual(error.details, { retryAfterSeconds: 7 });
+    return true;
+  },
+);
 
 assert.match(sdk.idempotencyKey("ApproveOrder", "order/1"), /^ApproveOrder-order\/1-\d+-[0-9a-f]+$/);
 coveredHelperIds.add("helpers.idempotencyKey");

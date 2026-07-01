@@ -1,3 +1,5 @@
+"""Application port contract for media repository."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

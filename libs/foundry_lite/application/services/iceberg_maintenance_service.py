@@ -1,3 +1,5 @@
+"""Application service helpers for iceberg maintenance service workflows."""
+
 from __future__ import annotations
 
 from typing import cast
@@ -12,6 +14,7 @@ from foundry_lite.application.ports.iceberg_maintenance import (
     IcebergMaintenanceAdapter,
     IcebergMaintenancePlan,
     IcebergMaintenancePolicy,
+    IcebergMaintenanceRun,
 )
 from foundry_lite.application.primitives import _dataset_ref_parts
 from foundry_lite.application.services.base import CoreService
@@ -46,6 +49,7 @@ class IcebergMaintenanceService(CoreService):
         read_amplification_threshold: float = DEFAULT_READ_AMPLIFICATION_THRESHOLD,
         retention_min_snapshots: int = DEFAULT_RETENTION_MIN_SNAPSHOTS,
     ) -> IcebergMaintenancePlan:
+        """Return a dry-run Iceberg maintenance plan with operator audit evidence."""
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "operations:read:detail", "iceberg_maintenance", dataset_ref)
         adapter = self._iceberg_maintenance_adapter()
@@ -68,6 +72,40 @@ class IcebergMaintenanceService(CoreService):
         with self.engine.begin() as conn:
             self._audit_plan(conn, ctx, dataset_ref, plan)
         return plan
+
+    def run_iceberg_maintenance(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+        branch: str = "main",
+        small_file_threshold_bytes: int = DEFAULT_SMALL_FILE_THRESHOLD_BYTES,
+        file_count_threshold: int = DEFAULT_FILE_COUNT_THRESHOLD,
+        read_amplification_threshold: float = DEFAULT_READ_AMPLIFICATION_THRESHOLD,
+        retention_min_snapshots: int = DEFAULT_RETENTION_MIN_SNAPSHOTS,
+    ) -> IcebergMaintenanceRun:
+        """Run bounded Iceberg maintenance and record operator audit evidence."""
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "operations:retry", "iceberg_maintenance", dataset_ref)
+        adapter = self._iceberg_maintenance_adapter()
+        policy = self._maintenance_policy(
+            small_file_threshold_bytes=small_file_threshold_bytes,
+            file_count_threshold=file_count_threshold,
+            read_amplification_threshold=read_amplification_threshold,
+            retention_min_snapshots=retention_min_snapshots,
+        )
+        dataset = self._dataset(ctx, dataset_ref)
+        run = adapter.run_iceberg_maintenance(
+            tenant_id=ctx.tenant_id,
+            dataset_id=dataset["id"],
+            dataset_ref=dataset_ref,
+            branch=branch,
+            committed_versions=self._committed_versions(dataset["id"], branch),
+            policy=policy,
+        )
+        with self.engine.begin() as conn:
+            self._audit_run(conn, ctx, dataset_ref, run)
+        return run
 
     def _dataset(self, ctx: RequestContext, dataset_ref: str) -> DatasetRow:
         namespace, name = _dataset_ref_parts(dataset_ref)
@@ -140,6 +178,35 @@ class IcebergMaintenanceService(CoreService):
             resource_type="dataset",
             resource_id=plan["dataset_id"],
             action="operations:read:detail",
+            after_ref=after_ref,
+            correlation_id=ctx.request_id,
+        )
+
+    def _audit_run(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset_ref: str,
+        run: IcebergMaintenanceRun,
+    ) -> None:
+        after_ref: RuntimeJsonObject = {
+            "datasetRef": dataset_ref,
+            "status": run["status"],
+            "beforeSnapshotId": run["before_snapshot_id"],
+            "afterSnapshotId": run["after_snapshot_id"],
+            "compactedSnapshotId": run["compacted_snapshot_id"],
+            "isRowHashPreserved": run["is_row_hash_preserved"],
+            "expiredSnapshotIds": list(run["expired_snapshot_ids"]),
+            "orphanCleanupFileCount": len(run["orphan_cleanup_file_uris"]),
+            "protectedSnapshotIds": list(run["protected_snapshot_ids"]),
+        }
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="iceberg_maintenance.run_completed",
+            resource_type="dataset",
+            resource_id=run["dataset_id"],
+            action="operations:retry",
             after_ref=after_ref,
             correlation_id=ctx.request_id,
         )

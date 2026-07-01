@@ -38,6 +38,9 @@ class Principal:
     tenant_id: str
     actor_user_id: str
     roles: tuple[str, ...]
+    application_id: str | None = None
+    client_id: str | None = None
+    token_scopes: tuple[str, ...] = ()
 
 
 @runtime_checkable

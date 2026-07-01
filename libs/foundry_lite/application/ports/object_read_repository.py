@@ -1,3 +1,5 @@
+"""Application port contract for object read repository."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -179,6 +181,17 @@ class ObjectReadRepository(Protocol):
         property_object_type_id: str | None = None,
     ) -> list[ObjectRecordRow]:
         """Return one DB-filtered, DB-sorted object page plus one lookahead row."""
+        ...
+
+    def latest_object_change_sequence(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_api_name: str,
+        include_deleted: bool = True,
+    ) -> int:
+        """Return the current object change watermark for one object type."""
         ...
 
     def active_links_from(

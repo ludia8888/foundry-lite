@@ -13,6 +13,7 @@ import type {
   ActionTypeRegistry,
   ActionWritebackQueueFilters,
   ActionWritebackReconciliationRequest,
+  ActionWritebackRecoveryApprovalRequest,
   AdminOperationsBoard,
   AdminRequiredBackendSurface,
   AdminTaskArea,
@@ -21,6 +22,7 @@ import type {
   AipAgentRunRequest,
   AipBuilderRunRequest,
   AipBuilderValidateRequest,
+  BackupRestoreArtifactRestoreRequest,
   BackupRestoreRecoveryOverview,
   BackupRestoreModeStartRequest,
   BackupRestorePostRestoreValidationRequest,
@@ -1376,6 +1378,8 @@ export function createWritebackReconciliationRecipe(
       client.operations.reconciliation.list(filters),
     resolveWriteback: (writebackId: string, payload: ActionWritebackReconciliationRequest) =>
       client.operations.reconciliation.resolve(writebackId, payload),
+    approveRecovery: (writebackId: string, payload: ActionWritebackRecoveryApprovalRequest) =>
+      client.operations.reconciliation.approveRecovery(writebackId, payload),
   };
 }
 
@@ -1393,6 +1397,10 @@ export function createMaintenanceOperationsRecipe(
       datasetRef: string,
       options: IcebergMaintenancePlanOptions = {},
     ) => client.operations.icebergMaintenance.plan(datasetRef, options),
+    runIcebergMaintenance: (
+      datasetRef: string,
+      options: IcebergMaintenancePlanOptions = {},
+    ) => client.operations.icebergMaintenance.run(datasetRef, options),
     replayObjectTypeIndex: (objectType: string) =>
       client.operations.index.replayObjectType(objectType),
     replayFailedIndexRun: (runId: string) => client.operations.index.replayFailedRun(runId),
@@ -1886,6 +1894,10 @@ export function createRecoveryOperationsRecipe(
     loadRecoveryOverview: () => client.operations.backupRestore.recoveryOverview(),
     preflight: (payload: BackupRestorePreflightRequest = {}) =>
       client.operations.backupRestore.preflight(payload),
+    restoreArtifact: (payload: BackupRestoreArtifactRestoreRequest) =>
+      client.operations.backupRestore.restoreArtifact(payload),
+    executeArtifactRestore: (payload: BackupRestoreArtifactRestoreRequest) =>
+      client.operations.backupRestore.executeArtifactRestore(payload),
     startRestoreMode: (payload: BackupRestoreModeStartRequest = {}) =>
       client.operations.backupRestore.startRestoreMode(payload),
     restoreModeStatus: (restoreId: string) =>

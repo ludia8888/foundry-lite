@@ -21,7 +21,8 @@ from sqlalchemy.engine import Engine
 
 
 class ObjectReadHarness(Protocol):
-    repository: ObjectReadRepository
+    @property
+    def repository(self) -> ObjectReadRepository: ...
 
     def transaction(self) -> AbstractContextManager[Any]: ...
 
@@ -129,6 +130,25 @@ class FakeObjectReadRepository:
             and row["deleted"] is False
         ]
 
+    def latest_object_change_sequence(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        include_deleted: bool = True,
+    ) -> int:
+        del transaction
+        rows = [
+            row
+            for row in self.object_records
+            if row["tenant_id"] == tenant_id
+            and row["object_type_api_name"] == object_type_api_name
+            and row.get("is_active", True) is True
+            and (include_deleted or row["deleted"] is False)
+        ]
+        return max((int(row.get("object_change_sequence") or 0) for row in rows), default=0)
+
     def active_links_to(
         self,
         *,
@@ -226,6 +246,7 @@ def _object_row(
     object_id: str = "O-1",
     deleted: bool = False,
     object_version: int = 1,
+    object_change_sequence: int = 1,
     index_version: str = "active",
     is_active: bool = True,
     properties: dict[str, Any] | None = None,
@@ -245,6 +266,7 @@ def _object_row(
         "source_dataset_version_id": "dsv_orders_1",
         "source_hash": "hash-demo",
         "object_version": object_version,
+        "object_change_sequence": object_change_sequence,
         "deleted": deleted,
         "deletion_reason": "test delete" if deleted else None,
         "created_at": "2026-06-10T00:00:00Z",
@@ -384,7 +406,7 @@ def _property_sort_key(
 def _sort_key(value: object, data_type: str) -> tuple[int, float, str]:
     if data_type in {"float", "integer", "number"}:
         number = _number_value(value)
-        return (0, number if number is not _INVALID_VALUE else -1e308, "")
+        return (0, cast(float, number) if number is not _INVALID_VALUE else -1e308, "")
     if data_type == "boolean":
         return (1, 1.0 if value is True else 0.0, "")
     return (2, 0.0, str(value) if value is not None else "")
@@ -441,7 +463,7 @@ def _matches_in_filter(current: object, value: object, data_type: str) -> bool:
     return current in [item for item in candidates if item is not _INVALID_VALUE]
 
 
-def _number_value(value: object) -> object:
+def _number_value(value: object) -> float | object:
     if isinstance(value, bool):
         return _INVALID_VALUE
     if isinstance(value, int | float):
@@ -458,9 +480,9 @@ def _evaluate_filter(current: object, op: str, expected: object) -> bool:
     if op == "eq":
         return current == expected
     if op == "gte":
-        return current >= expected
+        return isinstance(current, int | float) and isinstance(expected, int | float) and current >= expected
     if op == "lte":
-        return current <= expected
+        return isinstance(current, int | float) and isinstance(expected, int | float) and current <= expected
     return str(expected).lower() in str(current).lower()
 
 
@@ -797,6 +819,38 @@ def test_object_read_repository_contract_lists_active_incoming_links(
 
     assert [row["id"] for row in rows] == ["link_1", "link_2"]
     assert [row["from_object_id"] for row in rows] == ["O-1", "O-2"]
+
+
+def test_object_read_repository_contract_reads_latest_object_change_sequence(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_object(row_id="obj_1", object_id="O-1", object_change_sequence=4)
+    harness.add_object(row_id="obj_2", object_id="O-2", object_change_sequence=9)
+    harness.add_object(row_id="obj_3", object_id="O-3", object_change_sequence=12, deleted=True)
+    harness.add_object(
+        row_id="obj_other",
+        object_type_api_name="Customer",
+        object_type_id="ot_customer",
+        object_id="C-1",
+        object_change_sequence=99,
+    )
+
+    with harness.transaction() as transaction:
+        including_deleted = harness.repository.latest_object_change_sequence(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            include_deleted=True,
+        )
+        active_only = harness.repository.latest_object_change_sequence(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            include_deleted=False,
+        )
+
+    assert including_deleted == 12
+    assert active_only == 9
 
 
 def test_link_traversal_never_crosses_tenant_without_policy(harness: ObjectReadHarness) -> None:

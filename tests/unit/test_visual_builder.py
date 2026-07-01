@@ -56,9 +56,30 @@ def test_visual_builder_blocks_direct_apply_action_and_dangerous_tools(foundry: 
 
     codes = {issue.code for issue in result.blocking_issues}
     assert result.validation_status == "blocked"
-    assert "dangerous_tool_denied" in codes
+    assert "direct_vendor_tool_denied" in codes
     assert "write_tool_denied" in codes
     assert "direct_apply_action_blocked" in codes
+
+
+def test_visual_builder_blocks_direct_vendor_tool_ids(foundry: Any) -> None:
+    result = foundry.aip.validate_builder_draft(
+        agent_version_id="agent.order-ops.v1",
+        release_channel="dev",
+        model_alias_version="gpt-governed@v1",
+        prompt_version_id="prompt-order-copilot@v1",
+        context_sources=(_context(),),
+        tool_manifest=(_tool(tool_id="http.request"),),
+        logic_blocks=(
+            LogicBlock("input", "Input"),
+            LogicBlock("output", "Output", inputs={"fromBlock": "input"}, depends_on=("input",)),
+        ),
+        eval_axes=("security", "action"),
+        agent_allowed_actions=("ApproveOrder",),
+        ctx=_CTX,
+    )
+
+    assert result.validation_status == "blocked"
+    assert {issue.code for issue in result.blocking_issues} == {"direct_vendor_tool_denied"}
 
 
 def test_visual_builder_blocks_cross_tenant_context_partition(foundry: Any) -> None:

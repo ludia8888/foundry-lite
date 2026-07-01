@@ -1,3 +1,5 @@
+"""Application service helpers for backup restore service workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -24,6 +26,9 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.backup_restore_artifact_execution import BackupRestoreArtifactExecutionMixin
+from foundry_lite.application.services.backup_restore_artifact_restore import BackupRestoreArtifactRestoreMixin
+from foundry_lite.application.services.backup_restore_artifacts import BackupRestoreArtifactMixin
 from foundry_lite.application.services.backup_restore_mode import (
     active_restore_mode_report,
     inactive_restore_mode_report,
@@ -43,18 +48,26 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
 
 
-class BackupRestoreService(BackupRestoreValidationMixin, CoreService):
+class BackupRestoreService(
+    BackupRestoreArtifactMixin,
+    BackupRestoreValidationMixin,
+    BackupRestoreArtifactRestoreMixin,
+    BackupRestoreArtifactExecutionMixin,
+    CoreService,
+):
     """Build backup/restore commit-point reports and restore-mode gates."""
 
     required_dependencies = (
         "engine",
         "dataset_repository",
+        "dataset_transaction_repository",
         "dataset_version_repository",
         "dataset_storage",
         "object_index_repository",
         "runtime_repository",
         "search_adapter",
         "workflow_adapter",
+        "backup_artifact_store",
     )
     required_collaborators = ("runtime_service",)
     runtime_service: DatasetRuntimeBoundary

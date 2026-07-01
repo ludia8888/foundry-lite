@@ -1,13 +1,16 @@
+"""Application service helpers for action reconciliation workflows."""
+
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from foundry_lite.application.action_types import (
     ActionApplyResponse,
-    ActionWritebackQueueItem,
     ActionWritebackQueueResult,
     ActionWritebackReconciliationResult,
+    ActionWritebackRecoveryItem,
+    ActionWritebackRecoveryResult,
 )
 from foundry_lite.application.ports import (
     ACTION_RUN_RECONCILED,
@@ -33,11 +36,27 @@ from foundry_lite.application.services.action_protocols import (
     ActionOntologyLookup,
     ActionRuntimeBoundary,
 )
+from foundry_lite.application.services.action_reconciliation_helpers import (
+    UNRESOLVED_WRITEBACK_STATUSES,
+    action_run_has_sensitive_parameters,
+    already_reconciled_result,
+    approval_required_recovery_item,
+    external_writeback_uri,
+    failed_recovery_item,
+    is_resolvable_writeback,
+    queue_item,
+    queue_statuses,
+    reconciled_recovery_item,
+    reconciled_result,
+    reconciled_writeback_response,
+    recovery_result,
+    skipped_recovery_item,
+    validate_queue_limit,
+    validate_remote_success,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied, ValidationFailed
 from foundry_lite.security.policy import PolicyService
-
-UNRESOLVED_WRITEBACK_STATUSES = ("outcome_unknown", "compensation_required")
 
 
 @dataclass(frozen=True)
@@ -59,8 +78,8 @@ class ActionWritebackReconciliationWorkflow:
         limit: int = 50,
     ) -> ActionWritebackQueueResult:
         self._require_operations_read(ctx)
-        statuses = _queue_statuses(status)
-        _validate_queue_limit(limit)
+        statuses = queue_statuses(status)
+        validate_queue_limit(limit)
         with self.engine.begin() as conn:
             rows = self.action_repository.list_action_writebacks(
                 transaction=conn,
@@ -69,7 +88,7 @@ class ActionWritebackReconciliationWorkflow:
                 limit=limit,
             )
         sensitive = self.policy.sensitive_column_names(ctx)
-        return {"items": [_queue_item(row, sensitive) for row in rows]}
+        return {"items": [queue_item(row, sensitive) for row in rows]}
 
     def reconcile(
         self,
@@ -84,16 +103,16 @@ class ActionWritebackReconciliationWorkflow:
         status, resource_id = self._resolve_remote_outcome(
             remote_status, remote_resource_id, external_writeback_uri, writeback_id, ctx
         )
-        _validate_remote_success(status, resource_id)
+        validate_remote_success(status, resource_id)
         with self.engine.begin() as conn:
             writeback = self._required_writeback(conn, ctx, writeback_id)
             if writeback.status == "reconciled":
-                return _already_reconciled_result(writeback, status, resource_id)
+                return already_reconciled_result(writeback, status, resource_id)
             action_run = self._required_action_run(conn, ctx, writeback.action_run_id)
-            if not _is_resolvable_writeback(writeback, action_run):
+            if not is_resolvable_writeback(writeback, action_run):
                 current = self._required_writeback(conn, ctx, writeback_id)
                 if current.status == "reconciled":
-                    return _already_reconciled_result(current, status, resource_id)
+                    return already_reconciled_result(current, status, resource_id)
             self._require_outcome_unknown(writeback, action_run)
             return self._reconcile_outcome_unknown(
                 conn,
@@ -102,6 +121,153 @@ class ActionWritebackReconciliationWorkflow:
                 action_run=action_run,
                 remote_status=status,
                 remote_resource_id=resource_id,
+            )
+
+    def recover_unresolved(
+        self,
+        *,
+        ctx: RequestContext,
+        limit: int = 50,
+    ) -> ActionWritebackRecoveryResult:
+        self._require_operations_retry(ctx, "action_writeback_recovery")
+        validate_queue_limit(limit)
+        rows = self._unresolved_rows(ctx, limit)
+        items = [self._recover_one(ctx, row) for row in rows]
+        result = recovery_result(items)
+        self._audit_recovery_tick(ctx, result)
+        return result
+
+    def approve_recovery(
+        self,
+        writeback_id: str,
+        *,
+        approval_id: str,
+        reason: str,
+        external_writeback_uri: str | None = None,
+        ctx: RequestContext,
+    ) -> ActionWritebackRecoveryItem:
+        self._require_operations_retry(ctx, writeback_id)
+        approval_id = _required_approval_text("approval_id", approval_id)
+        reason = _required_approval_text("reason", reason)
+        writeback, policy_reason = self._approval_required_writeback(ctx, writeback_id)
+        self._audit_recovery_approved(ctx, writeback, approval_id, reason, policy_reason)
+        item = self._recover_one(
+            ctx,
+            writeback,
+            is_approval_released=True,
+            external_writeback_uri_override=external_writeback_uri,
+        )
+        item["approvalId"] = approval_id
+        item["approvalReason"] = policy_reason
+        return item
+
+    def _unresolved_rows(self, ctx: RequestContext, limit: int) -> list[ActionWritebackRecord]:
+        with self.engine.begin() as conn:
+            return self.action_repository.list_action_writebacks(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                statuses=UNRESOLVED_WRITEBACK_STATUSES,
+                limit=limit,
+            )
+
+    def _recover_one(
+        self,
+        ctx: RequestContext,
+        writeback: ActionWritebackRecord,
+        *,
+        is_approval_released: bool = False,
+        external_writeback_uri_override: str | None = None,
+    ) -> ActionWritebackRecoveryItem:
+        if writeback.status == "retryable":
+            return skipped_recovery_item(writeback, "retryable_external_not_changed")
+        approval_reason = None if is_approval_released else self._operator_approval_reason(ctx, writeback)
+        if approval_reason is not None:
+            return approval_required_recovery_item(writeback, approval_reason)
+        uri = external_writeback_uri_override or external_writeback_uri(writeback)
+        if uri is None:
+            return skipped_recovery_item(writeback, "missing_external_writeback_uri")
+        try:
+            result = self.reconcile(writeback.writeback_id, external_writeback_uri=uri, ctx=ctx)
+        except Exception as exc:
+            return failed_recovery_item(writeback, exc)
+        return reconciled_recovery_item(writeback, result)
+
+    def _operator_approval_reason(self, ctx: RequestContext, writeback: ActionWritebackRecord) -> str | None:
+        sensitive = self.policy.sensitive_column_names(ctx)
+        if not sensitive:
+            return None
+        with self.engine.begin() as conn:
+            action_run = self._required_action_run(conn, ctx, writeback.action_run_id)
+        if action_run_has_sensitive_parameters(action_run, sensitive):
+            return "sensitive_action_parameter"
+        return None
+
+    def _approval_required_writeback(
+        self,
+        ctx: RequestContext,
+        writeback_id: str,
+    ) -> tuple[ActionWritebackRecord, str]:
+        with self.engine.begin() as conn:
+            writeback = self._required_writeback(conn, ctx, writeback_id)
+            action_run = self._required_action_run(conn, ctx, writeback.action_run_id)
+        if not is_resolvable_writeback(writeback, action_run):
+            raise ValidationFailed(
+                "action writeback recovery is not approval-recoverable",
+                details={
+                    "writeback_id": writeback_id,
+                    "writeback_status": writeback.status,
+                    "action_run_status": action_run["status"],
+                },
+            )
+        sensitive = self.policy.sensitive_column_names(ctx)
+        policy_reason = None
+        if sensitive and action_run_has_sensitive_parameters(action_run, sensitive):
+            policy_reason = "sensitive_action_parameter"
+        if policy_reason is None:
+            raise ValidationFailed(
+                "action writeback recovery does not require operator approval",
+                details={"writeback_id": writeback_id, "writeback_status": writeback.status},
+            )
+        return writeback, policy_reason
+
+    def _audit_recovery_approved(
+        self,
+        ctx: RequestContext,
+        writeback: ActionWritebackRecord,
+        approval_id: str,
+        reason: str,
+        policy_reason: str,
+    ) -> None:
+        with self.engine.begin() as conn:
+            self.runtime_service._audit(
+                conn,
+                ctx,
+                event_type="action.writeback.recovery_approved",
+                resource_type="action_writeback",
+                resource_id=writeback.writeback_id,
+                action="approve_recovery",
+                after_ref={
+                    "approvalId": approval_id,
+                    "reason": reason,
+                    "policyReason": policy_reason,
+                    "actionRunId": writeback.action_run_id,
+                    "writebackStatus": writeback.status,
+                    "approvedBy": ctx.actor_user_id,
+                },
+                correlation_id=writeback.action_run_id,
+            )
+
+    def _audit_recovery_tick(self, ctx: RequestContext, result: ActionWritebackRecoveryResult) -> None:
+        with self.engine.begin() as conn:
+            self.runtime_service._audit(
+                conn,
+                ctx,
+                event_type="action.writeback.recovery_tick",
+                resource_type="action_writeback_recovery",
+                resource_id=ctx.request_id,
+                action="recover",
+                after_ref=dict(result),
+                correlation_id=ctx.request_id,
             )
 
     def _resolve_remote_outcome(
@@ -132,6 +298,11 @@ class ActionWritebackReconciliationWorkflow:
         assert adapter is not None  # guaranteed by caller  # nosec B101
         with self.engine.begin() as conn:
             writeback = self._required_writeback(conn, ctx, writeback_id)
+        if writeback.status == "retryable":
+            raise ValidationFailed(
+                "retryable writeback is not resolvable by reconciliation",
+                details={"writeback_id": writeback_id, "writeback_status": writeback.status},
+            )
         outcome = adapter.remote_lookup(
             ExternalWriteTarget(uri=external_writeback_uri, idempotency_key=writeback.idempotency_key)
         )
@@ -195,7 +366,7 @@ class ActionWritebackReconciliationWorkflow:
         # Both an outcome_unknown writeback (a timeout that may have landed) and a compensation_required
         # writeback (external success + local failure) are unresolved before-commit external side effects
         # that a remote-success reconciliation drives forward to a committed local mutation.
-        if not _is_resolvable_writeback(writeback, action_run):
+        if not is_resolvable_writeback(writeback, action_run):
             raise ValidationFailed(
                 "action writeback is not resolvable by reconciliation",
                 details={
@@ -216,13 +387,13 @@ class ActionWritebackReconciliationWorkflow:
         remote_resource_id: str,
     ) -> ActionWritebackReconciliationResult:
         now = _now()
-        response = _reconciled_writeback_response(writeback, remote_status, remote_resource_id, now)
+        response = reconciled_writeback_response(writeback, remote_status, remote_resource_id, now)
         if not self._try_mark_writeback_reconciled(conn, writeback, response, now):
             current = self._required_writeback(conn, ctx, writeback.writeback_id)
-            return _already_reconciled_result(current, remote_status, remote_resource_id)
+            return already_reconciled_result(current, remote_status, remote_resource_id)
         mutation = self._commit_reconciled_action(conn, ctx, action_run)
         self._audit_action_reconciled(conn, ctx, action_run["id"], writeback, response, mutation)
-        return _reconciled_result(action_run["id"], writeback.writeback_id, remote_status, remote_resource_id, mutation)
+        return reconciled_result(action_run["id"], writeback.writeback_id, remote_status, remote_resource_id, mutation)
 
     def _try_mark_writeback_reconciled(
         self,
@@ -301,122 +472,8 @@ class ActionWritebackReconciliationWorkflow:
         )
 
 
-def _validate_remote_success(remote_status: str, remote_resource_id: str) -> None:
-    if remote_status != "succeeded":
-        raise ValidationFailed(
-            "only remote success reconciliation is supported",
-            details={"remote_status": remote_status},
-        )
-    if not remote_resource_id:
-        raise ValidationFailed("remote resource id is required")
-
-
-def _is_resolvable_writeback(writeback: ActionWritebackRecord, action_run: ActionRunRow) -> bool:
-    return writeback.status in UNRESOLVED_WRITEBACK_STATUSES and action_run["status"] in UNRESOLVED_WRITEBACK_STATUSES
-
-
-def _queue_statuses(status: str | None) -> Sequence[str]:
-    if status is None:
-        return UNRESOLVED_WRITEBACK_STATUSES
-    if status not in UNRESOLVED_WRITEBACK_STATUSES:
-        raise ValidationFailed(
-            "reconciliation queue status must be unresolved",
-            details={"status": status, "allowed": list(UNRESOLVED_WRITEBACK_STATUSES)},
-        )
-    return (status,)
-
-
-def _validate_queue_limit(limit: int) -> None:
-    if limit < 1 or limit > 100:
-        raise ValidationFailed("reconciliation queue limit must be between 1 and 100", details={"limit": limit})
-
-
-def _queue_item(writeback: ActionWritebackRecord, sensitive: set[str]) -> ActionWritebackQueueItem:
-    response = _redact_mapping(writeback.response, sensitive)
-    evidence = dict(response or {})
-    return {
-        "writebackId": writeback.writeback_id,
-        "actionRunId": writeback.action_run_id,
-        "status": writeback.status,
-        "mode": writeback.mode,
-        "connectorId": writeback.connector_id,
-        "idempotencyKey": writeback.idempotency_key,
-        "attempts": writeback.attempts,
-        "createdAt": writeback.created_at,
-        "completedAt": writeback.completed_at,
-        "reconciliationDeadline": evidence.get("reconciliation_deadline"),
-        "remoteResourceId": evidence.get("remote_resource_id"),
-        "lastObservedStatus": evidence.get("last_observed_status"),
-        "compensationActionType": evidence.get("compensation_action_type"),
-        "request": _redact_mapping(writeback.request, sensitive) or {},
-        "response": response,
-    }
-
-
-def _redact_mapping(value: Mapping[str, object] | None, sensitive: set[str]) -> Mapping[str, object] | None:
-    if value is None:
-        return None
-    return {key: "***MASKED***" if key in sensitive else _redact_value(item, sensitive) for key, item in value.items()}
-
-
-def _redact_value(value: object, sensitive: set[str]) -> object:
-    if isinstance(value, Mapping):
-        return _redact_mapping(value, sensitive) or {}
-    if isinstance(value, list):
-        return [_redact_value(item, sensitive) for item in value]
-    return value
-
-
-def _reconciled_writeback_response(
-    writeback: ActionWritebackRecord,
-    remote_status: str,
-    remote_resource_id: str,
-    reconciled_at: str,
-) -> dict[str, object]:
-    response = dict(writeback.response or {})
-    return {
-        **response,
-        "status_code": 200,
-        "outcome_unknown": False,
-        "reconciled": True,
-        "remote_resource_id": remote_resource_id,
-        "last_observed_status": remote_status,
-        "reconciled_at": reconciled_at,
-    }
-
-
-def _reconciled_result(
-    action_run_id: str,
-    writeback_id: str,
-    remote_status: str,
-    remote_resource_id: str,
-    mutation: ActionApplyResponse,
-) -> ActionWritebackReconciliationResult:
-    result: ActionWritebackReconciliationResult = {
-        "actionRunId": action_run_id,
-        "writebackId": writeback_id,
-        "status": "reconciled",
-        "remoteStatus": remote_status,
-        "remoteResourceId": remote_resource_id,
-    }
-    if "objectEditId" in mutation:
-        result["objectEditId"] = mutation["objectEditId"]
-    if "newObjectVersion" in mutation:
-        result["newObjectVersion"] = mutation["newObjectVersion"]
-    return result
-
-
-def _already_reconciled_result(
-    writeback: ActionWritebackRecord,
-    remote_status: str,
-    remote_resource_id: str,
-) -> ActionWritebackReconciliationResult:
-    response = dict(writeback.response or {})
-    return {
-        "actionRunId": writeback.action_run_id,
-        "writebackId": writeback.writeback_id,
-        "status": "reconciled",
-        "remoteStatus": str(response.get("last_observed_status") or remote_status),
-        "remoteResourceId": str(response.get("remote_resource_id") or remote_resource_id),
-        "alreadyReconciled": True,
-    }
+def _required_approval_text(field: str, value: str) -> str:
+    normalized = value.strip()
+    if not normalized:
+        raise ValidationFailed("approval recovery field is required", details={"field": field})
+    return normalized

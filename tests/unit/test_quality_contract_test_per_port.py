@@ -54,6 +54,15 @@ def test_contract_test_per_port_accepts_dataset_storage_alias(tmp_path: Path) ->
     assert gate.collect_findings(port_dir=port_dir, contract_dir=contract_dir) == []
 
 
+def test_contract_test_per_port_accepts_runtime_repository_type_split(tmp_path: Path) -> None:
+    port_dir = tmp_path / "ports"
+    contract_dir = tmp_path / "contracts"
+    _write_port(port_dir, "runtime_repository_types.py")
+    _write_contract(contract_dir, "test_runtime_repository_contract.py")
+
+    assert gate.collect_findings(port_dir=port_dir, contract_dir=contract_dir) == []
+
+
 def test_contract_test_per_port_writes_json_report(tmp_path: Path) -> None:
     port_dir = tmp_path / "ports"
     contract_dir = tmp_path / "contracts"

@@ -1,3 +1,5 @@
+"""Application-layer models and helpers for core services."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -26,6 +28,8 @@ from foundry_lite.application.services.media_service import MediaServices
 from foundry_lite.application.services.object_service import ObjectServices
 from foundry_lite.application.services.ontology_search import OntologySearchService
 from foundry_lite.application.services.ontology_service import OntologyService
+from foundry_lite.application.services.osdk_application_service import OsdkApplicationService
+from foundry_lite.application.services.osdk_oauth_session_service import OsdkOAuthSessionService
 from foundry_lite.application.services.runtime_bundle import (
     BackupRestoreService,
     ErasureService,
@@ -68,6 +72,8 @@ __all__ = [
     "ObjectServices",
     "OntologySearchService",
     "OntologyService",
+    "OsdkApplicationService",
+    "OsdkOAuthSessionService",
     "OutboxPublisherService",
     "RecordDlqService",
     "RuntimeService",
@@ -127,6 +133,8 @@ class CoreServices:
     object_store: ObjectServices
     ontology: OntologyService
     ontology_search: OntologySearchService
+    osdk_applications: OsdkApplicationService
+    osdk_oauth_sessions: OsdkOAuthSessionService
     outbox_publisher: OutboxPublisherService
     record_dlq: RecordDlqService
     runtime: RuntimeService
@@ -159,9 +167,7 @@ def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices
 
 
 def _compose_core_services(
-    service_type: type[CoreServices],
-    dependencies: CoreDependencies,
-    shared: _SharedCoreServices,
+    service_type: type[CoreServices], dependencies: CoreDependencies, shared: _SharedCoreServices
 ) -> CoreServices:
     return service_type(
         action=build_service(ActionService, dependencies),
@@ -192,6 +198,8 @@ def _compose_core_services(
         object_store=shared["object_store"],
         ontology=build_service(OntologyService, dependencies),
         ontology_search=build_service(OntologySearchService, dependencies),
+        osdk_applications=build_service(OsdkApplicationService, dependencies),
+        osdk_oauth_sessions=build_service(OsdkOAuthSessionService, dependencies),
         outbox_publisher=build_service(OutboxPublisherService, dependencies),
         record_dlq=build_service(RecordDlqService, dependencies),
         runtime=build_service(RuntimeService, dependencies),
@@ -236,6 +244,8 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         *services.object_store.items(),
         services.ontology,
         services.ontology_search,
+        services.osdk_applications,
+        services.osdk_oauth_sessions,
         services.outbox_publisher,
         services.record_dlq,
         services.runtime,
@@ -307,7 +317,10 @@ def _object_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "object_records_service": services.object_store.records,
         "object_search_service": services.object_store.search,
         "object_sets_service": services.object_store.sets,
+        "object_subscription_service": services.object_store.subscriptions,
         "ontology_service": services.ontology,
+        "osdk_application_service": services.osdk_applications,
+        "osdk_oauth_session_service": services.osdk_oauth_sessions,
     }
 
 

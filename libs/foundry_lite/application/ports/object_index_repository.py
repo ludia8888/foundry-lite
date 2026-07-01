@@ -1,3 +1,5 @@
+"""Application port contract for object index repository."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -17,6 +19,9 @@ class IndexRunSourceRef(TypedDict, total=False):
 
     dataset_version_id: str
     replay_of_run_id: str
+    ontologyReindexKey: str
+    sourceOntologyVersionId: str
+    changedFields: list[str]
     cdc_dataset: str
     event_count: int
     mode: str
@@ -139,6 +144,22 @@ class ObjectIndexCdcResult(TypedDict):
     objects_upserted: int
     objects_deleted: int
     events_skipped: int
+
+
+class OntologyObjectReindexResult(TypedDict):
+    """Public result for executing an ontology object-reindex plan."""
+
+    index_run_id: str
+    object_type: str
+    rows_read: int
+    objects_upserted: int
+    objects_deleted: int
+    links_upserted: int
+    ontologyReindexKey: str
+    servingContractStatus: str
+    isIdempotentReplay: bool
+    sourceOntologyVersionId: str | None
+    changedFields: list[str]
 
 
 @dataclass(frozen=True)

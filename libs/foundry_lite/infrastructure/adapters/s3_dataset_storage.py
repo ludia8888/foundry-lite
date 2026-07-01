@@ -1,8 +1,11 @@
+"""Infrastructure adapter implementation for s3 dataset storage."""
+
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -10,7 +13,12 @@ from typing import Any, cast
 import pyarrow.parquet as pq
 from pyarrow.lib import ArrowException
 
-from foundry_lite.application.ports import DatasetManifest, DatasetManifestFile, StoredDatasetCommit
+from foundry_lite.application.ports import (
+    DatasetManifest,
+    DatasetManifestFile,
+    DatasetStagedFile,
+    StoredDatasetCommit,
+)
 from foundry_lite.application.ports.adapter_failure import (
     AdapterError,
     AdapterFailure,
@@ -19,6 +27,7 @@ from foundry_lite.application.ports.adapter_failure import (
     AdapterFailureMode,
 )
 from foundry_lite.application.primitives import _file_hash
+from foundry_lite.infrastructure.adapters.dataset_manifest_metadata import parquet_manifest_file_metadata
 from foundry_lite.infrastructure.adapters.s3_client import build_s3_client, is_not_found_error, join_key
 
 
@@ -60,7 +69,22 @@ class S3DatasetStorageAdapter:
                     has_required_idempotency_key=True,
                 ),
                 AdapterFailureMode(
+                    "commit_staged_files",
+                    "timeout",
+                    True,
+                    "S3 multi-part object promotion outcome is unknown; retry with the same version id after "
+                    "cleanup check.",
+                    timeout_seconds=30,
+                    has_required_idempotency_key=True,
+                ),
+                AdapterFailureMode(
                     "commit_staged_file",
+                    "conflict",
+                    False,
+                    "S3 dataset version id is already committed; the version allocator must hand out a fresh id.",
+                ),
+                AdapterFailureMode(
+                    "commit_staged_files",
                     "conflict",
                     False,
                     "S3 dataset version id is already committed; the version allocator must hand out a fresh id.",
@@ -70,6 +94,12 @@ class S3DatasetStorageAdapter:
                     "validation",
                     False,
                     "S3 dataset artifact is not a readable parquet file or its footer metadata disagrees.",
+                ),
+                AdapterFailureMode(
+                    "commit_staged_files",
+                    "validation",
+                    False,
+                    "S3 dataset artifact set is not readable parquet data or its footer metadata disagrees.",
                 ),
                 AdapterFailureMode(
                     "load_manifest",
@@ -112,27 +142,96 @@ class S3DatasetStorageAdapter:
         staged_file: Path,
         row_count: int,
         created_at: str,
+        sort_order: Sequence[str] | None = None,
     ) -> StoredDatasetCommit:
+        return self._commit_staged_files(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            branch=branch,
+            version_id=version_id,
+            dataset_ref=dataset_ref,
+            schema_hash=schema_hash,
+            staged_files=(DatasetStagedFile(path=staged_file, row_count=row_count),),
+            row_count=row_count,
+            created_at=created_at,
+            sort_order=sort_order,
+            operation="commit_staged_file",
+        )
+
+    def commit_staged_files(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        branch: str,
+        version_id: str,
+        dataset_ref: str,
+        schema_hash: str,
+        staged_files: Sequence[DatasetStagedFile],
+        row_count: int,
+        created_at: str,
+        sort_order: Sequence[str] | None = None,
+    ) -> StoredDatasetCommit:
+        return self._commit_staged_files(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            branch=branch,
+            version_id=version_id,
+            dataset_ref=dataset_ref,
+            schema_hash=schema_hash,
+            staged_files=staged_files,
+            row_count=row_count,
+            created_at=created_at,
+            sort_order=sort_order,
+            operation="commit_staged_files",
+        )
+
+    def _commit_staged_files(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        branch: str,
+        version_id: str,
+        dataset_ref: str,
+        schema_hash: str,
+        staged_files: Sequence[DatasetStagedFile],
+        row_count: int,
+        created_at: str,
+        sort_order: Sequence[str] | None,
+        operation: str,
+    ) -> StoredDatasetCommit:
+        if not staged_files:
+            raise ValueError("dataset commit requires at least one staged file")
         version_prefix = self._version_prefix(tenant_id, dataset_id, branch, version_id)
-        data_key = f"{version_prefix}/part-00000.parquet"
+        data_keys = [f"{version_prefix}/part-{index:05d}.parquet" for index, _ in enumerate(staged_files)]
         manifest_key = f"{version_prefix}/manifest.json"
         # Backstop against accidental version-id reuse. The transactional version
         # allocator is the real uniqueness guarantee; this only stops a duplicate
         # commit from overwriting or, worse, deleting an already-committed version.
-        self._guard_version_not_committed(manifest_key, version_id)
+        self._guard_version_not_committed(manifest_key, version_id, operation)
         try:
             return self._commit_objects(
-                data_key, manifest_key, version_id, dataset_ref, branch, schema_hash, staged_file, row_count, created_at
+                data_keys,
+                manifest_key,
+                version_id,
+                dataset_ref,
+                branch,
+                schema_hash,
+                staged_files,
+                row_count,
+                created_at,
+                sort_order,
             )
         except AdapterError as exc:
             # Never run the destructive cleanup when the failure is a duplicate-version
             # conflict: the existing objects belong to a healthy prior commit.
             if exc.failure.kind != "conflict":
-                self._safe_cleanup_failed_commit(data_key, manifest_key)
+                self._safe_cleanup_failed_commit(*data_keys, manifest_key)
             raise
         except Exception as exc:
-            cleanup = self._safe_cleanup_failed_commit(data_key, manifest_key)
-            raise self._adapter_error("commit_staged_file", exc, idempotency_key=version_id, details=cleanup) from exc
+            cleanup = self._safe_cleanup_failed_commit(*data_keys, manifest_key)
+            raise self._adapter_error(operation, exc, idempotency_key=version_id, details=cleanup) from exc
 
     def delete_committed_version(
         self,
@@ -191,38 +290,63 @@ class S3DatasetStorageAdapter:
 
     def _commit_objects(
         self,
-        data_key: str,
+        data_keys: Sequence[str],
         manifest_key: str,
         version_id: str,
         dataset_ref: str,
         branch: str,
         schema_hash: str,
-        staged_file: Path,
+        staged_files: Sequence[DatasetStagedFile],
         row_count: int,
         created_at: str,
+        sort_order: Sequence[str] | None,
     ) -> StoredDatasetCommit:
-        self._client.upload_file(str(staged_file), self.config.bucket, data_key)
-        manifest_file = self._manifest_file(data_key, staged_file, row_count)
-        manifest = self._manifest(version_id, dataset_ref, branch, schema_hash, manifest_file, created_at)
+        if _staged_files_row_count(staged_files, row_count) != row_count:
+            raise ValueError("dataset staged file row counts do not match validation row count")
+        manifest_files = self._upload_manifest_files(data_keys, staged_files, row_count, sort_order)
+        manifest = self._manifest(version_id, dataset_ref, branch, schema_hash, manifest_files, created_at)
         self._put_json(manifest_key, manifest)
-        self._verify_committed_manifest(manifest_key, manifest_file)
+        self._verify_committed_manifest(manifest_key, manifest_files)
+        first_file = manifest_files[0]
         return StoredDatasetCommit(
             manifest_uri=self._uri_for_key(manifest_key),
-            data_file_uri=manifest_file["uri"],
-            data_file_path=self._download_manifest_file(manifest_file),
-            byte_size=manifest_file["byte_size"],
-            content_hash=manifest_file["content_hash"],
+            data_file_uri=first_file["uri"],
+            data_file_path=self._download_manifest_file(first_file),
+            byte_size=sum(file["byte_size"] for file in manifest_files),
+            content_hash=_combined_content_hash(manifest_files),
             manifest=manifest,
         )
 
-    def _manifest_file(self, data_key: str, staged_file: Path, row_count: int) -> DatasetManifestFile:
-        return {
+    def _upload_manifest_files(
+        self,
+        data_keys: Sequence[str],
+        staged_files: Sequence[DatasetStagedFile],
+        row_count: int,
+        sort_order: Sequence[str] | None,
+    ) -> list[DatasetManifestFile]:
+        manifest_files: list[DatasetManifestFile] = []
+        for data_key, staged_file in zip(data_keys, staged_files, strict=True):
+            self._client.upload_file(str(staged_file.path), self.config.bucket, data_key)
+            manifest_files.append(self._manifest_file(data_key, staged_file, row_count, sort_order=sort_order))
+        return manifest_files
+
+    def _manifest_file(
+        self,
+        data_key: str,
+        staged_file: DatasetStagedFile,
+        row_count: int,
+        *,
+        sort_order: Sequence[str] | None,
+    ) -> DatasetManifestFile:
+        manifest_file: DatasetManifestFile = {
             "uri": self._uri_for_key(data_key),
             "format": "parquet",
-            "row_count": row_count,
-            "byte_size": staged_file.stat().st_size,
-            "content_hash": _file_hash(staged_file),
+            "row_count": _part_row_count(staged_file, row_count),
+            "byte_size": staged_file.path.stat().st_size,
+            "content_hash": _file_hash(staged_file.path),
+            "partition_values": dict(staged_file.partition_values or {}),
         }
+        return parquet_manifest_file_metadata(manifest_file, staged_file.path, sort_order=sort_order)
 
     def _manifest(
         self,
@@ -230,7 +354,7 @@ class S3DatasetStorageAdapter:
         dataset_ref: str,
         branch: str,
         schema_hash: str,
-        manifest_file: DatasetManifestFile,
+        manifest_files: Sequence[DatasetManifestFile],
         created_at: str,
     ) -> DatasetManifest:
         return {
@@ -238,19 +362,24 @@ class S3DatasetStorageAdapter:
             "dataset": dataset_ref,
             "branch": branch,
             "schema_hash": schema_hash,
-            "files": [manifest_file],
+            "files": list(manifest_files),
             "created_at": created_at,
             "storage_profile": self.profile_name,
         }
 
-    def _verify_committed_manifest(self, manifest_key: str, manifest_file: DatasetManifestFile) -> None:
+    def _verify_committed_manifest(
+        self,
+        manifest_key: str,
+        manifest_files: Sequence[DatasetManifestFile],
+    ) -> None:
         manifest = self.load_manifest(self._uri_for_key(manifest_key))
         files = manifest.get("files") or []
-        if not files or files[0]["uri"] != manifest_file["uri"]:
-            raise ValueError("S3 manifest does not reference the committed data object")
+        if [file["uri"] for file in files] != [file["uri"] for file in manifest_files]:
+            raise ValueError("S3 manifest does not reference the committed data objects")
         # _download_manifest_file re-verifies byte size and content hash against the
         # manifest, so committing and later reads share one integrity check.
-        self._download_manifest_file(manifest_file)
+        for manifest_file in manifest_files:
+            self._download_manifest_file(manifest_file)
 
     def _download_manifest_file(self, manifest_file: DatasetManifestFile) -> Path:
         key = self._key_for_uri(manifest_file["uri"])
@@ -291,12 +420,12 @@ class S3DatasetStorageAdapter:
                 raise FileNotFoundError(self._uri_for_key(key)) from exc
             raise self._adapter_error("load_manifest", exc) from exc
 
-    def _guard_version_not_committed(self, manifest_key: str, version_id: str) -> None:
-        if self._object_exists(manifest_key):
+    def _guard_version_not_committed(self, manifest_key: str, version_id: str, operation: str) -> None:
+        if self._object_exists(manifest_key, operation):
             raise AdapterError(
                 AdapterFailure(
                     self.profile_name,
-                    "commit_staged_file",
+                    operation,
                     "conflict",
                     False,
                     f"S3 dataset version already committed: {version_id}",
@@ -304,13 +433,13 @@ class S3DatasetStorageAdapter:
                 )
             )
 
-    def _object_exists(self, key: str) -> bool:
+    def _object_exists(self, key: str, operation: str) -> bool:
         try:
             self._client.head_object(Bucket=self.config.bucket, Key=key)
         except Exception as exc:
             if _is_not_found_error(exc):
                 return False
-            raise self._adapter_error("commit_staged_file", exc) from exc
+            raise self._adapter_error(operation, exc) from exc
         return True
 
     def _safe_cleanup_failed_commit(self, *keys: str) -> dict[str, object]:
@@ -450,6 +579,21 @@ def _matches_partition_filter(
 ) -> bool:
     partition_values = manifest_file.get("partition_values") or {}
     return all(partition_values.get(key) == value for key, value in partition_filter.items())
+
+
+def _part_row_count(staged_file: DatasetStagedFile, total_row_count: int) -> int:
+    return total_row_count if staged_file.row_count is None else staged_file.row_count
+
+
+def _staged_files_row_count(staged_files: Sequence[DatasetStagedFile], total_row_count: int) -> int:
+    return sum(_part_row_count(staged_file, total_row_count) for staged_file in staged_files)
+
+
+def _combined_content_hash(files: Sequence[DatasetManifestFile]) -> str:
+    if len(files) == 1:
+        return files[0]["content_hash"]
+    payload = json.dumps([file["content_hash"] for file in files], sort_keys=True).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 _join_key = join_key

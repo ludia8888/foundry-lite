@@ -1,3 +1,5 @@
+"""Application service helpers for webhook ingest workflows."""
+
 from __future__ import annotations
 
 import hashlib

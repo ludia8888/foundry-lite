@@ -1,3 +1,5 @@
+"""Application service helpers for visual search workflows."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

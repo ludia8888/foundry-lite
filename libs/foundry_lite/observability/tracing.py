@@ -1,3 +1,5 @@
+"""Observability helpers for tracing."""
+
 from __future__ import annotations
 
 import functools

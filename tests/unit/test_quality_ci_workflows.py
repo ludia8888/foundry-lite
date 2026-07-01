@@ -391,6 +391,16 @@ def test_stream_archive_worker_script_is_exposed() -> None:
     assert "tests/integration/test_search_indexing.py" in package_json
 
 
+def test_transform_scheduler_worker_script_is_exposed() -> None:
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"worker:transform-scheduler"' in package_json
+    assert "python -m foundry_lite_worker.transform_scheduler" in package_json
+    assert '"quality:transform-scheduler"' in package_json
+    assert "tests/unit/test_transform_scheduler_worker.py" in package_json
+    assert "tests/integration/test_closed_loop.py" in package_json
+
+
 def test_temporal_engine_integration_ratchet_is_runtime_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
@@ -424,6 +434,41 @@ def test_external_writeback_ratchet_is_runtime_gate_step() -> None:
     )
 
 
+def test_action_writeback_retryable_ratchet_is_runtime_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"quality:action-writeback-retryable"' in package_json
+    assert "test_retryable_writeback_failure_is_visible_without_object_edit" in package_json
+    assert "test_action_repository_contract_persists_retryable_writeback_fields" in package_json
+    assert "test_recovery_marks_retryable_writeback_as_retry_candidate" in package_json
+    assert "test_action_writeback_retryable_ratchet_is_runtime_gate_step" in package_json
+    assert "pnpm --silent quality:action-writeback-retryable" in script
+    assert script.index("pnpm --silent quality:external-writeback") < script.index(
+        "pnpm --silent quality:action-writeback-retryable"
+    )
+    assert script.index("pnpm --silent quality:action-writeback-retryable") < script.index(
+        "pnpm --silent quality:action-writeback-approval-release"
+    )
+
+
+def test_action_writeback_approval_release_ratchet_is_runtime_gate_step() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    assert '"quality:action-writeback-approval-release"' in package_json
+    assert "test_operator_approval_releases_sensitive_writeback_recovery" in package_json
+    assert "test_api_operations_reconciliation_approval_releases_sensitive_writeback" in package_json
+    assert "tests/sdk/request_contract.mjs" in package_json
+    assert "pnpm --silent quality:action-writeback-approval-release" in script
+    assert script.index("pnpm --silent quality:action-writeback-retryable") < script.index(
+        "pnpm --silent quality:action-writeback-approval-release"
+    )
+    assert script.index("pnpm --silent quality:action-writeback-approval-release") < script.index(
+        "pnpm --silent quality:saga-reconciliation"
+    )
+
+
 def test_saga_reconciliation_ratchet_is_runtime_gate_step() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
@@ -434,12 +479,13 @@ def test_saga_reconciliation_ratchet_is_runtime_gate_step() -> None:
     assert "test_reconciliation_resolves_remote_success" in package_json
     assert "test_concurrent_reconciliation_has_one_winner" in package_json
     assert "test_sensitive_writeback_payload_is_masked_in_audit" in package_json
+    assert "test_bounded_recovery_requires_operator_approval_for_sensitive_writeback" in package_json
     assert "test_api_operations_reconciliation_resolves_action_writeback" in package_json
     assert "test_action_repository_contract_lists_unresolved_writebacks" in package_json
     assert "test_api_operations_reconciliation_queue_lists_unresolved_writebacks" in package_json
     assert "test_reconciliation_queue_item_masks_sensitive_payload" in package_json
     assert "pnpm --silent quality:saga-reconciliation" in script
-    assert script.index("pnpm --silent quality:external-writeback") < script.index(
+    assert script.index("pnpm --silent quality:action-writeback-approval-release") < script.index(
         "pnpm --silent quality:saga-reconciliation"
     )
     assert script.index("pnpm --silent quality:saga-reconciliation") < script.index(
@@ -849,6 +895,7 @@ def test_frontend_backend_surface_gate_runs_after_sdk_generation() -> None:
     assert "tests/unit/test_quality_frontend_backend_surface.py" in package_json
     assert "tests/unit/test_sdk_ts_generation.py" in package_json
     assert "tests/unit/test_web_operations_ui.py" in package_json
+    assert "tests/unit/test_python_osdk.py" in package_json
 
 
 def test_schema_revision_guard_is_release_gate_step() -> None:
@@ -1229,6 +1276,22 @@ def test_agent_action_proposal_tool_gate_runs_after_tool_loop_before_citations()
     assert "agent_runtime_action_propose_tool" in package_json
     assert "agent_runtime_direct_write_tool_is_denied" in package_json
     assert "api_aip_agent_run_proposes_action_for_human_review" in package_json
+
+
+def test_agent_vendor_egress_gate_runs_after_action_proposal_before_approval() -> None:
+    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+
+    action_proposal_step = "pnpm --silent quality:agent-action-proposal-tool"
+    vendor_egress_step = "pnpm --silent quality:agent-vendor-egress"
+    approval_execution_step = "pnpm --silent quality:agent-approval-execution-api"
+    assert vendor_egress_step in script
+    assert script.index(action_proposal_step) < script.index(vendor_egress_step)
+    assert script.index(vendor_egress_step) < script.index(approval_execution_step)
+    assert '"quality:agent-vendor-egress"' in package_json
+    assert "test_tool_broker_rejects_direct_vendor_api_tool_even_when_manifest_published" in package_json
+    assert "test_agent_runtime_rejects_direct_vendor_api_tool_without_executor" in package_json
+    assert "test_visual_builder_blocks_direct_vendor_tool_ids" in package_json
 
 
 def test_agent_approval_execution_api_gate_runs_after_action_proposal_before_citations() -> None:

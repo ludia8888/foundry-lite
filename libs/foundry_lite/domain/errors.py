@@ -1,3 +1,5 @@
+"""Domain-layer types and rules for errors."""
+
 from __future__ import annotations
 
 
@@ -44,3 +46,11 @@ class ExternalOutcomeUnknown(ExternalSystemError):
 
 class ExternalCompensationRequired(ExternalSystemError):
     code = "EXTERNAL_COMPENSATION_REQUIRED"
+
+
+class ExternalRetryableWriteback(ExternalSystemError):
+    code = "EXTERNAL_RETRYABLE_WRITEBACK"
+
+
+class RateLimited(FoundryLiteError):
+    code = "RATE_LIMITED"

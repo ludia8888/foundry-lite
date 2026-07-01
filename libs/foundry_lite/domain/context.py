@@ -1,3 +1,5 @@
+"""Domain-layer types and rules for context."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -15,6 +17,9 @@ class RequestContext:
     actor_user_id: str = DEFAULT_ACTOR_USER_ID
     request_id: str = field(default_factory=lambda: f"req-{uuid4()}")
     roles: tuple[str, ...] = DEFAULT_ROLES
+    application_id: str | None = None
+    client_id: str | None = None
+    token_scopes: tuple[str, ...] = ()
 
     def has_role(self, role: str) -> bool:
         return role in self.roles

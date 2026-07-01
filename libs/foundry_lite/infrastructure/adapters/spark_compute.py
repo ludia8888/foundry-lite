@@ -15,9 +15,19 @@ from foundry_lite.application.ports.adapter_failure import (
     AdapterFailureKind,
     AdapterFailureMode,
 )
-from foundry_lite.application.ports.compute_adapter import SqlTransformPlan, TransformPlan
+from foundry_lite.application.ports.compute_adapter import (
+    PythonTransformPlan,
+    SqlTransformPlan,
+    TransformExecutionResult,
+    TransformPlan,
+)
 from foundry_lite.domain.errors import ValidationFailed
-from foundry_lite.infrastructure.adapters.compute import INPUT_PATTERN, DuckDBComputeAdapter, _sql_identifier
+from foundry_lite.infrastructure.adapters.compute import (
+    INPUT_PATTERN,
+    DuckDBComputeAdapter,
+    _input_path_tuple,
+    _sql_identifier,
+)
 
 
 class SparkComputeAdapter(DuckDBComputeAdapter):
@@ -93,8 +103,10 @@ class SparkComputeAdapter(DuckDBComputeAdapter):
                 raise ValidationFailed("invalid csv input", details={"path": str(source_path)}) from exc
             raise self._compute_error("csv_to_parquet", exc) from exc
 
-    def execute_transform(self, plan: TransformPlan) -> None:
+    def execute_transform(self, plan: TransformPlan) -> TransformExecutionResult:
         """Execute a SQL transform plan on Spark, writing one parquet output file."""
+        if isinstance(plan, PythonTransformPlan):
+            return super().execute_transform(plan)
         if not isinstance(plan, SqlTransformPlan):
             raise ValidationFailed(
                 "SparkComputeAdapter only supports SqlTransformPlan today",
@@ -104,10 +116,11 @@ class SparkComputeAdapter(DuckDBComputeAdapter):
         run_id = uuid4().hex
         views: list[str] = []
         try:
-            for index, (dataset_ref, parquet_path) in enumerate(plan.input_paths_by_ref.items()):
+            for index, (dataset_ref, input_paths) in enumerate(plan.input_paths_by_ref.items()):
                 view = f"foundry_input_{run_id}_{index}"
                 _sql_identifier(view)
-                self._spark.read.parquet(str(parquet_path)).createOrReplaceTempView(view)
+                parquet_paths = [str(path) for path in _input_path_tuple(input_paths)]
+                self._spark.read.parquet(*parquet_paths).createOrReplaceTempView(view)
                 views.append(view)
                 sql = sql.replace(f"{{{{ input('{dataset_ref}') }}}}", view)
             unresolved = INPUT_PATTERN.findall(sql)
@@ -115,6 +128,7 @@ class SparkComputeAdapter(DuckDBComputeAdapter):
                 raise ValidationFailed("transform has unresolved inputs", details={"inputs": unresolved})
             result = self._spark.sql(sql)
             self._write_single_parquet(result, plan.target_path)
+            return TransformExecutionResult()
         except ValidationFailed:
             raise
         except Exception as exc:  # noqa: BLE001 - classified for the failure contract

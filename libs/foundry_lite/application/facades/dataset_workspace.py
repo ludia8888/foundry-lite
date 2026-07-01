@@ -1,6 +1,8 @@
+"""Thin facade entrypoints for dataset workspace workflows."""
+
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from foundry_lite.application.ports import (
@@ -8,12 +10,16 @@ from foundry_lite.application.ports import (
     DatasetQualityContractCheck,
     DatasetQualityContractCheckCreateResult,
     DatasetQualityContractCheckList,
+    DatasetQualityContractVersion,
+    DatasetQualityContractVersionCreateResult,
+    DatasetQualityContractVersionList,
     DatasetQualityResultHistory,
     DatasetQualityResultSummary,
     DatasetRow,
     DatasetVersionRow,
     RestSourceConfig,
     StreamArchiveConfig,
+    StreamEvent,
     TabularRow,
 )
 from foundry_lite.application.primitives import CommitResult
@@ -143,6 +149,54 @@ class DatasetWorkspace:
         dataset = self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
         return self._datasets.quality.get_quality_result_summary(dataset, latest_limit=latest_limit, ctx=ctx)
 
+    def list_data_contract_versions(
+        self,
+        dataset_ref: str,
+        *,
+        limit: int = 20,
+        ctx: RequestContext | None = None,
+    ) -> DatasetQualityContractVersionList:
+        dataset = self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
+        return self._datasets.quality.list_data_contract_versions(dataset, limit=limit, ctx=ctx)
+
+    def get_data_contract_version(
+        self,
+        dataset_ref: str,
+        contract_version_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> DatasetQualityContractVersion:
+        dataset = self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
+        return self._datasets.quality.get_data_contract_version(dataset, contract_version_id, ctx=ctx)
+
+    def create_data_contract_version(
+        self,
+        dataset_ref: str,
+        *,
+        contract_key: str = "default",
+        owner_user_id: str | None = None,
+        description: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> DatasetQualityContractVersionCreateResult:
+        dataset = self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
+        return self._datasets.quality.create_data_contract_version(
+            dataset,
+            contract_key=contract_key,
+            owner_user_id=owner_user_id,
+            description=description,
+            ctx=ctx,
+        )
+
+    def activate_data_contract_version(
+        self,
+        dataset_ref: str,
+        contract_version_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> DatasetQualityContractVersion:
+        dataset = self._datasets.registry.get_dataset(dataset_ref, ctx=ctx)
+        return self._datasets.quality.activate_data_contract_version(dataset, contract_version_id, ctx=ctx)
+
     def create_quality_contract_check(
         self,
         dataset_ref: str,
@@ -201,6 +255,7 @@ class DatasetWorkspace:
         sync_name: str | None = None,
         cursor: Mapping[str, object] | None = None,
         rest: RestSourceConfig | None = None,
+        run_id: str | None = None,
     ) -> CommitResult:
         return self._datasets.ingest.sync_connector_snapshot(
             dataset_ref,
@@ -210,6 +265,7 @@ class DatasetWorkspace:
             sync_name=sync_name,
             cursor=cursor,
             rest=rest,
+            run_id=run_id,
         )
 
     def ingest_webhook_event(
@@ -249,6 +305,7 @@ class DatasetWorkspace:
         ctx: RequestContext | None = None,
         after_offset: int | None = None,
         sync_name: str | None = None,
+        pre_commit_check: Callable[[Sequence[StreamEvent]], None] | None = None,
     ) -> CommitResult | None:
         return self._datasets.ingest.archive_stream_events(
             dataset_ref,
@@ -256,4 +313,5 @@ class DatasetWorkspace:
             ctx=ctx,
             after_offset=after_offset,
             sync_name=sync_name,
+            pre_commit_check=pre_commit_check,
         )

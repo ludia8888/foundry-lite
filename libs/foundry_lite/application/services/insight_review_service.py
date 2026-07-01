@@ -1,3 +1,5 @@
+"""Application service helpers for insight review service workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

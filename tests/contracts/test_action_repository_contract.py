@@ -23,6 +23,7 @@ from foundry_lite.application.ports.transaction_context import (
     ACTION_RUN_FAILED,
     ACTION_RUN_OUTCOME_UNKNOWN,
     ACTION_RUN_RECONCILED,
+    ACTION_RUN_RETRYABLE,
     ACTION_RUN_SUCCEEDED,
     StatusTransition,
 )
@@ -656,6 +657,47 @@ def test_action_repository_contract_persists_outcome_unknown_writeback_fields(ha
     assert writebacks[0]["response"] == response
 
 
+def test_action_repository_contract_persists_retryable_writeback_fields(harness: ActionHarness) -> None:
+    request = {
+        "connector": "mock_erp",
+        "simulated": True,
+        "networkCall": False,
+        "idempotency_key": "idem-1",
+        "request_hash": "request-hash-1",
+    }
+    response = {
+        "status_code": 503,
+        "retryable": True,
+        "external_system_changed": False,
+        "remote_resource_id": None,
+        "last_observed_status": "not_changed",
+        "retry_after_seconds": 60,
+        "reconciliation_deadline": None,
+    }
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(transaction=transaction, record=_action_run_record())
+        updated = harness.repository.update_action_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            action_run_id="arun_1",
+            transition=ACTION_RUN_RETRYABLE,
+            error={"type": "EXTERNAL_RETRYABLE_WRITEBACK"},
+            completed_at="2026-06-10T00:00:05Z",
+        )
+        harness.repository.insert_action_writeback(
+            transaction=transaction,
+            record=_writeback_record(status="retryable", request=request, response=response),
+        )
+
+    action_runs = harness.action_run_rows()
+    writebacks = harness.writeback_rows()
+    assert updated is True
+    assert action_runs[0]["status"] == "retryable"
+    assert writebacks[0]["status"] == "retryable"
+    assert writebacks[0]["request"] == request
+    assert writebacks[0]["response"] == response
+
+
 def test_action_repository_contract_reconciles_outcome_unknown_writeback_once(harness: ActionHarness) -> None:
     original_response = {
         "status_code": None,
@@ -837,6 +879,14 @@ def test_action_repository_contract_lists_unresolved_writebacks(harness: ActionH
         )
         harness.repository.insert_action_writeback(
             transaction=transaction,
+            record=_writeback_record(
+                writeback_id="wb_retryable",
+                status="retryable",
+                created_at="2026-06-10T00:00:04Z",
+            ),
+        )
+        harness.repository.insert_action_writeback(
+            transaction=transaction,
             record=_writeback_record(writeback_id="wb_failed", status="failed"),
         )
         harness.repository.insert_action_writeback(
@@ -846,12 +896,12 @@ def test_action_repository_contract_lists_unresolved_writebacks(harness: ActionH
         rows = harness.repository.list_action_writebacks(
             transaction=transaction,
             tenant_id="tenant-demo",
-            statuses=("outcome_unknown", "compensation_required"),
-            limit=2,
+            statuses=("outcome_unknown", "compensation_required", "retryable"),
+            limit=3,
         )
 
-    assert [row.writeback_id for row in rows] == ["wb_new", "wb_old"]
-    assert {row.status for row in rows} == {"outcome_unknown", "compensation_required"}
+    assert [row.writeback_id for row in rows] == ["wb_retryable", "wb_new", "wb_old"]
+    assert {row.status for row in rows} == {"outcome_unknown", "compensation_required", "retryable"}
 
 
 def test_action_repository_contract_updates_object_target_and_records_edit(harness: ActionHarness) -> None:

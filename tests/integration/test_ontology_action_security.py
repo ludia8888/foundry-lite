@@ -18,12 +18,20 @@ from foundry_lite.application.ports.action_repository import (
     ObjectEditRecord,
     ObjectTargetUpdate,
 )
+from foundry_lite.application.ports.external_writeback_adapter import (
+    ExternalWritebackPayload,
+    ExternalWriteTarget,
+    RemoteOutcome,
+    RemoteOutcomeStatus,
+    WriteReceipt,
+)
 from foundry_lite.application.ports.transaction_context import StatusTransition
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import (
     ConflictDetected,
     ExternalCompensationRequired,
     ExternalOutcomeUnknown,
+    ExternalRetryableWriteback,
     ExternalSystemError,
     InvariantViolation,
     NotFound,
@@ -32,13 +40,32 @@ from foundry_lite.domain.errors import (
 )
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from tests.conftest import DEMO_ROOT, prepare_indexed_demo
 
 
 class _InjectedActionCommitFailure(RuntimeError):
     pass
+
+
+class _MemoryExternalWritebackAdapter:
+    profile_name = "memory-external-writeback"
+
+    def __init__(self, write_status: RemoteOutcomeStatus) -> None:
+        self.write_status = write_status
+        self.lookup_count = 0
+
+    def write(self, target: ExternalWriteTarget, payload: ExternalWritebackPayload) -> WriteReceipt:
+        del target, payload
+        if self.write_status is RemoteOutcomeStatus.AMBIGUOUS:
+            return WriteReceipt(status=RemoteOutcomeStatus.AMBIGUOUS)
+        return WriteReceipt(status=RemoteOutcomeStatus.LANDED, remote_resource_id="remote-sensitive-writeback")
+
+    def remote_lookup(self, target: ExternalWriteTarget) -> RemoteOutcome:
+        del target
+        self.lookup_count += 1
+        return RemoteOutcome(status=RemoteOutcomeStatus.LANDED, remote_resource_id="remote-sensitive-writeback")
 
 
 class _FailingActionRepository:
@@ -242,7 +269,7 @@ def test_ontology_migration_apply_blocks_required_action_parameter(
     assert {change["kind"] for change in blocked} == {"required_action_parameter_added"}
 
 
-def test_ontology_reindex_required_activation_does_not_serve_previous_index(
+def test_ontology_migration_reindex_executor_completes_required_object_reindex(
     foundry: FoundryLite,
     tmp_path: Path,
 ) -> None:
@@ -252,15 +279,64 @@ def test_ontology_reindex_required_activation_does_not_serve_previous_index(
     foundry.ontology.apply(_status_remapped_ontology(tmp_path), ctx=ctx)
     catalog = foundry.ontology.catalog(ctx=ctx)
     order_type = next(item for item in catalog["objectTypes"] if item["apiName"] == "Order")
+    reindex_key = str(order_type["config"]["objectReindexPlan"][0]["reindexKey"])
 
     assert order_type["config"]["servingRecordScope"] == "object_type_id"
     with pytest.raises(NotFound):
         foundry.objects.get("Order", "O-1001", ctx=ctx)
     assert foundry.objects.query("Order", ctx=ctx)["items"] == []
 
-    foundry.objects.reindex("Order", ctx=ctx)
+    result = foundry.objects.reindex_ontology_migration("Order", reindex_key, ctx=ctx)
+    replay = foundry.objects.reindex_ontology_migration("Order", reindex_key, ctx=ctx)
+    completed_catalog = foundry.ontology.catalog(ctx=ctx)
+    completed_order_type = next(item for item in completed_catalog["objectTypes"] if item["apiName"] == "Order")
     remapped = foundry.objects.get("Order", "O-1001", ctx=ctx)
+
+    assert result["ontologyReindexKey"] == reindex_key
+    assert result["servingContractStatus"] == "object_reindex_complete"
+    assert result["changedFields"] == ["properties.status"]
+    assert replay["index_run_id"] == result["index_run_id"]
+    assert replay["isIdempotentReplay"] is True
+    assert completed_order_type["config"]["servingContractStatus"] == "object_reindex_complete"
+    assert completed_order_type["config"]["objectReindexCompleted"]["indexRunId"] == result["index_run_id"]
     assert remapped["properties"]["status"] == "C-100"
+
+
+def test_ontology_mapping_migrates_with_dataset_schema(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    status_code_csv = _clean_orders_with_status_code(tmp_path)
+    committed = foundry.datasets.upload_csv("clean.orders", status_code_csv, ctx=ctx)
+    with foundry.engine.begin() as conn:
+        tx_row = (
+            conn.execute(
+                select(db.dataset_transactions).where(db.dataset_transactions.c.id == committed.transaction_id)
+            )
+            .mappings()
+            .one()
+        )
+
+    foundry.ontology.apply(_status_code_ontology(tmp_path), ctx=ctx)
+    catalog = foundry.ontology.catalog(ctx=ctx)
+    order_type = next(item for item in catalog["objectTypes"] if item["apiName"] == "Order")
+    migration = next(
+        event["after_ref"]["ontologyMigration"]
+        for event in foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+        if event["event_type"] == "ontology.version.activated" and "ontologyMigration" in event["after_ref"]
+    )
+    warning = next(item for item in migration["warnings"] if item["kind"] == "property_mapping_changed")
+    reindex_key = str(order_type["config"]["objectReindexPlan"][0]["reindexKey"])
+
+    result = foundry.objects.reindex_ontology_migration("Order", reindex_key, ctx=ctx)
+    migrated = foundry.objects.get("Order", "O-1001", ctx=ctx, include_explain=True)
+    status_lineage = next(item for item in migrated["explain"]["propertyLineage"] if item["propertyName"] == "status")
+    schema_changes = tx_row["metadata"]["schemaEvolution"]["changes"]
+
+    assert any(change.get("column") == "status_code" for change in schema_changes)
+    assert warning["details"] == {"previousColumn": "source_status", "nextColumn": "status_code"}
+    assert result["changedFields"] == ["properties.status"]
+    assert migrated["properties"]["status"] == "BACKORDERED"
+    assert status_lineage["sourceColumn"] == "status_code"
+    assert status_lineage["sourceDatasetVersionId"] == committed.version_id
 
 
 @pytest.mark.integration_scenario("object_action_audit")
@@ -446,6 +522,77 @@ def test_before_commit_writeback_failure_does_not_edit_object(
     assert writeback_response["simulated"] is True
     audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
     assert any(event["event_type"] == "action.run.failed" for event in audit_events)
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_retryable_writeback_failure_is_visible_without_object_edit(
+    foundry: FoundryLite,
+) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-retryable"
+
+    with pytest.raises(ExternalRetryableWriteback) as raised:
+        foundry.actions.apply(
+            "ApproveOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "external system not changed"},
+            idempotency_key=idempotency_key,
+            simulate_writeback_retryable=True,
+            ctx=ctx,
+        )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    retryable_runs = _rows_for_key(snapshot, "actionRuns", idempotency_key)
+    writebacks = _rows_for_key(snapshot, "actionWritebacks", idempotency_key)
+    writeback_response = cast(Mapping[str, object], writebacks[0]["response"])
+    error = cast(Mapping[str, object], retryable_runs[0]["error"])
+    error_details = cast(Mapping[str, object], error["details"])
+
+    assert after["objectVersion"] == order["objectVersion"]
+    assert after["properties"]["status"] == "PENDING"
+    assert raised.value.details["state"] == "RETRYABLE"
+    assert retryable_runs[0]["status"] == "retryable"
+    assert error["type"] == "EXTERNAL_RETRYABLE_WRITEBACK"
+    assert error_details["external_system_changed"] is False
+    assert error_details["last_observed_status"] == "not_changed"
+    assert writebacks[0]["status"] == "retryable"
+    assert writeback_response["retryable"] is True
+    assert writeback_response["external_system_changed"] is False
+    assert writeback_response["last_observed_status"] == "not_changed"
+    assert writeback_response["retry_after_seconds"] == 60
+    assert any(event["event_type"] == "action.run.retryable" for event in snapshot["auditEvents"])
+
+    replay = foundry.actions.apply(
+        "ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "external system not changed"},
+        idempotency_key=idempotency_key,
+        simulate_writeback_retryable=True,
+        ctx=ctx,
+    )
+    replay_snapshot = foundry.operations.list_runs(ctx=ctx)
+
+    assert replay["idempotentReplay"] is True
+    assert replay["status"] == "retryable"
+    assert replay["actionRunId"] == retryable_runs[0]["id"]
+    assert len(_rows_for_key(replay_snapshot, "actionWritebacks", idempotency_key)) == 1
+
+    writeback_id = cast(str, writebacks[0]["id"])
+    with pytest.raises(ValidationFailed, match="not approval-recoverable"):
+        foundry.operations.approve_action_writeback_recovery(
+            writeback_id,
+            approval_id="approval-retryable-should-not-apply",
+            reason="operator cannot release retryable external-not-changed rows",
+            ctx=ctx,
+        )
+    rejected_snapshot = foundry.operations.list_runs(ctx=ctx)
+    assert _event_count(rejected_snapshot["auditEvents"], "action.writeback.recovery_approved") == 0
 
 
 @pytest.mark.integration_scenario("failed_run_replay_or_dlq")
@@ -734,6 +881,99 @@ def test_sensitive_writeback_payload_is_masked_in_audit(foundry: FoundryLite, tm
     assert committed_audit["before_ref"]["margin"] == "***MASKED***"
     assert committed_audit["after_ref"]["patch"]["margin"] == "***MASKED***"
     assert str(sensitive_margin) not in repr(reconciled_audit)
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_bounded_recovery_requires_operator_approval_for_sensitive_writeback(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = _prepare_demo_with_ontology(foundry, _margin_action_ontology(tmp_path))
+    adapter = _MemoryExternalWritebackAdapter(RemoteOutcomeStatus.AMBIGUOUS)
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-sensitive-recovery-approval"
+
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "AdjustMargin",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"margin": 9999.99},
+            idempotency_key=idempotency_key,
+            external_writeback_uri="memory://erp/orders/O-1001/margin",
+            ctx=ctx,
+        )
+
+    result = foundry.operations.recover_action_writebacks(limit=10, ctx=ctx)
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    item = result["items"][0]
+
+    assert result["processed"] == 1
+    assert result["skipped"] == 1
+    assert item["decision"] == "skipped"
+    assert item.get("reason") == "operator_approval_required"
+    assert item.get("approvalRequired") is True
+    assert item.get("approvalReason") == "sensitive_action_parameter"
+    assert adapter.lookup_count == 0
+    assert after["objectVersion"] == order["objectVersion"]
+    assert after["properties"]["margin"] != 9999.99
+    assert _rows_for_key(snapshot, "actionWritebacks", idempotency_key)[0]["status"] == "outcome_unknown"
+    assert _event_count(snapshot["auditEvents"], "action.writeback.recovery_tick") == 1
+
+
+@pytest.mark.integration_scenario("failed_run_replay_or_dlq")
+def test_operator_approval_releases_sensitive_writeback_recovery(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = _prepare_demo_with_ontology(foundry, _margin_action_ontology(tmp_path))
+    adapter = _MemoryExternalWritebackAdapter(RemoteOutcomeStatus.AMBIGUOUS)
+    foundry.actions._action.set_external_writeback_adapter(adapter)
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    idempotency_key = "writeback-sensitive-recovery-approved"
+    margin = 7777.77
+
+    with pytest.raises(ExternalOutcomeUnknown):
+        foundry.actions.apply(
+            "AdjustMargin",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"margin": margin},
+            idempotency_key=idempotency_key,
+            external_writeback_uri="memory://erp/orders/O-1001/margin",
+            ctx=ctx,
+        )
+
+    skipped = foundry.operations.recover_action_writebacks(limit=10, ctx=ctx)
+    writeback_id = cast(str, skipped["items"][0]["writebackId"])
+    approved = foundry.operations.approve_action_writeback_recovery(
+        writeback_id,
+        approval_id="approval-writeback-1",
+        reason="finance operator reviewed remote margin write",
+        ctx=ctx,
+    )
+
+    after = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    snapshot = foundry.operations.list_runs(ctx=ctx)
+    approval_audit = next(
+        event for event in snapshot["auditEvents"] if event["event_type"] == "action.writeback.recovery_approved"
+    )
+
+    assert skipped["items"][0].get("approvalRequired") is True
+    assert approved["decision"] == "reconciled"
+    assert approved["approvalId"] == "approval-writeback-1"
+    assert approved["approvalReason"] == "sensitive_action_parameter"
+    assert approved["remoteResourceId"] == "remote-sensitive-writeback"
+    assert adapter.lookup_count == 1
+    assert after["objectVersion"] == order["objectVersion"] + 1
+    assert after["properties"]["margin"] == margin
+    assert _rows_for_key(snapshot, "actionWritebacks", idempotency_key)[0]["status"] == "reconciled"
+    assert approval_audit["after_ref"]["approvalId"] == "approval-writeback-1"
+    assert str(margin) not in repr(approval_audit)
 
 
 @pytest.mark.integration_scenario("failed_run_replay_or_dlq")
@@ -1372,6 +1612,30 @@ def _status_remapped_ontology(tmp_path: Path) -> Path:
         1,
     )
     path.write_text(remapped, encoding="utf-8")
+    return path
+
+
+def _status_code_ontology(tmp_path: Path) -> Path:
+    ontology = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
+    path = tmp_path / "order-customer-status-code.yaml"
+    remapped = ontology.replace(
+        "        column: source_status",
+        "        column: status_code",
+        1,
+    )
+    path.write_text(remapped, encoding="utf-8")
+    return path
+
+
+def _clean_orders_with_status_code(tmp_path: Path) -> Path:
+    path = tmp_path / "clean_orders_status_code.csv"
+    path.write_text(
+        "order_id,customer_id,source_status,status_code,amount,margin,order_ts,region,risk_score\n"
+        "O-1001,C-100,PENDING,BACKORDERED,1200.0,230.0,2026-06-09T10:00:00Z,NA,0.8\n"
+        "O-1002,C-101,REVIEW,REVIEW,800.0,80.0,2026-06-09T11:00:00Z,EU,0.3\n"
+        "O-1003,C-100,APPROVED,APPROVED,300.0,20.0,2026-06-09T12:00:00Z,NA,0.3\n",
+        encoding="utf-8",
+    )
     return path
 
 

@@ -1,3 +1,5 @@
+"""Security policy helpers for privacy."""
+
 from __future__ import annotations
 
 import hashlib

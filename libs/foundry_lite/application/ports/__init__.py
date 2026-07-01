@@ -3,7 +3,7 @@
 # ruff: noqa: F401
 # pyright: reportUnusedImport=false
 
-from foundry_lite.application.action_types import ActionWritebackQueueResult
+from foundry_lite.application.action_types import ActionWritebackQueueResult, ActionWritebackRecoveryResult
 from foundry_lite.application.dataset_webhook_events import WebhookEventKeyRecord, WebhookEventKeyRow
 from foundry_lite.application.ports.action_repository import (
     ActionErrorPayload,
@@ -40,7 +40,21 @@ from foundry_lite.application.ports.ai_run_repository import (
     AiToolCallRecord,
     AiUsageLedgerRecord,
 )
-from foundry_lite.application.ports.compute_adapter import ComputeAdapter, SqlTransformPlan, TabularRow
+from foundry_lite.application.ports.backup_artifact_store import (
+    BackupArtifactConflictError,
+    BackupArtifactIntegrityError,
+    BackupArtifactNotFoundError,
+    BackupArtifactStore,
+)
+from foundry_lite.application.ports.compute_adapter import (
+    ComputeAdapter,
+    InputFilePaths,
+    PythonTransformPlan,
+    SqlTransformPlan,
+    TabularRow,
+    TransformDeadLetterRecord,
+    TransformExecutionResult,
+)
 from foundry_lite.application.ports.connector_adapter import (
     ConnectorAdapter,
     ConnectorRateLimitedError,
@@ -73,6 +87,12 @@ from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetQualityContractCheck,
     DatasetQualityContractCheckCreateResult,
     DatasetQualityContractCheckList,
+    DatasetQualityContractCheckSnapshot,
+    DatasetQualityContractVersion,
+    DatasetQualityContractVersionCreateResult,
+    DatasetQualityContractVersionList,
+    DatasetQualityContractVersionRecord,
+    DatasetQualityContractVersionRow,
     DatasetQualityRepository,
     DatasetQualityResultHistory,
     DatasetQualityResultHistoryItem,
@@ -94,7 +114,9 @@ from foundry_lite.application.ports.dataset_repository import (
 from foundry_lite.application.ports.dataset_storage import (
     DatasetInspectionPayload,
     DatasetManifest,
+    DatasetManifestColumnStats,
     DatasetManifestFile,
+    DatasetStagedFile,
     DatasetStorageAdapter,
     StoredDatasetCommit,
 )
@@ -134,10 +156,23 @@ from foundry_lite.application.ports.materialization_repository import (
     MaterializationTriggerConfig,
 )
 from foundry_lite.application.ports.metadata_repository import MetadataRepository
+from foundry_lite.application.ports.oauth_session_repository import (
+    OAuthAccessTokenClaims,
+    OAuthAuthorizationCodeRecord,
+    OAuthAuthorizationCodeRow,
+    OAuthIssuedAccessToken,
+    OAuthRefreshTokenRecord,
+    OAuthRefreshTokenRow,
+    OAuthSessionRecord,
+    OAuthSessionRepository,
+    OAuthSessionRow,
+    OAuthTokenIssuer,
+)
 from foundry_lite.application.ports.object_index_repository import (
     IndexRunCursor,
     IndexRunError,
     IndexRunRecord,
+    IndexRunRow,
     IndexRunSourceRef,
     ObjectConflictRecord,
     ObjectIndexCdcResult,
@@ -154,6 +189,7 @@ from foundry_lite.application.ports.object_index_repository import (
     ObjectRecordInsert,
     ObjectRecordSourceDeletion,
     ObjectRecordSourceUpdate,
+    OntologyObjectReindexResult,
 )
 from foundry_lite.application.ports.object_read_repository import (
     ObjectLinkPayload,
@@ -206,8 +242,41 @@ from foundry_lite.application.ports.ontology_repository import (
     PropertyTypeRecord,
     PropertyTypeRow,
 )
+from foundry_lite.application.ports.osdk_application_repository import (
+    OsdkApplicationBundle,
+    OsdkApplicationClientRecord,
+    OsdkApplicationClientRow,
+    OsdkApplicationRecord,
+    OsdkApplicationRepository,
+    OsdkApplicationResourceRecord,
+    OsdkApplicationResourceRow,
+    OsdkApplicationRow,
+    OsdkDeveloperConsoleIdempotencyRecord,
+    OsdkDeveloperConsoleIdempotencyRow,
+    OsdkLanguage,
+    OsdkReleaseArtifactDownloadTokenRecord,
+    OsdkReleaseArtifactDownloadTokenRow,
+    OsdkReleaseArtifactRecord,
+    OsdkReleaseArtifactRow,
+    OsdkReleaseStatus,
+    OsdkResourceOperation,
+    OsdkResourceType,
+    OsdkSdkCompatibilityWindowRecord,
+    OsdkSdkCompatibilityWindowRow,
+    OsdkSdkReleaseChannelRecord,
+    OsdkSdkReleaseChannelRow,
+    OsdkSdkVersionBundle,
+    OsdkSdkVersionRecord,
+    OsdkSdkVersionRow,
+)
 from foundry_lite.application.ports.runtime_repository import (
     AuditEventRecord,
+    BackupRestoreArtifact,
+    BackupRestoreArtifactReceipt,
+    BackupRestoreArtifactRestoredVersion,
+    BackupRestoreArtifactRestoreReport,
+    BackupRestoreArtifactRestoreStatus,
+    BackupRestoreArtifactStatus,
     BackupRestoreDatasetVersion,
     BackupRestoreIndexPointer,
     BackupRestoreManifestIssue,
@@ -229,6 +298,7 @@ from foundry_lite.application.ports.runtime_repository import (
     ObservabilityIncidentStatus,
     ObservabilityReport,
     ObservabilitySeverity,
+    ObservabilityStoredReport,
     OutboxEventRecord,
     RuntimeJsonObject,
     RuntimeLookupTable,
@@ -247,6 +317,8 @@ from foundry_lite.application.ports.runtime_repository import (
     RuntimeRunRelationRow,
     RuntimeRunSnapshot,
     RuntimeRunType,
+    StoredObservabilityIncident,
+    StoredObservabilityIncidentStatus,
 )
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter, SourceTableBatch
 from foundry_lite.application.ports.source_management_repository import (
@@ -286,6 +358,7 @@ from foundry_lite.application.ports.transaction_context import (
     ACTION_RUN_FAILED,
     ACTION_RUN_OUTCOME_UNKNOWN,
     ACTION_RUN_RECONCILED,
+    ACTION_RUN_RETRYABLE,
     ACTION_RUN_SUCCEEDED,
     MATERIALIZATION_RUN_SUCCEEDED,
     OUTBOX_PUBLISH_FAILED,
@@ -303,6 +376,7 @@ from foundry_lite.application.ports.transaction_context import (
 from foundry_lite.application.ports.transform_repository import (
     TransformCheck,
     TransformRecord,
+    TransformRecordDlqRetryResult,
     TransformRepository,
     TransformRetryResult,
     TransformRow,

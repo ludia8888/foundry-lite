@@ -101,6 +101,34 @@ class _ToolCallingThenAnswerLanguageModel:
         )
 
 
+class _DirectVendorToolCallingLanguageModel:
+    profile_name = "direct-vendor-tool-calling-language-model"
+
+    def __init__(self) -> None:
+        self.offered_tools: tuple[str, ...] = ()
+        self.system_prompt = ""
+
+    def complete(self, request: ModelRequest) -> ModelResponse:
+        self.offered_tools = request.tools
+        self.system_prompt = request.messages[0].content
+        return ModelResponse(
+            provider="fake",
+            resolved_model_id="",
+            resolved_model_revision="",
+            content="I should call a vendor API directly.",
+            finish_reason="tool_calls",
+            input_tokens=4,
+            output_tokens=4,
+            normalized_tool_calls=(
+                ModelToolCall(
+                    tool_name="http.request",
+                    arguments_json='{"url":"https://api.vendor.example/orders"}',
+                ),
+            ),
+            provider_request_id="direct-vendor-tool-request",
+        )
+
+
 class _ActionProposingLanguageModel:
     profile_name = "action-proposing-language-model"
 
@@ -560,6 +588,38 @@ def test_agent_runtime_direct_write_tool_is_denied_without_review_or_action(foun
     assert _table_count(foundry.engine, db.action_runs) == 0
 
 
+def test_agent_runtime_rejects_direct_vendor_api_tool_without_executor(foundry: Any) -> None:
+    prepare_indexed_demo(foundry)
+    adapter = _DirectVendorToolCallingLanguageModel()
+    foundry._services.model_gateway.language_model_adapter = adapter
+
+    result = foundry.aip.run_agent_payload(
+        payload={
+            **_payload(),
+            "agentRunId": "agent-runtime-direct-vendor-tool-denied",
+            "maxModelCalls": 2,
+            "maxLoopIterations": 2,
+            "maxToolCalls": 1,
+            "toolManifest": [_direct_vendor_tool_spec_payload()],
+            "agentAllowedTools": ["http.request"],
+            "modelAllowedClassifications": ["public", "internal"],
+        },
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "failed"
+    assert result.ai_run_id is not None
+    assert result.error == {
+        "reason": "direct_vendor_tool_denied",
+        "detail": "direct vendor/API tools must use governed connectors, webhooks, or action proposals",
+    }
+    detail = foundry.operations.run_detail("ai", result.ai_run_id, ctx=_CTX)
+    assert detail["ai"]["summary"]["toolCallCount"] == 0
+    assert _table_count(foundry.engine, db.action_runs) == 0
+    assert adapter.offered_tools == ()
+    assert "http.request" not in adapter.system_prompt
+
+
 def test_agent_runtime_fails_before_model_when_prompt_artifact_write_fails(foundry: Any) -> None:
     prepare_indexed_demo(foundry)
     foundry._services.agent_runtime.prompt_artifact_service = _FailingPromptArtifactService()
@@ -739,6 +799,29 @@ def _action_proposal_tool_spec_payload(
         "requiredPermission": "insight:create",
         "confirmationPolicy": "HUMAN_REVIEW",
         "objectTypeAllowlist": ["Order"],
+        "propertyAllowlist": [],
+        "timeoutSeconds": 30,
+        "maxResultItems": 1,
+        "resultClassification": "internal",
+        "status": "published",
+    }
+
+
+def _direct_vendor_tool_spec_payload() -> dict[str, object]:
+    return {
+        "toolId": "http.request",
+        "version": "2026-06-25",
+        "inputSchema": {
+            "type": "object",
+            "required": ["url"],
+            "properties": {"url": {"type": "string"}},
+            "additionalProperties": False,
+        },
+        "outputSchema": {"type": "object"},
+        "effect": "READ",
+        "requiredPermission": "object:read",
+        "confirmationPolicy": "NONE",
+        "objectTypeAllowlist": [],
         "propertyAllowlist": [],
         "timeoutSeconds": 30,
         "maxResultItems": 1,

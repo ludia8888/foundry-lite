@@ -1,7 +1,8 @@
+"""Thin facade entrypoints for operations console workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol
 
 from foundry_lite.application.admin_overview import (
     AdminReadinessOverview,
@@ -10,12 +11,17 @@ from foundry_lite.application.admin_overview import (
     build_admin_task_plan,
 )
 from foundry_lite.application.core_retry import retry_materialization_name, retry_materialization_result
+from foundry_lite.application.facades.operations_console_backup import OperationsConsoleBackupMixin
+from foundry_lite.application.facades.operations_console_protocols import (
+    ActionWritebackReconciler,
+    BackupRestoreReporter,
+    OutboxPublisher,
+    PromptArtifactReader,
+    PromptArtifactReadPayload,
+)
 from foundry_lite.application.ports import (
     ActionWritebackQueueResult,
-    BackupRestoreModeReport,
-    BackupRestorePostRestoreValidationReport,
-    BackupRestorePreflightReport,
-    BackupRestoreRecoveryOverview,
+    ActionWritebackRecoveryResult,
     DeadLetterRecordBulkRetryResult,
     DeadLetterRecordDiscardResult,
     DeadLetterRecordRetryResult,
@@ -23,13 +29,15 @@ from foundry_lite.application.ports import (
     LineageEdgeRow,
     ObservabilityDetectorConfig,
     ObservabilityReport,
+    ObservabilityStoredReport,
     ProductWorkflowRun,
     RuntimeRetryResult,
     RuntimeRunDetail,
     RuntimeRunQueryResult,
     RuntimeRunSnapshot,
+    StoredObservabilityIncident,
 )
-from foundry_lite.application.ports.iceberg_maintenance import IcebergMaintenancePlan
+from foundry_lite.application.ports.iceberg_maintenance import IcebergMaintenancePlan, IcebergMaintenanceRun
 from foundry_lite.application.services.iceberg_maintenance_service import (
     DEFAULT_FILE_COUNT_THRESHOLD,
     DEFAULT_READ_AMPLIFICATION_THRESHOLD,
@@ -46,103 +54,8 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.observability.tracing import trace_public_methods
 
 
-class ActionWritebackReconciler(Protocol):
-    def list_unresolved_action_writebacks(
-        self,
-        *,
-        status: str | None = None,
-        limit: int = 50,
-        ctx: RequestContext | None = None,
-    ) -> ActionWritebackQueueResult: ...
-
-    def reconcile_action_writeback(
-        self,
-        writeback_id: str,
-        *,
-        remote_status: str | None = None,
-        remote_resource_id: str | None = None,
-        external_writeback_uri: str | None = None,
-        ctx: RequestContext | None = None,
-    ) -> Mapping[str, object]: ...
-
-
-class BackupRestoreReporter(Protocol):
-    def restore_preflight_report(
-        self,
-        *,
-        ctx: RequestContext | None = None,
-        backup_id: str | None = None,
-    ) -> BackupRestorePreflightReport: ...
-
-    def start_restore_mode(
-        self,
-        *,
-        ctx: RequestContext | None = None,
-        backup_id: str | None = None,
-        restore_id: str | None = None,
-    ) -> BackupRestoreModeReport: ...
-
-    def restore_mode_status(
-        self,
-        restore_id: str,
-        *,
-        ctx: RequestContext | None = None,
-    ) -> BackupRestoreModeReport: ...
-
-    def approve_restore_resume(
-        self,
-        restore_id: str,
-        *,
-        ctx: RequestContext | None = None,
-        validation_id: str | None = None,
-    ) -> BackupRestoreModeReport: ...
-
-    def run_post_restore_validation(
-        self,
-        restore_id: str,
-        *,
-        ctx: RequestContext | None = None,
-        validation_id: str | None = None,
-    ) -> BackupRestorePostRestoreValidationReport: ...
-
-    def recovery_overview(self, *, ctx: RequestContext | None = None) -> BackupRestoreRecoveryOverview: ...
-
-
-class PromptArtifactReadPayload(Protocol):
-    @property
-    def artifact_id(self) -> str: ...
-
-    @property
-    def ai_run_id(self) -> str: ...
-
-    @property
-    def content_hash(self) -> str: ...
-
-    @property
-    def export_marking(self) -> str: ...
-
-    @property
-    def plaintext(self) -> str: ...
-
-
-class PromptArtifactReader(Protocol):
-    def read_prompt_artifact(
-        self, ctx: RequestContext, *, artifact_id: str, ai_run_id: str | None = None
-    ) -> PromptArtifactReadPayload: ...
-
-
-class OutboxPublisher(Protocol):
-    def publish_pending_outbox(
-        self,
-        *,
-        ctx: RequestContext | None = None,
-        stream_name: str = "foundry-lite-outbox",
-        limit: int = 100,
-    ) -> OutboxPublishBatchResult: ...
-
-
 @trace_public_methods
-class OperationsConsole:
+class OperationsConsole(OperationsConsoleBackupMixin):
     """Operations bounded context: run inspection, lineage, retries, and DLQ reprocessing."""
 
     def __init__(
@@ -241,6 +154,41 @@ class OperationsConsole:
             observed_at=observed_at,
         )
 
+    def record_observability_report(
+        self,
+        *,
+        ctx: RequestContext | None = None,
+        configs: list[ObservabilityDetectorConfig] | None = None,
+        observed_at: str | None = None,
+    ) -> ObservabilityStoredReport:
+        return self._runtime.record_observability_report(ctx=ctx, configs=configs or [], observed_at=observed_at)
+
+    def list_observability_incidents(
+        self,
+        *,
+        ctx: RequestContext | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[StoredObservabilityIncident]:
+        return self._runtime.list_observability_incidents(ctx=ctx, status=status, limit=limit)
+
+    def acknowledge_observability_incident(
+        self,
+        incident_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> StoredObservabilityIncident:
+        return self._runtime.acknowledge_observability_incident(incident_id, ctx=ctx)
+
+    def resolve_observability_incident(
+        self,
+        incident_id: str,
+        *,
+        ctx: RequestContext | None = None,
+        reason: str | None = None,
+    ) -> StoredObservabilityIncident:
+        return self._runtime.resolve_observability_incident(incident_id, ctx=ctx, reason=reason)
+
     def run_detail(self, run_type: str, run_id: str, *, ctx: RequestContext | None = None) -> RuntimeRunDetail:
         return self._runtime.run_detail(run_type, run_id, ctx=ctx)
 
@@ -268,52 +216,6 @@ class OperationsConsole:
         resolved_ctx = ctx or RequestContext()
         self._runtime._require_or_audit(resolved_ctx, "operations:read:detail", "admin", "task-plan")
         return build_admin_task_plan()
-
-    def restore_preflight_report(
-        self,
-        *,
-        ctx: RequestContext | None = None,
-        backup_id: str | None = None,
-    ) -> BackupRestorePreflightReport:
-        return self._backup_restore.restore_preflight_report(ctx=ctx, backup_id=backup_id)
-
-    def start_restore_mode(
-        self,
-        *,
-        ctx: RequestContext | None = None,
-        backup_id: str | None = None,
-        restore_id: str | None = None,
-    ) -> BackupRestoreModeReport:
-        return self._backup_restore.start_restore_mode(ctx=ctx, backup_id=backup_id, restore_id=restore_id)
-
-    def restore_mode_status(
-        self,
-        restore_id: str,
-        *,
-        ctx: RequestContext | None = None,
-    ) -> BackupRestoreModeReport:
-        return self._backup_restore.restore_mode_status(restore_id, ctx=ctx)
-
-    def approve_restore_resume(
-        self,
-        restore_id: str,
-        *,
-        ctx: RequestContext | None = None,
-        validation_id: str | None = None,
-    ) -> BackupRestoreModeReport:
-        return self._backup_restore.approve_restore_resume(restore_id, ctx=ctx, validation_id=validation_id)
-
-    def run_post_restore_validation(
-        self,
-        restore_id: str,
-        *,
-        ctx: RequestContext | None = None,
-        validation_id: str | None = None,
-    ) -> BackupRestorePostRestoreValidationReport:
-        return self._backup_restore.run_post_restore_validation(restore_id, ctx=ctx, validation_id=validation_id)
-
-    def recovery_overview(self, *, ctx: RequestContext | None = None) -> BackupRestoreRecoveryOverview:
-        return self._backup_restore.recovery_overview(ctx=ctx)
 
     def list_dead_letter_records(
         self,
@@ -371,22 +273,37 @@ class OperationsConsole:
             dataset_ref,
             ctx=ctx,
             branch=branch,
-            small_file_threshold_bytes=(
-                small_file_threshold_bytes
-                if small_file_threshold_bytes is not None
-                else DEFAULT_SMALL_FILE_THRESHOLD_BYTES
+            small_file_threshold_bytes=_default_int(small_file_threshold_bytes, DEFAULT_SMALL_FILE_THRESHOLD_BYTES),
+            file_count_threshold=_default_int(file_count_threshold, DEFAULT_FILE_COUNT_THRESHOLD),
+            read_amplification_threshold=_default_float(
+                read_amplification_threshold,
+                DEFAULT_READ_AMPLIFICATION_THRESHOLD,
             ),
-            file_count_threshold=(
-                file_count_threshold if file_count_threshold is not None else DEFAULT_FILE_COUNT_THRESHOLD
+            retention_min_snapshots=_default_int(retention_min_snapshots, DEFAULT_RETENTION_MIN_SNAPSHOTS),
+        )
+
+    def run_iceberg_maintenance(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+        branch: str = "main",
+        small_file_threshold_bytes: int | None = None,
+        file_count_threshold: int | None = None,
+        read_amplification_threshold: float | None = None,
+        retention_min_snapshots: int | None = None,
+    ) -> IcebergMaintenanceRun:
+        return self._iceberg_maintenance.run_iceberg_maintenance(
+            dataset_ref,
+            ctx=ctx,
+            branch=branch,
+            small_file_threshold_bytes=_default_int(small_file_threshold_bytes, DEFAULT_SMALL_FILE_THRESHOLD_BYTES),
+            file_count_threshold=_default_int(file_count_threshold, DEFAULT_FILE_COUNT_THRESHOLD),
+            read_amplification_threshold=_default_float(
+                read_amplification_threshold,
+                DEFAULT_READ_AMPLIFICATION_THRESHOLD,
             ),
-            read_amplification_threshold=(
-                read_amplification_threshold
-                if read_amplification_threshold is not None
-                else DEFAULT_READ_AMPLIFICATION_THRESHOLD
-            ),
-            retention_min_snapshots=(
-                retention_min_snapshots if retention_min_snapshots is not None else DEFAULT_RETENTION_MIN_SNAPSHOTS
-            ),
+            retention_min_snapshots=_default_int(retention_min_snapshots, DEFAULT_RETENTION_MIN_SNAPSHOTS),
         )
 
     def start_connector_sync_workflow(
@@ -431,6 +348,15 @@ class OperationsConsole:
     ) -> ProductWorkflowRun:
         return self._workflow.product_workflow_run(workflow_run_id, ctx=ctx)
 
+    def cancel_product_workflow(
+        self,
+        workflow_run_id: str,
+        *,
+        reason: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> ProductWorkflowRun:
+        return self._workflow.cancel_product_workflow(workflow_run_id, reason=reason, ctx=ctx)
+
     def reconcile_action_writeback(
         self,
         writeback_id: str,
@@ -457,6 +383,31 @@ class OperationsConsole:
     ) -> ActionWritebackQueueResult:
         return self._action.list_unresolved_action_writebacks(status=status, limit=limit, ctx=ctx)
 
+    def recover_action_writebacks(
+        self,
+        *,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> ActionWritebackRecoveryResult:
+        return self._action.recover_action_writebacks(limit=limit, ctx=ctx)
+
+    def approve_action_writeback_recovery(
+        self,
+        writeback_id: str,
+        *,
+        approval_id: str,
+        reason: str,
+        external_writeback_uri: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> Mapping[str, object]:
+        return self._action.approve_action_writeback_recovery(
+            writeback_id,
+            approval_id=approval_id,
+            reason=reason,
+            external_writeback_uri=external_writeback_uri,
+            ctx=ctx,
+        )
+
     def retry_dead_letter_event(self, event_id: str, *, ctx: RequestContext | None = None) -> RuntimeRetryResult:
         ctx = ctx or RequestContext()
         plan = self._runtime.dead_letter_event_retry_plan(event_id, ctx=ctx)
@@ -469,3 +420,11 @@ class OperationsConsole:
         if materialization_result is not None:
             result["materializationResult"] = materialization_result
         return result
+
+
+def _default_int(value: int | None, default: int) -> int:
+    return default if value is None else value
+
+
+def _default_float(value: float | None, default: float) -> float:
+    return default if value is None else value

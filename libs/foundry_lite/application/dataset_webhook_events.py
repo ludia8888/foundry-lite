@@ -1,3 +1,5 @@
+"""Application-layer models and helpers for dataset webhook events."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

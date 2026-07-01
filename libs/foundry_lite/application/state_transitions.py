@@ -1,3 +1,5 @@
+"""Application-layer models and helpers for state transitions."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -78,6 +80,7 @@ ONTOLOGY_VERSION_ACTIVE = StatusTransition(("draft",), "active")
 ACTION_RUN_SUCCEEDED = StatusTransition(("received",), "succeeded")
 ACTION_RUN_FAILED = StatusTransition(("received",), "failed")
 ACTION_RUN_CONFLICT = StatusTransition(("received",), "conflict")
+ACTION_RUN_RETRYABLE = StatusTransition(("received",), "retryable")
 ACTION_RUN_OUTCOME_UNKNOWN = StatusTransition(("received",), "outcome_unknown")
 ACTION_RUN_COMPENSATION_REQUIRED = StatusTransition(("received",), "compensation_required")
 ACTION_RUN_RECONCILED = StatusTransition(("outcome_unknown", "compensation_required"), "reconciled")
@@ -94,15 +97,27 @@ OUTBOX_RETRY_PENDING = StatusTransition(("failed",), "pending")
 ERASURE_REQUEST_EXECUTED = StatusTransition(("requested",), "executed")
 WORKFLOW_RUN_STARTING = StatusTransition(("requested", "start_unknown"), "starting")
 WORKFLOW_RUN_RUNNING = StatusTransition(("starting",), "running")
-WORKFLOW_RUN_SUCCEEDED = StatusTransition(("starting", "running"), "succeeded")
-WORKFLOW_RUN_FAILED = StatusTransition(("requested", "starting", "running"), "failed")
-WORKFLOW_RUN_CANCELLED = StatusTransition(("starting", "running"), "cancelled")
+WORKFLOW_RUN_SUCCEEDED = StatusTransition(("starting", "running", "start_unknown"), "succeeded")
+WORKFLOW_RUN_FAILED = StatusTransition(("requested", "starting", "running", "start_unknown"), "failed")
+WORKFLOW_RUN_CANCELLED = StatusTransition(("requested", "starting", "running", "start_unknown"), "cancelled")
 WORKFLOW_RUN_START_UNKNOWN = StatusTransition(("requested", "starting"), "start_unknown")
+WORKFLOW_RUN_LEASE_RUNNING = StatusTransition(
+    ("requested", "starting", "running", "succeeded", "failed", "cancelled", "start_unknown"), "running"
+)
 AI_RUN_SUCCEEDED = StatusTransition(("started", "running"), "succeeded")
 AI_RUN_FAILED = StatusTransition(("started", "running"), "failed")
 AI_RUN_CANCELLED = StatusTransition(("started", "running"), "cancelled")
 AI_EVAL_RUN_PASSED = StatusTransition(("running",), "passed")
 AI_EVAL_RUN_FAILED = StatusTransition(("running",), "failed")
+DATASET_QUALITY_CONTRACT_ACTIVE = StatusTransition(("DRAFT",), "ACTIVE")
+DATASET_QUALITY_CONTRACT_SUPERSEDED = StatusTransition(("ACTIVE",), "SUPERSEDED")
+OSDK_APPLICATION_CLIENT_ACTIVE = StatusTransition(("active", "inactive"), "active")
+OSDK_APPLICATION_CLIENT_INACTIVE = StatusTransition(("active", "inactive"), "inactive")
+OSDK_DOWNLOAD_TOKEN_USED = StatusTransition(("active",), "used")
+OSDK_OAUTH_REFRESH_REVOKED = StatusTransition(("active", "rotated"), "revoked")
+OSDK_OAUTH_REFRESH_ROTATED = StatusTransition(("active",), "rotated")
+OSDK_OAUTH_SESSION_COMPROMISED = StatusTransition(("active",), "compromised")
+OSDK_OAUTH_SESSION_REVOKED = StatusTransition(("active",), "revoked")
 
 
 def dataset_run_failed_transition(run_kind: str) -> StatusTransition:

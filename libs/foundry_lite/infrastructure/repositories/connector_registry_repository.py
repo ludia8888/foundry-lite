@@ -1,3 +1,5 @@
+"""SQLAlchemy repository adapter for connector registry repository persistence."""
+
 from __future__ import annotations
 
 from typing import Any, cast

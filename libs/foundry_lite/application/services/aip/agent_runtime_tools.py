@@ -1,3 +1,5 @@
+"""Application service helpers for agent runtime tools workflows."""
+
 from __future__ import annotations
 
 import hashlib
@@ -20,6 +22,7 @@ from foundry_lite.application.services.aip.tool_broker import (
     ToolBrokerResult,
     ToolCallRequest,
     ToolSpec,
+    is_direct_vendor_tool_id,
     published_tool_spec,
     validated_tool_arguments,
 )
@@ -160,12 +163,17 @@ def tool_definitions(tools: tuple[ToolSpec, ...]) -> tuple[ToolDefinition, ...]:
             confirmation_policy=tool.confirmation_policy,
         )
         for tool in tools
+        if not is_direct_vendor_tool_id(tool.tool_id)
     )
 
 
 def model_tool_names(request: AgentRuntimeToolRequest) -> tuple[str, ...]:
     allowed = set(request.agent_allowed_tools)
-    return tuple(f"{tool.tool_id}@{tool.version}" for tool in request.tool_manifest if tool.tool_id in allowed)
+    return tuple(
+        f"{tool.tool_id}@{tool.version}"
+        for tool in request.tool_manifest
+        if tool.tool_id in allowed and not is_direct_vendor_tool_id(tool.tool_id)
+    )
 
 
 def followup_model_request(

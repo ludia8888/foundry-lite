@@ -1,3 +1,5 @@
+"""SQLAlchemy repository adapter for media reference binding repository persistence."""
+
 from __future__ import annotations
 
 from typing import Any, cast

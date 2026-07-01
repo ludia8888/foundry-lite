@@ -1,9 +1,16 @@
+"""Thin facade entrypoints for transform pipeline workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from foundry_lite.application.ports import TransformCheck, TransformRetryResult, TransformRow
+from foundry_lite.application.ports import (
+    TransformCheck,
+    TransformRecordDlqRetryResult,
+    TransformRetryResult,
+    TransformRow,
+)
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.application.services.transform_service import TransformService
 from foundry_lite.domain.context import RequestContext
@@ -64,5 +71,44 @@ class TransformPipeline:
     def run(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         return self._transform.run_transform(api_name, ctx=ctx)
 
+    def run_graph(
+        self,
+        api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        max_depth: int = 7,
+        max_runs: int = 50,
+    ) -> dict[str, object]:
+        return self._transform.run_transform_graph(api_name, ctx=ctx, max_depth=max_depth, max_runs=max_runs)
+
+    def preview_due(
+        self,
+        *,
+        ctx: RequestContext | None = None,
+        max_runs: int = 50,
+    ) -> dict[str, object]:
+        return self._transform.preview_due_transform_runs(ctx=ctx, max_runs=max_runs)
+
+    def run_due(
+        self,
+        *,
+        ctx: RequestContext | None = None,
+        max_runs: int = 50,
+    ) -> dict[str, object]:
+        return self._transform.run_due_transform_runs(ctx=ctx, max_runs=max_runs)
+
     def retry_run(self, transform_run_id: str, *, ctx: RequestContext | None = None) -> TransformRetryResult:
         return self._transform.retry_transform_run(transform_run_id, ctx=ctx)
+
+    def retry_dead_letter_record(
+        self,
+        record_id: str,
+        *,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> TransformRecordDlqRetryResult:
+        return self._transform.retry_transform_dead_letter_record(
+            record_id,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )

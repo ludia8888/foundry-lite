@@ -1,3 +1,5 @@
+"""Application service helpers for demo protocols workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -29,6 +31,7 @@ class DemoActionApplier(Protocol):
         idempotency_key: str,
         ctx: RequestContext | None = None,
         simulate_writeback_failure: bool = False,
+        simulate_writeback_retryable: bool = False,
         simulate_writeback_outcome_unknown: bool = False,
         simulate_writeback_compensation_required: bool = False,
     ) -> ActionApplyResponse: ...

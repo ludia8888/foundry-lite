@@ -19,4 +19,16 @@ paths = [
   # illustrative value (e.g. ABC123). gitleaks' generic-api-key heuristic
   # would otherwise flag it. The value is shown only as a header example.
   '''foundry_lite_development_plan_ko_sprintified\.md''',
+  # Local runtime state is generated during API/SDK contract checks and is
+  # already ignored by Git. The OAuth private key inside this directory is a
+  # machine-local artifact, not a committed product secret.
+  '''^\.foundry-lite/.*''',
+  # Parallel pytest workers use isolated local runtime roots with the same
+  # machine-local OAuth key material. These directories are ignored runtime
+  # state and are not product source or committed configuration.
+  '''^\.foundry-lite-pytest-xdist/.*''',
+  # The gitleaks JSON report is generated under ignored artifacts and can
+  # contain redacted findings from a failed scan, which would otherwise make
+  # the secret scanner recursively fail on its own report.
+  '''^artifacts/quality/gitleaks\.json$''',
 ]

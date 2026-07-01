@@ -13,6 +13,7 @@ from foundry_lite.application.ports import (
     DeadLetterEventRecord,
     LineageEdgeRecord,
     LineageEdgeRow,
+    ObservabilityIncident,
     OutboxEventRecord,
     RuntimeJsonObject,
     RuntimeLookupTable,
@@ -24,6 +25,9 @@ from foundry_lite.application.ports import (
     RuntimeRunRelationRow,
     RuntimeRunSnapshot,
     RuntimeRunType,
+    StoredObservabilityIncident,
+    StoredObservabilityIncidentStatus,
+    WorkflowLedgerStatus,
     WorkflowRunRecord,
     WorkflowRunRow,
 )
@@ -217,6 +221,68 @@ class FakeRuntimeRepository:
         ]
         return matches[:limit]
 
+    def list_observability_incidents(
+        self,
+        *,
+        tenant_id: str,
+        status: StoredObservabilityIncidentStatus | None,
+        limit: int,
+    ) -> list[StoredObservabilityIncident]:
+        rows = [row for row in self.tables["observability_incidents"] if row["tenant_id"] == tenant_id]
+        if status is not None:
+            rows = [row for row in rows if row["status"] == status]
+        rows.sort(key=lambda row: (str(row["lastObservedAt"]), str(row["id"])), reverse=True)
+        return [cast(StoredObservabilityIncident, dict(row)) for row in rows[:limit]]
+
+    def observability_incident_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        incident_id: str,
+    ) -> StoredObservabilityIncident | None:
+        del transaction
+        row = _fake_observability_incident(self.tables["observability_incidents"], tenant_id, incident_id)
+        return cast(StoredObservabilityIncident, dict(row)) if row else None
+
+    def upsert_observability_incident(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        incident: ObservabilityIncident,
+    ) -> StoredObservabilityIncident:
+        del transaction
+        existing = _fake_observability_incident_by_dedupe(
+            self.tables["observability_incidents"],
+            tenant_id,
+            incident["dedupeKey"],
+        )
+        if existing is None:
+            row = _stored_observability_row(tenant_id, incident)
+            self.tables["observability_incidents"].append(row)
+            return cast(StoredObservabilityIncident, dict(row))
+        existing.update(_stored_observability_update(incident, existing))
+        return cast(StoredObservabilityIncident, dict(existing))
+
+    def update_observability_incident_status(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        incident_id: str,
+        status: StoredObservabilityIncidentStatus,
+        actor_user_id: str,
+        updated_at: str,
+        resolution_reason: str | None,
+    ) -> StoredObservabilityIncident | None:
+        del transaction
+        row = _fake_observability_incident(self.tables["observability_incidents"], tenant_id, incident_id)
+        if row is None:
+            return None
+        row.update(_stored_observability_status_update(status, actor_user_id, updated_at, resolution_reason))
+        return cast(StoredObservabilityIncident, dict(row))
+
     def update_outbox_event_for_retry(
         self,
         *,
@@ -332,6 +398,65 @@ class FakeRuntimeRepository:
                     row["attempts"] += 1
                 return cast(WorkflowRunRow, dict(row))
         return None
+
+    def claim_workflow_run_lease(
+        self,
+        *,
+        transaction: Any,
+        record: WorkflowRunRecord,
+        lease_owner_id: str,
+        now: str,
+    ) -> WorkflowRunRow | None:
+        del transaction
+        row = self.workflow_run_by_idempotency(
+            transaction=None,
+            tenant_id=record.tenant_id,
+            workflow_name=record.workflow_name,
+            idempotency_key=record.idempotency_key,
+        )
+        if row is None:
+            self.tables["workflow_runs"].append(_workflow_row(record))
+            return self.workflow_run_by_id(
+                transaction=None,
+                tenant_id=record.tenant_id,
+                workflow_run_id=record.workflow_run_id,
+            )
+        mutable = _fake_workflow_row(self.tables["workflow_runs"], str(row["id"]))
+        if mutable is None or not _workflow_lease_claimable(mutable, lease_owner_id, now):
+            return None
+        mutable.update(
+            status=record.status,
+            output=dict(record.output),
+            error=dict(record.error) if record.error is not None else None,
+            attempts=_workflow_lease_attempts(mutable, lease_owner_id),
+            started_at=record.started_at,
+            completed_at=None,
+        )
+        return cast(WorkflowRunRow, dict(mutable))
+
+    def release_workflow_run_lease(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        workflow_run_id: str,
+        lease_owner_id: str,
+        lease_token: str,
+        status: WorkflowLedgerStatus,
+        output: RuntimeJsonObject,
+        error: RuntimeJsonObject | None,
+        completed_at: str,
+    ) -> WorkflowRunRow | None:
+        del transaction
+        row = _fake_workflow_row(self.tables["workflow_runs"], workflow_run_id)
+        if (
+            row is None
+            or row["tenant_id"] != tenant_id
+            or not _workflow_lease_matches(row, lease_owner_id, lease_token)
+        ):
+            return None
+        row.update(status=status, output=dict(output), error=dict(error) if error else None, completed_at=completed_at)
+        return cast(WorkflowRunRow, dict(row))
 
     def link_workflow_audit_event(
         self,
@@ -626,30 +751,144 @@ def _run_relation_record(
     )
 
 
+def _observability_incident(
+    *,
+    incident_id: str = "incident:raw-orders-flow:flow_interruption:dataset:raw.orders",
+    observed_at: str = "2026-06-19T00:15:00Z",
+    dedupe_key: str = "raw-orders-flow:flow_interruption:dataset:raw.orders",
+) -> ObservabilityIncident:
+    return {
+        "id": incident_id,
+        "detectorId": "raw-orders-flow",
+        "detectorType": "flow_interruption",
+        "configVersion": "s56-v1",
+        "status": "active",
+        "severity": "warning",
+        "owner": "data-platform",
+        "message": "missing data beyond expected cadence",
+        "dedupeKey": dedupe_key,
+        "firstObservedAt": observed_at,
+        "lastObservedAt": observed_at,
+        "evidence": {"failedRunCount": 0},
+        "evidenceLinks": [],
+        "threshold": {"expectedCadenceSeconds": 300},
+    }
+
+
+def _stored_observability_row(tenant_id: str, incident: ObservabilityIncident) -> dict[str, Any]:
+    return {
+        "id": incident["id"],
+        "tenant_id": tenant_id,
+        "detectorId": incident["detectorId"],
+        "detectorType": incident["detectorType"],
+        "configVersion": incident["configVersion"],
+        "status": "open",
+        "severity": incident["severity"],
+        "owner": incident["owner"],
+        "message": incident["message"],
+        "dedupeKey": incident["dedupeKey"],
+        "firstObservedAt": incident["firstObservedAt"],
+        "lastObservedAt": incident["lastObservedAt"],
+        "occurrenceCount": 1,
+        "evidence": dict(incident["evidence"]),
+        "evidenceLinks": list(incident["evidenceLinks"]),
+        "threshold": dict(incident["threshold"]),
+        "acknowledgedAt": None,
+        "acknowledgedBy": None,
+        "resolvedAt": None,
+        "resolvedBy": None,
+        "resolutionReason": None,
+    }
+
+
+def _stored_observability_update(
+    incident: ObservabilityIncident,
+    existing: dict[str, Any],
+) -> dict[str, Any]:
+    increment = 0 if existing["lastObservedAt"] == incident["lastObservedAt"] else 1
+    values = {
+        "lastObservedAt": incident["lastObservedAt"],
+        "occurrenceCount": int(existing["occurrenceCount"]) + increment,
+        "evidence": dict(incident["evidence"]),
+        "evidenceLinks": list(incident["evidenceLinks"]),
+        "threshold": dict(incident["threshold"]),
+        "status": existing["status"],
+    }
+    if existing["status"] == "resolved":
+        values.update(status="open", resolvedAt=None, resolvedBy=None, resolutionReason=None)
+    return values
+
+
+def _stored_observability_status_update(
+    status: StoredObservabilityIncidentStatus,
+    actor_user_id: str,
+    updated_at: str,
+    resolution_reason: str | None,
+) -> dict[str, Any]:
+    values: dict[str, Any] = {"status": status}
+    if status == "acknowledged":
+        values.update(acknowledgedAt=updated_at, acknowledgedBy=actor_user_id)
+    if status == "resolved":
+        values.update(resolvedAt=updated_at, resolvedBy=actor_user_id, resolutionReason=resolution_reason)
+    return values
+
+
+def _fake_observability_incident(
+    rows: list[dict[str, Any]],
+    tenant_id: str,
+    incident_id: str,
+) -> dict[str, Any] | None:
+    return next((row for row in rows if row["tenant_id"] == tenant_id and row["id"] == incident_id), None)
+
+
+def _fake_observability_incident_by_dedupe(
+    rows: list[dict[str, Any]],
+    tenant_id: str,
+    dedupe_key: str,
+) -> dict[str, Any] | None:
+    return next((row for row in rows if row["tenant_id"] == tenant_id and row["dedupeKey"] == dedupe_key), None)
+
+
 def _workflow_record_obj(
     *,
     workflow_run_id: str = "flite:workflow:run:1",
     tenant_id: str = "tenant-demo",
     idempotency_key: str = "workflow-key-1",
+    workflow_name: str = "ConnectorSyncWorkflow",
+    status: WorkflowLedgerStatus = "requested",
+    output: RuntimeJsonObject | None = None,
+    attempts: int = 0,
+    started_at: str | None = None,
 ) -> WorkflowRunRecord:
     return WorkflowRunRecord(
         workflow_run_id=workflow_run_id,
         tenant_id=tenant_id,
-        workflow_name="ConnectorSyncWorkflow",
+        workflow_name=workflow_name,
         workflow_profile="local",
-        status="requested",
+        status=status,
         idempotency_key=idempotency_key,
         request_fingerprint=f"fingerprint-{idempotency_key}",
         input={"datasetRef": "raw.orders"},
-        output={},
+        output=output or {},
         error=None,
         dataset_id="ds_orders",
         audit_event_id=None,
-        attempts=0,
+        attempts=attempts,
         created_at="2026-06-10T00:00:00Z",
-        started_at=None,
+        started_at=started_at,
         completed_at=None,
     )
+
+
+def _lease_output(owner_id: str, lease_token: str, lease_expires_at: str) -> RuntimeJsonObject:
+    return {
+        "workerLease": {
+            "ownerId": owner_id,
+            "leaseToken": lease_token,
+            "leaseExpiresAt": lease_expires_at,
+            "lastHeartbeatAt": "2026-06-10T00:00:00Z",
+        }
+    }
 
 
 def _audit_row(record: AuditEventRecord) -> dict[str, Any]:
@@ -772,6 +1011,47 @@ def _workflow_key_matches(row: dict[str, Any], tenant_id: str, workflow_name: st
         and row["workflow_name"] == workflow_name
         and row["idempotency_key"] == idempotency_key
     )
+
+
+def _fake_workflow_row(rows: list[dict[str, Any]], workflow_run_id: str) -> dict[str, Any] | None:
+    for row in rows:
+        if row["id"] == workflow_run_id:
+            return row
+    return None
+
+
+def _workflow_lease_claimable(row: dict[str, Any], lease_owner_id: str, now: str) -> bool:
+    if row["status"] in {"succeeded", "failed", "cancelled", "start_unknown"}:
+        return True
+    lease = _workflow_lease(row)
+    if lease is None:
+        return False
+    if lease.get("ownerId") == lease_owner_id:
+        return True
+    expires_at = lease.get("leaseExpiresAt")
+    return isinstance(expires_at, str) and expires_at <= now
+
+
+def _workflow_lease_matches(row: dict[str, Any], lease_owner_id: str, lease_token: str) -> bool:
+    lease = _workflow_lease(row)
+    return lease is not None and lease.get("ownerId") == lease_owner_id and lease.get("leaseToken") == lease_token
+
+
+def _workflow_lease_attempts(row: dict[str, Any], lease_owner_id: str) -> int:
+    attempts = row.get("attempts")
+    current = attempts if isinstance(attempts, int) and not isinstance(attempts, bool) else 0
+    lease = _workflow_lease(row)
+    if row["status"] == "running" and lease is not None and lease.get("ownerId") == lease_owner_id:
+        return current
+    return current + 1
+
+
+def _workflow_lease(row: dict[str, Any]) -> RuntimeJsonObject | None:
+    output = row.get("output")
+    if not isinstance(output, dict):
+        return None
+    lease = output.get("workerLease")
+    return cast(RuntimeJsonObject, lease) if isinstance(lease, dict) else None
 
 
 def _ai_run_row(*, run_id: str, tenant_id: str, started_at: str) -> dict[str, Any]:
@@ -1247,6 +1527,59 @@ def test_runtime_repository_contract_run_relations_are_tenant_scoped_and_idempot
     assert [row["id"] for row in visible_other_tenant] == ["run_relation_other"]
 
 
+def test_runtime_repository_contract_observability_incident_lifecycle(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        first = harness.repository.upsert_observability_incident(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            incident=_observability_incident(),
+        )
+        replay = harness.repository.upsert_observability_incident(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            incident=_observability_incident(),
+        )
+        acknowledged = harness.repository.update_observability_incident_status(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            incident_id=first["id"],
+            status="acknowledged",
+            actor_user_id="ops-user",
+            updated_at="2026-06-19T00:16:00Z",
+            resolution_reason=None,
+        )
+        resolved = harness.repository.update_observability_incident_status(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            incident_id=first["id"],
+            status="resolved",
+            actor_user_id="ops-user",
+            updated_at="2026-06-19T00:20:00Z",
+            resolution_reason="source recovered",
+        )
+        reopened = harness.repository.upsert_observability_incident(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            incident=_observability_incident(observed_at="2026-06-19T00:30:00Z"),
+        )
+
+    assert first["status"] == "open"
+    assert replay["occurrenceCount"] == 1
+    assert acknowledged is not None
+    assert acknowledged["acknowledgedBy"] == "ops-user"
+    assert resolved is not None
+    assert resolved["status"] == "resolved"
+    assert resolved["resolutionReason"] == "source recovered"
+    assert reopened["status"] == "open"
+    assert reopened["occurrenceCount"] == 2
+    assert harness.repository.list_observability_incidents(tenant_id="tenant-demo", status="open", limit=10) == [
+        reopened
+    ]
+    assert harness.repository.list_observability_incidents(tenant_id="tenant-other", status=None, limit=10) == []
+
+
 def test_runtime_repository_contract_requeues_dead_letter_event(
     harness: RuntimeRepositoryHarness,
 ) -> None:
@@ -1506,6 +1839,83 @@ def test_runtime_repository_contract_workflow_run_ledger_status_cas(
     assert linked is not None
     assert linked["audit_event_id"] == "audit_workflow_1"
     assert [row["id"] for row in runs["workflowRuns"]] == ["flite:workflow:run:1"]
+
+
+def test_runtime_repository_contract_workflow_run_lease_fences_stale_workers(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    first_record = _workflow_record_obj(
+        workflow_name="ContinuousStreamArchiveWorker",
+        status="running",
+        idempotency_key="stream-archive:raw.orders:orders:group:0",
+        output=_lease_output("worker-1", "lease-1", "2026-06-10T00:01:00Z"),
+        attempts=1,
+        started_at="2026-06-10T00:00:00Z",
+    )
+    second_record = _workflow_record_obj(
+        workflow_run_id="flite:workflow:run:2",
+        workflow_name="ContinuousStreamArchiveWorker",
+        status="running",
+        idempotency_key="stream-archive:raw.orders:orders:group:0",
+        output=_lease_output("worker-2", "lease-2", "2026-06-10T00:02:00Z"),
+        attempts=1,
+        started_at="2026-06-10T00:01:01Z",
+    )
+
+    with harness.transaction() as transaction:
+        first = harness.repository.claim_workflow_run_lease(
+            transaction=transaction,
+            record=first_record,
+            lease_owner_id="worker-1",
+            now="2026-06-10T00:00:00Z",
+        )
+        blocked = harness.repository.claim_workflow_run_lease(
+            transaction=transaction,
+            record=second_record,
+            lease_owner_id="worker-2",
+            now="2026-06-10T00:00:30Z",
+        )
+        takeover = harness.repository.claim_workflow_run_lease(
+            transaction=transaction,
+            record=second_record,
+            lease_owner_id="worker-2",
+            now="2026-06-10T00:01:01Z",
+        )
+        stale_release = harness.repository.release_workflow_run_lease(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            workflow_run_id="flite:workflow:run:1",
+            lease_owner_id="worker-1",
+            lease_token="lease-1",
+            status="succeeded",
+            output={"stopReason": "stale"},
+            error=None,
+            completed_at="2026-06-10T00:01:02Z",
+        )
+        released = harness.repository.release_workflow_run_lease(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            workflow_run_id="flite:workflow:run:1",
+            lease_owner_id="worker-2",
+            lease_token="lease-2",
+            status="succeeded",
+            output={"stopReason": "empty_polls"},
+            error=None,
+            completed_at="2026-06-10T00:01:03Z",
+        )
+
+    assert first is not None
+    assert blocked is None
+    assert takeover is not None
+    assert takeover["id"] == "flite:workflow:run:1"
+    takeover_output = cast(dict[str, object], takeover["output"])
+    takeover_lease = cast(dict[str, object], takeover_output["workerLease"])
+    assert takeover_lease["ownerId"] == "worker-2"
+    assert stale_release is None
+    assert released is not None
+    assert released["status"] == "succeeded"
+    released_output = cast(dict[str, object], released["output"])
+    assert released_output["stopReason"] == "empty_polls"
 
 
 def test_runtime_repository_contract_allowlisted_row_reads(

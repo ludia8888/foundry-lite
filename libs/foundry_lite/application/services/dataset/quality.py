@@ -1,3 +1,5 @@
+"""Application service helpers for quality workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -9,11 +11,6 @@ from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckRecord,
     DatasetCheckResult,
     DatasetCheckResultRecord,
-    DatasetQualityContractCheck,
-    DatasetQualityContractCheckCreateResult,
-    DatasetQualityContractCheckList,
-    DatasetQualityResultHistory,
-    DatasetQualityResultSummary,
     DatasetSchemaJson,
     DatasetSchemaRecord,
     DatasetSchemaReference,
@@ -21,24 +18,19 @@ from foundry_lite.application.ports.dataset_quality_repository import (
 from foundry_lite.application.primitives import StagedFileStats, _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary, DatasetVersionLookup
-from foundry_lite.application.services.dataset.quality_contracts import DatasetQualityContractMixin
+from foundry_lite.application.services.dataset.quality_api import DatasetQualityApiMixin
 from foundry_lite.application.services.dataset.quality_helpers import (
+    DEFAULT_QUALITY_CONTRACT_KEY,
     DatasetQualityRunContext,
     _allows_empty_dataset,
     _check_name,
     _check_severity,
-    _contract_check,
-    _contract_check_config,
-    _contract_check_record,
-    _dataset_ref,
+    _contract_snapshot_configs,
     _failed_row_indexes,
     _quality_policy_status,
     _quality_result_details,
-    _quality_result_history_item,
-    _quality_result_summary,
     _quarantine_dead_letter_record,
     _unique_checks,
-    _updated_contract_check_record,
     _validate_dataset_check_config,
 )
 from foundry_lite.application.services.dataset.schema_evolution import (
@@ -46,10 +38,9 @@ from foundry_lite.application.services.dataset.schema_evolution import (
     build_schema_evolution_result,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import NotFound, ValidationFailed
 
 
-class DatasetQualityService(DatasetQualityContractMixin, CoreService):
+class DatasetQualityService(DatasetQualityApiMixin, CoreService):
     required_dependencies = (
         "engine",
         "policy",
@@ -60,142 +51,6 @@ class DatasetQualityService(DatasetQualityContractMixin, CoreService):
     required_collaborators = ("dataset_version_service", "runtime_service")
     dataset_version_service: DatasetVersionLookup
     runtime_service: DatasetRuntimeBoundary
-
-    def list_contract_checks(
-        self,
-        dataset: DatasetRow,
-        *,
-        ctx: RequestContext | None = None,
-    ) -> DatasetQualityContractCheckList:
-        ctx = ctx or RequestContext()
-        self.policy.require(ctx, "dataset:read")
-        with self.engine.begin() as conn:
-            rows = self.dataset_quality_repository.checks_for_dataset(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                dataset_id=str(dataset["id"]),
-            )
-        return {"datasetRef": _dataset_ref(dataset), "checks": [_contract_check(row) for row in rows]}
-
-    def list_quality_results(
-        self,
-        dataset: DatasetRow,
-        *,
-        limit: int = 50,
-        ctx: RequestContext | None = None,
-    ) -> DatasetQualityResultHistory:
-        ctx = ctx or RequestContext()
-        if limit < 1 or limit > 100:
-            raise ValidationFailed("quality result history limit must be between 1 and 100")
-        self.policy.require(ctx, "dataset:read")
-        with self.engine.begin() as conn:
-            rows = self.dataset_quality_repository.check_results_for_dataset(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                dataset_id=str(dataset["id"]),
-                limit=limit,
-            )
-        return {
-            "datasetRef": _dataset_ref(dataset),
-            "results": [_quality_result_history_item(row) for row in rows],
-        }
-
-    def get_quality_result_summary(
-        self,
-        dataset: DatasetRow,
-        *,
-        latest_limit: int = 5,
-        ctx: RequestContext | None = None,
-    ) -> DatasetQualityResultSummary:
-        ctx = ctx or RequestContext()
-        if latest_limit < 1 or latest_limit > 20:
-            raise ValidationFailed("quality result summary latest limit must be between 1 and 20")
-        self.policy.require(ctx, "dataset:read")
-        dataset_id = str(dataset["id"])
-        with self.engine.begin() as conn:
-            status_rows = self.dataset_quality_repository.check_result_status_counts_for_dataset(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                dataset_id=dataset_id,
-            )
-            type_rows = self.dataset_quality_repository.check_result_type_status_counts_for_dataset(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                dataset_id=dataset_id,
-            )
-            latest_rows = self.dataset_quality_repository.check_results_for_dataset(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                dataset_id=dataset_id,
-                limit=latest_limit,
-            )
-        return _quality_result_summary(dataset, status_rows, type_rows, latest_rows)
-
-    def create_contract_check(
-        self,
-        dataset: DatasetRow,
-        *,
-        config: DatasetCheckConfig,
-        severity: str | None = None,
-        enabled: bool = True,
-        ctx: RequestContext | None = None,
-    ) -> DatasetQualityContractCheckCreateResult:
-        ctx = ctx or RequestContext()
-        dataset_id = str(dataset["id"])
-        if config is None and severity is None and enabled is None:
-            raise ValidationFailed("quality contract check update requires a change")
-        self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_id)
-        self.runtime_service._require_write_traffic_open(
-            ctx,
-            operation="create_quality_contract_check",
-            resource_type="dataset",
-            resource_id=dataset_id,
-        )
-        contract_config = _contract_check_config(config, severity)
-        check_name = _check_name(contract_config)
-        with self.engine.begin() as conn:
-            existing = self.dataset_quality_repository.check_by_name(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                dataset_id=dataset_id,
-                name=check_name,
-            )
-            if existing is not None:
-                return {"check": _contract_check(existing), "isIdempotentReplay": True}
-            record = _contract_check_record(ctx, dataset_id, check_name, contract_config, enabled)
-            self.dataset_quality_repository.insert_check(transaction=conn, record=record)
-            persisted = self._required_contract_check(conn, ctx, dataset_id, check_name)
-            self._audit_contract_check_created(conn, ctx, dataset, persisted)
-            return {"check": _contract_check(persisted), "isIdempotentReplay": False}
-
-    def update_contract_check(
-        self,
-        dataset: DatasetRow,
-        check_id: str,
-        *,
-        config: DatasetCheckConfig | None = None,
-        severity: str | None = None,
-        enabled: bool | None = None,
-        ctx: RequestContext | None = None,
-    ) -> DatasetQualityContractCheck:
-        ctx = ctx or RequestContext()
-        dataset_id = str(dataset["id"])
-        self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_id)
-        self.runtime_service._require_write_traffic_open(
-            ctx,
-            operation="update_quality_contract_check",
-            resource_type="dataset",
-            resource_id=dataset_id,
-        )
-        with self.engine.begin() as conn:
-            before = self._required_contract_check_by_id(conn, ctx, dataset_id, check_id)
-            record = _updated_contract_check_record(before, config=config, severity=severity, enabled=enabled)
-            self._ensure_no_contract_check_name_conflict(conn, ctx, dataset_id, record.name, check_id)
-            if not self.dataset_quality_repository.update_check(transaction=conn, record=record):
-                raise NotFound("dataset quality contract check not found", details={"check_id": check_id})
-            after = self._required_contract_check_by_id(conn, ctx, dataset_id, check_id)
-            self._audit_contract_check_updated(conn, ctx, dataset, before, after)
-            return _contract_check(after)
 
     def _inspect_parquet(self, parquet_path: Path, primary_key: list[str]) -> StagedFileStats:
         return self.compute_adapter.inspect_parquet(parquet_path, primary_key)
@@ -280,8 +135,12 @@ class DatasetQualityService(DatasetQualityContractMixin, CoreService):
         ctx: RequestContext,
         dataset: DatasetRow,
         extra_checks: Sequence[DatasetCheckConfig],
+        contract_checks: Sequence[DatasetCheckConfig] | None = None,
     ) -> list[DatasetCheckConfig]:
-        persisted_checks = self._enabled_contract_check_configs(conn, ctx, dataset)
+        if contract_checks is None:
+            persisted_checks = self._enabled_contract_check_configs(conn, ctx, dataset)
+        else:
+            persisted_checks = list(contract_checks)
         candidate_checks = [*persisted_checks, *extra_checks]
         for check in candidate_checks:
             _validate_dataset_check_config(check)
@@ -313,6 +172,7 @@ class DatasetQualityService(DatasetQualityContractMixin, CoreService):
         validated_against_schema_version_id: str,
         validated_against_schema_version: int,
     ) -> list[DatasetCheckResult]:
+        active_id, contract_checks, snapshot_ids = self._active_contract_check_context(conn, ctx, dataset)
         quality_ctx = DatasetQualityRunContext(
             conn=conn,
             request_ctx=ctx,
@@ -324,20 +184,48 @@ class DatasetQualityService(DatasetQualityContractMixin, CoreService):
             checked_manifest_hash=checked_manifest_hash,
             schema_version_id=validated_against_schema_version_id,
             schema_version=validated_against_schema_version,
+            active_contract_version_id=active_id,
         )
         failures: list[DatasetCheckResult] = []
-        for check in self._checks_for_dataset(conn, ctx, dataset, extra_checks):
-            result, policy_status = self._run_dataset_check(quality_ctx, check)
+        for check in self._checks_for_dataset(conn, ctx, dataset, extra_checks, contract_checks):
+            result, policy_status = self._run_dataset_check(
+                quality_ctx,
+                check,
+                check_id=snapshot_ids.get(_check_name(check)),
+            )
             if policy_status == "BLOCK_COMMIT":
                 failures.append(result)
         return failures
+
+    def _active_contract_check_context(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+    ) -> tuple[str | None, list[DatasetCheckConfig] | None, dict[str, str]]:
+        active_contract = self.dataset_quality_repository.active_contract_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            dataset_id=str(dataset["id"]),
+            contract_key=DEFAULT_QUALITY_CONTRACT_KEY,
+        )
+        if active_contract is None:
+            return None, None, {}
+        return (
+            active_contract["id"],
+            _contract_snapshot_configs(active_contract),
+            _snapshot_check_ids(active_contract),
+        )
 
     def _run_dataset_check(
         self,
         quality_ctx: DatasetQualityRunContext,
         check: DatasetCheckConfig,
+        check_id: str | None = None,
     ) -> tuple[DatasetCheckResult, str]:
-        check_id = self._ensure_dataset_check(quality_ctx.conn, quality_ctx.request_ctx, quality_ctx.dataset, check)
+        check_id = check_id or self._ensure_dataset_check(
+            quality_ctx.conn, quality_ctx.request_ctx, quality_ctx.dataset, check
+        )
         result = self._execute_check(quality_ctx.parquet_path, quality_ctx.row_count, check)
         policy_status = _quality_policy_status(result, check)
         if policy_status == "QUARANTINE":
@@ -366,6 +254,7 @@ class DatasetQualityService(DatasetQualityContractMixin, CoreService):
                 status=policy_status,
                 details=_quality_result_details(result, policy_status),
                 created_at=_now(),
+                data_contract_version_id=quality_ctx.active_contract_version_id,
             ),
         )
 
@@ -496,3 +385,16 @@ class DatasetQualityService(DatasetQualityContractMixin, CoreService):
             after_ref={"rowIndex": row_index, "check": result.get("check")},
             correlation_id=run_id,
         )
+
+
+def _snapshot_check_ids(row: object) -> dict[str, str]:
+    if not isinstance(row, dict):
+        return {}
+    snapshots = row.get("checks_snapshot")
+    if not isinstance(snapshots, list):
+        return {}
+    return {
+        _check_name(snapshot["config"]): str(snapshot["checkId"])
+        for snapshot in snapshots
+        if isinstance(snapshot, dict) and snapshot.get("enabled") and isinstance(snapshot.get("config"), Mapping)
+    }

@@ -39,16 +39,46 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "propertyLineage?: Array<Record<string, unknown>>" in generated
     assert "lateDataBadge?: Record<string, unknown> | null" in generated
     assert "query(payload?: ObjectQueryRequest): Promise<ObjectQueryResult<Order>>;" in generated
+    assert "validate(payload: ApproveOrderValidateRequest): Promise<ActionValidationResponse>;" in generated
     assert "apply(payload: ApproveOrderApplyRequest): Promise<ActionApplyResponse>;" in generated
+    assert "export type ActionValidationResponse = {" in generated
+    assert "export type ActionEditSummary = {" in generated
+    assert "export type ActionCacheRefreshHint = {" in generated
     assert "export type OsdkObjectType<" in generated
     assert "export type FoundryLiteOsdkClient = {" in generated
     assert "readonly objects: typeof $Objects;" in generated
     assert "readonly actions: typeof $Actions;" in generated
     assert "export const Order = {" in generated
     assert "export const $Objects = { Order, Customer } as const;" in generated
+    assert "export const OrderCustomer = {" in generated
+    assert "export const $Links = { OrderCustomer } as const;" in generated
+    assert "export interface OsdkGeneratedLinkRegistry" in generated
+    assert "customer: OsdkLinkSet<typeof Customer>;" in generated
+    assert "export interface OsdkGeneratedObjectActionRegistry" in generated
+    assert "approveOrder: OsdkBoundAction<typeof ApproveOrder>;" in generated
+    assert "function decorateOsdkInstance<TObject extends OsdkObjectType>" in generated
+    assert "function createOsdkLinkSet<TTarget extends OsdkObjectType>" in generated
+    assert "function createOsdkBoundAction<TAction extends OsdkActionType>" in generated
     assert "export const ApproveOrder = {" in generated
     assert "export const $Actions = { ApproveOrder } as const;" in generated
     assert "fetchOne(primaryKey: string, options?: { explain?: boolean })" in generated
+    assert "export type OsdkWhere<TObject extends OsdkObjectType>" in generated
+    assert "export type OsdkOrderBy<TObject extends OsdkObjectType>" in generated
+    assert "export type OsdkAggregateInput<TObject extends OsdkObjectType>" in generated
+    assert "export type OsdkAggregateResult = {" in generated
+    assert "where(filter: OsdkFilterInput<TObject>): OsdkObjectSet<TObject>;" in generated
+    assert "orderBy(orderBy: OsdkOrderByInput<TObject>): OsdkObjectSet<TObject>;" in generated
+    assert "aggregate(request: OsdkAggregateInput<TObject>): Promise<OsdkAggregateResult>;" in generated
+    assert "function normalizeOsdkFilterInput<TObject extends OsdkObjectType>" in generated
+    assert "function normalizeOsdkOrderBy<TObject extends OsdkObjectType>" in generated
+    assert "function normalizeOsdkAggregateInput<TObject extends OsdkObjectType>" in generated
+    assert "async function aggregateOsdkObjectSet<TObject extends OsdkObjectType>" in generated
+    assert "INVALID_OSDK_FILTER_OPERATOR" in generated
+    assert "INVALID_OSDK_AGGREGATE_GROUPBY_PROPERTY" in generated
+    assert "$pageSize?: number;" in generated
+    assert "$orderBy?: OsdkOrderBy<TObject>;" in generated
+    assert "validateAction(" in generated
+    assert "onCacheRefresh?: (hint: ActionCacheRefreshHint) => void" in generated
     assert "applyAction(" in generated
     assert "uploadAndCommit(" in generated
     assert "export function createFoundryLiteOsdkClient" in generated
@@ -92,6 +122,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type AipReleasePromotionRequest = {" in generated
     assert "export type MediaUploadRequest = {" in generated
     assert "export type TransformSqlRegisterRequest = {" in generated
+    assert "export type TransformSchedulerTickResult = {" in generated
     assert "aip: {" in generated
     assert "validate(payload: AipBuilderValidateRequest): Promise<AipBuilderValidationResult>;" in generated
     assert "run(payload: AipBuilderRunRequest): Promise<AipBuilderRunResult>;" in generated
@@ -153,17 +184,34 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert '"X-Request-ID": requestId' in generated
     assert "clientOptions.onResponse?.({" in generated
     assert "preflight(payload?: BackupRestorePreflightRequest): Promise<BackupRestorePreflightReport>;" in generated
+    assert (
+        "createArtifact(payload?: BackupRestoreArtifactCreateRequest): Promise<BackupRestoreArtifactReceipt>;"
+        in generated
+    )
+    assert (
+        "restoreArtifact(payload: BackupRestoreArtifactRestoreRequest): "
+        "Promise<BackupRestoreArtifactRestoreReport>;" in generated
+    )
+    assert (
+        "executeArtifactRestore(payload: BackupRestoreArtifactRestoreRequest): "
+        "Promise<BackupRestoreArtifactRestoreReport>;" in generated
+    )
+    assert "restoredDatasetVersions: BackupRestoreArtifactRestoredVersion[];" in generated
     assert "startRestoreMode(payload?: BackupRestoreModeStartRequest): Promise<BackupRestoreModeReport>;" in generated
     assert "restoreModeStatus(restoreId: string): Promise<BackupRestoreModeReport>;" in generated
     assert "postRestoreValidation(restoreId: string, payload?: BackupRestorePostRestoreValidationRequest)" in generated
     assert "approveResume(restoreId: string, payload?: BackupRestoreResumeApprovalRequest):" in generated
     assert "recoveryOverview(): Promise<BackupRestoreRecoveryOverview>;" in generated
+    assert "export type BackupRestoreArtifactReceipt = {" in generated
+    assert "export type BackupRestoreArtifactRestoreReport = {" in generated
     assert "publishPending(payload?: OutboxPublishRequest): Promise<OutboxPublishBatchResult>;" in generated
     assert "export type BackupRestorePostRestoreValidationReport = {" in generated
     assert "export type BackupRestoreRecoveryOverview = {" in generated
     assert "export type OutboxPublishBatchResult = {" in generated
     assert "export type ObservabilityDetectorConfig = {" in generated
     assert "detect(payload: ObservabilityDetectRequest): Promise<ObservabilityReport>;" in generated
+    assert "export type StoredObservabilityIncident = Omit<ObservabilityIncident, 'status'> & {" in generated
+    assert "detectAndRecord(payload: ObservabilityDetectRequest): Promise<ObservabilityStoredReport>;" in generated
     assert "deadLetterRecords: {" in generated
     assert "deadLetterEvents: {" in generated
     assert "retry(id: string): Promise<RuntimeRetryResult>;" in generated
@@ -182,6 +230,12 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "index: {" in generated
     assert "replayObjectType(objectType: string): Promise<ObjectIndexRebuildResult>;" in generated
     assert "replayFailedRun(runId: string): Promise<ObjectIndexRebuildResult>;" in generated
+    assert "export type OntologyObjectReindexResult = ObjectIndexRebuildResult & {" in generated
+    assert "replayOntologyReindex(objectType: string, payload: OntologyObjectReindexRequest)" in generated
+    assert (
+        "run(datasetRef: string, options?: IcebergMaintenancePlanOptions): Promise<IcebergMaintenanceRun>;" in generated
+    )
+    assert "export type IcebergMaintenanceRun = {" in generated
     assert "transforms: {" in generated
     assert "retry(runId: string): Promise<TransformRetryResult>;" in generated
     assert "connectors: {" in generated
@@ -204,8 +258,11 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "workflows: {" in generated
     assert "startConnectorSync(payload: ConnectorSyncWorkflowStartRequest" in generated
     assert "get(workflowRunId: string): Promise<ProductWorkflowRun>;" in generated
+    assert "cancel(workflowRunId: string, payload?: ProductWorkflowCancelRequest):" in generated
     assert "list(filters?: { status?: DeadLetterRecordStatus }): Promise<DeadLetterRecord[]>;" in generated
     assert "retry(id: string, options: { idempotencyKey: string }):" in generated
+    assert "retryTransform(id: string, options: { idempotencyKey: string }):" in generated
+    assert "export type TransformRecordDlqRetryResult = {" in generated
     assert "bulkRetry(ids: string[], options: { idempotencyKey: string }):" in generated
     assert "discard(id: string): Promise<DeadLetterRecordDiscardResult>;" in generated
     assert "export type DeadLetterRecordBulkRetryFailure = {" in generated
@@ -215,9 +272,15 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "rowCount: number | null;" in generated
     assert "reason: string;" in approve_params
     assert "any" not in approve_params
-    approve_request = _type_block(generated, "ApproveOrderApplyRequest")
-    assert "idempotencyKey: string;" in approve_request
-    assert "idempotencyKey?: string;" not in approve_request
+    approve_validate_request = _type_block(generated, "ApproveOrderValidateRequest")
+    assert "expectedObjectVersion: number;" in approve_validate_request
+    assert "idempotencyKey" not in approve_validate_request
+    approve_apply_start = generated.index("export type ApproveOrderApplyRequest =")
+    approve_apply_end = generated.index("export const Order", approve_apply_start)
+    approve_apply_request = generated[approve_apply_start:approve_apply_end]
+    assert "export type ApproveOrderApplyRequest = ApproveOrderValidateRequest & {" in approve_apply_request
+    assert "idempotencyKey: string;" in approve_apply_request
+    assert "idempotencyKey?: string;" not in approve_apply_request
     assert "expectedObjectVersion(object: { objectVersion: number }): number" in generated
     assert "idempotencyKey(actionName: string, objectId: string): string" in generated
     assert "function requireIdempotencyKey(value: string | undefined" in generated
@@ -227,6 +290,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.assign")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.decide")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.deadLetterRecords.retry")' in generated
+    assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.deadLetterRecords.retryTransform")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.deadLetterRecords.bulkRetry")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "connectors.connections.create")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "connectors.connections.update")' in generated
@@ -234,6 +298,12 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert 'requireIdempotencyKey(options?.idempotencyKey, "connectors.resources.startSync")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.workflows.startConnectorSync")' in generated
     assert "export const SDK_CLIENT_SURFACE" in generated
+    assert "export const SDK_PACKAGE_MANIFEST" in generated
+    assert "export type FoundryLiteSdkDriftReport = {" in generated
+    assert "sdkPackageManifest(): FoundryLiteSdkPackageManifest" in generated
+    assert "sdkOntologyDriftReport(" in generated
+    assert "assertFoundryLiteSdkFresh(" in generated
+    assert "OSDK_SDK_REGENERATION_REQUIRED" in generated
 
 
 def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
@@ -248,6 +318,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["system"] == ["health"]
     assert ts_surface["datasets"] == {
         "_self": ["list", "versions", "preview", "inspect"],
+        "qualityContracts": ["list", "create", "get", "activate"],
         "qualityChecks": ["list", "create", "update"],
         "qualityResults": ["list", "summary"],
     }
@@ -274,14 +345,44 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     }
     assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide", "executeApprovedAction"]}
     objects_surface = cast(dict[str, object], ts_surface["objects"])
-    assert objects_surface["generic"] == ["get", "query", "links"]
+    assert objects_surface["generic"] == ["get", "query", "links", "subscribe"]
+    assert ts_surface["auth"] == {"osdkOAuth": ["authorize", "token", "refresh", "revoke"]}
+    assert ts_surface["developerConsole"] == {
+        "osdkApplications": [
+            "create",
+            "list",
+            "get",
+            "updateResources",
+            "createClient",
+            "listClients",
+            "updateClient",
+            "deactivateClient",
+        ],
+        "sdkVersions": [
+            "create",
+            "list",
+            "get",
+            "artifact",
+            "promote",
+            "channels",
+            "createCompatibilityWindow",
+            "compatibilityWindows",
+            "installMetadata",
+            "downloadToken",
+            "artifactByDownloadToken",
+        ],
+    }
     assert ts_surface["objectSets"] == ["list", "create", "get"]
+    assert ts_surface["actions"] == {"ApproveOrder": ["apply", "validate"]}
     assert ts_surface["materializations"] == ["run"]
-    assert ts_surface["transforms"] == ["registerSql", "run"]
+    assert ts_surface["transforms"] == ["registerSql", "run", "previewDue", "tick"]
     assert ts_surface["operations"] == {
         "admin": ["overview", "taskPlan"],
         "backupRestore": [
             "preflight",
+            "createArtifact",
+            "restoreArtifact",
+            "executeArtifactRestore",
             "startRestoreMode",
             "restoreModeStatus",
             "postRestoreValidation",
@@ -289,16 +390,16 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
             "recoveryOverview",
         ],
         "deadLetterEvents": ["retry"],
-        "deadLetterRecords": ["list", "get", "retry", "bulkRetry", "discard"],
-        "icebergMaintenance": ["planReadOnly", "plan"],
-        "index": ["replayObjectType", "replayFailedRun"],
+        "deadLetterRecords": ["list", "get", "retry", "retryTransform", "bulkRetry", "discard"],
+        "icebergMaintenance": ["planReadOnly", "plan", "run"],
+        "index": ["replayObjectType", "replayFailedRun", "replayOntologyReindex"],
         "lineage": ["get"],
-        "observability": ["detect"],
+        "observability": ["detect", "detectAndRecord", "listIncidents", "acknowledgeIncident", "resolveIncident"],
         "outbox": ["publishPending"],
-        "reconciliation": ["list", "resolve"],
+        "reconciliation": ["list", "resolve", "approveRecovery"],
         "runs": ["list", "detail", "promptArtifact"],
         "transforms": ["retry"],
-        "workflows": ["startConnectorSync", "get"],
+        "workflows": ["startConnectorSync", "get", "cancel"],
     }
     assert ts_surface["helpers"] == [
         "adminCapabilityView",
@@ -325,6 +426,9 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "pollFoundryLiteOperation",
         "requestContextHeaders",
         "retryWithBackoff",
+        "sdkOntologyDriftReport",
+        "sdkPackageManifest",
+        "assertFoundryLiteSdkFresh",
         "streamFoundryLiteOperationEvents",
     ]
 
@@ -353,25 +457,53 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "mediaUploadFormData(payload)",
         "export const Order = Object.freeze({",
         "export const $Objects = Object.freeze({ Order, Customer });",
+        "export const OrderCustomer = Object.freeze({",
+        "export const $Links = Object.freeze({ OrderCustomer });",
         "export const ApproveOrder = Object.freeze({",
         "function createOsdkObjectSet(client, objectType, base = {})",
+        "function decorateOsdkInstance(client, objectType, item)",
+        "function createOsdkLinkSet(client, sourceObjectType, source, entry)",
+        "function createOsdkBoundAction(client, actionType, source)",
+        "function normalizeOsdkFilterInput(objectType, filter)",
+        "function normalizeOsdkOrderBy(objectType, orderBy)",
+        "function normalizeOsdkAggregateInput(objectType, request)",
+        "async function aggregateOsdkObjectSet(client, objectType, base, request)",
+        "orderBy(orderBy) {",
+        "aggregate(request) {",
+        "INVALID_OSDK_FILTER_OPERATOR",
+        "INVALID_OSDK_AGGREGATE_GROUPBY_PROPERTY",
+        "$pageSize",
         "function createOsdkActionInvoker(client, actionType)",
+        "validateAction(payload) {",
+        "/api/actions/ApproveOrder/validate",
+        "onCacheRefresh",
         "uploadAndCommit(mediaSetId, payload, options)",
         "export function createFoundryLiteOsdkClient(client)",
         "export function createFoundryLiteOntologyIndex(catalog = null)",
+        "export const SDK_PACKAGE_MANIFEST =",
+        "export function sdkPackageManifest()",
+        "export function sdkOntologyDriftReport(catalog = null)",
+        "export function assertFoundryLiteSdkFresh(catalog = null)",
+        "OSDK_SDK_REGENERATION_REQUIRED",
         "media: {",
         "upload: (mediaSetId, mediaTransactionId, payload) => request(",
         'requireIdempotencyKey(requestOptions?.idempotencyKey, "media.transactions.open")',
         'requireIdempotencyKey(requestOptions?.idempotencyKey, "media.references.bind")',
         "transforms: {",
         "registerSql: (payload) => request(`/api/transforms/sql`, {",
+        "previewDue: (options = {}) => {",
+        "request(`/api/transforms/scheduler/due${suffix}`)",
+        "tick: (payload = {}) => request(`/api/transforms/scheduler/tick`, {",
         "export function classifyFoundryLiteError(error)",
         "export function actionLockKey(actionName, objectId)",
         "export function createInFlightActionLock()",
         "function requireIdempotencyKey(value, operationName)",
         'requireIdempotencyKey(options?.idempotencyKey, "insights.reviews.create")',
         'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.deadLetterRecords.retry")',
+        'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.deadLetterRecords.retryTransform")',
         'requireIdempotencyKey(requestOptions?.idempotencyKey, "operations.workflows.startConnectorSync")',
+        "cancel: (workflowRunId, payload = {}) =>",
+        "encodeURIComponent(workflowRunId)}/cancel",
         '"MISSING_IDEMPOTENCY_KEY"',
         "export function groupAdminCapabilities(overview)",
         "export function adminCapabilityView(capability)",
@@ -846,6 +978,7 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
     assert "export function createWritebackReconciliationRecipe" in screen_recipes
     assert "writebackReconciliation: createWritebackReconciliationRecipe(client)" in screen_recipes
     assert "client.operations.reconciliation.resolve(writebackId, payload)" in screen_recipes
+    assert "client.operations.reconciliation.approveRecovery(writebackId, payload)" in screen_recipes
     assert "export function createMaintenanceOperationsRecipe" in screen_recipes
     assert "maintenanceOperations: createMaintenanceOperationsRecipe(client)" in screen_recipes
     assert "client.operations.observability.detect(payload)" in screen_recipes

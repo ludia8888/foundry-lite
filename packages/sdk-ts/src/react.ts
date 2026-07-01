@@ -5146,10 +5146,12 @@ export type FoundryLiteWritebackReconciliationView = {
   items: ActionWritebackQueueItem[];
   outcomeUnknownItems: ActionWritebackQueueItem[];
   compensationRequiredItems: ActionWritebackQueueItem[];
+  retryableItems: ActionWritebackQueueItem[];
   selectedWriteback: ActionWritebackQueueItem | null;
   hasItems: boolean;
   hasOutcomeUnknown: boolean;
   hasCompensationRequired: boolean;
+  hasRetryable: boolean;
   canResolveSelected: boolean;
 };
 
@@ -5183,12 +5185,14 @@ export function foundryLiteWritebackReconciliationView(
   const items = result?.items ?? [];
   const outcomeUnknownItems = items.filter((item) => item.status === "outcome_unknown");
   const compensationRequiredItems = items.filter((item) => item.status === "compensation_required");
+  const retryableItems = items.filter((item) => item.status === "retryable");
   const selectedWriteback =
     (selection.selectedWritebackId
       ? items.find((item) => item.writebackId === selection.selectedWritebackId)
       : null) ??
     compensationRequiredItems[0] ??
     outcomeUnknownItems[0] ??
+    retryableItems[0] ??
     items[0] ??
     null;
 
@@ -5197,10 +5201,12 @@ export function foundryLiteWritebackReconciliationView(
     items,
     outcomeUnknownItems,
     compensationRequiredItems,
+    retryableItems,
     selectedWriteback,
     hasItems: items.length > 0,
     hasOutcomeUnknown: outcomeUnknownItems.length > 0,
     hasCompensationRequired: compensationRequiredItems.length > 0,
+    hasRetryable: retryableItems.length > 0,
     canResolveSelected: selectedWriteback ? canResolveFoundryLiteWriteback(selectedWriteback) : false,
   };
 }

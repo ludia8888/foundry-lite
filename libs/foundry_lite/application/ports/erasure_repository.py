@@ -1,3 +1,5 @@
+"""Application port contract for erasure repository."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

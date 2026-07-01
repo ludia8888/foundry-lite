@@ -1,3 +1,5 @@
+"""Application-layer models and helpers for upload limits."""
+
 from __future__ import annotations
 
 import os

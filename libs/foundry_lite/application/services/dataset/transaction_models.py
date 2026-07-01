@@ -1,3 +1,5 @@
+"""Application service helpers for transaction models workflows."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,6 +8,7 @@ from pathlib import Path
 from foundry_lite.application.ports import (
     DatasetCheckConfig,
     DatasetRow,
+    DatasetStagedFile,
     DatasetTransactionMetadata,
     StoredDatasetCommit,
 )
@@ -34,6 +37,7 @@ class DatasetFinalizationRequest:
     target: DatasetCommitTarget
     transaction_id: str
     staged_parquet: Path
+    staged_files: tuple[DatasetStagedFile, ...]
     run_id: str
     audit_action: str
     outbox_event_type: str
@@ -46,6 +50,7 @@ class DatasetFinalizationCheck:
     branch: str
     stats: StagedFileStats
     checked_manifest_hash: str
+    staged_files_hash: str
     schema_version_id: str
     schema_version: int
     schema_evolution_metadata: dict[str, object] | None = None

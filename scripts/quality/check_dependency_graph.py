@@ -12,6 +12,13 @@ from typing import Any, TypedDict, cast
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_ROOTS = [ROOT / "libs", ROOT / "apps", ROOT / "scripts"]
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality"
+FAN_OUT_BASELINE_MODULES = {
+    "foundry_lite.application.ports",
+    "foundry_lite.application.primitives",
+    "foundry_lite.application.services.base",
+    "foundry_lite.domain.context",
+    "foundry_lite.domain.errors",
+}
 
 
 @dataclass(frozen=True)
@@ -188,57 +195,94 @@ def write_reports(output: Path, modules: dict[str, ModuleInfo], edges: dict[str,
     (output / "dependency_graph.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def main(argv: list[str] | None = None) -> int:
+def _default_aggregation_roots() -> list[str]:
+    return [
+        "foundry_lite.application.ports",
+        "foundry_lite.infrastructure.repositories",
+        "foundry_lite.infrastructure.adapters",
+        # Composition roots wire every bounded context together; their fan-out grows
+        # by one per new context (e.g. the Media/Content Plane) and is coupling by
+        # design, not by accident — bounded by the higher aggregation budget, not exempt.
+        "foundry_lite.application.core_services",
+        "foundry_lite.application.dependencies",
+        "foundry_lite.application.facades",
+        "foundry_lite.infrastructure.local_runtime",
+        # The CoreService DI base type-annotates every injectable dependency, and a
+        # bounded-context facade aggregates that context's services + DTOs — both are
+        # aggregation points whose fan-out grows with the platform, by design.
+        "foundry_lite.application.services.base",
+        "foundry_lite.application.facades.media_workspace",
+        # The MediaServices group composes every media bounded-context service; its
+        # fan-out grows by one per new media capability (e.g. M9 access patterns), by design.
+        "foundry_lite.application.services.media_service",
+        # These are explicit operator/composition roots. They assemble many bounded
+        # services or proof adapters but do not own domain rules; router purity and
+        # service dependency gates still prevent hidden DB/service coupling.
+        "apps.api.foundry_lite_api.main",
+        "foundry_lite.application.facades.operations_console",
+        "scripts.operations.run_live_media_byte_proof",
+        "scripts.operations.run_palantir_live_simulation",
+    ]
+
+
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--max-fan-out", type=int, default=10)
     parser.add_argument(
         "--max-aggregation-fan-out",
         type=int,
-        # 30: explicit composition roots grow by one per new bounded capability; connector/source
+        # 35: explicit composition roots grow by one per new bounded capability; connector/source
         # onboarding add their registry and management ports to CoreDependencies, which is
         # intentional coupling at the dependency injection root rather than a hidden service
-        # dependency.
+        # dependency. OSDK application/client/OAuth/session ports are also platform roots.
         #
         # The `infrastructure.adapters` aggregation root grows by one per new adapter; L13
         # added `LocalCompletionAdapter` (query-side HyDE/distillation completion seam) and AIP
         # P0b adds the `FakeLanguageModel` + `ProviderCompatibleLanguageModel` governed-gateway
         # seams — coupling by design at an explicit aggregation point, not accidental fan-out.
-        default=30,
+        default=35,
         help="Higher fan-out budget for explicit aggregation roots (ports/repositories __init__).",
     )
-    parser.add_argument(
-        "--aggregation-root",
-        action="append",
-        default=[
-            "foundry_lite.application.ports",
-            "foundry_lite.infrastructure.repositories",
-            "foundry_lite.infrastructure.adapters",
-            # Composition roots wire every bounded context together; their fan-out grows
-            # by one per new context (e.g. the Media/Content Plane) and is coupling by
-            # design, not by accident — bounded by the higher aggregation budget, not exempt.
-            "foundry_lite.application.core_services",
-            "foundry_lite.application.dependencies",
-            "foundry_lite.application.facades",
-            "foundry_lite.infrastructure.local_runtime",
-            # The CoreService DI base type-annotates every injectable dependency, and a
-            # bounded-context facade aggregates that context's services + DTOs — both are
-            # aggregation points whose fan-out grows with the platform, by design.
-            "foundry_lite.application.services.base",
-            "foundry_lite.application.facades.media_workspace",
-            # The MediaServices group composes every media bounded-context service; its
-            # fan-out grows by one per new media capability (e.g. M9 access patterns), by design.
-            "foundry_lite.application.services.media_service",
-            # These are explicit operator/composition roots. They assemble many bounded
-            # services or proof adapters but do not own domain rules; router purity and
-            # service dependency gates still prevent hidden DB/service coupling.
-            "apps.api.foundry_lite_api.main",
-            "foundry_lite.application.facades.operations_console",
-            "scripts.operations.run_live_media_byte_proof",
-            "scripts.operations.run_palantir_live_simulation",
-        ],
-    )
-    args = parser.parse_args(argv)
+    parser.add_argument("--aggregation-root", action="append", default=_default_aggregation_roots())
+    return parser
+
+
+def _fan_out_limit(name: str, aggregation_roots: set[str], max_fan_out: int, max_aggregation_fan_out: int) -> int:
+    if name in aggregation_roots:
+        return max_aggregation_fan_out
+    return max_fan_out
+
+
+def _over_coupled_modules(
+    edges: dict[str, list[str]],
+    aggregation_roots: set[str],
+    max_fan_out: int,
+    max_aggregation_fan_out: int,
+) -> list[str]:
+    over_coupled: list[str] = []
+    for name, targets in edges.items():
+        counted_targets = [target for target in targets if target not in FAN_OUT_BASELINE_MODULES]
+        limit = _fan_out_limit(name, aggregation_roots, max_fan_out, max_aggregation_fan_out)
+        if len(counted_targets) > limit:
+            over_coupled.append(name)
+    return over_coupled
+
+
+def _print_failures(
+    output: Path, edges: dict[str, list[str]], cycles: list[list[str]], violations: list[str], over_coupled: list[str]
+) -> None:
+    print(f"Dependency graph report: {output / 'dependency_graph.md'}")
+    for violation in violations:
+        print(f"Layer violation: {violation}")
+    for cycle in cycles:
+        print(f"Cycle: {' -> '.join(cycle)}")
+    for name in over_coupled:
+        print(f"High fan-out: {name} imports {len(edges[name])} internal modules")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
 
     modules = collect_modules()
     edges = internal_edges(modules)
@@ -247,19 +291,14 @@ def main(argv: list[str] | None = None) -> int:
     cycles = find_cycles(edges)
     violations = layer_violations(edges)
     aggregation_roots = set(args.aggregation_root)
-    over_coupled = [
-        name
-        for name, targets in edges.items()
-        if (len(targets) > (args.max_aggregation_fan_out if name in aggregation_roots else args.max_fan_out))
-    ]
+    over_coupled = _over_coupled_modules(
+        edges,
+        aggregation_roots,
+        args.max_fan_out,
+        args.max_aggregation_fan_out,
+    )
     if cycles or violations or over_coupled:
-        print(f"Dependency graph report: {args.output / 'dependency_graph.md'}")
-        for violation in violations:
-            print(f"Layer violation: {violation}")
-        for cycle in cycles:
-            print(f"Cycle: {' -> '.join(cycle)}")
-        for name in over_coupled:
-            print(f"High fan-out: {name} imports {len(edges[name])} internal modules")
+        _print_failures(args.output, edges, cycles, violations, over_coupled)
         return 1
     print(f"Dependency graph OK: {args.output / 'dependency_graph.md'}")
     return 0

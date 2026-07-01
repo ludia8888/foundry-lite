@@ -1,3 +1,5 @@
+"""Application service helpers for runtime run queries workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -106,10 +108,16 @@ def late_data_detail(dataset_transaction: RuntimeRow | None) -> dict[str, object
         return None
     summary = metadata.get("lateDataSummary")
     watermark = metadata.get("lateDataWatermark")
+    platform_watermark = metadata.get("platformWatermark")
     reprocessing_plan = metadata.get("lateDataReprocessingPlan")
-    if summary is None and watermark is None and reprocessing_plan is None:
+    if summary is None and watermark is None and platform_watermark is None and reprocessing_plan is None:
         return None
-    return {"summary": summary, "watermark": watermark, "reprocessingPlan": reprocessing_plan}
+    return {
+        "summary": summary,
+        "watermark": watermark,
+        "platformWatermark": platform_watermark,
+        "reprocessingPlan": reprocessing_plan,
+    }
 
 
 def materialization_detail(row: RuntimeRow, dataset_transaction: RuntimeRow | None) -> dict[str, object] | None:

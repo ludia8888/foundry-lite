@@ -92,3 +92,6 @@ ignore_imports =
     foundry_lite_worker.outbox_publisher -> foundry_lite.infrastructure.local_runtime
     foundry_lite_worker.source_scheduler -> foundry_lite.infrastructure.local_runtime
     foundry_lite_worker.stream_archive -> foundry_lite.infrastructure.local_runtime
+    foundry_lite_worker.cdc_object_indexer -> foundry_lite.infrastructure.local_runtime
+    foundry_lite_worker.transform_scheduler -> foundry_lite.infrastructure.local_runtime
+    foundry_lite_worker.writeback_reconciliation -> foundry_lite.infrastructure.local_runtime

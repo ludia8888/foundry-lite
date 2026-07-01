@@ -1,7 +1,9 @@
+"""Application service helpers for query workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import cast
+from typing import Protocol, cast
 
 from foundry_lite.application.ports import (
     LineageEdgeRow,
@@ -11,6 +13,8 @@ from foundry_lite.application.ports import (
     ObjectQueryResult,
     ObjectRecordRow,
     ObjectSortDirection,
+    OsdkResourceOperation,
+    OsdkResourceType,
     TransactionContext,
 )
 from foundry_lite.application.ports.object_read_repository import ObjectExplain
@@ -37,13 +41,31 @@ from foundry_lite.domain.errors import (
 OBJECT_QUERY_MAX_LIMIT = 500
 
 
+class _OsdkScopeBoundary(Protocol):
+    def require_resource_scope(
+        self,
+        ctx: RequestContext,
+        *,
+        resource_type: OsdkResourceType,
+        resource_api_name: str,
+        operation: OsdkResourceOperation,
+    ) -> None: ...
+
+
 class ObjectQueryService(CoreService):
     required_dependencies = ("engine", "policy", "object_index_repository", "object_read_repository")
-    required_collaborators = ("object_records_service", "runtime_service", "ontology_service", "object_search_service")
+    required_collaborators = (
+        "object_records_service",
+        "runtime_service",
+        "ontology_service",
+        "object_search_service",
+        "osdk_application_service",
+    )
     object_records_service: ObjectRecordLookup
     runtime_service: ObjectLineageReader
     ontology_service: ObjectQueryOntologyLookup
     object_search_service: ObjectSearchQueryPlanner
+    osdk_application_service: _OsdkScopeBoundary
 
     def get_object(
         self,
@@ -55,6 +77,7 @@ class ObjectQueryService(CoreService):
     ) -> ObjectPayload:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
+        self._require_object_read_scope(ctx, object_type_api_name)
         with self.engine.begin() as conn:
             object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
             record = self.object_records_service._object_record(
@@ -156,6 +179,7 @@ class ObjectQueryService(CoreService):
     ) -> ObjectQueryResult:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
+        self._require_object_read_scope(ctx, object_type_api_name)
         query_limit = _query_limit(limit)
         routed = self._search_route(
             object_type_api_name, ctx, search_text, semantic_text, query_limit, filter_ast, order_by, cursor
@@ -178,6 +202,14 @@ class ObjectQueryService(CoreService):
             "items": [self._object_query_item(ctx, object_type_api_name, row) for row in page],
             "nextCursor": _next_cursor(records, page, normalized_order_by, filter_ast, active_index_version, ctx),
         }
+
+    def _require_object_read_scope(self, ctx: RequestContext, object_type_api_name: str) -> None:
+        self.osdk_application_service.require_resource_scope(
+            ctx,
+            resource_type="object",
+            resource_api_name=object_type_api_name,
+            operation="read",
+        )
 
     def _search_route(
         self,

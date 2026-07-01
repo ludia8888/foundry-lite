@@ -1,3 +1,5 @@
+"""Application port contract for iceberg maintenance."""
+
 from __future__ import annotations
 
 from typing import Protocol, TypedDict
@@ -44,8 +46,35 @@ class IcebergMaintenancePlan(TypedDict):
     status: str
 
 
+class IcebergMaintenanceRun(TypedDict):
+    """Evidence returned after a bounded Iceberg maintenance execution."""
+
+    dataset_ref: str
+    dataset_id: str
+    branch: str
+    storage_profile: str
+    table_identifier: str
+    status: str
+    policy: IcebergMaintenancePolicy
+    before_snapshot_id: int | None
+    after_snapshot_id: int | None
+    compacted_snapshot_id: int | None
+    rewritten_data_file_count: int
+    output_data_file_count: int
+    before_row_hash: str | None
+    after_row_hash: str | None
+    is_row_hash_preserved: bool | None
+    expired_snapshot_ids: list[int]
+    protected_snapshot_ids: list[int]
+    retained_snapshot_ids: list[int]
+    skipped_expiration_snapshot_ids: list[int]
+    orphan_cleanup_file_uris: list[str]
+    before_plan_status: str
+    after_plan_status: str
+
+
 class IcebergMaintenanceAdapter(Protocol):
-    """Optional storage capability for Iceberg-specific table maintenance planning."""
+    """Optional storage capability for Iceberg-specific table maintenance."""
 
     @property
     def profile_name(self) -> str: ...
@@ -61,4 +90,17 @@ class IcebergMaintenanceAdapter(Protocol):
         policy: IcebergMaintenancePolicy,
     ) -> IcebergMaintenancePlan:
         """Return a dry-run maintenance plan without mutating the serving table."""
+        ...
+
+    def run_iceberg_maintenance(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        dataset_ref: str,
+        branch: str,
+        committed_versions: list[DatasetVersionRow],
+        policy: IcebergMaintenancePolicy,
+    ) -> IcebergMaintenanceRun:
+        """Execute table maintenance while preserving committed-version snapshots."""
         ...

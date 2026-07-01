@@ -1,3 +1,5 @@
+"""Application service helpers for stream archive workflows."""
+
 from __future__ import annotations
 
 import hashlib

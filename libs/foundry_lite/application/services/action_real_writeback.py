@@ -86,7 +86,12 @@ class RealExternalWritebackRunner:
         if receipt.status is RemoteOutcomeStatus.AMBIGUOUS:
             # A timeout is outcome_unknown (the write may have landed), never a guaranteed failure.
             unknown = self._recorder().outcome_unknown_before_commit(
-                conn, ctx, action_run_id, command.idempotency_key, command.request_fingerprint
+                conn,
+                ctx,
+                action_run_id,
+                command.idempotency_key,
+                command.request_fingerprint,
+                external_writeback_uri=uri,
             )
             return ActionApplyOutcome(deferred_error=unknown)
         self._record_succeeded(conn, ctx, action_run_id, command, receipt)
@@ -113,6 +118,7 @@ class RealExternalWritebackRunner:
             idempotency_key=command.idempotency_key,
             request_hash=command.request_fingerprint,
             response={"status_code": 200, "remote_resource_id": receipt.remote_resource_id},
+            external_writeback_uri=command.external_writeback_uri,
         )
 
     def record_compensation_required(
@@ -132,4 +138,5 @@ class RealExternalWritebackRunner:
             command.idempotency_key,
             command.request_fingerprint,
             remote_resource_id=receipt.remote_resource_id,
+            external_writeback_uri=command.external_writeback_uri,
         )

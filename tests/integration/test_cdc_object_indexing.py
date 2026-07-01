@@ -230,6 +230,8 @@ def test_late_event_reopens_expected_materialization(tmp_path: Path) -> None:
     rows = _materialization_rows_for_version(foundry, ctx, second.version_id)
     materialization = detail["materialization"]
     reopen = materialization["reopen"]
+    platform_watermark = detail["lateData"]["platformWatermark"]
+    reprocessing = platform_watermark["reprocessing"]
 
     assert index_result["objects_upserted"] == 1
     assert rows[0]["status"] == "APPROVED_LATE"
@@ -239,6 +241,12 @@ def test_late_event_reopens_expected_materialization(tmp_path: Path) -> None:
     assert reopen["sourceIndexRunId"] == index_result["index_run_id"]
     assert reopen["lateEventIds"] == ["topic:0:40"]
     assert materialization["watermark"]["lateDataReopen"] == reopen
+    assert platform_watermark["producer"] == "materialization"
+    assert platform_watermark["scope"] == "platform_object_store_watermark"
+    assert platform_watermark["status"] == "REPROCESS_REQUIRED"
+    assert platform_watermark["timeAxis"]["activeIndexVersion"] == materialization["watermark"]["active_index_version"]
+    assert reprocessing["previousDatasetVersionId"] == first.version_id
+    assert reprocessing["sourceIndexRunId"] == index_result["index_run_id"]
     assert detail["datasetTransaction"]["committed_version_id"] == second.version_id
 
 
