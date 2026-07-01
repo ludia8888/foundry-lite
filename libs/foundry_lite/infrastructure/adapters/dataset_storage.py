@@ -1,14 +1,23 @@
+"""Infrastructure adapter implementation for dataset storage."""
+
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
-from foundry_lite.application.ports import DatasetManifest, DatasetManifestFile, StoredDatasetCommit
+from foundry_lite.application.ports import (
+    DatasetManifest,
+    DatasetManifestFile,
+    DatasetStagedFile,
+    StoredDatasetCommit,
+)
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract, AdapterFailureMode
 from foundry_lite.application.primitives import _file_hash
+from foundry_lite.infrastructure.adapters.dataset_manifest_metadata import parquet_manifest_file_metadata
 
 
 class LocalDatasetStorageAdapter:
@@ -72,38 +81,61 @@ class LocalDatasetStorageAdapter:
         staged_file: Path,
         row_count: int,
         created_at: str,
+        sort_order: Sequence[str] | None = None,
     ) -> StoredDatasetCommit:
-        version_dir = self._version_dir(tenant_id, dataset_id, branch, version_id)
-        version_dir.mkdir(parents=True, exist_ok=True)
-        final_parquet = version_dir / "part-00000.parquet"
-        shutil.copy2(staged_file, final_parquet)
+        return self.commit_staged_files(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            branch=branch,
+            version_id=version_id,
+            dataset_ref=dataset_ref,
+            schema_hash=schema_hash,
+            staged_files=(DatasetStagedFile(path=staged_file, row_count=row_count),),
+            row_count=row_count,
+            created_at=created_at,
+            sort_order=sort_order,
+        )
 
-        data_file_uri = self._uri_for(final_parquet)
+    def commit_staged_files(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        branch: str,
+        version_id: str,
+        dataset_ref: str,
+        schema_hash: str,
+        staged_files: Sequence[DatasetStagedFile],
+        row_count: int,
+        created_at: str,
+        sort_order: Sequence[str] | None = None,
+    ) -> StoredDatasetCommit:
+        if not staged_files:
+            raise ValueError("dataset commit requires at least one staged file")
+        version_dir = self._version_dir(tenant_id, dataset_id, branch, version_id)
+        self._prepare_version_dir(version_dir)
+        version_dir.mkdir(parents=True, exist_ok=True)
+        manifest_files = self._promote_manifest_files(version_dir, staged_files, row_count, sort_order)
         manifest_path = version_dir / "manifest.json"
-        manifest_file: DatasetManifestFile = {
-            "uri": data_file_uri,
-            "format": "parquet",
-            "row_count": row_count,
-            "byte_size": final_parquet.stat().st_size,
-            "content_hash": _file_hash(final_parquet),
-        }
         manifest: DatasetManifest = {
             "version_id": version_id,
             "dataset": dataset_ref,
             "branch": branch,
             "schema_hash": schema_hash,
-            "files": [manifest_file],
+            "files": manifest_files,
             "created_at": created_at,
             "storage_profile": self.profile_name,
         }
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
-        self._verify_committed_manifest(manifest_path, final_parquet, manifest_file)
+        self._verify_committed_manifest_files(manifest_path, manifest_files)
+        first_file = manifest_files[0]
+        first_path = self._path_for(first_file["uri"])
         return StoredDatasetCommit(
             manifest_uri=self._uri_for(manifest_path),
-            data_file_uri=data_file_uri,
-            data_file_path=final_parquet,
-            byte_size=final_parquet.stat().st_size,
-            content_hash=_file_hash(final_parquet),
+            data_file_uri=first_file["uri"],
+            data_file_path=first_path,
+            byte_size=sum(file["byte_size"] for file in manifest_files),
+            content_hash=_combined_content_hash(manifest_files),
             manifest=manifest,
         )
 
@@ -176,13 +208,66 @@ class LocalDatasetStorageAdapter:
         files = manifest.get("files") or []
         if not files or files[0]["uri"] != self._uri_for(data_path):
             raise ValueError("dataset manifest does not reference the committed data file")
-        if data_path.stat().st_size != manifest_file["byte_size"]:
-            raise ValueError("dataset manifest byte size does not match committed data file")
-        if _file_hash(data_path) != manifest_file["content_hash"]:
-            raise ValueError("dataset manifest content hash does not match committed data file")
+        self._verify_committed_manifest_files(manifest_path, [manifest_file])
+
+    def _verify_committed_manifest_files(
+        self,
+        manifest_path: Path,
+        manifest_files: Sequence[DatasetManifestFile],
+    ) -> None:
+        manifest = self.load_manifest(self._uri_for(manifest_path))
+        files = manifest.get("files") or []
+        if [file["uri"] for file in files] != [file["uri"] for file in manifest_files]:
+            raise ValueError("dataset manifest does not reference the committed data files")
+        for manifest_file in manifest_files:
+            data_path = self._path_for(manifest_file["uri"])
+            if data_path.stat().st_size != manifest_file["byte_size"]:
+                raise ValueError("dataset manifest byte size does not match committed data file")
+            if _file_hash(data_path) != manifest_file["content_hash"]:
+                raise ValueError("dataset manifest content hash does not match committed data file")
+
+    def _promote_manifest_files(
+        self,
+        version_dir: Path,
+        staged_files: Sequence[DatasetStagedFile],
+        row_count: int,
+        sort_order: Sequence[str] | None,
+    ) -> list[DatasetManifestFile]:
+        if _staged_files_row_count(staged_files, row_count) != row_count:
+            raise ValueError("dataset staged file row counts do not match validation row count")
+        manifest_files: list[DatasetManifestFile] = []
+        for index, staged_file in enumerate(staged_files):
+            final_parquet = version_dir / f"part-{index:05d}.parquet"
+            shutil.copy2(staged_file.path, final_parquet)
+            manifest_files.append(self._manifest_file(final_parquet, staged_file, row_count, sort_order))
+        return manifest_files
+
+    def _manifest_file(
+        self,
+        final_parquet: Path,
+        staged_file: DatasetStagedFile,
+        row_count: int,
+        sort_order: Sequence[str] | None,
+    ) -> DatasetManifestFile:
+        manifest_file: DatasetManifestFile = {
+            "uri": self._uri_for(final_parquet),
+            "format": "parquet",
+            "row_count": _part_row_count(staged_file, row_count),
+            "byte_size": final_parquet.stat().st_size,
+            "content_hash": _file_hash(final_parquet),
+            "partition_values": dict(staged_file.partition_values or {}),
+        }
+        return parquet_manifest_file_metadata(manifest_file, final_parquet, sort_order=sort_order)
 
     def _dataset_dir(self, tenant_id: str, dataset_id: str) -> Path:
         return self.root / tenant_id / "datasets" / dataset_id
+
+    def _prepare_version_dir(self, version_dir: Path) -> None:
+        manifest_path = version_dir / "manifest.json"
+        if manifest_path.exists():
+            raise FileExistsError(f"dataset version already committed: {version_dir}")
+        if version_dir.exists():
+            shutil.rmtree(version_dir)
 
     def _version_dir(self, tenant_id: str, dataset_id: str, branch: str, version_id: str) -> Path:
         return self._dataset_dir(tenant_id, dataset_id) / f"branch={branch}" / f"version={version_id}"
@@ -226,3 +311,22 @@ def _matches_partition_filter(
 ) -> bool:
     partition_values = manifest_file.get("partition_values") or {}
     return all(partition_values.get(key) == value for key, value in partition_filter.items())
+
+
+def _part_row_count(staged_file: DatasetStagedFile, total_row_count: int) -> int:
+    return total_row_count if staged_file.row_count is None else staged_file.row_count
+
+
+def _staged_files_row_count(staged_files: Sequence[DatasetStagedFile], total_row_count: int) -> int:
+    return sum(_part_row_count(staged_file, total_row_count) for staged_file in staged_files)
+
+
+def _combined_content_hash(files: Sequence[DatasetManifestFile]) -> str:
+    if len(files) == 1:
+        return files[0]["content_hash"]
+    digest = json.dumps([file["content_hash"] for file in files], sort_keys=True).encode("utf-8")
+    return _file_hash_bytes(digest)
+
+
+def _file_hash_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()

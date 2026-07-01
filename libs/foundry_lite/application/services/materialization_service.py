@@ -28,6 +28,7 @@ from foundry_lite.application.services.materialization_types import (
     supported_materialization_type,
     unsupported_materialization_type,
 )
+from foundry_lite.application.services.materialization_watermarks import materialization_platform_watermark
 from foundry_lite.application.services.write_traffic_gate import require_write_open
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -473,12 +474,13 @@ class MaterializationService(CoreService):
 def _materialization_transaction_metadata(plan: MaterializationRunPlan) -> dict[str, object]:
     reopen = plan.watermark.get("lateDataReopen")
     return {
+        "platformWatermark": materialization_platform_watermark(plan),
         "materializationDetail": {
             "apiName": plan.api_name,
             "materializationType": plan.materialization_type,
             "watermark": dict(plan.watermark),
             "reopen": reopen if isinstance(reopen, Mapping) else {"isReopened": False},
-        }
+        },
     }
 
 

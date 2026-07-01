@@ -18,7 +18,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.ports import DatasetFileRecord, DatasetVersionRow
+from foundry_lite.application.ports import DatasetFileRecord, DatasetStagedFile, DatasetVersionRow
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.iceberg_maintenance import IcebergMaintenancePolicy
 from foundry_lite.domain.context import demo_admin_context
@@ -457,6 +457,90 @@ def test_iceberg_retry_after_ambiguous_commit_does_not_duplicate_version(
     assert exc_info.value.failure.kind == "conflict"
 
 
+def test_iceberg_commit_staged_files_retries_as_one_snapshot(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    bucket = _make_bucket(minio_server)
+    base = _adapter(tmp_path, minio_server, bucket)
+    adapter = IcebergDatasetStorageAdapter(base.config, catalog=_FailOnceCatalog(base._catalog))
+    staged_files = (
+        DatasetStagedFile(path=_staged(adapter, tmp_path, ["O-1", "O-2"], [100, 200]), row_count=2),
+        DatasetStagedFile(path=_staged(adapter, tmp_path, ["O-3"], [300]), row_count=1),
+    )
+
+    with pytest.raises(AdapterError) as exc_info:
+        _commit_parts(adapter, staged_files, version_id="dsv_parts")
+
+    assert exc_info.value.failure.kind == "timeout"
+    assert exc_info.value.failure.operation == "commit_staged_files"
+
+    stored = _commit_parts(adapter, staged_files, version_id="dsv_parts")
+    rows = _combined_parquet_rows(adapter.data_file_paths(stored.manifest_uri))
+    manifest = adapter.load_manifest(stored.manifest_uri)
+
+    assert rows["id"] == ["O-1", "O-2", "O-3"]
+    assert rows["amount"] == [100, 200, 300]
+    assert sum(file["row_count"] for file in manifest["files"]) == 3
+
+    with pytest.raises(AdapterError) as conflict:
+        _commit_parts(adapter, staged_files, version_id="dsv_parts")
+    assert conflict.value.failure.kind == "conflict"
+
+
+def test_iceberg_data_file_paths_prune_files_by_column_stats_without_full_materialization(
+    minio_server: MinioServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _adapter(tmp_path, minio_server, _make_bucket(minio_server))
+    stored = _commit_parts(
+        adapter,
+        (
+            DatasetStagedFile(path=_staged(adapter, tmp_path, ["O-low"], [10]), row_count=1),
+            DatasetStagedFile(path=_staged(adapter, tmp_path, ["O-high"], [900]), row_count=1),
+        ),
+        version_id="dsv_pruned",
+    )
+
+    def fail_full_materialization(*args: object, **kwargs: object) -> Path:
+        del args, kwargs
+        raise AssertionError("file-level pruning must not materialize the full Iceberg snapshot")
+
+    monkeypatch.setattr(adapter, "_materialize_snapshot", fail_full_materialization)
+
+    manifest = adapter.load_manifest(stored.manifest_uri)
+    paths = adapter.data_file_paths(stored.manifest_uri, partition_filter={"amount": 900})
+    skipped = adapter.data_file_paths(stored.manifest_uri, partition_filter={"amount": 12345})
+
+    assert len(manifest["files"]) == 2
+    assert len(paths) == 1
+    assert pq.read_table(paths[0]).to_pydict()["id"] == ["O-high"]
+    assert skipped == []
+
+
+def test_iceberg_commit_staged_files_replaces_head_without_clobbering_pinned_version(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    adapter = _adapter(tmp_path, minio_server, _make_bucket(minio_server))
+    first = _commit(adapter, _staged(adapter, tmp_path, ["O-old"], [1]), version_id="dsv_old")
+    second = _commit_parts(
+        adapter,
+        (
+            DatasetStagedFile(path=_staged(adapter, tmp_path, ["O-new-a"], [10]), row_count=1),
+            DatasetStagedFile(path=_staged(adapter, tmp_path, ["O-new-b"], [20]), row_count=1),
+        ),
+        version_id="dsv_new_parts",
+    )
+
+    first_rows = _combined_parquet_rows(adapter.data_file_paths(first.manifest_uri))
+    second_rows = _combined_parquet_rows(adapter.data_file_paths(second.manifest_uri))
+
+    assert first_rows["id"] == ["O-old"]
+    assert second_rows["id"] == ["O-new-a", "O-new-b"]
+
+
 def test_iceberg_compatible_schema_evolution_across_versions(
     minio_server: MinioServer,
     tmp_path: Path,
@@ -613,6 +697,72 @@ def test_iceberg_maintenance_plan_reports_healthy_when_no_policy_trigger_matches
     assert plan["current_snapshot_id"] in plan["retained_snapshot_ids"]
 
 
+def test_iceberg_maintenance_run_compacts_current_snapshot_and_expires_orphans(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    adapter = _adapter(tmp_path, minio_server, _make_bucket(minio_server))
+    first = _commit(adapter, _staged(adapter, tmp_path, ["O-1", "O-2"], [100, 200]), version_id="dsv_v1")
+    identifier, _ = adapter._parse_manifest_uri(first.manifest_uri)
+    adapter._load_table(identifier).overwrite(pa.table({"id": ["ghost"], "amount": [999]}))
+    orphan_snapshot_id = int(adapter._load_table(identifier).current_snapshot().snapshot_id)
+    second = _commit_parts(
+        adapter,
+        (
+            DatasetStagedFile(path=_staged(adapter, tmp_path, ["O-3"], [300]), row_count=1),
+            DatasetStagedFile(path=_staged(adapter, tmp_path, ["O-4"], [400]), row_count=1),
+        ),
+        version_id="dsv_v2",
+    )
+
+    run = adapter.run_iceberg_maintenance(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        dataset_ref="raw.orders",
+        branch="main",
+        committed_versions=[
+            _dataset_version_row("dsv_v1", first.manifest_uri),
+            _dataset_version_row("dsv_v2", second.manifest_uri),
+        ],
+        policy={**_maintenance_policy(), "small_file_threshold_bytes": 10_000_000},
+    )
+    current_files = adapter._manifest_files(adapter._load_table(identifier), int(run["after_snapshot_id"]))
+
+    assert run["status"] == "completed"
+    assert run["is_row_hash_preserved"] is True
+    assert run["rewritten_data_file_count"] == 2
+    assert run["output_data_file_count"] == 1
+    assert orphan_snapshot_id in run["expired_snapshot_ids"]
+    assert adapter._load_table(identifier).snapshot_by_id(orphan_snapshot_id) is None
+    assert len(current_files) == 1
+    assert sorted(_combined_parquet_rows(adapter.data_file_paths(second.manifest_uri))["id"]) == ["O-3", "O-4"]
+
+
+def test_iceberg_maintenance_run_writes_audit_evidence(
+    minio_server: MinioServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bucket = _make_bucket(minio_server)
+    _set_iceberg_env(monkeypatch, minio_server, bucket, tmp_path)
+    deps = create_local_core_dependencies(
+        adapter_profile="iceberg",
+        storage_root=tmp_path / "runtime-maintenance-run",
+        db_url=f"sqlite:///{tmp_path / 'maintenance-run.db'}",
+    )
+    foundry = FoundryLite(dependencies=deps)
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.orders", ctx=ctx, primary_key=["id"])
+    foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
+
+    run = foundry.operations.run_iceberg_maintenance("raw.orders", ctx=ctx, small_file_threshold_bytes=10_000_000)
+    audits = foundry.operations.query_runs(ctx=ctx, run_type="audit")["auditEvents"]
+
+    assert run["is_row_hash_preserved"] is True
+    assert run["compacted_snapshot_id"] == run["after_snapshot_id"]
+    assert any(event["event_type"] == "iceberg_maintenance.run_completed" for event in audits)
+
+
 def _foundry_with_storage(
     tmp_path: Path,
     adapter: IcebergDatasetStorageAdapter,
@@ -659,6 +809,25 @@ def _commit(adapter: IcebergDatasetStorageAdapter, staged: Path, version_id: str
     )
 
 
+def _commit_parts(
+    adapter: IcebergDatasetStorageAdapter,
+    staged_files: tuple[DatasetStagedFile, ...],
+    *,
+    version_id: str,
+) -> Any:
+    return adapter.commit_staged_files(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        branch="main",
+        version_id=version_id,
+        dataset_ref="raw.orders",
+        schema_hash="schema_hash_demo",
+        staged_files=staged_files,
+        row_count=sum(2 if staged.row_count is None else staged.row_count for staged in staged_files),
+        created_at="2026-06-16T00:00:00Z",
+    )
+
+
 def _maintenance_policy() -> IcebergMaintenancePolicy:
     return {
         "small_file_threshold_bytes": 32,
@@ -695,6 +864,11 @@ def _staged(adapter: IcebergDatasetStorageAdapter, tmp_path: Path, ids: list[str
     )
     pq.write_table(pa.table({"id": ids, "amount": amounts}), str(staged))
     return staged
+
+
+def _combined_parquet_rows(paths: list[Path]) -> dict[str, list[object]]:
+    tables = [pq.read_table(path) for path in paths]
+    return pa.concat_tables(tables).to_pydict()
 
 
 def _set_iceberg_env(monkeypatch: pytest.MonkeyPatch, minio_server: MinioServer, bucket: str, tmp_path: Path) -> None:

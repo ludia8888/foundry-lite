@@ -1,3 +1,5 @@
+"""Thin facade entrypoints for ontology registry workflows."""
+
 from __future__ import annotations
 
 from pathlib import Path

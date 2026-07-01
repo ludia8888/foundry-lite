@@ -105,6 +105,10 @@ class FakeTransformRepository:
                 return cast(TransformRow, dict(row))
         return None
 
+    def list_transforms(self, *, transaction: Any, tenant_id: str) -> list[TransformRow]:
+        del transaction
+        return [cast(TransformRow, dict(row)) for row in self.transforms if row["tenant_id"] == tenant_id]
+
     def transform_run_by_id(
         self,
         *,
@@ -117,6 +121,38 @@ class FakeTransformRepository:
             if row["tenant_id"] == tenant_id and row["id"] == transform_run_id:
                 return cast(TransformRunRow, dict(row))
         return None
+
+    def latest_successful_transform_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transform_id: str,
+    ) -> TransformRunRow | None:
+        del transaction
+        rows = [
+            row
+            for row in self.transform_runs
+            if row["tenant_id"] == tenant_id and row["transform_id"] == transform_id and row["status"] == "SUCCESS"
+        ]
+        rows.sort(key=lambda row: (str(row.get("completed_at") or ""), str(row.get("created_at") or "")))
+        return cast(TransformRunRow, dict(rows[-1])) if rows else None
+
+    def running_transform_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transform_id: str,
+    ) -> TransformRunRow | None:
+        del transaction
+        rows = [
+            row
+            for row in self.transform_runs
+            if row["tenant_id"] == tenant_id and row["transform_id"] == transform_id and row["status"] == "RUNNING"
+        ]
+        rows.sort(key=lambda row: str(row.get("created_at") or ""))
+        return cast(TransformRunRow, dict(rows[-1])) if rows else None
 
     def insert_transform_run(self, *, transaction: Any, record: TransformRunRecord) -> None:
         del transaction
@@ -268,6 +304,28 @@ def _transform_run_record() -> TransformRunRecord:
     )
 
 
+def _completed_transform_run_record(
+    transform_run_id: str,
+    *,
+    status: str,
+    completed_at: str,
+    input_versions: dict[str, str] | None = None,
+) -> TransformRunRecord:
+    return TransformRunRecord(
+        transform_run_id=transform_run_id,
+        tenant_id="tenant-test",
+        transform_id="tf_test",
+        status=status,
+        input_versions=input_versions or {"raw.orders": "dsv_1"},
+        definition_snapshot=dict(_transform_run_record().definition_snapshot),
+        output_version_id="dsv_out" if status == "SUCCESS" else None,
+        transaction_id=f"dtx_{transform_run_id}",
+        error=None,
+        created_at=completed_at,
+        completed_at=completed_at,
+    )
+
+
 def test_transform_by_api_name_returns_none_when_absent(harness: TransformHarness) -> None:
     with harness.transaction() as txn:
         assert (
@@ -286,6 +344,27 @@ def test_insert_transform_persists_and_returns_row_by_id(harness: TransformHarne
         assert row["output_dataset_ref"] == "clean.orders"
         assert row["checks"] == [{"type": "primary_key"}]
     assert len(harness.transform_rows()) == 1
+
+
+def test_list_transforms_is_tenant_scoped(harness: TransformHarness) -> None:
+    record = _transform_record()
+    other = TransformRecord(
+        transform_id="tf_other",
+        tenant_id="tenant-other",
+        api_name="other_transform",
+        language="sql",
+        entrypoint="/tmp/other.sql",
+        mode="snapshot",
+        inputs={"orders": "raw.other"},
+        output_dataset_ref="clean.other",
+        checks=[],
+    )
+    with harness.transaction() as txn:
+        harness.repository.insert_transform(transaction=txn, record=record)
+        harness.repository.insert_transform(transaction=txn, record=other)
+        rows = harness.repository.list_transforms(transaction=txn, tenant_id="tenant-test")
+
+    assert [row["api_name"] for row in rows] == ["clean_orders"]
 
 
 def test_update_transform_definition_overwrites_fields(harness: TransformHarness) -> None:
@@ -387,6 +466,63 @@ def test_update_transform_run_terminal_marks_failure(harness: TransformHarness) 
     assert row["status"] == "FAILED"
     assert row["error"] == {"message": "boom"}
     assert row["output_version_id"] is None
+
+
+def test_latest_successful_transform_run_is_tenant_scoped_and_ordered(harness: TransformHarness) -> None:
+    with harness.transaction() as txn:
+        harness.repository.insert_transform(transaction=txn, record=_transform_record())
+        harness.repository.insert_transform_run(
+            transaction=txn,
+            record=_completed_transform_run_record("trun_old", status="SUCCESS", completed_at="2025-01-01T00:00:00Z"),
+        )
+        harness.repository.insert_transform_run(
+            transaction=txn,
+            record=_completed_transform_run_record("trun_failed", status="FAILED", completed_at="2025-01-02T00:00:00Z"),
+        )
+        harness.repository.insert_transform_run(
+            transaction=txn,
+            record=_completed_transform_run_record(
+                "trun_latest",
+                status="SUCCESS",
+                completed_at="2025-01-03T00:00:00Z",
+                input_versions={"raw.orders": "dsv_3"},
+            ),
+        )
+        latest = harness.repository.latest_successful_transform_run(
+            transaction=txn,
+            tenant_id="tenant-test",
+            transform_id="tf_test",
+        )
+        hidden = harness.repository.latest_successful_transform_run(
+            transaction=txn,
+            tenant_id="tenant-other",
+            transform_id="tf_test",
+        )
+
+    assert latest is not None
+    assert latest["id"] == "trun_latest"
+    assert latest["input_versions"] == {"raw.orders": "dsv_3"}
+    assert hidden is None
+
+
+def test_running_transform_run_returns_active_run(harness: TransformHarness) -> None:
+    with harness.transaction() as txn:
+        harness.repository.insert_transform(transaction=txn, record=_transform_record())
+        harness.repository.insert_transform_run(transaction=txn, record=_transform_run_record())
+        running = harness.repository.running_transform_run(
+            transaction=txn,
+            tenant_id="tenant-test",
+            transform_id="tf_test",
+        )
+        hidden = harness.repository.running_transform_run(
+            transaction=txn,
+            tenant_id="tenant-other",
+            transform_id="tf_test",
+        )
+
+    assert running is not None
+    assert running["id"] == "trun_test"
+    assert hidden is None
 
 
 def test_transform_by_api_name_isolated_by_tenant(harness: TransformHarness) -> None:

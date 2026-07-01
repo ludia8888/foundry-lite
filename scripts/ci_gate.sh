@@ -341,6 +341,8 @@ run_runtime_gate() {
 
   run_runtime_step "Record DLQ replay ratchet" pnpm --silent quality:record-dlq-replay
 
+  run_runtime_step "Transform scheduler worker ratchet" pnpm --silent quality:transform-scheduler
+
   run_runtime_step "Late-data ratchet" pnpm --silent quality:late-data
 
   run_runtime_step "Watermark ratchet" pnpm --silent quality:watermark
@@ -390,6 +392,10 @@ run_runtime_gate() {
   run_runtime_step "Media workflow Temporal ratchet" pnpm --silent quality:media-workflow-temporal
 
   run_runtime_step "External writeback outcome ratchet" pnpm --silent quality:external-writeback
+
+  run_runtime_step "Action writeback retryable ratchet" pnpm --silent quality:action-writeback-retryable
+
+  run_runtime_step "Action writeback approval release ratchet" pnpm --silent quality:action-writeback-approval-release
 
   run_runtime_step "Saga reconciliation ratchet" pnpm --silent quality:saga-reconciliation
 
@@ -452,6 +458,8 @@ run_runtime_gate() {
   run_runtime_step "AIP Agent Runtime tool loop ratchet" pnpm --silent quality:agent-tool-loop
 
   run_runtime_step "AIP Agent action proposal tool ratchet" pnpm --silent quality:agent-action-proposal-tool
+
+  run_runtime_step "AIP Agent vendor egress ratchet" pnpm --silent quality:agent-vendor-egress
 
   run_runtime_step "AIP Agent approval execution API ratchet" pnpm --silent quality:agent-approval-execution-api
 

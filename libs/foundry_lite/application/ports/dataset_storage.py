@@ -1,6 +1,8 @@
+"""Application port contract for dataset storage."""
+
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NotRequired, Protocol, TypedDict
@@ -10,6 +12,12 @@ from foundry_lite.application.ports.dataset_quality_repository import DatasetSch
 from foundry_lite.application.ports.dataset_version_repository import DatasetVersionRow
 
 
+class DatasetManifestColumnStats(TypedDict, total=False):
+    min: object
+    max: object
+    null_count: int
+
+
 class DatasetManifestFile(TypedDict):
     uri: str
     format: str
@@ -17,6 +25,8 @@ class DatasetManifestFile(TypedDict):
     byte_size: int
     content_hash: str
     partition_values: NotRequired[dict[str, object]]
+    column_stats: NotRequired[dict[str, DatasetManifestColumnStats]]
+    sort_bounds: NotRequired[dict[str, DatasetManifestColumnStats]]
 
 
 class DatasetManifest(TypedDict):
@@ -49,6 +59,15 @@ class StoredDatasetCommit:
     manifest: DatasetManifest
 
 
+@dataclass(frozen=True)
+class DatasetStagedFile:
+    """One staged parquet file that will become part of a committed dataset version."""
+
+    path: Path
+    row_count: int | None = None
+    partition_values: Mapping[str, object] | None = None
+
+
 class DatasetStorageAdapter(Protocol):
     """Storage boundary for staged dataset files and committed dataset manifests."""
 
@@ -79,8 +98,26 @@ class DatasetStorageAdapter(Protocol):
         staged_file: Path,
         row_count: int,
         created_at: str,
+        sort_order: Sequence[str] | None = None,
     ) -> StoredDatasetCommit:
         """Promote a staged file into a committed dataset version manifest."""
+        ...
+
+    def commit_staged_files(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        branch: str,
+        version_id: str,
+        dataset_ref: str,
+        schema_hash: str,
+        staged_files: Sequence[DatasetStagedFile],
+        row_count: int,
+        created_at: str,
+        sort_order: Sequence[str] | None = None,
+    ) -> StoredDatasetCommit:
+        """Promote staged files into one committed dataset version manifest."""
         ...
 
     def delete_committed_version(

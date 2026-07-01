@@ -1,6 +1,9 @@
+"""Application service helpers for quality helpers workflows."""
+
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +18,9 @@ from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckResultTypeStatusCountRow,
     DatasetCheckRow,
     DatasetQualityContractCheck,
+    DatasetQualityContractCheckSnapshot,
+    DatasetQualityContractVersion,
+    DatasetQualityContractVersionRow,
     DatasetQualityResultHistoryItem,
     DatasetQualityResultStatusCount,
     DatasetQualityResultSummary,
@@ -24,7 +30,10 @@ from foundry_lite.application.primitives import _json_hash, _new_id, _now
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
-SUPPORTED_DATASET_CHECK_TYPES = frozenset({"allow_empty", "row_count_min", "not_null", "unique", "unique_tuple"})
+SUPPORTED_DATASET_CHECK_TYPES = frozenset(
+    {"allow_empty", "row_count_min", "not_null", "unique", "unique_tuple", "accepted_values"}
+)
+DEFAULT_QUALITY_CONTRACT_KEY = "default"
 
 
 @dataclass(frozen=True)
@@ -39,6 +48,7 @@ class DatasetQualityRunContext:
     checked_manifest_hash: str
     schema_version_id: str
     schema_version: int
+    active_contract_version_id: str | None
 
 
 def _allows_empty_dataset(extra_checks: Sequence[DatasetCheckConfig]) -> bool:
@@ -122,10 +132,70 @@ def _contract_check(row: DatasetCheckRow) -> DatasetQualityContractCheck:
     }
 
 
+def _contract_check_snapshot(row: DatasetCheckRow) -> DatasetQualityContractCheckSnapshot:
+    return {
+        "checkId": row["id"],
+        "name": row["name"],
+        "checkType": row["check_type"],
+        "config": row["config"],
+        "severity": row["severity"],
+        "enabled": row["enabled"],
+    }
+
+
+def _contract_version(row: DatasetQualityContractVersionRow, dataset: DatasetRow) -> DatasetQualityContractVersion:
+    return {
+        "id": row["id"],
+        "datasetId": row["dataset_id"],
+        "datasetRef": _dataset_ref(dataset),
+        "contractKey": row["contract_key"],
+        "version": int(row["version"]),
+        "status": row["status"],
+        "ownerUserId": row["owner_user_id"],
+        "description": row["description"],
+        "checks": [_contract_version_check(row["dataset_id"], check) for check in row["checks_snapshot"]],
+        "schemaVersionId": row["schema_version_id"],
+        "schemaVersion": row["schema_version"],
+        "createdAt": row["created_at"],
+        "activatedAt": row["activated_at"],
+    }
+
+
+def _contract_version_check(
+    dataset_id: str,
+    check: DatasetQualityContractCheckSnapshot,
+) -> DatasetQualityContractCheck:
+    return {
+        "id": check["checkId"],
+        "datasetId": dataset_id,
+        "name": check["name"],
+        "checkType": check["checkType"],
+        "config": check["config"],
+        "severity": check["severity"],
+        "enabled": check["enabled"],
+    }
+
+
+def _contract_snapshot_configs(
+    row: DatasetQualityContractVersionRow,
+) -> list[DatasetCheckConfig]:
+    return [check["config"] for check in row["checks_snapshot"] if check["enabled"]]
+
+
+def _validate_contract_key(contract_key: str) -> str:
+    normalized = contract_key.strip()
+    if not normalized:
+        raise ValidationFailed("dataset quality contract key is required")
+    if len(normalized) > 80:
+        raise ValidationFailed("dataset quality contract key is too long")
+    return normalized
+
+
 def _quality_result_history_item(row: DatasetCheckResultHistoryRow) -> DatasetQualityResultHistoryItem:
     return {
         "id": str(row["id"]),
         "checkId": str(row["check_id"]),
+        "dataContractVersionId": row["data_contract_version_id"],
         "checkName": str(row["check_name"]),
         "checkType": str(row["check_type"]),
         "severity": str(row["severity"]),
@@ -205,6 +275,27 @@ def _validate_dataset_check_config(check: DatasetCheckConfig) -> None:
             "unsupported dataset quality check type",
             details={"check_type": str(check_type)},
         )
+    if check_type == "accepted_values":
+        _validate_accepted_values_config(check)
+
+
+def _validate_accepted_values_config(check: DatasetCheckConfig) -> None:
+    column = check.get("column")
+    values = check.get("values")
+    if not isinstance(column, str) or not column.strip() or column != column.strip():
+        raise ValidationFailed("accepted values check requires a column", details={"check": dict(check)})
+    if not isinstance(values, Sequence) or isinstance(values, str | bytes) or not values:
+        raise ValidationFailed("accepted values check requires values", details={"check": dict(check)})
+    if any(not _is_allowed_contract_value(value) for value in values):
+        raise ValidationFailed("accepted values check requires scalar JSON values", details={"check": dict(check)})
+
+
+def _is_allowed_contract_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool | str | int):
+        return True
+    return isinstance(value, float) and math.isfinite(value)
 
 
 def _quality_result_details(result: DatasetCheckResult, policy_status: str) -> DatasetCheckResult:
@@ -216,7 +307,7 @@ def _check_severity(check: DatasetCheckConfig) -> str:
 
 
 def _is_row_quarantine_check(check: DatasetCheckConfig) -> bool:
-    return str(check.get("type")) in {"not_null", "unique", "unique_tuple"}
+    return str(check.get("type")) in {"not_null", "unique", "unique_tuple", "accepted_values"}
 
 
 def _failed_row_indexes(rows: Sequence[Mapping[str, object]], check: DatasetCheckConfig) -> list[int]:
@@ -227,6 +318,8 @@ def _failed_row_indexes(rows: Sequence[Mapping[str, object]], check: DatasetChec
         return _unique_failed_indexes(rows, check)
     if check_type == "unique_tuple":
         return _unique_tuple_failed_indexes(rows, check)
+    if check_type == "accepted_values":
+        return _accepted_values_failed_indexes(rows, check)
     return []
 
 
@@ -251,6 +344,23 @@ def _unique_tuple_failed_indexes(rows: Sequence[Mapping[str, object]], check: Da
     for key in keys:
         counts[key] = counts.get(key, 0) + 1
     return [index for index, key in enumerate(keys) if counts[key] > 1]
+
+
+def _accepted_values_failed_indexes(rows: Sequence[Mapping[str, object]], check: DatasetCheckConfig) -> list[int]:
+    column = str(check.get("column"))
+    accepted = set(_accepted_values(check))
+    return [index for index, row in enumerate(rows) if _is_disallowed_value(row.get(column), accepted)]
+
+
+def _accepted_values(check: DatasetCheckConfig) -> list[object]:
+    values = check.get("values")
+    if not isinstance(values, Sequence) or isinstance(values, str | bytes):
+        return []
+    return list(values)
+
+
+def _is_disallowed_value(value: object, accepted: set[object]) -> bool:
+    return value is not None and value not in accepted
 
 
 def _string_list(value: object) -> list[str]:

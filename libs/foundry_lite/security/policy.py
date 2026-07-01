@@ -1,3 +1,5 @@
+"""Security policy helpers for policy."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
@@ -53,6 +55,8 @@ class PolicyService:
         "insight:review": {"admin", "ops_manager"},
         "media:search": {"admin", "data_engineer", "ops_manager"},
         "action:execute:ApproveOrder": {"admin", "ops_manager"},
+        "developer_console:read": {"admin", "data_engineer", "ops_manager"},
+        "developer_console:manage": {"admin", "data_engineer"},
         "materialization:run": {"admin", "data_engineer", "ops_manager"},
         # Operations exposes raw run/writeback/outbox/audit rows, so reads are
         # operator-only (viewers and finance are excluded) and split from retry.

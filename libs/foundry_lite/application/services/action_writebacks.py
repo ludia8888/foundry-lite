@@ -1,3 +1,5 @@
+"""Application service helpers for action writebacks workflows."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,6 +9,7 @@ from foundry_lite.application.ports import (
     ACTION_RUN_COMPENSATION_REQUIRED,
     ACTION_RUN_FAILED,
     ACTION_RUN_OUTCOME_UNKNOWN,
+    ACTION_RUN_RETRYABLE,
     TransactionContext,
 )
 from foundry_lite.application.ports.action_repository import (
@@ -17,11 +20,19 @@ from foundry_lite.application.ports.action_repository import (
 from foundry_lite.application.primitives import MOCK_WRITEBACK_CONNECTOR, _new_id, _now
 from foundry_lite.application.services.action_helpers import writeback_error_payload
 from foundry_lite.application.services.action_protocols import ActionRuntimeBoundary
+from foundry_lite.application.services.action_writeback_payloads import (
+    compensation_required_details,
+    outcome_unknown_details,
+    retryable_details,
+    writeback_failure_error,
+    writeback_request,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
     ExternalCompensationRequired,
     ExternalOutcomeUnknown,
+    ExternalRetryableWriteback,
     ExternalSystemError,
 )
 
@@ -35,6 +46,9 @@ class SimulatedWritebackCommand(Protocol):
 
     @property
     def simulate_writeback_failure(self) -> bool: ...
+
+    @property
+    def simulate_writeback_retryable(self) -> bool: ...
 
     @property
     def simulate_writeback_outcome_unknown(self) -> bool: ...
@@ -60,14 +74,16 @@ class ActionWritebackRecorder:
         idempotency_key: str,
         request_hash: str,
         response: ActionWritebackPayload,
+        external_writeback_uri: str | None = None,
     ) -> str:
         now = _now()
         writeback_id = _new_id("writeback")
-        request = _writeback_request(
+        request = writeback_request(
             connector_id=self.connector_id,
             is_simulated=self.is_simulated,
             idempotency_key=idempotency_key,
             request_hash=request_hash,
+            external_writeback_uri=external_writeback_uri,
         )
         self.action_repository.insert_action_writeback(
             transaction=conn,
@@ -123,6 +139,10 @@ class ActionWritebackRecorder:
             return self.fail_before_commit(
                 conn, ctx, action_run_id, command.idempotency_key, command.request_fingerprint
             )
+        if command.simulate_writeback_retryable:
+            return self.retryable_before_commit(
+                conn, ctx, action_run_id, command.idempotency_key, command.request_fingerprint
+            )
         if command.simulate_writeback_outcome_unknown:
             return self.outcome_unknown_before_commit(
                 conn, ctx, action_run_id, command.idempotency_key, command.request_fingerprint
@@ -141,7 +161,7 @@ class ActionWritebackRecorder:
         idempotency_key: str,
         request_hash: str,
     ) -> ExternalSystemError:
-        error = _writeback_failure_error(idempotency_key=idempotency_key, request_hash=request_hash)
+        error = writeback_failure_error(idempotency_key=idempotency_key, request_hash=request_hash)
         self.record(
             conn,
             ctx,
@@ -152,6 +172,36 @@ class ActionWritebackRecorder:
             response={"status_code": 500},
         )
         self._mark_failed(conn, ctx, action_run_id, error)
+        return error
+
+    def retryable_before_commit(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        idempotency_key: str,
+        request_hash: str,
+    ) -> ExternalRetryableWriteback:
+        details = retryable_details(
+            connector_id=self.connector_id,
+            is_simulated=self.is_simulated,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+        )
+        error = ExternalRetryableWriteback(
+            "writeback failed before changing the external system",
+            details=dict(details),
+        )
+        self.record(
+            conn,
+            ctx,
+            action_run_id,
+            status="retryable",
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response=details,
+        )
+        self._mark_retryable(conn, ctx, action_run_id, error)
         return error
 
     def _mark_failed(
@@ -185,6 +235,37 @@ class ActionWritebackRecorder:
             correlation_id=action_run_id,
         )
 
+    def _mark_retryable(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        action_run_id: str,
+        error: ExternalRetryableWriteback,
+    ) -> None:
+        error_payload = dict(
+            writeback_error_payload(self.runtime_service, error, ctx, action_run_id, connector_id=self.connector_id)
+        )
+        updated = self.action_repository.update_action_run_terminal(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            action_run_id=action_run_id,
+            transition=ACTION_RUN_RETRYABLE,
+            error=error_payload,
+            completed_at=_now(),
+        )
+        if not updated:
+            raise ConflictDetected("action run terminal state changed concurrently")
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="action.run.retryable",
+            resource_type="action_run",
+            resource_id=action_run_id,
+            action="apply",
+            after_ref=error_payload,
+            correlation_id=action_run_id,
+        )
+
     def outcome_unknown_before_commit(
         self,
         conn: TransactionContext,
@@ -194,9 +275,10 @@ class ActionWritebackRecorder:
         request_hash: str,
         *,
         remote_resource_id: str | None = None,
+        external_writeback_uri: str | None = None,
     ) -> ExternalOutcomeUnknown:
         now = _now()
-        details = _outcome_unknown_details(
+        details = outcome_unknown_details(
             connector_id=self.connector_id,
             is_simulated=self.is_simulated,
             idempotency_key=idempotency_key,
@@ -205,7 +287,9 @@ class ActionWritebackRecorder:
             remote_resource_id=remote_resource_id,
         )
         error = ExternalOutcomeUnknown("writeback outcome is unknown", details=dict(details))
-        self._record_outcome_unknown(conn, ctx, action_run_id, idempotency_key, request_hash, details)
+        self._record_outcome_unknown(
+            conn, ctx, action_run_id, idempotency_key, request_hash, details, external_writeback_uri
+        )
         self._mark_outcome_unknown(conn, ctx, action_run_id, error)
         return error
 
@@ -218,9 +302,10 @@ class ActionWritebackRecorder:
         request_hash: str,
         *,
         remote_resource_id: str | None = None,
+        external_writeback_uri: str | None = None,
     ) -> ExternalCompensationRequired:
         now = _now()
-        details = _compensation_required_details(
+        details = compensation_required_details(
             connector_id=self.connector_id,
             is_simulated=self.is_simulated,
             idempotency_key=idempotency_key,
@@ -229,7 +314,9 @@ class ActionWritebackRecorder:
             remote_resource_id=remote_resource_id,
         )
         error = ExternalCompensationRequired("writeback requires compensation", details=dict(details))
-        self._record_compensation_required(conn, ctx, action_run_id, idempotency_key, request_hash, details)
+        self._record_compensation_required(
+            conn, ctx, action_run_id, idempotency_key, request_hash, details, external_writeback_uri
+        )
         self._mark_compensation_required(conn, ctx, action_run_id, error)
         return error
 
@@ -241,6 +328,7 @@ class ActionWritebackRecorder:
         idempotency_key: str,
         request_hash: str,
         details: ActionWritebackPayload,
+        external_writeback_uri: str | None,
     ) -> None:
         self.record(
             conn,
@@ -249,6 +337,7 @@ class ActionWritebackRecorder:
             status="outcome_unknown",
             idempotency_key=idempotency_key,
             request_hash=request_hash,
+            external_writeback_uri=external_writeback_uri,
             response={
                 "status_code": None,
                 "outcome_unknown": True,
@@ -267,6 +356,7 @@ class ActionWritebackRecorder:
         idempotency_key: str,
         request_hash: str,
         details: ActionWritebackPayload,
+        external_writeback_uri: str | None,
     ) -> None:
         self.record(
             conn,
@@ -275,6 +365,7 @@ class ActionWritebackRecorder:
             status="compensation_required",
             idempotency_key=idempotency_key,
             request_hash=request_hash,
+            external_writeback_uri=external_writeback_uri,
             response={
                 "status_code": 200,
                 "compensation_required": True,
@@ -347,84 +438,3 @@ class ActionWritebackRecorder:
             after_ref=error_payload,
             correlation_id=action_run_id,
         )
-
-
-def _writeback_request(
-    *,
-    connector_id: str,
-    is_simulated: bool,
-    idempotency_key: str,
-    request_hash: str,
-) -> ActionWritebackPayload:
-    return {
-        "connector": connector_id,
-        "simulated": is_simulated,
-        "networkCall": not is_simulated,
-        "idempotency_key": idempotency_key,
-        "request_hash": request_hash,
-    }
-
-
-def _writeback_failure_error(*, idempotency_key: str, request_hash: str) -> ExternalSystemError:
-    return ExternalSystemError(
-        "mock before-commit writeback failed",
-        details={
-            "connector": MOCK_WRITEBACK_CONNECTOR,
-            "simulated": True,
-            "idempotency_key": idempotency_key,
-            "request_hash": request_hash,
-        },
-    )
-
-
-def _operation_id(connector_id: str, is_simulated: bool, idempotency_key: str) -> str:
-    prefix = "mock-op" if is_simulated else f"{connector_id}-op"
-    return f"{prefix}-{idempotency_key}"
-
-
-def _outcome_unknown_details(
-    *,
-    connector_id: str,
-    is_simulated: bool,
-    idempotency_key: str,
-    request_hash: str,
-    reconciliation_deadline: str,
-    remote_resource_id: str | None,
-) -> ActionWritebackPayload:
-    return {
-        "state": "OUTCOME_UNKNOWN",
-        "connector": connector_id,
-        "simulated": is_simulated,
-        "external_operation_id": _operation_id(connector_id, is_simulated, idempotency_key),
-        "idempotency_key": idempotency_key,
-        "request_hash": request_hash,
-        "remote_resource_id": remote_resource_id,
-        "last_observed_status": "unknown",
-        "reconciliation_deadline": reconciliation_deadline,
-    }
-
-
-def _compensation_required_details(
-    *,
-    connector_id: str,
-    is_simulated: bool,
-    idempotency_key: str,
-    request_hash: str,
-    reconciliation_deadline: str,
-    remote_resource_id: str | None,
-) -> ActionWritebackPayload:
-    resolved_remote_resource_id = (
-        f"mock-resource-{idempotency_key}" if is_simulated and remote_resource_id is None else remote_resource_id
-    )
-    return {
-        "state": "COMPENSATION_REQUIRED",
-        "connector": connector_id,
-        "simulated": is_simulated,
-        "external_operation_id": _operation_id(connector_id, is_simulated, idempotency_key),
-        "idempotency_key": idempotency_key,
-        "request_hash": request_hash,
-        "remote_resource_id": resolved_remote_resource_id,
-        "last_observed_status": "succeeded",
-        "compensation_action_type": "mock_reverse_writeback" if is_simulated else f"{connector_id}_reverse_writeback",
-        "reconciliation_deadline": reconciliation_deadline,
-    }

@@ -36,13 +36,14 @@ cross-check summary, PR exit checklist는 이 문서가 소유하고, 실제 cur
 | Area | Current evidence boundary | Merge decision |
 |---|---|---|
 | S3/MinIO, Iceberg, Spark | `quality:s3-storage`, `quality:iceberg`, `quality:spark`, `quality:infra-composition` prove adapter/composition ratchets. | Treat as implemented ratchet proof, not full production platform packaging. |
-| Temporal | `WorkflowAdapter`, `quality:temporal`, and S52 `ConnectorSyncWorkflow` control-plane plus worker-bound connector snapshot commit proof exist. | Treat start/status/audit linking and the local connector activity commit proof as partial; keep managed workers, cancellation/reconciliation, workflow upgrade replay, and production connector packaging future. |
-| External writeback / saga | S53 simulated `outcome_unknown`, `compensation_required`, reconciliation resolve, masking, replay proofs, L8 real S3/MinIO adapter timeout/landed-write/`remote_lookup` proof, and unresolved writeback backend/API/SDK queue exist. | Treat core safety semantics and backend queue as covered for the current adapter; keep ERP-specific connector packaging, autonomous compensation workers, queue UI, and approval UI future. |
+| Temporal | `WorkflowAdapter`, `quality:temporal`, and S52 `ConnectorSyncWorkflow` control-plane plus worker-bound connector snapshot commit proof exist. | Treat start/status/cancel/audit linking, persisted `workflowDefinitionVersion` retry evidence, and the local connector activity commit proof as partial; keep managed workers, continue-as-new, full old-history workflow upgrade replay, and production connector packaging future. |
+| Transform scheduling | `foundry.transforms.preview_due(...)`/`run_due(...)`, API/SDK scheduler tick, and `worker:transform-scheduler` proof exist for snapshot rebuilds. | Treat bounded/continuous local worker evidence as current; keep production lease/fencing/Kubernetes packaging, managed Temporal transform scheduling, and append/incremental merge policy future. |
+| External writeback / saga | S53 simulated `retryable`, `outcome_unknown`, `compensation_required`, reconciliation resolve, masking, replay proofs, L8 real S3/MinIO adapter timeout/landed-write/`remote_lookup` proof, unresolved writeback backend/API/SDK queue, bounded writeback reconciliation worker proof, sensitive/high-risk approval-required skip plus backend approval-release API/SDK/audit proof, and AI direct vendor/API tool denial proof exist. | Treat core safety semantics, retryable-not-changed evidence, backend queue, bounded recovery tick, backend approval-required/release gate, and AIP ToolBroker/Builder vendor-egress denial as covered for the current adapter; keep ERP-specific connector packaging, automatic retry/reissue policy, always-on managed compensation daemon, queue UI, connector-backed vendor tools, and visual approval workflow/UI future. |
 | Elasticsearch | Adapter/projection/live Testcontainers proof exists. | Keep search as rebuildable projection; managed cloud packaging and ops remain future. |
 | CDC | Archive, live Debezium proof, CDC object indexing, bounded stream loop, and active-stack composition proof exist. | Treat bounded/archive/indexing slices as active-covered; keep production daemon lease/fencing/rebalance/commit-unknown edges future. |
-| Backup/restore | S57 preflight, restore-mode status, DB/storage mismatch detection, retry lockout, post-restore validation/approval evidence, and core platform write-traffic lockout exist. | Treat current lockout and validation as service-boundary proof; keep real backup artifact creation, publisher daemon control, and restore executor packaging future. |
+| Backup/restore | S57 preflight, restore-mode status, DB/storage mismatch detection, retry lockout, post-restore validation/approval evidence, core platform write-traffic lockout, immutable local backup artifact creation, verified artifact restore entrypoint, and historical artifact dataset-head execution exist. | Treat current lockout, validation, artifact manifest creation, verified artifact restore, and local dataset-head execution as service-boundary proof; keep external DB dump orchestration, full old/new runtime compatibility, publisher daemon control, automatic smoke, and restore executor packaging future. |
 | Auth/privacy/erasure | S58A/S58B/S58C local JWT/OIDC, secret provider, privacy transform, replication policy, and erasure manifest proofs exist. | Treat local proof as partial; keep cloud/Vault, durable workflows, encrypted durable stores, and full executors future. |
-| Frontend | S61/S62/S63/S64 backend/API/SDK surfaces, request/helper contracts, named SDK-only Web Operations, Insight Review queue proofs, and Operations Recovery overview/post-restore validation proof exist. | Treat backend/API/SDK foundation as partial; keep full visual workspace UX, evidence panels, action orchestration, and recovery console UI future. |
+| Frontend | S61/S62/S63/S64 backend/API/SDK surfaces, request/helper contracts, Developer Console-lite OSDK app/scope/client registry, local OAuth authorization-code/PKCE/token/refresh/revoke proof, local TS/Python SDK release artifacts/channels/compatibility windows/download tokens, ObjectSet WebSocket subscription runtime with SSE fallback, named SDK-only Web Operations, Insight Review queue proofs, and Operations Recovery overview/post-restore validation proof exist. | Treat backend/API/SDK foundation, JWT-claim app/resource scope enforcement, local OAuth/session lifecycle, local artifact registry lifecycle, WebSocket/SSE `.subscribe(...)`, at-least-once delivery, reconnect/resume, backpressure, rate-limit, JWKS rotation, redaction, and browser-security proof as partial-current; keep full visual workspace UX, external NPM/PyPI publishing, external IdP introspection/refresh-token revocation, exactly-once subscription delivery, Palantir-grade external package lifecycle/deployment compatibility windows, evidence panels, action orchestration, and recovery console UI future. |
 
 다음 확장은 무작정 기능을 늘리는 방식이 아니라 아래 순서로 진행한다.
 
@@ -246,8 +247,16 @@ quality:data-pattern-matrix
 > 미리보기, 단건 replay, bulk replay, discard, open/closed/top-error 요약을 노출한다. stream/source
 > archive 경로는 `StreamArchiveConfig`의 `max_record_error_ratio`와 `fail_closed_error_kinds`로
 > source별 오류율 threshold와 identity/ordering fail-closed 정책을 선언할 수 있고, PostgreSQL
-> 동시 replay request proof는 한 record에 replay run이 하나만 남는지 검증한다. transform-level
-> Record DLQ 오류 정책은 transform record DLQ가 생길 때 별도 확장한다.
+> 동시 replay request proof는 한 record에 replay run이 하나만 남는지 검증한다. Python transform
+> 경로는 `Input.map_rows(..., on_error="quarantine")`로 row-local mapper 예외를 격리하고,
+> 정상 mapped row만 output dataset으로 commit하며 `recordDlqKind="transform_execution"` DLQ,
+> `dead_letter_record.quarantined` audit, `transformRecordDlq` transaction metadata를 남긴다.
+> Generic source replay는 transform-execution DLQ를 계속 거절한다. Transform-specific replay는
+> `POST /api/operations/dead-letter-records/{id}/retry-transform` / generated SDK
+> `operations.deadLetterRecords.retryTransform(...)` / `foundry.transforms.retry_dead_letter_record(...)`
+> 경로에서 현재 transform 정의와 최신 입력 dataset version으로 snapshot output을 전체 재빌드한다.
+> Append/incremental transform replay는 중복 append 위험 때문에 duplicate-safe merge policy가 생기기
+> 전까지 fail-closed로 남긴다.
 
 ## 핵심 구분
 
@@ -288,7 +297,8 @@ Record DLQ = 들어온 데이터 한 건 자체가 처리 불가
 ## 처리 정책
 
 - [x] stream/source 오류 정책을 source별로 선언 가능하게 한다.
-- [ ] transform-level Record DLQ 오류 정책은 transform record DLQ가 생길 때 별도 확장한다.
+- [x] Python transform row-local 오류는 `Input.map_rows(..., on_error="quarantine")`로 Record DLQ에 격리한다.
+- [x] transform-specific Record DLQ replay executor는 snapshot full rebuild에 한해 지원한다.
 - [x] 소수 오류는 quarantine하고 정상 record를 계속 처리한다.
 - [x] 오류율이 threshold를 넘으면 전체 batch를 fail-closed한다.
 - [x] identity/primary-key/ordering 오류는 기본적으로 fail-closed한다.
@@ -301,6 +311,7 @@ Record DLQ = 들어온 데이터 한 건 자체가 처리 불가
 - [x] `GET /api/operations/dead-letter-records`
 - [x] `GET /api/operations/dead-letter-records/{id}`
 - [x] `POST /api/operations/dead-letter-records/{id}/retry`
+- [x] `POST /api/operations/dead-letter-records/{id}/retry-transform`
 - [x] `POST /api/operations/dead-letter-records/bulk-retry`
 - [x] `POST /api/operations/dead-letter-records/{id}/discard`
 - [x] generated TypeScript SDK에 typed DLQ operations를 추가한다.
@@ -344,6 +355,10 @@ quality:record-dlq-replay
 - [x] `test_operations_record_dead_letter_replay_request_is_idempotent_and_audited`
 - [x] `test_operations_record_dead_letter_replay_failure_is_visible`
 - [x] `test_api_operations_record_dead_letter_records_retry_bulk_and_discard`
+- [x] `test_python_transform_row_errors_are_quarantined_without_failing_run`
+- [x] `test_transform_record_dlq_retry_rebuilds_snapshot_after_fix`
+- [x] `test_transform_record_dlq_retry_fails_without_fix_and_does_not_commit_output`
+- [x] `test_transform_record_dlq_retry_rejects_append_mode_fail_closed`
 - [x] `test_operations_ui_record_dlq_retry_shows_result`
 - [x] `test_concurrent_replay_requests_create_one_replay_run`
 - [x] `test_same_replay_idempotency_key_returns_existing_result`
@@ -363,7 +378,8 @@ quality:record-dlq-replay
 
 늦게 도착한 소셜/API/stream 이벤트를 조용히 버리거나 현재 상태를 잘못 되돌리는 문제를 막는다.
 
-> 2026-06-18 현재 첫 ratchet은 stream/source archive 경로에 한정해 구현되었다.
+> 2026-07-01 현재 S48 ratchet은 stream/source archive 경로, snapshot transform
+> output watermark 전파 경로, materialization output boundary watermark 경로에 한정해 구현되었다.
 > `StreamArchiveConfig`가 source별 `event_time_field`, `source_time_field`,
 > `time_zone`, `allowed_lateness_seconds`, `too_late_after_seconds`, `clock_skew_seconds`를 선언하고,
 > 정상 archive row에는 `event_time`, `source_time`, `ingested_at`, `processed_at`,
@@ -373,9 +389,13 @@ quality:record-dlq-replay
 > watermark 때문에 조용히 유실되지 않고, 같은 늦은 event가 재전달되어도 committed offset
 > 이후부터 다시 읽어 두 번째 dataset version을 만들지 않는다. stream commit metadata에는
 > `lateDataSummary`와 이전에 닫힌 archive dataset version 대상 `lateDataReprocessingPlan`이
-> 남고, Operations run detail은 event-time lag와 reprocessing plan을 노출한다. CDC index run이
+> 남고, 같은 metadata에서 공통 `platformWatermark` read-model이 정규화되어 Operations
+> run detail에 노출된다. snapshot transform output commit은 입력 dataset transaction의
+> `platformWatermark`를 읽어 output dataset version metadata에 `producer=transform`,
+> min-input event-time policy, 입력 version id, reprocessing flag와 함께 전파한다. CDC index run이
 > `LATE_REQUIRES_REPROCESS` event를 적용한 뒤 실행한 materialization commit metadata에는
-> `materializationDetail.watermark`와 `reopen.reason=late_data_reprocess`가 남아 Operations
+> action-log/object-snapshot 시간축을 구분하는 top-level `platformWatermark`,
+> `materializationDetail.watermark`, `reopen.reason=late_data_reprocess`가 남아 Operations
 > materialization run detail에서 확인할 수 있다. 같은 증거는 object explain의
 > `lateDataBadge`, materialization detail의 `lateDataBadge`, Operations run detail의
 > `downstreamImpact` graph로 이어져 어떤 materialized output/insight가 다시 만들어졌는지
@@ -409,7 +429,10 @@ lateData:
   - [x] `LATE_REQUIRES_REPROCESS`
   - [x] `TOO_LATE`
 - [x] stream archive watermark는 partition/source별 transaction metadata로 저장한다.
+- [x] stream archive watermark는 공통 `platformWatermark` read-model로 정규화한다.
 - [x] stream archive watermark는 뒤로 이동하지 않는다.
+- [x] snapshot transform output은 입력 `platformWatermark`를 min-input event-time 정책으로 전파한다.
+- [x] materialization output은 action-log/object-snapshot boundary를 top-level `platformWatermark`로 남긴다.
 - [x] 늦은 데이터가 닫힌 stream archive output을 바꾸면 reprocessing plan을 생성한다.
 - [x] too-late event는 Record DLQ와 연결한다.
 
@@ -431,6 +454,7 @@ quality:watermark
 
 - [x] `test_watermark_never_moves_backward`
 - [x] `test_slow_partition_does_not_silently_drop_data`
+- [x] `test_platform_watermark_contract_normalizes_stream_metadata`
 - [x] `test_late_event_reopens_expected_materialization`
 - [x] `test_too_late_event_goes_to_record_dlq`
 - [x] `test_event_time_and_processing_time_sla_are_separate`
@@ -438,14 +462,19 @@ quality:watermark
 - [x] `test_late_event_creates_reprocessing_plan_for_closed_archive_output`
 - [x] `test_run_detail_shows_event_time_lag_and_reprocessing_plan`
 - [x] `test_late_data_badge_marks_impacted_insight`
+- [x] `test_platform_watermark_contract_covers_action_boundaries`
+- [x] `test_platform_watermark_contract_covers_object_materialization_reprocessing`
 - [x] `test_late_data_downstream_impact_graph_lists_materializations`
 - [x] `test_late_delete_does_not_resurrect_stale_object`
 - [x] `test_late_data_named_timezone_override_applies_source_policy`
+- [x] `test_transform_output_platform_watermark_is_derived_from_stream_input`
+- [x] `test_transform_output_platform_watermark_uses_min_input_event_time_and_reprocessing`
 
 ## 완료 기준
 
 - [x] stream/source 늦은 데이터가 정책에 따라 처리되고 이유가 보인다.
 - [x] stream/source 늦은 데이터가 이미 닫힌 archive/materialization output을 바꿀 때 downstream 영향이 추적된다.
+- [x] snapshot transform output이 입력 watermark/reprocessing evidence를 잃지 않는다.
 - [x] 늦은 데이터 때문에 현재 객체가 과거 상태로 회귀하지 않는다.
 
 ---
@@ -456,15 +485,27 @@ quality:watermark
 
 단일 Parquet 파일 중심 protocol을 multi-file manifest 기반으로 확장해 대용량 데이터의 병렬 처리와 partition pruning을 가능하게 한다.
 
-> 현재 부분 구현 메모 (2026-06-18): S49 ratchet은 read/preview 경로에 한정한다.
+> 현재 부분 구현 메모 (2026-06-30): S49 ratchet은 read/preview 경로, manifest metadata 경로,
+> local/fake/S3/Iceberg multi-part commit proof와 단일 입력 SQL transform predicate pushdown proof 경로까지 포함한다.
 > `DatasetStorageAdapter.data_file_paths()`가 manifest의 `files` 목록을 읽기 가능한 local path
 > 목록으로 resolve하고, `foundry.datasets.preview(...)`는 첫 파일만 읽지 않고 manifest 순서대로
 > 여러 parquet part를 읽는다. manifest에 없는 orphan file은 directory/bucket listing으로 발견하지
 > 않으므로 serving truth는 계속 manifest다. Local/fake/S3 adapter는 manifest entry를 그대로
 > 읽고, `partition_filter`가 주어지면 manifest의 `partition_values`와 맞는 file만 읽는다.
-> S3 adapter도 같은 filter를 download 전에 적용하며, Iceberg adapter는 기존 snapshot materialization
-> 계약을 유지하므로 no-match filter는 읽지 않지만 snapshot 내부 file-level pruning은 아직 future
-> scope다. 여러 staged file을 하나의 dataset version으로 원자 commit하는 protocol도 아직 future scope다.
+> Local/S3/Iceberg commit path는 읽을 수 있는 Parquet file에 대해 manifest `column_stats`
+> min/max/null_count와 `sort_bounds`를 남긴다.
+> local/fake storage adapter는 여러 staged parquet part를 deterministic `part-00000.parquet`
+> file set으로 승격하고 manifest를 마지막에 쓴다. application transaction 경로는 같은 commit에서
+> manifest의 모든 file을 DB `dataset_files` row로 남기며, 검증 후 part tamper와 stale retry orphan
+> part를 차단한다. S3 adapter는 여러 staged parquet part를 같은 version prefix의 exact
+> `part-00000.parquet`/`part-00001.parquet` set으로 승격하고 timeout retry 후에도 part를
+> 중복 생성하지 않으며, 같은 filter를 download 전에 적용한다. Iceberg adapter는 여러 staged
+> parquet part를 하나의 pinned snapshot 안의 여러 data file로 승격하고 timeout retry와 duplicate conflict를 구분한다.
+> SQL transform runner는 단일 입력 SQL의 단순 equality 파티션 조건을 `DatasetStorageAdapter`
+> `partition_filter`로 전달하고, compute adapter에는 선택된 input file list만 넘긴다.
+> Iceberg adapter는 no-match filter를 읽지 않고, manifest `column_stats`/`sort_bounds`가 equality filter와
+> 맞지 않는 data file은 전체 snapshot materialization 없이 건너뛴다. high-cardinality partition warning은
+> committed transaction metadata 경고 증거로 현재 partial proof에 포함된다.
 
 ## Manifest v2
 
@@ -474,9 +515,9 @@ quality:watermark
   - [x] `row_count`
   - [x] `byte_size`
   - [x] `content_hash`
-  - [ ] column min/max
-  - [ ] null count
-  - [ ] sort bounds
+  - [x] column min/max
+  - [x] null count
+  - [x] sort bounds
 - [x] reader가 bucket listing이 아니라 manifest만 사용한다.
 - [x] 기존 single-file manifest와 backward compatibility를 제공한다.
 
@@ -485,8 +526,8 @@ quality:watermark
 - [x] dataset에 `partition_spec`을 선언한다.
 - [x] `sort_order`를 선언한다.
 - [x] target file size를 선언한다.
-- [ ] high-cardinality partition을 validation에서 경고한다.
-- [~] read/preview predicate를 storage adapter에 전달한다. transform predicate 전달은 future scope다.
+- [x] high-cardinality partition을 validation에서 경고한다.
+- [~] read/preview predicate와 단일 입력 SQL transform equality predicate를 storage adapter에 전달한다. 복잡한 join/OR predicate pushdown은 future scope다.
 
 ## Commit protocol
 
@@ -498,28 +539,38 @@ quality:watermark
 → COMMITTED serving pointer 노출
 ```
 
-- [ ] part 하나 실패 시 전체 version을 abort한다.
-- [ ] retry는 동일 logical version의 file set을 중복 생성하지 않는다.
-- [ ] cleanup은 reachable file을 삭제하지 않는다.
+- [x] part 하나 실패/검증 후 tamper 시 전체 version을 abort한다.
+- [x] retry는 동일 logical version의 file set을 중복 생성하지 않는다. (local/fake/S3/Iceberg proof)
+- [x] cleanup은 reachable file을 삭제하지 않는다.
 
 ## 연결/제안 명령
 
 ```text
 quality:multi-file-dataset   # 연결됨
 quality:partition-pruning    # 연결됨
+quality:s3-storage           # 연결됨
+quality:iceberg              # 연결됨
 ```
 
 ## 제안 테스트
 
 - [x] `test_dataset_storage_adapter_resolves_manifest_files_with_partition_filter_without_listing`
 - [x] `test_partition_pruning_reads_only_required_manifest_files`
+- [x] `test_committed_manifest_records_column_stats_and_sort_bounds`
 - [x] `test_s3_data_file_paths_apply_partition_filter_before_download`
 - [x] `test_iceberg_data_file_paths_skip_snapshot_when_partition_filter_has_no_match`
-- [ ] `test_multi_file_commit_is_all_or_nothing`
+- [x] `test_dataset_transaction_finalizes_multiple_parts_as_one_version`
+- [x] `test_dataset_transaction_blocks_tampered_multi_part_after_validation`
+- [x] `test_dataset_storage_adapter_commits_multiple_staged_files_without_duplicate_retry_parts`
+- [x] `test_s3_commit_staged_files_retries_without_duplicate_parts`
+- [x] `test_iceberg_commit_staged_files_retries_as_one_snapshot`
+- [x] `test_iceberg_data_file_paths_prune_files_by_column_stats_without_full_materialization`
+- [x] `test_iceberg_commit_staged_files_replaces_head_without_clobbering_pinned_version`
+- [~] `test_multi_file_commit_is_all_or_nothing`
 - [ ] `test_one_part_upload_failure_exposes_no_version`
 - [ ] `test_manifest_lists_exact_committed_files`
 - [ ] `test_reader_never_lists_bucket_to_discover_version`
-- [ ] `test_transform_partition_predicate_reaches_storage_adapter`
+- [x] `test_sql_transform_pushes_partition_predicate_to_storage_adapter`
 - [ ] `test_same_version_retry_does_not_duplicate_parts`
 - [ ] `test_single_file_versions_remain_readable`
 - [ ] `test_concurrent_multi_file_commits_allocate_unique_versions`
@@ -529,6 +580,8 @@ quality:partition-pruning    # 연결됨
 - [x] 기존 API는 유지된다.
 - [x] 단일 파일과 multi-file dataset을 같은 facade로 읽는다.
 - [x] partition predicate가 read/preview path의 실제 read file 수를 줄인다.
+- [x] local/fake storage에서는 여러 staged part가 하나의 version/manifest/DB file row set으로 commit된다.
+- [x] S3/Iceberg profile에서는 여러 staged part가 retry-safe committed version/snapshot으로 승격된다.
 
 ---
 
@@ -541,11 +594,11 @@ quality:partition-pruning    # 연결됨
 ## 기능
 
 - [x] compaction candidate detector
-- [ ] `rewrite_data_files` 실행기
-- [ ] snapshot expiration policy
-- [ ] orphan file cleanup
+- [x] current snapshot compact rewrite 실행기
+- [~] snapshot expiration policy: DB committed snapshot 보호와 deletable orphan expiration은 active, transform/materialization/backup pin retention은 future.
+- [x] orphan file cleanup: expired snapshot의 no-longer-reachable data/sidecar file만 삭제한다.
 - [x] maintenance plan model
-- [~] retention policy: `retention_min_snapshots`와 DB committed version 보호를 plan에 반영한다. 실제 snapshot expiration 실행은 아직 future다.
+- [~] retention policy: `retention_min_snapshots`와 DB committed version 보호를 plan/run에 반영한다. 삭제 가능한 orphan snapshot expiration/cleanup은 active이고, transform/materialization/backup pin까지 포함한 full retention policy는 future다.
 
 ## 기본 정책
 
@@ -562,14 +615,15 @@ average_file_size < 32 MiB
 - [ ] materialization watermark가 참조하는 snapshot 삭제 금지
 - [ ] backup retention보다 이른 snapshot 삭제 금지
 - [x] active DB COMMITTED version이 참조하는 metadata 삭제 금지: S50-A1 plan은 DB committed dataset version의 Iceberg snapshot을 `protected_by=committed_db_version:*`로 표시하고 삭제 후보에서 제외한다.
-- [ ] 실패한 compaction이 serving pointer를 바꾸지 않음
+- [~] 실패한 compaction이 serving pointer를 바꾸지 않음: row-hash mismatch는 이전 snapshot으로 rollback을 시도하고 실패 처리한다. 실제 fault-injection proof와 ambiguous retry idempotency는 future다.
 
 ## API/UI
 
 - [x] `GET /api/operations/maintenance/iceberg`
 - [x] `POST /api/operations/maintenance/iceberg/{dataset}/plan`
-- [ ] `POST /api/operations/maintenance/iceberg/{dataset}/run`
-- [x] 대상 snapshot, compaction candidate, orphan snapshot, 보존 snapshot을 preview한다. 예상 절감 용량은 실제 rewrite/orphan cleanup slice에서 확정한다.
+- [x] `POST /api/operations/maintenance/iceberg/{dataset}/run`
+- [x] 대상 snapshot, compaction candidate, orphan snapshot, 보존 snapshot을 preview한다.
+- [x] Maintenance run은 current snapshot compaction, row-hash preservation, deletable orphan snapshot expiration/cleanup, protected snapshot evidence를 반환한다.
 
 ## 제안 명령
 
@@ -580,19 +634,20 @@ quality:iceberg-maintenance
 ## 제안 테스트
 
 - [x] `test_iceberg_maintenance_plan_protects_committed_snapshots_and_audits`
-- [ ] `test_compaction_preserves_row_hash`
-- [ ] `test_old_pinned_snapshot_remains_readable_within_retention`
-- [ ] `test_expiration_refuses_referenced_snapshot`
+- [x] `test_iceberg_maintenance_run_compacts_current_snapshot_and_expires_orphans`
+- [x] `test_iceberg_maintenance_run_writes_audit_evidence`
+- [~] old pinned snapshot readability within retention: `test_iceberg_maintenance_run_compacts_current_snapshot_and_expires_orphans` keeps the committed manifest readable after maintenance; transform/materialization/backup pin coverage remains future.
+- [~] expiration refuses referenced snapshot: DB committed snapshot protection is active; transform/materialization/backup references remain future.
 - [ ] `test_compaction_failure_does_not_move_serving_pointer`
-- [ ] `test_orphan_cleanup_never_deletes_reachable_file`
+- [x] orphan cleanup never deletes reachable files: `test_iceberg_maintenance_run_compacts_current_snapshot_and_expires_orphans` expires only deletable orphan snapshots and verifies the committed manifest is still readable.
 - [ ] `test_concurrent_maintenance_runs_have_one_winner`
 - [ ] `test_retry_after_ambiguous_compaction_is_idempotent`
 
 ## 완료 기준
 
-- [~] maintenance plan 결과가 operator audit evidence로 남는다. 실제 run model은 다음 slice에서 별도 구현한다.
+- [x] maintenance plan과 maintenance run 결과가 operator audit evidence로 남는다.
 - [~] DB committed version snapshot은 plan에서 보호된다. transform/materialization/backup pin까지 포함한 time travel/restore 보존은 다음 slice다.
-- [ ] compaction 전후 logical row hash가 동일하다.
+- [x] compaction 전후 logical row hash가 동일하다.
 
 ---
 
@@ -602,25 +657,26 @@ quality:iceberg-maintenance
 
 현재 one-shot proof를 실제 지속 실행 worker로 확장하고, rebalance/commit-unknown에서 데이터 유실과 중복 logical commit을 막는다.
 
-> S51 현재 구현 범위: bounded continuous stream archive loop가 추가되어 기존 `archive_stream_events` transaction/checkpoint 경계를 여러 batch에 반복 적용하고, configured empty poll 또는 stop callback에서 멈추며 loop summary를 반환한다. worker CLI는 env/schema/tenant 설정 실패를 stacktrace가 아닌 `CONFIGURATION_ERROR` JSON payload로 반환한다. PostgreSQL-backed live Kafka worker가 같은 offset을 동시에 읽어도 commit 직전 stream cursor CAS가 한쪽 commit을 막는 proof가 추가됐다. `pnpm fault:local:stress`는 이 노트북에서 Spark executor kill, live Kafka/PostgreSQL 8-worker same-offset storm, continuous worker stop/restart replay overload를 한 번에 실행하고 `artifacts/operations/local_fault_lab.json`에 증거를 남긴다. Lease/fencing, rebalance revoke, broker commit-unknown reconciliation, CDC object-indexer continuous worker, managed Temporal failover는 아직 future scope다.
+> S51 현재 구현 범위: bounded continuous stream archive loop가 추가되어 기존 `archive_stream_events` transaction/checkpoint 경계를 여러 batch에 반복 적용하고, configured empty poll 또는 stop callback에서 멈추며 loop summary를 반환한다. worker CLI는 env/schema/tenant 설정 실패를 stacktrace가 아닌 `CONFIGURATION_ERROR` JSON payload로 반환한다. PostgreSQL-backed live Kafka worker가 같은 offset을 동시에 읽어도 commit 직전 stream cursor CAS가 한쪽 commit을 막는 proof가 추가됐다. Continuous worker는 `workflow_runs`에 owner/token/expiry 기반 lease를 남기고, lease를 잃은 old worker가 다음 batch를 archive하지 않고 `lease_lost`로 멈추는 proof를 갖는다. Stream archive worker는 batch read 뒤 dataset commit 직전 partition assignment guard를 한 번 더 확인하며, revoke가 감지되면 output dataset version과 cursor를 만들지 않고 failed sync evidence와 `assignment_revoked` stop reason으로 닫는다. `worker:cdc-object-indexer`는 committed CDC dataset version을 version 순서로 읽고, `workflow_runs.output.cdcObjectIndexer.cursor`의 `lastIndexedVersionId`/`lastIndexedVersionNumber`/`lastIndexRunId`에서 재시작해 이미 index한 version을 다시 처리하지 않는다. 이 worker는 one-shot 또는 bounded/continuous loop로 실행되며 empty poll, max batch, stop callback, lease loss에서 멈추고, CDC version row count가 configured limit을 넘으면 일부만 읽고 cursor를 전진시키지 않도록 fail-closed 한다. `pnpm fault:local:stress`는 이 노트북에서 Spark executor kill, live Kafka/PostgreSQL 8-worker same-offset storm, continuous worker stop/restart replay overload를 한 번에 실행하고 `artifacts/operations/local_fault_lab.json`에 증거를 남긴다. Real broker rebalance revoke callback integration, broker commit-unknown reconciliation, OS SIGTERM finish-or-abort proof, production daemon packaging, managed Temporal failover는 아직 future scope다.
 
 ## Worker 기능
 
 - [~] continuously running stream archive worker: bounded loop, CLI/env option, configuration-error JSON payload는 active, production daemon packaging은 future.
-- [ ] continuously running CDC object-index worker
-- [~] graceful shutdown: stop callback boundary는 active, OS signal/SIGTERM finish-or-abort proof는 future.
-- [ ] heartbeat/lease
-- [ ] partition assignment tracking
+- [~] continuously running CDC object-index worker: committed CDC dataset version cursor/lease 기반 one-shot 및 bounded/continuous loop는 active, production daemon packaging은 future.
+- [~] graceful shutdown: stop callback boundary와 lease-lost graceful stop은 active, OS signal/SIGTERM finish-or-abort proof는 future.
+- [~] heartbeat/lease: `workflow_runs` owner/token/expiry lease와 per-batch renewal proof는 active, Kubernetes/broker-group lease packaging은 future.
+- [~] partition assignment tracking: read 후 commit 직전 assignment guard는 active, durable assignment history와 broker callback 연결은 future.
 - [ ] backpressure
 - [ ] retry budget
 - [~] lag reporting: existing stream lag metric과 loop summary count는 active, Operations assignment/lag surface는 future.
 
 ## Checkpoint protocol
 
-- [~] partition별 checkpoint: existing `streamCursor` partition/offset metadata를 continuous loop가 재사용하고, live Kafka/PostgreSQL same-offset parallel commit은 cursor CAS로 fencing한다. lease/fencing token과 broker rebalance fencing은 future.
+- [~] partition별 checkpoint: existing `streamCursor` partition/offset metadata를 continuous loop가 재사용하고, live Kafka/PostgreSQL same-offset parallel commit은 cursor CAS로 fencing한다. worker lease/fencing token proof는 active, broker rebalance fencing은 future.
+- [~] CDC object-indexer version cursor: `lastIndexedVersionNumber`/`lastIndexedVersionId`/`lastIndexRunId`가 workflow run output에 남고 restart/takeover worker가 다음 committed CDC dataset version부터 처리한다.
 - [ ] batch transaction ID
 - [ ] source epoch/fencing token
-- [ ] revoke 이후 old worker의 commit 금지
+- [~] revoke 이후 old worker의 commit 금지: worker pre-commit assignment guard는 active, real broker callback integration은 future.
 - [ ] broker commit-unknown reconciliation
 - [~] topic/partition/offset event dedupe: same-offset duplicate logical commit은 PostgreSQL cursor CAS proof가 active, cross-broker/topic recreation identity는 future
 
@@ -637,19 +693,27 @@ pnpm fault:local:stress
 - [x] `test_stream_archive_worker_continuous_loop_archives_until_empty_poll`
 - [x] `test_stream_archive_worker_continuous_loop_honors_stop_callback`
 - [x] `test_stream_archive_worker_continuous_loop_stops_after_max_batches`
+- [x] `test_stream_archive_worker_continuous_loop_records_workflow_lease_release`
+- [x] `test_stream_archive_worker_continuous_loop_stops_when_lease_is_lost`
+- [x] `test_runtime_repository_contract_workflow_run_lease_fences_stale_workers`
 - [x] `test_stream_archive_worker_continuous_loop_counts_empty_polls_before_stop`
 - [x] `test_stream_archive_worker_main_prints_continuous_result`
+- [x] `test_cdc_object_indexer_worker_once_resumes_after_last_indexed_version`
+- [x] `test_cdc_object_indexer_continuous_loop_indexes_until_empty_and_releases_lease`
+- [x] `test_cdc_object_indexer_continuous_loop_stops_when_lease_is_lost`
+- [x] `test_cdc_object_indexer_worker_fails_closed_when_version_exceeds_row_limit`
+- [x] `test_cdc_object_indexer_worker_config_cli_and_failure_payload_edges`
+- [x] `test_stream_archive_worker_continuous_loop_broker_rebalance_revoked_worker_cannot_commit_current_batch`
 - [ ] `test_rebalance_during_dataset_commit_has_no_loss`
 - [ ] `test_commit_unknown_replay_creates_one_dataset_version`
 - [ ] `test_revoked_worker_cannot_advance_checkpoint`
 - [ ] `test_multi_partition_batch_does_not_hide_partial_failure`
 - [ ] `test_worker_sigterm_finishes_or_aborts_current_batch`
-- [ ] `test_worker_lease_expiry_fences_stale_instance`
-- [ ] `test_continuous_indexer_restarts_from_committed_watermark`
+- [ ] `test_real_broker_rebalance_callback_revokes_assignment_before_commit`
 
 ## 완료 기준
 
-- [~] bounded continuous loop 안에서 committed cursor를 따라 no-gap/no-duplicate archive result가 증명된다. rebalance/restart/lease expiry proof는 future.
+- [~] bounded continuous loop 안에서 committed cursor를 따라 no-gap/no-duplicate archive result가 증명되고, lease를 잃은 old worker는 다음 batch를 쓰지 않는다. CDC object-indexer도 committed CDC dataset version cursor를 따라 이미 처리한 version을 재처리하지 않는다. Worker pre-commit assignment guard는 revoked worker의 current batch commit을 막는다. Real broker callback integration과 commit-unknown proof는 future.
 - [ ] lag와 assignment가 Operations에 보인다.
 - [ ] timeout/commit-unknown이 generic failure로 뭉개지지 않는다.
 
@@ -661,27 +725,41 @@ pnpm fault:local:stress
 
 Temporal을 독립 adapter에서 실제 Foundry-lite 업무 오케스트레이터로 승격한다.
 
-> 현재 부분 구현 메모 (2026-06-19): S52의 첫 slice는 실제 connector
-> page fetch/commit/cursor advance 전체가 아니라 product workflow control-plane을
-> 고정한다. `ConnectorSyncWorkflow`는 Operations facade/API/generated SDK에서
+> 현재 부분 구현 메모 (2026-06-30): S52의 current slice는 product workflow control-plane에
+> 더해 worker-bound connector activity의 bounded data-plane evidence를 고정한다.
+> `ConnectorSyncWorkflow`는 Operations facade/API/generated SDK에서
 > 시작/조회할 수 있고, local/fake/Temporal profile이 같은 public
 > `ProductWorkflowRun` shape를 반환하며, audit event의 `workflowRunId`와
 > `foundryRunId`가 서로 연결된다. Workflow adapter start 예외는 ledger를
 > `starting`에 방치하지 않고 retryable timeout/unavailable이면 `start_unknown`,
-> permanent exception이면 `failed`로 운영 증거를 남긴다. 실제 connector activity data-plane,
-> cancel cleanup, response-loss reconciliation, continue-as-new, code upgrade
-> replay는 아직 future scope다.
+> permanent exception이면 `failed`로 운영 증거를 남긴다. 실제 connector activity는
+> Dataset ingest boundary로 fetch page, raw staging write, quality check,
+> dataset commit, cursor advance, `dataset.version.committed` emit evidence를 남긴다.
+> Workflow request payload의 deterministic `syncRunId`와
+> `workflowDefinitionVersion`으로 post-commit activity retry가 같은 committed sync run을
+> 재사용하므로 duplicate dataset version/outbox를 만들지 않는다. Activity 완료 뒤 start 응답이 유실된 경우에도 같은 idempotency key
+> 재시작이 adapter lookup으로 기존 domain result에 재부착되어 `workflow.reconciled`
+> evidence를 남긴다. `start_unknown` 재시도는 ledger에 처음 저장된
+> `workflowDefinitionVersion`을 보존해 새 코드 기본값으로 조용히 바뀌지 않는다.
+> Workflow cancel은
+> `POST /api/operations/workflows/{workflow_run_id}/cancel`과 generated SDK로
+> 노출되며, running/requested run을 `cancelled` ledger state로 닫고 cleanup
+> payload, `workflow.cancelled` audit, `cancelled_by` run relation evidence를 남기되,
+> adapter가 다른 run id나 terminal non-cancelled 결과를 돌려주면 fail-closed로
+> 거부한다. Production connector activity packaging/config persistence,
+> continue-as-new, full old-history code upgrade replay, managed worker operations는 아직
+> S52 workflow의 남은 범위다.
 
 ## 1차 workflow
 
 ### ConnectorSyncWorkflow
 
-- [ ] fetch page
-- [ ] raw staging write
-- [ ] quality check
-- [ ] dataset commit
-- [ ] cursor advance
-- [ ] `dataset.version.committed` emit
+- [x] fetch page
+- [x] raw staging write
+- [x] quality check
+- [x] dataset commit
+- [x] cursor advance
+- [x] `dataset.version.committed` emit
 
 ### 후속 workflow
 
@@ -695,15 +773,26 @@ Temporal을 독립 adapter에서 실제 Foundry-lite 업무 오케스트레이�
 
 - [~] workflow ID는 stable idempotency key 기반: S52 첫 slice에서는
   `ConnectorSyncWorkflow` run id가 `Idempotency-Key`와 같도록 고정한다.
-- [ ] activity ID와 domain transaction ID 연결
+- [~] activity ID와 domain transaction ID 연결: connector activity output이
+  deterministic `syncRunId`, transaction id, committed dataset version, cursor,
+  `dataset.version.committed` evidence를 workflow output으로 되돌린다.
 - [~] workflow history와 Foundry run evidence 연결: Operations audit detail이
   `workflowRunId`와 `foundryRunId`를 서로 참조한다.
-- [ ] cancel 시 staging cleanup
-- [ ] activity 완료 후 응답 유실 reconciliation
-- [ ] bounded retry 정책
+- [~] cancel 시 staging cleanup: requested run은 `not_started`, running adapter run은
+  `adapter_confirmed` cleanup evidence를 남기며 `workflow.cancelled` audit과
+  `cancelled_by` run relation을 기록한다. 실제 long-running connector activity의
+  단계별 staging cleanup executor는 full data-plane workflow slice로 남긴다.
+- [~] activity 완료 후 응답 유실 reconciliation: `start_unknown` ledger row는
+  같은 idempotency key 재시작에서 adapter lookup으로 terminal workflow result에
+  재부착되고 `workflow.reconciled` audit/run relation을 남긴다.
+- [~] bounded retry 정책: post-commit activity retry는 deterministic `syncRunId`로
+  이미 committed sync run을 재사용해 duplicate dataset version/outbox를 만들지 않는다.
+- [~] workflow code versioning / replay determinism: workflow input은
+  `workflowDefinitionVersion`을 싣고, `start_unknown` 재시도는 처음 ledger에 저장된
+  input을 adapter에 다시 전달한다. 남은 범위인 full old-history upgrade replay는 아직
+  미구현 후속 범위다.
 - [ ] continue-as-new
-- [ ] workflow code versioning
-- [ ] replay determinism
+- [ ] full old-history workflow upgrade replay
 
 ## API/UI
 
@@ -711,7 +800,8 @@ Temporal을 독립 adapter에서 실제 Foundry-lite 업무 오케스트레이�
   `POST /api/operations/workflows/connector-sync/start`로 connector-sync workflow만 제공한다.
 - [~] workflow status endpoint: 현재는
   `GET /api/operations/workflows/{workflow_run_id}`로 product workflow run을 조회한다.
-- [ ] cancel/retry/reconcile action
+- [~] cancel/retry/reconcile action: cancel은 API/SDK로 active이고, retry/reconcile 전용
+  operator action은 future다.
 - [ ] progress, current activity, next retry, failure classification 표시
 
 ## 제안 명령
@@ -722,10 +812,14 @@ quality:temporal-engine-integration
 
 ## 제안 테스트
 
-- [ ] `test_connector_sync_workflow_commits_then_advances_cursor`
-- [ ] `test_worker_crash_mid_activity_replays_without_duplicate_commit`
-- [ ] `test_activity_completion_response_loss_reattaches_to_domain_result`
-- [ ] `test_cancel_cleans_staging_and_persists_cancel_evidence`
+- [x] `test_connector_sync_workflow_commits_then_advances_cursor`
+- [x] `test_worker_crash_mid_activity_replays_without_duplicate_commit`
+- [x] `test_product_workflow_reconciles_activity_completion_response_loss`
+- [x] `test_product_workflow_start_unknown_retry_preserves_persisted_definition_version`
+- [x] `test_product_workflow_cancel_cleans_running_workflow_and_audits`
+- [x] `test_workflow_adapter_contract_cancel_is_tenant_scoped`
+- [x] `test_product_workflow_cancel_rejects_mismatched_adapter_result`
+- [x] `test_product_workflow_cancel_rejects_terminal_non_cancelled_adapter_result`
 - [ ] `test_continue_as_new_preserves_business_idempotency`
 - [ ] `test_workflow_upgrade_replays_old_history`
 - [x] `test_product_workflow_operations_contract_starts_connector_sync_and_audits`
@@ -736,11 +830,13 @@ quality:temporal-engine-integration
 ## 완료 기준
 
 - [~] 최소 하나의 실제 product workflow가 Temporal을 통해 실행된다:
-  `ConnectorSyncWorkflow` control-plane 경로는 Temporal time-skipping worker로 실행된다.
+  `ConnectorSyncWorkflow` control-plane 경로는 Temporal time-skipping worker로 실행되고,
+  worker-bound connector activity는 Dataset ingest boundary로 commit evidence를 남긴다.
 - [~] 기존 local profile과 Temporal profile의 public contract가 같다:
   local/fake/Temporal profile이 `ProductWorkflowRun` 계약을 공유한다.
 - [~] Operations에서 Temporal 내부 로그 없이 조사할 수 있다:
-  workflow start audit event와 Operations audit detail link가 제공된다.
+  workflow start audit event, Operations audit detail link, workflow output data-plane
+  stages가 제공된다.
 
 ---
 
@@ -750,7 +846,15 @@ quality:temporal-engine-integration
 
 AI Agent와 Action Type이 CRM/ERP/Slack/캠페인 시스템을 안전하게 움직이도록 한다.
 
-> 현재 부분 구현 메모 (2026-06-26): S53의 fast slices는 기존
+공식 문서 cross-check: Palantir의 [Action webhook writeback 문서](https://palantir.com/docs/foundry/action-types/webhooks/)는
+writeback webhook이 object change 전에 실행되고, 외부 요청 실패 시 Foundry Ontology 변경을
+막지만 외부 요청 성공 뒤 Ontology 변경 실패 가능성은 남는다고 설명한다. 그래서 S53은
+외부 성공/로컬 실패를 숨기지 않는 `outcome_unknown`/`compensation_required` evidence와
+민감 writeback의 자동 복구 중단 evidence를 우선 구현한다. Data Connection의
+[webhooks overview](https://palantir.com/docs/foundry/data-connection/webhooks-overview/)도
+외부 시스템 요청이 Foundry source/credential 경계에 묶여야 함을 전제로 한다.
+
+> 현재 부분 구현 메모 (2026-07-01): S53의 fast slices는 기존
 > `mock_erp_simulator` before-commit writeback 경로에서 외부 응답 유실/timeout 성격의
 > 결과 미확인 상태를 first-class evidence로 고정한다. `quality:external-writeback`은
 > `action_runs.status="outcome_unknown"`, `action_writebacks.status="outcome_unknown"`,
@@ -770,14 +874,34 @@ AI Agent와 Action Type이 CRM/ERP/Slack/캠페인 시스템을 안전하게 움
 > object type이 action definition의 target과 다르면 idempotency key를 선점하거나
 > action/writeback/object edit/outbox를 남기기 전에 거부하고, 같은 property 이름을 가진
 > 다른 object type도 거부하며, 손상된 object record type id도 action run insert 전에 막는다.
-> ERP-specific connector packaging, background compensation worker 실행, reconciliation
-> queue UI, operator approval UI는 아직 future scope다.
+> `quality:writeback-reconciliation-worker`는 `externalWritebackUri`가 저장된 unresolved
+> writeback을 bounded worker tick으로 다시 조회하고, remote success가 확인되면 같은
+> reconciliation 경로로 local object mutation을 따라잡으며, `action.writeback.recovery_tick`
+> audit evidence와 JSON worker evidence를 남긴다. 민감 action parameter가 있는 unresolved
+> writeback은 bounded recovery가 remote lookup/local mutation을 진행하지 않고
+> `operator_approval_required`, `approvalRequired`, `approvalReason` evidence로 멈춘다.
+> `quality:action-writeback-approval-release`는 명시적 approval id/reason을 받은
+> `approve_action_writeback_recovery`, `POST /api/operations/reconciliation/{writeback_id}/approve-recovery`,
+> generated SDK `approveRecovery(...)`가 `action.writeback.recovery_approved` audit evidence를
+> 남기고 같은 reconciliation path로 민감 writeback을 닫는지 검증한다. Retryable row는
+> approval-recoverable 대상이 아니므로 fail-closed로 남긴다.
+> `quality:agent-vendor-egress`는 published manifest + agent allowlist에 들어간
+> `http.request` 같은 direct vendor/API tool도 `ToolBrokerService`가 executor 호출 전에
+> `direct_vendor_tool_denied`로 거부하고, Agent Runtime은 실패 run evidence로 닫으며,
+> Visual Builder는 같은 tool id를 release-ready draft로 보지 않는 것을 검증한다.
+> `quality:action-writeback-retryable`은 외부 시스템이 바뀌지 않은 before-commit 실패를
+> `retryable` action/writeback 상태로 남기고, 같은 idempotency key replay가 새 writeback을
+> 만들지 않으며, unresolved queue와 bounded recovery tick에서 자동 reconcile 없이
+> `retryable_external_not_changed` skip evidence로 보이는 것을 검증한다.
+> ERP-specific connector packaging, always-on/managed daemon 운영, reconciliation queue UI,
+> connector-backed vendor tool release policy, automatic retry/reissue policy, full operator
+> visual approval workflow/UI는 아직 future scope다.
 
 ## 상태 모델
 
 - [~] `SUCCEEDED`: 기존 before-commit mock writeback 성공 row와 action success path가 있다.
 - [~] `FAILED`: 기존 before-commit mock writeback 실패 row와 failed action run이 있다.
-- [ ] `RETRYABLE`
+- [~] `RETRYABLE`: S53 retryable slice에서 외부 시스템이 바뀌지 않은 before-commit 실패를 별도 상태로 남기고, bounded recovery가 자동 reconcile하지 않고 retry 후보 skip evidence로만 남긴다.
 - [~] `OUTCOME_UNKNOWN`: S53 첫 slice와 L8 real adapter slice에서 simulated response loss와 real external timeout을 별도 상태로 남긴다.
 - [~] `COMPENSATION_REQUIRED`: S53 두 번째 slice와 L8 real adapter slice에서 simulated 또는 real external success/local failure를 별도 상태로 남긴다.
 - [ ] `RECONCILING`
@@ -790,8 +914,11 @@ AI Agent와 Action Type이 CRM/ERP/Slack/캠페인 시스템을 안전하게 움
 - [~] `request_hash`: action request fingerprint를 writeback request/error detail에 남긴다.
 - [~] `remote_resource_id`: outcome-unknown 최초 기록은 unknown/null이며, operator reconciliation resolve 시 remote resource id를 기록한다.
 - [~] `attempts`: `action_writebacks.attempts`로 남긴다.
-- [~] `last_observed_status`: outcome-unknown response/error detail에는 `unknown`, reconciliation resolve 후에는 `succeeded`로 남긴다.
-- [~] `compensation_action_type`: 현재는 `mock_reverse_writeback` evidence를 남기며 실제 compensation worker는 future다.
+- [~] `last_observed_status`: retryable response/error detail에는 `not_changed`, outcome-unknown response/error detail에는 `unknown`, reconciliation resolve 후에는 `succeeded`로 남긴다.
+- [~] `external_system_changed`: retryable response/error detail에서 `false`로 남긴다.
+- [~] `retry_after_seconds`: retryable response/error detail에서 운영자가 볼 수 있는 bounded retry hint로 남긴다.
+- [~] `externalWritebackUri`: real adapter writeback request에 remote lookup target을 남기며, worker recovery tick이 이 값으로 원격 성공 여부를 다시 확인한다.
+- [~] `compensation_action_type`: 현재는 `mock_reverse_writeback` evidence를 남기며 ERP별 reverse/compensation executor는 future다.
 - [~] `reconciliation_deadline`: outcome-unknown evidence에 첫 reconciliation 기준 시각을 남긴다.
 - [~] unresolved queue item: `GET /api/operations/reconciliation/writebacks`와 generated SDK가 tenant-scoped unresolved writeback id/action id/status/deadline/remote evidence를 반환한다.
 - [~] before/after evidence: writeback request/response, action run error, reconciliation result, audit event가 남는다.
@@ -802,23 +929,45 @@ AI Agent와 Action Type이 CRM/ERP/Slack/캠페인 시스템을 안전하게 움
 - [~] timeout을 곧바로 실패로 처리하지 않는다:
   S53 첫 slice는 응답 유실/timeout 성격의 mock writeback을 `failed`가 아니라
   `outcome_unknown`으로 잠근다.
+- [~] 외부가 바뀌지 않은 실패를 retry 후보로 구분한다:
+  S53 retryable slice는 before-commit writeback이 외부 시스템을 변경하지 못한 증거가 있으면
+  `failed`나 `outcome_unknown`으로 뭉개지 않고 `retryable` 상태, `external_system_changed=false`,
+  `last_observed_status=not_changed` evidence를 남긴다. 단, automatic retry/reissue worker는
+  아직 future이므로 bounded recovery는 이 row를 `retryable_external_not_changed`로 skip한다.
 - [~] remote lookup/reconciliation path를 제공한다:
   현재는 operator가 확인한 remote success payload 또는 L8 real adapter `remote_lookup`으로
   `POST /api/operations/reconciliation/{writeback_id}/resolve`와 generated SDK를 통해
   writeback/action/object edit을 한 transaction에서 닫는 경로를 제공한다.
 - [~] compensation action은 idempotent하다:
   현재는 compensation-required action replay가 같은 idempotency key에서 두 번째
-  writeback을 만들지 않는 것을 검증한다. 실제 compensation worker idempotency는 future다.
+  writeback을 만들지 않는 것을 검증한다. Bounded worker recovery도 기존 writeback row를
+  다시 확인하므로 새 writeback을 만들지 않는다. ERP별 compensation action executor는 future다.
+- [~] bounded worker recovery path를 제공한다:
+  `worker:writeback-reconciliation`과 `foundry.operations.recover_action_writebacks(...)`가
+  unresolved writeback batch를 읽고 `externalWritebackUri`가 있는 row만 remote lookup으로
+  reconcile한다. URI가 없으면 fail-closed skip evidence를 남기고, row 하나가 실패해도 batch
+  audit summary에 `failed` item을 남긴다. 민감 action parameter가 포함된 row는 자동
+  lookup/mutation 전에 `operator_approval_required`로 skip되고 approval evidence를 남긴다.
+  명시적 approval id/reason이 제출되면 backend/API/SDK approval-release path가 같은
+  reconciliation transaction으로 복구하고 `action.writeback.recovery_approved` audit을 남긴다.
 - [~] action은 선언된 target object type 밖으로 실행되지 않는다:
   현재는 target object type mismatch, 같은 property 이름을 가진 다른 object type 요청,
   그리고 손상된 object record type id를 action run 생성 전 거부한다.
-- [ ] high-risk action에는 human approval을 요구한다.
-- [ ] AI Agent가 직접 vendor API를 호출하지 못하게 한다.
+- [~] high-risk action에는 human approval을 요구한다:
+  현재는 bounded worker auto-recovery가 민감 action parameter writeback을 approval-required로
+  멈추는 backend gate만 있다. 실제 승인 요청/승인 후 재개 workflow와 UI는 future다.
+- [~] AI Agent가 직접 vendor API를 호출하지 못하게 한다:
+  현재는 `ToolBrokerService`가 `http.*`, `webhook.*`, `vendor.*`, 주요 SaaS/vendor prefix와
+  `shell_execute`/`generic_sql` 같은 generic executor tool id를 published manifest와
+  agent allowlist에 있어도 모델 tool list/system prompt에서 제외하고 executor 호출 전에 거부한다.
+  Agent Runtime 실패 evidence와 Visual Builder draft validation도 같은 중앙 규칙을 사용한다. ERP별 connector-backed tool
+  packaging과 visual approval workflow는 future다.
 
 ## API/UI
 
 - [~] reconciliation queue: backend/API/SDK queue는 active이며 persistent queue UI는 future다.
-- [ ] compensation approval
+- [~] compensation approval: backend auto-recovery approval-required evidence는 active이고,
+  full approval action/workflow/UI는 future다.
 - [ ] remote/local state 비교
 - [ ] operator action history
 
@@ -826,19 +975,35 @@ AI Agent와 Action Type이 CRM/ERP/Slack/캠페인 시스템을 안전하게 움
 
 ```text
 quality:external-writeback
+quality:action-writeback-retryable
+quality:action-writeback-approval-release
 quality:saga-reconciliation
+quality:writeback-reconciliation-worker
+quality:agent-vendor-egress
 ```
 
-현재 활성화된 명령은 `quality:external-writeback`, `quality:saga-reconciliation`, `quality:action-writeback-live`이다.
+현재 활성화된 명령은 `quality:external-writeback`, `quality:action-writeback-retryable`, `quality:action-writeback-approval-release`, `quality:saga-reconciliation`, `quality:action-writeback-live`, `quality:writeback-reconciliation-worker`, `quality:agent-vendor-egress`이다.
 `quality:saga-reconciliation`은 compensation-required first-class state,
 same-key replay proof, operator-provided remote-success resolve, 그리고 concurrent
-reconciliation winner, unresolved backend/API/SDK queue, sensitive writeback audit masking을 검증한다. 실제 vendor SDK packaging,
-autonomous compensation worker, queue UI, approval UI는 아직 future scope다.
+reconciliation winner, unresolved backend/API/SDK queue, sensitive writeback audit masking,
+bounded recovery approval-required skip을 검증한다. `quality:writeback-reconciliation-worker`는
+bounded worker recovery, skip evidence, recovery audit, worker evidence JSON을 검증한다.
+`quality:action-writeback-retryable`은 retryable 상태와 queue/recovery skip evidence를 검증한다.
+`quality:action-writeback-approval-release`는 approval-required 상태였던 민감 writeback이
+명시적 approval id/reason과 audit evidence를 거친 뒤에만 recovery되는지 검증하고, retryable
+writeback은 approval-recoverable 대상이 아니도록 차단한다.
+`quality:agent-vendor-egress`는 direct vendor/API tool id가 ToolBroker/Agent Runtime/Visual
+Builder 경계를 통과하지 못하는지 검증한다. 실제 vendor SDK packaging, connector-backed
+vendor tool release policy, automatic retry/reissue worker, always-on/managed compensation daemon,
+queue UI, visual approval workflow/UI는 아직 future scope다.
 
 ## 제안 테스트
 
 - [x] `test_external_success_response_lost_becomes_outcome_unknown`
 - [x] `test_outcome_unknown_is_not_blindly_retried`
+- [x] `test_retryable_writeback_failure_is_visible_without_object_edit`
+- [x] `test_action_repository_contract_persists_retryable_writeback_fields`
+- [x] `test_recovery_marks_retryable_writeback_as_retry_candidate`
 - [x] `test_external_success_local_failure_requires_compensation`
 - [x] `test_compensation_is_idempotent`
 - [x] `test_reconciliation_resolves_remote_success`
@@ -847,18 +1012,32 @@ autonomous compensation worker, queue UI, approval UI는 아직 future scope다.
 - [x] `test_action_rejects_target_object_type_mismatch_before_side_effects`
 - [x] `test_action_rejects_same_property_target_type_mismatch`
 - [x] `test_action_rejects_corrupt_target_record_type_before_action_run`
+- [x] `test_bounded_writeback_recovery_resolves_outcome_unknown_and_audits`
+- [x] `test_bounded_recovery_requires_operator_approval_for_sensitive_writeback`
+- [x] `test_worker_recovers_compensation_required_and_writes_evidence`
+- [x] `test_recovery_skips_unresolved_writeback_without_external_uri`
+- [x] `test_writeback_reconciliation_worker_config_from_env`
+- [x] `test_tool_broker_rejects_direct_vendor_api_tool_even_when_manifest_published`
+- [x] `test_agent_runtime_rejects_direct_vendor_api_tool_without_executor`
+- [x] `test_visual_builder_blocks_direct_vendor_tool_ids`
 
 ## 완료 기준
 
 - [~] 외부 시스템과 local state divergence가 first-class 상태로 보인다:
-  현재는 outcome-unknown 및 compensation-required divergence가 action run/writeback/audit
-  evidence로 보인다.
+  현재는 retryable, outcome-unknown 및 compensation-required 상태가 action run/writeback/audit
+  evidence로 보인다. retryable은 외부가 바뀌지 않은 실패로만 표시되며 자동 재발행은 future다.
 - [~] operator가 추측 없이 reconcile/compensate할 수 있다:
-  remote success reconciliation resolve는 가능하다. 실제 compensation worker와 approval UI는 future다.
+  remote success reconciliation resolve와 bounded worker recovery는 가능하다. 민감 writeback은
+  bounded worker가 approval-required로 멈추고, 명시적 approval id/reason이 있으면 backend
+  approval-release path로 복구된다. ERP-specific compensation executor, always-on
+  managed daemon, visual approval workflow/UI는 future다.
 - [~] action이 잘못된 aggregate에 적용되지 않는다:
   target object type invariant와 corrupt record type-id guard는 증명됐다. DB-level FK/constraint
   강화와 실제 vendor policy approval은 future다.
-- [ ] AI Agent 권한은 Action Type과 approval policy로 제한된다.
+- [~] AI Agent 권한은 Action Type과 approval policy로 제한된다:
+  direct vendor/API/generic executor tool은 ToolBroker와 Visual Builder에서 fail-closed로 막힌다.
+  Action proposal/human review path는 active proof가 있으나, ERP-specific connector-backed
+  action policy와 visual approval workflow/UI는 future다.
 
 ---
 
@@ -868,12 +1047,13 @@ autonomous compensation worker, queue UI, approval UI는 아직 future scope다.
 
 데이터 품질을 코드 안의 개별 validation이 아니라 versioned product contract로 관리한다.
 
-> 현재 부분 구현 메모 (2026-06-19): S54의 첫 slices는 완전한
-> `DataContract` CRUD나 QUARANTINE 정책 엔진이 아니라,
+> 현재 부분 구현 메모 (2026-07-01): S54의 slices는 완전한
+> `DataContract` 정책 엔진이 아니라,
 > 현재 dataset quality check 결과가 어떤 `dataset_schemas` row/version과 어떤 staged
 > candidate fingerprint를 기준으로 검증됐는지 고정한다. `dataset_check_results`는
 > `checked_manifest_hash`, `validated_against_schema_version_id`,
-> `validated_against_schema_version`을 저장하며, `quality:data-contracts`는 dataset
+> `validated_against_schema_version`, 그리고 활성 계약이 있는 경우
+> `data_contract_version_id`를 저장하며, `quality:data-contracts`는 dataset
 > commit 경로와 repository contract가 이 값을 잃지 않는지 검증한다. 같은 gate는
 > 이후 같은 dataset에 새 schema version이 생겨도 과거 check result가 당시 검증한
 > schema row/version에 계속 pinned되는지 검증한다. 또한 final
@@ -894,22 +1074,31 @@ autonomous compensation worker, queue UI, approval UI는 아직 future scope다.
 > `client.datasets.qualityResults.list(...)`는 persisted commit-time quality result history를 dataset 단위로 노출하고,
 > `GET /api/datasets/{namespace}/{name}/quality-contract/results/summary`와
 > `client.datasets.qualityResults.summary(...)`는 같은 persisted result를 status/check-type count와 latest evidence로 요약한다.
-> Full versioned DataContract object CRUD,
-> owner/policy UI, dedicated failed-row sample UI, trend UI, owner notification,
+> 이번 slice는 `dataset_quality_contract_versions`를 추가해 default DataContract version
+> `create/list/get/activate` API/SDK를 제공하고, 활성 version이 있으면 이후 commit-time check가
+> live check row가 아니라 version snapshot을 기준으로 실행되며 Operations quality report/history에
+> contract version id를 남긴다. Delete/update-in-place 없는 immutable version 방식이며,
+> 이번 policy slice는 `accepted_values` check를 추가해 상태/카테고리 값이 허용 목록 밖이면
+> `BLOCK_COMMIT`로 막고, 활성 DataContract version snapshot이 live check 변경보다 우선한다는
+> 증거를 남긴다. Custom contract key activation, owner/policy UI, referential/freshness/volume 같은
+> 나머지 policy surface, dedicated failed-row sample UI, trend UI, owner notification,
 > production DB schema race proof는 아직 future scope다.
 
 ## 모델
 
-- [~] `DataContract`: 현재는 full contract object/table이 아니라 persisted
-  `dataset_checks` check-definition을 API/SDK로 create/list/update하고 commit validation에 적용한다.
-- [~] contract version: 현재는 별도 DataContract version이 아니라
-  `dataset_schemas.id`/`version` reference를 check result에 저장하고, run 이후 새
-  schema version이 생겨도 과거 check result가 당시 reference에 pinned되는 증거를 남긴다.
-- [ ] owner
+- [~] `DataContract`: `dataset_quality_contract_versions`가 default 계약 version을 immutable snapshot으로 저장하고,
+  `GET/POST /quality-contract/contracts`, `GET/POST /contracts/{id}/activate`, generated SDK
+  `client.datasets.qualityContracts.list/create/get/activate(...)`로 노출한다. Full multi-contract policy
+  surface와 delete/update-in-place는 future다.
+- [~] contract version: 활성 default DataContract version이 있으면 commit-time check는 live check row가 아니라
+  `checks_snapshot`을 기준으로 실행되고, `dataset_check_results.data_contract_version_id`와 Operations
+  quality report/history가 같은 version id를 노출한다.
+- [~] owner: contract version row는 `owner_user_id`를 저장하지만 owner notification/workflow는 future다.
 - [~] schema: dataset schema registry row를 기준으로 check result reference를 남긴다.
 - [ ] primary key
 - [ ] nullability
-- [ ] accepted values
+- [x] accepted values: `accepted_values` check가 활성 DataContract version snapshot에 pinned되어
+  허용 목록 밖 값은 commit-time `BLOCK_COMMIT`로 막힌다.
 - [ ] referential constraints
 - [ ] freshness
 - [ ] expected volume
@@ -933,9 +1122,9 @@ autonomous compensation worker, queue UI, approval UI는 아직 future scope다.
 
 ## API/UI
 
-- [~] contract CRUD/validate: 현재는 check-definition create/list/update API/SDK와 subsequent
-  commit validation enforcement까지다. get/delete, versioned DataContract object,
-  owner workflow는 future다.
+- [~] contract CRUD/validate: check-definition create/list/update API/SDK와 subsequent
+  commit validation enforcement에 더해 default DataContract version create/list/get/activate API/SDK가 active다.
+  delete, custom contract-key activation, full owner workflow는 future다.
 - [~] candidate quality report: Operations run detail의 `quality` 섹션에서
   transaction별 summary/schema reference/result/failed row sample을 확인한다.
 - [~] failed row sample: Operations run detail의 `quality.failedRowSamples`가
@@ -953,7 +1142,7 @@ quality:data-quality-runtime
 ```
 
 현재 활성화된 명령은 `quality:data-contracts`이다. `quality:data-quality-runtime`은
-owner notification, dedicated failed-row sample UI, versioned DataContract object, full
+owner notification, dedicated failed-row sample UI, custom contract-key policy, full
 DataContract policy surface 같은 후속 runtime policy slice에서 활성화한다.
 
 ## 제안 테스트
@@ -968,7 +1157,12 @@ DataContract policy surface 같은 후속 runtime policy slice에서 활성화�
 - [x] `test_updated_quality_contract_check_controls_later_commit`
 - [x] `test_quality_result_history_lists_dataset_commit_results`
 - [x] `test_check_result_summary_counts_are_tenant_dataset_scoped`
-- [x] `test_api_dataset_object_action_and_metrics_smoke` covers quality contract check create/list/update, quality result history API, and quality result summary API.
+- [x] `test_active_data_contract_version_pins_check_snapshot`
+- [x] `test_active_data_contract_version_pins_accepted_values_policy`
+- [x] `test_contract_versions_round_trip_and_activate_one_winner`
+- [x] `test_check_result_can_reference_contract_version`
+- [x] `test_latest_schema_returns_highest_row`
+- [x] `test_api_dataset_object_action_and_metrics_smoke` covers quality contract check create/list/update, quality contract version create/list/get/activate, quality result history API, and quality result summary API.
 - [x] `test_contract_version_is_pinned_to_run`
 - [x] `test_operations_run_detail_exposes_candidate_quality_report`
 - [x] `test_operations_run_detail_includes_failed_row_sample_for_quarantine`
@@ -977,11 +1171,12 @@ DataContract policy surface 같은 후속 runtime policy slice에서 활성화�
 
 ## 완료 기준
 
-- [~] 데이터셋마다 품질 기대치와 owner가 보인다: 현재는 schema reference evidence만
-  남기고 Operations run detail에서 transaction별 품질 리포트와 실패 행 샘플을 볼 수 있으며,
-  owner/contract UI는 future다.
+- [~] 데이터셋마다 품질 기대치와 owner가 보인다: 현재는 default contract version의 owner_user_id,
+  schema reference, check snapshot, active status가 API/SDK에 보이고, Operations run detail에서
+  transaction별 품질 리포트/계약 버전 id/실패 행 샘플을 볼 수 있다. owner/contract UI는 future다.
 - [~] 품질 실패 정책이 명시적이며 조용히 유실하지 않는다: PASS/WARN/BLOCK_COMMIT와
-  row-level QUARANTINE/failed row sample evidence는 active이나 full DataContract policy surface는 future다.
+  row-level QUARANTINE/failed row sample evidence, accepted-values commit blocking은 active이나
+  remaining DataContract policy surface는 future다.
 - [ ] downstream은 contract-failed version을 정상으로 소비하지 않는다.
 
 ---
@@ -1052,7 +1247,14 @@ DataContract policy surface 같은 후속 runtime policy slice에서 활성화�
   optional parameter 추가나 required → optional 완화는 warning으로 남긴다.
 - [~] Object reindex plan: object backing 또는 dataset-backed property mapping 변경은
   deterministic `object_reindex:<ObjectType>:<hash>` key와 changedFields를 audit/outbox
-  payload의 `ontologyMigration.objectReindexPlan`에 남긴다. 실제 worker 실행은 future다.
+  payload의 `ontologyMigration.objectReindexPlan`에 남기고, `foundry.objects.reindex_ontology_migration(...)`,
+  `POST /api/operations/index/{object_type}/ontology-reindex`, generated
+  `client.operations.index.replayOntologyReindex(...)`가 해당 key를 bounded object index run으로 실행한다.
+  성공하면 `ontology.object_reindexed` audit/outbox evidence와 `object_reindex_complete` serving contract
+  completion을 남긴다. Mapping 변경 warning은 이전/다음 source column을 evidence로 남기며,
+  additive dataset schema evolution으로 새 column이 들어온 뒤 ontology property mapping을 새 column으로
+  옮기고 reindex하면 latest dataset version의 새 column 값이 object serving과 property lineage에 반영된다.
+  Old column drop/rename remap executor와 full migration workflow orchestration은 future다.
 - [~] generated SDK compatibility/versioning: blocking API shape change는
   `sdkCompatibility="major_version_required"`로 노출되고 `quality:ontology-migrations`가
   generated SDK drift check와 함께 실행된다. release/version bump 자동화는 future다.
@@ -1091,9 +1293,11 @@ quality:ontology-migrations
 - [x] `test_backfill_resumes_idempotently`
 - [x] `test_schema_evolution_widening_is_visible_in_transaction_metadata`
 - [x] `test_contract_phase_rejects_old_writer`
-- [ ] `test_ontology_mapping_migrates_with_dataset_schema`
+- [x] `test_ontology_mapping_migrates_with_dataset_schema`
 - [x] `test_sdk_breaking_change_requires_major_version`
 - [x] `test_ontology_migration_apply_blocks_required_action_parameter`
+- [x] `test_ontology_migration_reindex_executor_completes_required_object_reindex`
+- [x] `test_ontology_repository_contract_updates_object_type_config`
 - [x] `test_failed_migration_leaves_operator_evidence`
 
 ## 완료 기준
@@ -1104,8 +1308,11 @@ quality:ontology-migrations
 - [~] ontology/schema 변경의 영향과 backfill이 merge 전에 보인다: Dataset schema
   evolution은 `quality:schema-evolution`과 transaction metadata로 일부 보이고,
   ontology migration plan은 `quality:ontology-migrations`와 activation-time
-  audit/outbox evidence로 일부 보인다. 실제 ontology migration executor,
-  object reindex worker 실행, backfill worker/progress API는 future다.
+  audit/outbox evidence로 일부 보이며, bounded object reindex executor는
+  `object_reindex:*` key를 실제 index run으로 실행하고 completion evidence를 남긴다. Additive
+  dataset schema evolution과 함께 ontology property mapping을 새 source column으로 옮기는 경로도
+  property lineage와 latest dataset version 기준으로 증명됐다.
+  object/link remap executor, full migration workflow orchestration, backfill worker/progress API는 future다.
 - [~] old/new app version 공존 구간이 테스트된다: 현재는 expand-phase static
   compatibility gate, `release_compatibility="old_and_new_app"` metadata guard,
   contract-phase fail-closed proof가 active이고, 실제 배포 중 old/new app runtime
@@ -1126,11 +1333,12 @@ quality:ontology-migrations
 ### Flow Interruption
 
 - [~] expected cadence: versioned detector config의 `expectedCadenceSeconds`로
-  현재 runtime snapshot과 비교한다. 저장형 incident scheduler는 future다.
+  현재 runtime snapshot과 비교하고, `detect-and-record` 실행 시 durable
+  `observability_incidents` row로 저장한다. 상시 scheduler는 future다.
 - [~] last successful event/version: `RuntimeRunSnapshot`에서 성공 row와
   version/resource reference를 읽어 evidence link를 만든다.
 - [~] missing-data alert: `FAILED` run이 없어도 마지막 성공 이후 cadence를 넘으면
-  active incident를 만든다.
+  active detector incident를 만들고 저장형 실행에서는 `open` incident로 upsert한다.
 
 ### Lag
 
@@ -1164,12 +1372,21 @@ quality:ontology-migrations
   delivery/routing은 future다.
 - [~] seasonality/baseline
 - [~] alert evidence links
+- [~] stored incident lifecycle: `open → acknowledged → resolved` 상태, occurrence count,
+  reopen, audit/outbox evidence를 backend/API/SDK로 검증한다. notification delivery와
+  dashboard timeline은 future다.
 
 ## API/UI
 
 - [ ] SLO dashboard
 - [~] active incidents: `POST /api/operations/observability/detect`와 generated SDK
   `operations.observability.detect(...)`가 read-only report를 반환한다.
+- [~] stored incidents: `POST /api/operations/observability/detect-and-record`,
+  `GET /api/operations/observability/incidents`,
+  `POST /api/operations/observability/incidents/{incident_id}/acknowledge`,
+  `POST /api/operations/observability/incidents/{incident_id}/resolve`와 generated SDK
+  `operations.observability.detectAndRecord/listIncidents/acknowledgeIncident/resolveIncident(...)`가
+  저장형 lifecycle을 제공한다.
 - [ ] source health timeline
 - [~] run/dataset/object drill-down: incident evidence link가
   `/api/operations/runs/{run_type}/{run_id}` 형태의 Operations path를 담는다.
@@ -1193,16 +1410,21 @@ quality:slo-contracts
 - [x] `test_alert_dedup_prevents_alarm_storm`
 - [x] `test_detector_failure_does_not_mutate_source_of_truth`
 - [x] `test_api_observability_detect_returns_active_incident_report`
+- [x] `test_observability_recorded_incident_lifecycle_reopens_after_resolution`
+- [x] `test_runtime_repository_contract_observability_incident_lifecycle`
+- [x] `test_api_observability_incident_lifecycle_routes`
 - [x] `test_observability_detector_gate_runs_after_ontology_migrations`
 
 ## 완료 기준
 
 - [~] “FAILED run이 없음에도 데이터가 멈춘 상태”를 탐지한다: read-only
-  detector report로 증명된다. 저장형 incident lifecycle은 future다.
+  detector report와 저장형 incident lifecycle로 증명된다. 상시 scheduler와
+  notification delivery는 future다.
 - [~] alert에서 관련 run/dataset/worker로 바로 이동할 수 있다: 현재는
   Operations run-detail API path evidence link까지 제공한다. UI timeline은 future다.
 - [~] threshold와 owner가 versioned configuration으로 남는다: detector config
-  payload의 `configVersion`, `owner`, threshold fields로 증명된다. 영구 config registry는 future다.
+  payload의 `configVersion`, `owner`, threshold fields와 저장된 incident row로 증명된다.
+  영구 config registry는 future다.
 
 ---
 
@@ -1215,11 +1437,19 @@ PostgreSQL, S3/Iceberg, Object Store, outbox/action 상태를 일관된 시점�
 ## Backup manifest
 
 - [~] DB backup ID/time: `POST /api/operations/backup-restore/preflight` report가
-  `backupId`와 `generatedAt`을 남긴다. 실제 DB backup artifact 생성은 future다.
+  `backupId`와 `generatedAt`을 남기고, `POST /api/operations/backup-restore/artifacts`가
+  ready preflight를 immutable local backup artifact JSON으로 저장해 content hash receipt를
+  반환한다. 외부 PostgreSQL dump/remote object-store backup orchestration은 future다.
 - [~] dataset committed version inventory: tenant의 active dataset과 committed
   dataset version을 전수 inventory로 만든다.
 - [~] S3/Iceberg manifest inventory: 현재 storage adapter가 제공하는 committed
-  manifest와 data file hash/size를 검증한다. 별도 backup manifest artifact는 future다.
+  manifest와 data file hash/size를 검증하고, ready report는 backup artifact payload에
+  저장된다. 원격 백업 저장소와 cross-region artifact 복제는 future다.
+- [~] verified artifact restore execution: `execute_backup_artifact_restore`가
+  immutable artifact hash와 source dataset version의 manifest/data file byte/hash를
+  다시 검증한 뒤, sealed source files를 새 snapshot dataset version으로 복사해 latest
+  serving head로 커밋한다. 과거 version row를 삭제하거나 덮어쓰지는 않으며, 외부
+  PostgreSQL dump orchestration과 production restore packaging은 future다.
 - [~] active object index pointers: runtime index run에서 object type을 찾아 현재
   serving `activeIndexVersion`을 report에 남긴다.
 - [~] action/outbox/audit/materialization high-watermarks: action run, action
@@ -1277,21 +1507,32 @@ quality:backup-restore
 - [x] `test_restore_retry_is_idempotent`
 - [x] `test_restore_failure_never_opens_serving_traffic`
 - [x] `test_restore_mode_blocks_platform_write_traffic`
+- [x] `test_backup_restore_create_artifact_writes_receipt_and_audit`
+- [x] `test_backup_restore_create_artifact_fails_closed_when_preflight_is_blocked`
+- [x] `test_local_backup_artifact_store_writes_immutable_receipt`
+- [x] `test_local_backup_artifact_store_replays_same_artifact_without_overwrite`
+- [x] `test_local_backup_artifact_store_rejects_same_backup_id_with_different_payload`
+- [x] `test_backup_restore_artifact_restore_validates_and_runs_closed_loop`
+- [x] `test_backup_restore_artifact_restore_blocks_when_serving_head_moved`
+- [x] `test_backup_restore_artifact_execute_restores_historical_dataset_head`
+- [x] `test_backup_restore_artifact_execute_fails_closed_when_source_storage_is_missing`
 
 ## 완료 기준
 
 - [~] DB만 또는 storage만 복구한 상태를 serving하지 않는다: 현재는 preflight가
   DB/storage mismatch를 `blocked`로 보고하고, restore mode status가 serving traffic을
-  열지 않는 상태를 남기며 core service write path를 restore mode 중 차단한다. 별도
-  edge traffic fencing과 Kubernetes packaging은 future다.
+  열지 않는 상태를 남기며 core service write path를 restore mode 중 차단한다. ready
+  preflight만 immutable backup artifact로 저장되며 blocked preflight는 artifact 생성을
+  fail-closed로 거부한다. 별도 edge traffic fencing과 Kubernetes packaging은 future다.
 - [~] 외부 side effect 중복 전송을 방지한다: 현재는 outbox/action high-watermark와
   publisher pause 조건을 report에 남기고, restore mode 중 outbox retry/reprocess 진입을
   차단하며, post-restore 폐루프 검증 후 운영자 승인 상태에서만 현재 retry/reprocess
   entrypoint를 다시 연다. 실제 publisher daemon pause/resume executor는 future다.
-- [~] 복구 후 데이터셋→오브젝트→액션 폐루프 smoke가 통과한다: 현재는 복구 후 상태를
+- [~] 복구 후 데이터셋→오브젝트→액션 폐루프 smoke가 통과한다: 현재는 검증된
+  artifact source files를 새 snapshot dataset version으로 복원하고, 복구 후 상태를
   흉내낸 runtime snapshot에서 dataset inventory, object index pointer, action run,
-  materialization run 증거가 모두 있어야 승인된다. 실제 backup artifact restore executor가
-  smoke를 자동 실행하는 것은 future다.
+  materialization run 증거가 모두 있어야 승인된다. 외부 PostgreSQL dump 복구, full
+  production restore packaging, 그리고 executor가 smoke를 자동 실행하는 것은 future다.
 
 ---
 
@@ -1623,6 +1864,43 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
   `requiresIdempotencyKey` mutation required-key header wiring, missing-key fail-fast,
   `actionLockKey`, `createInFlightActionLock`가 유지된다. Retry UX는 한 사용자 intent에서 만든
   같은 idempotency key를 재사용해야 하며, 동일 click 중복 잠금 버튼 UX는 future다.
+- [x] TypeScript ObjectSet DSL: `osdk(Order).where({ status: { $eq: "PENDING" } })`,
+  `orderBy({ amount: "desc" })`, `$pageSize`/`$pageToken` aliases가 현재 backend
+  `filter`/`orderBy` request shape로 정규화된다. Unknown property, unsupported operator,
+  invalid order field는 network I/O 전에 `FoundryLiteApiError`로 fail-fast된다. `aggregate(...)`
+  는 현재 `$count` metric과 `groupBy: { property: "exact" }`를 기존 Object Query 경계 위에서
+  bounded page scan으로 계산하며, groupBy property도 query `orderBy` 검증 경계를 타게 해
+  permission/masking/tenant boundary를 우회하지 않는다. Distinct/sum/avg 같은 richer aggregate,
+  server-side scalable aggregate, richer link traversal DSL, broader generated Python type system and
+  external Python package publishing은 future다.
+- [x] TypeScript instance relation DSL: generated object instances now expose `$link`
+  and `$actions` handles. `order.$link.customer.fetchPage(...)` maps the generated
+  alias to the current `OrderCustomer` link API and reads target objects through the
+  object read boundary. `order.$actions.approveOrder.validateAction(params)` validates
+  the same permission, target version, parameter, and precondition rules without creating
+  an action run, while `order.$actions.approveOrder.applyAction(params, { idempotencyKey, onCacheRefresh })`
+  binds the source object id/version before applying `ApproveOrder` and returns edit/cache-refresh
+  hints. Current link fetch uses the bounded object-link endpoint rather than true cursor
+  pagination; multi-hop/batched link traversal, full visual validation/cache-refresh UX,
+  broader generated Python type system, and external Python package publishing remain future.
+- [x] Python OSDK mirror 1차: `foundry_lite.osdk`가 `Order`, `Customer`,
+  `ApproveOrder` resource를 노출하고 `FoundryLite.__call__`이 이를 받아
+  `foundry(Order).where(status={"eq": "PENDING"}).order_by(amount="desc").fetch_page(...)`,
+  `foundry(ApproveOrder).validate_action(...)`,
+  `foundry(ApproveOrder).apply_action(..., idempotency_key=...)`,
+  `foundry(Customer).aggregate({"select": {"count": {"$count": "unordered"}}, "group_by": {"region": "exact"}})`,
+  `order.links.customer.fetch_page(...)`, `order.actions.approve_order.apply_action(...)`
+  흐름을 지원한다. 이 mirror는 기존 object/action facade만 호출하므로 permission,
+  masking, tenant, optimistic concurrency, action idempotency boundary를 우회하지 않는다.
+  Python aggregate도 현재 `$count` + exact groupBy만 지원하고 기존 Object Query 경계를 타며,
+  TS/Python SDK package manifest와 live-catalog drift report/assert gate는 current다. Developer
+  Console-lite app/scope registry, JWT claim 기반 app/resource scope enforcement, local TS/Python
+  SDK version/artifact release registry with channels/compatibility windows/download tokens, local OAuth
+  authorization-code/PKCE/token/refresh/revoke lifecycle, and ObjectSet WebSocket `.subscribe(...)` with
+  SSE fallback are current backend/API/SDK proof. External NPM/PyPI publishing, external IdP
+  introspection/refresh-token revocation, visual Developer Console/login/session UI, query/function SDK,
+  exactly-once subscription delivery, Palantir-grade external package lifecycle/deployment compatibility windows,
+  and full link pagination remain future.
 - [x] expected object version helper
 - [x] cursor pagination helper: `collectCursorPages`가 cursor 기반 API를 안전하게 끝까지
   수집한다. visual pagination/infinite scroll UX는 future다.
@@ -1635,8 +1913,8 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
 - [x] SDK regeneration CI 유지
 - [~] frontend API compatibility test: `quality:frontend-backend-surface`,
   `quality:sdk-request-contract`, `quality:frontend-foundation`이 route/helper -> named SDK ->
-  proofClass -> proof test -> operator evidence matrix, 116개 browser SDK route surface
-  method/path/query/header/body, typed error metadata, 25개 SDK helper runtime behavior,
+  proofClass -> proof test -> operator evidence matrix, 160개 browser SDK route surface
+  method/path/query/header/body, typed error metadata, 28개 SDK helper runtime behavior,
   Web Operations named-SDK-only 계약을 검증한다. Full browser compatibility matrix는 future다.
 
 ## 테스트
@@ -1757,7 +2035,7 @@ AI/분석 결과를 검토하고 허용된 Action Type으로 실제 업무를 �
 > required operator next actions를 한 read model과 재개 전 검증 evidence로 묶는
 > backend/API/SDK 계약이다. `quality:operations-recovery`와
 > `tests/sdk/request_contract.mjs`가 이 route/method를 named SDK-only surface로 검증한다.
-> run console 화면, recovery UI, alert dashboard, workflow cancel/reconcile executor는 아직 future scope다.
+> run console 화면, recovery UI, alert dashboard, workflow retry/reconcile executor는 아직 future scope다.
 
 ## Run Console
 
@@ -1775,7 +2053,8 @@ AI/분석 결과를 검토하고 허용된 Action Type으로 실제 업무를 �
 - [ ] index replay
 - [ ] Record DLQ retry
 - [ ] Outbox DLQ retry
-- [ ] workflow cancel/reconcile
+- [~] workflow cancel/reconcile: workflow cancel backend/API/SDK는 S52에서 active이고,
+  recovery console의 retry/reconcile executor는 future다.
 - [ ] compaction/maintenance run
 - [~] restore mode status / recovery overview backend/API/SDK
 
@@ -1972,9 +2251,9 @@ named SDK -> proofClass -> proof test -> operator evidence로 고정한다. `qua
 FastAPI route가 분류되지 않았거나, frontend-consumable route에 generated SDK method나
 request-contract proof가 없거나, SDK helper에 `sdkHelpers` row/export/operator-evidence/helper
 proof가 없거나, Web Operations가 다시 raw `/api/...` path를 직접 조립하면 실패한다.
-`quality:sdk-request-contract`는 실제 browser SDK를 import해 116개 frontend route surface의
+`quality:sdk-request-contract`는 실제 browser SDK를 import해 160개 frontend route surface의
 method/path/query/header/body, request-id/context header, idempotency header, typed error metadata를
-fake fetch로 검증하고, 25개 `SDK_CLIENT_SURFACE.helpers`의 런타임 동작도 함께 증명한다. 즉 S62-S64 화면을
+fake fetch로 검증하고, 28개 `SDK_CLIENT_SURFACE.helpers`의 런타임 동작도 함께 증명한다. 즉 S62-S64 화면을
 올리기 전, 현재 사용 가능한 backend surface는 named SDK-only와 request-contract로 잠긴다.
 React helper surface는 live ontology catalog workspace model, cursor/list screen state, start-and-poll job state,
 그리고 admin console launch/preflight/task-plan model을 제공해 generated static type과 dynamic-only ontology row,
@@ -1988,7 +2267,7 @@ typechecked recipe builder로 제공하며, `quality:frontend-backend-surface`�
 S63의 현재 backend/API/SDK slice는 `client.insights.reviews.list/create/get/assign/decide`와
 `quality:insight-review`로 create idempotency, assignment, terminal decision conflict, and audit
 evidence를 잠근다. 다만 full login/session, screen-specific retry/backoff copy, visual cursor
-pagination components, server push route implementation, visual streaming timeline UX, duplicate-click button state UX, stale-version compare/refresh UI,
+pagination components, broader visual server-push timeline components, visual streaming timeline UX, duplicate-click button state UX, stale-version compare/refresh UI,
 permission-denied masking UX, direct migration execution, long-running worker daemon control,
 infra bootstrap browser execution, full catalog-driven S62-S64 workspace UX, S63 evidence panel UI,
 and action execution orchestration은 아직 후속 product slice다.

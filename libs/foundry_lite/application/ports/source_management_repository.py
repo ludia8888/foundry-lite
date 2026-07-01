@@ -1,3 +1,5 @@
+"""Application port contract for source management repository."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

@@ -1,3 +1,5 @@
+"""Thin facade entrypoints for materialization runner workflows."""
+
 from __future__ import annotations
 
 from foundry_lite.application.ports import MaterializationReplayResult

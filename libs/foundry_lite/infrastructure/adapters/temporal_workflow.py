@@ -27,6 +27,7 @@ time-skipping ratchet tests, and thin blocking wrappers for the sync port. The
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -104,6 +105,13 @@ class TemporalWorkflowAdapter:
                     True,
                     "Temporal service was unavailable during lookup.",
                 ),
+                AdapterFailureMode("cancel_workflow", "not_found", False, "Workflow run was not found."),
+                AdapterFailureMode(
+                    "cancel_workflow",
+                    "unavailable",
+                    True,
+                    "Temporal service was unavailable during cancellation.",
+                ),
             ),
         )
 
@@ -116,6 +124,10 @@ class TemporalWorkflowAdapter:
     def workflow_run(self, tenant_id: str, run_id: str) -> WorkflowRun | None:
         """Return a known workflow run by id, or None when Temporal has no record."""
         return _run_blocking(lambda: self.workflow_run_async(tenant_id, run_id))
+
+    def cancel_workflow(self, tenant_id: str, run_id: str, *, reason: str | None = None) -> WorkflowRun | None:
+        """Cancel a known workflow run by id and return the terminal state."""
+        return _run_blocking(lambda: self.cancel_workflow_async(tenant_id, run_id, reason=reason))
 
     # -- async core (exercised directly by the time-skipping tests) -------
 
@@ -179,6 +191,50 @@ class TemporalWorkflowAdapter:
             status=status,
             output=output,
             error=error,
+        )
+
+    async def cancel_workflow_async(
+        self,
+        tenant_id: str,
+        run_id: str,
+        *,
+        reason: str | None = None,
+    ) -> WorkflowRun | None:
+        """Cancel a known run by workflow id; None when Temporal has no record."""
+        if not workflow_run_id_matches_tenant(tenant_id, run_id):
+            return None
+        try:
+            client = await self._client_handle()
+        except Exception as exc:  # noqa: BLE001 - normalized into typed adapter evidence
+            raise _cancel_workflow_adapter_error(self.profile_name, run_id, exc) from exc
+        service = import_module("temporalio.service")
+        client_mod = import_module("temporalio.client")
+        handle = client.get_workflow_handle(run_id)
+        try:
+            await handle.cancel()
+            with contextlib.suppress(client_mod.WorkflowFailureError):
+                await handle.result()
+        except service.RPCError as exc:
+            if getattr(exc, "status", None) == service.RPCStatusCode.NOT_FOUND:
+                return None
+            raise _cancel_workflow_adapter_error(self.profile_name, run_id, exc) from exc
+        except Exception as exc:  # noqa: BLE001 - normalized into typed adapter evidence
+            raise _cancel_workflow_adapter_error(self.profile_name, run_id, exc) from exc
+        run = await self.workflow_run_async(tenant_id, run_id)
+        if run is None:
+            return None
+        output = dict(run.output)
+        output["cancellation"] = {
+            "reason": reason or "operator_cancelled",
+            "source": self.profile_name,
+            "cleanup": {"datasetStaging": "adapter_confirmed", "committedVersionId": None},
+        }
+        return WorkflowRun(
+            run_id=run.run_id,
+            workflow_name=run.workflow_name,
+            status=run.status,
+            output=output,
+            error=run.error,
         )
 
     # -- internals --------------------------------------------------------
@@ -297,6 +353,10 @@ def _temporal_workflow_id(request: WorkflowStartRequest) -> str:
 
 def _workflow_run_adapter_error(profile: str, run_id: str, exc: Exception) -> AdapterError:
     return AdapterError(_temporal_adapter_failure(profile, "workflow_run", exc, workflow_id=run_id))
+
+
+def _cancel_workflow_adapter_error(profile: str, run_id: str, exc: Exception) -> AdapterError:
+    return AdapterError(_temporal_adapter_failure(profile, "cancel_workflow", exc, workflow_id=run_id))
 
 
 def _temporal_adapter_failure(

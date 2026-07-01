@@ -1,3 +1,5 @@
+"""Application service helpers for indexing protocols workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -56,6 +58,17 @@ class IndexOntologyLookup(Protocol):
         conn: TransactionContext,
         object_type_id: str,
     ) -> Sequence[PropertyTypeRow]: ...
+
+    def _complete_object_reindex_contract(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type_id: str,
+        reindex_key: str,
+        index_run_id: str,
+        dataset_version_id: str,
+        completed_at: str,
+    ) -> Mapping[str, object]: ...
 
 
 class IndexRuntimeBoundary(Protocol):

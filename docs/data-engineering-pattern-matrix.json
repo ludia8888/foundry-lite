@@ -85,7 +85,7 @@
       "riskTier": "P0",
       "owner": "operations-runtime",
       "owningDoc": "docs/quality-gate-roadmap.md",
-      "reason": "Adapter, auth, secret, and commit-point failures must be visible in run/error/audit/outbox/trace evidence, not only logs. S56 proves read-only detector reports can surface missing-data, lag, skew, and SLO evidence before source-of-truth rows are mutated. S57 proves backup/restore preflight can block DB/storage committed-version mismatches, mark search as rebuildable projection evidence, keep outbox retry/reprocess closed while restore mode is active, and reject publisher resume until post-restore closed-loop evidence exists. S58A proves local JWT/OIDC bearer-token failures are denied before a Principal is built, M2M service-account tokens remain tenant-scoped, revoked JWT ids are blocked, JWKS refresh/cache behavior is tested, webhook signing secrets are read through SecretProvider and redacted from operator evidence/errors, and REST connector credential secretRefs are re-resolved on the next snapshot after local rotation.",
+      "reason": "Adapter, auth, secret, and commit-point failures must be visible in run/error/audit/outbox/trace evidence, not only logs. S56 proves read-only detector reports can surface missing-data, lag, skew, and SLO evidence before source-of-truth rows are mutated, and detect-and-record can persist open/acknowledged/resolved observability_incidents with audit/outbox evidence. S57 proves backup/restore preflight can block DB/storage committed-version mismatches, mark search as rebuildable projection evidence, store only ready preflight evidence as immutable backup artifacts, verify artifact receipts before restore-mode entry, block current-serving-head drift on the validation-only path, execute historical artifact dataset-head restore by copying byte/hash-clean source files into new snapshot versions, keep outbox retry/reprocess closed while restore mode is active, and reject publisher resume until post-restore closed-loop evidence exists. S58A proves local JWT/OIDC bearer-token failures are denied before a Principal is built, M2M service-account tokens remain tenant-scoped, revoked JWT ids are blocked, JWKS refresh/cache behavior is tested, webhook signing secrets are read through SecretProvider and redacted from operator evidence/errors, and REST connector credential secretRefs are re-resolved on the next snapshot after local rotation.",
       "activeInfraRefs": [
         "s3-storage",
         "iceberg",
@@ -106,6 +106,14 @@
         "test_restore_preflight_validates_every_committed_manifest",
         "test_restore_preflight_captures_index_pointers_and_runtime_high_watermarks",
         "test_restore_pauses_outbox_until_reconciliation",
+        "test_backup_restore_create_artifact_writes_receipt_and_audit",
+        "test_backup_restore_create_artifact_fails_closed_when_preflight_is_blocked",
+        "test_local_backup_artifact_store_writes_immutable_receipt",
+        "test_local_backup_artifact_store_reads_and_verifies_artifact",
+        "test_local_backup_artifact_store_rejects_wrong_expected_hash",
+        "test_local_backup_artifact_store_rejects_tampered_payload",
+        "test_backup_restore_artifact_restore_validates_and_runs_closed_loop",
+        "test_backup_restore_artifact_restore_blocks_when_serving_head_moved",
         "test_restore_resume_requires_closed_loop_validation",
         "test_post_restore_closed_loop_smoke",
         "test_restore_retry_is_idempotent",
@@ -160,7 +168,7 @@
       "riskTier": "P1",
       "owner": "metadata-runtime",
       "owningDoc": "docs/quality-gate-roadmap.md",
-      "reason": "The schema revision guard protects SQLAlchemy metadata snapshots, fresh Alembic upgrade parity proves a blank DB can reach the current table/column shape, S55 schema migration safety keeps Alembic history single-headed, blocks destructive downgrade schema operations, and now requires phase-tagged expand migrations to declare an old-and-new-app release compatibility window. S55 migration runner proof keeps Alembic execution behind a dedicated singleton DB lock, proves live PostgreSQL advisory-lock contention has one migration callback winner with `lock_busy` evidence for the concurrent runner, and leaves password-masked operator evidence when a migration attempt fails. Dataset schema evolution proof now blocks rename/drop/narrowing-style consumer breaks, records widening/deprecated-field warnings, and creates deterministic backfill progress metadata. Ontology migration proof now blocks property/object/link/action parameter breaking changes before activation, records object reindex plans, and checks generated SDK compatibility. full old/new app deployment windows, actual ontology migration executors/reindex workers, real backfill execution, and rollback/restore runbook rehearsal remain broader S55 work.",
+      "reason": "The schema revision guard protects SQLAlchemy metadata snapshots, fresh Alembic upgrade parity proves a blank DB can reach the current table/column shape, S55 schema migration safety keeps Alembic history single-headed, blocks destructive downgrade schema operations, and now requires phase-tagged expand migrations to declare an old-and-new-app release compatibility window. S55 migration runner proof keeps Alembic execution behind a dedicated singleton DB lock, proves live PostgreSQL advisory-lock contention has one migration callback winner with `lock_busy` evidence for the concurrent runner, and leaves password-masked operator evidence when a migration attempt fails. Dataset schema evolution proof now blocks rename/drop/narrowing-style consumer breaks, records widening/deprecated-field warnings, and creates deterministic backfill progress metadata. Ontology migration proof now blocks property/object/link/action parameter breaking changes before activation, records object reindex plans plus previous/next source-column evidence for property mapping changes, checks generated SDK compatibility, and executes bounded `object_reindex:*` plans through an Operations/API/SDK surface that closes the active object type serving contract as `object_reindex_complete`. The gate also proves additive dataset schema evolution can be followed by ontology mapping migration and reindex against the latest dataset version. Full old/new app deployment windows, object/link remap executors, real backfill execution, and rollback/restore runbook rehearsal remain broader S55 work.",
       "activeInfraRefs": [],
       "proofLevel": "L1",
       "evidenceRefs": [
@@ -181,7 +189,10 @@
         "test_migration_job_singleton_no_app_start_race",
         "test_failed_migration_leaves_operator_evidence",
         "test_schema_evolution_widening_is_visible_in_transaction_metadata",
-        "test_backfill_resumes_idempotently"
+        "test_backfill_resumes_idempotently",
+        "test_ontology_mapping_migrates_with_dataset_schema",
+        "test_ontology_migration_reindex_executor_completes_required_object_reindex",
+        "test_ontology_repository_contract_updates_object_type_config"
       ],
       "futureTests": [
         "test_live_postgres_migration_lock_contention_has_one_winner",
@@ -199,7 +210,7 @@
       "riskTier": "P0",
       "owner": "ingest-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "S47 now has stream CDC quarantine plus Operations API, typed generated SDK, and Web Operations UI coverage for tenant-scoped dead_letter_records, single and bulk replay idempotency, valid-payload APPEND replay result, replay failure result, discard, audit evidence, DLQ-write fail-closed tests, source-side error threshold fail-closed policy, identity/ordering fail-closed policy, and PostgreSQL concurrent replay request proof. Transform-level Record DLQ policy remains future if transform record DLQ is introduced.",
+      "reason": "S47 now has stream CDC quarantine plus Operations API, typed generated SDK, and Web Operations UI coverage for tenant-scoped dead_letter_records, single and bulk replay idempotency, valid-payload APPEND replay result, replay failure result, discard, audit evidence, DLQ-write fail-closed tests, source-side error threshold fail-closed policy, identity/ordering fail-closed policy, and PostgreSQL concurrent replay request proof. Python transform row-local errors are now quarantined through Input.map_rows(..., on_error=\"quarantine\") with clean-row output commit, transform_execution DLQ metadata, audit evidence, generic replay rejection, and snapshot transform-specific full-rebuild retry. Append/incremental transform DLQ replay remains future until a duplicate-safe merge policy exists.",
       "activeInfraRefs": [
         "debezium-cdc"
       ],
@@ -218,6 +229,7 @@
         "test_operations_record_dead_letter_replay_request_is_idempotent_and_audited",
         "test_operations_record_dead_letter_replay_failure_is_visible",
         "test_api_operations_record_dead_letter_records_retry_bulk_and_discard",
+        "test_python_transform_row_errors_are_quarantined_without_failing_run",
         "test_operations_ui_record_dlq_retry_shows_result",
         "test_concurrent_replay_requests_create_one_replay_run",
         "test_same_replay_idempotency_key_returns_existing_result",
@@ -233,38 +245,43 @@
         "DLQ replay"
       ]
     },
-        {
-            "id": "late-data-watermark-policy",
-            "name": "Late data and watermark movement are explicit",
-            "status": "partial",
-            "riskTier": "P1",
-            "owner": "ingest-runtime",
-            "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-            "reason": "S48 now has a stream/source archive slice: StreamArchiveConfig declares event/source time fields, named timezone override, and lateness thresholds, committed archive rows separate event/source/ingest/process time with a late_data_status, too-late records route to Record DLQ, transaction metadata keeps a matching partition/source lateDataWatermark from moving backward without letting unrelated fast-partition watermarks classify slow partitions as stale, duplicate delivery after a committed late event resumes from the durable offset instead of creating a second dataset version, late stream commits expose lateDataSummary plus lateDataReprocessingPlan through Operations run detail, materialization commits expose watermark plus late-data reopen evidence when a LATE_REQUIRES_REPROCESS CDC index run forces the next closed output to be regenerated, object/materialization explain exposes late-data badges, Operations detail exposes a downstream impact graph for the regenerated materialization, and a late stale CDC delete cannot remove or resurrect the current active object.",
-            "activeInfraRefs": [
-                "debezium-cdc"
-            ],
-            "proofLevel": "L2",
-            "evidenceRefs": [
-                "test_too_late_event_goes_to_record_dlq",
-                "test_event_time_and_processing_time_sla_are_separate",
-                "test_watermark_never_moves_backward",
-                "test_slow_partition_does_not_silently_drop_data",
-                "test_duplicate_late_event_is_idempotent",
-                "test_late_event_creates_reprocessing_plan_for_closed_archive_output",
-                "test_run_detail_shows_event_time_lag_and_reprocessing_plan",
-                "test_late_event_reopens_expected_materialization",
-                "test_late_data_badge_marks_impacted_insight",
-                "test_late_data_downstream_impact_graph_lists_materializations",
-                "test_late_delete_does_not_resurrect_stale_object",
-                "test_late_data_named_timezone_override_applies_source_policy"
-            ],
-            "futureTests": [
-                "test_transform_record_dlq_policy_routes_bad_transform_rows"
-            ],
-            "readmeAliases": [
-                "Late data",
-                "watermark policy"
+    {
+      "id": "late-data-watermark-policy",
+      "name": "Late data and watermark movement are explicit",
+      "status": "partial",
+      "riskTier": "P1",
+      "owner": "ingest-runtime",
+      "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
+      "reason": "S48 now has a stream/source archive slice plus snapshot transform output and materialization boundary watermark propagation: StreamArchiveConfig declares event/source time fields, named timezone override, and lateness thresholds, committed archive rows separate event/source/ingest/process time with a late_data_status, too-late records route to Record DLQ, transaction metadata keeps a matching partition/source lateDataWatermark from moving backward without letting unrelated fast-partition watermarks classify slow partitions as stale, duplicate delivery after a committed late event resumes from the durable offset instead of creating a second dataset version, late stream commits expose lateDataSummary, lateDataReprocessingPlan, and a normalized platformWatermark through Operations run detail, snapshot transform output commits derive platformWatermark from input dataset transaction watermarks with a min-input event-time policy while retaining input version/reprocessing evidence, materialization commits expose top-level platformWatermark for action-log and object-snapshot output boundaries plus late-data reopen evidence when a LATE_REQUIRES_REPROCESS CDC index run forces the next closed output to be regenerated, object/materialization explain exposes late-data badges, Operations detail exposes a downstream impact graph for the regenerated materialization, and a late stale CDC delete cannot remove or resurrect the current active object.",
+      "activeInfraRefs": [
+        "debezium-cdc"
+      ],
+      "proofLevel": "L2",
+      "evidenceRefs": [
+        "test_too_late_event_goes_to_record_dlq",
+        "test_event_time_and_processing_time_sla_are_separate",
+        "test_watermark_never_moves_backward",
+        "test_slow_partition_does_not_silently_drop_data",
+        "test_platform_watermark_contract_normalizes_stream_metadata",
+        "test_duplicate_late_event_is_idempotent",
+        "test_late_event_creates_reprocessing_plan_for_closed_archive_output",
+        "test_run_detail_shows_event_time_lag_and_reprocessing_plan",
+        "test_late_event_reopens_expected_materialization",
+        "test_late_data_badge_marks_impacted_insight",
+        "test_late_data_downstream_impact_graph_lists_materializations",
+        "test_late_delete_does_not_resurrect_stale_object",
+        "test_late_data_named_timezone_override_applies_source_policy",
+        "test_transform_output_platform_watermark_is_derived_from_stream_input",
+        "test_transform_output_platform_watermark_uses_min_input_event_time_and_reprocessing",
+        "test_platform_watermark_contract_covers_action_boundaries",
+        "test_platform_watermark_contract_covers_object_materialization_reprocessing"
+      ],
+      "futureTests": [
+        "test_platform_watermark_contract_covers_all_worker_boundaries"
+      ],
+      "readmeAliases": [
+        "Late data",
+        "watermark policy"
       ]
     },
     {
@@ -274,7 +291,7 @@
       "riskTier": "P1",
       "owner": "storage-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "S49 now has a read/preview slice: DatasetStorageAdapter.data_file_paths resolves manifest-listed data files in order, foundry.datasets.preview reads multi-file manifests through the existing facade, unlisted files in the storage directory are not discovered by listing, dataset rows can declare layout policy fields, local/fake/S3 read/preview partition filters reduce actual read files, and Iceberg skips reads when no manifest file matches. Multi-part atomic commit, transform predicate pushdown, high-cardinality partition warnings, and Iceberg snapshot file-level pruning remain future work.",
+      "reason": "S49 now has a read/preview, manifest-metadata, local/fake/S3/Iceberg multi-part commit, high-cardinality partition warning, Iceberg file-level pruning, and single-input SQL transform predicate-to-storage proof slice: DatasetStorageAdapter.data_file_paths resolves manifest-listed data files in order, foundry.datasets.preview reads multi-file manifests through the existing facade, unlisted files in the storage directory are not discovered by listing, dataset rows can declare layout policy fields, local/fake/S3 read/preview partition filters reduce actual read files, readable Parquet commit paths record manifest column min/max/null_count and sort_bounds, local/fake storage can commit multiple staged parquet parts into one deterministic manifest/version/DB file-row set, high-cardinality partition layouts persist a warning in committed dataset transaction metadata, validation-after-tamper blocks the commit, stale retry orphan parts are not retained, S3 retries multi-part staged-file commits without duplicate parts, Iceberg commits multiple staged parts into one pinned snapshot with multiple data files, Iceberg skips reads when no manifest file matches, Iceberg column-stat filters download only matching data files without full snapshot materialization, and a single-input SQL transform equality predicate reaches storage partition_filter and compute input file selection. Iceberg maintenance execution is covered by the S50 matrix row.",
       "activeInfraRefs": [
         "s3-storage",
         "iceberg"
@@ -282,14 +299,23 @@
       "proofLevel": "L2",
       "evidenceRefs": [
         "test_dataset_storage_adapter_resolves_manifest_files_with_partition_filter_without_listing",
+        "test_dataset_storage_adapter_commits_multiple_staged_files_without_duplicate_retry_parts",
+        "test_dataset_transaction_finalizes_multiple_parts_as_one_version",
+        "test_dataset_transaction_blocks_tampered_multi_part_after_validation",
         "test_partition_pruning_reads_only_required_manifest_files",
+        "test_sql_transform_pushes_partition_predicate_to_storage_adapter",
+        "test_committed_manifest_records_column_stats_and_sort_bounds",
         "test_s3_data_file_paths_apply_partition_filter_before_download",
-        "test_iceberg_data_file_paths_skip_snapshot_when_partition_filter_has_no_match"
+        "test_s3_commit_staged_files_retries_without_duplicate_parts",
+        "test_iceberg_commit_staged_files_retries_as_one_snapshot",
+        "test_iceberg_data_file_paths_skip_snapshot_when_partition_filter_has_no_match",
+        "test_iceberg_data_file_paths_prune_files_by_column_stats_without_full_materialization",
+        "test_iceberg_commit_staged_files_replaces_head_without_clobbering_pinned_version",
+        "test_dataset_commit_persists_high_cardinality_partition_warning"
       ],
       "futureTests": [
-        "test_multi_file_commit_is_all_or_nothing",
-        "test_transform_partition_predicate_reaches_storage_adapter",
-        "test_iceberg_partition_pruning_reads_only_required_files"
+        "test_multi_file_atomic_commit_abort_rollback_keeps_manifest_unpublished",
+        "test_transform_predicate_pushdown_handles_range_and_compound_filters"
       ],
       "readmeAliases": [
         "Multi-file dataset",
@@ -304,20 +330,22 @@
       "riskTier": "P1",
       "owner": "storage-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "S50 now has a maintenance planning slice: Operations can request an Iceberg maintenance plan, committed DB dataset-version snapshots are marked protected, compaction candidates are reported from file-count/small-file/read-amplification thresholds, and the plan request leaves audit evidence. Actual rewrite_data_files execution, snapshot expiration, and orphan cleanup remain future work.",
+      "reason": "S50 now has a maintenance planning and bounded execution slice: Operations can request an Iceberg maintenance plan, committed DB dataset-version snapshots are marked protected, compaction candidates are reported from file-count/small-file/read-amplification thresholds, and plan requests leave audit evidence. Operations can also run Iceberg maintenance, compact the current snapshot, verify before/after row hashes match, expire deletable orphan snapshots, delete no-longer-reachable data/sidecar files, keep DB committed manifests readable, and write run audit evidence. Transform/materialization/backup pin retention, concurrent maintenance fencing, fault-injected rollback proof, and ambiguous retry idempotency remain future work.",
       "activeInfraRefs": [
         "iceberg",
         "s3-storage"
       ],
       "proofLevel": "L1",
       "evidenceRefs": [
-        "test_iceberg_maintenance_plan_protects_committed_snapshots_and_audits"
+        "test_iceberg_maintenance_plan_protects_committed_snapshots_and_audits",
+        "test_iceberg_maintenance_run_compacts_current_snapshot_and_expires_orphans",
+        "test_iceberg_maintenance_run_writes_audit_evidence"
       ],
       "futureTests": [
-        "test_compaction_preserves_row_hash",
-        "test_iceberg_retention_keeps_all_committed_dataset_versions_readable",
-        "test_iceberg_orphan_cleanup_never_deletes_serving_snapshot_files",
-        "test_compaction_failure_does_not_move_serving_pointer"
+        "test_iceberg_retention_blocks_transform_materialization_backup_pins",
+        "test_compaction_failure_does_not_move_serving_pointer",
+        "test_concurrent_maintenance_runs_have_one_winner",
+        "test_retry_after_ambiguous_compaction_is_idempotent"
       ],
       "readmeAliases": [
         "Iceberg maintenance",
@@ -331,7 +359,7 @@
       "riskTier": "P0",
       "owner": "ingest-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "S51 now has a bounded continuous stream archive worker loop that repeatedly calls the existing archive_stream_events transaction boundary, stops after configured empty polls or a stop callback, and reports loop summary counts. Lease fencing, rebalance revocation, commit-unknown reconciliation, and a continuous CDC object-index worker remain future work.",
+      "reason": "S51 now has bounded worker loops for stream archive and CDC object indexing. The stream archive worker repeatedly calls the existing archive_stream_events transaction boundary, stops after configured empty polls, a stop callback, max batches, or lease_lost, and reports loop summary counts. Workflow-run lease owner/token/expiry evidence fences an old worker from archiving the next batch after another worker takes the lease. A pre-commit partition-assignment guard now stops a revoked stream archive worker before the dataset version and cursor are committed, leaving failed sync evidence instead of a silent duplicate or lost-offset commit. The CDC object-indexer worker indexes committed CDC dataset versions in version order, persists lastIndexedVersionId/lastIndexedVersionNumber/lastIndexRunId in workflow output, resumes after the last indexed version, fences takeover workers with the same lease shape, and fails closed if a source version exceeds the configured row limit. Full broker rebalance callback integration, commit-unknown reconciliation, OS SIGTERM proof, and production daemon packaging remain future work.",
       "activeInfraRefs": [
         "debezium-cdc"
       ],
@@ -340,15 +368,23 @@
         "test_stream_archive_worker_continuous_loop_archives_until_empty_poll",
         "test_stream_archive_worker_continuous_loop_honors_stop_callback",
         "test_stream_archive_worker_continuous_loop_stops_after_max_batches",
+        "test_stream_archive_worker_continuous_loop_records_workflow_lease_release",
+        "test_stream_archive_worker_continuous_loop_stops_when_lease_is_lost",
         "test_stream_archive_worker_continuous_loop_counts_empty_polls_before_stop",
-        "test_stream_archive_worker_main_prints_continuous_result"
+        "test_stream_archive_worker_main_prints_continuous_result",
+        "test_stream_archive_worker_continuous_loop_broker_rebalance_revoked_worker_cannot_commit_current_batch",
+        "test_runtime_repository_contract_workflow_run_lease_fences_stale_workers",
+        "test_cdc_object_indexer_worker_once_resumes_after_last_indexed_version",
+        "test_cdc_object_indexer_continuous_loop_indexes_until_empty_and_releases_lease",
+        "test_cdc_object_indexer_continuous_loop_stops_when_lease_is_lost",
+        "test_cdc_object_indexer_worker_fails_closed_when_version_exceeds_row_limit",
+        "test_cdc_object_indexer_worker_config_cli_and_failure_payload_edges"
       ],
       "futureTests": [
         "test_rebalance_during_dataset_commit_has_no_loss",
         "test_commit_unknown_replay_creates_one_dataset_version",
-        "test_revoked_worker_cannot_advance_checkpoint",
-        "test_worker_lease_expiry_fences_stale_instance",
-        "test_continuous_indexer_restarts_from_committed_watermark"
+        "test_real_broker_rebalance_callback_revokes_assignment_before_commit",
+        "test_worker_sigterm_finishes_or_aborts_current_batch"
       ],
       "readmeAliases": [
         "Continuously running CDC/search workers",
@@ -362,22 +398,26 @@
       "riskTier": "P0",
       "owner": "workflow-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "ConnectorSyncWorkflow now has a product workflow control-plane path through Operations/API/SDK with local/fake/Temporal contract proof, audit-linked ProductWorkflowRun evidence, and a worker-bound Temporal activity proof that commits a local connector snapshot through the normal Dataset ingest boundary. Cancellation cleanup, response-loss reconciliation, continue-as-new, upgrade replay, managed worker operations, and production connector packaging remain future work.",
+      "reason": "ConnectorSyncWorkflow now has a product workflow control-plane path through Operations/API/SDK with local/fake/Temporal contract proof, audit-linked ProductWorkflowRun evidence, and a worker-bound Temporal activity proof that commits a local connector snapshot through the normal Dataset ingest boundary. The workflow payload includes a deterministic syncRunId and workflowDefinitionVersion, activity output carries fetch/stage/quality/commit/cursor/event data-plane evidence, cursor advance is proven across workflow starts, and post-commit activity retry reuses the committed sync run without duplicate dataset version or outbox rows. A same-idempotency retry can also reconcile a start_unknown ledger row to the terminal workflow result after the activity already committed the dataset transaction, leaving workflow.reconciled audit/run-relation evidence, and start_unknown retry preserves the originally persisted workflowDefinitionVersion instead of silently switching to a newer code default. Workflow cancel now closes requested/running runs as cancelled with cleanup payload, workflow.cancelled audit, cancelled_by run relation evidence, tenant-scoped adapter cancel behavior, a mismatch guard for adapter-returned run ids, and a terminal-non-cancelled adapter result guard. Continue-as-new, full old-history upgrade replay, managed worker operations, and production connector packaging remain future work.",
       "activeInfraRefs": [
         "temporal"
       ],
       "proofLevel": "L2",
       "evidenceRefs": [
         "test_product_workflow_operations_contract_starts_connector_sync_and_audits",
+        "test_product_workflow_reconciles_activity_completion_response_loss",
+        "test_connector_sync_workflow_commits_then_advances_cursor",
+        "test_worker_crash_mid_activity_replays_without_duplicate_commit",
+        "test_product_workflow_start_unknown_retry_preserves_persisted_definition_version",
+        "test_product_workflow_cancel_cleans_running_workflow_and_audits",
+        "test_workflow_adapter_contract_cancel_is_tenant_scoped",
+        "test_product_workflow_cancel_rejects_mismatched_adapter_result",
+        "test_product_workflow_cancel_rejects_terminal_non_cancelled_adapter_result",
         "test_product_connector_sync_workflow_runs_through_temporal_and_audits",
         "test_api_operations_workflow_start_status_and_audit",
         "test_sdk_package_and_browser_outputs_share_client_surface"
       ],
       "futureTests": [
-        "test_connector_sync_workflow_commits_then_advances_cursor",
-        "test_worker_crash_mid_activity_replays_without_duplicate_commit",
-        "test_activity_completion_response_loss_reattaches_to_domain_result",
-        "test_cancel_cleans_staging_and_persists_cancel_evidence",
         "test_continue_as_new_preserves_business_idempotency",
         "test_workflow_upgrade_replays_old_history"
       ],
@@ -393,12 +433,14 @@
       "riskTier": "P0",
       "owner": "action-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "S53 now has simulated before-commit writeback slices plus an L8 real S3/MinIO adapter slice. Simulated response loss and real adapter timeouts become outcome_unknown, simulated external success and real landed writes followed by local mutation failure become compensation_required, and operator-provided remote-success or real adapter remote_lookup catches up the local object mutation while closing action/writeback evidence as reconciled. Same-idempotency-key replay does not blindly issue another writeback, concurrent reconcile has one winner, and sensitive writeback parameters stay masked in Operations/audit surfaces. ERP-specific connector packaging, autonomous compensation worker execution, persistent reconciliation queue, and operator approval remain future work.",
-      "activeInfraRefs": [
-      ],
+      "reason": "S53 now has simulated before-commit writeback slices plus an L8 real S3/MinIO adapter slice, a bounded writeback reconciliation worker slice, a backend approval-release slice for sensitive/high-risk recovery, and an AI direct vendor/API egress denial slice. Simulated external-not-changed failures become retryable with external_system_changed=false, retry_after_seconds, same-key replay, queue visibility, and bounded recovery skip evidence instead of automatic reconcile/reissue. Simulated response loss and real adapter timeouts become outcome_unknown, simulated external success and real landed writes followed by local mutation failure become compensation_required, operator-provided remote-success or real adapter remote_lookup catches up the local object mutation while closing action/writeback evidence as reconciled, and the bounded worker can recover non-sensitive unresolved rows using stored externalWritebackUri while leaving audit and JSON evidence. Sensitive/high-risk action-parameter writebacks are skipped as operator_approval_required with approval evidence and no remote lookup/local mutation until the approval-release path receives explicit approval id/reason evidence, records action.writeback.recovery_approved, and reuses the same reconciliation path. Retryable rows are not approval-recoverable. Same-idempotency-key replay does not blindly issue another writeback, concurrent reconcile has one winner, sensitive writeback parameters stay masked in Operations/audit surfaces, and raw HTTP/vendor/webhook/generic executor tool ids are denied by ToolBroker, Agent Runtime, and Visual Builder even when present in a published manifest. ERP-specific connector packaging, connector-backed vendor tool release policy, automatic retry/reissue worker, always-on managed compensation daemon, persistent queue UI, reverse/compensation executor, and visual operator approval workflow/UI remain future work.",
+      "activeInfraRefs": [],
       "proofLevel": "L2",
-      "evidenceRefs": [
-        "test_external_success_response_lost_becomes_outcome_unknown",
+    "evidenceRefs": [
+      "test_retryable_writeback_failure_is_visible_without_object_edit",
+      "test_action_repository_contract_persists_retryable_writeback_fields",
+      "test_recovery_marks_retryable_writeback_as_retry_candidate",
+      "test_external_success_response_lost_becomes_outcome_unknown",
         "test_outcome_unknown_is_not_blindly_retried",
         "test_action_repository_contract_persists_outcome_unknown_writeback_fields",
         "test_external_success_local_failure_requires_compensation",
@@ -410,12 +452,21 @@
         "test_concurrent_reconciliation_has_one_winner",
         "test_sensitive_writeback_payload_is_masked_in_audit",
         "test_action_repository_contract_reconciles_outcome_unknown_writeback_once",
-        "test_api_operations_reconciliation_resolves_action_writeback"
+        "test_api_operations_reconciliation_resolves_action_writeback",
+        "test_bounded_writeback_recovery_resolves_outcome_unknown_and_audits",
+        "test_bounded_recovery_requires_operator_approval_for_sensitive_writeback",
+        "test_operator_approval_releases_sensitive_writeback_recovery",
+        "test_api_operations_reconciliation_approval_releases_sensitive_writeback",
+        "test_action_writeback_approval_release_ratchet_is_runtime_gate_step",
+        "test_worker_recovers_compensation_required_and_writes_evidence",
+        "test_recovery_skips_unresolved_writeback_without_external_uri",
+        "test_tool_broker_rejects_direct_vendor_api_tool_even_when_manifest_published",
+        "test_agent_runtime_rejects_direct_vendor_api_tool_without_executor",
+        "test_visual_builder_blocks_direct_vendor_tool_ids"
       ],
       "futureTests": [
-        "test_reconciliation_queue_requires_operator_approval_for_sensitive_writeback",
-        "test_autonomous_compensation_worker_drains_unresolved_writebacks",
-        "test_ai_agent_cannot_call_vendor_api_directly"
+        "test_managed_compensation_daemon_requires_approval_policy",
+        "test_connector_backed_vendor_tool_uses_governed_credentials"
       ],
       "readmeAliases": [
         "Real S3/MinIO external writeback",
@@ -429,9 +480,8 @@
       "riskTier": "P1",
       "owner": "dataset-runtime",
       "owningDoc": "docs/data-platform-expansion-sprint-plan-ko.md",
-      "reason": "S54 first slices record the staged candidate fingerprint and schema row/version used by dataset quality check results through checked_manifest_hash, validated_against_schema_version_id, and validated_against_schema_version. Historical check results stay pinned to the schema row/version used by that run after later schema versions are created. Successful check rows are stored as PASS, warning severity failures are visible as non-blocking WARN, and staged candidate tamper or commit-time hard failure is rejected as BLOCK_COMMIT before storage commit. Row-level not_null/unique quarantine checks route failed records to tenant-scoped Record DLQ as DATA_QUALITY_CONTRACT, rewrite the staged candidate to clean records, and revalidate before commit. Operations run detail exposes the transaction-scoped quality summary, schema references, checked manifest hashes, check results, and up to 5 data-quality quarantine failed-row samples. Persisted quality contract check definitions are create/list/update visible through API/SDK, enabled/config changes are applied by later dataset commit validation, and dataset quality result history and summary are API/SDK visible with persisted run evidence, status counts, check-type counts, and latest result evidence. Full versioned DataContract object CRUD, owner notification, dedicated failed-row sample UI, quality result trend UI, and production DB schema race proof remain future work.",
-      "activeInfraRefs": [
-      ],
+      "reason": "S54 slices record the staged candidate fingerprint and schema row/version used by dataset quality check results through checked_manifest_hash, validated_against_schema_version_id, and validated_against_schema_version. When a default DataContract version is active, check results also store data_contract_version_id. Historical check results stay pinned to the schema row/version used by that run after later schema versions are created. Successful check rows are stored as PASS, warning severity failures are visible as non-blocking WARN, and staged candidate tamper or commit-time hard failure is rejected as BLOCK_COMMIT before storage commit. Row-level not_null/unique quarantine checks route failed records to tenant-scoped Record DLQ as DATA_QUALITY_CONTRACT, rewrite the staged candidate to clean records, and revalidate before commit. Operations run detail exposes the transaction-scoped quality summary, schema references, checked manifest hashes, data contract version ids, check results, and up to 5 data-quality quarantine failed-row samples. Persisted quality contract check definitions are create/list/update visible through API/SDK, enabled/config changes are applied by later dataset commit validation when no active contract version overrides them, default DataContract versions can be create/list/get/activate visible through API/SDK, and active versions pin later validation to the checks_snapshot. Accepted-values policy checks now block category/status values outside the active contract snapshot's allowed list. Custom contract-key activation, remaining DataContract policy surface, owner notification, dedicated failed-row sample UI, quality result trend UI, and production DB schema race proof remain future work.",
+      "activeInfraRefs": [],
       "proofLevel": "L2",
       "evidenceRefs": [
         "test_quality_check_pins_candidate_manifest_hash",
@@ -444,10 +494,15 @@
         "test_operations_run_detail_exposes_candidate_quality_report",
         "test_operations_run_detail_includes_failed_row_sample_for_quarantine",
         "test_insert_check_result_persists",
+        "test_active_data_contract_version_pins_check_snapshot",
+        "test_active_data_contract_version_pins_accepted_values_policy",
+        "test_contract_versions_round_trip_and_activate_one_winner",
+        "test_check_result_can_reference_contract_version",
         "test_check_results_for_transaction_is_tenant_scoped"
       ],
       "futureTests": [
-        "test_data_contract_crud_validate_surfaces_owner_and_policy",
+        "test_custom_data_contract_key_activation_selects_policy",
+        "test_data_contract_policy_surface_validates_owner_and_policy",
         "test_dedicated_failed_row_sample_ui_is_visible_to_owner",
         "test_quality_history_trend_shows_contract_drift",
         "test_quality_owner_notification_is_emitted",

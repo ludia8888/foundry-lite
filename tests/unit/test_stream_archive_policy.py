@@ -6,7 +6,8 @@ from typing import cast
 from zoneinfo import ZoneInfo
 
 import pytest
-from foundry_lite.application.ports import StreamArchiveConfig, StreamEvent
+from foundry_lite.application.ports import DatasetRow, StreamArchiveConfig, StreamEvent
+from foundry_lite.application.services.dataset.platform_watermark import platform_watermark_metadata
 from foundry_lite.application.services.dataset.stream_archive import (
     ensure_stream_archive_batch_writable,
     prepare_stream_archive_batch,
@@ -33,6 +34,25 @@ def test_stream_archive_policy_classifies_late_accepted_event() -> None:
     assert batch.rows[0]["late_data_status"] == "LATE_ACCEPTED"
     assert watermark["eventTimeField"] == "event_time"
     assert watermark["watermarkEventTime"] == datetime.fromisoformat(event_time).isoformat()
+
+
+def test_platform_watermark_contract_normalizes_stream_metadata() -> None:
+    dataset = cast(DatasetRow, _dataset())
+    stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events", partition=2)
+    event_time = _iso_seconds_ago(600)
+    batch = prepare_stream_archive_batch([_event({"event_time": event_time})], stream)
+    metadata = stream_transaction_metadata(stream, [_event({"event_time": event_time})], rows=batch.rows)
+
+    platform = platform_watermark_metadata(dataset, metadata)
+
+    assert platform is not None
+    assert platform["scope"] == "platform_dataset_event_time"
+    assert platform["datasetRef"] == "raw.shipment_events"
+    assert platform["sourceKey"] == "shipments:shipment_events:2:foundry-lite-archive"
+    assert platform["status"] == "CURRENT"
+    time_axis = cast(Mapping[str, object], platform["timeAxis"])
+    assert time_axis["watermarkEventTime"] == datetime.fromisoformat(event_time).isoformat()
+    assert platform["reprocessing"] == {"isRequired": False, "affectedClosedOutputs": []}
 
 
 @pytest.mark.parametrize(
@@ -142,6 +162,9 @@ def test_slow_partition_does_not_silently_drop_data() -> None:
     assert batch.rows[0]["late_data_status"] == "LATE_ACCEPTED"
     assert watermark["partition"] == 1
     assert watermark["watermarkEventTime"] == datetime.fromisoformat(slow_event_time).isoformat()
+    platform = platform_watermark_metadata(cast(DatasetRow, _dataset()), metadata)
+    assert platform is not None
+    assert str(platform["sourceKey"]).split(":")[2] == "1"
 
 
 def test_stream_archive_naive_event_time_defaults_to_utc() -> None:
@@ -200,3 +223,24 @@ def _event(payload: dict[str, object]) -> StreamEvent:
 
 def _iso_seconds_ago(seconds: int) -> str:
     return (datetime.now(UTC) - timedelta(seconds=seconds)).isoformat()
+
+
+def _dataset() -> dict[str, object]:
+    return {
+        "id": "dataset_shipments",
+        "tenant_id": "tenant_demo",
+        "namespace": "raw",
+        "name": "shipment_events",
+        "description": None,
+        "storage_kind": "local",
+        "storage_uri": None,
+        "owner_team": None,
+        "classification": None,
+        "status": "ACTIVE",
+        "primary_key": ["event_id"],
+        "partition_spec": [],
+        "sort_order": [],
+        "target_file_size_bytes": None,
+        "created_at": "2026-06-18T00:00:00+00:00",
+        "updated_at": "2026-06-18T00:00:00+00:00",
+    }

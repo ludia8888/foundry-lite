@@ -1,3 +1,5 @@
+"""Application-layer models and helpers for dependencies."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -24,6 +26,7 @@ from foundry_lite.application.ports import (
     TransactionManager,
     TransformRepository,
 )
+from foundry_lite.application.ports.backup_artifact_store import BackupArtifactStore
 from foundry_lite.application.ports.citation_source import CitationSourceVerifier
 from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.connector_adapter import ConnectorAdapter
@@ -43,6 +46,8 @@ from foundry_lite.application.ports.media_reference_binding_repository import Me
 from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
+from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
+from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
@@ -84,6 +89,9 @@ class CoreDependencies:
     object_index_repository: ObjectIndexRepository
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository
+    osdk_application_repository: OsdkApplicationRepository
+    oauth_session_repository: OAuthSessionRepository
+    oauth_token_issuer: OAuthTokenIssuer
     runtime_repository: RuntimeRepository
     erasure_repository: ErasureRepository
     media_repository: MediaRepository
@@ -111,3 +119,4 @@ class CoreDependencies:
     stream_adapter: StreamAdapter
     tool_executor: ToolExecutor
     workflow_adapter: WorkflowAdapter
+    backup_artifact_store: BackupArtifactStore

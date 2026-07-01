@@ -6,16 +6,17 @@ from pathlib import Path
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.ports import TransactionContext
-from foundry_lite.application.ports.compute_adapter import TransformPlan
+from foundry_lite.application.ports import DatasetStagedFile, TransactionContext
+from foundry_lite.application.ports.compute_adapter import SqlTransformPlan, TransformExecutionResult, TransformPlan
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.application.services.materialization_service import MaterializationRunPlan, MaterializationService
 from foundry_lite.application.services.transform_service import TransformService
 from foundry_lite.domain.context import RequestContext, demo_admin_context
-from foundry_lite.domain.errors import ExternalSystemError, InvariantViolation, NotFound, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, ExternalSystemError, InvariantViolation, ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
+from sqlalchemy import select
 
 from tests.conftest import prepare_indexed_demo
 
@@ -207,6 +208,48 @@ def test_downstream_transform_consumes_materialized_version_id_not_latest(tmp_pa
     assert latest_status["O-1001"] == "APPROVED"
     assert transform_run["input_versions"] == {"ops.order_current": first_materialized.version_id}
     assert materialization_event["payload"]["versionId"] == first_materialized.version_id
+
+
+def test_transform_graph_runs_downstream_transform_and_records_relation(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-graph"))
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.graph_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("stage.graph_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("mart.graph_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.graph_orders", _csv(tmp_path, "graph_orders.csv", "O-1", 100), ctx=ctx)
+    stage_sql = tmp_path / "graph_stage.sql"
+    mart_sql = tmp_path / "graph_mart.sql"
+    stage_sql.write_text("select order_id, amount from {{ input('raw.graph_orders') }}", encoding="utf-8")
+    mart_sql.write_text(
+        "select order_id, amount * 2 as doubled from {{ input('stage.graph_orders') }}",
+        encoding="utf-8",
+    )
+    foundry.transforms.register(
+        "graph_stage",
+        entrypoint=stage_sql,
+        inputs={"orders": "raw.graph_orders"},
+        output_dataset_ref="stage.graph_orders",
+        ctx=ctx,
+    )
+    foundry.transforms.register(
+        "graph_mart",
+        entrypoint=mart_sql,
+        inputs={"stage": "stage.graph_orders"},
+        output_dataset_ref="mart.graph_orders",
+        ctx=ctx,
+    )
+
+    graph = foundry.transforms.run_graph("graph_stage", ctx=ctx)
+
+    downstream = graph["downstream"]
+    assert isinstance(downstream, list)
+    assert downstream[0]["apiName"] == "graph_mart"
+    assert foundry.datasets.preview("mart.graph_orders", ctx=ctx)[0]["doubled"] == 200
+    detail = foundry.operations.run_detail("transform", str(graph["root"]["transformRunId"]), ctx=ctx)
+    assert any(
+        row["target_run_id"] == downstream[0]["transformRunId"] and row["relation"] == "triggered_downstream"
+        for row in detail["runRelations"]
+    )
 
 
 def test_failed_action_not_included_in_success_action_log_materialization(foundry: FoundryLite) -> None:
@@ -517,29 +560,204 @@ def test_sql_transform_cannot_reference_undeclared_input_dataset(tmp_path: Path)
     assert foundry.datasets.list_versions("clean.allowlisted_orders", ctx=ctx) == []
 
 
-def test_python_transform_cannot_access_raw_storage_path(tmp_path: Path) -> None:
+def test_python_transform_runs_through_sdk_handles_without_raw_storage_path(tmp_path: Path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "python-guard"))
     ctx = RequestContext(roles=("admin", "data_engineer"))
     foundry.datasets.ensure("raw.python_guard_orders", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("clean.python_guard_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.python_guard_orders", _csv(tmp_path, "python_orders.csv", "O-1", 100), ctx=ctx)
     entrypoint = tmp_path / "unsafe_transform.py"
-    entrypoint.write_text("open('/tmp/raw-storage-path').read()\n", encoding="utf-8")
+    entrypoint.write_text(
+        "\n".join(
+            [
+                "from foundry_lite.transforms_sdk import Input, Output, transform",
+                "",
+                "@transform(orders=Input('raw.python_guard_orders'), out=Output('clean.python_guard_orders'))",
+                "def compute(orders, out):",
+                "    if hasattr(orders, '_parquet_path'):",
+                "        raise RuntimeError('raw storage path leaked')",
+                "    rows = orders.read_rows()",
+                "    out.write_rows([{'order_id': row['order_id'], 'amount': row['amount'] + 1} for row in rows])",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
-    with pytest.raises(ValidationFailed, match="unsupported transform language"):
-        foundry.transforms.register(
-            "unsafe_python_transform",
-            entrypoint=entrypoint,
-            inputs={"orders": "raw.python_guard_orders"},
-            output_dataset_ref="clean.python_guard_orders",
-            language="python",
+    foundry.transforms.register(
+        "safe_python_transform",
+        entrypoint=entrypoint,
+        inputs={"orders": "raw.python_guard_orders"},
+        output_dataset_ref="clean.python_guard_orders",
+        language="python",
+        ctx=ctx,
+    )
+    result = foundry.transforms.run("safe_python_transform", ctx=ctx)
+
+    output_rows = foundry.datasets.preview("clean.python_guard_orders", ctx=ctx, version=result.version_id)
+    transform_run = next(
+        run
+        for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"]
+        if run["output_version_id"] == result.version_id
+    )
+    assert [(row["order_id"], row["amount"]) for row in output_rows] == [("O-1", 101)]
+    assert transform_run["definition_snapshot"]["language"] == "python"
+    assert "python_source_sha256" in transform_run["definition_snapshot"]
+
+
+def test_python_transform_row_errors_are_quarantined_without_failing_run(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-record-dlq"))
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.row_error_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.row_error_orders", ctx=ctx, primary_key=["order_id"])
+    csv_path = tmp_path / "row_error_orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,100\nO-BAD,not-a-number\nO-2,200\n", encoding="utf-8")
+    input_version = foundry.datasets.upload_csv("raw.row_error_orders", csv_path, ctx=ctx)
+    entrypoint = tmp_path / "row_error_transform.py"
+    entrypoint.write_text(
+        "\n".join(
+            [
+                "from foundry_lite.transforms_sdk import Input, Output, transform",
+                "",
+                "@transform(orders=Input('raw.row_error_orders'), out=Output('clean.row_error_orders'))",
+                "def compute(orders, out):",
+                "    def clean(row):",
+                "        amount = int(row['amount'])",
+                "        return {'order_id': row['order_id'], 'amount': amount + 1}",
+                "    out.write_rows(orders.map_rows(clean, on_error='quarantine'))",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    foundry.transforms.register(
+        "row_error_orders",
+        entrypoint=entrypoint,
+        inputs={"orders": "raw.row_error_orders"},
+        output_dataset_ref="clean.row_error_orders",
+        language="python",
+        ctx=ctx,
+    )
+
+    result = foundry.transforms.run("row_error_orders", ctx=ctx)
+
+    output_rows = foundry.datasets.preview("clean.row_error_orders", ctx=ctx, version=result.version_id)
+    transform_run = next(
+        run
+        for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"]
+        if run["output_version_id"] == result.version_id
+    )
+    with foundry.engine.begin() as conn:
+        dead_letters = (
+            conn.execute(
+                select(db.dead_letter_records).where(db.dead_letter_records.c.source_run_id == transform_run["id"])
+            )
+            .mappings()
+            .all()
+        )
+        transaction = (
+            conn.execute(select(db.dataset_transactions).where(db.dataset_transactions.c.id == result.transaction_id))
+            .mappings()
+            .one()
+        )
+
+    assert [(row["order_id"], row["amount"]) for row in output_rows] == [("O-1", 101), ("O-2", 201)]
+    assert result.row_count == 2
+    assert len(dead_letters) == 1
+    assert dead_letters[0]["source_dataset_version_id"] == input_version.version_id
+    assert dead_letters[0]["payload"]["order_id"] == "O-BAD"
+    assert dead_letters[0]["error_kind"] == "PYTHON_ROW_ERROR"
+    assert dead_letters[0]["metadata"]["recordDlqKind"] == "transform_execution"
+    assert dead_letters[0]["metadata"]["transformRunId"] == transform_run["id"]
+    assert transaction["metadata"]["transformRecordDlq"]["quarantinedRows"] == 1
+    audit_types = {event["event_type"] for event in foundry.operations.list_runs(ctx=ctx)["auditEvents"]}
+    assert "dead_letter_record.quarantined" in audit_types
+    with pytest.raises(ConflictDetected, match="rerunning the transform"):
+        foundry.operations.retry_dead_letter_record(
+            dead_letters[0]["id"],
+            idempotency_key="retry-transform-row-error",
             ctx=ctx,
         )
 
-    with pytest.raises(NotFound):
-        foundry.transforms.run("unsafe_python_transform", ctx=ctx)
+
+def test_transform_record_dlq_retry_rebuilds_snapshot_after_fix(tmp_path: Path) -> None:
+    foundry, ctx, dead_letter = _create_transform_record_dlq(tmp_path / "transform-record-dlq-success")
+    _register_row_error_transform(foundry, ctx, tmp_path, should_fix_bad_row=True)
+
+    replay = foundry.transforms.retry_dead_letter_record(
+        dead_letter["id"],
+        idempotency_key="transform-record-dlq-success",
+        ctx=ctx,
+    )
+    duplicate = foundry.transforms.retry_dead_letter_record(
+        dead_letter["id"],
+        idempotency_key="transform-record-dlq-success",
+        ctx=ctx,
+    )
+    rows = foundry.datasets.preview("clean.row_error_orders", ctx=ctx, version=replay["replayDatasetVersionId"])
+    detail = foundry.operations.run_detail("transform", dead_letter["metadata"]["transformRunId"], ctx=ctx)
+    audit_types = {event["event_type"] for event in foundry.operations.list_runs(ctx=ctx)["auditEvents"]}
+
+    assert replay["status"] == "RESOLVED"
+    assert replay["replayStatus"] == "SUCCEEDED"
+    assert replay["transformRunId"] != dead_letter["metadata"]["transformRunId"]
+    assert replay["replayDatasetVersionId"] is not None
+    assert replay["rowCount"] == 3
+    assert [(row["order_id"], row["amount"]) for row in rows] == [("O-1", 101), ("O-BAD", 1), ("O-2", 201)]
+    assert duplicate["isIdempotentReplay"] is True
+    assert duplicate["transformRunId"] == replay["transformRunId"]
+    assert duplicate["replayDatasetVersionId"] == replay["replayDatasetVersionId"]
+    assert any(
+        row["target_run_id"] == replay["transformRunId"] and row["relation"] == "record_dlq_replay_of"
+        for row in detail["runRelations"]
+    )
+    assert "dead_letter_record.transform_replay_requested" in audit_types
+    assert "dead_letter_record.transform_replayed" in audit_types
+    with pytest.raises(ConflictDetected, match="different key"):
+        foundry.transforms.retry_dead_letter_record(dead_letter["id"], idempotency_key="new-transform-key", ctx=ctx)
 
 
-def test_transform_output_mode_fails_closed_without_changing_definition(tmp_path: Path) -> None:
+def test_transform_record_dlq_retry_fails_without_fix_and_does_not_commit_output(tmp_path: Path) -> None:
+    foundry, ctx, dead_letter = _create_transform_record_dlq(tmp_path / "transform-record-dlq-failure")
+
+    replay = foundry.transforms.retry_dead_letter_record(
+        dead_letter["id"],
+        idempotency_key="transform-record-dlq-failure",
+        ctx=ctx,
+    )
+    versions = foundry.datasets.list_versions("clean.row_error_orders", ctx=ctx)
+    audit_types = {event["event_type"] for event in foundry.operations.list_runs(ctx=ctx)["auditEvents"]}
+
+    assert replay["status"] == "QUARANTINED"
+    assert replay["replayStatus"] == "FAILED"
+    assert replay["transformRunId"] is not None
+    assert replay["replayDatasetVersionId"] is None
+    assert replay["error"]["type"] == "ValidationFailed"
+    assert "new row quarantines" in replay["error"]["message"]
+    assert len(versions) == 1
+    assert "dead_letter_record.transform_replay_failed" in audit_types
+
+
+def test_transform_record_dlq_retry_rejects_append_mode_fail_closed(tmp_path: Path) -> None:
+    foundry, ctx, dead_letter = _create_transform_record_dlq(
+        tmp_path / "transform-record-dlq-append",
+        mode="append",
+    )
+
+    replay = foundry.transforms.retry_dead_letter_record(
+        dead_letter["id"],
+        idempotency_key="transform-record-dlq-append",
+        ctx=ctx,
+    )
+    versions = foundry.datasets.list_versions("clean.row_error_orders", ctx=ctx)
+
+    assert replay["status"] == "QUARANTINED"
+    assert replay["replayStatus"] == "FAILED"
+    assert replay["transformRunId"] is None
+    assert replay["replayDatasetVersionId"] is None
+    assert "duplicate-safe merge policy" in replay["error"]["message"]
+    assert len(versions) == 1
+
+
+def test_transform_append_output_mode_commits_append_transaction(tmp_path: Path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-mode"))
     ctx = RequestContext(roles=("admin", "data_engineer"))
     foundry.datasets.ensure("raw.mode_orders", ctx=ctx, primary_key=["order_id"])
@@ -552,18 +770,9 @@ def test_transform_output_mode_fails_closed_without_changing_definition(tmp_path
         entrypoint=sql_path,
         inputs={"orders": "raw.mode_orders"},
         output_dataset_ref="clean.mode_orders",
+        mode="append",
         ctx=ctx,
     )
-
-    with pytest.raises(ValidationFailed, match="unsupported transform output mode") as exc_info:
-        foundry.transforms.register(
-            "mode_orders",
-            entrypoint=sql_path,
-            inputs={"orders": "raw.mode_orders"},
-            output_dataset_ref="clean.mode_orders",
-            mode="append",
-            ctx=ctx,
-        )
 
     result = foundry.transforms.run("mode_orders", ctx=ctx)
     output_rows = foundry.datasets.preview("clean.mode_orders", ctx=ctx, version=result.version_id)
@@ -572,10 +781,228 @@ def test_transform_output_mode_fails_closed_without_changing_definition(tmp_path
         for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"]
         if run["output_version_id"] == result.version_id
     )
+    with foundry.engine.begin() as conn:
+        tx = (
+            conn.execute(select(db.dataset_transactions).where(db.dataset_transactions.c.id == result.transaction_id))
+            .mappings()
+            .one()
+        )
 
-    assert exc_info.value.details == {"mode": "append", "supported_modes": ["snapshot"]}
     assert [(row["order_id"], row["amount"]) for row in output_rows] == [("O-1", 100)]
-    assert transform_run["definition_snapshot"]["mode"] == "snapshot"
+    assert transform_run["definition_snapshot"]["mode"] == "append"
+    assert tx["tx_type"] == "APPEND"
+
+
+def test_transform_scheduler_tick_rebuilds_snapshot_when_input_version_changes(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-scheduler"))
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.scheduler_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.scheduler_orders", ctx=ctx, primary_key=["order_id"])
+    first_input = foundry.datasets.upload_csv(
+        "raw.scheduler_orders",
+        _csv(tmp_path, "sched_v1.csv", "O-1", 100),
+        ctx=ctx,
+    )
+    sql_path = tmp_path / "scheduler_orders.sql"
+    sql_path.write_text("select order_id, amount from {{ input('raw.scheduler_orders') }}", encoding="utf-8")
+    foundry.transforms.register(
+        "scheduler_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.scheduler_orders"},
+        output_dataset_ref="clean.scheduler_orders",
+        ctx=ctx,
+    )
+    first_output = foundry.transforms.run("scheduler_orders", ctx=ctx)
+    second_input = foundry.datasets.upload_csv(
+        "raw.scheduler_orders",
+        _csv(tmp_path, "sched_v2.csv", "O-1", 125),
+        ctx=ctx,
+    )
+
+    preview = foundry.transforms.preview_due(ctx=ctx, max_runs=5)
+    due = next(row for row in preview["due"] if row["apiName"] == "scheduler_orders")
+    tick = foundry.transforms.run_due(ctx=ctx, max_runs=5)
+    started = next(row for row in tick["started"] if row["decision"]["apiName"] == "scheduler_orders")
+    repeat = foundry.transforms.run_due(ctx=ctx, max_runs=5)
+    repeat_skip = next(row for row in repeat["skipped"] if row["apiName"] == "scheduler_orders")
+    rows = foundry.datasets.preview("clean.scheduler_orders", ctx=ctx, version=started["run"]["versionId"])
+    detail = foundry.operations.run_detail("transform", str(started["run"]["transformRunId"]), ctx=ctx)
+
+    assert due["reason"] == "input_version_changed"
+    assert due["changedInputRefs"] == ["raw.scheduler_orders"]
+    assert due["lastSuccessfulInputVersions"] == {"raw.scheduler_orders": first_input.version_id}
+    assert due["latestInputVersions"] == {"raw.scheduler_orders": second_input.version_id}
+    assert started["run"]["versionId"] != first_output.version_id
+    assert [(row["order_id"], row["amount"]) for row in rows] == [("O-1", 125)]
+    assert repeat["started"] == []
+    assert repeat_skip["reason"] == "up_to_date"
+    assert any(row["relation"] == "scheduled_rebuild_of" for row in detail["runRelations"])
+
+
+def test_transform_scheduler_skips_append_mode_until_merge_policy_exists(tmp_path: Path) -> None:
+    foundry = FoundryLite(
+        dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-scheduler-append")
+    )
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.scheduler_append_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.scheduler_append_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.scheduler_append_orders", _csv(tmp_path, "append_v1.csv", "O-1", 100), ctx=ctx)
+    sql_path = tmp_path / "scheduler_append_orders.sql"
+    sql_path.write_text("select order_id, amount from {{ input('raw.scheduler_append_orders') }}", encoding="utf-8")
+    foundry.transforms.register(
+        "scheduler_append_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.scheduler_append_orders"},
+        output_dataset_ref="clean.scheduler_append_orders",
+        mode="append",
+        ctx=ctx,
+    )
+
+    preview = foundry.transforms.preview_due(ctx=ctx, max_runs=5)
+    skipped = next(row for row in preview["skipped"] if row["apiName"] == "scheduler_append_orders")
+    tick = foundry.transforms.run_due(ctx=ctx, max_runs=5)
+
+    assert skipped["reason"] == "append_mode_requires_manual_run"
+    assert tick["started"] == []
+    assert foundry.datasets.list_versions("clean.scheduler_append_orders", ctx=ctx) == []
+
+
+def test_transform_scheduler_skips_snapshot_until_input_version_exists(tmp_path: Path) -> None:
+    foundry = FoundryLite(
+        dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-scheduler-missing-input")
+    )
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.scheduler_empty_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.scheduler_empty_orders", ctx=ctx, primary_key=["order_id"])
+    sql_path = tmp_path / "scheduler_empty_orders.sql"
+    sql_path.write_text("select order_id, amount from {{ input('raw.scheduler_empty_orders') }}", encoding="utf-8")
+    foundry.transforms.register(
+        "scheduler_empty_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.scheduler_empty_orders"},
+        output_dataset_ref="clean.scheduler_empty_orders",
+        ctx=ctx,
+    )
+
+    preview = foundry.transforms.preview_due(ctx=ctx, max_runs=5)
+    skipped = next(row for row in preview["skipped"] if row["apiName"] == "scheduler_empty_orders")
+    tick = foundry.transforms.run_due(ctx=ctx, max_runs=5)
+
+    assert skipped["reason"] == "input_version_missing"
+    assert skipped["missingInputRefs"] == ["raw.scheduler_empty_orders"]
+    assert tick["started"] == []
+    assert foundry.datasets.list_versions("clean.scheduler_empty_orders", ctx=ctx) == []
+
+
+def test_sql_transform_pushes_partition_predicate_to_storage_adapter(tmp_path: Path) -> None:
+    compute = _TransformInputPlanSpy()
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "transform-partition-pushdown")
+    storage = _PartitionFilterSpy(dependencies.dataset_storage)
+    foundry = FoundryLite(dependencies=replace(dependencies, compute_adapter=compute, dataset_storage=storage))
+    ctx = demo_admin_context()
+    dataset = foundry.datasets.ensure("raw.partitioned_orders", ctx=ctx, primary_key=["id"])
+    foundry.datasets.ensure("clean.partitioned_orders", ctx=ctx, primary_key=["id"])
+    transaction = foundry._services.dataset.transaction
+    with foundry.engine.begin() as conn:
+        tx_id = transaction._open_dataset_transaction(conn, ctx, dataset, "SNAPSHOT")
+    first = foundry.dataset_storage.staging_file(
+        tenant_id=ctx.tenant_id,
+        dataset_id=dataset["id"],
+        transaction_id=tx_id,
+        file_name="bucket-a.parquet",
+    )
+    second = foundry.dataset_storage.staging_file(
+        tenant_id=ctx.tenant_id,
+        dataset_id=dataset["id"],
+        transaction_id=tx_id,
+        file_name="bucket-b.parquet",
+    )
+    validation = foundry.dataset_storage.staging_file(
+        tenant_id=ctx.tenant_id,
+        dataset_id=dataset["id"],
+        transaction_id=tx_id,
+        file_name="_validation.parquet",
+    )
+    foundry.compute_adapter.rows_to_parquet(
+        [{"id": "O-1", "bucket": "a", "amount": 100}], first, ["id", "bucket", "amount"]
+    )
+    foundry.compute_adapter.rows_to_parquet(
+        [{"id": "O-2", "bucket": "b", "amount": 200}], second, ["id", "bucket", "amount"]
+    )
+    foundry.compute_adapter.rows_to_parquet(
+        [{"id": "O-1", "bucket": "a", "amount": 100}, {"id": "O-2", "bucket": "b", "amount": 200}],
+        validation,
+        ["id", "bucket", "amount"],
+    )
+    with foundry.engine.begin() as conn:
+        transaction._finalize_open_transaction_parts(
+            conn,
+            ctx,
+            dataset=dataset,
+            transaction_id=tx_id,
+            validation_parquet=validation,
+            staged_files=(
+                DatasetStagedFile(path=first, row_count=1, partition_values={"bucket": "a"}),
+                DatasetStagedFile(path=second, row_count=1, partition_values={"bucket": "b"}),
+            ),
+            run_id="sync_partitioned_orders",
+            audit_action="multi_part_dataset_commit",
+            outbox_event_type="dataset.version.committed",
+        )
+    foundry.transforms.register_sql(
+        "partitioned_orders",
+        sql="select id, bucket, amount from {{ input('raw.partitioned_orders') }} where bucket = 'b'",
+        inputs={"orders": "raw.partitioned_orders"},
+        output_dataset_ref="clean.partitioned_orders",
+        ctx=ctx,
+    )
+
+    storage.partition_filters.clear()
+    result = foundry.transforms.run("partitioned_orders", ctx=ctx)
+    filters_after_run = list(storage.partition_filters)
+    rows = foundry.datasets.preview("clean.partitioned_orders", ctx=ctx, version=result.version_id)
+
+    assert filters_after_run == [{"bucket": "b"}]
+    assert compute.input_file_counts == [1]
+    assert [(row["id"], row["bucket"], row["amount"]) for row in rows] == [("O-2", "b", 200)]
+
+
+class _TransformInputPlanSpy(DuckDBComputeAdapter):
+    def __init__(self) -> None:
+        self.input_file_counts: list[int] = []
+
+    def execute_transform(self, plan: TransformPlan) -> TransformExecutionResult:
+        if isinstance(plan, SqlTransformPlan):
+            self.input_file_counts.append(
+                sum(_input_path_count(input_paths) for input_paths in plan.input_paths_by_ref.values())
+            )
+        return super().execute_transform(plan)
+
+
+class _PartitionFilterSpy:
+    def __init__(self, wrapped: object) -> None:
+        self._wrapped = wrapped
+        self.partition_filters: list[Mapping[str, object] | None] = []
+
+    def data_file_paths(
+        self,
+        manifest_uri: str,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]:
+        self.partition_filters.append(dict(partition_filter) if partition_filter is not None else None)
+        return self._wrapped.data_file_paths(manifest_uri, partition_filter=partition_filter)  # type: ignore[attr-defined]
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._wrapped, name)
+
+
+def _input_path_count(input_paths: object) -> int:
+    if isinstance(input_paths, Path):
+        return 1
+    if isinstance(input_paths, tuple):
+        return len(input_paths)
+    return 0
 
 
 class _BeforeExecuteTransformAdapter(DuckDBComputeAdapter):
@@ -604,6 +1031,81 @@ def _csv(tmp_path: Path, name: str, order_id: str, amount: int) -> Path:
     path = tmp_path / name
     path.write_text(f"order_id,amount\n{order_id},{amount}\n", encoding="utf-8")
     return path
+
+
+def _create_transform_record_dlq(
+    root: Path,
+    *,
+    mode: str = "snapshot",
+) -> tuple[FoundryLite, RequestContext, Mapping[str, object]]:
+    root.mkdir(parents=True, exist_ok=True)
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=root / "runtime"))
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.row_error_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.row_error_orders", ctx=ctx, primary_key=["order_id"])
+    csv_path = root / "row_error_orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,100\nO-BAD,not-a-number\nO-2,200\n", encoding="utf-8")
+    foundry.datasets.upload_csv("raw.row_error_orders", csv_path, ctx=ctx)
+    _register_row_error_transform(foundry, ctx, root, mode=mode)
+    result = foundry.transforms.run("row_error_orders", ctx=ctx)
+    transform_run = next(
+        run
+        for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"]
+        if run["output_version_id"] == result.version_id
+    )
+    return foundry, ctx, _dead_letter_for_transform_run(foundry, str(transform_run["id"]))
+
+
+def _register_row_error_transform(
+    foundry: FoundryLite,
+    ctx: RequestContext,
+    root: Path,
+    *,
+    should_fix_bad_row: bool = False,
+    mode: str = "snapshot",
+) -> None:
+    entrypoint = root / ("row_error_transform_fixed.py" if should_fix_bad_row else "row_error_transform.py")
+    entrypoint.write_text(_row_error_transform_source(should_fix_bad_row), encoding="utf-8")
+    foundry.transforms.register(
+        "row_error_orders",
+        entrypoint=entrypoint,
+        inputs={"orders": "raw.row_error_orders"},
+        output_dataset_ref="clean.row_error_orders",
+        language="python",
+        mode=mode,
+        ctx=ctx,
+    )
+
+
+def _row_error_transform_source(should_fix_bad_row: bool) -> str:
+    amount_line = (
+        "        amount = int(row['amount']) if str(row['amount']).isdigit() else 0"
+        if should_fix_bad_row
+        else "        amount = int(row['amount'])"
+    )
+    return "\n".join(
+        [
+            "from foundry_lite.transforms_sdk import Input, Output, transform",
+            "",
+            "@transform(orders=Input('raw.row_error_orders'), out=Output('clean.row_error_orders'))",
+            "def compute(orders, out):",
+            "    def clean(row):",
+            amount_line,
+            "        return {'order_id': row['order_id'], 'amount': amount + 1}",
+            "    out.write_rows(orders.map_rows(clean, on_error='quarantine'))",
+        ]
+    )
+
+
+def _dead_letter_for_transform_run(foundry: FoundryLite, transform_run_id: str) -> Mapping[str, object]:
+    with foundry.engine.begin() as conn:
+        return (
+            conn.execute(
+                select(db.dead_letter_records).where(db.dead_letter_records.c.source_run_id == transform_run_id)
+            )
+            .mappings()
+            .one()
+        )
 
 
 def test_materialization_late_commit_action_not_skipped(

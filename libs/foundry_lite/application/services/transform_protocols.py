@@ -1,8 +1,10 @@
+"""Application service helpers for transform protocols workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol, overload
 
 from foundry_lite.application.ports import (
     DatasetCheckConfig,
@@ -49,6 +51,15 @@ class TransformDatasetTransactions(Protocol):
         """Return the concrete data file path for an input dataset version."""
         ...
 
+    def _version_file_paths(
+        self,
+        version: DatasetVersionRow,
+        *,
+        partition_filter: Mapping[str, object] | None = None,
+    ) -> list[Path]:
+        """Return the concrete data file paths for an input dataset version."""
+        ...
+
     def _finalize_open_transaction(
         self,
         conn: TransactionContext,
@@ -61,6 +72,7 @@ class TransformDatasetTransactions(Protocol):
         audit_action: str,
         outbox_event_type: str,
         extra_checks: Sequence[DatasetCheckConfig] | None = None,
+        transaction_metadata: Mapping[str, object] | None = None,
         after_persist: DatasetCommitMetadataHook | None = None,
     ) -> CommitResult:
         """Validate and commit the staged transform output atomically."""
@@ -82,12 +94,26 @@ class TransformDatasetTransactions(Protocol):
 class TransformDatasetVersions(Protocol):
     """Committed dataset version reads required by transform runs."""
 
+    @overload
     def _latest_version_by_dataset_id(
         self,
         conn: TransactionContext,
         dataset_id: str,
+        *,
+        allow_missing: Literal[False] = False,
     ) -> DatasetVersionRow:
         """Return the latest committed input version inside the transaction."""
+        ...
+
+    @overload
+    def _latest_version_by_dataset_id(
+        self,
+        conn: TransactionContext,
+        dataset_id: str,
+        *,
+        allow_missing: Literal[True],
+    ) -> DatasetVersionRow | None:
+        """Return the latest committed input version or None when missing."""
         ...
 
     def _get_version_by_id(self, version_id: str) -> DatasetVersionRow:

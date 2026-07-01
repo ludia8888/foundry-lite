@@ -5,7 +5,17 @@ from typing import cast
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import DeadLetterRecordRow
-from foundry_lite.application.services.dataset.record_dlq_replay import _failure_metadata
+from foundry_lite.application.primitives import CommitResult
+from foundry_lite.application.services.dataset.record_dlq_replay import (
+    _failure_metadata,
+    _int_metadata,
+    _optional_str_metadata,
+    _replay_lease_token,
+    _replay_run_id,
+    _schema_strategy,
+    _str_metadata,
+    _success_metadata,
+)
 from foundry_lite.application.services.record_dlq_service import (
     _bulk_retry_failure,
     _bulk_retry_result,
@@ -16,7 +26,7 @@ from foundry_lite.application.services.record_dlq_service import (
     _retry_result,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, PermissionDenied, ValidationFailed
+from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, PermissionDenied, ValidationFailed
 from foundry_lite.infrastructure import schema as db
 from sqlalchemy import Connection, select
 
@@ -126,6 +136,49 @@ def test_record_dlq_replay_failure_metadata_scrubs_secret_message() -> None:
 
     assert metadata["lastReplayError"] == {"type": "RuntimeError", "message": "***MASKED***"}
     assert "raw-record-token" not in str(metadata)
+
+
+def test_record_dlq_replay_metadata_helpers_fail_closed_and_preserve_success_evidence() -> None:
+    ctx = RequestContext(tenant_id="tenant-demo", actor_user_id="operator", request_id="req-replay")
+    row = _row(
+        replay_run_id="replay-run-1",
+        replay_lease_token="lease-1",
+        metadata={"dataset_ref": "raw.orders", "schema_strategy": "envelope_json", "batchSize": 10},
+    )
+    result = CommitResult(
+        dataset_id="dataset-orders",
+        dataset_ref="raw.orders",
+        transaction_id="tx-replay",
+        version_id="version-replayed",
+        version_number=2,
+        row_count=3,
+        manifest_uri="/tmp/manifest.json",
+        schema_hash="schema-hash",
+    )
+
+    success = _success_metadata(row, ctx, result)
+
+    assert _replay_lease_token(row) == "lease-1"
+    assert _replay_run_id(row) == "replay-run-1"
+    assert _str_metadata(row["metadata"], "dataset_ref") == "raw.orders"
+    assert _optional_str_metadata(row["metadata"], "missing") is None
+    assert _int_metadata(row["metadata"], "batchSize") == 10
+    assert _schema_strategy(row["metadata"]) == "envelope_json"
+    assert success["replayResult"] == {
+        "datasetVersionId": "version-replayed",
+        "transactionId": "tx-replay",
+        "rowCount": 3,
+    }
+    with pytest.raises(InvariantViolation, match="lease is missing"):
+        _replay_lease_token(_row(replay_lease_token=""))
+    with pytest.raises(ValidationFailed, match="replay run is missing"):
+        _replay_run_id(_row(replay_run_id=None))
+    with pytest.raises(ValidationFailed, match="missing a string"):
+        _str_metadata({}, "dataset_ref")
+    with pytest.raises(ValidationFailed, match="missing an integer"):
+        _int_metadata({"batchSize": True}, "batchSize")
+    with pytest.raises(ValidationFailed, match="schema strategy is invalid"):
+        _schema_strategy({"schema_strategy": "bad"})
 
 
 def test_record_dlq_permission_denied_audit_records_deny_decision(foundry: FoundryLite) -> None:

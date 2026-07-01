@@ -486,6 +486,56 @@ def test_run_detail_shows_event_time_lag_and_reprocessing_plan(tmp_path: Path) -
     assert detail["lateData"]["summary"]["requiresReprocessing"] is True
     assert detail["lateData"]["summary"]["maxEventTimeLagSeconds"] >= 1800
     assert detail["lateData"]["reprocessingPlan"]["previousCommittedDatasetVersionId"] is not None
+    platform_watermark = detail["lateData"]["platformWatermark"]
+    assert platform_watermark["scope"] == "platform_dataset_event_time"
+    assert platform_watermark["status"] == "REPROCESS_REQUIRED"
+    assert platform_watermark["reprocessing"]["isRequired"] is True
+    assert platform_watermark["reprocessing"]["previousCommittedDatasetVersionId"] is not None
+    assert platform_watermark["sourceKey"] == "shipments:shipment_events:0:foundry-lite-archive"
+
+
+def test_transform_output_platform_watermark_is_derived_from_stream_input(tmp_path: Path) -> None:
+    foundry, dependencies = _core_with_stream(tmp_path)
+    ctx = demo_admin_context()
+    stream = StreamArchiveConfig(stream_name="shipments", topic="shipment_events")
+    foundry.datasets.ensure("raw.shipment_events", ctx=ctx, primary_key=["event_id"])
+    foundry.datasets.ensure("clean.shipment_events", ctx=ctx, primary_key=["event_id"])
+    event_time = _iso_seconds_ago(300)
+    _publish_shipment(
+        dependencies.stream_adapter,
+        "S-100",
+        ctx=ctx,
+        payload={"shipment_id": "S-100", "status": "IN_TRANSIT", "event_time": event_time},
+    )
+    input_commit = foundry.datasets.archive_stream_events("raw.shipment_events", stream=stream, ctx=ctx)
+    sql_path = tmp_path / "clean_shipment_events.sql"
+    sql_path.write_text(
+        "select event_id, event_time, payload_json from {{ input('raw.shipment_events') }}",
+        encoding="utf-8",
+    )
+    foundry.transforms.register(
+        "clean_shipment_events",
+        entrypoint=sql_path,
+        inputs={"events": "raw.shipment_events"},
+        output_dataset_ref="clean.shipment_events",
+        ctx=ctx,
+    )
+
+    output_commit = foundry.transforms.run("clean_shipment_events", ctx=ctx)
+
+    assert input_commit is not None
+    output_transaction = _committed_transaction_for_version(dependencies, ctx, output_commit.version_id)
+    platform_watermark = output_transaction["metadata"]["platformWatermark"]
+    input_watermark = _committed_transaction_for_version(dependencies, ctx, input_commit.version_id)["metadata"][
+        "platformWatermark"
+    ]
+    assert platform_watermark["producer"] == "transform"
+    assert platform_watermark["datasetRef"] == "clean.shipment_events"
+    assert platform_watermark["status"] == "CURRENT"
+    assert platform_watermark["timeAxis"]["policy"] == "min_input_event_time"
+    assert platform_watermark["timeAxis"]["watermarkEventTime"] == input_watermark["timeAxis"]["watermarkEventTime"]
+    assert platform_watermark["inputs"][0]["datasetRef"] == "raw.shipment_events"
+    assert platform_watermark["inputs"][0]["inputDatasetVersionId"] == input_commit.version_id
 
 
 def test_stream_archive_dead_letter_store_failure_fails_main_pipeline(tmp_path: Path) -> None:
@@ -789,6 +839,21 @@ def _latest_stream_transaction(
             transaction=transaction,
             tenant_id=ctx.tenant_id,
             dataset_id=dataset["id"],
+        )
+    assert row is not None
+    return dict(row)
+
+
+def _committed_transaction_for_version(
+    dependencies: CoreDependencies,
+    ctx: RequestContext,
+    version_id: str,
+) -> dict[str, Any]:
+    with dependencies.engine.begin() as transaction:
+        row = dependencies.dataset_transaction_repository.committed_transaction_by_version(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            committed_version_id=version_id,
         )
     assert row is not None
     return dict(row)

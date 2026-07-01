@@ -30,6 +30,7 @@ from foundry_lite.application.services.ontology_migration_changes import (
     warning_object_reindex,
     warning_optional_parameter_added,
     warning_parameter_became_optional,
+    warning_property_reindex,
 )
 from foundry_lite.application.services.ontology_migration_types import reindex_operation
 from foundry_lite.domain.errors import ValidationFailed
@@ -79,6 +80,10 @@ def test_ontology_migration_object_reindex_plan_is_deterministic() -> None:
 
     assert first.status == "compatible_with_warning"
     assert _change_kinds(first.warning_changes) == ["property_mapping_changed"]
+    assert first.warning_changes[0].to_payload()["details"] == {
+        "previousColumn": "source_status",
+        "nextColumn": "normalized_status",
+    }
     assert first.reindex_operations[0].reindex_key == second.reindex_operations[0].reindex_key
     assert first.reindex_operations[0].to_payload()["changedFields"] == ["properties.status"]
 
@@ -115,6 +120,7 @@ def test_ontology_migration_direct_change_constructors_keep_operator_evidence() 
         warning_object_reindex("Order", "backing"),
         blocked_property_removed("Order", "legacyStatus"),
         blocked_property_type_change("Order", "status", property_row, {"type": "integer"}),
+        warning_property_reindex("Order", "status", property_row, {"column": "normalized_status"}),
         blocked_link_removed("LegacyLink"),
         blocked_link_cardinality_changed("OrderCustomer"),
         blocked_link_backing_changed(
@@ -141,11 +147,12 @@ def test_ontology_migration_direct_change_constructors_keep_operator_evidence() 
     assert payloads[1]["details"] == {"previous": "orderId", "next": "newOrderId"}
     assert payloads[2]["requiresObjectReindex"] is True
     assert payloads[4]["details"] == {"previous": "string", "next": "integer"}
-    assert payloads[7]["details"] == {
+    assert payloads[5]["details"] == {"previousColumn": "source_status", "nextColumn": "normalized_status"}
+    assert payloads[8]["details"] == {
         "previous": {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "customer_id"},
         "next": {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "account_id"},
     }
-    assert payloads[11]["requiresSdkMajorVersion"] is True
+    assert payloads[12]["requiresSdkMajorVersion"] is True
     assert payloads[-1]["status"] == "warning"
 
 

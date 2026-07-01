@@ -31,6 +31,39 @@ _JSON_TYPE_CHECKS: dict[str, JsonTypeChecker] = {
     "object": lambda value: isinstance(value, Mapping),
     "array": lambda value: isinstance(value, list),
 }
+_DIRECT_VENDOR_TOOL_IDS = frozenset(
+    {
+        "arbitrary_http_request",
+        "generic_repository_write",
+        "generic_sql",
+        "http.fetch",
+        "http.post",
+        "http.request",
+        "https.fetch",
+        "https.post",
+        "https.request",
+        "python_eval",
+        "shell_execute",
+        "vendor.api.request",
+        "webhook.invoke",
+    }
+)
+_DIRECT_VENDOR_TOOL_DOTTED_IDS = frozenset(
+    tool_id.replace("_", ".").replace("-", ".") for tool_id in _DIRECT_VENDOR_TOOL_IDS
+)
+_DIRECT_VENDOR_TOOL_PREFIXES = (
+    "crm.",
+    "erp.",
+    "http.",
+    "https.",
+    "hubspot.",
+    "netsuite.",
+    "salesforce.",
+    "sap.",
+    "slack.",
+    "vendor.",
+    "webhook.",
+)
 
 
 @dataclass(frozen=True)
@@ -134,7 +167,24 @@ def _published_spec(request: ToolBrokerRequest) -> ToolSpec:
     spec = _matching_spec(call.tool_id, call.version, request.tool_manifest)
     if spec is None or spec.status != "published":
         raise ToolBrokerError("not_published", f"tool {call.tool_id}@{call.version} is not published")
+    if is_direct_vendor_tool_id(spec.tool_id):
+        raise ToolBrokerError(
+            "direct_vendor_tool_denied",
+            "direct vendor/API tools must use governed connectors, webhooks, or action proposals",
+        )
     return spec
+
+
+def is_direct_vendor_tool_id(tool_id: str) -> bool:
+    """Return whether a tool id represents direct egress outside governed actions/connectors."""
+
+    normalized = tool_id.strip().lower()
+    dotted = normalized.replace("_", ".").replace("-", ".")
+    return (
+        normalized in _DIRECT_VENDOR_TOOL_IDS
+        or dotted in _DIRECT_VENDOR_TOOL_DOTTED_IDS
+        or dotted.startswith(_DIRECT_VENDOR_TOOL_PREFIXES)
+    )
 
 
 def _matching_spec(tool_id: str, version: str, specs: Sequence[ToolSpec]) -> ToolSpec | None:

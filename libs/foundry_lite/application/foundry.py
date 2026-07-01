@@ -1,14 +1,19 @@
+"""Application-layer models and helpers for foundry."""
+
 from __future__ import annotations
 
 import shutil
+from typing import cast, overload
 
 from foundry_lite.application.core_services import CoreServices
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.facades import (
     ActionGateway,
     AipWorkspace,
+    AuthGateway,
     ConnectorWorkspace,
     DatasetWorkspace,
+    DeveloperConsole,
     ErasureGateway,
     InsightReviewWorkspace,
     MaterializationRunner,
@@ -19,6 +24,14 @@ from foundry_lite.application.facades import (
     SourceWorkspace,
     SupplyChainDemo,
     TransformPipeline,
+)
+from foundry_lite.application.osdk import (
+    OsdkActionInvoker,
+    OsdkActionType,
+    OsdkHost,
+    OsdkObjectSet,
+    OsdkObjectType,
+    osdk_resource,
 )
 from foundry_lite.application.ports.model_registry_repository import (
     ModelAliasRecord,
@@ -35,7 +48,7 @@ from foundry_lite.application.primitives import (
     _now,
     _required_row,
 )
-from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID
+from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID, RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.observability.tracing import trace_public_methods
 
@@ -81,6 +94,7 @@ class FoundryLite:
         self.object_index_repository = dependencies.object_index_repository
         self.object_read_repository = dependencies.object_read_repository
         self.object_set_repository = dependencies.object_set_repository
+        self.osdk_application_repository = dependencies.osdk_application_repository
         self.runtime_repository = dependencies.runtime_repository
         self.dataset_storage = dependencies.dataset_storage
         self.connector_registry_repository = dependencies.connector_registry_repository
@@ -97,6 +111,7 @@ class FoundryLite:
         self.ontology = OntologyRegistry(services.ontology)
         self.objects = ObjectStore(services.object_store, services.ontology_search)
         self.actions = ActionGateway(services.action)
+        self.auth = AuthGateway(services.osdk_oauth_sessions)
         self.aip = AipWorkspace(
             services.agent_runtime,
             services.action_proposal,
@@ -116,6 +131,7 @@ class FoundryLite:
             services.source_scheduler,
         )
         self.erasure = ErasureGateway(services.erasure)
+        self.developer_console = DeveloperConsole(services.osdk_applications)
         self.operations = OperationsConsole(
             services.action,
             services.runtime,
@@ -156,6 +172,30 @@ class FoundryLite:
             self._ensure_demo_model_registry(now)
         except Exception:
             return
+
+    @overload
+    def __call__(
+        self,
+        resource: OsdkObjectType,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> OsdkObjectSet: ...
+
+    @overload
+    def __call__(
+        self,
+        resource: OsdkActionType,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> OsdkActionInvoker: ...
+
+    def __call__(
+        self,
+        resource: OsdkObjectType | OsdkActionType,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> OsdkObjectSet | OsdkActionInvoker:
+        return osdk_resource(cast(OsdkHost, self), resource, ctx=ctx)
 
     def _ensure_demo_model_registry(self, now: str) -> None:
         with self.engine.begin() as transaction:

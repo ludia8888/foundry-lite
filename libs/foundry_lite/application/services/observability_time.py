@@ -1,3 +1,5 @@
+"""Application service helpers for observability time workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence

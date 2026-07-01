@@ -1,3 +1,5 @@
+"""SQLAlchemy repository adapter for dataset quality repository persistence."""
+
 from __future__ import annotations
 
 from typing import Any, cast
@@ -15,10 +17,17 @@ from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckResultStatusCountRow,
     DatasetCheckResultTypeStatusCountRow,
     DatasetCheckRow,
+    DatasetQualityContractVersionRecord,
+    DatasetQualityContractVersionRow,
     DatasetSchemaRecord,
     DatasetSchemaRow,
 )
+from foundry_lite.application.state_transitions import (
+    DATASET_QUALITY_CONTRACT_ACTIVE,
+    DATASET_QUALITY_CONTRACT_SUPERSEDED,
+)
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update, cas_status_update_many
 
 
 class SqlAlchemyDatasetQualityRepository:
@@ -53,6 +62,18 @@ class SqlAlchemyDatasetQualityRepository:
             select(func.max(db.dataset_schemas.c.version)).where(db.dataset_schemas.c.dataset_id == dataset_id)
         ).scalar()
         return int(value) if value is not None else None
+
+    def latest_schema(self, *, transaction: Any, dataset_id: str) -> DatasetSchemaRow | None:
+        row = (
+            transaction.execute(
+                select(db.dataset_schemas)
+                .where(db.dataset_schemas.c.dataset_id == dataset_id)
+                .order_by(db.dataset_schemas.c.version.desc(), db.dataset_schemas.c.id.desc())
+            )
+            .mappings()
+            .first()
+        )
+        return cast(DatasetSchemaRow, dict(row)) if row else None
 
     def insert_schema(self, *, transaction: Any, record: DatasetSchemaRecord) -> None:
         transaction.execute(
@@ -158,6 +179,7 @@ class SqlAlchemyDatasetQualityRepository:
                 id=record.check_result_id,
                 tenant_id=record.tenant_id,
                 check_id=record.check_id,
+                data_contract_version_id=record.data_contract_version_id,
                 run_id=record.run_id,
                 transaction_id=record.transaction_id,
                 checked_manifest_hash=record.checked_manifest_hash,
@@ -167,6 +189,134 @@ class SqlAlchemyDatasetQualityRepository:
                 details=record.details,
                 created_at=record.created_at,
             )
+        )
+
+    def latest_contract_version_number(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        contract_key: str,
+    ) -> int | None:
+        value = transaction.execute(
+            select(func.max(db.dataset_quality_contract_versions.c.version)).where(
+                _contract_version_scope(tenant_id, dataset_id, contract_key)
+            )
+        ).scalar()
+        return int(value) if value is not None else None
+
+    def insert_contract_version(
+        self,
+        *,
+        transaction: Any,
+        record: DatasetQualityContractVersionRecord,
+    ) -> None:
+        values = _contract_version_values(record)
+        values.pop("tenant_id", None)
+        transaction.execute(insert(db.dataset_quality_contract_versions).values(tenant_id=record.tenant_id, **values))
+
+    def contract_version_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        contract_version_id: str,
+    ) -> DatasetQualityContractVersionRow | None:
+        row = (
+            transaction.execute(
+                select(db.dataset_quality_contract_versions).where(
+                    and_(
+                        db.dataset_quality_contract_versions.c.tenant_id == tenant_id,
+                        db.dataset_quality_contract_versions.c.dataset_id == dataset_id,
+                        db.dataset_quality_contract_versions.c.id == contract_version_id,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(DatasetQualityContractVersionRow, dict(row)) if row else None
+
+    def contract_versions_for_dataset(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        limit: int,
+    ) -> list[DatasetQualityContractVersionRow]:
+        rows = (
+            transaction.execute(
+                select(db.dataset_quality_contract_versions)
+                .where(
+                    and_(
+                        db.dataset_quality_contract_versions.c.tenant_id == tenant_id,
+                        db.dataset_quality_contract_versions.c.dataset_id == dataset_id,
+                    )
+                )
+                .order_by(
+                    db.dataset_quality_contract_versions.c.contract_key,
+                    db.dataset_quality_contract_versions.c.version.desc(),
+                )
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(DatasetQualityContractVersionRow, dict(row)) for row in rows]
+
+    def active_contract_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        contract_key: str,
+    ) -> DatasetQualityContractVersionRow | None:
+        row = (
+            transaction.execute(
+                select(db.dataset_quality_contract_versions)
+                .where(
+                    and_(
+                        _contract_version_scope(tenant_id, dataset_id, contract_key),
+                        db.dataset_quality_contract_versions.c.status == "ACTIVE",
+                    )
+                )
+                .order_by(db.dataset_quality_contract_versions.c.version.desc())
+            )
+            .mappings()
+            .first()
+        )
+        return cast(DatasetQualityContractVersionRow, dict(row)) if row else None
+
+    def activate_contract_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        dataset_id: str,
+        contract_key: str,
+        contract_version_id: str,
+        activated_at: str,
+    ) -> bool:
+        cas_status_update_many(
+            transaction,
+            db.dataset_quality_contract_versions,
+            tenant_id=tenant_id,
+            transition=DATASET_QUALITY_CONTRACT_SUPERSEDED,
+            values={},
+            conditions=(_contract_version_scope(tenant_id, dataset_id, contract_key),),
+        )
+        return cas_status_update(
+            transaction,
+            db.dataset_quality_contract_versions,
+            tenant_id=tenant_id,
+            row_id=contract_version_id,
+            transition=DATASET_QUALITY_CONTRACT_ACTIVE,
+            values={"activated_at": activated_at},
+            conditions=(_contract_version_scope(tenant_id, dataset_id, contract_key),),
         )
 
     def check_results_for_transaction(
@@ -281,6 +431,14 @@ def _dataset_result_scope(tenant_id: str, dataset_id: str) -> Any:
     )
 
 
+def _contract_version_scope(tenant_id: str, dataset_id: str, contract_key: str) -> Any:
+    return and_(
+        db.dataset_quality_contract_versions.c.tenant_id == tenant_id,
+        db.dataset_quality_contract_versions.c.dataset_id == dataset_id,
+        db.dataset_quality_contract_versions.c.contract_key == contract_key,
+    )
+
+
 def _dataset_check_insert_or_ignore(transaction: Any, record: DatasetCheckRecord) -> Any:
     values = _dataset_check_values(record)
     conflict_columns = ["tenant_id", "dataset_id", "name"]
@@ -303,4 +461,22 @@ def _dataset_check_values(record: DatasetCheckRecord) -> dict[str, object]:
         "config": record.config,
         "severity": record.severity,
         "enabled": record.enabled,
+    }
+
+
+def _contract_version_values(record: DatasetQualityContractVersionRecord) -> dict[str, object]:
+    return {
+        "id": record.contract_version_id,
+        "tenant_id": record.tenant_id,
+        "dataset_id": record.dataset_id,
+        "contract_key": record.contract_key,
+        "version": record.version,
+        "status": record.status,
+        "owner_user_id": record.owner_user_id,
+        "description": record.description,
+        "checks_snapshot": record.checks_snapshot,
+        "schema_version_id": record.schema_version_id,
+        "schema_version": record.schema_version,
+        "created_at": record.created_at,
+        "activated_at": record.activated_at,
     }

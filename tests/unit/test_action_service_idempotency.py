@@ -59,6 +59,11 @@ class _UnexpectedMutation:
         raise AssertionError("idempotency race replay must not reach object mutation")
 
 
+class _AllowOsdkScope:
+    def require_resource_scope(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
 class _WriteOpenRuntime:
     """Runtime stub for a tenant that is not in restore mode (write traffic open)."""
 
@@ -110,6 +115,7 @@ def test_action_service_replays_when_insert_loses_idempotency_race() -> None:
             "object_indexing_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),
             "ontology_service": _Ontology(),
+            "osdk_application_service": _AllowOsdkScope(),
             "runtime_service": _WriteOpenRuntime(),
         }
     )
@@ -143,6 +149,7 @@ def test_protected_runtime_blocks_action_failure_injection_before_run_insert(mon
             "object_indexing_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),
             "ontology_service": _Ontology(),
+            "osdk_application_service": _AllowOsdkScope(),
             "runtime_service": runtime,
         }
     )
@@ -173,6 +180,7 @@ def test_protected_runtime_blocks_action_failure_injection_before_run_insert(mon
                 "action_api_name": "ApproveOrder",
                 "failure_injection": {
                     "simulate_writeback_failure": False,
+                    "simulate_writeback_retryable": False,
                     "simulate_writeback_outcome_unknown": True,
                     "simulate_writeback_compensation_required": False,
                 },
@@ -198,8 +206,18 @@ def test_action_request_fingerprint_includes_writeback_simulation_flags() -> Non
         params={"reason": "Inventory confirmed"},
         simulate_writeback_outcome_unknown=True,
     )
+    retryable = action_request_fingerprint(
+        action_api_name="ApproveOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=1,
+        params={"reason": "Inventory confirmed"},
+        simulate_writeback_retryable=True,
+    )
 
     assert simulated != base
+    assert retryable != base
+    assert retryable != simulated
 
 
 def _action_run_row() -> ActionRunRow:

@@ -1,3 +1,5 @@
+"""Application service helpers for index records workflows."""
+
 from __future__ import annotations
 
 from foundry_lite.application.ports import LinkTypeRow, ObjectLinkInsert

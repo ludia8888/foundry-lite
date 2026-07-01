@@ -1,18 +1,39 @@
+"""Application service helpers for links workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import Literal, Protocol
 
-from foundry_lite.application.ports import ObjectLinkPayload, ObjectLinkRow, ObjectRecordRow, TransactionContext
+from foundry_lite.application.ports import (
+    ObjectLinkPayload,
+    ObjectLinkRow,
+    ObjectRecordRow,
+    OsdkResourceOperation,
+    OsdkResourceType,
+    TransactionContext,
+)
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.object_store.query_protocols import ObjectRecordLookup
 from foundry_lite.domain.context import RequestContext
 
 
+class _OsdkScopeBoundary(Protocol):
+    def require_resource_scope(
+        self,
+        ctx: RequestContext,
+        *,
+        resource_type: OsdkResourceType,
+        resource_api_name: str,
+        operation: OsdkResourceOperation,
+    ) -> None: ...
+
+
 class ObjectLinksService(CoreService):
     required_dependencies = ("engine", "policy", "object_read_repository")
-    required_collaborators = ("object_records_service",)
+    required_collaborators = ("object_records_service", "osdk_application_service")
     object_records_service: ObjectRecordLookup
+    osdk_application_service: _OsdkScopeBoundary
 
     def get_links(
         self,
@@ -24,6 +45,7 @@ class ObjectLinksService(CoreService):
     ) -> list[ObjectLinkPayload]:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
+        self._require_link_read_scope(ctx, link_type_api_name)
         with self.engine.begin() as conn:
             links = self.object_read_repository.active_links_from(
                 transaction=conn,
@@ -50,6 +72,14 @@ class ObjectLinksService(CoreService):
                 reverse_links,
                 direction="reverse",
             )
+
+    def _require_link_read_scope(self, ctx: RequestContext, link_type_api_name: str) -> None:
+        self.osdk_application_service.require_resource_scope(
+            ctx,
+            resource_type="link",
+            resource_api_name=link_type_api_name,
+            operation="read",
+        )
 
     def _link_payloads(
         self,

@@ -358,6 +358,10 @@ def _ensure_retryable(row: DeadLetterRecordRow, idempotency_key: str) -> None:
             "data quality quarantine records require contract-specific remediation",
             details={"record_id": row["id"]},
         )
+    if _record_dlq_kind(row) == "transform_execution":
+        raise ConflictDetected(
+            "transform quarantine records require rerunning the transform", details={"record_id": row["id"]}
+        )
     existing_key = row.get("replay_idempotency_key")
     if existing_key is not None and existing_key != idempotency_key and row["replay_status"] != "FAILED":
         raise ConflictDetected(

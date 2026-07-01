@@ -1,6 +1,8 @@
+"""SQLAlchemy repository adapter for runtime repository persistence."""
+
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
 from sqlalchemy import and_, delete, desc, false, func, insert, or_, select
@@ -12,7 +14,9 @@ from foundry_lite.application.ports import (
     DeadLetterEventRecord,
     LineageEdgeRecord,
     LineageEdgeRow,
+    ObservabilityIncident,
     OutboxEventRecord,
+    RuntimeJsonObject,
     RuntimeLookupTable,
     RuntimeRow,
     RuntimeRowsTable,
@@ -21,9 +25,17 @@ from foundry_lite.application.ports import (
     RuntimeRunRelationRow,
     RuntimeRunSnapshot,
     RuntimeRunType,
+    StoredObservabilityIncident,
+    StoredObservabilityIncidentStatus,
 )
-from foundry_lite.application.ports.transaction_context import StatusTransition
-from foundry_lite.application.ports.workflow_adapter import WorkflowRunRecord, WorkflowRunRow
+from foundry_lite.application.ports.transaction_context import (
+    WORKFLOW_RUN_CANCELLED,
+    WORKFLOW_RUN_FAILED,
+    WORKFLOW_RUN_LEASE_RUNNING,
+    WORKFLOW_RUN_SUCCEEDED,
+    StatusTransition,
+)
+from foundry_lite.application.ports.workflow_adapter import WorkflowLedgerStatus, WorkflowRunRecord, WorkflowRunRow
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
 
@@ -251,6 +263,119 @@ class SqlAlchemyRuntimeRepository:
             )
         return [cast(RuntimeRow, dict(row)) for row in rows]
 
+    def list_observability_incidents(
+        self,
+        *,
+        tenant_id: str,
+        status: StoredObservabilityIncidentStatus | None,
+        limit: int,
+    ) -> list[StoredObservabilityIncident]:
+        conditions = [db.observability_incidents.c.tenant_id == tenant_id]
+        if status is not None:
+            conditions.append(db.observability_incidents.c.status == status)
+        with self.engine.begin() as transaction:
+            rows = (
+                transaction.execute(
+                    select(db.observability_incidents)
+                    .where(and_(*conditions))
+                    .order_by(
+                        desc(db.observability_incidents.c.last_observed_at),
+                        desc(db.observability_incidents.c.id),
+                    )
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+        return [_observability_incident_response(dict(row)) for row in rows]
+
+    def observability_incident_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        incident_id: str,
+    ) -> StoredObservabilityIncident | None:
+        row = _observability_incident_db_row(transaction, tenant_id=tenant_id, incident_id=incident_id)
+        return _observability_incident_response(row) if row else None
+
+    def upsert_observability_incident(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        incident: ObservabilityIncident,
+    ) -> StoredObservabilityIncident:
+        existing = _observability_incident_by_dedupe(transaction, tenant_id, incident["dedupeKey"])
+        if existing is None:
+            return self._insert_observability_incident(transaction, tenant_id, incident)
+        return self._update_observability_incident(transaction, tenant_id, incident, existing)
+
+    def _insert_observability_incident(
+        self,
+        transaction: Any,
+        tenant_id: str,
+        incident: ObservabilityIncident,
+    ) -> StoredObservabilityIncident:
+        values = _observability_insert_values(tenant_id, incident)
+        values.pop("tenant_id", None)
+        transaction.execute(insert(db.observability_incidents).values(tenant_id=tenant_id, **values))
+        row = _observability_incident_db_row(transaction, tenant_id=tenant_id, incident_id=incident["id"])
+        assert row is not None
+        return _observability_incident_response(row)
+
+    def _update_observability_incident(
+        self,
+        transaction: Any,
+        tenant_id: str,
+        incident: ObservabilityIncident,
+        existing: Mapping[str, Any],
+    ) -> StoredObservabilityIncident:
+        values = _observability_update_values(incident, existing)
+        transaction.execute(
+            db.observability_incidents.update()
+            .where(
+                and_(
+                    db.observability_incidents.c.tenant_id == tenant_id,
+                    db.observability_incidents.c.id == existing["id"],
+                )
+            )
+            .values(**values)
+        )
+        row = _observability_incident_db_row(transaction, tenant_id=tenant_id, incident_id=str(existing["id"]))
+        assert row is not None
+        return _observability_incident_response(row)
+
+    def update_observability_incident_status(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        incident_id: str,
+        status: StoredObservabilityIncidentStatus,
+        actor_user_id: str,
+        updated_at: str,
+        resolution_reason: str | None,
+    ) -> StoredObservabilityIncident | None:
+        values = _observability_status_values(status, actor_user_id, updated_at, resolution_reason)
+        result = transaction.execute(
+            db.observability_incidents.update()
+            .where(
+                and_(
+                    db.observability_incidents.c.tenant_id == tenant_id,
+                    db.observability_incidents.c.id == incident_id,
+                )
+            )
+            .values(**values)
+        )
+        if result.rowcount != 1:
+            return None
+        return self.observability_incident_by_id(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            incident_id=incident_id,
+        )
+
     def row_by_id(self, *, transaction: Any, table: RuntimeLookupTable, row_id: str) -> RuntimeRow | None:
         runtime_table = _lookup_table(table)
         row = transaction.execute(select(runtime_table).where(runtime_table.c.id == row_id)).mappings().first()
@@ -459,8 +584,8 @@ class SqlAlchemyRuntimeRepository:
         tenant_id: str,
         workflow_run_id: str,
         transition: StatusTransition,
-        output: RuntimeRow,
-        error: RuntimeRow | None,
+        output: RuntimeJsonObject,
+        error: RuntimeJsonObject | None,
         started_at: str | None,
         completed_at: str | None,
     ) -> WorkflowRunRow | None:
@@ -478,6 +603,75 @@ class SqlAlchemyRuntimeRepository:
             row_id=workflow_run_id,
             transition=transition,
             values=values,
+        )
+        if not updated:
+            return None
+        return self.workflow_run_by_id(transaction=transaction, tenant_id=tenant_id, workflow_run_id=workflow_run_id)
+
+    def claim_workflow_run_lease(
+        self,
+        *,
+        transaction: Any,
+        record: WorkflowRunRecord,
+        lease_owner_id: str,
+        now: str,
+    ) -> WorkflowRunRow | None:
+        existing = self.insert_workflow_run_or_get_existing(transaction=transaction, record=record)
+        row = existing or self.workflow_run_by_id(
+            transaction=transaction,
+            tenant_id=record.tenant_id,
+            workflow_run_id=record.workflow_run_id,
+        )
+        if row is None:
+            return None
+        if existing is None:
+            return row
+        if not _workflow_lease_claimable(row, lease_owner_id, now):
+            return None
+        attempts = _workflow_lease_attempts(row, lease_owner_id)
+        updated = cas_status_update(
+            transaction,
+            db.workflow_runs,
+            tenant_id=record.tenant_id,
+            row_id=row["id"],
+            transition=WORKFLOW_RUN_LEASE_RUNNING,
+            values=_workflow_lease_claim_values(record, attempts),
+        )
+        if not updated:
+            return None
+        return self.workflow_run_by_id(transaction=transaction, tenant_id=record.tenant_id, workflow_run_id=row["id"])
+
+    def release_workflow_run_lease(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        workflow_run_id: str,
+        lease_owner_id: str,
+        lease_token: str,
+        status: WorkflowLedgerStatus,
+        output: RuntimeRow,
+        error: RuntimeRow | None,
+        completed_at: str,
+    ) -> WorkflowRunRow | None:
+        row = self.workflow_run_by_id(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            workflow_run_id=workflow_run_id,
+        )
+        if row is None or not _workflow_lease_matches(row, lease_owner_id, lease_token):
+            return None
+        updated = cas_status_update(
+            transaction,
+            db.workflow_runs,
+            tenant_id=tenant_id,
+            row_id=workflow_run_id,
+            transition=_workflow_lease_release_transition(status),
+            values={
+                "output": dict(output),
+                "error": dict(error) if error is not None else None,
+                "completed_at": completed_at,
+            },
         )
         if not updated:
             return None
@@ -683,6 +877,151 @@ def _lookup_table(table: RuntimeLookupTable) -> Any:
     }[table]
 
 
+def _observability_incident_db_row(
+    transaction: Any,
+    *,
+    tenant_id: str,
+    incident_id: str,
+) -> Mapping[str, Any] | None:
+    row = (
+        transaction.execute(
+            select(db.observability_incidents).where(
+                and_(
+                    db.observability_incidents.c.tenant_id == tenant_id,
+                    db.observability_incidents.c.id == incident_id,
+                )
+            )
+        )
+        .mappings()
+        .first()
+    )
+    return dict(row) if row else None
+
+
+def _observability_incident_by_dedupe(
+    transaction: Any,
+    tenant_id: str,
+    dedupe_key: str,
+) -> Mapping[str, Any] | None:
+    row = (
+        transaction.execute(
+            select(db.observability_incidents).where(
+                and_(
+                    db.observability_incidents.c.tenant_id == tenant_id,
+                    db.observability_incidents.c.dedupe_key == dedupe_key,
+                )
+            )
+        )
+        .mappings()
+        .first()
+    )
+    return dict(row) if row else None
+
+
+def _observability_insert_values(tenant_id: str, incident: ObservabilityIncident) -> dict[str, object]:
+    observed_at = incident["lastObservedAt"]
+    return {
+        "id": incident["id"],
+        "tenant_id": tenant_id,
+        "detector_id": incident["detectorId"],
+        "detector_type": incident["detectorType"],
+        "config_version": incident["configVersion"],
+        "status": "open",
+        "severity": incident["severity"],
+        "owner": incident["owner"],
+        "message": incident["message"],
+        "dedupe_key": incident["dedupeKey"],
+        "first_observed_at": incident["firstObservedAt"],
+        "last_observed_at": observed_at,
+        "occurrence_count": 1,
+        "evidence": dict(incident["evidence"]),
+        "evidence_links": list(incident["evidenceLinks"]),
+        "threshold": dict(incident["threshold"]),
+        "created_at": observed_at,
+        "updated_at": observed_at,
+    }
+
+
+def _observability_update_values(
+    incident: ObservabilityIncident,
+    existing: Mapping[str, Any],
+) -> dict[str, object | None]:
+    occurrence_increment = 0 if existing.get("last_observed_at") == incident["lastObservedAt"] else 1
+    values: dict[str, object | None] = {
+        "detector_id": incident["detectorId"],
+        "detector_type": incident["detectorType"],
+        "config_version": incident["configVersion"],
+        "severity": incident["severity"],
+        "owner": incident["owner"],
+        "message": incident["message"],
+        "last_observed_at": incident["lastObservedAt"],
+        "occurrence_count": int(existing["occurrence_count"]) + occurrence_increment,
+        "evidence": dict(incident["evidence"]),
+        "evidence_links": list(incident["evidenceLinks"]),
+        "threshold": dict(incident["threshold"]),
+        "updated_at": incident["lastObservedAt"],
+    }
+    if existing.get("status") == "resolved":
+        values.update(_observability_reopen_values())
+    return values
+
+
+def _observability_reopen_values() -> dict[str, object | None]:
+    return {
+        "status": "open",
+        "acknowledged_at": None,
+        "acknowledged_by": None,
+        "resolved_at": None,
+        "resolved_by": None,
+        "resolution_reason": None,
+    }
+
+
+def _observability_status_values(
+    status: StoredObservabilityIncidentStatus,
+    actor_user_id: str,
+    updated_at: str,
+    resolution_reason: str | None,
+) -> dict[str, object | None]:
+    values: dict[str, object | None] = {"status": status, "updated_at": updated_at}
+    if status == "acknowledged":
+        values.update({"acknowledged_at": updated_at, "acknowledged_by": actor_user_id})
+    if status == "resolved":
+        values.update(
+            {
+                "resolved_at": updated_at,
+                "resolved_by": actor_user_id,
+                "resolution_reason": resolution_reason,
+            }
+        )
+    return values
+
+
+def _observability_incident_response(row: Mapping[str, Any]) -> StoredObservabilityIncident:
+    return {
+        "id": str(row["id"]),
+        "detectorId": str(row["detector_id"]),
+        "detectorType": cast(Any, row["detector_type"]),
+        "configVersion": str(row["config_version"]),
+        "status": cast(StoredObservabilityIncidentStatus, row["status"]),
+        "severity": cast(Any, row["severity"]),
+        "owner": str(row["owner"]),
+        "message": str(row["message"]),
+        "dedupeKey": str(row["dedupe_key"]),
+        "firstObservedAt": str(row["first_observed_at"]),
+        "lastObservedAt": str(row["last_observed_at"]),
+        "occurrenceCount": int(row["occurrence_count"]),
+        "evidence": cast(RuntimeJsonObject, row["evidence"] or {}),
+        "evidenceLinks": cast(list[Any], row["evidence_links"] or []),
+        "threshold": cast(RuntimeJsonObject, row["threshold"] or {}),
+        "acknowledgedAt": cast(str | None, row.get("acknowledged_at")),
+        "acknowledgedBy": cast(str | None, row.get("acknowledged_by")),
+        "resolvedAt": cast(str | None, row.get("resolved_at")),
+        "resolvedBy": cast(str | None, row.get("resolved_by")),
+        "resolutionReason": cast(str | None, row.get("resolution_reason")),
+    }
+
+
 def _is_outbox_idempotency_duplicate(transaction: Any, record: OutboxEventRecord) -> bool:
     if record.idempotency_key is None:
         return False
@@ -740,6 +1079,58 @@ def _relation_columns(runtime_table: Any) -> list[Any]:
         for column in runtime_table.c
         if column.name != "tenant_id" and (column.name.endswith("_id") or column.name in {"id", "correlation_id"})
     ]
+
+
+def _workflow_lease_claimable(row: WorkflowRunRow, lease_owner_id: str, now: str) -> bool:
+    if row["status"] in {"succeeded", "failed", "cancelled", "start_unknown"}:
+        return True
+    lease = _workflow_lease(row)
+    if lease is None:
+        return False
+    if lease.get("ownerId") == lease_owner_id:
+        return True
+    expires_at = lease.get("leaseExpiresAt")
+    return isinstance(expires_at, str) and expires_at <= now
+
+
+def _workflow_lease_claim_values(record: WorkflowRunRecord, attempts: int) -> dict[str, object]:
+    return {
+        "output": dict(record.output),
+        "error": dict(record.error) if record.error is not None else None,
+        "attempts": attempts,
+        "started_at": record.started_at,
+        "completed_at": None,
+    }
+
+
+def _workflow_lease_release_transition(status: WorkflowLedgerStatus) -> StatusTransition:
+    if status == "cancelled":
+        return WORKFLOW_RUN_CANCELLED
+    if status == "failed":
+        return WORKFLOW_RUN_FAILED
+    return WORKFLOW_RUN_SUCCEEDED
+
+
+def _workflow_lease_matches(row: WorkflowRunRow, lease_owner_id: str, lease_token: str) -> bool:
+    lease = _workflow_lease(row)
+    return lease is not None and lease.get("ownerId") == lease_owner_id and lease.get("leaseToken") == lease_token
+
+
+def _workflow_lease_attempts(row: WorkflowRunRow, lease_owner_id: str) -> int:
+    attempts = row["attempts"]
+    current = attempts if isinstance(attempts, int) and not isinstance(attempts, bool) else 0
+    lease = _workflow_lease(row)
+    if row["status"] == "running" and lease is not None and lease.get("ownerId") == lease_owner_id:
+        return current
+    return current + 1
+
+
+def _workflow_lease(row: WorkflowRunRow) -> Mapping[str, object] | None:
+    output = row.get("output")
+    if not isinstance(output, Mapping):
+        return None
+    lease = output.get("workerLease")
+    return lease if isinstance(lease, Mapping) else None
 
 
 def _in_or_none(column: Any, values: list[str]) -> Any:

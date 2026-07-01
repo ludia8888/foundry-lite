@@ -1,3 +1,5 @@
+"""Application-layer models and helpers for safe expression."""
+
 from __future__ import annotations
 
 import re

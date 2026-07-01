@@ -9,6 +9,8 @@ from foundry_lite.application.primitives import _json_hash
 from foundry_lite.domain.errors import ValidationFailed
 
 ActionParameterMap = Mapping[str, object]
+OBJECT_REINDEX_COMPLETE = "object_reindex_complete"
+OBJECT_REINDEX_REQUIRED = "object_reindex_required"
 
 
 @dataclass(frozen=True)
@@ -124,12 +126,53 @@ def object_type_serving_config(plan: OntologyMigrationPlan, api_name: str) -> di
         return {}
     payload: dict[str, object] = {
         "servingRecordScope": "object_type_id",
-        "servingContractStatus": "object_reindex_required",
+        "servingContractStatus": OBJECT_REINDEX_REQUIRED,
         "objectReindexPlan": [operation.to_payload() for operation in operations],
     }
     if plan.source_ontology_version_id is not None:
         payload["sourceOntologyVersionId"] = plan.source_ontology_version_id
     return payload
+
+
+def pending_object_reindex_operation(config: Mapping[str, object], reindex_key: str) -> Mapping[str, object] | None:
+    """Return the pending operation for a key if the object type still requires it."""
+    if config.get("servingContractStatus") != OBJECT_REINDEX_REQUIRED:
+        return None
+    for operation in _object_reindex_plan(config):
+        if operation.get("reindexKey") == reindex_key:
+            return operation
+    return None
+
+
+def completed_object_reindex(config: Mapping[str, object], reindex_key: str) -> Mapping[str, object] | None:
+    """Return stored completion evidence for a replayed ontology reindex key."""
+    if config.get("servingContractStatus") != OBJECT_REINDEX_COMPLETE:
+        return None
+    completed = config.get("objectReindexCompleted")
+    if not isinstance(completed, Mapping) or completed.get("reindexKey") != reindex_key:
+        return None
+    return completed
+
+
+def complete_object_reindex_config(
+    config: Mapping[str, object],
+    operation: Mapping[str, object],
+    *,
+    index_run_id: str,
+    dataset_version_id: str,
+    completed_at: str,
+) -> dict[str, object]:
+    """Return object-type config after a required ontology reindex succeeds."""
+    next_config = dict(config)
+    next_config["servingContractStatus"] = OBJECT_REINDEX_COMPLETE
+    next_config["objectReindexCompleted"] = {
+        "reindexKey": str(operation["reindexKey"]),
+        "indexRunId": index_run_id,
+        "datasetVersionId": dataset_version_id,
+        "completedAt": completed_at,
+        "changedFields": list(_changed_fields(operation)),
+    }
+    return next_config
 
 
 def _consumer_compatibility(plan: OntologyMigrationPlan) -> str:
@@ -152,3 +195,17 @@ def reindex_operation(api_name: str, reindex_fields: Sequence[str]) -> OntologyR
         changed_fields=fields,
         reindex_key=f"object_reindex:{api_name}:{_json_hash(payload)[:12]}",
     )
+
+
+def _object_reindex_plan(config: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    value = config.get("objectReindexPlan")
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    return tuple(item for item in value if isinstance(item, Mapping))
+
+
+def _changed_fields(operation: Mapping[str, object]) -> tuple[str, ...]:
+    value = operation.get("changedFields")
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    return tuple(str(item) for item in value)

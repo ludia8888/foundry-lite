@@ -1,3 +1,5 @@
+"""Application port contract for transaction context."""
+
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
@@ -9,6 +11,7 @@ from foundry_lite.application.state_transitions import (
     ACTION_RUN_FAILED,
     ACTION_RUN_OUTCOME_UNKNOWN,
     ACTION_RUN_RECONCILED,
+    ACTION_RUN_RETRYABLE,
     ACTION_RUN_SUCCEEDED,
     ACTION_WRITEBACK_RECONCILED,
     AI_EVAL_RUN_FAILED,
@@ -42,6 +45,7 @@ from foundry_lite.application.state_transitions import (
     TRANSFORM_RUN_SUCCEEDED,
     WORKFLOW_RUN_CANCELLED,
     WORKFLOW_RUN_FAILED,
+    WORKFLOW_RUN_LEASE_RUNNING,
     WORKFLOW_RUN_RUNNING,
     WORKFLOW_RUN_START_UNKNOWN,
     WORKFLOW_RUN_STARTING,
@@ -85,6 +89,7 @@ __all__ = [
     "ACTION_RUN_FAILED",
     "ACTION_RUN_OUTCOME_UNKNOWN",
     "ACTION_RUN_RECONCILED",
+    "ACTION_RUN_RETRYABLE",
     "ACTION_RUN_SUCCEEDED",
     "ACTION_WRITEBACK_RECONCILED",
     "AI_EVAL_RUN_FAILED",
@@ -118,6 +123,7 @@ __all__ = [
     "TRANSFORM_RUN_SUCCEEDED",
     "WORKFLOW_RUN_CANCELLED",
     "WORKFLOW_RUN_FAILED",
+    "WORKFLOW_RUN_LEASE_RUNNING",
     "WORKFLOW_RUN_RUNNING",
     "WORKFLOW_RUN_START_UNKNOWN",
     "WORKFLOW_RUN_STARTING",

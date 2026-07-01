@@ -1,3 +1,5 @@
+"""Thin facade entrypoints for erasure gateway workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Sequence

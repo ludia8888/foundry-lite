@@ -664,10 +664,10 @@
 ### T1-009 — Python transform accesses raw storage credentials/path
 
 - [x] **Condition:** Python transform 사용자 코드가 S3/MinIO path를 직접 조작한다.
-- [x] **Guardrail:** 안전한 Python SDK/sandbox가 생기기 전까지 Python transform은 fail-closed로 거부한다.
-- [ ] **Guardrail:** SDK Input/Output abstraction만 제공한다.
+- [x] **Guardrail:** Python transform 사용자 함수에는 raw storage path 대신 SDK Input/Output handle만 제공한다.
+- [ ] **Guardrail:** process sandbox/external worker isolation을 제공한다.
 - [x] **Guardrail:** storage credential을 사용자 코드에 노출하지 않는다.
-- [x] **Regression Test:** `test_python_transform_cannot_access_raw_storage_path`
+- [x] **Regression Test:** `test_python_transform_runs_through_sdk_handles_without_raw_storage_path`
 
 ### T1-010 — Spark speculative execution double-writes output
 
@@ -1306,7 +1306,7 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 - [x] `test_transform_retry_after_commit_does_not_create_second_output_version`
 - [x] `test_transform_output_and_lineage_commit_atomically`
 - [x] `test_duckdb_oom_aborts_output_transaction`
-- [x] `test_python_transform_cannot_access_raw_storage_path`
+- [x] `test_python_transform_runs_through_sdk_handles_without_raw_storage_path`
 - [x] `test_rest_cursor_not_advanced_when_dataset_commit_fails`
 - [x] `test_rest_mutable_pagination_detected_or_marked_non_replayable`
 - [x] `test_webhook_ack_not_sent_before_append_commit_or_has_replay_strategy`
@@ -1348,6 +1348,7 @@ ElasticsearchAdapter는 이전부터 존재(profile + projection 계약). 이 ra
 - [x] `test_debezium_cdc_iceberg_s3_spark_archive_failure_aborts_without_dataset_version`
 - [x] `test_spark_rows_to_parquet_preserves_quoted_json_strings`
 - [x] `test_stream_offset_not_advanced_when_append_commit_fails`
+- [x] `test_stream_archive_worker_continuous_loop_broker_rebalance_revoked_worker_cannot_commit_current_batch`
 - [ ] `test_stream_rebalance_mid_batch_dedupes_offsets`
 - [ ] `test_stream_partial_partition_batch_abort_policy`
 - [x] `test_object_merge_edit_only_not_overwritten_by_source`

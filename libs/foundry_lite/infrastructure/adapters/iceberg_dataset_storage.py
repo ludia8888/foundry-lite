@@ -7,13 +7,16 @@ import json
 import shutil
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
 from foundry_lite.application.ports import (
     DatasetManifest,
+    DatasetManifestColumnStats,
     DatasetManifestFile,
+    DatasetStagedFile,
     DatasetVersionRow,
     StoredDatasetCommit,
 )
@@ -27,14 +30,18 @@ from foundry_lite.application.ports.adapter_failure import (
 from foundry_lite.application.ports.iceberg_maintenance import (
     IcebergMaintenancePlan,
     IcebergMaintenancePolicy,
+    IcebergMaintenanceRun,
     IcebergMaintenanceSnapshot,
 )
+from foundry_lite.infrastructure.adapters.dataset_manifest_metadata import parquet_manifest_file_metadata
 
 _VERSION_PROP = "foundry.version_id"
 _DATASET_PROP = "foundry.dataset_ref"
 _BRANCH_PROP = "foundry.branch"
 _SCHEMA_PROP = "foundry.schema_hash"
 _CREATED_AT_PROP = "foundry.created_at"
+_MAINTENANCE_KIND_PROP = "foundry.maintenance.kind"
+_MAINTENANCE_BEFORE_SNAPSHOT_PROP = "foundry.maintenance.before_snapshot_id"
 _URI_SCHEME = "iceberg://"
 
 
@@ -51,6 +58,20 @@ class IcebergDatasetStorageAdapterConfig:
     s3_secret_access_key: str | None = field(default=None, repr=False)
     s3_region: str = "us-east-1"
     s3_path_style_enabled: bool = True
+
+
+@dataclass(frozen=True)
+class _MaintenanceRewriteResult:
+    """Compaction evidence for the current Iceberg snapshot."""
+
+    before_snapshot_id: int | None
+    after_snapshot_id: int | None
+    compacted_snapshot_id: int | None
+    rewritten_data_file_count: int
+    output_data_file_count: int
+    before_row_hash: str | None
+    after_row_hash: str | None
+    is_row_hash_preserved: bool | None
 
 
 class IcebergDatasetStorageAdapter:
@@ -84,7 +105,22 @@ class IcebergDatasetStorageAdapter:
                     has_required_idempotency_key=True,
                 ),
                 AdapterFailureMode(
+                    "commit_staged_files",
+                    "timeout",
+                    True,
+                    "Iceberg multi-part snapshot commit outcome is unknown; retry with the same version id after "
+                    "a catalog check.",
+                    timeout_seconds=30,
+                    has_required_idempotency_key=True,
+                ),
+                AdapterFailureMode(
                     "commit_staged_file",
+                    "conflict",
+                    False,
+                    "Iceberg table already holds this dataset version id; the allocator must hand out a fresh id.",
+                ),
+                AdapterFailureMode(
+                    "commit_staged_files",
                     "conflict",
                     False,
                     "Iceberg table already holds this dataset version id; the allocator must hand out a fresh id.",
@@ -106,6 +142,13 @@ class IcebergDatasetStorageAdapter:
                     "unavailable",
                     True,
                     "Iceberg orphan-snapshot cleanup could not reach the catalog; retry before advancing the ratchet.",
+                ),
+                AdapterFailureMode(
+                    "run_iceberg_maintenance",
+                    "unavailable",
+                    True,
+                    "Iceberg maintenance execution could not reach the catalog/storage; retry after checking "
+                    "the maintenance audit evidence.",
                 ),
             ),
         )
@@ -132,13 +175,81 @@ class IcebergDatasetStorageAdapter:
         staged_file: Path,
         row_count: int,
         created_at: str,
+        sort_order: Sequence[str] | None = None,
     ) -> StoredDatasetCommit:
         """Commit staged file."""
+        return self._commit_staged_files(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            branch=branch,
+            version_id=version_id,
+            dataset_ref=dataset_ref,
+            schema_hash=schema_hash,
+            staged_files=(DatasetStagedFile(path=staged_file, row_count=row_count),),
+            row_count=row_count,
+            created_at=created_at,
+            sort_order=sort_order,
+            operation="commit_staged_file",
+        )
+
+    def commit_staged_files(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        branch: str,
+        version_id: str,
+        dataset_ref: str,
+        schema_hash: str,
+        staged_files: Sequence[DatasetStagedFile],
+        row_count: int,
+        created_at: str,
+        sort_order: Sequence[str] | None = None,
+    ) -> StoredDatasetCommit:
+        """Commit staged files as one Iceberg snapshot."""
+        return self._commit_staged_files(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            branch=branch,
+            version_id=version_id,
+            dataset_ref=dataset_ref,
+            schema_hash=schema_hash,
+            staged_files=staged_files,
+            row_count=row_count,
+            created_at=created_at,
+            sort_order=sort_order,
+            operation="commit_staged_files",
+        )
+
+    def _commit_staged_files(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        branch: str,
+        version_id: str,
+        dataset_ref: str,
+        schema_hash: str,
+        staged_files: Sequence[DatasetStagedFile],
+        row_count: int,
+        created_at: str,
+        sort_order: Sequence[str] | None,
+        operation: str,
+    ) -> StoredDatasetCommit:
+        if not staged_files:
+            raise ValueError("dataset commit requires at least one staged file")
+        if _staged_files_row_count(staged_files, row_count) != row_count:
+            raise ValueError("dataset staged file row counts do not match validation row count")
         identifier = self._identifier(tenant_id, dataset_id, branch)
-        self._guard_version_not_committed(identifier, version_id)
+        self._guard_version_not_committed(identifier, version_id, operation)
         try:
-            return self._commit_snapshot(
-                identifier, version_id, dataset_ref, branch, schema_hash, staged_file, created_at
+            if len(staged_files) == 1:
+                staged_file = self._merged_staged_file(version_id, staged_files)
+                return self._commit_snapshot(
+                    identifier, version_id, dataset_ref, branch, schema_hash, staged_file, created_at, sort_order
+                )
+            return self._commit_snapshot_files(
+                identifier, version_id, dataset_ref, branch, schema_hash, staged_files, created_at, sort_order
             )
         except AdapterError as exc:
             if exc.failure.kind != "conflict":
@@ -146,7 +257,7 @@ class IcebergDatasetStorageAdapter:
             raise
         except Exception as exc:
             cleanup = self._safe_rollback_version(identifier, version_id)
-            raise self._adapter_error("commit_staged_file", exc, idempotency_key=version_id, details=cleanup) from exc
+            raise self._adapter_error(operation, exc, idempotency_key=version_id, details=cleanup) from exc
 
     def delete_committed_version(
         self,
@@ -196,6 +307,58 @@ class IcebergDatasetStorageAdapter:
             table.current_snapshot(),
         )
 
+    def run_iceberg_maintenance(
+        self,
+        *,
+        tenant_id: str,
+        dataset_id: str,
+        dataset_ref: str,
+        branch: str,
+        committed_versions: list[DatasetVersionRow],
+        policy: IcebergMaintenancePolicy,
+    ) -> IcebergMaintenanceRun:
+        """Execute compaction plus safe orphan snapshot expiration."""
+        identifier = self._identifier(tenant_id, dataset_id, branch)
+        try:
+            table = self._load_table(identifier)
+        except FileNotFoundError:
+            return _empty_maintenance_run(self.profile_name, dataset_ref, dataset_id, branch, identifier, policy)
+        before_plan = self.plan_iceberg_maintenance(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            dataset_ref=dataset_ref,
+            branch=branch,
+            committed_versions=committed_versions,
+            policy=policy,
+        )
+        rewrite = self._rewrite_current_snapshot_if_needed(table, identifier, dataset_ref, branch, before_plan)
+        expiration_plan = self.plan_iceberg_maintenance(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            dataset_ref=dataset_ref,
+            branch=branch,
+            committed_versions=committed_versions,
+            policy=policy,
+        )
+        expired, skipped, cleaned = self._expire_deletable_snapshots(identifier, expiration_plan)
+        after_plan = self.plan_iceberg_maintenance(
+            tenant_id=tenant_id,
+            dataset_id=dataset_id,
+            dataset_ref=dataset_ref,
+            branch=branch,
+            committed_versions=committed_versions,
+            policy=policy,
+        )
+        return _maintenance_run(
+            self.profile_name,
+            before_plan,
+            after_plan,
+            rewrite,
+            expired_snapshot_ids=expired,
+            skipped_expiration_snapshot_ids=skipped,
+            orphan_cleanup_file_uris=cleaned,
+        )
+
     def load_manifest(self, manifest_uri: str) -> DatasetManifest:
         """Load manifest."""
         identifier, snapshot_id = self._parse_manifest_uri(manifest_uri)
@@ -229,9 +392,7 @@ class IcebergDatasetStorageAdapter:
         """Readable data paths for the snapshot represented by a Foundry manifest."""
         manifest = self.load_manifest(manifest_uri)
         files = manifest.get("files") or []
-        if partition_filter is not None and not any(
-            _matches_partition_filter(file, partition_filter) for file in files
-        ):
+        if partition_filter is not None and not any(_matches_manifest_filter(file, partition_filter) for file in files):
             return []
         identifier, snapshot_id = self._parse_manifest_uri(manifest_uri)
         table = self._load_table(identifier)
@@ -241,13 +402,12 @@ class IcebergDatasetStorageAdapter:
         expected_files = _expected_files(sidecar)
         self._verify_snapshot_files(table, snapshot_id, manifest_uri, expected_files=expected_files)
         _, has_delete_files = self._snapshot_data_file_uris(table, snapshot_id)
-        # The common case is a single coalesced data file with no row-deletes: stream that
-        # file directly instead of scanning the whole snapshot into Arrow and rewriting it.
-        # Multi-file snapshots and delete files still materialize a single merged file so the
-        # single-file read contract (committed_version_file_path -> paths[0]) is preserved.
-        if partition_filter is None and len(expected_files) == 1 and not has_delete_files:
-            return [self._download_snapshot_file(table, next(iter(expected_files.values())))]
-        return [self._materialize_snapshot(table, snapshot_id, identifier)]
+        matched_files = _matching_expected_files(expected_files, partition_filter)
+        if not matched_files:
+            return []
+        if has_delete_files:
+            return [self._materialize_snapshot(table, snapshot_id, identifier)]
+        return [self._download_snapshot_file(table, file) for file in matched_files]
 
     def preview_file_paths(
         self,
@@ -280,6 +440,7 @@ class IcebergDatasetStorageAdapter:
         schema_hash: str,
         staged_file: Path,
         created_at: str,
+        sort_order: Sequence[str] | None,
     ) -> StoredDatasetCommit:
         """Commit snapshot."""
         pq = import_module("pyarrow.parquet")
@@ -294,33 +455,20 @@ class IcebergDatasetStorageAdapter:
         # semantics (overwrite) apply and the new current snapshot is this version.
         table.overwrite(
             arrow_table,
-            snapshot_properties={
-                _VERSION_PROP: version_id,
-                _DATASET_PROP: dataset_ref,
-                _BRANCH_PROP: branch,
-                _SCHEMA_PROP: schema_hash,
-                _CREATED_AT_PROP: created_at,
-            },
+            snapshot_properties=_snapshot_properties(version_id, dataset_ref, branch, schema_hash, created_at),
         )
         snapshot = self._reload(identifier).current_snapshot()
         if snapshot is None:
             raise ValueError("Iceberg overwrite did not produce a snapshot")
         snapshot_id = snapshot.snapshot_id
         manifest_uri = self._manifest_uri(identifier, snapshot_id)
-        files = self._manifest_files(self._load_table(identifier), snapshot_id)
+        files = self._manifest_files(self._load_table(identifier), snapshot_id, sort_order=sort_order)
         content_hash = _snapshot_token(files)
+        manifest = _dataset_manifest(version_id, dataset_ref, branch, schema_hash, files, created_at, self.profile_name)
         self._write_sidecar_manifest(
             self._load_table(identifier),
             snapshot_id,
-            {
-                "version_id": version_id,
-                "dataset": dataset_ref,
-                "branch": branch,
-                "schema_hash": schema_hash,
-                "files": files,
-                "created_at": created_at,
-                "storage_profile": self.profile_name,
-            },
+            manifest,
             content_hash,
         )
         return StoredDatasetCommit(
@@ -329,30 +477,142 @@ class IcebergDatasetStorageAdapter:
             data_file_path=self._materialize_snapshot(self._load_table(identifier), snapshot_id, identifier),
             byte_size=sum(f["byte_size"] for f in files),
             content_hash=content_hash,
-            manifest={
-                "version_id": version_id,
-                "dataset": dataset_ref,
-                "branch": branch,
-                "schema_hash": schema_hash,
-                "files": files,
-                "created_at": created_at,
-                "storage_profile": self.profile_name,
-            },
+            manifest=manifest,
         )
 
-    def _guard_version_not_committed(self, identifier: str, version_id: str) -> None:
+    def _commit_snapshot_files(
+        self,
+        identifier: str,
+        version_id: str,
+        dataset_ref: str,
+        branch: str,
+        schema_hash: str,
+        staged_files: Sequence[DatasetStagedFile],
+        created_at: str,
+        sort_order: Sequence[str] | None,
+    ) -> StoredDatasetCommit:
+        pa = import_module("pyarrow")
+        pq = import_module("pyarrow.parquet")
+        tables = [_iceberg_compatible_arrow_table(pq.read_table(str(staged.path))) for staged in staged_files]
+        arrow_schema = pa.concat_tables(tables).schema
+        self._load_or_create_table(identifier, arrow_schema)
+        self._evolve_schema_if_needed(identifier, arrow_schema)
+        table = self._reload(identifier)
+        uploaded = self._upload_iceberg_data_files(table, version_id, staged_files, tables, sort_order)
+        props = _snapshot_properties(version_id, dataset_ref, branch, schema_hash, created_at)
+        expressions = import_module("pyiceberg.expressions")
+        with table.transaction() as tx:
+            if table.current_snapshot() is not None:
+                tx.delete(expressions.AlwaysTrue(), snapshot_properties=props)
+            tx.add_files([file["uri"] for file in uploaded], snapshot_properties=props, check_duplicate_files=False)
+        snapshot = self._reload(identifier).current_snapshot()
+        if snapshot is None:
+            raise ValueError("Iceberg add-files commit did not produce a snapshot")
+        return self._stored_snapshot_commit(
+            identifier, int(snapshot.snapshot_id), version_id, dataset_ref, branch, schema_hash, created_at, uploaded
+        )
+
+    def _upload_iceberg_data_files(
+        self,
+        table: Any,
+        version_id: str,
+        staged_files: Sequence[DatasetStagedFile],
+        tables: Sequence[Any],
+        sort_order: Sequence[str] | None,
+    ) -> list[DatasetManifestFile]:
+        pq = import_module("pyarrow.parquet")
+        uploaded: list[DatasetManifestFile] = []
+        for index, staged_file in enumerate(staged_files):
+            local_path = self.cache_root / "prepared" / version_id / f"part-{index:05d}.parquet"
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            pq.write_table(tables[index], str(local_path))
+            uri = f"{table.location().rstrip('/')}/data/foundry-{version_id}-part-{index:05d}.parquet"
+            self._write_table_file(table, local_path, uri)
+            uploaded.append(self._uploaded_manifest_file(uri, local_path, staged_file, tables[index], sort_order))
+        return uploaded
+
+    def _write_table_file(self, table: Any, local_path: Path, uri: str) -> None:
+        output = table.io.new_output(uri)
+        with local_path.open("rb") as source, output.create(overwrite=True) as target:
+            shutil.copyfileobj(source, target, length=1024 * 1024)
+
+    def _uploaded_manifest_file(
+        self,
+        uri: str,
+        local_path: Path,
+        staged_file: DatasetStagedFile,
+        table: Any,
+        sort_order: Sequence[str] | None,
+    ) -> DatasetManifestFile:
+        row_count = _uploaded_row_count(staged_file, int(table.num_rows))
+        manifest_file: DatasetManifestFile = {
+            "uri": uri,
+            "format": "parquet",
+            "row_count": row_count,
+            "byte_size": local_path.stat().st_size,
+            "content_hash": _path_sha256(local_path),
+            "partition_values": dict(staged_file.partition_values or {}),
+        }
+        return parquet_manifest_file_metadata(manifest_file, local_path, sort_order=sort_order)
+
+    def _stored_snapshot_commit(
+        self,
+        identifier: str,
+        snapshot_id: int,
+        version_id: str,
+        dataset_ref: str,
+        branch: str,
+        schema_hash: str,
+        created_at: str,
+        expected_files: Sequence[DatasetManifestFile],
+    ) -> StoredDatasetCommit:
+        manifest_uri = self._manifest_uri(identifier, snapshot_id)
+        table = self._load_table(identifier)
+        files = self._manifest_files(table, snapshot_id, expected_files=_files_by_uri(expected_files))
+        content_hash = _snapshot_token(files)
+        manifest: DatasetManifest = _dataset_manifest(
+            version_id, dataset_ref, branch, schema_hash, files, created_at, self.profile_name
+        )
+        self._write_sidecar_manifest(table, snapshot_id, manifest, content_hash)
+        first_path = (
+            self._download_snapshot_file(table, files[0])
+            if files
+            else self._materialize_snapshot(table, snapshot_id, identifier)
+        )
+        return StoredDatasetCommit(
+            manifest_uri=manifest_uri,
+            data_file_uri=files[0]["uri"] if files else manifest_uri,
+            data_file_path=first_path,
+            byte_size=sum(f["byte_size"] for f in files),
+            content_hash=content_hash,
+            manifest=manifest,
+        )
+
+    def _guard_version_not_committed(self, identifier: str, version_id: str, operation: str) -> None:
         """Guard version not committed."""
-        if self._find_snapshot_id(identifier, version_id) is not None:
+        if self._find_snapshot_id(identifier, version_id, operation) is not None:
             raise AdapterError(
                 AdapterFailure(
                     self.profile_name,
-                    "commit_staged_file",
+                    operation,
                     "conflict",
                     False,
                     f"Iceberg dataset version already committed: {version_id}",
                     idempotency_key=version_id,
                 )
             )
+
+    def _merged_staged_file(self, version_id: str, staged_files: Sequence[DatasetStagedFile]) -> Path:
+        """Return one parquet payload for an atomic Iceberg snapshot commit."""
+        if len(staged_files) == 1:
+            return staged_files[0].path
+        pa = import_module("pyarrow")
+        pq = import_module("pyarrow.parquet")
+        tables = [pq.read_table(str(staged_file.path)) for staged_file in staged_files]
+        target = self.cache_root / "merged" / f"{version_id}.parquet"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        pq.write_table(pa.concat_tables(tables), str(target))
+        return target
 
     def _safe_rollback_version(self, identifier: str, version_id: str) -> Mapping[str, object]:
         """Safe rollback version."""
@@ -388,6 +648,7 @@ class IcebergDatasetStorageAdapter:
         snapshot_id: int,
         *,
         expected_files: Mapping[str, DatasetManifestFile] | None = None,
+        sort_order: Sequence[str] | None = None,
     ) -> list[DatasetManifestFile]:
         """Manifest files."""
         files: list[DatasetManifestFile] = []
@@ -396,23 +657,38 @@ class IcebergDatasetStorageAdapter:
             data = task.file
             uri = str(data.file_path)
             expected = expected_files.get(uri) if expected_files is not None else None
-            content_hash = self._hash_iceberg_file(table, uri)
-            if expected is not None:
-                self._verify_manifest_file(uri, data, content_hash, expected)
             actual_uris.add(uri)
-            entry: DatasetManifestFile = {
-                "uri": uri,
-                "format": "parquet",
-                "row_count": int(data.record_count),
-                "byte_size": int(data.file_size_in_bytes),
-                "content_hash": content_hash,
-            }
-            if expected is not None and "partition_values" in expected:
-                entry["partition_values"] = expected["partition_values"]
-            files.append(entry)
+            files.append(self._manifest_file_entry(table, data, uri, expected, sort_order))
         if expected_files is not None and set(expected_files) != actual_uris:
             raise ValueError("Iceberg snapshot file list differs from the committed Foundry manifest")
         return files
+
+    def _manifest_file_entry(
+        self,
+        table: Any,
+        data: Any,
+        uri: str,
+        expected: DatasetManifestFile | None,
+        sort_order: Sequence[str] | None,
+    ) -> DatasetManifestFile:
+        content_hash = self._hash_iceberg_file(table, uri)
+        if expected is not None:
+            self._verify_manifest_file(uri, data, content_hash, expected)
+        entry: DatasetManifestFile = {
+            "uri": uri,
+            "format": "parquet",
+            "row_count": int(data.record_count),
+            "byte_size": int(data.file_size_in_bytes),
+            "content_hash": content_hash,
+        }
+        _copy_expected_manifest_metadata(entry, expected)
+        if "column_stats" in entry:
+            return entry
+        return parquet_manifest_file_metadata(
+            entry,
+            self._download_snapshot_file(table, entry),
+            sort_order=sort_order,
+        )
 
     def _verify_snapshot_files(
         self,
@@ -477,6 +753,149 @@ class IcebergDatasetStorageAdapter:
                 )
             )
         return snapshots
+
+    def _rewrite_current_snapshot_if_needed(
+        self,
+        table: Any,
+        identifier: str,
+        dataset_ref: str,
+        branch: str,
+        plan: IcebergMaintenancePlan,
+    ) -> _MaintenanceRewriteResult:
+        """Compact the current snapshot when the maintenance plan requires it."""
+        current = table.current_snapshot()
+        candidate = _current_compaction_candidate(plan)
+        if current is None or candidate is None:
+            return _empty_rewrite_result(plan["current_snapshot_id"])
+        before_id = int(current.snapshot_id)
+        before_arrow = _iceberg_compatible_arrow_table(table.scan(snapshot_id=before_id).to_arrow())
+        before_hash = _arrow_table_row_hash(before_arrow)
+        props = _maintenance_snapshot_properties(current, dataset_ref, branch, before_id)
+        try:
+            table.overwrite(before_arrow, snapshot_properties=props)
+        except Exception as exc:  # noqa: BLE001 - classified by the adapter contract
+            raise self._adapter_error("run_iceberg_maintenance", exc) from exc
+        return self._verify_compacted_snapshot(
+            identifier,
+            dataset_ref,
+            branch,
+            before_id=before_id,
+            before_hash=before_hash,
+            before_file_count=candidate["file_count"],
+        )
+
+    def _verify_compacted_snapshot(
+        self,
+        identifier: str,
+        dataset_ref: str,
+        branch: str,
+        *,
+        before_id: int,
+        before_hash: str,
+        before_file_count: int,
+    ) -> _MaintenanceRewriteResult:
+        table = self._load_table(identifier)
+        after = table.current_snapshot()
+        if after is None:
+            raise ValueError("Iceberg maintenance rewrite did not produce a snapshot")
+        after_id = int(after.snapshot_id)
+        after_arrow = table.scan(snapshot_id=after_id).to_arrow()
+        after_hash = _arrow_table_row_hash(after_arrow)
+        if before_hash != after_hash:
+            self._rollback_current_snapshot(identifier, before_id)
+            raise ValueError("Iceberg maintenance rewrite changed row content")
+        output_file_count = len(self._write_maintenance_sidecar(table, after_id, dataset_ref, branch, after_arrow))
+        return _rewrite_result(before_id, after_id, before_file_count, output_file_count, before_hash, after_hash)
+
+    def _write_maintenance_sidecar(
+        self,
+        table: Any,
+        snapshot_id: int,
+        dataset_ref: str,
+        branch: str,
+        arrow_table: Any,
+    ) -> list[DatasetManifestFile]:
+        files = self._manifest_files(table, snapshot_id)
+        content_hash = _snapshot_token(files)
+        manifest = _dataset_manifest(
+            f"maintenance:{snapshot_id}",
+            dataset_ref,
+            branch,
+            _arrow_schema_hash(arrow_table),
+            files,
+            _utc_now_iso(),
+            self.profile_name,
+        )
+        self._write_sidecar_manifest(table, snapshot_id, manifest, content_hash)
+        return files
+
+    def _rollback_current_snapshot(self, identifier: str, snapshot_id: int) -> None:
+        try:
+            self._load_table(identifier).manage_snapshots().rollback_to_snapshot(snapshot_id).commit()
+        except Exception as exc:  # noqa: BLE001 - best effort rollback is still classified
+            raise self._adapter_error("run_iceberg_maintenance", exc) from exc
+
+    def _expire_deletable_snapshots(
+        self,
+        identifier: str,
+        plan: IcebergMaintenancePlan,
+    ) -> tuple[list[int], list[int], list[str]]:
+        """Expire plan-deletable snapshots and clean unreachable files."""
+        snapshot_ids = list(plan["deletable_snapshot_ids"])
+        if not snapshot_ids:
+            return [], [], []
+        table = self._load_table(identifier)
+        cleanup_targets = self._snapshot_cleanup_targets(table, snapshot_ids)
+        try:
+            table.maintenance.expire_snapshots().by_ids(snapshot_ids).commit()
+        except Exception as exc:  # noqa: BLE001 - classified by the adapter contract
+            raise self._adapter_error("run_iceberg_maintenance", exc) from exc
+        after_table = self._load_table(identifier)
+        expired = [snapshot_id for snapshot_id in snapshot_ids if after_table.snapshot_by_id(snapshot_id) is None]
+        skipped = [snapshot_id for snapshot_id in snapshot_ids if snapshot_id not in expired]
+        cleaned = self._delete_expired_snapshot_files(after_table, cleanup_targets, expired)
+        return expired, skipped, cleaned
+
+    def _snapshot_cleanup_targets(self, table: Any, snapshot_ids: list[int]) -> dict[int, set[str]]:
+        targets: dict[int, set[str]] = {}
+        for snapshot_id in snapshot_ids:
+            if table.snapshot_by_id(snapshot_id) is None:
+                continue
+            data_uris, _ = self._snapshot_data_file_uris(table, snapshot_id)
+            targets[snapshot_id] = set(data_uris) | {self._sidecar_manifest_location(table, snapshot_id)}
+        return targets
+
+    def _delete_expired_snapshot_files(
+        self,
+        table: Any,
+        targets: Mapping[int, set[str]],
+        expired_snapshot_ids: list[int],
+    ) -> list[str]:
+        active = self._active_snapshot_file_uris(table)
+        deleted: list[str] = []
+        for snapshot_id in expired_snapshot_ids:
+            for uri in sorted(targets.get(snapshot_id, set()) - active):
+                if self._delete_table_file(table, uri):
+                    deleted.append(uri)
+        return deleted
+
+    def _active_snapshot_file_uris(self, table: Any) -> set[str]:
+        active: set[str] = set()
+        for snapshot in table.snapshots():
+            snapshot_id = int(snapshot.snapshot_id)
+            data_uris, _ = self._snapshot_data_file_uris(table, snapshot_id)
+            active.update(data_uris)
+            active.add(self._sidecar_manifest_location(table, snapshot_id))
+        return active
+
+    def _delete_table_file(self, table: Any, uri: str) -> bool:
+        try:
+            table.io.delete(uri)
+        except FileNotFoundError:
+            return False
+        except Exception as exc:  # noqa: BLE001 - classified by the adapter contract
+            raise self._adapter_error("run_iceberg_maintenance", exc) from exc
+        return True
 
     def _hash_iceberg_file(self, table: Any, uri: str) -> str:
         """Hash iceberg file."""
@@ -611,7 +1030,7 @@ class IcebergDatasetStorageAdapter:
             if "AlreadyExists" not in type(exc).__name__ and "exists" not in str(exc).lower():
                 raise
 
-    def _find_snapshot_id(self, identifier: str, version_id: str) -> int | None:
+    def _find_snapshot_id(self, identifier: str, version_id: str, operation: str = "commit_staged_file") -> int | None:
         """Find snapshot id."""
         try:
             table = self._catalog.load_table(identifier)
@@ -620,7 +1039,7 @@ class IcebergDatasetStorageAdapter:
                 return None
             if _is_corrupt_metadata(exc):
                 raise ValueError(f"Iceberg table metadata is corrupt: {identifier}: {exc}") from exc
-            raise self._adapter_error("commit_staged_file", exc, idempotency_key=version_id) from exc
+            raise self._adapter_error(operation, exc, idempotency_key=version_id) from exc
         for snapshot in table.snapshots():
             if snapshot.summary.additional_properties.get(_VERSION_PROP) == version_id:
                 return int(snapshot.snapshot_id)
@@ -729,9 +1148,7 @@ def _expected_files(sidecar: Mapping[str, object]) -> Mapping[str, DatasetManife
             "byte_size": int(str(raw_file["byte_size"])),
             "content_hash": str(raw_file["content_hash"]),
         }
-        partition_values = raw_file.get("partition_values")
-        if isinstance(partition_values, dict):
-            entry["partition_values"] = dict(partition_values)
+        _copy_raw_manifest_metadata(entry, raw_file)
         expected[entry["uri"]] = entry
     return expected
 
@@ -743,7 +1160,54 @@ def _matching_expected_files(
     files = list(expected_files.values())
     if partition_filter is None:
         return files
-    return [file for file in files if _matches_partition_filter(file, partition_filter)]
+    return [file for file in files if _matches_manifest_filter(file, partition_filter)]
+
+
+def _copy_raw_manifest_metadata(entry: DatasetManifestFile, raw_file: Mapping[str, object]) -> None:
+    partition_values = raw_file.get("partition_values")
+    if isinstance(partition_values, dict):
+        entry["partition_values"] = dict(partition_values)
+    column_stats = _raw_column_stats(raw_file.get("column_stats"))
+    if column_stats:
+        entry["column_stats"] = column_stats
+    sort_bounds = _raw_column_stats(raw_file.get("sort_bounds"))
+    if sort_bounds:
+        entry["sort_bounds"] = sort_bounds
+
+
+def _raw_column_stats(raw: object) -> dict[str, DatasetManifestColumnStats]:
+    if not isinstance(raw, dict):
+        return {}
+    parsed: dict[str, DatasetManifestColumnStats] = {}
+    for column, stats in raw.items():
+        if isinstance(stats, dict):
+            parsed[str(column)] = _raw_stats(stats)
+    return parsed
+
+
+def _raw_stats(raw: Mapping[str, object]) -> DatasetManifestColumnStats:
+    stats: DatasetManifestColumnStats = {}
+    if "min" in raw:
+        stats["min"] = raw["min"]
+    if "max" in raw:
+        stats["max"] = raw["max"]
+    if "null_count" in raw:
+        stats["null_count"] = int(str(raw["null_count"]))
+    return stats
+
+
+def _copy_expected_manifest_metadata(
+    entry: DatasetManifestFile,
+    expected: DatasetManifestFile | None,
+) -> None:
+    if expected is None:
+        return
+    if "partition_values" in expected:
+        entry["partition_values"] = expected["partition_values"]
+    if "column_stats" in expected:
+        entry["column_stats"] = expected["column_stats"]
+    if "sort_bounds" in expected:
+        entry["sort_bounds"] = expected["sort_bounds"]
 
 
 def _verify_downloaded_snapshot_file(target: Path, manifest_file: DatasetManifestFile) -> None:
@@ -761,12 +1225,130 @@ def _path_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _matches_partition_filter(
+def _matches_manifest_filter(
     manifest_file: DatasetManifestFile,
     partition_filter: Mapping[str, object],
 ) -> bool:
+    return all(_file_might_match_value(manifest_file, key, value) for key, value in partition_filter.items())
+
+
+def _file_might_match_value(manifest_file: DatasetManifestFile, key: str, value: object) -> bool:
     partition_values = manifest_file.get("partition_values") or {}
-    return all(partition_values.get(key) == value for key, value in partition_filter.items())
+    if key in partition_values:
+        return partition_values.get(key) == value
+    stats = _stats_for_column(manifest_file, key)
+    if stats is None:
+        return True
+    if value is None:
+        return int(stats.get("null_count", 0)) > 0
+    if int(stats.get("null_count", 0)) >= int(manifest_file.get("row_count", 0)):
+        return False
+    return _value_within_bounds(value, stats)
+
+
+def _stats_for_column(manifest_file: DatasetManifestFile, key: str) -> DatasetManifestColumnStats | None:
+    column_stats = manifest_file.get("column_stats") or {}
+    sort_bounds = manifest_file.get("sort_bounds") or {}
+    return column_stats.get(key) or sort_bounds.get(key)
+
+
+def _value_within_bounds(value: object, stats: DatasetManifestColumnStats) -> bool:
+    lower = stats.get("min")
+    upper = stats.get("max")
+    if lower is not None and _safe_less(value, lower):
+        return False
+    if upper is not None and _safe_greater(value, upper):
+        return False
+    return True
+
+
+def _safe_less(left: object, right: object) -> bool:
+    try:
+        return bool(cast(Any, left) < cast(Any, right))
+    except TypeError:
+        return False
+
+
+def _safe_greater(left: object, right: object) -> bool:
+    try:
+        return bool(cast(Any, left) > cast(Any, right))
+    except TypeError:
+        return False
+
+
+def _part_row_count(staged_file: DatasetStagedFile, total_row_count: int) -> int:
+    return total_row_count if staged_file.row_count is None else staged_file.row_count
+
+
+def _staged_files_row_count(staged_files: Sequence[DatasetStagedFile], total_row_count: int) -> int:
+    return sum(_part_row_count(staged_file, total_row_count) for staged_file in staged_files)
+
+
+def _uploaded_row_count(staged_file: DatasetStagedFile, actual_row_count: int) -> int:
+    if staged_file.row_count is not None and staged_file.row_count != actual_row_count:
+        raise ValueError("dataset staged file row count does not match parquet content")
+    return actual_row_count
+
+
+def _files_by_uri(files: Sequence[DatasetManifestFile]) -> Mapping[str, DatasetManifestFile]:
+    return {file["uri"]: file for file in files}
+
+
+def _snapshot_properties(
+    version_id: str,
+    dataset_ref: str,
+    branch: str,
+    schema_hash: str,
+    created_at: str,
+) -> dict[str, str]:
+    return {
+        _VERSION_PROP: version_id,
+        _DATASET_PROP: dataset_ref,
+        _BRANCH_PROP: branch,
+        _SCHEMA_PROP: schema_hash,
+        _CREATED_AT_PROP: created_at,
+    }
+
+
+def _dataset_manifest(
+    version_id: str,
+    dataset_ref: str,
+    branch: str,
+    schema_hash: str,
+    files: list[DatasetManifestFile],
+    created_at: str,
+    profile_name: str,
+) -> DatasetManifest:
+    return {
+        "version_id": version_id,
+        "dataset": dataset_ref,
+        "branch": branch,
+        "schema_hash": schema_hash,
+        "files": files,
+        "created_at": created_at,
+        "storage_profile": profile_name,
+    }
+
+
+def _empty_maintenance_run(
+    profile_name: str,
+    dataset_ref: str,
+    dataset_id: str,
+    branch: str,
+    identifier: str,
+    policy: IcebergMaintenancePolicy,
+) -> IcebergMaintenanceRun:
+    rewrite = _empty_rewrite_result(None)
+    empty_plan = _empty_maintenance_plan(profile_name, dataset_ref, dataset_id, branch, identifier, policy)
+    return _maintenance_run(
+        profile_name,
+        empty_plan,
+        empty_plan,
+        rewrite,
+        expired_snapshot_ids=[],
+        skipped_expiration_snapshot_ids=[],
+        orphan_cleanup_file_uris=[],
+    )
 
 
 def _empty_maintenance_plan(
@@ -793,6 +1375,55 @@ def _empty_maintenance_plan(
         "deletable_snapshot_ids": [],
         "status": "no_table",
     }
+
+
+def _maintenance_run(
+    profile_name: str,
+    before_plan: IcebergMaintenancePlan,
+    after_plan: IcebergMaintenancePlan,
+    rewrite: _MaintenanceRewriteResult,
+    *,
+    expired_snapshot_ids: list[int],
+    skipped_expiration_snapshot_ids: list[int],
+    orphan_cleanup_file_uris: list[str],
+) -> IcebergMaintenanceRun:
+    status = _maintenance_run_status(rewrite, expired_snapshot_ids, before_plan["status"])
+    return {
+        "dataset_ref": before_plan["dataset_ref"],
+        "dataset_id": before_plan["dataset_id"],
+        "branch": before_plan["branch"],
+        "storage_profile": profile_name,
+        "table_identifier": before_plan["table_identifier"],
+        "status": status,
+        "policy": before_plan["policy"],
+        "before_snapshot_id": rewrite.before_snapshot_id,
+        "after_snapshot_id": rewrite.after_snapshot_id,
+        "compacted_snapshot_id": rewrite.compacted_snapshot_id,
+        "rewritten_data_file_count": rewrite.rewritten_data_file_count,
+        "output_data_file_count": rewrite.output_data_file_count,
+        "before_row_hash": rewrite.before_row_hash,
+        "after_row_hash": rewrite.after_row_hash,
+        "is_row_hash_preserved": rewrite.is_row_hash_preserved,
+        "expired_snapshot_ids": sorted(expired_snapshot_ids),
+        "protected_snapshot_ids": after_plan["protected_snapshot_ids"],
+        "retained_snapshot_ids": after_plan["retained_snapshot_ids"],
+        "skipped_expiration_snapshot_ids": sorted(skipped_expiration_snapshot_ids),
+        "orphan_cleanup_file_uris": sorted(orphan_cleanup_file_uris),
+        "before_plan_status": before_plan["status"],
+        "after_plan_status": after_plan["status"],
+    }
+
+
+def _maintenance_run_status(
+    rewrite: _MaintenanceRewriteResult,
+    expired_snapshot_ids: list[int],
+    before_plan_status: str,
+) -> str:
+    if before_plan_status == "no_table":
+        return "no_table"
+    if rewrite.compacted_snapshot_id is None and not expired_snapshot_ids:
+        return "skipped"
+    return "completed"
 
 
 def _maintenance_plan(
@@ -846,6 +1477,47 @@ def _plan_retained_snapshot_ids(snapshots: list[IcebergMaintenanceSnapshot]) -> 
 
 def _deletable_snapshot_ids(orphans: list[IcebergMaintenanceSnapshot]) -> list[int]:
     return sorted(snapshot["snapshot_id"] for snapshot in orphans if not snapshot["is_protected"])
+
+
+def _current_compaction_candidate(plan: IcebergMaintenancePlan) -> IcebergMaintenanceSnapshot | None:
+    compaction_reasons = {"too_many_files", "small_files", "read_amplification"}
+    for snapshot in plan["compaction_candidates"]:
+        if snapshot["is_current"] and compaction_reasons & set(snapshot["reason_codes"]):
+            return snapshot
+    return None
+
+
+def _empty_rewrite_result(snapshot_id: int | None) -> _MaintenanceRewriteResult:
+    return _MaintenanceRewriteResult(
+        before_snapshot_id=snapshot_id,
+        after_snapshot_id=snapshot_id,
+        compacted_snapshot_id=None,
+        rewritten_data_file_count=0,
+        output_data_file_count=0,
+        before_row_hash=None,
+        after_row_hash=None,
+        is_row_hash_preserved=None,
+    )
+
+
+def _rewrite_result(
+    before_snapshot_id: int,
+    after_snapshot_id: int,
+    before_file_count: int,
+    output_file_count: int,
+    before_row_hash: str,
+    after_row_hash: str,
+) -> _MaintenanceRewriteResult:
+    return _MaintenanceRewriteResult(
+        before_snapshot_id=before_snapshot_id,
+        after_snapshot_id=after_snapshot_id,
+        compacted_snapshot_id=after_snapshot_id,
+        rewritten_data_file_count=before_file_count,
+        output_data_file_count=output_file_count,
+        before_row_hash=before_row_hash,
+        after_row_hash=after_row_hash,
+        is_row_hash_preserved=before_row_hash == after_row_hash,
+    )
 
 
 def _current_snapshot_id(current: Any | None) -> int | None:
@@ -932,6 +1604,44 @@ def _maintenance_reason_codes(
 def _snapshot_version_id(snapshot: Any, committed_version_id: str | None) -> str | None:
     value = snapshot.summary.additional_properties.get(_VERSION_PROP)
     return value if isinstance(value, str) and value else committed_version_id
+
+
+def _maintenance_snapshot_properties(
+    snapshot: Any,
+    dataset_ref: str,
+    branch: str,
+    before_snapshot_id: int,
+) -> dict[str, str]:
+    created_at = _utc_now_iso()
+    schema_hash = str(snapshot.summary.additional_properties.get(_SCHEMA_PROP) or "")
+    return {
+        _VERSION_PROP: f"maintenance:{before_snapshot_id}:{created_at}",
+        _DATASET_PROP: dataset_ref,
+        _BRANCH_PROP: branch,
+        _SCHEMA_PROP: schema_hash,
+        _CREATED_AT_PROP: created_at,
+        _MAINTENANCE_KIND_PROP: "compaction",
+        _MAINTENANCE_BEFORE_SNAPSHOT_PROP: str(before_snapshot_id),
+    }
+
+
+def _arrow_table_row_hash(arrow_table: Any) -> str:
+    rows = sorted(
+        json.dumps(row, default=str, sort_keys=True, separators=(",", ":")) for row in arrow_table.to_pylist()
+    )
+    digest = hashlib.sha256()
+    for row in rows:
+        digest.update(row.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _arrow_schema_hash(arrow_table: Any) -> str:
+    return hashlib.sha256(str(arrow_table.schema).encode("utf-8")).hexdigest()
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _committed_snapshot_versions(

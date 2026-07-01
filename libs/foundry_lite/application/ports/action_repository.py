@@ -1,3 +1,5 @@
+"""Application port contract for action repository."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

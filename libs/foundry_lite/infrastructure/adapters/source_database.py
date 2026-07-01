@@ -1,3 +1,5 @@
+"""Infrastructure adapter implementation for source database."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

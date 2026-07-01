@@ -1,3 +1,5 @@
+"""Application service helpers for source permissions workflows."""
+
 from __future__ import annotations
 
 _SOURCE_PERMISSION_BY_TYPE = {

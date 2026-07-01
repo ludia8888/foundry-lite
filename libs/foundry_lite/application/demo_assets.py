@@ -1,3 +1,5 @@
+"""Application-layer models and helpers for demo assets."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

@@ -205,6 +205,7 @@ REQUIRED_RECIPE_FRAGMENTS = {
         "useFoundryLiteIcebergMaintenancePlan",
         "useFoundryLiteMaintenanceControls",
         "planIcebergMaintenanceReadOnly",
+        "client.operations.icebergMaintenance.run",
     ),
     "admin-console-screen": (
         "### Admin readiness screen",
@@ -319,6 +320,7 @@ REQUIRED_SCREEN_RECIPE_FRAGMENTS = {
         "createMaintenanceOperationsRecipe",
         "client.operations.observability.detect",
         "client.operations.icebergMaintenance.planReadOnly",
+        "client.operations.icebergMaintenance.run",
         "client.operations.index.replayObjectType",
         "client.operations.transforms.retry",
     ),
@@ -348,6 +350,7 @@ REQUIRED_SCREEN_RECIPE_FRAGMENTS = {
     "recovery-operations-recipe": (
         "createRecoveryOperationsRecipe",
         "client.operations.backupRestore.recoveryOverview",
+        "client.operations.backupRestore.restoreArtifact",
         "client.operations.backupRestore.approveResume",
     ),
 }

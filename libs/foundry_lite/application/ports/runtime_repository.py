@@ -1,14 +1,42 @@
+"""Application port contract for runtime repository."""
 # pyright: reportUnusedImport=false
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import Literal, NotRequired, Protocol, TypedDict
+from collections.abc import Sequence
+from typing import Protocol
 
+from foundry_lite.application.ports.runtime_repository_types import (  # noqa: F401
+    AuditEventRecord,
+    DeadLetterEventRecord,
+    LineageEdgeRecord,
+    LineageEdgeRow,
+    OutboxEventRecord,
+    RuntimeJsonObject,
+    RuntimeLookupTable,
+    RuntimeRetryMaterializationResult,
+    RuntimeRetryPlan,
+    RuntimeRetryResult,
+    RuntimeRow,
+    RuntimeRowsTable,
+    RuntimeRunDetail,
+    RuntimeRunInvestigation,
+    RuntimeRunPageCursor,
+    RuntimeRunQueryResult,
+    RuntimeRunRelationRecord,
+    RuntimeRunRelationRow,
+    RuntimeRunSnapshot,
+    RuntimeRunType,
+)
 from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
-from foundry_lite.application.ports.workflow_adapter import WorkflowRunRecord, WorkflowRunRow
+from foundry_lite.application.ports.workflow_adapter import WorkflowLedgerStatus, WorkflowRunRecord, WorkflowRunRow
 from foundry_lite.application.runtime_repository_backup_restore import (  # noqa: F401
+    BackupRestoreArtifact,
+    BackupRestoreArtifactReceipt,
+    BackupRestoreArtifactRestoredVersion,
+    BackupRestoreArtifactRestoreReport,
+    BackupRestoreArtifactRestoreStatus,
+    BackupRestoreArtifactStatus,
     BackupRestoreDatasetVersion,
     BackupRestoreIndexPointer,
     BackupRestoreManifestIssue,
@@ -29,252 +57,11 @@ from foundry_lite.application.runtime_repository_observability import (  # noqa:
     ObservabilityIncidentStatus,
     ObservabilityReport,
     ObservabilitySeverity,
+    ObservabilityStoredReport,
     RuntimeRunLink,
+    StoredObservabilityIncident,
+    StoredObservabilityIncidentStatus,
 )
-
-RuntimeLookupTable = Literal["transforms", "materializations"]
-RuntimeRowsTable = Literal[
-    "sync_runs",
-    "transform_runs",
-    "index_runs",
-    "action_runs",
-    "action_writebacks",
-    "materialization_runs",
-    "outbox_events",
-    "dead_letter_events",
-    "workflow_runs",
-    "ai_execution_runs",
-    "audit_events",
-    "object_edits",
-    "object_records",
-]
-RuntimeRunType = Literal[
-    "sync",
-    "transform",
-    "index",
-    "action",
-    "action_writeback",
-    "materialization",
-    "outbox",
-    "dead_letter",
-    "workflow",
-    "insight_review",
-    "ai",
-    "audit",
-]
-RuntimeJsonObject = Mapping[str, object]
-
-
-@dataclass(frozen=True)
-class AuditEventRecord:
-    event_id: str
-    tenant_id: str
-    actor_user_id: str
-    event_type: str
-    resource_type: str
-    resource_id: str | None
-    action: str
-    decision: str
-    policy_decision: RuntimeJsonObject
-    before_ref: RuntimeJsonObject
-    after_ref: RuntimeJsonObject
-    correlation_id: str
-    request_id: str
-    metadata: RuntimeJsonObject
-    created_at: str
-
-
-@dataclass(frozen=True)
-class OutboxEventRecord:
-    event_id: str
-    tenant_id: str
-    event_type: str
-    aggregate_type: str
-    aggregate_id: str
-    payload: RuntimeJsonObject
-    status: str
-    attempts: int
-    idempotency_key: str
-    correlation_id: str
-    created_at: str
-    published_at: str | None
-
-
-@dataclass(frozen=True)
-class DeadLetterEventRecord:
-    event_id: str
-    tenant_id: str
-    source_event_id: str | None
-    event_type: str
-    payload: RuntimeJsonObject
-    error: RuntimeJsonObject
-    failed_at: str
-    retry_after: str | None
-
-
-@dataclass(frozen=True)
-class LineageEdgeRecord:
-    edge_id: str
-    tenant_id: str
-    from_resource_type: str
-    from_resource_id: str
-    to_resource_type: str
-    to_resource_id: str
-    relation: str
-    created_by_run_id: str
-    created_at: str
-
-
-class LineageEdgeRow(TypedDict):
-    """Persisted lineage edge row returned by runtime read APIs."""
-
-    id: str
-    tenant_id: str
-    from_resource_type: str
-    from_resource_id: str
-    to_resource_type: str
-    to_resource_id: str
-    relation: str
-    created_by_run_id: str
-    created_at: str
-
-
-@dataclass(frozen=True)
-class RuntimeRunRelationRecord:
-    relation_id: str
-    tenant_id: str
-    source_run_type: RuntimeRunType
-    source_run_id: str
-    target_run_type: RuntimeRunType
-    target_run_id: str
-    relation: str
-    resource_type: str
-    resource_id: str
-    metadata: RuntimeJsonObject
-    created_at: str
-
-
-class RuntimeRunRelationRow(TypedDict):
-    """Durable operator relation between two Operations rows."""
-
-    id: str
-    tenant_id: str
-    source_run_type: RuntimeRunType
-    source_run_id: str
-    target_run_type: RuntimeRunType
-    target_run_id: str
-    relation: str
-    resource_type: str
-    resource_id: str
-    metadata: RuntimeJsonObject
-    created_at: str
-
-
-RuntimeRow = Mapping[str, object]
-
-
-class RuntimeRelatedCounts(TypedDict):
-    """Operator-facing counts for evidence attached to one runtime row."""
-
-    outboxEvents: int
-    auditEvents: int
-    objectEdits: int
-    actionWritebacks: int
-    lineageEdges: int
-
-
-class RuntimeRunInvestigation(TypedDict):
-    """Human-readable investigation summary for one runtime row."""
-
-    summary: str
-    status: str | None
-    errorMessage: str | None
-    correlationId: str | None
-    references: RuntimeJsonObject
-    relatedCounts: RuntimeRelatedCounts
-    suggestedActions: list[str]
-
-
-class RuntimeRetryMaterializationResult(TypedDict):
-    """Materialization output created while reprocessing a retryable DLQ event."""
-
-    kind: Literal["materialization"]
-    apiName: str
-    datasetId: str
-    datasetRef: str
-    transactionId: str
-    versionId: str
-    versionNumber: int
-    rowCount: int
-
-
-class RuntimeRunSnapshot(TypedDict):
-    syncRuns: list[RuntimeRow]
-    transformRuns: list[RuntimeRow]
-    indexRuns: list[RuntimeRow]
-    actionRuns: list[RuntimeRow]
-    actionWritebacks: list[RuntimeRow]
-    materializationRuns: list[RuntimeRow]
-    outboxEvents: list[RuntimeRow]
-    deadLetterEvents: list[RuntimeRow]
-    workflowRuns: list[RuntimeRow]
-    aiRuns: list[RuntimeRow]
-    auditEvents: list[RuntimeRow]
-    objectEdits: list[RuntimeRow]
-
-
-class RuntimeRunPageCursor(TypedDict):
-    timestamp: str
-    run_id: str
-
-
-class RuntimeRunQueryResult(RuntimeRunSnapshot):
-    """Paged operational runtime rows grouped for the run-list screen/API."""
-
-    nextCursor: NotRequired[str | None]
-    nextCursors: NotRequired[dict[RuntimeRunType, str]]
-
-
-class RuntimeRetryPlan(TypedDict):
-    """Validated DLQ retry data read before changing runtime state."""
-
-    deadLetterEventId: str
-    outboxEventId: str
-    eventType: str
-    payload: RuntimeJsonObject
-
-
-class RuntimeRetryResult(RuntimeRetryPlan):
-    """Result returned when an operator requeues a dead-lettered event."""
-
-    status: str
-    materializationResult: NotRequired[RuntimeRetryMaterializationResult]
-
-
-class RuntimeRunDetail(TypedDict):
-    """Operator-facing detail payload for one runtime row."""
-
-    runType: RuntimeRunType
-    runId: str
-    row: RuntimeRow
-    status: str | None
-    errorMessage: str | None
-    error: object | None
-    correlationId: str | None
-    references: RuntimeJsonObject
-    investigation: RuntimeRunInvestigation
-    relatedOutboxEvents: list[RuntimeRow]
-    relatedAuditEvents: list[RuntimeRow]
-    relatedObjectEdits: list[RuntimeRow]
-    relatedActionWritebacks: list[RuntimeRow]
-    runRelations: list[RuntimeRunRelationRow]
-    lineageEdges: list[LineageEdgeRow]
-    datasetTransaction: NotRequired[RuntimeRow | None]
-    lateData: NotRequired[RuntimeJsonObject | None]
-    materialization: NotRequired[RuntimeJsonObject | None]
-    downstreamImpact: NotRequired[RuntimeJsonObject | None]
-    quality: NotRequired[RuntimeJsonObject | None]
-    ai: NotRequired[RuntimeJsonObject | None]
 
 
 class RuntimeRepository(Protocol):
@@ -335,6 +122,50 @@ class RuntimeRepository(Protocol):
         self, *, tenant_id: str, table: RuntimeRowsTable, relation_ids: Sequence[str], limit: int
     ) -> list[RuntimeRow]:
         """Return bounded evidence rows whose relation columns match any correlation id."""
+        ...
+
+    def list_observability_incidents(
+        self,
+        *,
+        tenant_id: str,
+        status: StoredObservabilityIncidentStatus | None,
+        limit: int,
+    ) -> list[StoredObservabilityIncident]:
+        """Return durable observability incidents for one tenant."""
+        ...
+
+    def observability_incident_by_id(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        incident_id: str,
+    ) -> StoredObservabilityIncident | None:
+        """Return one durable incident inside the caller transaction."""
+        ...
+
+    def upsert_observability_incident(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        incident: ObservabilityIncident,
+    ) -> StoredObservabilityIncident:
+        """Insert or update one active detector incident by tenant/dedupe key."""
+        ...
+
+    def update_observability_incident_status(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        incident_id: str,
+        status: StoredObservabilityIncidentStatus,
+        actor_user_id: str,
+        updated_at: str,
+        resolution_reason: str | None,
+    ) -> StoredObservabilityIncident | None:
+        """Move one durable incident through the acknowledged/resolved lifecycle."""
         ...
 
     def row_by_id(
@@ -431,6 +262,24 @@ class RuntimeRepository(Protocol):
     ) -> WorkflowRunRow | None:
         """CAS a workflow run status and return the updated row."""
         ...
+
+    def claim_workflow_run_lease(
+        self, *, transaction: TransactionContext, record: WorkflowRunRecord, lease_owner_id: str, now: str
+    ) -> WorkflowRunRow | None: ...
+
+    def release_workflow_run_lease(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        workflow_run_id: str,
+        lease_owner_id: str,
+        lease_token: str,
+        status: WorkflowLedgerStatus,
+        output: RuntimeJsonObject,
+        error: RuntimeJsonObject | None,
+        completed_at: str,
+    ) -> WorkflowRunRow | None: ...
 
     def link_workflow_audit_event(
         self,

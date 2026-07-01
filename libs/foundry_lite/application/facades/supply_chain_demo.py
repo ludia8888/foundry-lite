@@ -1,3 +1,5 @@
+"""Thin facade entrypoints for supply chain demo workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

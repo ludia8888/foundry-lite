@@ -16,6 +16,8 @@ BackupRestorePreflightStatus = Literal["ready", "blocked"]
 BackupRestoreVersionStatus = Literal["valid", "missing", "corrupt"]
 BackupRestoreModeStatus = Literal["inactive", "paused", "blocked", "resume_approved"]
 BackupRestoreValidationStatus = Literal["passed", "blocked"]
+BackupRestoreArtifactStatus = Literal["created", "existing"]
+BackupRestoreArtifactRestoreStatus = Literal["validated", "blocked"]
 
 
 class BackupRestoreManifestIssue(TypedDict):
@@ -72,6 +74,78 @@ class BackupRestorePreflightReport(TypedDict):
     temporalStrategy: RuntimeJsonObject
     searchRebuild: RuntimeJsonObject
     restoreTrafficGate: RuntimeJsonObject
+    summary: RuntimeJsonObject
+
+
+class BackupRestoreArtifactReceipt(TypedDict):
+    """Durable backup artifact receipt for one ready restore preflight."""
+
+    generatedAt: str
+    tenantId: str
+    backupId: str
+    backupArtifactId: str
+    status: BackupRestoreArtifactStatus
+    artifactRef: str
+    artifactHash: str
+    payloadByteSize: int
+    manifestFormat: str
+    preflightStatus: str
+    datasetVersionCount: int
+    issueCount: int
+    isIdempotentReplay: bool
+    restoreModeStartPath: str
+    summary: RuntimeJsonObject
+
+
+class BackupRestoreArtifact(TypedDict):
+    """Immutable backup artifact payload read back from durable artifact storage."""
+
+    receipt: BackupRestoreArtifactReceipt
+    manifestFormat: str
+    sourceOfTruth: RuntimeJsonObject
+    preflightReport: BackupRestorePreflightReport
+
+
+class BackupRestoreArtifactRestoredVersion(TypedDict):
+    """One dataset head restored from a verified backup artifact."""
+
+    datasetId: str
+    datasetRef: str
+    branch: str
+    status: Literal["restored", "already_current"]
+    sourceVersionId: str
+    currentHeadBeforeRestoreVersionId: str
+    restoredVersionId: str
+    restoreTransactionId: str
+    restoredVersionNumber: int
+    rowCount: int
+    manifestUri: str
+
+
+class BackupRestoreArtifactRestoreReport(TypedDict):
+    """Verified backup artifact restore entrypoint evidence."""
+
+    generatedAt: str
+    tenantId: str
+    backupId: str
+    restoreId: str
+    status: BackupRestoreArtifactRestoreStatus
+    artifactRef: str
+    artifactHash: str
+    manifestFormat: str
+    executionMode: str
+    isArtifactVerified: bool
+    isHistoricalRepointExecuted: bool
+    preflightStatus: str
+    restoreModeStatus: str
+    postRestoreValidationStatus: str
+    datasetVersionCount: int
+    blockingIssueCount: int
+    findings: list[RuntimeJsonObject]
+    restoreMode: BackupRestoreModeReport | None
+    postRestoreValidation: BackupRestorePostRestoreValidationReport | None
+    restoredDatasetVersions: list[BackupRestoreArtifactRestoredVersion]
+    restoreTransactionCount: int
     summary: RuntimeJsonObject
 
 

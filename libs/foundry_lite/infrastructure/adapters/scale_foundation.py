@@ -1,3 +1,5 @@
+"""Infrastructure adapter implementation for scale foundation."""
+
 from __future__ import annotations
 
 import math
@@ -55,6 +57,7 @@ class LocalWorkflowAdapter:
                     has_required_idempotency_key=True,
                 ),
                 AdapterFailureMode("workflow_run", "not_found", False, "Workflow run was not found."),
+                AdapterFailureMode("cancel_workflow", "not_found", False, "Workflow run was not found."),
             ),
         )
 
@@ -85,6 +88,32 @@ class LocalWorkflowAdapter:
         if self._run_tenants.get(run_id) != tenant_id:
             return None
         return self._runs_by_id.get(run_id)
+
+    def cancel_workflow(self, tenant_id: str, run_id: str, *, reason: str | None = None) -> WorkflowRun | None:
+        run = self.workflow_run(tenant_id, run_id)
+        if run is None:
+            return None
+        if run.status == "cancelled":
+            return run
+        if run.status in {"succeeded", "failed"}:
+            return run
+        cancelled = WorkflowRun(
+            run_id=run.run_id,
+            workflow_name=run.workflow_name,
+            status="cancelled",
+            output={
+                **dict(run.output),
+                "cancellation": {
+                    "reason": reason or "operator_cancelled",
+                    "source": self.profile_name,
+                    "cleanup": {"datasetStaging": "adapter_confirmed", "committedVersionId": None},
+                },
+            },
+            error=None,
+        )
+        self._runs_by_id[run_id] = cancelled
+        self._runs_by_idempotency[run_id] = cancelled
+        return cancelled
 
 
 class FakeWorkflowAdapter(LocalWorkflowAdapter):

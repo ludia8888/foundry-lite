@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from foundry_lite.application.services.aip.eval_identifiers import hash_json
 from foundry_lite.application.services.aip.logic_runtime import LogicBlock
-from foundry_lite.application.services.aip.tool_broker import ToolSpec
+from foundry_lite.application.services.aip.tool_broker import ToolSpec, is_direct_vendor_tool_id
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
 
@@ -38,9 +38,6 @@ _CANONICAL_BLOCKS = frozenset(
 )
 _RUNTIME_READY_BLOCKS = frozenset(
     {"Input", "CallFunction", "Condition", "CreateActionProposal", "HumanApproval", "Output"}
-)
-_DANGEROUS_TOOL_IDS = frozenset(
-    {"generic_sql", "arbitrary_http_request", "shell_execute", "python_eval", "generic_repository_write"}
 )
 _TOOL_EFFECTS = frozenset({"READ", "PROPOSE_WRITE", "WRITE"})
 _CONFIRMATION_POLICIES = frozenset({"NONE", "USER", "HUMAN_REVIEW"})
@@ -201,8 +198,14 @@ def _tool_identity_issues(
     issues: list[VisualBuilderIssue] = []
     if key in seen:
         issues.append(_issue("duplicate_tool_version", "tools", f"{tool.tool_id}@{tool.version} is duplicated"))
-    if tool.tool_id in _DANGEROUS_TOOL_IDS:
-        issues.append(_issue("dangerous_tool_denied", "tools", f"{tool.tool_id} is never allowed in AIP Builder"))
+    if is_direct_vendor_tool_id(tool.tool_id):
+        issues.append(
+            _issue(
+                "direct_vendor_tool_denied",
+                "tools",
+                f"{tool.tool_id} must use governed connectors, webhooks, or action proposals",
+            )
+        )
     if tool.status != "published":
         issues.append(_issue("tool_not_published", "tools", f"{tool.tool_id}@{tool.version} is not published"))
     return tuple(issues)

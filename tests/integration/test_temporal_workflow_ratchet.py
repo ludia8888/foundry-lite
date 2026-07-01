@@ -38,6 +38,7 @@ from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import ConnectorSnapshot
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.workflow_adapter import WorkflowStartRequest
+from foundry_lite.application.services.workflow_connector_sync import connector_sync_workflow_output
 from foundry_lite.application.services.workflow_orchestration_service import CONNECTOR_SYNC_WORKFLOW_NAME
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.adapters.scale_foundation import LocalConnectorAdapter
@@ -489,6 +490,21 @@ def test_sync_start_workflow_bridges_to_async_core() -> None:
     _run(body)
 
 
+def _committed_transaction_metadata(
+    foundry: FoundryLite,
+    tenant_id: str,
+    version_id: str,
+) -> Mapping[str, object]:
+    with foundry.engine.begin() as conn:
+        tx = foundry.dataset_transaction_repository.committed_transaction_by_version(
+            transaction=conn,
+            tenant_id=tenant_id,
+            committed_version_id=version_id,
+        )
+    assert tx is not None
+    return tx["metadata"]
+
+
 def test_product_connector_sync_workflow_runs_through_temporal_and_audits(tmp_path: Path) -> None:
     async def body() -> None:
         ctx = demo_admin_context()
@@ -503,14 +519,10 @@ def test_product_connector_sync_workflow_runs_through_temporal_and_audits(tmp_pa
                 resource_name=str(payload["resourceName"]),
                 sync_name=sync_name_value if isinstance(sync_name_value, str) else None,
                 ctx=ctx,
+                run_id=str(payload["syncRunId"]),
             )
-            return {
-                "workflowKind": "connector_sync",
-                "datasetRef": result.dataset_ref,
-                "committedVersionId": result.version_id,
-                "versionNumber": result.version_number,
-                "rowCount": result.row_count,
-            }
+            metadata = _committed_transaction_metadata(foundry, ctx.tenant_id, result.version_id)
+            return dict(connector_sync_workflow_output(result, payload=payload, transaction_metadata=metadata))
 
         async with _connector_sync_harness(driver) as (_env, temporal_adapter):
             dependencies = create_local_core_dependencies(storage_root=tmp_path / "temporal-product")
@@ -558,6 +570,7 @@ def test_product_connector_sync_workflow_runs_through_temporal_and_audits(tmp_pa
             assert output["workflowKind"] == "connector_sync"
             assert output["datasetRef"] == "raw.workflow_orders"
             assert output["rowCount"] == 1
+            assert output["dataPlane"]["outboxEventType"] == "dataset.version.committed"
             assert lookup["workflowRunId"] == run["workflowRunId"]
             assert lookup["idempotencyKey"] == "temporal-connector-sync-orders"
             assert run["foundryRunId"] is not None

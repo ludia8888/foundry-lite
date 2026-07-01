@@ -1,3 +1,5 @@
+"""Application service helpers for search projection context workflows."""
+
 from __future__ import annotations
 
 from foundry_lite.domain.context import RequestContext

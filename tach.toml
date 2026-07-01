@@ -39,6 +39,7 @@ depends_on = [
   "foundry_lite.application",
   "foundry_lite.domain",
   "foundry_lite.security",
+  "foundry_lite.transforms_sdk",
 ]
 
 [[modules]]

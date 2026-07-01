@@ -1,3 +1,5 @@
+"""SQLAlchemy repository adapter for object change sequence persistence."""
+
 from __future__ import annotations
 
 from typing import Any

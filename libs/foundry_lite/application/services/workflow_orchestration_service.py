@@ -1,41 +1,54 @@
+"""Application service helpers for workflow orchestration service workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
 
 from foundry_lite.application.ports import (
     AdapterError,
-    AuditEventRecord,
     ProductWorkflowRun,
-    RuntimeJsonObject,
     RuntimeRepository,
     WorkflowRun,
-    WorkflowRunRecord,
     WorkflowRunRow,
     WorkflowStartRequest,
-    workflow_request_fingerprint,
     workflow_run_id,
 )
-from foundry_lite.application.ports.transaction_context import (
-    WORKFLOW_RUN_CANCELLED,
-    WORKFLOW_RUN_FAILED,
-    WORKFLOW_RUN_RUNNING,
-    WORKFLOW_RUN_START_UNKNOWN,
-    WORKFLOW_RUN_STARTING,
-    WORKFLOW_RUN_SUCCEEDED,
-    StatusTransition,
-    TransactionContext,
-)
+from foundry_lite.application.ports.transaction_context import WORKFLOW_RUN_STARTING, TransactionContext
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRegistryLookup
 from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping
 from foundry_lite.application.services.runtime_service import RuntimeService
+from foundry_lite.application.services.workflow_audit_payloads import (
+    workflow_cancelled_audit_record,
+    workflow_reconciliation_audit_record,
+    workflow_start_audit_record,
+)
+from foundry_lite.application.services.workflow_orchestration_helpers import (
+    CONNECTOR_SYNC_WORKFLOW_NAME as _CONNECTOR_SYNC_WORKFLOW_NAME,
+)
+from foundry_lite.application.services.workflow_orchestration_helpers import (
+    MEDIA_PROCESSING_WORKFLOW_NAME as _MEDIA_PROCESSING_WORKFLOW_NAME,
+)
+from foundry_lite.application.services.workflow_orchestration_helpers import (
+    cancelled_adapter_run,
+    cancelled_ledger_run,
+    connector_sync_request,
+    ensure_cancellable,
+    media_processing_request,
+    product_workflow_run_from_row,
+    require_same_workflow_request,
+    workflow_record,
+    workflow_run_from_start_exception,
+    workflow_start_request_from_row,
+    workflow_transition_for_run,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
 
-CONNECTOR_SYNC_WORKFLOW_NAME = "ConnectorSyncWorkflow"
-MEDIA_PROCESSING_WORKFLOW_NAME = "MediaProcessingWorkflow"
+CONNECTOR_SYNC_WORKFLOW_NAME = _CONNECTOR_SYNC_WORKFLOW_NAME
+MEDIA_PROCESSING_WORKFLOW_NAME = _MEDIA_PROCESSING_WORKFLOW_NAME
 
 
 class WorkflowOrchestrationService(CoreService):
@@ -64,7 +77,7 @@ class WorkflowOrchestrationService(CoreService):
         ctx = ctx or RequestContext()
         self._require_workflow_start(ctx, dataset_ref)
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
-        request = _connector_sync_request(
+        request = connector_sync_request(
             ctx,
             dataset_ref,
             connector_name,
@@ -87,7 +100,7 @@ class WorkflowOrchestrationService(CoreService):
     ) -> ProductWorkflowRun:
         ctx = ctx or RequestContext()
         self._require_media_workflow_start(ctx, media_item_version_id)
-        request = _media_processing_request(ctx, media_item_version_id, processor_spec, idempotency_key)
+        request = media_processing_request(ctx, media_item_version_id, processor_spec, idempotency_key)
         row = self._ensure_workflow_intent(ctx, request, dataset_id=None)
         return self._start_or_replay(ctx, request, row)
 
@@ -102,7 +115,25 @@ class WorkflowOrchestrationService(CoreService):
             )
         if row is None:
             raise NotFound("workflow run not found", details={"workflow_run_id": workflow_run_id})
-        return _product_workflow_run_from_row(row)
+        return product_workflow_run_from_row(row)
+
+    def cancel_product_workflow(
+        self,
+        workflow_run_id: str,
+        *,
+        reason: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> ProductWorkflowRun:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "operations:retry", "product_workflow", workflow_run_id)
+        row = self._workflow_row_by_id(ctx, workflow_run_id)
+        ensure_cancellable(row)
+        if row["status"] == "cancelled":
+            return product_workflow_run_from_row(row)
+        run = self._cancel_workflow_run(ctx, row, reason=reason)
+        updated = self._record_adapter_result(ctx, run)
+        audited = self._audit_workflow_cancellation(ctx, updated, previous_status=row["status"], reason=reason)
+        return product_workflow_run_from_row(audited)
 
     def _require_workflow_start(self, ctx: RequestContext, dataset_ref: str) -> None:
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
@@ -132,10 +163,10 @@ class WorkflowOrchestrationService(CoreService):
         with self.engine.begin() as conn:
             existing = self.runtime_repository.insert_workflow_run_or_get_existing(
                 transaction=conn,
-                record=_workflow_record(ctx, request, self.workflow_adapter.profile_name, dataset_id),
+                record=workflow_record(ctx, request, self.workflow_adapter.profile_name, dataset_id),
             )
             row = existing or self._workflow_row(conn, ctx, workflow_run_id(request))
-        _require_same_workflow_request(row, request)
+        require_same_workflow_request(row, request)
         return row
 
     def _start_or_replay(
@@ -145,20 +176,51 @@ class WorkflowOrchestrationService(CoreService):
         row: WorkflowRunRow,
     ) -> ProductWorkflowRun:
         if row["status"] not in {"requested", "start_unknown"}:
-            return _product_workflow_run_from_row(row)
+            return product_workflow_run_from_row(row)
+        if row["status"] == "start_unknown":
+            reconciled = self._reconcile_start_unknown_workflow(ctx, row)
+            if reconciled["status"] != "start_unknown":
+                return product_workflow_run_from_row(reconciled)
         claimed = self._claim_start(ctx, row["id"])
         if claimed is None:
-            return _product_workflow_run_from_row(self._workflow_row_by_id(ctx, row["id"]))
-        run = self._start_workflow_with_evidence(request)
+            return product_workflow_run_from_row(self._workflow_row_by_id(ctx, row["id"]))
+        run = self._start_workflow_with_evidence(workflow_start_request_from_row(row, request))
         updated = self._record_adapter_result(ctx, run)
         audited = self._audit_workflow_start(ctx, updated)
-        return _product_workflow_run_from_row(audited)
+        return product_workflow_run_from_row(audited)
 
     def _start_workflow_with_evidence(self, request: WorkflowStartRequest) -> WorkflowRun:
         try:
             return self.workflow_adapter.start_workflow(request)
         except Exception as exc:
-            return _workflow_run_from_start_exception(request, self.workflow_adapter.profile_name, exc)
+            return workflow_run_from_start_exception(request, self.workflow_adapter.profile_name, exc)
+
+    def _cancel_workflow_run(self, ctx: RequestContext, row: WorkflowRunRow, *, reason: str | None) -> WorkflowRun:
+        if row["status"] == "requested":
+            return cancelled_ledger_run(row, reason, source="foundry_ledger")
+        try:
+            run = self.workflow_adapter.cancel_workflow(ctx.tenant_id, row["id"], reason=reason)
+        except AdapterError as exc:
+            raise ConflictDetected(
+                "workflow adapter could not confirm cancellation",
+                details={"workflow_run_id": row["id"], "adapterFailure": scrub_error_mapping(exc.failure.to_payload())},
+            ) from exc
+        if run is None:
+            raise ConflictDetected(
+                "workflow adapter has no cancellable run",
+                details={"workflow_run_id": row["id"], "status": row["status"]},
+            )
+        return cancelled_adapter_run(row, run, reason)
+
+    def _reconcile_start_unknown_workflow(self, ctx: RequestContext, row: WorkflowRunRow) -> WorkflowRunRow:
+        try:
+            run = self.workflow_adapter.workflow_run(ctx.tenant_id, row["id"])
+        except AdapterError:
+            return row
+        if run is None or run.status in {"queued", "running"}:
+            return row
+        updated = self._record_adapter_result(ctx, run)
+        return self._audit_workflow_reconciliation(ctx, updated, previous_status=row["status"])
 
     def _claim_start(self, ctx: RequestContext, workflow_run_id_value: str) -> WorkflowRunRow | None:
         now = _now()
@@ -175,7 +237,7 @@ class WorkflowOrchestrationService(CoreService):
             )
 
     def _record_adapter_result(self, ctx: RequestContext, run: WorkflowRun) -> WorkflowRunRow:
-        transition = _workflow_transition_for_run(run)
+        transition = workflow_transition_for_run(run)
         completed_at = _now() if run.status in {"succeeded", "failed", "cancelled"} else None
         with self.engine.begin() as conn:
             row = self.runtime_repository.update_workflow_run_status(
@@ -198,7 +260,7 @@ class WorkflowOrchestrationService(CoreService):
             audit_id = _new_id("audit")
             self.runtime_repository.insert_audit_event(
                 transaction=conn,
-                record=_workflow_audit_record(ctx, row, audit_id=audit_id),
+                record=workflow_start_audit_record(ctx, row, audit_id=audit_id),
             )
             linked = self.runtime_repository.link_workflow_audit_event(
                 transaction=conn,
@@ -220,6 +282,61 @@ class WorkflowOrchestrationService(CoreService):
             )
         return linked or self._workflow_row_by_id(ctx, row["id"])
 
+    def _audit_workflow_cancellation(
+        self,
+        ctx: RequestContext,
+        row: WorkflowRunRow,
+        *,
+        previous_status: str,
+        reason: str | None,
+    ) -> WorkflowRunRow:
+        with self.engine.begin() as conn:
+            audit_id = _new_id("audit")
+            self.runtime_repository.insert_audit_event(
+                transaction=conn,
+                record=workflow_cancelled_audit_record(ctx, row, audit_id, previous_status, reason),
+            )
+            self.runtime_service._run_relation(
+                conn,
+                ctx,
+                source_run_type="workflow",
+                source_run_id=row["id"],
+                target_run_type="audit",
+                target_run_id=audit_id,
+                relation="cancelled_by",
+                resource_type="product_workflow",
+                resource_id=row["id"],
+                metadata={"previousStatus": previous_status, "status": row["status"]},
+            )
+        return self._workflow_row_by_id(ctx, row["id"])
+
+    def _audit_workflow_reconciliation(
+        self,
+        ctx: RequestContext,
+        row: WorkflowRunRow,
+        *,
+        previous_status: str,
+    ) -> WorkflowRunRow:
+        with self.engine.begin() as conn:
+            audit_id = _new_id("audit")
+            self.runtime_repository.insert_audit_event(
+                transaction=conn,
+                record=workflow_reconciliation_audit_record(ctx, row, audit_id, previous_status),
+            )
+            self.runtime_service._run_relation(
+                conn,
+                ctx,
+                source_run_type="workflow",
+                source_run_id=row["id"],
+                target_run_type="audit",
+                target_run_id=audit_id,
+                relation="reconciled_by",
+                resource_type="product_workflow",
+                resource_id=row["id"],
+                metadata={"previousStatus": previous_status, "status": row["status"]},
+            )
+        return self._workflow_row_by_id(ctx, row["id"])
+
     def _workflow_row_by_id(self, ctx: RequestContext, workflow_run_id_value: str) -> WorkflowRunRow:
         with self.engine.begin() as conn:
             return self._workflow_row(conn, ctx, workflow_run_id_value)
@@ -238,204 +355,3 @@ class WorkflowOrchestrationService(CoreService):
         if row is None:
             raise NotFound("workflow run not found", details={"workflow_run_id": workflow_run_id_value})
         return row
-
-
-def _connector_sync_request(
-    ctx: RequestContext,
-    dataset_ref: str,
-    connector_name: str,
-    resource_name: str,
-    idempotency_key: str,
-    sync_name: str | None,
-    config_fingerprint: str | None,
-    transaction_type: str,
-) -> WorkflowStartRequest:
-    return WorkflowStartRequest(
-        workflow_name=CONNECTOR_SYNC_WORKFLOW_NAME,
-        tenant_id=ctx.tenant_id,
-        request_id=ctx.request_id,
-        idempotency_key=idempotency_key,
-        input=_connector_sync_input(
-            dataset_ref, connector_name, resource_name, sync_name, config_fingerprint, transaction_type
-        ),
-    )
-
-
-def _connector_sync_input(
-    dataset_ref: str,
-    connector_name: str,
-    resource_name: str,
-    sync_name: str | None,
-    config_fingerprint: str | None,
-    transaction_type: str,
-) -> Mapping[str, object]:
-    payload = {
-        "workflowKind": "connector_sync",
-        "datasetRef": dataset_ref,
-        "connectorName": connector_name,
-        "resourceName": resource_name,
-        "syncName": sync_name,
-        "configFingerprint": config_fingerprint,
-    }
-    if transaction_type != "SNAPSHOT":
-        payload["transactionType"] = transaction_type
-    return payload
-
-
-def _media_processing_request(
-    ctx: RequestContext,
-    media_item_version_id: str,
-    processor_spec: Mapping[str, object],
-    idempotency_key: str,
-) -> WorkflowStartRequest:
-    return WorkflowStartRequest(
-        workflow_name=MEDIA_PROCESSING_WORKFLOW_NAME,
-        tenant_id=ctx.tenant_id,
-        request_id=ctx.request_id,
-        idempotency_key=idempotency_key,
-        input=_media_processing_input(media_item_version_id, processor_spec),
-    )
-
-
-def _media_processing_input(
-    media_item_version_id: str,
-    processor_spec: Mapping[str, object],
-) -> Mapping[str, object]:
-    return {
-        "workflowKind": "media_processing",
-        "mediaItemVersionId": media_item_version_id,
-        "processorSpec": dict(processor_spec),
-    }
-
-
-def _workflow_record(
-    ctx: RequestContext,
-    request: WorkflowStartRequest,
-    workflow_profile: str,
-    dataset_id: str | None,
-) -> WorkflowRunRecord:
-    return WorkflowRunRecord(
-        workflow_run_id=workflow_run_id(request),
-        tenant_id=ctx.tenant_id,
-        workflow_name=request.workflow_name,
-        workflow_profile=workflow_profile,
-        status="requested",
-        idempotency_key=request.idempotency_key,
-        request_fingerprint=workflow_request_fingerprint(request),
-        input=dict(request.input),
-        output={},
-        error=None,
-        dataset_id=dataset_id,
-        audit_event_id=None,
-        attempts=0,
-        created_at=_now(),
-        started_at=None,
-        completed_at=None,
-    )
-
-
-def _require_same_workflow_request(row: WorkflowRunRow, request: WorkflowStartRequest) -> None:
-    if row["request_fingerprint"] == workflow_request_fingerprint(request):
-        return
-    raise ConflictDetected(
-        "workflow idempotency key already belongs to a different request",
-        details={"workflow_run_id": row["id"], "workflow_name": row["workflow_name"]},
-    )
-
-
-def _workflow_transition_for_run(run: WorkflowRun) -> StatusTransition:
-    if run.status == "succeeded":
-        return WORKFLOW_RUN_SUCCEEDED
-    if run.status == "cancelled":
-        return WORKFLOW_RUN_CANCELLED
-    if run.status in {"queued", "running"}:
-        return WORKFLOW_RUN_RUNNING
-    if _is_retryable_start_unknown(run.error):
-        return WORKFLOW_RUN_START_UNKNOWN
-    return WORKFLOW_RUN_FAILED
-
-
-def _workflow_run_from_start_exception(
-    request: WorkflowStartRequest,
-    adapter_profile: str,
-    exc: Exception,
-) -> WorkflowRun:
-    return WorkflowRun(
-        run_id=workflow_run_id(request),
-        workflow_name=request.workflow_name,
-        status="failed",
-        output={},
-        error=_workflow_start_error_payload(adapter_profile, exc),
-    )
-
-
-def _workflow_start_error_payload(adapter_profile: str, exc: Exception) -> Mapping[str, object]:
-    if isinstance(exc, AdapterError):
-        return scrub_error_mapping(exc.failure.to_payload())
-    return {
-        "adapterProfile": adapter_profile,
-        "operation": "start_workflow",
-        "kind": "unknown",
-        "retryable": False,
-        "operatorMessage": "workflow adapter start failed",
-        "details": {"errorType": exc.__class__.__name__},
-    }
-
-
-def _is_retryable_start_unknown(error: Mapping[str, object] | None) -> bool:
-    if error is None:
-        return False
-    kind = error.get("kind")
-    retryable = error.get("retryable")
-    return kind in {"timeout", "unavailable"} and retryable is True
-
-
-def _product_workflow_run_from_row(row: WorkflowRunRow) -> ProductWorkflowRun:
-    audit_event_id = row.get("audit_event_id")
-    audit_id = audit_event_id if isinstance(audit_event_id, str) and audit_event_id else None
-    return {
-        "workflowRunId": row["id"],
-        "workflowName": row["workflow_name"],
-        "workflowProfile": row["workflow_profile"],
-        "status": row["status"],
-        "idempotencyKey": row["idempotency_key"],
-        "foundryRunId": audit_id,
-        "operationPath": f"/api/operations/runs/workflow/{row['id']}",
-        "output": dict(row["output"]),
-        "error": dict(row["error"]) if row["error"] is not None else None,
-        "auditEventId": audit_id,
-    }
-
-
-def _workflow_audit_record(ctx: RequestContext, row: WorkflowRunRow, *, audit_id: str) -> AuditEventRecord:
-    return AuditEventRecord(
-        event_id=audit_id,
-        tenant_id=ctx.tenant_id,
-        actor_user_id=ctx.actor_user_id,
-        event_type=f"workflow.{row['status']}",
-        resource_type="product_workflow",
-        resource_id=row["id"],
-        action="workflow:start",
-        decision="allow",
-        policy_decision={"permission": "dataset:write"},
-        before_ref={},
-        after_ref=_workflow_after_ref(row, audit_id),
-        correlation_id=row["id"],
-        request_id=ctx.request_id,
-        metadata={},
-        created_at=_now(),
-    )
-
-
-def _workflow_after_ref(row: WorkflowRunRow, audit_id: str) -> RuntimeJsonObject:
-    return {
-        "workflowRunId": row["id"],
-        "workflowName": row["workflow_name"],
-        "workflowProfile": row["workflow_profile"],
-        "foundryRunId": audit_id,
-        "datasetId": row["dataset_id"],
-        "idempotencyKey": row["idempotency_key"],
-        "status": row["status"],
-        "output": dict(row["output"]),
-        "error": dict(row["error"]) if row["error"] is not None else None,
-    }

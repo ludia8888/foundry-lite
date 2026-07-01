@@ -1,3 +1,5 @@
+"""Application service helpers for quality contracts workflows."""
+
 from __future__ import annotations
 
 from foundry_lite.application.ports import (
@@ -5,10 +7,15 @@ from foundry_lite.application.ports import (
     DatasetRow,
     TransactionContext,
 )
-from foundry_lite.application.ports.dataset_quality_repository import DatasetCheckRow
+from foundry_lite.application.ports.dataset_quality_repository import (
+    DatasetCheckRow,
+    DatasetQualityContractCheckSnapshot,
+    DatasetQualityContractVersionRow,
+)
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
 from foundry_lite.application.services.dataset.quality_helpers import (
     _contract_check_audit_ref,
+    _contract_check_snapshot,
     _dataset_ref,
 )
 from foundry_lite.domain.context import RequestContext
@@ -52,6 +59,39 @@ class DatasetQualityContractMixin:
         if persisted is None:
             raise NotFound("dataset quality contract check not found", details={"check_id": check_id})
         return persisted
+
+    def _required_contract_version_by_id(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset_id: str,
+        contract_version_id: str,
+    ) -> DatasetQualityContractVersionRow:
+        persisted = self.dataset_quality_repository.contract_version_by_id(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            dataset_id=dataset_id,
+            contract_version_id=contract_version_id,
+        )
+        if persisted is None:
+            raise NotFound(
+                "dataset quality contract version not found",
+                details={"contract_version_id": contract_version_id},
+            )
+        return persisted
+
+    def _snapshot_contract_checks(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset_id: str,
+    ) -> list[DatasetQualityContractCheckSnapshot]:
+        rows = self.dataset_quality_repository.checks_for_dataset(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            dataset_id=dataset_id,
+        )
+        return [_contract_check_snapshot(row) for row in rows]
 
     def _ensure_no_contract_check_name_conflict(
         self,
@@ -116,3 +156,55 @@ class DatasetQualityContractMixin:
             after_ref=_contract_check_audit_ref(dataset, after),
             correlation_id=str(dataset["id"]),
         )
+
+    def _audit_contract_version_created(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        contract: DatasetQualityContractVersionRow,
+    ) -> None:
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="dataset_quality_contract.version_created",
+            resource_type="dataset_quality_contract",
+            resource_id=contract["id"],
+            action="create_version",
+            after_ref=_contract_version_audit_ref(dataset, contract),
+            correlation_id=str(dataset["id"]),
+        )
+
+    def _audit_contract_version_activated(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        contract: DatasetQualityContractVersionRow,
+    ) -> None:
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type="dataset_quality_contract.version_activated",
+            resource_type="dataset_quality_contract",
+            resource_id=contract["id"],
+            action="activate_version",
+            after_ref=_contract_version_audit_ref(dataset, contract),
+            correlation_id=str(dataset["id"]),
+        )
+
+
+def _contract_version_audit_ref(
+    dataset: DatasetRow,
+    contract: DatasetQualityContractVersionRow,
+) -> dict[str, object]:
+    return {
+        "datasetId": dataset["id"],
+        "datasetRef": _dataset_ref(dataset),
+        "contractKey": contract["contract_key"],
+        "version": contract["version"],
+        "status": contract["status"],
+        "checkCount": len(contract["checks_snapshot"]),
+        "schemaVersionId": contract["schema_version_id"],
+        "schemaVersion": contract["schema_version"],
+    }

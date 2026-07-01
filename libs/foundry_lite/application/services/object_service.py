@@ -1,3 +1,5 @@
+"""Application service helpers for object service workflows."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,6 +12,7 @@ from foundry_lite.application.services.object_store.query import ObjectQueryServ
 from foundry_lite.application.services.object_store.records import ObjectRecordsService
 from foundry_lite.application.services.object_store.search import ObjectSearchService
 from foundry_lite.application.services.object_store.sets import ObjectSetsService
+from foundry_lite.application.services.object_store.subscriptions import ObjectSubscriptionService
 
 
 @dataclass(frozen=True)
@@ -22,6 +25,7 @@ class ObjectServices:
     records: ObjectRecordsService
     search: ObjectSearchService
     sets: ObjectSetsService
+    subscriptions: ObjectSubscriptionService
 
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> ObjectServices:
@@ -32,7 +36,8 @@ class ObjectServices:
             records=build_service(ObjectRecordsService, dependencies),
             search=build_service(ObjectSearchService, dependencies),
             sets=build_service(ObjectSetsService, dependencies),
+            subscriptions=build_service(ObjectSubscriptionService, dependencies),
         )
 
     def items(self) -> tuple[CoreService, ...]:
-        return (self.indexing, self.links, self.query, self.records, self.search, self.sets)
+        return (self.indexing, self.links, self.query, self.records, self.search, self.sets, self.subscriptions)

@@ -1,3 +1,5 @@
+"""Application port contract for destructive development admin."""
+
 from __future__ import annotations
 
 from typing import Protocol

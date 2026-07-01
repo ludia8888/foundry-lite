@@ -7,7 +7,7 @@
 
 > 현재 구현 상태 주의: 2026-06-19 기준 현재 구현이 실제로 보장하는 범위는 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. 완료 체크박스가 `[x]`인 상태 추적 항목은 [Sprint Evidence Ledger](./docs/sprint-evidence-ledger.md)에 PR, merge commit, 테스트, 품질 게이트 근거가 있어야 한다. 개발 가이드용 체크리스트는 제품 완료 상태가 아니라 매 변경 때 확인하는 템플릿으로 본다.
 >
-> 구현 동기화 메모: 현재 checkout은 Sprint 00~36, Sprint 02A, Sprint 36A의 MVP core/운영 안정성 체크를 완료한 상태다. Sprint 37~42의 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다. 이후 infra ratchet은 S3/MinIO, Iceberg-on-S3, Spark compute, Temporal workflow adapter, Elasticsearch live proof, 그리고 S3+Iceberg+Spark+CDC 조합까지 active-covered다. S46 이후 확장 순서는 [Data Platform Expansion Sprint Plan](./docs/data-platform-expansion-sprint-plan-ko.md)을 따르되, 현재 구현 완료 여부는 항상 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. S61은 generated SDK/request/error/request-id foundation과 frontend/backend surface lock, S62는 Dataset Explorer backend/API/SDK 시작점, S63은 Insight Review queue backend/API/SDK slice까지 부분 구현이다. PostgreSQL snapshot connector production implementation, multi-step Alembic upgrade/rollback operations, managed Temporal connector workflow operations beyond the local activity commit proof, executable Python transform runner, full visual workspace UX는 MVP core 완료 조건에서 제외되며 현재 status 문서의 future/deferred 경계를 따른다.
+> 구현 동기화 메모: 현재 checkout은 Sprint 00~36, Sprint 02A, Sprint 36A의 MVP core/운영 안정성 체크를 완료한 상태다. Sprint 37~42의 REST/Webhook, stream archive, Debezium CDC, CDC object indexing, Elasticsearch-compatible search projection은 MVP 이후 확장 proof로 구현 증거가 있다. 이후 infra ratchet은 S3/MinIO, Iceberg-on-S3, Spark compute, Temporal workflow adapter, Elasticsearch live proof, 그리고 S3+Iceberg+Spark+CDC 조합까지 active-covered다. S46 이후 확장 순서는 [Data Platform Expansion Sprint Plan](./docs/data-platform-expansion-sprint-plan-ko.md)을 따르되, 현재 구현 완료 여부는 항상 [Implementation Status](./docs/implementation-status.md)를 원본으로 본다. S61은 generated SDK/request/error/request-id foundation과 frontend/backend surface lock, S62는 Dataset Explorer backend/API/SDK 시작점, S63은 Insight Review queue backend/API/SDK slice까지 부분 구현이다. PostgreSQL snapshot connector production implementation, multi-step Alembic upgrade/rollback operations, managed Temporal connector workflow operations beyond the local activity commit proof, full Python sandbox/worker isolation, full visual workspace UX는 MVP core 완료 조건에서 제외되며 현재 status 문서의 future/deferred 경계를 따른다.
 
 ---
 
@@ -226,7 +226,7 @@ v1은 “Foundry 전체 기능 축소판”이 아니라 **재현 가능한 최�
 
 3. **Transform Engine**
    - canonical runner: SQL + DuckDB
-   - Python transform SDK는 skeleton/fail-closed boundary로 제한하며, executable Python runner는 future scope다.
+   - Python transform SDK handle runner는 current proof이며, full sandbox/worker isolation은 future scope다.
    - Polars는 Python runner 내부 선택지
    - Spark는 interface만 정의하고 Phase 7에서 구현
    - append-only incremental mode만 허용
@@ -309,7 +309,7 @@ managed infrastructure, 광범위한 SaaS 일반화까지 v1 core 성공 조건�
 않는다.
 
 - Kafka/Redpanda stream ingest의 continuously running production worker와 deployment packaging
-- Debezium CDC production deployment와 continuously running CDC object-indexing worker
+- Debezium CDC production deployment와 production-grade CDC object-indexer daemon packaging
 - REST pull sync의 durable connector registry, retry worker, 광범위한 SaaS connector 일반화
 - Webhook listener의 durable inbox, retry worker, 광범위한 SaaS event 일반화
 - Palantir 수준의 multi-tenant enterprise security 완전체
@@ -335,8 +335,8 @@ managed infrastructure, 광범위한 SaaS 일반화까지 v1 core 성공 조건�
 |---|---|---|
 | REST pull sync | `RestPullConnectorAdapter`와 cursor/rate-limit/SSRF guard proof 존재 | durable connector registry, retry workers, SaaS별 production adapter |
 | Webhook push ingest | timestamp-bound HMAC signed append ingest proof 존재 | durable inbox, retry workers, SaaS event 일반화 |
-| Kafka/Redpanda ingest | local/fake stream archive, Kafka-compatible adapter, one-shot worker, live broker proof 존재 | continuously running worker, rebalance/commit-unknown hardening, deployment packaging |
-| Debezium CDC | Debezium-shaped archive, live Debezium/PostgreSQL topic, CDC object indexing proof 존재 | production CDC deployment, always-on CDC object-indexing worker |
+| Kafka/Redpanda ingest | local/fake stream archive, Kafka-compatible adapter, one-shot worker, bounded continuous worker, live broker proof 존재 | rebalance/commit-unknown hardening, deployment packaging |
+| Debezium CDC | Debezium-shaped archive, live Debezium/PostgreSQL topic, CDC object indexing proof, bounded/continuous CDC object-indexer worker proof 존재 | production CDC deployment, production daemon packaging |
 | Elasticsearch | Elasticsearch-compatible adapter, projection, rebuild, orphan drift proof와 live Testcontainers proof 존재 | managed cloud packaging, deployment operations |
 | Spark runner | `SparkComputeAdapter` ratchet와 S3+Iceberg+Spark composition proof 존재 | real cluster deployment, distributed Spark failure modes |
 | Iceberg storage/catalog ratchet | Iceberg snapshot/version pinning proof와 MinIO/S3-backed composition proof 존재 | maintenance, retention, managed catalog operations |
@@ -374,7 +374,7 @@ CSV/local snapshot 또는 PostgreSQL-backed repository closed-loop proof
 
 - Python 백엔드 중심
 - TypeScript는 Web UI와 generated SDK에 사용
-- SQL/DuckDB transform을 canonical path로 두고, Python transform은 SDK skeleton/fail-closed boundary로 제한
+- SQL/DuckDB transform을 canonical path로 두고, Python transform은 SDK handle runner로 제한
 - Docker Compose로 로컬 완전 실행
 - Kubernetes로 scale-out 가능
 - storage/queue/compute는 interface로 추상화
@@ -401,7 +401,7 @@ v1은 선택지를 줄여 구현 속도와 디버깅 가능성을 우선한다.
 | Stream | local/fake stream + Kafka-compatible adapter/one-shot worker proof | v1 core 필수는 아니지만 Sprint 38 proof는 존재, continuously running production worker는 future scope |
 | CDC | Debezium-shaped archive + live Debezium/PostgreSQL topic proof | v1 core 필수는 아니지만 Sprint 39~40 proof는 존재, production CDC worker packaging은 future scope |
 | Batch compute | DuckDB canonical runner | local/small production에서 transaction/lineage 단순화 |
-| Python compute | transforms SDK skeleton + fail-closed registration | executable Python runner와 sandboxed SDK IO abstraction은 future scope |
+| Python compute | transforms SDK handle runner + source snapshot retry proof | full sandbox/worker isolation은 future scope |
 | Spark | Spark ComputeAdapter ratchet | v1 core 필수는 아니지만 post-MVP proof는 존재, real cluster 운영은 future scope |
 | Workflow | local/fake WorkflowAdapter contract + Temporal adapter ratchet + ConnectorSyncWorkflow Operations/API/SDK control plane + local connector snapshot activity commit proof | Temporal이 managed connector worker, cancellation/reconciliation, action/writeback/retry/replay를 실제 운영 구동하는 것은 future scope |
 | Search index | local/fake + Elasticsearch-compatible adapter/projection proof | object store가 source of truth이고 managed Elasticsearch deployment는 future scope |
@@ -1018,7 +1018,7 @@ v1 optional/prototype:
 추가 future:
 
 - production connector registry/retry workers
-- continuously running stream/CDC workers
+- production-grade stream/CDC worker packaging and broker failure hardening
 
 ### 6.4 Sync run lifecycle
 
@@ -1038,7 +1038,7 @@ Sync는 dataset transaction을 연 뒤 파일을 쓴다. health check 통과 후
 
 ### 6.5 CDC ingest, Phase 6
 
-CDC는 v1 MVP core 필수 기능이 아니다. 다만 현재 checkout에는 Debezium-shaped archive, live Debezium/PostgreSQL topic, CDC object indexing proof가 존재한다. production CDC deployment와 continuously running object-indexing worker는 future scope다.
+CDC는 v1 MVP core 필수 기능이 아니다. 다만 현재 checkout에는 Debezium-shaped archive, live Debezium/PostgreSQL topic, CDC object indexing proof와 bounded/continuous CDC object-indexer worker proof가 존재한다. production CDC deployment, production daemon packaging, broker rebalance/commit-unknown hardening은 future scope다.
 
 CDC event envelope 표준:
 
@@ -1108,14 +1108,14 @@ Inputs → Transform Logic → Outputs
 
 ### 7.2 Transform definition
 
-v1의 canonical runner는 SQL + DuckDB다. Python transform은 현재 SDK skeleton과 fail-closed registration boundary까지만 둔다. executable Python runner와 sandboxed DatasetInput/DatasetOutput API는 future scope이며, 그때도 output commit은 반드시 DatasetOutput API를 통해서만 허용한다.
+v1의 canonical runner는 SQL + DuckDB다. Python transform은 현재 `PythonTransformPlan`과 `foundry_lite.transforms_sdk` input/output handle runner까지 둔다. 사용자 함수는 raw committed storage path 대신 `Input.read_rows/read_pandas/read_polars`와 `Output.write_rows/write_pandas/write_polars`를 받으며, output commit은 SQL과 같은 Dataset transaction/finalization path를 사용한다. Full process sandbox, external worker isolation, managed production scheduling은 future scope다.
 
 ```yaml
 id: clean_orders
 name: Clean Orders
 language: sql # sql | python
 entrypoint: transforms/clean_orders.sql
-mode: snapshot # snapshot | incremental
+mode: snapshot # snapshot | append/incremental
 inputs:
   orders: raw.erp_orders
   customers: raw.crm_customers
@@ -1139,6 +1139,7 @@ v1 constraints:
 - v1 core 완료 조건으로 Spark runner를 요구하지 않음
 - transform output은 Dataset transaction으로만 commit
 - runner가 직접 dataset_files를 수정하면 안 됨
+- mode=snapshot은 SNAPSHOT transaction, mode=append/incremental은 APPEND transaction으로 output을 commit
 ```
 
 ### 7.3 Python Transform SDK
@@ -1238,7 +1239,7 @@ v1 incremental constraints:
 - failed run은 cursor를 변경하지 않음
 ```
 
-UPDATE/DELETE CDC 처리는 object indexer와 Iceberg 도입 후 확장한다.
+현재 checkout은 transform output APPEND mode와 SDK-handle Python runner를 제공한다. Snapshot transform은 `foundry.transforms.preview_due(...)`/`run_due(...)`, `GET /api/transforms/scheduler/due`, `POST /api/transforms/scheduler/tick`, generated SDK `client.transforms.previewDue/tick(...)`, `worker:transform-scheduler`로 최신 입력 dataset version 변화에 대한 bounded/continuous rebuild tick을 지원한다. 별도 `transform_cursors` table 기반 last-processed cursor, production lease/fencing/Kubernetes scheduler packaging, managed Temporal transform scheduling, UPDATE/DELETE CDC transform semantics, append/incremental 자동 tick merge policy는 future scope다. UPDATE/DELETE CDC 처리는 object indexer와 Iceberg 도입 후 확장한다.
 
 ### 7.7 Build graph and lineage
 
@@ -1259,6 +1260,8 @@ create table lineage_edges (
 ```
 
 Transform run마다 input dataset version과 output dataset version을 기록한다.
+
+현재 checkout의 `foundry.transforms.run_graph(...)`는 한 transform 성공 후 output dataset을 input으로 선언한 downstream transform을 bounded depth/max-runs 안에서 자동 실행하고 `transform.run.downstream_triggered` audit 및 `triggered_downstream` run relation을 남긴다. `foundry.transforms.preview_due(...)`/`run_due(...)`는 등록된 transform의 최신 입력 dataset version과 마지막 성공 run의 `input_versions`를 비교해 snapshot transform만 재빌드하고 `transform.scheduler.triggered` audit 및 `scheduled_rebuild_of` run relation을 남긴다. `worker:transform-scheduler`는 같은 tick을 한 번 실행하거나 configured max tick/empty tick/stop callback까지 반복하고 JSON evidence를 쓴다. 이는 full visual pipeline builder나 production-managed 상시 scheduler daemon이 아니라 명시적 graph/scheduler tick과 bounded worker entrypoint다.
 
 ---
 
@@ -2905,15 +2908,15 @@ Actions:
 | 범위 | 현재 상태 | 남은 것 |
 |---|---|---|
 | Scaffold / API / Web / CLI / Worker skeleton | 완료. 모노레포, FastAPI, Web, CLI, worker entrypoint, shared config/logging/error boundary가 있다. | production packaging polish |
-| Dataset transaction vertical slice | 완료. CSV/local snapshot, immutable dataset version, staging/manifest commit, schema/health guard, preview, sync run tracking이 있다. S3/Iceberg storage ratchet은 post-MVP proof로 active-covered다. | PostgreSQL snapshot connector production implementation, future Iceberg maintenance/catalog operations, managed retention/compaction |
-| Transform vertical slice | 완료. DuckDB SQL transform, input/output version binding, lineage, health gate, failed-run cleanup이 있다. | executable Python runner, sandboxed SDK IO, Temporal scheduling |
+| Dataset transaction vertical slice | 완료. CSV/local snapshot, immutable dataset version, staging/manifest commit, schema/health guard, preview, sync run tracking이 있다. S3/Iceberg storage ratchet과 bounded partial Iceberg maintenance execution slice는 post-MVP proof로 active-covered다. | PostgreSQL snapshot connector production implementation, production Iceberg catalog operations, managed retention/compaction |
+| Transform vertical slice | 완료. DuckDB SQL transform, SDK-handle Python transform, input/output version binding, append output mode, bounded downstream graph trigger, bounded snapshot scheduler tick, `worker:transform-scheduler`, lineage, health gate, failed-run cleanup이 있다. | full process sandbox/worker isolation, production lease/fencing/Kubernetes scheduler packaging, managed Temporal transform scheduling, append/incremental scheduler merge policy |
 | Ontology / Object vertical slice | 완료. YAML import/validate/activate, object/link/action definitions, object indexing, query, links, object explorer, shadow reindex proof가 있다. | very large object-type serving optimization |
-| Action vertical slice | 완료. `ApproveOrder`, safeExpression subset, permission/precondition, expectedObjectVersion, idempotency, action log, outbox, audit, UI action form이 있다. | future real external ERP/webhook writeback and compensation worker |
+| Action vertical slice | 완료. `ApproveOrder`, safeExpression subset, permission/precondition, expectedObjectVersion, idempotency, action log, outbox, audit, UI action form이 있다. External writeback saga는 부분 proof로 real S3/MinIO external writeback과 bounded writeback reconciliation worker까지 active-covered다. | ERP/webhook-specific connector packaging, always-on managed compensation daemon, approval UI |
 | Materialization / closed loop | 완료. `object_snapshot`, `action_log`, watermark/source version proof, downstream transform, lineage/audit/operations tracing이 있다. | additional materialization types and external export |
-| Streaming / CDC post-MVP proof | 부분 완료. REST/Webhook, Kafka-compatible stream archive, live broker proof, Debezium archive/live topic, CDC object indexing proof가 있다. | continuously running workers, rebalance/commit-unknown failure injection, production deployment packaging |
+| Streaming / CDC post-MVP proof | 부분 완료. REST/Webhook, Kafka-compatible stream archive, bounded continuous stream archive worker, live broker proof, Debezium archive/live topic, CDC object indexing proof, bounded/continuous CDC object-indexer worker proof가 있다. | rebalance/commit-unknown failure injection, production deployment packaging |
 | Search post-MVP proof | 부분 완료. Elasticsearch-compatible adapter/projection/rebuild/orphan drift proof가 있다. | managed live Elasticsearch cluster deployment |
 | Scale hardening | 일부 proof. active index pointer, shadow swap, PostgreSQL contract coverage, RLS contract proof, S3/Iceberg/Spark/infra-composition ratchet이 있다. | Kubernetes/Helm, backup/restore, managed operations, real cluster/cloud/chaos evidence |
-| Frontend/API/SDK product surface | 부분 완료. S61 generated SDK request/error/request-id foundation, Ontology-style object/action/media OSDK facade, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, bounded operation polling, fetch-based operation event streaming helper, Source onboarding recipe/hook, Source Wizard recipe/hook, Generic REST connector onboarding recipe/hook, Source scheduler preview/tick API/SDK, admin readiness overview/screen/task-plan/operations-board model, bounded outbox publish admin start, 116 route-surface request contract, 25 helper-surface contract, frontend/backend surface lock, S62 Dataset Explorer backend/API/SDK start point, S63 Insight Review durable queue/API/SDK, S64 Operations Recovery overview and post-restore validation API/SDK가 있다. | full visual dataset browser, lineage graph UX, insight evidence panel, approval policy UI, action orchestration workspace, recovery console UI, SAP/NetSuite/OAuth packaged source wizard |
+| Frontend/API/SDK product surface | 부분 완료. S61 generated SDK request/error/request-id foundation, Ontology-style object/action/media OSDK facade, Developer Console-lite OSDK app/scope/client registry, JWT claim 기반 app/resource scope enforcement, local OAuth authorization-code/PKCE/token/refresh/revoke lifecycle, local TS/Python SDK version/artifact registry with channels/compatibility windows/download tokens, ObjectSet WebSocket `.subscribe(...)` runtime with SSE fallback, generated package manifest/fingerprint and live-catalog SDK regeneration assertion, lifecycle mutation idempotency, rate-limit/replay/family-compromise/JWKS/redaction proof, reconnect/resume/backpressure proof, browser CORS/WebSocket Origin/XSS/CSRF threat-model proof, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, bounded operation polling, fetch-based operation event streaming helper, Source onboarding recipe/hook, Source Wizard recipe/hook, Generic REST connector onboarding recipe/hook, Source scheduler preview/tick API/SDK, admin readiness overview/screen/task-plan/operations-board model, bounded outbox publish admin start, 160 route-surface request contract, 28 helper-surface contract, frontend/backend surface lock, S62 Dataset Explorer backend/API/SDK start point, S63 Insight Review durable queue/API/SDK, S64 Operations Recovery overview and post-restore validation API/SDK가 있다. | full visual dataset browser, lineage graph UX, insight evidence panel, approval policy UI, action orchestration workspace, recovery console UI, visual Developer Console/login/session UI, external NPM/PyPI publishing, external IdP introspection/refresh-token revocation, exactly-once subscription delivery, Palantir-grade external package lifecycle/deployment compatibility windows, SAP/NetSuite/OAuth packaged source wizard |
 
 ## 22. Performance targets
 
@@ -3260,7 +3263,7 @@ Sprint 00~36, Sprint 02A, Sprint 36A가 끝났을 때 아래가 모두 가능해
 
 - [x] CSV/local snapshot 또는 PostgreSQL-backed repository closed-loop path로 raw dataset을 commit한다.
 - [x] Scale Foundation boundary가 있어 storage/metadata/compute/event/search/workflow/connector/auth infra를 port/adapter 뒤에서 교체할 수 있다.
-- [x] SQL/DuckDB transform으로 clean dataset을 만든다. Python transform execution은 fail-closed future scope다.
+- [x] SQL/DuckDB transform과 SDK-handle Python transform으로 clean dataset을 만든다.
 - [x] Ontology draft를 validate/activate한다.
 - [x] clean dataset rows를 Order/Customer objects로 index한다.
 - [x] Object Explorer에서 Order를 조회하고 Order -> Customer link를 본다.

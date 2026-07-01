@@ -1,3 +1,5 @@
+"""Infrastructure support for postgres rls."""
+
 from __future__ import annotations
 
 from weakref import WeakSet

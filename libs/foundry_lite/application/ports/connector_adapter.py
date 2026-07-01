@@ -1,3 +1,5 @@
+"""Application port contract for connector adapter."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

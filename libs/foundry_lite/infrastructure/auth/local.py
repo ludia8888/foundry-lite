@@ -36,7 +36,10 @@ from foundry_lite.domain.context import (
 )
 
 __all__ = [
+    "HEADER_APP_ID_KEY",
+    "HEADER_CLIENT_ID_KEY",
     "HEADER_ROLES_KEY",
+    "HEADER_SCOPES_KEY",
     "HEADER_TENANT_KEY",
     "HEADER_USER_KEY",
     "DemoAuthProvider",
@@ -46,6 +49,9 @@ __all__ = [
 HEADER_TENANT_KEY = "x-tenant-id"
 HEADER_USER_KEY = "x-user-id"
 HEADER_ROLES_KEY = "x-roles"
+HEADER_APP_ID_KEY = "x-foundry-lite-app-id"
+HEADER_CLIENT_ID_KEY = "x-foundry-lite-client-id"
+HEADER_SCOPES_KEY = "x-foundry-lite-scopes"
 
 _DEMO_USER_ID = "user-demo-admin"
 
@@ -59,6 +65,13 @@ def _split_roles(value: str | None, fallback: tuple[str, ...]) -> tuple[str, ...
         return fallback
     roles = tuple(role.strip() for role in value.split(",") if role.strip())
     return roles or fallback
+
+
+def _split_scopes(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    normalized = value.replace(",", " ")
+    return tuple(scope.strip() for scope in normalized.split(" ") if scope.strip())
 
 
 @dataclass(frozen=True)
@@ -93,7 +106,14 @@ class HeaderTrustAuthProvider:
         tenant_id = headers.get(HEADER_TENANT_KEY) or self.default_tenant_id
         actor_user_id = headers.get(HEADER_USER_KEY) or self.default_actor_user_id
         roles = _split_roles(headers.get(HEADER_ROLES_KEY), self.default_roles)
-        return Principal(tenant_id=tenant_id, actor_user_id=actor_user_id, roles=roles)
+        return Principal(
+            tenant_id=tenant_id,
+            actor_user_id=actor_user_id,
+            roles=roles,
+            application_id=headers.get(HEADER_APP_ID_KEY),
+            client_id=headers.get(HEADER_CLIENT_ID_KEY),
+            token_scopes=_split_scopes(headers.get(HEADER_SCOPES_KEY)),
+        )
 
     def anonymous(self) -> Principal:
         return Principal(

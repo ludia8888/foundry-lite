@@ -1,9 +1,13 @@
+"""Package exports for the application facades boundary."""
+
 from __future__ import annotations
 
 from foundry_lite.application.facades.action_gateway import ActionGateway
 from foundry_lite.application.facades.aip_workspace import AipWorkspace
+from foundry_lite.application.facades.auth_gateway import AuthGateway
 from foundry_lite.application.facades.connector_workspace import ConnectorWorkspace
 from foundry_lite.application.facades.dataset_workspace import DatasetWorkspace
+from foundry_lite.application.facades.developer_console import DeveloperConsole
 from foundry_lite.application.facades.erasure_gateway import ErasureGateway
 from foundry_lite.application.facades.insight_review_workspace import InsightReviewWorkspace
 from foundry_lite.application.facades.materialization_runner import MaterializationRunner
@@ -18,8 +22,10 @@ from foundry_lite.application.facades.transform_pipeline import TransformPipelin
 __all__ = [
     "ActionGateway",
     "AipWorkspace",
+    "AuthGateway",
     "ConnectorWorkspace",
     "DatasetWorkspace",
+    "DeveloperConsole",
     "ErasureGateway",
     "InsightReviewWorkspace",
     "MaterializationRunner",

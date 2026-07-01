@@ -1,3 +1,5 @@
+"""Application port contract for transform repository."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -80,6 +82,21 @@ class TransformRetryResult(TypedDict):
     schema_hash: str
 
 
+class TransformRecordDlqRetryResult(TypedDict):
+    """Operator response returned after replaying a transform row quarantine."""
+
+    deadLetterRecordId: str
+    status: str
+    replayStatus: str
+    replayRunId: str
+    transformRunId: str | None
+    isIdempotentReplay: bool
+    replayDatasetVersionId: str | None
+    rowCount: int | None
+    error: Mapping[str, object] | None
+    downstreamBackfillPlan: Mapping[str, object]
+
+
 class TransformRepository(Protocol):
     """DB boundary for transform registry and transform run persistence."""
 
@@ -117,6 +134,10 @@ class TransformRepository(Protocol):
         """Return a transform row by id, or None."""
         ...
 
+    def list_transforms(self, *, transaction: TransactionContext, tenant_id: str) -> list[TransformRow]:
+        """Return all transform definitions visible to a tenant."""
+        ...
+
     def transform_run_by_id(
         self,
         *,
@@ -125,6 +146,26 @@ class TransformRepository(Protocol):
         transform_run_id: str,
     ) -> TransformRunRow | None:
         """Return a tenant-scoped transform run row by id, or None."""
+        ...
+
+    def latest_successful_transform_run(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        transform_id: str,
+    ) -> TransformRunRow | None:
+        """Return the latest successful run for one tenant-scoped transform."""
+        ...
+
+    def running_transform_run(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        transform_id: str,
+    ) -> TransformRunRow | None:
+        """Return a running run for one tenant-scoped transform, if any."""
         ...
 
     def insert_transform_run(self, *, transaction: TransactionContext, record: TransformRunRecord) -> None:

@@ -3,22 +3,26 @@ from __future__ import annotations
 import json
 import os
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import asdict, dataclass
 from typing import Protocol, cast
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from foundry_lite.application.action_types import (
     ActionApplyResponse,
+    ActionValidationResponse,
     ActionWritebackQueueResult,
     ActionWritebackReconciliationResult,
+    ActionWritebackRecoveryItem,
 )
 from foundry_lite.application.admin_overview import AdminReadinessOverview, AdminTaskPlan
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
+    BackupRestoreArtifactReceipt,
+    BackupRestoreArtifactRestoreReport,
     BackupRestoreModeReport,
     BackupRestorePostRestoreValidationReport,
     BackupRestorePreflightReport,
@@ -27,6 +31,9 @@ from foundry_lite.application.ports import (
     DatasetQualityContractCheck,
     DatasetQualityContractCheckCreateResult,
     DatasetQualityContractCheckList,
+    DatasetQualityContractVersion,
+    DatasetQualityContractVersionCreateResult,
+    DatasetQualityContractVersionList,
     DatasetQualityResultHistory,
     DatasetQualityResultSummary,
     DatasetRow,
@@ -44,13 +51,17 @@ from foundry_lite.application.ports import (
     ObjectSetQueryResult,
     ObservabilityDetectorConfig,
     ObservabilityReport,
+    ObservabilityStoredReport,
     OntologyCatalogResult,
+    OntologyObjectReindexResult,
     OntologyValidationResult,
     ProductWorkflowRun,
     RuntimeRetryResult,
     RuntimeRunDetail,
     RuntimeRunQueryResult,
+    StoredObservabilityIncident,
     TabularRow,
+    TransformRecordDlqRetryResult,
     TransformRetryResult,
     TransformRow,
 )
@@ -61,7 +72,7 @@ from foundry_lite.application.services.aip.eval_types import AiEvalError, EvalCa
 from foundry_lite.application.services.source_onboarding_config import SourceUpload
 from foundry_lite.application.upload_limits import max_webhook_body_bytes
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
+from foundry_lite.domain.errors import FoundryLiteError, RateLimited, ValidationFailed
 from foundry_lite.infrastructure.auth import AUTHORIZATION_HEADER, AuthProvider, auth_provider_from_env
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.observability.metrics import prometheus_payload, record_http_request
@@ -72,11 +83,30 @@ from foundry_lite.observability.tracing import (
 )
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+
+@dataclass
+class _ApiWindowRateLimiter:
+    buckets: dict[tuple[str, ...], list[float]]
+
+    def __init__(self) -> None:
+        self.buckets = {}
+
+    def retry_after_seconds(self, key: tuple[str, ...], *, limit: int, window_seconds: float) -> int | None:
+        now = time.monotonic()
+        recent = [seen_at for seen_at in self.buckets.get(key, []) if now - seen_at < window_seconds]
+        if len(recent) >= limit:
+            return max(1, int(window_seconds - (now - recent[0])))
+        recent.append(now)
+        self.buckets[key] = recent
+        return None
+
+
 configure_observability("foundry-lite-api")
 app = FastAPI(title="Foundry-lite API", version="0.1.0")
+ALLOWED_BROWSER_ORIGINS = ("http://127.0.0.1:4173", "http://localhost:4173")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1:4173", "http://localhost:4173"],
+    allow_origins=list(ALLOWED_BROWSER_ORIGINS),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -92,6 +122,12 @@ foundry = FoundryLite(
 auth_provider: AuthProvider = auth_provider_from_env()
 instrument_fastapi_app(app)
 instrument_sqlalchemy_engine(foundry.engine)
+
+WEBSOCKET_SUBSCRIPTION_CONNECT_LIMIT = int(os.getenv("FOUNDRY_LITE_WS_SUBSCRIPTION_CONNECT_LIMIT", "100"))
+WEBSOCKET_SUBSCRIPTION_CONNECT_WINDOW_SECONDS = float(
+    os.getenv("FOUNDRY_LITE_WS_SUBSCRIPTION_CONNECT_WINDOW_SECONDS", "60")
+)
+websocket_subscription_rate_limiter = _ApiWindowRateLimiter()
 
 JsonObject = dict[str, object]
 ValidationErrorPayload = dict[str, object]
@@ -125,10 +161,30 @@ class ObservabilityDetectRequest(BaseModel):
     observed_at: str | None = Field(default=None, alias="observedAt")
 
 
+class ObservabilityResolveRequest(BaseModel):
+    reason: str | None = None
+
+
 class BackupRestorePreflightRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     backup_id: str | None = Field(default=None, alias="backupId")
+
+
+class BackupRestoreArtifactCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    backup_id: str | None = Field(default=None, alias="backupId")
+
+
+class BackupRestoreArtifactRestoreRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    artifact_ref: str = Field(alias="artifactRef")
+    artifact_hash: str | None = Field(default=None, alias="artifactHash")
+    restore_id: str | None = Field(default=None, alias="restoreId")
+    validation_id: str | None = Field(default=None, alias="validationId")
+    should_run_post_restore_validation: bool = Field(default=True, alias="runPostRestoreValidation")
 
 
 class BackupRestoreModeStartRequest(BaseModel):
@@ -136,6 +192,12 @@ class BackupRestoreModeStartRequest(BaseModel):
 
     backup_id: str | None = Field(default=None, alias="backupId")
     restore_id: str | None = Field(default=None, alias="restoreId")
+
+
+class OntologyObjectReindexRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    reindex_key: str = Field(alias="reindexKey")
 
 
 class DatasetQualityContractCheckCreateRequest(BaseModel):
@@ -152,6 +214,14 @@ class DatasetQualityContractCheckUpdateRequest(BaseModel):
     config: JsonObject | None = None
     severity: str | None = None
     enabled: bool | None = None
+
+
+class DatasetQualityContractVersionCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    contract_key: str = Field(default="default", alias="contractKey")
+    owner_user_id: str | None = Field(default=None, alias="ownerUserId")
+    description: str | None = None
 
 
 class BackupRestoreResumeApprovalRequest(BaseModel):
@@ -210,6 +280,89 @@ class ObjectQueryRequest(BaseModel):
     limit: int = 50
     cursor: str | None = None
     search_text: str | None = Field(default=None, alias="search")
+
+
+class ObjectSubscriptionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    filter_ast: JsonObject | None = Field(default=None, alias="filter")
+    order_by: list[dict[str, str]] | None = Field(default=None, alias="orderBy")
+    properties: list[str] | None = None
+    page_size: int = Field(default=50, alias="pageSize")
+    last_seen_object_change_sequence: int | None = Field(default=None, alias="lastSeenObjectChangeSequence")
+    max_events: int | None = Field(default=None, alias="maxEvents")
+    poll_interval_seconds: float = Field(default=1.0, alias="pollIntervalSeconds")
+
+
+class OsdkApplicationResourceRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    resource_type: str = Field(alias="resourceType")
+    resource_api_name: str = Field(alias="resourceApiName")
+    scopes: list[str]
+
+
+class OsdkApplicationCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    app_api_name: str = Field(alias="appApiName")
+    display_name: str = Field(alias="displayName")
+    client_id: str | None = Field(default=None, alias="clientId")
+    resources: list[OsdkApplicationResourceRequest] = Field(default_factory=list)
+
+
+class OsdkApplicationResourcesUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    resources: list[OsdkApplicationResourceRequest]
+
+
+class OsdkApplicationClientRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    client_id: str = Field(alias="clientId")
+    redirect_uris: list[str] = Field(default_factory=list, alias="redirectUris")
+    allowed_scopes: list[str] = Field(default_factory=list, alias="allowedScopes")
+    access_token_ttl_seconds: int = Field(default=900, alias="accessTokenTtlSeconds")
+    refresh_token_ttl_seconds: int = Field(default=2_592_000, alias="refreshTokenTtlSeconds")
+    status: str = "active"
+
+
+class OsdkSdkVersionCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    language: str
+    package_name: str | None = Field(default=None, alias="packageName")
+    requested_bump: str | None = Field(default=None, alias="requestedBump")
+
+
+class OsdkSdkCompatibilityWindowCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    from_version_id: str = Field(alias="fromVersionId")
+    to_version_id: str = Field(alias="toVersionId")
+    supported_until: str | None = Field(default=None, alias="supportedUntil")
+
+
+class OsdkArtifactDownloadTokenRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    ttl_seconds: int = Field(default=900, alias="ttlSeconds")
+
+
+class OsdkOAuthTokenRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    client_id: str = Field(alias="clientId")
+    code: str
+    redirect_uri: str = Field(alias="redirectUri")
+    code_verifier: str = Field(alias="codeVerifier")
+
+
+class OsdkOAuthRefreshRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    refresh_token: str = Field(alias="refreshToken")
 
 
 class WebhookPayloadRequest(BaseModel):
@@ -434,6 +587,12 @@ class TransformSqlRegisterRequest(BaseModel):
     mode: str = "snapshot"
 
 
+class TransformSchedulerTickRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    max_runs: int = Field(default=50, ge=1, le=500, alias="maxRuns")
+
+
 class DeadLetterBulkRetryRequest(BaseModel):
     ids: list[str]
 
@@ -445,6 +604,10 @@ class ConnectorSyncWorkflowStartRequest(BaseModel):
     connector_name: str = Field(alias="connectorName")
     resource_name: str = Field(alias="resourceName")
     sync_name: str | None = Field(default=None, alias="syncName")
+
+
+class ProductWorkflowCancelRequest(BaseModel):
+    reason: str | None = None
 
 
 class RestConnectorAuthRequest(BaseModel):
@@ -623,8 +786,17 @@ class SourceBatchFileManifest(BaseModel):
 class ActionWritebackReconciliationRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    remote_status: str = Field(alias="remoteStatus")
-    remote_resource_id: str = Field(alias="remoteResourceId")
+    remote_status: str | None = Field(default=None, alias="remoteStatus")
+    remote_resource_id: str | None = Field(default=None, alias="remoteResourceId")
+    external_writeback_uri: str | None = Field(default=None, alias="externalWritebackUri")
+
+
+class ActionWritebackRecoveryApprovalRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    approval_id: str = Field(alias="approvalId")
+    reason: str
+    external_writeback_uri: str | None = Field(default=None, alias="externalWritebackUri")
 
 
 class InsightReviewCreateRequest(BaseModel):
@@ -732,6 +904,9 @@ def _ctx(
     x_tenant_id: str | None = Header(default=None),
     x_user_id: str | None = Header(default=None),
     x_roles: str | None = Header(default=None),
+    x_foundry_lite_app_id: str | None = Header(default=None),
+    x_foundry_lite_client_id: str | None = Header(default=None),
+    x_foundry_lite_scopes: str | None = Header(default=None),
 ) -> RequestContext:
     defaults = RequestContext()
     credentials = _collect_credentials(
@@ -740,6 +915,9 @@ def _ctx(
         x_tenant_id=x_tenant_id,
         x_user_id=x_user_id,
         x_roles=x_roles,
+        x_foundry_lite_app_id=x_foundry_lite_app_id,
+        x_foundry_lite_client_id=x_foundry_lite_client_id,
+        x_foundry_lite_scopes=x_foundry_lite_scopes,
     )
     principal = auth_provider.authenticate(credentials) if credentials else auth_provider.anonymous()
     return RequestContext(
@@ -747,7 +925,74 @@ def _ctx(
         actor_user_id=principal.actor_user_id,
         request_id=_request_id(request, defaults.request_id),
         roles=principal.roles,
+        application_id=principal.application_id,
+        client_id=principal.client_id,
+        token_scopes=principal.token_scopes,
     )
+
+
+def _websocket_ctx(websocket: WebSocket) -> RequestContext:
+    defaults = RequestContext()
+    credentials = _collect_websocket_credentials(websocket)
+    principal = auth_provider.authenticate(credentials) if credentials else auth_provider.anonymous()
+    return RequestContext(
+        tenant_id=principal.tenant_id,
+        actor_user_id=principal.actor_user_id,
+        request_id=websocket.headers.get("X-Request-ID", defaults.request_id),
+        roles=principal.roles,
+        application_id=principal.application_id,
+        client_id=principal.client_id,
+        token_scopes=principal.token_scopes,
+    )
+
+
+def _collect_websocket_credentials(websocket: WebSocket) -> dict[str, str]:
+    authorization = websocket.headers.get(AUTHORIZATION_HEADER) or _websocket_subprotocol_bearer(websocket)
+    pairs = (
+        ("Authorization", authorization),
+        ("X-Tenant-ID", websocket.headers.get("X-Tenant-ID")),
+        ("X-User-ID", websocket.headers.get("X-User-ID")),
+        ("X-Roles", websocket.headers.get("X-Roles")),
+        ("X-Foundry-Lite-App-ID", websocket.headers.get("X-Foundry-Lite-App-ID")),
+        ("X-Foundry-Lite-Client-ID", websocket.headers.get("X-Foundry-Lite-Client-ID")),
+        ("X-Foundry-Lite-Scopes", websocket.headers.get("X-Foundry-Lite-Scopes")),
+    )
+    return {key: value for key, value in pairs if value}
+
+
+def _websocket_subprotocol_bearer(websocket: WebSocket) -> str | None:
+    header = websocket.headers.get("sec-websocket-protocol")
+    if not header:
+        return None
+    for item in (part.strip() for part in header.split(",")):
+        if item.startswith("bearer."):
+            return f"Bearer {item.removeprefix('bearer.')}"
+    return None
+
+
+def _websocket_origin_allowed(websocket: WebSocket) -> bool:
+    origin = websocket.headers.get("origin")
+    return origin is None or origin in ALLOWED_BROWSER_ORIGINS
+
+
+def _check_websocket_subscription_rate(ctx: RequestContext, object_type: str) -> None:
+    key = (
+        ctx.tenant_id,
+        ctx.actor_user_id,
+        ctx.application_id or "",
+        ctx.client_id or "",
+        object_type,
+    )
+    retry_after = websocket_subscription_rate_limiter.retry_after_seconds(
+        key,
+        limit=WEBSOCKET_SUBSCRIPTION_CONNECT_LIMIT,
+        window_seconds=WEBSOCKET_SUBSCRIPTION_CONNECT_WINDOW_SECONDS,
+    )
+    if retry_after is not None:
+        raise RateLimited(
+            "WebSocket object subscription rate limit exceeded",
+            details={"retryAfterSeconds": retry_after},
+        )
 
 
 def _collect_credentials(
@@ -757,12 +1002,18 @@ def _collect_credentials(
     x_tenant_id: str | None,
     x_user_id: str | None,
     x_roles: str | None,
+    x_foundry_lite_app_id: str | None,
+    x_foundry_lite_client_id: str | None,
+    x_foundry_lite_scopes: str | None,
 ) -> dict[str, str]:
     pairs = (
         ("Authorization", _header_or_request(authorization, request, AUTHORIZATION_HEADER)),
         ("X-Tenant-ID", _header_or_request(x_tenant_id, request, "X-Tenant-ID")),
         ("X-User-ID", _header_or_request(x_user_id, request, "X-User-ID")),
         ("X-Roles", _header_or_request(x_roles, request, "X-Roles")),
+        ("X-Foundry-Lite-App-ID", _header_or_request(x_foundry_lite_app_id, request, "X-Foundry-Lite-App-ID")),
+        ("X-Foundry-Lite-Client-ID", _header_or_request(x_foundry_lite_client_id, request, "X-Foundry-Lite-Client-ID")),
+        ("X-Foundry-Lite-Scopes", _header_or_request(x_foundry_lite_scopes, request, "X-Foundry-Lite-Scopes")),
     )
     return {key: value for key, value in pairs if value}
 
@@ -779,11 +1030,37 @@ def _request_id(request: Request | None, default_request_id: str) -> str:
     return getattr(state, "request_id", default_request_id)
 
 
+def _resource_payloads(resources: list[OsdkApplicationResourceRequest]) -> list[JsonObject]:
+    return [cast(JsonObject, resource.model_dump(by_alias=True)) for resource in resources]
+
+
+def _scope_query(scope: str | None) -> tuple[str, ...]:
+    if not scope:
+        return ()
+    return tuple(item.strip() for item in scope.replace(",", " ").split(" ") if item.strip())
+
+
+def _sse_json_events(events: Iterable[JsonObject]) -> Iterator[str]:
+    for payload in events:
+        yield _sse_json_event(payload)
+
+
+def _sse_json_event(payload: JsonObject) -> str:
+    name = str(payload.get("event", "message"))
+    return f"event: {name}\ndata: {json.dumps(payload, sort_keys=True)}\n\n"
+
+
+def _with_first_event(first: JsonObject, events: Iterable[JsonObject]) -> Iterator[JsonObject]:
+    yield first
+    yield from events
+
+
 def _handle_error(exc: FoundryLiteError, request: Request | None = None) -> HTTPException:
     status_by_code = {
         "NOT_FOUND": 404,
         "CONFLICT": 409,
         "PERMISSION_DENIED": 403,
+        "RATE_LIMITED": 429,
     }
     status = _status_for_error(exc, status_by_code.get(exc.code, 400))
     request_id = getattr(getattr(request, "state", None), "request_id", None)
@@ -791,6 +1068,10 @@ def _handle_error(exc: FoundryLiteError, request: Request | None = None) -> HTTP
         status_code=status,
         detail={"code": _code_for_error(exc), "message": exc.message, "details": exc.details, "request_id": request_id},
     )
+
+
+def _websocket_error(exc: FoundryLiteError, request_id: str) -> JsonObject:
+    return {"code": _code_for_error(exc), "message": exc.message, "details": exc.details, "request_id": request_id}
 
 
 def _code_for_error(exc: FoundryLiteError) -> str:
@@ -887,6 +1168,72 @@ def list_dataset_quality_contract_checks(
 ) -> DatasetQualityContractCheckList:
     try:
         return foundry.datasets.list_quality_contract_checks(f"{namespace}.{name}", ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/datasets/{namespace}/{name}/quality-contract/contracts")
+def list_dataset_quality_contract_versions(
+    request: Request,
+    namespace: str,
+    name: str,
+    limit: int = Query(default=20, ge=1, le=100),
+) -> DatasetQualityContractVersionList:
+    try:
+        return foundry.datasets.list_data_contract_versions(f"{namespace}.{name}", limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/datasets/{namespace}/{name}/quality-contract/contracts")
+def create_dataset_quality_contract_version(
+    request: Request,
+    namespace: str,
+    name: str,
+    payload: DatasetQualityContractVersionCreateRequest,
+) -> DatasetQualityContractVersionCreateResult:
+    try:
+        return foundry.datasets.create_data_contract_version(
+            f"{namespace}.{name}",
+            contract_key=payload.contract_key,
+            owner_user_id=payload.owner_user_id,
+            description=payload.description,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/datasets/{namespace}/{name}/quality-contract/contracts/{contract_version_id}")
+def get_dataset_quality_contract_version(
+    request: Request,
+    namespace: str,
+    name: str,
+    contract_version_id: str,
+) -> DatasetQualityContractVersion:
+    try:
+        return foundry.datasets.get_data_contract_version(
+            f"{namespace}.{name}",
+            contract_version_id,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/datasets/{namespace}/{name}/quality-contract/contracts/{contract_version_id}/activate")
+def activate_dataset_quality_contract_version(
+    request: Request,
+    namespace: str,
+    name: str,
+    contract_version_id: str,
+) -> DatasetQualityContractVersion:
+    try:
+        return foundry.datasets.activate_data_contract_version(
+            f"{namespace}.{name}",
+            contract_version_id,
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -1340,6 +1687,432 @@ def query_objects(request: Request, object_type: str, payload: ObjectQueryReques
         raise _handle_error(exc, request) from exc
 
 
+@app.post("/api/objects/{object_type}/subscriptions/stream")
+def stream_object_subscription(
+    request: Request,
+    object_type: str,
+    payload: ObjectSubscriptionRequest,
+) -> StreamingResponse:
+    try:
+        events = foundry.objects.subscription_events(
+            object_type,
+            ctx=_ctx(request),
+            filter_ast=payload.filter_ast,
+            order_by=payload.order_by,
+            properties=payload.properties,
+            page_size=payload.page_size,
+            last_seen_object_change_sequence=payload.last_seen_object_change_sequence,
+            max_events=payload.max_events,
+            poll_interval_seconds=payload.poll_interval_seconds,
+        )
+        first = cast(JsonObject, next(events))
+        return StreamingResponse(
+            _sse_json_events(_with_first_event(first, cast(Iterator[JsonObject], events))),
+            media_type="text/event-stream",
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.websocket("/api/objects/{object_type}/subscriptions/ws")
+async def websocket_object_subscription(websocket: WebSocket, object_type: str) -> None:
+    if not _websocket_origin_allowed(websocket):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    ctx = _websocket_ctx(websocket)
+    try:
+        _check_websocket_subscription_rate(ctx, object_type)
+        payload = await websocket.receive_json()
+        request = ObjectSubscriptionRequest.model_validate(payload or {})
+        events = foundry.objects.subscription_events(
+            object_type,
+            ctx=ctx,
+            filter_ast=request.filter_ast,
+            order_by=request.order_by,
+            properties=request.properties,
+            page_size=request.page_size,
+            last_seen_object_change_sequence=request.last_seen_object_change_sequence,
+            max_events=request.max_events,
+            poll_interval_seconds=request.poll_interval_seconds,
+        )
+        for event in events:
+            await websocket.send_json(cast(JsonObject, event))
+    except FoundryLiteError as exc:
+        await websocket.send_json({"event": "error", "error": _websocket_error(exc, ctx.request_id)})
+        await websocket.close(code=1008)
+    except ValidationError as exc:
+        await websocket.send_json({"event": "error", "error": {"code": "VALIDATION_ERROR", "message": str(exc)}})
+        await websocket.close(code=1003)
+
+
+@app.get("/api/auth/osdk/oauth/authorize")
+def authorize_osdk_oauth(
+    request: Request,
+    client_id: str = Query(alias="clientId"),
+    redirect_uri: str = Query(alias="redirectUri"),
+    code_challenge: str = Query(alias="codeChallenge"),
+    code_challenge_method: str = Query(default="S256", alias="codeChallengeMethod"),
+    scope: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.auth.osdk_oauth_authorize(
+                client_id=client_id,
+                redirect_uri=redirect_uri,
+                code_challenge=code_challenge,
+                code_challenge_method=code_challenge_method,
+                scopes=_scope_query(scope),
+                state=state,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/auth/osdk/oauth/token")
+def exchange_osdk_oauth_token(request: Request, payload: OsdkOAuthTokenRequest) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.auth.osdk_oauth_token(
+                client_id=payload.client_id,
+                code=payload.code,
+                redirect_uri=payload.redirect_uri,
+                code_verifier=payload.code_verifier,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/auth/osdk/oauth/refresh")
+def refresh_osdk_oauth_token(request: Request, payload: OsdkOAuthRefreshRequest) -> JsonObject:
+    try:
+        return cast(JsonObject, foundry.auth.osdk_oauth_refresh(refresh_token=payload.refresh_token, ctx=_ctx(request)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/auth/osdk/oauth/revoke")
+def revoke_osdk_oauth_token(request: Request, payload: OsdkOAuthRefreshRequest) -> JsonObject:
+    try:
+        return cast(JsonObject, foundry.auth.osdk_oauth_revoke(refresh_token=payload.refresh_token, ctx=_ctx(request)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/developer-console/osdk-applications")
+def create_osdk_application(
+    request: Request,
+    payload: OsdkApplicationCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.create_osdk_application(
+                app_api_name=payload.app_api_name,
+                display_name=payload.display_name,
+                client_id=payload.client_id,
+                resources=_resource_payloads(payload.resources),
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/developer-console/osdk-applications")
+def list_osdk_applications(request: Request) -> list[JsonObject]:
+    try:
+        return [cast(JsonObject, item) for item in foundry.developer_console.list_osdk_applications(ctx=_ctx(request))]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/developer-console/osdk-applications/{app_id}")
+def get_osdk_application(request: Request, app_id: str) -> JsonObject:
+    try:
+        return cast(JsonObject, foundry.developer_console.get_osdk_application(app_id, ctx=_ctx(request)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.put("/api/developer-console/osdk-applications/{app_id}/resources")
+def update_osdk_application_resources(
+    request: Request,
+    app_id: str,
+    payload: OsdkApplicationResourcesUpdateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.update_osdk_application_resources(
+                app_id,
+                resources=_resource_payloads(payload.resources),
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/developer-console/osdk-applications/{app_id}/clients")
+def create_osdk_application_client(
+    request: Request,
+    app_id: str,
+    payload: OsdkApplicationClientRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.create_osdk_application_client(
+                app_id,
+                client_id=payload.client_id,
+                redirect_uris=payload.redirect_uris,
+                allowed_scopes=payload.allowed_scopes,
+                access_token_ttl_seconds=payload.access_token_ttl_seconds,
+                refresh_token_ttl_seconds=payload.refresh_token_ttl_seconds,
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/developer-console/osdk-applications/{app_id}/clients")
+def list_osdk_application_clients(request: Request, app_id: str) -> list[JsonObject]:
+    try:
+        return [
+            cast(JsonObject, item)
+            for item in foundry.developer_console.list_osdk_application_clients(app_id, ctx=_ctx(request))
+        ]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.put("/api/developer-console/osdk-applications/{app_id}/clients/{client_row_id}")
+def update_osdk_application_client(
+    request: Request,
+    app_id: str,
+    client_row_id: str,
+    payload: OsdkApplicationClientRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.update_osdk_application_client(
+                app_id,
+                client_row_id,
+                status=payload.status,
+                redirect_uris=payload.redirect_uris,
+                allowed_scopes=payload.allowed_scopes,
+                access_token_ttl_seconds=payload.access_token_ttl_seconds,
+                refresh_token_ttl_seconds=payload.refresh_token_ttl_seconds,
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/developer-console/osdk-applications/{app_id}/clients/{client_row_id}/deactivate")
+def deactivate_osdk_application_client(
+    request: Request,
+    app_id: str,
+    client_row_id: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.deactivate_osdk_application_client(
+                app_id, client_row_id, idempotency_key=idempotency_key, ctx=_ctx(request)
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/developer-console/osdk-applications/{app_id}/sdk-versions")
+def create_osdk_sdk_version(
+    request: Request,
+    app_id: str,
+    payload: OsdkSdkVersionCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.create_osdk_sdk_version(
+                app_id,
+                language=payload.language,
+                package_name=payload.package_name,
+                requested_bump=payload.requested_bump,
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/developer-console/osdk-applications/{app_id}/sdk-versions")
+def list_osdk_sdk_versions(request: Request, app_id: str) -> list[JsonObject]:
+    try:
+        return [
+            cast(JsonObject, item)
+            for item in foundry.developer_console.list_osdk_sdk_versions(app_id, ctx=_ctx(request))
+        ]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/developer-console/osdk-applications/{app_id}/sdk-versions/{version_id}")
+def get_osdk_sdk_version(request: Request, app_id: str, version_id: str) -> JsonObject:
+    try:
+        return cast(JsonObject, foundry.developer_console.get_osdk_sdk_version(app_id, version_id, ctx=_ctx(request)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/developer-console/osdk-applications/{app_id}/sdk-versions/{version_id}/artifacts/{artifact_kind}")
+def get_osdk_release_artifact(request: Request, app_id: str, version_id: str, artifact_kind: str) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.osdk_release_artifact(app_id, version_id, artifact_kind, ctx=_ctx(request)),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/developer-console/osdk-applications/{app_id}/sdk-versions/{version_id}/channels/{channel}")
+def promote_osdk_sdk_version(
+    request: Request,
+    app_id: str,
+    version_id: str,
+    channel: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.promote_osdk_sdk_version(
+                app_id, version_id, channel=channel, idempotency_key=idempotency_key, ctx=_ctx(request)
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/developer-console/osdk-applications/{app_id}/sdk-release-channels")
+def list_osdk_release_channels(
+    request: Request, app_id: str, language: str | None = Query(default=None)
+) -> list[JsonObject]:
+    try:
+        return [
+            cast(JsonObject, item)
+            for item in foundry.developer_console.list_osdk_release_channels(
+                app_id, language=language, ctx=_ctx(request)
+            )
+        ]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/developer-console/osdk-applications/{app_id}/sdk-compatibility-windows")
+def create_osdk_compatibility_window(
+    request: Request,
+    app_id: str,
+    payload: OsdkSdkCompatibilityWindowCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.create_osdk_compatibility_window(
+                app_id,
+                from_version_id=payload.from_version_id,
+                to_version_id=payload.to_version_id,
+                supported_until=payload.supported_until,
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/developer-console/osdk-applications/{app_id}/sdk-compatibility-windows")
+def list_osdk_compatibility_windows(request: Request, app_id: str) -> list[JsonObject]:
+    try:
+        return [
+            cast(JsonObject, item)
+            for item in foundry.developer_console.list_osdk_compatibility_windows(app_id, ctx=_ctx(request))
+        ]
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/developer-console/osdk-applications/{app_id}/sdk-install-metadata")
+def get_osdk_install_metadata(request: Request, app_id: str) -> JsonObject:
+    try:
+        return cast(JsonObject, foundry.developer_console.osdk_install_metadata(app_id, ctx=_ctx(request)))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post(
+    "/api/developer-console/osdk-applications/{app_id}/sdk-versions/{version_id}/artifacts/{artifact_kind}/download-token"
+)
+def create_osdk_artifact_download_token(
+    request: Request,
+    app_id: str,
+    version_id: str,
+    artifact_kind: str,
+    payload: OsdkArtifactDownloadTokenRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.create_osdk_artifact_download_token(
+                app_id,
+                version_id,
+                artifact_kind,
+                ttl_seconds=payload.ttl_seconds,
+                idempotency_key=idempotency_key,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/developer-console/osdk-release-artifacts/download/{download_token}")
+def get_osdk_release_artifact_by_download_token(request: Request, download_token: str) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.developer_console.osdk_release_artifact_by_download_token(download_token, ctx=_ctx(request)),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.get("/api/insights/reviews")
 def list_insight_reviews(
     request: Request,
@@ -1539,6 +2312,53 @@ def detect_observability_incidents(request: Request, payload: ObservabilityDetec
         raise _handle_error(exc, request) from exc
 
 
+@app.post("/api/operations/observability/detect-and-record")
+def record_observability_incidents(
+    request: Request,
+    payload: ObservabilityDetectRequest,
+) -> ObservabilityStoredReport:
+    try:
+        return foundry.operations.record_observability_report(
+            ctx=_ctx(request),
+            configs=cast(list[ObservabilityDetectorConfig], payload.configs),
+            observed_at=payload.observed_at,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/operations/observability/incidents")
+def list_observability_incidents(
+    request: Request,
+    status: str | None = None,
+    limit: int = 50,
+) -> list[StoredObservabilityIncident]:
+    try:
+        return foundry.operations.list_observability_incidents(ctx=_ctx(request), status=status, limit=limit)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/observability/incidents/{incident_id}/acknowledge")
+def acknowledge_observability_incident(request: Request, incident_id: str) -> StoredObservabilityIncident:
+    try:
+        return foundry.operations.acknowledge_observability_incident(incident_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/observability/incidents/{incident_id}/resolve")
+def resolve_observability_incident(
+    request: Request,
+    incident_id: str,
+    payload: ObservabilityResolveRequest,
+) -> StoredObservabilityIncident:
+    try:
+        return foundry.operations.resolve_observability_incident(incident_id, ctx=_ctx(request), reason=payload.reason)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.post("/api/operations/backup-restore/preflight")
 def backup_restore_preflight(
     request: Request,
@@ -1546,6 +2366,53 @@ def backup_restore_preflight(
 ) -> BackupRestorePreflightReport:
     try:
         return foundry.operations.restore_preflight_report(ctx=_ctx(request), backup_id=payload.backup_id)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/backup-restore/artifacts")
+def create_backup_restore_artifact(
+    request: Request,
+    payload: BackupRestoreArtifactCreateRequest,
+) -> BackupRestoreArtifactReceipt:
+    try:
+        return foundry.operations.create_backup_artifact(ctx=_ctx(request), backup_id=payload.backup_id)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/backup-restore/artifacts/restore")
+def restore_from_backup_restore_artifact(
+    request: Request,
+    payload: BackupRestoreArtifactRestoreRequest,
+) -> BackupRestoreArtifactRestoreReport:
+    try:
+        return foundry.operations.restore_from_backup_artifact(
+            ctx=_ctx(request),
+            artifact_ref=payload.artifact_ref,
+            artifact_hash=payload.artifact_hash,
+            restore_id=payload.restore_id,
+            validation_id=payload.validation_id,
+            should_run_post_restore_validation=payload.should_run_post_restore_validation,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/backup-restore/artifacts/restore/execute")
+def execute_backup_restore_artifact_restore(
+    request: Request,
+    payload: BackupRestoreArtifactRestoreRequest,
+) -> BackupRestoreArtifactRestoreReport:
+    try:
+        return foundry.operations.execute_backup_artifact_restore(
+            ctx=_ctx(request),
+            artifact_ref=payload.artifact_ref,
+            artifact_hash=payload.artifact_hash,
+            restore_id=payload.restore_id,
+            validation_id=payload.validation_id,
+            should_run_post_restore_validation=payload.should_run_post_restore_validation,
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -1684,6 +2551,18 @@ def start_connector_sync_workflow(
 def get_product_workflow_run(request: Request, workflow_run_id: str) -> ProductWorkflowRun:
     try:
         return foundry.operations.product_workflow_run(workflow_run_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/workflows/{workflow_run_id}/cancel")
+def cancel_product_workflow_run(
+    request: Request,
+    workflow_run_id: str,
+    payload: ProductWorkflowCancelRequest,
+) -> ProductWorkflowRun:
+    try:
+        return foundry.operations.cancel_product_workflow(workflow_run_id, reason=payload.reason, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -2257,6 +3136,28 @@ def resolve_action_writeback_reconciliation(
                 writeback_id,
                 remote_status=payload.remote_status,
                 remote_resource_id=payload.remote_resource_id,
+                external_writeback_uri=payload.external_writeback_uri,
+                ctx=_ctx(request),
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/reconciliation/{writeback_id}/approve-recovery")
+def approve_action_writeback_recovery(
+    request: Request,
+    writeback_id: str,
+    payload: ActionWritebackRecoveryApprovalRequest,
+) -> ActionWritebackRecoveryItem:
+    try:
+        return cast(
+            ActionWritebackRecoveryItem,
+            foundry.operations.approve_action_writeback_recovery(
+                writeback_id,
+                approval_id=payload.approval_id,
+                reason=payload.reason,
+                external_writeback_uri=payload.external_writeback_uri,
                 ctx=_ctx(request),
             ),
         )
@@ -2305,6 +3206,33 @@ def plan_iceberg_maintenance(
         return cast(
             JsonObject,
             foundry.operations.plan_iceberg_maintenance(
+                dataset_ref,
+                ctx=_ctx(request),
+                branch=branch,
+                small_file_threshold_bytes=small_file_threshold_bytes,
+                file_count_threshold=file_count_threshold,
+                read_amplification_threshold=read_amplification_threshold,
+                retention_min_snapshots=retention_min_snapshots,
+            ),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/maintenance/iceberg/{dataset_ref}/run")
+def run_iceberg_maintenance(
+    request: Request,
+    dataset_ref: str,
+    branch: str = Query(default="main"),
+    small_file_threshold_bytes: int | None = Query(default=None, alias="smallFileThresholdBytes"),
+    file_count_threshold: int | None = Query(default=None, alias="fileCountThreshold"),
+    read_amplification_threshold: float | None = Query(default=None, alias="readAmplificationThreshold"),
+    retention_min_snapshots: int | None = Query(default=None, alias="retentionMinSnapshots"),
+) -> JsonObject:
+    try:
+        return cast(
+            JsonObject,
+            foundry.operations.run_iceberg_maintenance(
                 dataset_ref,
                 ctx=_ctx(request),
                 branch=branch,
@@ -2369,6 +3297,22 @@ def retry_dead_letter_record(
         raise _handle_error(exc, request) from exc
 
 
+@app.post("/api/operations/dead-letter-records/{record_id}/retry-transform")
+def retry_transform_dead_letter_record(
+    request: Request,
+    record_id: str,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> TransformRecordDlqRetryResult:
+    try:
+        return foundry.transforms.retry_dead_letter_record(
+            record_id,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @app.post("/api/operations/dead-letter-records/{record_id}/discard")
 def discard_dead_letter_record(request: Request, record_id: str) -> DeadLetterRecordDiscardResult:
     try:
@@ -2389,6 +3333,22 @@ def retry_dead_letter_event(request: Request, event_id: str) -> RuntimeRetryResu
 def replay_object_index(request: Request, object_type: str) -> ObjectIndexRebuildResult:
     try:
         return foundry.objects.reindex(object_type, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/operations/index/{object_type}/ontology-reindex")
+def replay_ontology_object_reindex(
+    request: Request,
+    object_type: str,
+    payload: OntologyObjectReindexRequest,
+) -> OntologyObjectReindexResult:
+    try:
+        return foundry.objects.reindex_ontology_migration(
+            object_type,
+            payload.reindex_key,
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -2421,6 +3381,25 @@ def register_sql_transform(request: Request, payload: TransformSqlRegisterReques
             mode=payload.mode,
             ctx=_ctx(request),
         )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.get("/api/transforms/scheduler/due")
+def preview_transform_scheduler_due(
+    request: Request,
+    max_runs: int = Query(default=50, ge=1, le=500, alias="maxRuns"),
+) -> JsonObject:
+    try:
+        return foundry.transforms.preview_due(ctx=_ctx(request), max_runs=max_runs)
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/transforms/scheduler/tick")
+def run_transform_scheduler_tick(request: Request, payload: TransformSchedulerTickRequest) -> JsonObject:
+    try:
+        return foundry.transforms.run_due(ctx=_ctx(request), max_runs=payload.max_runs)
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -2504,6 +3483,25 @@ def apply_action(
             expected_object_version=payload.expected_object_version,
             params=payload.params,
             idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@app.post("/api/actions/{action_type}/validate")
+def validate_action(
+    request: Request,
+    action_type: str,
+    payload: ActionApplyRequest,
+) -> ActionValidationResponse:
+    try:
+        return foundry.actions.validate(
+            action_type,
+            object_type=payload.target.object_type,
+            object_id=payload.target.object_id,
+            expected_object_version=payload.expected_object_version,
+            params=payload.params,
             ctx=_ctx(request),
         )
     except FoundryLiteError as exc:

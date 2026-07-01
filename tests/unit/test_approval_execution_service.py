@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from foundry_lite.application.ports.ai_run_repository import (
@@ -12,8 +12,23 @@ from foundry_lite.application.ports.ai_run_repository import (
     AiSessionRecord,
     AiToolCallRecord,
 )
+from foundry_lite.application.ports.insight_review_repository import InsightReviewRow
 from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionError
-from foundry_lite.application.services.aip.approval_execution_payloads import validate_request
+from foundry_lite.application.services.aip.approval_execution_payloads import (
+    approved_executable_proposal,
+    evidence_refs,
+    execution_claim,
+    optional_row_text,
+    parse_instant,
+    require_matching_execution_claim,
+    require_matching_fingerprint,
+    required_int,
+    required_mapping,
+    required_row_text,
+    required_text,
+    tool_call_rows,
+    validate_request,
+)
 from foundry_lite.application.services.aip.approval_execution_types import ApprovalExecutionRequest
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, PermissionDenied
@@ -56,6 +71,55 @@ def test_approval_execution_payload_rule_validates_request_shape_directly() -> N
         )
 
     assert missing_idempotency.value.reason == "missing_field"
+
+
+def test_approval_execution_payload_helpers_fail_closed_on_invalid_rows() -> None:
+    request = ApprovalExecutionRequest(
+        review_id="review-1",
+        expected_proposal_fingerprint="sha256:" + "1" * 64,
+        idempotency_key="approval-exec-helpers",
+    )
+    row = _insight_review_row(
+        status="approved",
+        execution_status="executing",
+        review_metadata={"approvalExecution": {"idempotencyKey": "missing-fingerprint"}},
+    )
+
+    assert execution_claim(row) is None
+    with pytest.raises(ConflictDetected, match="missing its idempotency claim"):
+        require_matching_execution_claim(row, request)
+    with pytest.raises(ApprovalExecutionError, match="must be approved"):
+        approved_executable_proposal(_insight_review_row(status="pending"), request)
+    with pytest.raises(ConflictDetected, match="terminal"):
+        approved_executable_proposal(_insight_review_row(status="approved", execution_status="executed"), request)
+    with pytest.raises(ApprovalExecutionError, match="does not contain an action proposal"):
+        approved_executable_proposal(
+            _insight_review_row(status="approved", proposal_type="insight", action_proposal=None),
+            request,
+        )
+    with pytest.raises(ApprovalExecutionError, match="fingerprint"):
+        require_matching_fingerprint(_insight_review_row(proposal_fingerprint="sha256:old"), "sha256:new")
+
+
+def test_approval_execution_required_payload_helpers_reject_malformed_values() -> None:
+    with pytest.raises(ApprovalExecutionError, match="review is missing"):
+        required_row_text(_insight_review_row(originating_ai_run_id=None), "originating_ai_run_id")
+    with pytest.raises(ApprovalExecutionError, match="invalid originating_tool_call_id"):
+        optional_row_text(_insight_review_row(originating_tool_call_id=""), "originating_tool_call_id")
+    with pytest.raises(ApprovalExecutionError, match="proposal is missing"):
+        required_text({}, "actionType")
+    with pytest.raises(ApprovalExecutionError, match="missing integer"):
+        required_int({"expectedObjectVersion": "1"}, "expectedObjectVersion")
+    with pytest.raises(ApprovalExecutionError, match="proposal is missing"):
+        required_mapping({"parameters": []}, "parameters")
+    with pytest.raises(ApprovalExecutionError, match="requires evidence"):
+        evidence_refs({})
+    with pytest.raises(ApprovalExecutionError, match="must be objects"):
+        evidence_refs({"evidenceRefs": ["bad"]})
+    with pytest.raises(ApprovalExecutionError, match="ledger rows were not available"):
+        tool_call_rows({"toolCalls": "bad"})
+    with pytest.raises(ApprovalExecutionError, match="not a valid ISO"):
+        parse_instant("not-a-date")
 
 
 def test_approval_execution_validates_request_shape(foundry: Any) -> None:
@@ -567,3 +631,36 @@ def _relations(engine: Any, review_id: str, action_run_id: str) -> list[Mapping[
 def _table_count(engine: Any, table: Any) -> int:
     with engine.begin() as transaction:
         return int(transaction.execute(select(func.count()).select_from(table)).scalar_one())
+
+
+def _insight_review_row(**overrides: Any) -> InsightReviewRow:
+    row = {
+        "id": "review-1",
+        "tenant_id": "tenant-demo",
+        "claim_id": "claim-1",
+        "claim_text": "Approve the order",
+        "status": "approved",
+        "priority": "normal",
+        "assignee_user_id": None,
+        "evidence_object_ids": (),
+        "evidence_refs": (),
+        "action_proposal": {"proposalFingerprint": "sha256:" + "1" * 64},
+        "proposal_type": "ontology_action",
+        "proposal_fingerprint": "sha256:" + "1" * 64,
+        "originating_ai_run_id": "ai-run-1",
+        "originating_tool_call_id": None,
+        "expires_at": None,
+        "execution_status": None,
+        "approved_action_run_id": None,
+        "approval_policy_version": "policy-v1",
+        "created_by_user_id": "user-1",
+        "created_idempotency_key": "review-create",
+        "assignment_idempotency_key": None,
+        "decision": None,
+        "decision_idempotency_key": None,
+        "review_metadata": {},
+        "created_at": "2026-07-01T00:00:00Z",
+        "updated_at": "2026-07-01T00:00:00Z",
+    }
+    row.update(overrides)
+    return cast(InsightReviewRow, row)

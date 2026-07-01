@@ -28,13 +28,16 @@ from foundry_lite.application.services.ontology_migration import (
     OntologyMigrationPlan,
     plan_ontology_migration,
 )
-from foundry_lite.application.services.ontology_migration_types import object_type_serving_config
+from foundry_lite.application.services.ontology_migration_types import (
+    object_type_serving_config,
+)
 from foundry_lite.application.services.ontology_protocols import (
     OntologyDatasetRegistry,
     OntologyDatasetVersions,
     OntologyRuntimeBoundary,
     require_ontology_write_open,
 )
+from foundry_lite.application.services.ontology_reindex_contract import OntologyReindexContractMixin
 from foundry_lite.application.services.ontology_validation import (
     build_ontology_catalog,
     ontology_validation_result,
@@ -60,7 +63,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
 
 
-class OntologyService(CoreService):
+class OntologyService(OntologyReindexContractMixin, CoreService):
     required_dependencies = ("engine", "ontology_repository")
     required_collaborators = (
         "dataset_registry_service",

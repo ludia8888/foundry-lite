@@ -1,3 +1,5 @@
+"""Infrastructure adapter implementation for fake context provider."""
+
 from __future__ import annotations
 
 import hashlib

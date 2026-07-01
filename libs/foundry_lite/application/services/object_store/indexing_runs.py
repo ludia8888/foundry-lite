@@ -1,3 +1,5 @@
+"""Application service helpers for indexing runs workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -14,6 +16,9 @@ from foundry_lite.application.ports.object_index_repository import (
     ObjectIndexRepository,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.object_store.indexing_ontology_reindex import (
+    pending_ontology_reindex_operation,
+)
 from foundry_lite.application.services.object_store.indexing_protocols import (
     IndexDatasetRegistry,
     IndexDatasetVersions,
@@ -62,6 +67,48 @@ def _start_index_rebuild_plan(
         version["id"],
         mode,
         index_version,
+        active_index_version,
+    )
+
+
+def _start_ontology_reindex_plan(
+    *,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    object_type_api_name: str,
+    reindex_key: str,
+    dataset_registry_service: IndexDatasetRegistry,
+    dataset_version_service: IndexDatasetVersions,
+    ontology_service: IndexOntologyLookup,
+    object_index_repository: ObjectIndexRepository,
+) -> ObjectIndexRebuildPlan:
+    object_type = ontology_service._active_object_type(conn, ctx, object_type_api_name)
+    operation = pending_ontology_reindex_operation(object_type, reindex_key)
+    dataset = dataset_registry_service.get_dataset(object_type["backing"]["dataset"], ctx=ctx)
+    version = dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
+    run_id = _new_id("index_run")
+    active_index_version = _active_index_version(conn, ctx, object_type, object_index_repository)
+    _create_index_run(
+        conn=conn,
+        ctx=ctx,
+        object_type=object_type,
+        object_type_api_name=object_type_api_name,
+        version=version,
+        run_id=run_id,
+        mode="full",
+        index_version=active_index_version,
+        object_index_repository=object_index_repository,
+        trigger_type="ontology_migration_reindex",
+        source_ref=_ontology_reindex_source_ref(object_type["config"], operation, reindex_key),
+    )
+    return ObjectIndexRebuildPlan(
+        run_id,
+        object_type_api_name,
+        object_type,
+        version,
+        version["id"],
+        "full",
+        active_index_version,
         active_index_version,
     )
 
@@ -223,3 +270,18 @@ def _index_run_source_ref(
 
 def _rebuild_trigger_type(mode: str) -> str:
     return "shadow_reindex" if mode == "shadow" else "reindex"
+
+
+def _ontology_reindex_source_ref(
+    config: Mapping[str, object],
+    operation: Mapping[str, object],
+    reindex_key: str,
+) -> IndexRunSourceRef:
+    source_ref: IndexRunSourceRef = {"ontologyReindexKey": reindex_key}
+    source_ontology_version_id = config.get("sourceOntologyVersionId")
+    changed_fields = operation.get("changedFields")
+    if isinstance(source_ontology_version_id, str) and source_ontology_version_id:
+        source_ref["sourceOntologyVersionId"] = source_ontology_version_id
+    if isinstance(changed_fields, list):
+        source_ref["changedFields"] = [str(item) for item in changed_fields]
+    return source_ref

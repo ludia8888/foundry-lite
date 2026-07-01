@@ -1,3 +1,5 @@
+"""Application service helpers for retrieval workflows."""
+
 from __future__ import annotations
 
 from dataclasses import replace

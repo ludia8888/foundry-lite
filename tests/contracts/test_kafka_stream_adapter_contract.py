@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
@@ -24,7 +26,7 @@ from foundry_lite_worker.stream_archive import (
     run_stream_archive_continuously,
     run_stream_archive_once,
 )
-from sqlalchemy import select
+from sqlalchemy import and_, select
 
 
 def test_kafka_stream_adapter_reads_assigned_offsets() -> None:
@@ -379,6 +381,121 @@ def test_stream_archive_worker_continuous_loop_stops_after_max_batches(tmp_path:
     assert result.rows_archived == 1
 
 
+def test_stream_archive_worker_continuous_loop_records_workflow_lease_release(tmp_path: Path) -> None:
+    storage_root = tmp_path / "lease-release"
+    adapter = LocalStreamAdapter()
+    _publish_local_event(adapter, "shipments", "S-501")
+
+    result = run_stream_archive_continuously(
+        StreamArchiveWorkerConfig(
+            dataset_ref="raw.shipment_events",
+            stream_name="shipments",
+            topic="shipment_events",
+            bootstrap_servers="redpanda:9092",
+            storage_root=storage_root,
+            limit=1,
+            worker_id="worker-release",
+            is_continuous=True,
+            continuous_max_empty_polls=1,
+        ),
+        stream_adapter=adapter,
+    )
+
+    workflow = _workflow_row(storage_root, result.workflow_run_id)
+    assert result.stop_reason == "empty_polls"
+    assert result.workflow_run_id is not None
+    assert result.lease_owner_id == "worker-release"
+    assert workflow["status"] == "succeeded"
+    workflow_output = cast(dict[str, object], workflow["output"])
+    assert workflow_output["stopReason"] == "empty_polls"
+    assert workflow_output["archivedBatches"] == 1
+
+
+def test_stream_archive_worker_continuous_loop_stops_when_lease_is_lost(tmp_path: Path) -> None:
+    storage_root = tmp_path / "lease-lost"
+    adapter = LocalStreamAdapter()
+    _publish_local_event(adapter, "shipments", "S-601")
+    _publish_local_event(adapter, "shipments", "S-602")
+    checks = 0
+    takeover_done = False
+
+    first = StreamArchiveWorkerConfig(
+        dataset_ref="raw.shipment_events",
+        stream_name="shipments",
+        topic="shipment_events",
+        bootstrap_servers="redpanda:9092",
+        storage_root=storage_root,
+        limit=1,
+        worker_id="worker-old",
+        lease_ttl_seconds=0,
+        is_continuous=True,
+        continuous_max_empty_polls=1,
+    )
+
+    def takeover_after_first_batch() -> bool:
+        nonlocal checks, takeover_done
+        checks += 1
+        if checks == 2 and not takeover_done:
+            takeover_done = True
+            run_stream_archive_continuously(
+                replace(first, worker_id="worker-new", request_id="req-worker-new"),
+                stream_adapter=adapter,
+            )
+        return False
+
+    result = run_stream_archive_continuously(first, stream_adapter=adapter, should_stop=takeover_after_first_batch)
+
+    assert result.stop_reason == "lease_lost"
+    assert result.archived_batches == 1
+    assert result.rows_archived == 1
+    final_workflow = _workflow_row(storage_root, result.workflow_run_id)
+    final_output = cast(dict[str, object], final_workflow["output"])
+    assert final_output["stopReason"] == "empty_polls"
+    assert [row["event_id"] for row in _archived_rows(storage_root)] == [
+        "shipment_events:0:0",
+        "shipment_events:0:1",
+    ]
+
+
+def test_stream_archive_worker_continuous_loop_broker_rebalance_revoked_worker_cannot_commit_current_batch(
+    tmp_path: Path,
+) -> None:
+    storage_root = tmp_path / "assignment-revoked"
+    adapter = LocalStreamAdapter()
+    _publish_local_event(adapter, "shipments", "S-611")
+
+    def assignment_revoked_after_read() -> bool:
+        return False
+
+    result = run_stream_archive_continuously(
+        StreamArchiveWorkerConfig(
+            dataset_ref="raw.shipment_events",
+            stream_name="shipments",
+            topic="shipment_events",
+            bootstrap_servers="redpanda:9092",
+            storage_root=storage_root,
+            limit=1,
+            worker_id="worker-revoked",
+            is_continuous=True,
+        ),
+        stream_adapter=adapter,
+        assignment_is_current=assignment_revoked_after_read,
+    )
+
+    workflow = _workflow_row(storage_root, result.workflow_run_id)
+    sync_run = _latest_sync_run(storage_root)
+    error = cast(dict[str, object], sync_run["error"])
+    trace = cast(dict[str, object], error["trace"])
+    assert result.stop_reason == "assignment_revoked"
+    assert result.archived_batches == 0
+    assert _archived_rows(storage_root) == []
+    assert workflow["status"] == "cancelled"
+    assert cast(dict[str, object], workflow["output"])["stopReason"] == "assignment_revoked"
+    assert sync_run["status"] == "FAILED"
+    assert sync_run["committed_version_id"] is None
+    assert trace["adapter"] == "stream_archive_pre_commit_guard"
+
+
 def test_stream_archive_worker_continuous_loop_counts_empty_polls_before_stop(tmp_path: Path) -> None:
     result = run_stream_archive_continuously(
         StreamArchiveWorkerConfig(
@@ -420,6 +537,8 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
             "FOUNDRY_LITE_STREAM_CONTINUOUS": "true",
             "FOUNDRY_LITE_STREAM_CONTINUOUS_MAX_BATCHES": "3",
             "FOUNDRY_LITE_STREAM_CONTINUOUS_MAX_EMPTY_POLLS": "2",
+            "FOUNDRY_LITE_STREAM_WORKER_ID": "worker-custom",
+            "FOUNDRY_LITE_STREAM_LEASE_TTL_SECONDS": "45",
         }
     )
 
@@ -434,6 +553,8 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
     assert config.is_continuous is True
     assert config.continuous_max_batches == 3
     assert config.continuous_max_empty_polls == 2
+    assert config.worker_id == "worker-custom"
+    assert config.lease_ttl_seconds == 45
 
 
 def test_worker_requires_tenant_context_for_background_jobs(tmp_path: Path) -> None:
@@ -582,6 +703,53 @@ def test_stream_archive_worker_main_prints_continuous_result(
 
 def test_stream_archive_worker_result_json_for_no_events() -> None:
     assert worker_module._result_json(None) == '{"status": "NO_EVENTS"}'
+
+
+def _workflow_row(storage_root: Path, workflow_run_id: str | None) -> dict[str, object]:
+    assert workflow_run_id is not None
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    with foundry.engine.begin() as transaction:
+        conn = cast(Any, transaction)
+        row = (
+            conn.execute(
+                select(db.workflow_runs).where(
+                    and_(
+                        db.workflow_runs.c.tenant_id == demo_admin_context().tenant_id,
+                        db.workflow_runs.c.id == workflow_run_id,
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
+    return dict(row)
+
+
+def _archived_rows(storage_root: Path) -> list[dict[str, object]]:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    ctx = demo_admin_context()
+    return [
+        dict(row)
+        for version in foundry.datasets.list_versions("raw.shipment_events", ctx=ctx)
+        for row in foundry.datasets.preview("raw.shipment_events", ctx=ctx, version=version["id"])
+    ]
+
+
+def _latest_sync_run(storage_root: Path) -> dict[str, object]:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
+    with foundry.engine.begin() as transaction:
+        conn = cast(Any, transaction)
+        row = (
+            conn.execute(
+                select(db.sync_runs)
+                .where(db.sync_runs.c.tenant_id == demo_admin_context().tenant_id)
+                .order_by(db.sync_runs.c.created_at.desc(), db.sync_runs.c.id.desc())
+            )
+            .mappings()
+            .first()
+        )
+    assert row is not None
+    return dict(row)
 
 
 def _publish_local_event(adapter: LocalStreamAdapter, stream_name: str, key: str) -> None:

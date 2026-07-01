@@ -1,3 +1,5 @@
+"""Application service helpers for transactions workflows."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

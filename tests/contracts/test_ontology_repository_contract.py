@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -178,6 +178,34 @@ class FakeOntologyRepository:
                 return cast(ObjectTypeRow, dict(row))
         return None
 
+    def object_type_by_id(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+    ) -> ObjectTypeRow | None:
+        del transaction
+        for row in self.object_types:
+            if row["tenant_id"] == tenant_id and row["id"] == object_type_id:
+                return cast(ObjectTypeRow, dict(row))
+        return None
+
+    def update_object_type_config(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_id: str,
+        config: Mapping[str, object],
+    ) -> bool:
+        del transaction
+        for row in self.object_types:
+            if row["tenant_id"] == tenant_id and row["id"] == object_type_id:
+                row["config"] = dict(config)
+                return True
+        return False
+
     def enabled_action_type_for_version(
         self,
         *,
@@ -308,6 +336,7 @@ def _object_type_record(
     tenant_id: str = "tenant-demo",
     ontology_version_id: str = "ont_1",
     api_name: str = "Order",
+    config: dict[str, object] | None = None,
 ) -> ObjectTypeRecord:
     return ObjectTypeRecord(
         object_type_id=object_type_id,
@@ -318,7 +347,7 @@ def _object_type_record(
         description=None,
         primary_key_property="order_id",
         backing={"dataset": "clean.orders"},
-        config={},
+        config=config or {},
     )
 
 
@@ -580,6 +609,37 @@ def test_ontology_repository_contract_persists_and_reads_type_metadata(harness: 
     assert [row["api_name"] for row in properties] == ["order_id", "status"]
     assert [row["api_name"] for row in link_types] == ["OrderCustomer"]
     assert [row["api_name"] for row in actions] == ["ApproveOrder"]
+
+
+def test_ontology_repository_contract_updates_object_type_config(harness: OntologyHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_object_type(
+            transaction=transaction,
+            record=_object_type_record(config={"servingContractStatus": "object_reindex_required"}),
+        )
+        updated = harness.repository.update_object_type_config(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+            config={"servingContractStatus": "object_reindex_complete", "indexRunId": "index_run_1"},
+        )
+        other_tenant_updated = harness.repository.update_object_type_config(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            object_type_id="ot_order",
+            config={"servingContractStatus": "wrong-tenant"},
+        )
+        row = harness.repository.object_type_by_id(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_id="ot_order",
+        )
+
+    assert updated is True
+    assert other_tenant_updated is False
+    assert row is not None
+    assert row["config"]["servingContractStatus"] == "object_reindex_complete"
+    assert row["config"]["indexRunId"] == "index_run_1"
 
 
 def test_ontology_repository_contract_scopes_active_lookups(harness: OntologyHarness) -> None:

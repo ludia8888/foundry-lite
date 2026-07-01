@@ -1,3 +1,5 @@
+"""Application port contract for compute adapter."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -11,6 +13,27 @@ from foundry_lite.application.primitives import StagedFileStats
 
 TabularRow = dict[str, object]
 """JSON-ready tabular row keyed by column name."""
+
+InputFilePaths = Path | tuple[Path, ...]
+"""One or more local parquet files backing a pinned transform input."""
+
+
+@dataclass(frozen=True)
+class TransformDeadLetterRecord:
+    """One input row rejected by a row-aware transform execution policy."""
+
+    input_dataset_ref: str
+    row_index: int
+    payload: Mapping[str, object]
+    error_kind: str
+    error_message: str
+
+
+@dataclass(frozen=True)
+class TransformExecutionResult:
+    """Adapter result metadata that is durable only after application persistence."""
+
+    dead_letters: tuple[TransformDeadLetterRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -27,15 +50,30 @@ class SqlTransformPlan:
     """
 
     sql_template: str
-    input_paths_by_ref: dict[str, Path]
+    input_paths_by_ref: dict[str, InputFilePaths]
     target_path: Path
 
 
-TransformPlan = SqlTransformPlan
-"""Union root for all logical transform plans. Today there is only
-``SqlTransformPlan``; future kinds (Python UDF, native Spark, Iceberg
-merge, etc.) are added as additional dataclass variants and unioned here
-so application services stay vendor-neutral."""
+@dataclass(frozen=True)
+class PythonTransformPlan:
+    """Logical plan for a Python SDK transform.
+
+    Application services bind committed dataset versions and a staging output
+    path, then pass only SDK handles into user code. Raw storage paths stay
+    inside the compute adapter.
+    """
+
+    entrypoint: str
+    source_code: str
+    function_name: str | None
+    input_refs_by_alias: dict[str, str]
+    input_paths_by_ref: dict[str, InputFilePaths]
+    output_dataset_ref: str
+    target_path: Path
+
+
+TransformPlan = SqlTransformPlan | PythonTransformPlan
+"""Union root for all logical transform plans."""
 
 
 class ComputeAdapter(Protocol):
@@ -72,7 +110,7 @@ class ComputeAdapter(Protocol):
         """Execute a dataset health check against a Parquet file."""
         ...
 
-    def execute_transform(self, plan: TransformPlan) -> None:
+    def execute_transform(self, plan: TransformPlan) -> TransformExecutionResult:
         """Execute a logical transform plan and write the output file.
 
         Adapters dispatch by plan kind (today only SqlTransformPlan). When

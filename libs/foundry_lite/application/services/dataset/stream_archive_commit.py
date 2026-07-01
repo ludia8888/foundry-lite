@@ -64,6 +64,7 @@ __all__ = [
     "finalize_stream_archive_commit",
     "insert_stream_dead_letters",
     "lock_stream_cursor_for_commit",
+    "record_stream_pre_commit_failure",
     "record_stream_read_failure",
     "write_stream_archive_batch",
 ]
@@ -375,8 +376,56 @@ def record_stream_read_failure(
     sync_name: str | None,
     exc: Exception,
 ) -> None:
+    record_stream_archive_failure(
+        engine,
+        repository,
+        runtime_service,
+        ctx,
+        dataset,
+        stream,
+        sync_name,
+        exc,
+        adapter="stream_archive_reader",
+    )
+
+
+def record_stream_pre_commit_failure(
+    engine: TransactionManager,
+    repository: DatasetTransactionRepository,
+    runtime_service: DatasetRuntimeBoundary,
+    ctx: RequestContext,
+    dataset: DatasetRow,
+    stream: StreamArchiveConfig,
+    sync_name: str | None,
+    exc: Exception,
+) -> None:
+    record_stream_archive_failure(
+        engine,
+        repository,
+        runtime_service,
+        ctx,
+        dataset,
+        stream,
+        sync_name,
+        exc,
+        adapter="stream_archive_pre_commit_guard",
+    )
+
+
+def record_stream_archive_failure(
+    engine: TransactionManager,
+    repository: DatasetTransactionRepository,
+    runtime_service: DatasetRuntimeBoundary,
+    ctx: RequestContext,
+    dataset: DatasetRow,
+    stream: StreamArchiveConfig,
+    sync_name: str | None,
+    exc: Exception,
+    *,
+    adapter: str,
+) -> None:
     run_id = _new_id("sync_run")
-    error = runtime_service._error_payload(exc, ctx, run_id=run_id, adapter="stream_archive_reader")
+    error = runtime_service._error_payload(exc, ctx, run_id=run_id, adapter=adapter)
     now = _now()
     with engine.begin() as conn:
         repository.insert_sync_run(

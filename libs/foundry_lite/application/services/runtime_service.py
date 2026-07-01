@@ -1,3 +1,5 @@
+"""Application service helpers for runtime service workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -9,8 +11,6 @@ from foundry_lite.application.ports import (
     DatasetTransactionRepository,
     LineageEdgeRecord,
     LineageEdgeRow,
-    ObservabilityDetectorConfig,
-    ObservabilityReport,
     OutboxEventRecord,
     RuntimeJsonObject,
     RuntimeLookupTable,
@@ -28,7 +28,6 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.observability_detectors import build_observability_report
 from foundry_lite.application.services.runtime_detail_payload import (
     dataset_transaction_for_row,
     lineage_edges_for_row,
@@ -47,6 +46,7 @@ from foundry_lite.application.services.runtime_error_payloads import (
     require_write_traffic_open,
     runtime_error_payload,
 )
+from foundry_lite.application.services.runtime_observability import RuntimeObservabilityMixin
 from foundry_lite.application.services.runtime_run_paging import (
     OPERATIONS_RUN_DEFAULT_LIMIT,
     OPERATIONS_RUN_MAX_LIMIT,
@@ -64,7 +64,7 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, PermissionDenied
 
 
-class RuntimeService(CoreService):
+class RuntimeService(RuntimeObservabilityMixin, CoreService):
     required_dependencies = (
         "engine",
         "policy",
@@ -158,25 +158,6 @@ class RuntimeService(CoreService):
             cursor=cursor,
         )
         return cast(RuntimeRunQueryResult, redact_sensitive(page, self.policy.sensitive_column_names(ctx)))
-
-    def observability_report(
-        self,
-        *,
-        ctx: RequestContext | None = None,
-        configs: Sequence[ObservabilityDetectorConfig] = (),
-        previous_incidents: Sequence[Mapping[str, object]] = (),
-        observed_at: str | None = None,
-    ) -> ObservabilityReport:
-        ctx = ctx or RequestContext()
-        self.policy.require(ctx, "operations:read:summary")
-        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id, limit=OPERATIONS_RUN_MAX_LIMIT)
-        report = build_observability_report(
-            snapshot,
-            configs=configs,
-            previous_incidents=previous_incidents,
-            observed_at=observed_at or _now(),
-        )
-        return cast(ObservabilityReport, redact_sensitive(report, self.policy.sensitive_column_names(ctx)))
 
     def run_detail(self, run_type: str, run_id: str, *, ctx: RequestContext | None = None) -> RuntimeRunDetail:
         ctx = ctx or RequestContext()

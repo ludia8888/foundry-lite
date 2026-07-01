@@ -19,7 +19,7 @@ import pyarrow.parquet as pq
 import pytest
 from fastapi.testclient import TestClient
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.ports import DatasetFileRecord, DatasetManifestFile
+from foundry_lite.application.ports import DatasetFileRecord, DatasetManifestFile, DatasetStagedFile
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import InvariantViolation, ValidationFailed
@@ -384,6 +384,48 @@ def test_s3_retry_after_storage_timeout_does_not_duplicate_version(
     assert sorted(key.rsplit("/", 1)[-1] for key in _version_keys(client, adapter, "dsv_retry")) == [
         "manifest.json",
         "part-00000.parquet",
+    ]
+
+
+def test_s3_commit_staged_files_retries_without_duplicate_parts(
+    minio_server: MinioServer,
+    tmp_path: Path,
+) -> None:
+    client = _s3_client(minio_server)
+    adapter = _adapter(tmp_path, minio_server, client=_PartialUploadClient(client, fail_once=True))
+    part_a = _staged_bytes(adapter, b"s3 part a")
+    part_b = _staged_bytes(adapter, b"s3 part b")
+    staged_files = (
+        DatasetStagedFile(path=part_a, row_count=1, partition_values={"bucket": "a"}),
+        DatasetStagedFile(path=part_b, row_count=1, partition_values={"bucket": "b"}),
+    )
+
+    with pytest.raises(AdapterError) as exc_info:
+        _commit_parts(adapter, staged_files, version_id="dsv_parts")
+
+    assert exc_info.value.failure.kind == "timeout"
+    assert exc_info.value.failure.operation == "commit_staged_files"
+    assert _version_keys(client, adapter, "dsv_parts") == []
+
+    stored = _commit_parts(adapter, staged_files, version_id="dsv_parts")
+    manifest = adapter.load_manifest(stored.manifest_uri)
+
+    assert [file["partition_values"] for file in manifest["files"]] == [{"bucket": "a"}, {"bucket": "b"}]
+    assert [_parquet_payloads(path) for path in adapter.data_file_paths(stored.manifest_uri)] == [
+        ["s3 part a"],
+        ["s3 part b"],
+    ]
+    assert [
+        _parquet_payloads(path)
+        for path in adapter.data_file_paths(
+            stored.manifest_uri,
+            partition_filter={"bucket": "b"},
+        )
+    ] == [["s3 part b"]]
+    assert sorted(key.rsplit("/", 1)[-1] for key in _version_keys(client, adapter, "dsv_parts")) == [
+        "manifest.json",
+        "part-00000.parquet",
+        "part-00001.parquet",
     ]
 
 
@@ -904,6 +946,25 @@ def _commit(adapter: S3DatasetStorageAdapter, staged: Path, version_id: str, *, 
         schema_hash="schema_hash_demo",
         staged_file=staged,
         row_count=row_count,
+        created_at="2026-06-10T00:00:00Z",
+    )
+
+
+def _commit_parts(
+    adapter: S3DatasetStorageAdapter,
+    staged_files: tuple[DatasetStagedFile, ...],
+    *,
+    version_id: str,
+) -> Any:
+    return adapter.commit_staged_files(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        branch="main",
+        version_id=version_id,
+        dataset_ref="raw.orders",
+        schema_hash="schema_hash_demo",
+        staged_files=staged_files,
+        row_count=sum(1 if staged.row_count is None else staged.row_count for staged in staged_files),
         created_at="2026-06-10T00:00:00Z",
     )
 

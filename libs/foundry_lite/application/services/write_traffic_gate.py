@@ -1,3 +1,5 @@
+"""Application service helpers for write traffic gate workflows."""
+
 from __future__ import annotations
 
 from typing import Protocol

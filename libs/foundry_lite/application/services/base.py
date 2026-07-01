@@ -1,3 +1,5 @@
+"""Application service helpers for base workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -45,6 +47,8 @@ from foundry_lite.application.ports.media_reference_binding_repository import Me
 from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
+from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
+from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
@@ -91,7 +95,10 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "object_records_service": "ObjectRecordsService",
     "object_search_service": "ObjectSearchService",
     "object_sets_service": "ObjectSetsService",
+    "object_subscription_service": "ObjectSubscriptionService",
     "ontology_service": "OntologyService",
+    "osdk_application_service": "OsdkApplicationService",
+    "osdk_oauth_session_service": "OsdkOAuthSessionService",
     "outbox_publisher_service": "OutboxPublisherService",
     "record_dlq_service": "RecordDlqService",
     "runtime_service": "RuntimeService",
@@ -130,6 +137,9 @@ class CoreService:
     object_index_repository: ObjectIndexRepository
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository
+    osdk_application_repository: OsdkApplicationRepository
+    oauth_session_repository: OAuthSessionRepository
+    oauth_token_issuer: OAuthTokenIssuer
     runtime_repository: RuntimeRepository
     erasure_repository: ErasureRepository
     search_adapter: SearchAdapter

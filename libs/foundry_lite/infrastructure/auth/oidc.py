@@ -27,6 +27,8 @@ __all__ = [
     "OIDC_RETIRED_KEY_GRACE_SECONDS_ENV",
     "OIDC_REVOKED_JTIS_JSON_ENV",
     "OIDC_ROLES_CLAIM_ENV",
+    "OIDC_OSDK_APP_CLAIM_ENV",
+    "OIDC_SCOPE_CLAIM_ENV",
     "OIDC_SERVICE_ACCOUNT_CLAIM_ENV",
     "OIDC_TENANT_CLAIM_ENV",
     "JwtOidcAuthConfig",
@@ -45,11 +47,15 @@ OIDC_REVOKED_JTIS_JSON_ENV: Final = "FOUNDRY_LITE_OIDC_REVOKED_JTIS_JSON"
 OIDC_TENANT_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_TENANT_CLAIM"
 OIDC_ROLES_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_ROLES_CLAIM"
 OIDC_SERVICE_ACCOUNT_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_SERVICE_ACCOUNT_CLAIM"
+OIDC_OSDK_APP_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_OSDK_APP_CLAIM"
+OIDC_SCOPE_CLAIM_ENV: Final = "FOUNDRY_LITE_OIDC_SCOPE_CLAIM"
 
 _DEFAULT_ALGORITHM: Final = "RS256"
 _DEFAULT_TENANT_CLAIM: Final = "tenant_id"
 _DEFAULT_ROLES_CLAIM: Final = "roles"
 _DEFAULT_SERVICE_ACCOUNT_CLAIM: Final = "client_id"
+_DEFAULT_OSDK_APP_CLAIM: Final = "osdk_app_id"
+_DEFAULT_SCOPE_CLAIM: Final = "scope"
 _SERVICE_ACCOUNT_ACTOR_PREFIX: Final = "service-account:"
 _JWT_ID_CLAIM: Final = "jti"
 _SUBJECT_CLAIM: Final = "sub"
@@ -75,6 +81,8 @@ class JwtOidcAuthConfig:
     tenant_claim: str = _DEFAULT_TENANT_CLAIM
     roles_claim: str = _DEFAULT_ROLES_CLAIM
     service_account_claim: str = _DEFAULT_SERVICE_ACCOUNT_CLAIM
+    osdk_app_claim: str = _DEFAULT_OSDK_APP_CLAIM
+    scope_claim: str = _DEFAULT_SCOPE_CLAIM
     revoked_token_ids: frozenset[str] = field(default_factory=frozenset)
     algorithm: str = _DEFAULT_ALGORITHM
     leeway_seconds: int = 0
@@ -130,6 +138,9 @@ class JwtOidcAuthProvider:
             tenant_id=_required_payload_string(payload, self.config.tenant_claim, self.profile_name),
             actor_user_id=_actor_user_id(payload, self.config.service_account_claim, self.profile_name),
             roles=_roles_from_payload(payload, self.config.roles_claim, self.profile_name),
+            application_id=_optional_payload_string(payload, self.config.osdk_app_claim),
+            client_id=_optional_payload_string(payload, self.config.service_account_claim),
+            token_scopes=_scopes_from_payload(payload, self.config.scope_claim),
         )
 
     def anonymous(self) -> Principal:
@@ -220,6 +231,8 @@ def jwt_oidc_auth_provider_from_env(environ: Mapping[str, str] | None = None) ->
         tenant_claim=_env_value(source, OIDC_TENANT_CLAIM_ENV) or _DEFAULT_TENANT_CLAIM,
         roles_claim=_env_value(source, OIDC_ROLES_CLAIM_ENV) or _DEFAULT_ROLES_CLAIM,
         service_account_claim=_env_value(source, OIDC_SERVICE_ACCOUNT_CLAIM_ENV) or _DEFAULT_SERVICE_ACCOUNT_CLAIM,
+        osdk_app_claim=_env_value(source, OIDC_OSDK_APP_CLAIM_ENV) or _DEFAULT_OSDK_APP_CLAIM,
+        scope_claim=_env_value(source, OIDC_SCOPE_CLAIM_ENV) or _DEFAULT_SCOPE_CLAIM,
         revoked_token_ids=_json_string_set_from_env(source, OIDC_REVOKED_JTIS_JSON_ENV),
         jwks_refresh_interval_seconds=_int_from_env(source, OIDC_JWKS_REFRESH_INTERVAL_SECONDS_ENV, 300),
         retired_key_grace_seconds=_int_from_env(source, OIDC_RETIRED_KEY_GRACE_SECONDS_ENV, 300),
@@ -300,6 +313,15 @@ def _roles_from_payload(payload: Mapping[str, object], claim: str, profile_name:
     if not roles:
         raise _permission_denied(profile_name, f"missing_{claim}")
     return roles
+
+
+def _scopes_from_payload(payload: Mapping[str, object], claim: str) -> tuple[str, ...]:
+    value = payload.get(claim)
+    if value is None and claim != "scp":
+        value = payload.get("scp")
+    if isinstance(value, Sequence) and not isinstance(value, str):
+        return _string_sequence(value)
+    return _string_roles(value)
 
 
 def _string_sequence(value: Sequence[object]) -> tuple[str, ...]:

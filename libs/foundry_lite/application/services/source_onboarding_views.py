@@ -1,3 +1,5 @@
+"""Application service helpers for source onboarding views workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

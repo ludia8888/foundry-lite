@@ -1,6 +1,8 @@
+"""Thin facade entrypoints for object store workflows."""
+
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 
 from foundry_lite.application.ports import (
     ObjectIndexCdcResult,
@@ -11,6 +13,8 @@ from foundry_lite.application.ports import (
     ObjectQueryResult,
     ObjectSetPayload,
     ObjectSetQueryResult,
+    OntologyObjectReindexResult,
+    RuntimeJsonObject,
 )
 from foundry_lite.application.services.object_service import ObjectServices
 from foundry_lite.application.services.ontology_search import OntologySearchService, UnifiedSearchHit
@@ -60,6 +64,19 @@ class ObjectStore:
 
     def replay_index_run(self, index_run_id: str, *, ctx: RequestContext | None = None) -> ObjectIndexRebuildResult:
         return self._objects.indexing.index_replay_run(index_run_id, ctx=ctx)
+
+    def reindex_ontology_migration(
+        self,
+        object_type_api_name: str,
+        reindex_key: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> OntologyObjectReindexResult:
+        return self._objects.indexing.index_ontology_reindex_plan(
+            object_type_api_name,
+            reindex_key,
+            ctx=ctx,
+        )
 
     def index_cdc_events(
         self,
@@ -124,6 +141,31 @@ class ObjectStore:
             cursor=cursor,
             search_text=search_text,
             semantic_text=semantic_text,
+        )
+
+    def subscription_events(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        order_by: Sequence[Mapping[str, str]] | None = None,
+        properties: Sequence[str] | None = None,
+        page_size: int = 50,
+        last_seen_object_change_sequence: int | None = None,
+        max_events: int | None = None,
+        poll_interval_seconds: float = 1.0,
+    ) -> Iterator[RuntimeJsonObject]:
+        return self._objects.subscriptions.subscription_events(
+            object_type_api_name,
+            ctx=ctx,
+            filter_ast=filter_ast,
+            order_by=order_by,
+            properties=properties,
+            page_size=page_size,
+            last_seen_object_change_sequence=last_seen_object_change_sequence,
+            max_events=max_events,
+            poll_interval_seconds=poll_interval_seconds,
         )
 
     def create_set(

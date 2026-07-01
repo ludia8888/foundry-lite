@@ -23,6 +23,7 @@ from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamAdapterConfig,
     KafkaStreamSubscription,
 )
+from foundry_lite.infrastructure.adapters.local_backup_artifact_store import LocalBackupArtifactStore
 from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
 from foundry_lite.infrastructure.adapters.local_embedding import LocalEmbeddingAdapter
@@ -83,6 +84,7 @@ __all__ = [
     "KafkaStreamAdapterConfig",
     "KafkaStreamSubscription",
     "LocalCompletionAdapter",
+    "LocalBackupArtifactStore",
     "LocalConnectorAdapter",
     "LocalDatasetStorageAdapter",
     "LocalExternalMediaReader",

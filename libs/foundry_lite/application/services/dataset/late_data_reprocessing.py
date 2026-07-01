@@ -1,8 +1,11 @@
+"""Application service helpers for late data reprocessing workflows."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports import DatasetRow, DatasetTransactionRow, StreamArchiveConfig, StreamEvent
+from foundry_lite.application.services.dataset.platform_watermark import platform_watermark_metadata
 from foundry_lite.application.services.dataset.stream_archive import stream_transaction_metadata
 
 
@@ -19,6 +22,9 @@ def stream_commit_metadata(
     plan = stream_reprocessing_plan(dataset, stream, previous_transaction, rows)
     if plan is not None:
         metadata["lateDataReprocessingPlan"] = plan
+    platform_watermark = platform_watermark_metadata(dataset, metadata)
+    if platform_watermark is not None:
+        metadata["platformWatermark"] = platform_watermark
     return metadata
 
 

@@ -1,3 +1,5 @@
+"""Application port contract for object set repository."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

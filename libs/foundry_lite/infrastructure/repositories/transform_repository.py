@@ -1,9 +1,11 @@
+"""SQLAlchemy repository adapter for transform repository persistence."""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from sqlalchemy import and_, insert, select, update
+from sqlalchemy import and_, desc, insert, select, update
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.transaction_context import StatusTransition
@@ -90,6 +92,12 @@ class SqlAlchemyTransformRepository:
         row = transaction.execute(select(db.transforms).where(db.transforms.c.id == transform_id)).mappings().first()
         return cast(TransformRow, dict(row)) if row else None
 
+    def list_transforms(self, *, transaction: Any, tenant_id: str) -> list[TransformRow]:
+        rows = transaction.execute(
+            select(db.transforms).where(db.transforms.c.tenant_id == tenant_id).order_by(db.transforms.c.api_name)
+        ).mappings()
+        return [cast(TransformRow, dict(row)) for row in rows]
+
     def transform_run_by_id(
         self,
         *,
@@ -102,6 +110,56 @@ class SqlAlchemyTransformRepository:
                 select(db.transform_runs).where(
                     and_(db.transform_runs.c.tenant_id == tenant_id, db.transform_runs.c.id == transform_run_id)
                 )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(TransformRunRow, dict(row)) if row else None
+
+    def latest_successful_transform_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transform_id: str,
+    ) -> TransformRunRow | None:
+        row = (
+            transaction.execute(
+                select(db.transform_runs)
+                .where(
+                    and_(
+                        db.transform_runs.c.tenant_id == tenant_id,
+                        db.transform_runs.c.transform_id == transform_id,
+                        db.transform_runs.c.status == "SUCCESS",
+                    )
+                )
+                .order_by(desc(db.transform_runs.c.completed_at), desc(db.transform_runs.c.created_at))
+                .limit(1)
+            )
+            .mappings()
+            .first()
+        )
+        return cast(TransformRunRow, dict(row)) if row else None
+
+    def running_transform_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transform_id: str,
+    ) -> TransformRunRow | None:
+        row = (
+            transaction.execute(
+                select(db.transform_runs)
+                .where(
+                    and_(
+                        db.transform_runs.c.tenant_id == tenant_id,
+                        db.transform_runs.c.transform_id == transform_id,
+                        db.transform_runs.c.status == "RUNNING",
+                    )
+                )
+                .order_by(desc(db.transform_runs.c.created_at))
+                .limit(1)
             )
             .mappings()
             .first()

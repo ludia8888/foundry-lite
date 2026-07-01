@@ -56,6 +56,11 @@ class _ObjectIndexRepository:
         return self.active_index_version_value
 
 
+class _AllowOsdkScope:
+    def require_resource_scope(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
 class _PagedObjectRepository:
     def __init__(self) -> None:
         self.requested_limit: int | None = None
@@ -86,6 +91,7 @@ def test_object_query_service_requests_db_keyset_page_with_one_row_lookahead() -
             "runtime_service": object(),
             "ontology_service": _OntologyLookup(),
             "object_search_service": object(),
+            "osdk_application_service": _AllowOsdkScope(),
         }
     )
 
@@ -303,6 +309,7 @@ def _object_query_service(
             "runtime_service": object(),
             "ontology_service": _OntologyLookup(),
             "object_search_service": object(),
+            "osdk_application_service": _AllowOsdkScope(),
         }
     )
     return service

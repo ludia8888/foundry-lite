@@ -40,6 +40,208 @@ def test_restore_preflight_validates_every_committed_manifest(
     assert any(event["event_type"] == "backup_restore.preflight_reported" for event in audit_events)
 
 
+def test_backup_restore_create_artifact_writes_receipt_and_audit(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.restore_artifact", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.restore_artifact", _csv(tmp_path, "artifact.csv"), ctx=ctx)
+
+    receipt = foundry.operations.create_backup_artifact(ctx=ctx, backup_id="backup-artifact-ready")
+    replay = foundry.operations.create_backup_artifact(ctx=ctx, backup_id="backup-artifact-ready")
+
+    artifact_path = Path(receipt["artifactRef"])
+    assert receipt["status"] == "created"
+    assert receipt["preflightStatus"] == "ready"
+    assert receipt["datasetVersionCount"] == 1
+    assert artifact_path.exists()
+    assert replay["status"] == "existing"
+    assert replay["isIdempotentReplay"] is True
+    assert replay["artifactHash"] == receipt["artifactHash"]
+    audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+    created = [
+        event
+        for event in audit_events
+        if event["event_type"] == "backup_restore.artifact_created" and event["resource_id"] == "backup-artifact-ready"
+    ]
+    assert len(created) == 1
+
+
+def test_backup_restore_create_artifact_fails_closed_when_preflight_is_blocked(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.restore_artifact_blocked", ctx=ctx, primary_key=["order_id"])
+    committed = foundry.datasets.upload_csv(
+        "raw.restore_artifact_blocked",
+        _csv(tmp_path, "artifact-blocked.csv"),
+        ctx=ctx,
+    )
+    Path(committed.manifest_uri).unlink()
+
+    with pytest.raises(ConflictDetected, match="backup artifact requires a ready restore preflight"):
+        foundry.operations.create_backup_artifact(ctx=ctx, backup_id="backup-artifact-blocked")
+
+    audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+    assert any(
+        event["event_type"] == "backup_restore.artifact_failed" and event["resource_id"] == "backup-artifact-blocked"
+        for event in audit_events
+    )
+
+
+def test_backup_restore_artifact_restore_validates_and_runs_closed_loop(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+    _apply_action_and_materialize(foundry, ctx)
+    receipt = foundry.operations.create_backup_artifact(ctx=ctx, backup_id="backup-artifact-restore")
+
+    report = foundry.operations.restore_from_backup_artifact(
+        ctx=ctx,
+        artifact_ref=receipt["artifactRef"],
+        artifact_hash=receipt["artifactHash"],
+        restore_id="restore-artifact",
+        validation_id="validation-artifact",
+    )
+
+    assert report["status"] == "validated"
+    assert report["restoreModeStatus"] == "paused"
+    assert report["postRestoreValidationStatus"] == "passed"
+    assert report["summary"]["artifactMatchesCurrentServingHead"] is True
+    assert report["summary"]["pointInTimeRepointExecuted"] is False
+    assert report["summary"]["nextStep"] == "approve_restore_resume"
+    assert report["postRestoreValidation"] is not None
+    assert report["postRestoreValidation"]["validationId"] == "validation-artifact"
+    audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+    assert any(event["event_type"] == "backup_restore.artifact_restore_requested" for event in audit_events)
+    assert any(event["event_type"] == "backup_restore.artifact_restore_validated" for event in audit_events)
+
+
+def test_backup_restore_artifact_restore_blocks_when_serving_head_moved(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.restore_artifact_drift", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.restore_artifact_drift", _csv(tmp_path, "artifact-drift-a.csv"), ctx=ctx)
+    receipt = foundry.operations.create_backup_artifact(ctx=ctx, backup_id="backup-artifact-drift")
+    foundry.datasets.upload_csv("raw.restore_artifact_drift", _csv(tmp_path, "artifact-drift-b.csv"), ctx=ctx)
+
+    report = foundry.operations.restore_from_backup_artifact(
+        ctx=ctx,
+        artifact_ref=receipt["artifactRef"],
+        artifact_hash=receipt["artifactHash"],
+        restore_id="restore-artifact-drift",
+    )
+
+    assert report["status"] == "blocked"
+    assert report["restoreModeStatus"] == "not_started"
+    assert report["summary"]["artifactMatchesCurrentServingHead"] is False
+    assert {finding["check"] for finding in report["findings"]} == {"serving_head_matches_artifact"}
+    status = foundry.operations.restore_mode_status("restore-artifact-drift", ctx=ctx)
+    assert status["status"] == "inactive"
+
+
+def test_backup_restore_artifact_execute_restores_historical_dataset_head(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.restore_artifact_execute", ctx=ctx, primary_key=["order_id"])
+    original = foundry.datasets.upload_csv(
+        "raw.restore_artifact_execute",
+        _csv_with_status(tmp_path, "artifact-execute-a.csv", "PENDING"),
+        ctx=ctx,
+    )
+    receipt = foundry.operations.create_backup_artifact(ctx=ctx, backup_id="backup-artifact-execute")
+    moved = foundry.datasets.upload_csv(
+        "raw.restore_artifact_execute",
+        _csv_with_status(tmp_path, "artifact-execute-b.csv", "SHIPPED"),
+        ctx=ctx,
+    )
+
+    report = foundry.operations.execute_backup_artifact_restore(
+        ctx=ctx,
+        artifact_ref=receipt["artifactRef"],
+        artifact_hash=receipt["artifactHash"],
+        restore_id="restore-artifact-execute",
+        should_run_post_restore_validation=False,
+    )
+    replay = foundry.operations.execute_backup_artifact_restore(
+        ctx=ctx,
+        artifact_ref=receipt["artifactRef"],
+        artifact_hash=receipt["artifactHash"],
+        restore_id="restore-artifact-execute",
+        should_run_post_restore_validation=False,
+    )
+
+    restored = report["restoredDatasetVersions"][0]
+    preview = foundry.datasets.preview("raw.restore_artifact_execute", ctx=ctx)
+    assert report["status"] == "validated"
+    assert report["isHistoricalRepointExecuted"] is True
+    assert report["restoreTransactionCount"] == 1
+    assert report["summary"]["artifactMatchesCurrentServingHead"] is False
+    assert report["summary"]["pointInTimeRepointExecuted"] is True
+    assert report["summary"]["restoredDatasetVersionCount"] == 1
+    assert restored["sourceVersionId"] == original.version_id
+    assert restored["currentHeadBeforeRestoreVersionId"] == moved.version_id
+    assert restored["restoredVersionId"] not in {original.version_id, moved.version_id}
+    assert replay["restoredDatasetVersions"][0]["restoredVersionId"] == restored["restoredVersionId"]
+    assert preview[0]["order_id"] == "O-1"
+    assert preview[0]["status"] == "PENDING"
+    assert preview[0]["version"] == restored["restoredVersionId"]
+    with foundry.engine.begin() as conn:
+        transaction = cast(Any, conn)
+        tx_row = (
+            transaction.execute(
+                select(db.dataset_transactions).where(db.dataset_transactions.c.id == restored["restoreTransactionId"])
+            )
+            .mappings()
+            .one()
+        )
+    assert tx_row["committed_version_id"] == restored["restoredVersionId"]
+    assert tx_row["metadata"]["backupRestore"]["sourceVersionId"] == original.version_id
+    audit_events = foundry.operations.list_runs(ctx=ctx)["auditEvents"]
+    assert any(event["event_type"] == "backup_restore.artifact_restore_executed" for event in audit_events)
+    assert any(event["event_type"] == "backup_restore.dataset_version_restored" for event in audit_events)
+
+
+def test_backup_restore_artifact_execute_fails_closed_when_source_storage_is_missing(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.restore_artifact_execute_missing", ctx=ctx, primary_key=["order_id"])
+    original = foundry.datasets.upload_csv(
+        "raw.restore_artifact_execute_missing",
+        _csv_with_status(tmp_path, "artifact-execute-missing-a.csv", "PENDING"),
+        ctx=ctx,
+    )
+    receipt = foundry.operations.create_backup_artifact(ctx=ctx, backup_id="backup-artifact-execute-missing")
+    foundry.datasets.upload_csv(
+        "raw.restore_artifact_execute_missing",
+        _csv_with_status(tmp_path, "artifact-execute-missing-b.csv", "SHIPPED"),
+        ctx=ctx,
+    )
+    Path(original.manifest_uri).unlink()
+
+    report = foundry.operations.execute_backup_artifact_restore(
+        ctx=ctx,
+        artifact_ref=receipt["artifactRef"],
+        artifact_hash=receipt["artifactHash"],
+        restore_id="restore-artifact-execute-missing",
+        should_run_post_restore_validation=False,
+    )
+
+    assert report["status"] == "blocked"
+    assert report["isHistoricalRepointExecuted"] is False
+    assert report["restoreTransactionCount"] == 0
+    assert {finding["check"] for finding in report["findings"]} == {
+        "artifact_dataset_version_integrity",
+        "current_preflight",
+    }
+
+
 def test_restore_preflight_rejects_db_storage_point_mismatch(
     foundry: FoundryLite,
     tmp_path: Path,
@@ -329,8 +531,12 @@ def test_restore_failure_never_opens_serving_traffic(foundry: FoundryLite, tmp_p
 
 
 def _csv(tmp_path: Path, name: str) -> str:
+    return _csv_with_status(tmp_path, name, "PENDING")
+
+
+def _csv_with_status(tmp_path: Path, name: str, status: str) -> str:
     path = tmp_path / name
-    path.write_text("order_id,status\nO-1,PENDING\n", encoding="utf-8")
+    path.write_text(f"order_id,status\nO-1,{status}\n", encoding="utf-8")
     return str(path)
 
 

@@ -58,8 +58,9 @@ SDK helper, 파일을 봐야 하는지 남긴다.
 | Object Sets | `client.objectSets.list/create/get(...)` |
 | Actions | generated `client.actions.ApproveOrder.apply(...)` |
 | Materializations | `client.materializations.run(...)` |
+| Transforms | `client.transforms.registerSql(...)`, `client.transforms.run(...)`, `client.transforms.previewDue(...)`, `client.transforms.tick(...)` |
 | Operations | run list/detail, AI prompt artifact access, admin overview, lineage get, transform retry, index replay, bounded outbox publish, outbox DLQ retry, Record DLQ controls |
-| Platform Ops | observability detect, backup/restore, reconciliation, workflows, Iceberg maintenance `planReadOnly`/`plan` |
+| Platform Ops | observability detect, backup/restore, reconciliation, workflows, Iceberg maintenance `planReadOnly`/`plan`/`run` |
 | Connectors | `client.connectors.connections.create/list/get/update(...)`, `client.connectors.resources.upsert/test/startSync(...)` |
 | Sources | `client.sources.list/get(...)`, `client.sources.templates.list(...)`, `client.sources.credentials.create/list/get(...)`, `client.sources.agents.register/list/heartbeat(...)`, `client.sources.networkPolicies.create/list(...)`, `client.sources.exploration.run(...)`, `client.sources.managedSyncs.create/list/get/startRun/listRuns/getRun(...)`, `client.sources.scheduler.previewDue/tick(...)`, `client.sources.csv.upload(...)`, `client.sources.batchFiles.upload(...)`, `client.sources.webhookListeners.create/get(...)`, `client.sources.cdc.debezium.create/startSync(...)`, `client.sources.media.uploadAndCommit(...)`, `client.sources.rest.createConnection/upsertResource/test/startSync(...)` |
 | Insights | `client.insights.reviews.list/create/get/assign/decide(...)` |
@@ -120,6 +121,8 @@ const recordDlq = createRecordDlqOperationsRecipe(client);
 const writebackReconciliation = createWritebackReconciliationRecipe(client);
 const adminOps = createAdminOperationsRecipe(client);
 const recoveryOps = createRecoveryOperationsRecipe(client);
+await recoveryOps.restoreArtifact({ artifactRef, artifactHash, restoreId, validationId });
+await recoveryOps.executeArtifactRestore({ artifactRef, artifactHash, restoreId, runPostRestoreValidation: false });
 const home = await operatorWorkspace.loadHome({ runFilters: { limit: 25 } });
 const shell = await operatorWorkspace.loadShell({
   runFilters: { limit: 25 },
@@ -267,7 +270,7 @@ The recipe phases are `select_kind`, `configure_source`, `test_source`, `upload_
 uploads commit dataset versions through the dataset transaction path; media upload commits immutable media versions and
 returns the serving-truth `mediaItemVersionId`; Debezium starts a bounded CDC sync with fingerprint fail-closed
 behavior; REST source wrappers call the Generic REST connector onboarding surface without forcing screen code to use
-connector language first. Source schedule evaluation/tick is available through API/SDK and `worker:source-scheduler`; remote directory crawling, visual scheduler UI, managed Debezium Connect operations, cloud secret
+connector language first. Source schedule evaluation/tick is available through API/SDK and `worker:source-scheduler`; Transform schedule evaluation/tick is available through API/SDK and `worker:transform-scheduler`; remote directory crawling, visual scheduler UI, managed Debezium Connect operations, cloud secret
 manager, OAuth authorization flow, and SAP/NetSuite packaged source wizards remain future scope.
 
 ### Connector onboarding
@@ -1201,6 +1204,10 @@ const readOnlyIcebergPlan = await maintenance.planIcebergMaintenanceReadOnly("cl
   retentionMinSnapshots: 3,
 });
 const requestedIcebergPlan = await maintenance.requestIcebergMaintenancePlan("clean.orders");
+const maintenanceRun = await client.operations.icebergMaintenance.run("clean.orders", {
+  branch: "main",
+  retentionMinSnapshots: 3,
+});
 const objectIndexReplay = await maintenance.replayObjectTypeIndex("Order");
 const failedIndexReplay = await maintenance.replayFailedIndexRun(indexRunId);
 const transformRetry = await maintenance.retryTransformRun(transformRunId);
@@ -1226,9 +1233,10 @@ await maintenanceControls.retryTransformRun.execute({ runId: transformRunId });
 ```
 
 The maintenance workbench covers current browser-safe Operations surfaces: observability detection, read-only
-Iceberg maintenance planning, maintenance plan request evidence, object-type index replay, failed index-run replay,
-and failed transform retry. It does not execute Iceberg compaction/expiration, start managed worker daemons, run
-database migrations, or bootstrap infrastructure from the browser.
+Iceberg maintenance planning, maintenance plan request evidence, bounded Iceberg maintenance run evidence,
+object-type index replay, failed index-run replay, and failed transform retry. It does not start managed worker
+daemons, run database migrations, bootstrap infrastructure from the browser, or claim full retention policy across
+transform/materialization/backup pins.
 
 ### Admin outbox publish
 
@@ -1578,8 +1586,9 @@ prompt artifacts load only through the governed Operations SDK surface.
 operations workbench screens for record quarantine replay/discard and unresolved external writeback resolution while
 keeping privileged migration/worker/bootstrap execution out of the browser surface.
 `useFoundryLiteObservabilityDetect(...)`, `useFoundryLiteIcebergMaintenancePlan(...)`, and
-`useFoundryLiteMaintenanceControls(...)` cover browser-safe observability and maintenance planning screens while
-keeping actual compaction execution, migration execution, and daemon control out of the browser surface.
+`useFoundryLiteMaintenanceControls(...)` cover browser-safe observability and maintenance planning screens, while
+`client.operations.icebergMaintenance.run(...)` covers the bounded maintenance execution API. Full retention policy
+controls, migration execution, and daemon control remain outside the current browser surface.
 `latestEvent`, `isStreaming`, `requestId`, `retryable`, `start()`, `stop()`, and `reset()` while leaving the backend
 event route and visual timeline component product-specific. `useFoundryLiteProvidedOperationEventStream(...)` is the
 Provider-backed shortcut for React screens that should inherit auth/session/request context instead of repeating it.
@@ -1612,7 +1621,7 @@ browser actions.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 116 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 160 frontend route surfaces
 -> browser SDK helper-contract proof for 25 frontend foundation helpers
 -> SDK TypeScript typecheck for package entrypoints, generated types, optional React helpers, and screen recipes
 -> `@foundry-lite/sdk/screen-recipes` importable recipe builders for core product screens

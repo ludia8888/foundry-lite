@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from foundry_lite.application.ports import DatasetManifestFile
+from foundry_lite.application.ports import DatasetManifestFile, DatasetStagedFile
 from foundry_lite.infrastructure.adapters import FakeDatasetStorageAdapter, LocalDatasetStorageAdapter
 
 StorageFactory = Callable[[Path], LocalDatasetStorageAdapter]
@@ -126,6 +126,65 @@ def test_dataset_storage_adapter_resolves_manifest_files_with_partition_filter_w
     assert [path.read_bytes() for path in filtered_paths] == [b"second part"]
     assert [path.read_bytes() for path in preview_paths] == [b"second part"]
     assert empty_paths == []
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        pytest.param(lambda root: LocalDatasetStorageAdapter(root), id="local"),
+        pytest.param(lambda root: FakeDatasetStorageAdapter(root), id="fake-storage"),
+    ],
+)
+def test_dataset_storage_adapter_commits_multiple_staged_files_without_duplicate_retry_parts(
+    factory: StorageFactory,
+    tmp_path: Path,
+) -> None:
+    adapter = factory(tmp_path / "object-storage")
+    first = adapter.staging_file(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        transaction_id="dstx_multi",
+        file_name="part-a.parquet",
+    )
+    second = adapter.staging_file(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        transaction_id="dstx_multi",
+        file_name="part-b.parquet",
+    )
+    first.write_bytes(b"first part")
+    second.write_bytes(b"second part")
+    stale_dir = adapter.root / "tenant_demo" / "datasets" / "ds_orders" / "branch=main" / "version=dsv_multi"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "part-00002.parquet").write_bytes(b"stale retry orphan")
+
+    stored = adapter.commit_staged_files(
+        tenant_id="tenant_demo",
+        dataset_id="ds_orders",
+        branch="main",
+        version_id="dsv_multi",
+        dataset_ref="raw.orders",
+        schema_hash="schema_hash_demo",
+        staged_files=(
+            DatasetStagedFile(path=first, row_count=1, partition_values={"bucket": "a"}),
+            DatasetStagedFile(path=second, row_count=2, partition_values={"bucket": "b"}),
+        ),
+        row_count=3,
+        created_at="2026-06-10T00:00:00Z",
+    )
+
+    manifest = adapter.load_manifest(stored.manifest_uri)
+    assert [file["uri"].rsplit("/", 1)[-1] for file in manifest["files"]] == [
+        "part-00000.parquet",
+        "part-00001.parquet",
+    ]
+    assert [file["row_count"] for file in manifest["files"]] == [1, 2]
+    assert [file.get("partition_values") for file in manifest["files"]] == [{"bucket": "a"}, {"bucket": "b"}]
+    assert [path.read_bytes() for path in adapter.data_file_paths(stored.manifest_uri)] == [
+        b"first part",
+        b"second part",
+    ]
+    assert not (stale_dir / "part-00002.parquet").exists()
 
 
 def test_fake_storage_adapter_uses_logical_non_file_uris(tmp_path: Path) -> None:

@@ -96,6 +96,24 @@ def _collect_service_method_names(tree: ast.AST) -> dict[str, set[str]]:
     return method_names
 
 
+def _base_class_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Subscript):
+        return _base_class_name(node.value)
+    return None
+
+
+def _collect_class_bases(tree: ast.AST) -> dict[str, set[str]]:
+    bases: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            bases[node.name] = {name for base in node.bases if (name := _base_class_name(base)) is not None}
+    return bases
+
+
 def _collect_declared_class_attributes(tree: ast.AST) -> dict[str, set[str]]:
     """Collect typed class attributes declared directly on each service class.
 
@@ -340,11 +358,54 @@ def _check_collaborator_declarations(
     )
 
 
+def _inherited_accesses(
+    class_name: str,
+    *,
+    class_bases: dict[str, set[str]],
+    class_accesses: dict[str, set[str]],
+    seen: set[str] | None = None,
+) -> set[str]:
+    seen = set(seen or set())
+    if class_name in seen:
+        return set()
+    seen.add(class_name)
+    inherited: set[str] = set()
+    for base_name in class_bases.get(class_name, set()):
+        inherited.update(class_accesses.get(base_name, set()))
+        inherited.update(
+            _inherited_accesses(
+                base_name,
+                class_bases=class_bases,
+                class_accesses=class_accesses,
+                seen=seen,
+            )
+        )
+    return inherited
+
+
+def _merge_inherited_accesses(
+    local_accesses: dict[str, set[str]],
+    *,
+    local_bases: dict[str, set[str]],
+    global_bases: dict[str, set[str]],
+    global_accesses: dict[str, set[str]],
+) -> dict[str, set[str]]:
+    merged = {class_name: set(attributes) for class_name, attributes in local_accesses.items()}
+    for class_name in local_bases:
+        inherited = _inherited_accesses(class_name, class_bases=global_bases, class_accesses=global_accesses)
+        if inherited:
+            merged.setdefault(class_name, set()).update(inherited)
+    return merged
+
+
 def _analyze_service_file(
     path: Path,
     *,
     dependency_attrs: set[str],
     collaborator_attrs: set[str],
+    global_dependency_accesses: dict[str, set[str]] | None = None,
+    global_collaborator_accesses: dict[str, set[str]] | None = None,
+    global_class_bases: dict[str, set[str]] | None = None,
 ) -> ServiceDependencyAnalysis:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     findings, dependency_accesses, collaborator_accesses = _check_attribute_accesses(
@@ -355,6 +416,21 @@ def _analyze_service_file(
         method_names=_collect_service_method_names(tree),
         declared_class_attrs=_collect_declared_class_attributes(tree),
     )
+    local_bases = _collect_class_bases(tree)
+    if global_class_bases is not None and global_dependency_accesses is not None:
+        dependency_accesses = _merge_inherited_accesses(
+            dependency_accesses,
+            local_bases=local_bases,
+            global_bases=global_class_bases,
+            global_accesses=global_dependency_accesses,
+        )
+    if global_class_bases is not None and global_collaborator_accesses is not None:
+        collaborator_accesses = _merge_inherited_accesses(
+            collaborator_accesses,
+            local_bases=local_bases,
+            global_bases=global_class_bases,
+            global_accesses=global_collaborator_accesses,
+        )
     dependency_declarations = _collect_required_dependencies(tree)
     collaborator_declarations = _collect_required_collaborators(tree)
     declaration_findings = _check_dependency_declarations(
@@ -381,6 +457,31 @@ def _analyze_service_file(
             class_name: sorted(names) for class_name, names in collaborator_declarations.items()
         },
     )
+
+
+def _global_access_context(
+    service_files: list[Path],
+    *,
+    dependency_attrs: set[str],
+    collaborator_attrs: set[str],
+) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, set[str]]]:
+    dependency_accesses: dict[str, set[str]] = {}
+    collaborator_accesses: dict[str, set[str]] = {}
+    class_bases: dict[str, set[str]] = {}
+    for path in service_files:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        class_bases.update(_collect_class_bases(tree))
+        _, file_dependency_accesses, file_collaborator_accesses = _check_attribute_accesses(
+            path,
+            tree,
+            dependency_attrs=dependency_attrs,
+            collaborator_attrs=collaborator_attrs,
+            method_names=_collect_service_method_names(tree),
+            declared_class_attrs=_collect_declared_class_attributes(tree),
+        )
+        dependency_accesses.update(file_dependency_accesses)
+        collaborator_accesses.update(file_collaborator_accesses)
+    return dependency_accesses, collaborator_accesses, class_bases
 
 
 def _finding_rows(findings: list[DependencyAccess]) -> list[dict[str, object]]:
@@ -453,6 +554,11 @@ def main(argv: list[str] | None = None) -> int:
     dependency_attrs = _core_dependency_attributes()
     service_files = _service_files()
     collaborator_attrs = _collect_collaborator_attributes(service_files)
+    global_dependency_accesses, global_collaborator_accesses, global_class_bases = _global_access_context(
+        service_files,
+        dependency_attrs=dependency_attrs,
+        collaborator_attrs=collaborator_attrs,
+    )
 
     all_findings: list[DependencyAccess] = []
     declaration_findings: list[DependencyDeclarationFinding] = []
@@ -465,6 +571,9 @@ def main(argv: list[str] | None = None) -> int:
             path,
             dependency_attrs=dependency_attrs,
             collaborator_attrs=collaborator_attrs,
+            global_dependency_accesses=global_dependency_accesses,
+            global_collaborator_accesses=global_collaborator_accesses,
+            global_class_bases=global_class_bases,
         )
         all_findings.extend(analysis.findings)
         declaration_findings.extend(analysis.declaration_findings)

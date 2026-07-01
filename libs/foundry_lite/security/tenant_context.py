@@ -1,3 +1,5 @@
+"""Security policy helpers for tenant context."""
+
 from __future__ import annotations
 
 import functools

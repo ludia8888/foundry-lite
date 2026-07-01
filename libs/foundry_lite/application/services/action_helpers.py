@@ -1,3 +1,5 @@
+"""Application service helpers for action helpers workflows."""
+
 from __future__ import annotations
 
 import os
@@ -21,6 +23,7 @@ from foundry_lite.application.ports.action_repository import (
     ObjectProperties,
 )
 from foundry_lite.application.primitives import MOCK_WRITEBACK_CONNECTOR, _json_hash
+from foundry_lite.application.services.action_validation import action_cache_refresh_hint, action_edit_summary
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -96,6 +99,7 @@ def action_command(
     params: Mapping[str, object],
     idempotency_key: str,
     simulate_writeback_failure: bool,
+    simulate_writeback_retryable: bool,
     simulate_writeback_outcome_unknown: bool,
     simulate_writeback_compensation_required: bool,
     external_writeback_uri: str | None = None,
@@ -117,10 +121,12 @@ def action_command(
             expected_object_version=expected_object_version,
             params=normalized_params,
             simulate_writeback_failure=simulate_writeback_failure,
+            simulate_writeback_retryable=simulate_writeback_retryable,
             simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
             simulate_writeback_compensation_required=simulate_writeback_compensation_required,
         ),
         simulate_writeback_failure=simulate_writeback_failure,
+        simulate_writeback_retryable=simulate_writeback_retryable,
         simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
         simulate_writeback_compensation_required=simulate_writeback_compensation_required,
         external_writeback_uri=external_writeback_uri,
@@ -159,6 +165,7 @@ def action_request_fingerprint(
     expected_object_version: int,
     params: Mapping[str, object],
     simulate_writeback_failure: bool = False,
+    simulate_writeback_retryable: bool = False,
     simulate_writeback_outcome_unknown: bool = False,
     simulate_writeback_compensation_required: bool = False,
 ) -> str:
@@ -173,6 +180,7 @@ def action_request_fingerprint(
             "simulateWritebackCompensationRequired": simulate_writeback_compensation_required,
             "simulateWritebackFailure": simulate_writeback_failure,
             "simulateWritebackOutcomeUnknown": simulate_writeback_outcome_unknown,
+            "simulateWritebackRetryable": simulate_writeback_retryable,
         }
     )
 
@@ -184,6 +192,7 @@ def _uses_failure_injection(command: ActionApplyCommand) -> bool:
 def _failure_injection_flags(command: ActionApplyCommand) -> dict[str, bool]:
     return {
         "simulate_writeback_failure": command.simulate_writeback_failure,
+        "simulate_writeback_retryable": command.simulate_writeback_retryable,
         "simulate_writeback_outcome_unknown": command.simulate_writeback_outcome_unknown,
         "simulate_writeback_compensation_required": command.simulate_writeback_compensation_required,
     }
@@ -214,6 +223,7 @@ def action_replay_response(existing: ActionRunRow) -> ActionApplyResponse:
     patch = result.get("patch")
     if isinstance(patch, Mapping):
         response["patch"] = patch
+    _attach_edit_response(response)
     return response
 
 
@@ -264,7 +274,7 @@ def action_success_response(
     edit_id: str,
     patch: ObjectPatch,
 ) -> ActionApplyResponse:
-    return {
+    response: ActionApplyResponse = {
         "actionRunId": action_run_id,
         "status": "succeeded",
         "objectEditId": edit_id,
@@ -272,6 +282,27 @@ def action_success_response(
         "newObjectVersion": record["object_version"] + 1,
         "patch": patch,
     }
+    _attach_edit_response(response)
+    return response
+
+
+def _attach_edit_response(response: ActionApplyResponse) -> None:
+    target = response["target"]
+    object_type = str(target["objectType"])
+    object_id = str(target["objectId"])
+    action_run_id = response["actionRunId"]
+    response["edits"] = action_edit_summary(
+        object_type,
+        object_id,
+        object_edit_id=response.get("objectEditId"),
+        new_object_version=response.get("newObjectVersion"),
+        patch=response.get("patch"),
+    )
+    response["cacheRefresh"] = action_cache_refresh_hint(
+        action_run_id=action_run_id,
+        object_type=object_type,
+        object_id=object_id,
+    )
 
 
 def action_patch(action_type: ActionTypeRow, params: Mapping[str, object]) -> ObjectPatch:
