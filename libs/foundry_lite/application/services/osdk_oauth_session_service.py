@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 import secrets
 import time
 from collections.abc import Mapping, Sequence
@@ -27,9 +28,15 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied, RateLimited, ValidationFailed
 
 _DEFAULT_CODE_TTL_SECONDS = 300
-_DEFAULT_ACCESS_TTL_SECONDS = 900
+# Access tokens are stateless: the JWT verifier cannot consult the session store, so a
+# revoked/logged-out session's access token stays valid until it expires. Keep the fallback
+# TTL short to bound that window when a client does not configure its own TTL.
+_DEFAULT_ACCESS_TTL_SECONDS = 120
 _DEFAULT_REFRESH_TTL_SECONDS = 2_592_000
-_PKCE_METHODS = frozenset({"S256", "plain"})
+_PKCE_METHODS = frozenset({"S256"})
+_CODE_CHALLENGE_MIN_LENGTH = 43
+_CODE_CHALLENGE_MAX_LENGTH = 128
+_CODE_CHALLENGE_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
 _RATE_LIMIT_CAPACITY = 5
 _RATE_LIMIT_WINDOW_SECONDS = 60.0
 _REFRESH_REUSE_REASON = "rotated_refresh_token_reuse"
@@ -95,6 +102,7 @@ class OsdkOAuthSessionService(CoreService):
     ) -> RuntimeJsonObject:
         ctx = ctx or RequestContext()
         method = _pkce_method(code_challenge_method)
+        _require_valid_code_challenge(code_challenge)
         raw_code = _raw_token("oauth_code")
         now = _now()
         with self.engine.begin() as conn:
@@ -169,7 +177,8 @@ class OsdkOAuthSessionService(CoreService):
                 self._audit(conn, ctx, "osdk.oauth.refresh_rotated", session, safe_session_ref(session))
         if invalid_refresh or session is None or new_refresh is None:
             raise PermissionDenied("OSDK OAuth refresh token is invalid")
-        access = self.oauth_token_issuer.issue_access_token(_claims(session), ttl_seconds=_access_ttl(session))
+        claims = _claims(session, roles=_reevaluated_roles(session, ctx))
+        access = self.oauth_token_issuer.issue_access_token(claims, ttl_seconds=_access_ttl(session))
         return _token_response(access, new_refresh)
 
     def revoke(self, *, ctx: RequestContext | None = None, refresh_token: str) -> RuntimeJsonObject:
@@ -395,11 +404,12 @@ def _token_response(access: RuntimeJsonObject, refresh: RuntimeJsonObject) -> Ru
     }
 
 
-def _claims(session: Mapping[str, object]) -> OAuthAccessTokenClaims:
+def _claims(session: Mapping[str, object], roles: Sequence[str] | None = None) -> OAuthAccessTokenClaims:
+    session_roles = [str(role) for role in cast(Sequence[object], session["roles"])]
     return {
         "tenant_id": cast(str, session["tenant_id"]),
         "actor_user_id": cast(str, session["actor_user_id"]),
-        "roles": [str(role) for role in cast(Sequence[object], session["roles"])],
+        "roles": session_roles if roles is None else list(roles),
         "application_id": cast(str, session["app_id"]),
         "client_id": cast(str, session["client_id"]),
         "scopes": [str(scope) for scope in cast(Sequence[object], session["scopes"])],
@@ -407,9 +417,23 @@ def _claims(session: Mapping[str, object]) -> OAuthAccessTokenClaims:
     }
 
 
+def _reevaluated_roles(session: Mapping[str, object], ctx: RequestContext) -> list[str]:
+    """Re-evaluate roles at refresh time so a revoked role stops minting privileged tokens.
+
+    Roles are the caller's current roles (from ``ctx``) intersected with the roles originally
+    granted to the session. The intersection drops roles revoked since authorization while never
+    escalating beyond the originally consented set.
+    """
+    granted = [str(role) for role in cast(Sequence[object], session["roles"])]
+    current = set(ctx.roles)
+    return [role for role in granted if role in current]
+
+
 def _require_redirect_uri(client: Mapping[str, object], redirect_uri: str) -> None:
     allowed = tuple(str(item) for item in cast(Sequence[object] | None, client.get("redirect_uris")) or ())
-    if allowed and redirect_uri not in allowed:
+    if not allowed:
+        raise PermissionDenied("OSDK OAuth client has no registered redirect URIs")
+    if redirect_uri not in allowed:
         raise PermissionDenied("OSDK OAuth redirect URI is not registered")
 
 
@@ -427,13 +451,23 @@ def _app_resource_scopes(resources: Sequence[Mapping[str, object]]) -> set[str]:
 
 def _pkce_method(method: str) -> str:
     if method not in _PKCE_METHODS:
-        raise ValidationFailed("OSDK OAuth code_challenge_method must be S256 or plain")
+        raise ValidationFailed("OSDK OAuth code_challenge_method must be S256")
     return method
 
 
+def _require_valid_code_challenge(code_challenge: str) -> None:
+    length = len(code_challenge)
+    if (
+        length < _CODE_CHALLENGE_MIN_LENGTH
+        or length > _CODE_CHALLENGE_MAX_LENGTH
+        or _CODE_CHALLENGE_PATTERN.fullmatch(code_challenge) is None
+    ):
+        raise ValidationFailed("OSDK OAuth code_challenge must be 43-128 base64url characters")
+
+
 def _pkce_matches(method: str, challenge: str, verifier: str) -> bool:
-    if method == "plain":
-        return secrets.compare_digest(challenge, verifier)
+    if method != "S256":
+        return False
     digest = hashlib.sha256(verifier.encode("utf-8")).digest()
     encoded = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
     return secrets.compare_digest(challenge, encoded)
