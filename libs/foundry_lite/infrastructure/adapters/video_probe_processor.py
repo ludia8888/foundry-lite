@@ -53,6 +53,10 @@ from foundry_lite.infrastructure.adapters.ocr_processor import _tesseract_ocr_en
 
 _DERIVATIVE_KIND = "video_probe"
 _DEFAULT_TIMEOUT_SECONDS = 30
+# Minimal ffmpeg/ffprobe input-protocol allow-list: only local file access (+ crypto for
+# AES-encrypted containers). Blocks http/https/tcp/... so a crafted container cannot turn a
+# probe into a local-file read (LFI) or a request to a network endpoint (SSRF).
+_PROTOCOL_ALLOWLIST_ARGS = ("-protocol_whitelist", "file,crypto")
 
 
 @dataclass(frozen=True)
@@ -99,9 +103,23 @@ def _ffprobe_video_probe_runner(source_path: str) -> VideoProbe:
 
 
 def _run_ffprobe(source_path: str) -> str:
-    args = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", source_path]
+    args = [
+        "ffprobe",
+        "-v",
+        "quiet",
+        # LFI/SSRF guard: an untrusted container (concat/playlist) can reference file:// or
+        # http:// (e.g. cloud metadata) sub-inputs; restrict to local file (+crypto) protocols
+        # so only the sandbox path itself can be opened. ffprobe does not support ffmpeg's
+        # -nostdin flag, so stdin is closed at the process boundary below.
+        *_PROTOCOL_ALLOWLIST_ARGS,
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        source_path,
+    ]
     process = subprocess.Popen(  # nosec B603 B607 - fixed ffprobe arg list, no shell, sandbox path only
-        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
+        args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
     )
     try:
         stdout, _stderr = process.communicate(timeout=_FFPROBE_TIMEOUT_SECONDS)
@@ -290,7 +308,21 @@ def _ffmpeg_scene_frame_extractor(
 
 def _run_ffmpeg_scene_select(source_path: str, threshold: float, outdir: str) -> list[float]:
     select = f"select='eq(n,0)+gt(scene,{threshold})',showinfo"
-    args = ["ffmpeg", "-hide_banner", "-i", source_path, "-vf", select, "-vsync", "vfr", f"{outdir}/f_%03d.png"]
+    args = [
+        "ffmpeg",
+        "-hide_banner",
+        # LFI/SSRF guard (same as ffprobe): pin an input-protocol allow-list before -i and never
+        # read stdin so a crafted container cannot pull in file:// / http:// sub-inputs.
+        "-nostdin",
+        *_PROTOCOL_ALLOWLIST_ARGS,
+        "-i",
+        source_path,
+        "-vf",
+        select,
+        "-vsync",
+        "vfr",
+        f"{outdir}/f_%03d.png",
+    ]
     process = subprocess.Popen(  # nosec B603 B607 - fixed ffmpeg arg list, no shell, sandbox path only
         args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
     )

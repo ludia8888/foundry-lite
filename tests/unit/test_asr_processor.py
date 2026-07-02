@@ -112,3 +112,24 @@ def test_default_engine_without_a_bundled_speech_model_is_a_validation_failure()
     with pytest.raises(AsrDocumentError) as excinfo:
         _default_asr_engine("/sandbox/audio.wav")
     assert excinfo.value.reason == "asr_engine_unavailable"
+
+
+def test_repeated_timeouts_do_not_accumulate_worker_threads() -> None:
+    # A per-call ThreadPoolExecutor abandoned on timeout leaks a live thread per timeout;
+    # repeated timeouts must NOT grow the thread count unboundedly.
+    release = threading.Event()
+
+    def _blocking(_path: str) -> Sequence[TranscriptSegment]:
+        release.wait(timeout=10)
+        return []
+
+    adapter = AsrProcessorAdapter(timeout_seconds=0, asr_engine=_blocking)
+    baseline = threading.active_count()
+    try:
+        for _ in range(20):
+            with pytest.raises(AdapterError) as excinfo:
+                adapter.process(_request())
+            assert excinfo.value.failure.kind == "timeout"
+        assert threading.active_count() - baseline <= 8
+    finally:
+        release.set()

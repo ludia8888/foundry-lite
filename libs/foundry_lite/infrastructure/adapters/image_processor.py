@@ -36,6 +36,10 @@ _DERIVATIVE_KIND = "thumbnail"
 _DEFAULT_TIMEOUT_SECONDS = 30
 _DEFAULT_MAX_PIXELS = 64_000_000  # ~64MP resource cap (decompression-bomb guard, M-T3-001).
 _DEFAULT_THUMBNAIL_DIM = 256
+# Cap on live worker threads. An in-thread Pillow decode cannot be force-cancelled, so on timeout
+# we abandon the worker; a SHARED bounded pool (not a fresh pool per call) means repeated timeouts
+# reuse a fixed thread set instead of leaking one live thread per timeout.
+_MAX_WORKER_THREADS = 4
 
 
 @dataclass(frozen=True)
@@ -108,6 +112,7 @@ class ImageProcessorAdapter:
         self._max_pixels = max_pixels
         self._thumbnail_dim = thumbnail_dim
         self._image_describer = image_describer or _pillow_describe
+        self._executor = ThreadPoolExecutor(max_workers=_MAX_WORKER_THREADS, thread_name_prefix="image")
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -156,19 +161,17 @@ class ImageProcessorAdapter:
 
     def _describe_within_timeout(self, request: MediaProcessingRequest) -> ImageDescription:
         assert request.source_path is not None
-        # Not a context manager: on timeout we abandon the worker (shutdown wait=False)
-        # rather than block on shutdown(wait=True) for a hung decode.
-        pool = ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(self._image_describer, request.source_path, self._max_pixels, self._thumbnail_dim)
+        # Shared bounded pool: on timeout we abandon the worker (an in-thread Pillow decode cannot
+        # be cancelled) but reuse a fixed thread set, so repeated timeouts do not leak threads.
+        future = self._executor.submit(
+            self._image_describer, request.source_path, self._max_pixels, self._thumbnail_dim
+        )
         try:
-            result = future.result(timeout=self._timeout_seconds)
-            pool.shutdown(wait=True)
-            return result
+            return future.result(timeout=self._timeout_seconds)
         except FuturesTimeoutError as exc:
-            pool.shutdown(wait=False)
+            future.cancel()
             raise self._error("timeout", "image processing timed out", request, is_retryable=True) from exc
         except ImageDocumentError as exc:
-            pool.shutdown(wait=False)
             raise self._error("validation", exc.reason, request, is_retryable=False) from exc
 
     def _error(self, kind: str, reason: str, request: MediaProcessingRequest, *, is_retryable: bool) -> AdapterError:
