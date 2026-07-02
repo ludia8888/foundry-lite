@@ -44,6 +44,7 @@ from foundry_lite.application.services.source_management_service import SourceMa
 from foundry_lite.application.services.source_onboarding_service import SourceOnboardingService
 from foundry_lite.application.services.source_scheduler_service import SourceSchedulerService
 from foundry_lite.application.services.transform_service import TransformService
+from foundry_lite.application.services.transform_services import TransformServices
 
 __all__ = [
     "CoreServices",
@@ -81,6 +82,7 @@ __all__ = [
     "SourceOnboardingService",
     "SourceSchedulerService",
     "TransformService",
+    "TransformServices",
     "WorkflowOrchestrationService",
 ]
 
@@ -138,7 +140,7 @@ class CoreServices:
     outbox_publisher: OutboxPublisherService
     record_dlq: RecordDlqService
     runtime: RuntimeService
-    transform: TransformService
+    transform: TransformServices
     workflow: WorkflowOrchestrationService
 
     @classmethod
@@ -203,7 +205,7 @@ def _compose_core_services(
         outbox_publisher=build_service(OutboxPublisherService, dependencies),
         record_dlq=build_service(RecordDlqService, dependencies),
         runtime=build_service(RuntimeService, dependencies),
-        transform=build_service(TransformService, dependencies),
+        transform=TransformServices.create(dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies),
     )
 
@@ -249,7 +251,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.outbox_publisher,
         services.record_dlq,
         services.runtime,
-        services.transform,
+        *services.transform.items(),
         services.workflow,
     ]
 
@@ -305,7 +307,12 @@ def _data_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "dataset_transaction_service": services.dataset.transaction,
         "dataset_version_service": services.dataset.version,
         "materialization_service": services.materialization,
-        "transform_service": services.transform,
+        "transform_service": services.transform.entrypoint,
+        "transform_definition_service": services.transform.definition,
+        "transform_dlq_replay_service": services.transform.dlq_replay,
+        "transform_graph_service": services.transform.graph,
+        "transform_run_service": services.transform.run,
+        "transform_scheduler_service": services.transform.scheduler,
     }
 
 

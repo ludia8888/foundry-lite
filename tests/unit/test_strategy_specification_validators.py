@@ -6,8 +6,8 @@ from typing import cast
 import pytest
 from foundry_lite.application.ports import DatasetManifestFile, DatasetVersionRow
 from foundry_lite.application.services.backup_restore_artifact_execution_helpers import validate_source_files
-from foundry_lite.application.services.transform_scheduler import validate_transform_scheduler_max_runs
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.transform import validate_transform_scheduler_max_runs
 
 
 def test_validate_source_files_accepts_matching_manifest_file(tmp_path) -> None:

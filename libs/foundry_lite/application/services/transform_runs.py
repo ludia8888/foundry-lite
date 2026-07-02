@@ -30,9 +30,7 @@ from foundry_lite.application.services.transform_sql_guards import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
-
-SUPPORTED_TRANSFORM_OUTPUT_MODES = ("snapshot", "append")
-TRANSFORM_OUTPUT_MODE_ALIASES = {"incremental": "append"}
+from foundry_lite.domain.transform import output_transaction_type_for_mode
 
 
 @dataclass(frozen=True)
@@ -314,21 +312,6 @@ def _python_entrypoint_parts(entrypoint: str) -> tuple[str, str | None]:
     if separator and not function_name.strip():
         raise ValidationFailed("Python transform entrypoint function is empty", details={"entrypoint": entrypoint})
     return path, function_name.strip() or None
-
-
-def normalize_transform_output_mode(mode: str) -> str:
-    raw = mode.strip().lower()
-    normalized = TRANSFORM_OUTPUT_MODE_ALIASES.get(raw, raw)
-    if normalized in SUPPORTED_TRANSFORM_OUTPUT_MODES:
-        return normalized
-    raise ValidationFailed(
-        "unsupported transform output mode",
-        details={"mode": mode, "supported_modes": ["snapshot", "append", "incremental"]},
-    )
-
-
-def output_transaction_type_for_mode(mode: str) -> str:
-    return "APPEND" if normalize_transform_output_mode(mode) == "append" else "SNAPSHOT"
 
 
 def _definition_snapshot(transform: TransformRow, source: TransformSource) -> dict[str, object]:

@@ -187,6 +187,8 @@ intermediate states.
   across the bounded-context sub-facades, which keeps API/CLI/test entrypoints
   stable while services continue to evolve independently.
 
+- Transform bounded-context split: Transform is now split into pure domain rules plus explicit application use-case services for definition, run, scheduler, graph, and transform Record DLQ replay. `TransformService` remains as the compatibility entrypoint for `foundry.transforms.*`, API callers, and SDK-facing contracts, while `TransformServices` registers the subservices in the dependency/collaborator graph so quality gates can inspect each responsibility separately. Action bounded-context split is intentionally future follow-up work after this Transform-first pattern stays stable.
+
 ## Quality Signal Boundaries
 
 - Branch coverage is the main behavior gate.

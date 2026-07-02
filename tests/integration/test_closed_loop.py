@@ -10,7 +10,7 @@ from foundry_lite.application.ports import DatasetStagedFile, TransactionContext
 from foundry_lite.application.ports.compute_adapter import SqlTransformPlan, TransformExecutionResult, TransformPlan
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.application.services.materialization_service import MaterializationRunPlan, MaterializationService
-from foundry_lite.application.services.transform_service import TransformService
+from foundry_lite.application.services.transform_run_service import TransformRunService
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ConflictDetected, ExternalSystemError, InvariantViolation, ValidationFailed
 from foundry_lite.infrastructure import schema as db
@@ -380,11 +380,11 @@ def test_transform_output_and_lineage_commit_atomically(
         ctx=ctx,
     )
 
-    def fail_lineage(self: TransformService, *_args: object) -> None:
+    def fail_lineage(self: TransformRunService, *_args: object) -> None:
         del self, _args
         raise RuntimeError("lineage insert exploded after output commit")
 
-    monkeypatch.setattr(TransformService, "_record_transform_lineage", fail_lineage)
+    monkeypatch.setattr(TransformRunService, "_record_transform_lineage", fail_lineage)
 
     with pytest.raises(InvariantViolation, match="dataset commit metadata persistence failed") as exc_info:
         foundry.transforms.run("atomic_orders", ctx=ctx)

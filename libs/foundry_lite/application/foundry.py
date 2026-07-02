@@ -107,7 +107,7 @@ class FoundryLite:
 
     def _attach_facades(self, services: CoreServices) -> None:
         self.datasets = DatasetWorkspace(services.dataset)
-        self.transforms = TransformPipeline(services.transform)
+        self.transforms = TransformPipeline(services.transform.entrypoint)
         self.ontology = OntologyRegistry(services.ontology)
         self.objects = ObjectStore(services.object_store, services.ontology_search)
         self.actions = ActionGateway(services.action)

@@ -1,18 +1,18 @@
-"""Application service helpers for transform scheduler mixin workflows."""
+"""Transform scheduler use cases."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
+from typing import Protocol
 
 from foundry_lite.application.ports import TransactionContext, TransactionManager, TransformRepository, TransformRow
 from foundry_lite.application.primitives import CommitResult
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.transform_protocols import (
     TransformDatasetRegistry,
     TransformDatasetVersions,
     TransformRuntimeBoundary,
-)
-from foundry_lite.application.services.transform_protocols import (
-    require_transform_write_open as require_write_open,
+    require_transform_write_open,
 )
 from foundry_lite.application.services.transform_runs import TransformRunPlan
 from foundry_lite.application.services.transform_scheduler import (
@@ -21,20 +21,35 @@ from foundry_lite.application.services.transform_scheduler import (
     transform_schedule_decision,
     transform_scheduler_run_payload,
     transform_scheduler_view,
-    validate_transform_scheduler_max_runs,
 )
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.transform import validate_transform_scheduler_max_runs
 from foundry_lite.security.policy import PolicyService
 
 
-class TransformSchedulerMixin:
-    engine: TransactionManager
-    policy: PolicyService
+class _TransformRunner(Protocol):
+    def run_transform_internal(self, ctx: RequestContext, api_name: str) -> tuple[CommitResult, TransformRunPlan]:
+        """Run one transform without public entrypoint authorization."""
+        ...
+
+
+class TransformSchedulerService(CoreService):
+    """Preview and run due snapshot transforms."""
+
+    required_dependencies = ("engine", "policy", "transform_repository")
+    required_collaborators = (
+        "dataset_registry_service",
+        "dataset_version_service",
+        "runtime_service",
+        "transform_run_service",
+    )
     dataset_registry_service: TransformDatasetRegistry
     dataset_version_service: TransformDatasetVersions
+    engine: TransactionManager
+    policy: PolicyService
     runtime_service: TransformRuntimeBoundary
     transform_repository: TransformRepository
-    _run_transform_internal: Callable[[RequestContext, str], tuple[CommitResult, TransformRunPlan]]
+    transform_run_service: _TransformRunner
 
     def preview_due_transform_runs(
         self,
@@ -56,7 +71,7 @@ class TransformSchedulerMixin:
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "transform:run", "transform_scheduler", "tick")
-        require_write_open(self.runtime_service, ctx, "run_due_transform_runs", "transform_scheduler", "tick")
+        require_transform_write_open(self.runtime_service, ctx, "run_due_transform_runs", "transform_scheduler", "tick")
         max_runs = validate_transform_scheduler_max_runs(max_runs)
         decisions = self._transform_schedule_decisions(ctx)
         started = self._run_due_transform_decisions(ctx, decisions, max_runs=max_runs)
@@ -130,7 +145,7 @@ class TransformSchedulerMixin:
         ctx: RequestContext,
         decision: TransformScheduleDecision,
     ) -> dict[str, object]:
-        result, plan = self._run_transform_internal(ctx, decision.api_name)
+        result, plan = self.transform_run_service.run_transform_internal(ctx, decision.api_name)
         self._record_scheduler_trigger(ctx, decision, result, plan)
         return transform_scheduler_run_payload(decision, result, plan)
 
@@ -163,5 +178,5 @@ class TransformSchedulerMixin:
                 relation="scheduled_rebuild_of",
                 resource_type="transform",
                 resource_id=plan.transform_id,
-                metadata={"reason": decision.reason, "changedInputRefs": list(decision.changed_input_refs)},
+                metadata={"outputVersionId": result.version_id, "reason": decision.reason},
             )
