@@ -109,8 +109,8 @@ def _run_ffprobe(source_path: str) -> str:
         "quiet",
         # LFI/SSRF guard: an untrusted container (concat/playlist) can reference file:// or
         # http:// (e.g. cloud metadata) sub-inputs; restrict to local file (+crypto) protocols
-        # and never read stdin so only the sandbox path itself can be opened.
-        "-nostdin",
+        # so only the sandbox path itself can be opened. ffprobe does not support ffmpeg's
+        # -nostdin flag, so stdin is closed at the process boundary below.
         *_PROTOCOL_ALLOWLIST_ARGS,
         "-print_format",
         "json",
@@ -119,7 +119,7 @@ def _run_ffprobe(source_path: str) -> str:
         source_path,
     ]
     process = subprocess.Popen(  # nosec B603 B607 - fixed ffprobe arg list, no shell, sandbox path only
-        args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
+        args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True
     )
     try:
         stdout, _stderr = process.communicate(timeout=_FFPROBE_TIMEOUT_SECONDS)

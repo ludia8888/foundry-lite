@@ -108,14 +108,16 @@ def test_default_runner_without_a_bundled_ffprobe_is_unavailable() -> None:
 def test_ffprobe_invocation_restricts_protocols_to_prevent_lfi_ssrf(monkeypatch: pytest.MonkeyPatch) -> None:
     # A crafted container (concat/playlist referencing a local file URL or a link-local metadata
     # endpoint) must not let ffprobe read local files or reach the network: the arg list must pin
-    # an allow-list of protocols and disable stdin.
+    # an allow-list of protocols and close stdin at the process boundary.
     from foundry_lite.infrastructure.adapters import video_probe_processor as vpp
 
     captured: list[list[str]] = []
+    captured_stdin: list[object] = []
 
     class _FakePopen:
-        def __init__(self, args: list[str], **_: object) -> None:
+        def __init__(self, args: list[str], **kwargs: object) -> None:
             captured.append(args)
+            captured_stdin.append(kwargs.get("stdin"))
             self.returncode = 0
 
         def communicate(self, timeout: object = None) -> tuple[bytes, bytes]:
@@ -129,7 +131,8 @@ def test_ffprobe_invocation_restricts_protocols_to_prevent_lfi_ssrf(monkeypatch:
     whitelist = args[args.index("-protocol_whitelist") + 1]
     assert "http" not in whitelist and "tcp" not in whitelist
     assert set(whitelist.split(",")) <= {"file", "crypto"}
-    assert "-nostdin" in args
+    assert "-nostdin" not in args
+    assert captured_stdin == [vpp.subprocess.DEVNULL]
     # protocol restriction must precede the input path it guards.
     assert args.index("-protocol_whitelist") < args.index("/sandbox/clip.mp4")
 
