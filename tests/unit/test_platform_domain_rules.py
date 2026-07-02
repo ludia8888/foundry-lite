@@ -33,11 +33,17 @@ def test_resource_scope_vocabulary_and_matching() -> None:
     assert is_scope_allowed(scope, [scope], [scope])
     assert is_scope_allowed(scope, ["osdk:*"], [scope])
     assert not is_scope_allowed(scope, [scope], [])
+    assert not is_scope_allowed(scope, [], [scope])
 
     with pytest.raises(ValidationFailed):
         resource_scope("object", "Order", "delete")
     with pytest.raises(ValidationFailed):
         validate_resource_scope("osdk:object:Order:execute", "object", "Order")
+
+
+def test_resource_scope_requires_api_name() -> None:
+    with pytest.raises(ValidationFailed):
+        resource_scope("object", "", "read")
 
 
 def test_terminal_state_rules_block_terminal_transitions() -> None:
@@ -63,6 +69,36 @@ def test_evidence_redaction_masks_sensitive_keys_but_keeps_token_counts() -> Non
     assert redacted["nested"][0]["password"] == "***REDACTED***"
     assert redacted["nested"][1]["inputTokens"] == 12
     assert redacted["authorizationDecision"] == "allow"
+
+
+def test_evidence_redaction_matches_normalized_sensitive_keys() -> None:
+    redacted = redact_evidence({"api_token": "raw"}, {"apiToken"})
+
+    assert redacted["api_token"] == "***REDACTED***"
+
+
+def test_evidence_redaction_matches_exact_sensitive_keys() -> None:
+    redacted = redact_evidence({"custom": "raw"}, {"custom"})
+
+    assert redacted["custom"] == "***MASKED***"
+
+
+def test_evidence_redaction_masks_forbidden_nonsecret_keys() -> None:
+    redacted = redact_evidence({"prompt": "hello there"})
+
+    assert redacted["prompt"] == "***MASKED***"
+
+
+def test_evidence_redaction_preserves_already_redacted_values() -> None:
+    redacted = redact_evidence({"password": "***REDACTED***"})
+
+    assert redacted["password"] == "***REDACTED***"
+
+
+def test_evidence_redaction_recurses_into_tuples() -> None:
+    redacted = redact_evidence((1, {"password": "raw"}, 2))
+
+    assert redacted == (1, {"password": "***REDACTED***"}, 2)
 
 
 def test_write_traffic_decision_blocks_active_restore_mode() -> None:

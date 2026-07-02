@@ -11,7 +11,18 @@ from foundry_lite.application.ports.ontology_repository import (
 )
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.domain.ontology.migration import (
+    _current_action_parameters,
+    _mapping,
+    _parameter_definitions_by_api,
+    _yaml_rows_by_api,
     build_ontology_migration_plan,
+    link_type_backing,
+    mapping_sequence,
+    object_type_backing,
+    optional_bool,
+    optional_str,
+    property_source,
+    required_str,
 )
 from foundry_lite.domain.ontology.migration_changes import (
     blocked_action_removed,
@@ -32,8 +43,14 @@ from foundry_lite.domain.ontology.migration_changes import (
     warning_property_reindex,
 )
 from foundry_lite.domain.ontology.migration_types import (
+    OBJECT_REINDEX_COMPLETE,
+    OBJECT_REINDEX_REQUIRED,
     OntologyMigrationChange,
     OntologyMigrationPlan,
+    complete_object_reindex_config,
+    completed_object_reindex,
+    object_type_serving_config,
+    pending_object_reindex_operation,
     reindex_operation,
 )
 
@@ -415,3 +432,190 @@ def _single_yaml_row(definition: dict[str, object], key: str, api_name: str) -> 
         if row.get("apiName") == api_name:
             return row
     raise AssertionError(f"missing {key}.{api_name}")
+
+
+def test_ontology_migration_blocks_removed_object_link_and_action() -> None:
+    plan = build_ontology_migration_plan(
+        source_ontology_version_id="ont_1",
+        current_objects={"LegacyObject": {"api_name": "LegacyObject"}},
+        current_properties={},
+        current_links=({"api_name": "LegacyLink"},),
+        current_actions=({"api_name": "LegacyAction"},),
+        definition={},
+    )
+
+    assert plan.status == "blocked"
+    assert set(_change_kinds(plan.blocking_changes)) == {"object_removed", "link_removed", "action_removed"}
+
+
+def test_ontology_migration_blocks_parameter_became_required() -> None:
+    action = _action_row()
+    action["definition"] = {
+        "apiName": "ApproveOrder",
+        "target": "Order",
+        "parameters": (_yaml_parameter("reason", required=False),),
+    }
+    plan = build_ontology_migration_plan(
+        source_ontology_version_id="ont_1",
+        current_objects={"Order": _object_type_row(), "Customer": _object_type_row("Customer", "customerId")},
+        current_properties={
+            "Order": (
+                _property_row("orderId", "order_id", nullable=False),
+                _property_row("status", "source_status"),
+            ),
+            "Customer": (_property_row("customerId", "customer_id", object_type_id="otype_Customer"),),
+        },
+        current_links=(_link_type_row(),),
+        current_actions=(action,),
+        definition=_definition(action_parameters=[_yaml_parameter("reason", required=True)]),
+    )
+
+    assert "action_parameter_became_required" in _change_kinds(plan.blocking_changes)
+
+
+def test_yaml_rows_by_api_rejects_duplicate_api_name() -> None:
+    with pytest.raises(ValidationFailed, match="duplicate object apiName"):
+        _yaml_rows_by_api(
+            ({"apiName": "Order"}, {"apiName": "Order"}),
+            "duplicate object apiName",
+            "objectType",
+        )
+
+
+def test_current_action_parameters_rejects_non_list() -> None:
+    with pytest.raises(ValidationFailed, match="persisted action parameters must be a list"):
+        _current_action_parameters({"api_name": "ApproveOrder", "definition": {"parameters": "not-a-list"}})
+
+
+def test_parameter_definitions_by_api_rejects_duplicate_api_name() -> None:
+    with pytest.raises(ValidationFailed, match="duplicate action parameter apiName"):
+        _parameter_definitions_by_api(
+            ({"apiName": "reason", "type": "string"}, {"apiName": "reason", "type": "string"})
+        )
+
+
+def test_object_type_backing_falls_back_to_dataset() -> None:
+    assert object_type_backing({"backing": {"dataset": "clean.orders"}}) == {"dataset": "clean.orders"}
+    assert object_type_backing({"dataset": "clean.orders"}) == {"dataset": "clean.orders"}
+
+
+def test_link_type_backing_falls_back_to_keys() -> None:
+    assert link_type_backing({"backing": {"dataset": "d"}}) == {"dataset": "d"}
+    assert link_type_backing({"dataset": "d", "fromKey": "a", "toKey": "b"}) == {
+        "dataset": "d",
+        "fromKey": "a",
+        "toKey": "b",
+    }
+
+
+def test_mapping_sequence_handles_none_and_rejects_non_list() -> None:
+    assert mapping_sequence({"objectTypes": None}, "objectTypes") == ()
+    with pytest.raises(ValidationFailed, match="objectTypes must be a list"):
+        mapping_sequence({"objectTypes": "not-a-list"}, "objectTypes")
+
+
+def test_property_source_requires_a_value() -> None:
+    with pytest.raises(ValidationFailed, match="property source must be set"):
+        property_source({"apiName": "status", "source": None})
+
+
+def test_optional_bool_rejects_non_boolean() -> None:
+    with pytest.raises(ValidationFailed, match="deprecated must be a boolean"):
+        optional_bool({"deprecated": "yes"}, "deprecated", False)
+
+
+def test_optional_str_rejects_non_string() -> None:
+    with pytest.raises(ValidationFailed, match="column must be a string"):
+        optional_str({"column": 5}, "column")
+
+
+def test_required_str_rejects_missing_value() -> None:
+    with pytest.raises(ValidationFailed, match="primaryKey must be set"):
+        required_str({}, "primaryKey")
+
+
+def test_mapping_rejects_non_mapping() -> None:
+    with pytest.raises(ValidationFailed, match="expected mapping"):
+        _mapping("not-a-mapping")
+
+
+def test_object_type_serving_config_binds_pending_reindex() -> None:
+    operation = reindex_operation("Order", ["backing"])
+    assert operation is not None
+    plan = OntologyMigrationPlan("ont_1", (), (operation,))
+
+    config = object_type_serving_config(plan, "Order")
+
+    assert config["servingContractStatus"] == OBJECT_REINDEX_REQUIRED
+    assert config["sourceOntologyVersionId"] == "ont_1"
+    assert config["objectReindexPlan"] == [operation.to_payload()]
+    assert object_type_serving_config(plan, "Missing") == {}
+    assert "sourceOntologyVersionId" not in object_type_serving_config(
+        OntologyMigrationPlan(None, (), (operation,)), "Order"
+    )
+
+
+def test_pending_object_reindex_operation_matches_only_active_key() -> None:
+    operation = reindex_operation("Order", ["backing"])
+    assert operation is not None
+    config = object_type_serving_config(OntologyMigrationPlan("ont_1", (), (operation,)), "Order")
+
+    assert pending_object_reindex_operation(config, operation.reindex_key) == operation.to_payload()
+    assert pending_object_reindex_operation(config, "object_reindex:Order:missing") is None
+    assert pending_object_reindex_operation({}, operation.reindex_key) is None
+    non_list = {"servingContractStatus": OBJECT_REINDEX_REQUIRED, "objectReindexPlan": "not-a-list"}
+    assert pending_object_reindex_operation(non_list, operation.reindex_key) is None
+    mixed = {
+        "servingContractStatus": OBJECT_REINDEX_REQUIRED,
+        "objectReindexPlan": ["not-a-mapping", operation.to_payload()],
+    }
+    assert pending_object_reindex_operation(mixed, operation.reindex_key) == operation.to_payload()
+
+
+def test_complete_and_read_object_reindex_config() -> None:
+    operation = reindex_operation("Order", ["backing"])
+    assert operation is not None
+    config = object_type_serving_config(OntologyMigrationPlan("ont_1", (), (operation,)), "Order")
+
+    completed_config = complete_object_reindex_config(
+        config,
+        operation.to_payload(),
+        index_run_id="run_1",
+        dataset_version_id="dsv_1",
+        completed_at="2026-07-02T00:00:00Z",
+    )
+
+    assert completed_config["servingContractStatus"] == OBJECT_REINDEX_COMPLETE
+    evidence = completed_object_reindex(completed_config, operation.reindex_key)
+    assert evidence is not None
+    assert evidence["indexRunId"] == "run_1"
+    assert evidence["changedFields"] == list(operation.changed_fields)
+    assert completed_object_reindex(completed_config, "object_reindex:Order:missing") is None
+    assert completed_object_reindex({}, operation.reindex_key) is None
+    assert completed_object_reindex({"servingContractStatus": OBJECT_REINDEX_COMPLETE}, operation.reindex_key) is None
+
+
+def test_complete_object_reindex_config_handles_missing_changed_fields() -> None:
+    completed_config = complete_object_reindex_config(
+        {},
+        {"reindexKey": "object_reindex:Order:abc"},
+        index_run_id="run_1",
+        dataset_version_id="dsv_1",
+        completed_at="2026-07-02T00:00:00Z",
+    )
+
+    evidence = completed_config["objectReindexCompleted"]
+    assert isinstance(evidence, dict)
+    assert evidence["changedFields"] == []
+
+
+def test_raise_if_blocked_is_a_noop_when_compatible() -> None:
+    OntologyMigrationPlan(None, (), ()).raise_if_blocked()
+
+
+def test_change_constructors_tolerate_missing_optional_and_required_fields() -> None:
+    reindex = warning_property_reindex("Order", "status", {"column_name": "source_status"}, {})
+    primary_key = blocked_primary_key_changed("Order", "orderId", {})
+
+    assert reindex.details["nextColumn"] is None
+    assert primary_key.details["next"] == ""

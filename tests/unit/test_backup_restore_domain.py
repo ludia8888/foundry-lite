@@ -99,3 +99,105 @@ def test_artifact_tenant_rule_fails_closed_on_mismatch() -> None:
         require_artifact_tenant("tenant-a", "tenant-b")
 
     assert exc.value.details == {"artifact_tenant_id": "tenant-b", "request_tenant_id": "tenant-a"}
+
+
+def test_post_restore_findings_flag_every_missing_signal() -> None:
+    preflight = {"status": "degraded"}
+
+    findings = post_restore_validation_findings(preflight)
+
+    assert findings == [
+        {"check": "metadata_storage_preflight", "status": "degraded"},
+        {"check": "dataset_version_inventory", "status": "missing"},
+        {"check": "object_index_pointer", "status": "missing"},
+        {"check": "actionRuns", "status": "missing"},
+        {"check": "materializationRuns", "status": "missing"},
+    ]
+
+
+def test_post_restore_findings_accept_scalar_watermark_counts() -> None:
+    preflight = {
+        "status": "ready",
+        "datasetVersions": [{"id": "version-1"}],
+        "activeIndexPointers": [{"objectType": "Order"}],
+        "highWatermarks": {"actionRuns": 3, "materializationRuns": "not-a-count"},
+    }
+
+    findings = post_restore_validation_findings(preflight)
+
+    assert findings == [{"check": "materializationRuns", "status": "missing"}]
+
+
+def test_post_restore_findings_treat_nonint_watermark_count_as_missing() -> None:
+    preflight = {
+        "status": "ready",
+        "datasetVersions": [{"id": "version-1"}],
+        "activeIndexPointers": [{"objectType": "Order"}],
+        "highWatermarks": {
+            "actionRuns": {"count": 2},
+            "materializationRuns": {"count": "not-an-int"},
+        },
+    }
+
+    findings = post_restore_validation_findings(preflight)
+
+    assert findings == [{"check": "materializationRuns", "status": "missing"}]
+
+
+def test_restore_resume_ready_passes_when_no_findings() -> None:
+    require_restore_resume_ready("restore-1", [])
+
+
+def test_artifact_restore_findings_flag_both_preflights_not_ready() -> None:
+    findings = artifact_restore_findings({"status": "degraded"}, {"status": "pending"})
+
+    assert findings == [
+        {"check": "artifact_preflight", "status": "degraded"},
+        {"check": "current_preflight", "status": "pending"},
+    ]
+
+
+def _version(version_id: str, version_number: int, **overrides: object) -> dict[str, object]:
+    version: dict[str, object] = {
+        "datasetId": "ds-1",
+        "branch": "main",
+        "versionId": version_id,
+        "versionNumber": version_number,
+        "manifestUri": f"m-{version_id}",
+        "rowCount": 1,
+        "byteSize": 10,
+        "manifestContentHashes": ["h1"],
+        "status": "valid",
+    }
+    version.update(overrides)
+    return version
+
+
+def test_artifact_restore_findings_flag_field_integrity_mismatch() -> None:
+    artifact = {"status": "ready", "datasetVersions": [_version("v2", 2, rowCount=9)]}
+    current = {
+        "status": "ready",
+        "datasetVersions": [_version("v2", 2, rowCount=2), _version("v1", 1)],
+    }
+
+    findings = artifact_restore_findings(artifact, current)
+
+    assert findings == [
+        {
+            "check": "artifact_dataset_version_integrity",
+            "status": "mismatch",
+            "fields": ["rowCount"],
+        }
+    ]
+
+
+def test_artifact_restore_findings_pass_when_artifact_matches_serving_head() -> None:
+    version = _version("v1", 1)
+    artifact = {"status": "ready", "datasetVersions": [version]}
+    current = {"status": "ready", "datasetVersions": [dict(version)]}
+
+    assert artifact_restore_findings(artifact, current) == []
+
+
+def test_artifact_tenant_rule_allows_matching_tenant() -> None:
+    require_artifact_tenant("tenant-a", "tenant-a")
