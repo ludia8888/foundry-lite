@@ -105,9 +105,18 @@ class ModelRegistryRepository(Protocol):
         ...
 
     def get_aliases(
-        self, *, transaction: TransactionContext, tenant_id: str, aliases: list[str]
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        aliases: list[str],
+        environment: str | None = None,
     ) -> list[ModelAliasRecord]:
-        """Resolve aliases for one tenant (batch; N+1 prevention)."""
+        """Resolve aliases for one tenant, optionally scoped to one environment (batch; N+1 prevention).
+
+        The unique key is (tenant_id, alias, environment); results are ordered deterministically so a
+        caller never routes nondeterministically when the same alias exists in several environments.
+        """
         ...
 
     def get_models(self, *, transaction: TransactionContext, tenant_id: str, model_ids: list[str]) -> list[ModelRecord]:

@@ -63,6 +63,7 @@ class AgentRuntimeRequest:
     ai_run_id: str | None = None
     session_id: str | None = None
     ontology_version_id: str = "active-ontology"
+    environment: str = "prod"
     data_classification: str = "internal"
     allowed_classifications: tuple[str, ...] | None = None
     region_requirement: str | None = None
@@ -173,6 +174,7 @@ def model_request(request: AgentRuntimeRequest, ai_run_id: str, compiled: Compil
     return ModelRequest(
         model_alias=request.model_alias,
         messages=compiled.messages,
+        environment=request.environment,
         tools=model_tool_names(request),
         response_schema=_response_schema(request.output_schema),
         max_output_tokens=request.max_output_tokens,

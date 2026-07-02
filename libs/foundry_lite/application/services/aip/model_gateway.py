@@ -25,7 +25,7 @@ One boundary for all LLM access. ``invoke``:
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure, AdapterFailureKind
 from foundry_lite.application.ports.ai_run_repository import AiModelCallRecord
@@ -51,6 +51,8 @@ class ModelResolution:
     provider: str
     model_id: str
     revision: str
+    # Per-1k token rates the ledger uses to estimate spend (§10.1 ``ai_models.pricing_json``).
+    pricing_json: dict[str, object] = field(default_factory=dict)
 
 
 class ModelGatewayService(CoreService):
@@ -60,7 +62,7 @@ class ModelGatewayService(CoreService):
     required_collaborators = ()
 
     def invoke(self, ctx: RequestContext, request: ModelRequest) -> ModelResponse:
-        alias, model, provider = self._resolve(ctx, request.model_alias)
+        alias, model, provider = self._resolve(ctx, request.model_alias, request.environment)
         revision = alias.version or model.revision
         self._guard_serving(alias, model)
         self._guard_egress(request, model, provider)
@@ -81,22 +83,23 @@ class ModelGatewayService(CoreService):
         self._record_model_call(ctx, request, provider.provider_type, revision, resolved_response, None)
         return resolved_response
 
-    def resolve_model(self, ctx: RequestContext, model_alias: str) -> ModelResolution:
+    def resolve_model(self, ctx: RequestContext, model_alias: str, environment: str = "prod") -> ModelResolution:
         """Resolve a serving alias without making a provider call."""
-        alias, model, provider = self._resolve(ctx, model_alias)
+        alias, model, provider = self._resolve(ctx, model_alias, environment)
         self._guard_serving(alias, model)
         return ModelResolution(
             provider=provider.provider_type,
             model_id=model.model_id,
             revision=alias.version or model.revision,
+            pricing_json=dict(model.pricing_json),
         )
 
     def _resolve(
-        self, ctx: RequestContext, model_alias: str
+        self, ctx: RequestContext, model_alias: str, environment: str
     ) -> tuple[ModelAliasRecord, ModelRecord, ModelProviderRecord]:
         with self.engine.begin() as conn:
             aliases = self.model_registry_repository.get_aliases(
-                transaction=conn, tenant_id=ctx.tenant_id, aliases=[model_alias]
+                transaction=conn, tenant_id=ctx.tenant_id, aliases=[model_alias], environment=environment
             )
             if not aliases:
                 raise self._error("not_found", f"unknown model alias: {model_alias}", model_alias)
@@ -131,8 +134,15 @@ class ModelGatewayService(CoreService):
             )
 
     def _guard_egress(self, request: ModelRequest, model: ModelRecord, provider: ModelProviderRecord) -> None:
-        # Export-control marking: classification must be exportable to the destination (§9.3).
-        if request.data_classification and request.data_classification not in model.allowed_classifications:
+        # Export-control marking: classification must be exportable to the destination (§9.3). Fail
+        # CLOSED on an unset/empty classification — an unmarked request is never egressed by default.
+        if not request.data_classification:
+            raise self._error(
+                "authorization",
+                "an explicit data_classification is required before egress; unmarked requests are denied",
+                model.model_id,
+            )
+        if request.data_classification not in model.allowed_classifications:
             raise self._error(
                 "authorization",
                 f"classification {request.data_classification!r} is not exportable to {provider.provider_type}",
