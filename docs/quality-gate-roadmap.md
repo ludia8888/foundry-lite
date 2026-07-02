@@ -564,7 +564,7 @@ Self-test: `tests/unit/test_quality_data_platform_sprint_status.py`가 현재 re
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
 
 `scripts/quality/check_schema_revision_guard.py`는
-`libs/foundry_lite/infrastructure/schema.py`의 SQLAlchemy metadata를 정규화해
+`libs/foundry_lite/infrastructure/schema` 패키지의 SQLAlchemy metadata를 정규화해
 fingerprint를 만들고, 최신 `infra/schema_revisions/*.json` snapshot과 비교한다.
 비개발자 관점으로 말하면, DB 설계도를 바꿨는데 변경 이력 도장을 찍지 않는 일을
 release gate에서 막는 장치다.
@@ -599,7 +599,7 @@ AST로 읽고 tenant-scoped table에 대한 insert/update/delete가 tenant bound
 
 검사 기준:
 
-- `schema.py`에서 `Column("tenant_id", ...)`를 가진 table을 tenant-scoped table로 본다.
+- `libs/foundry_lite/infrastructure/schema` 패키지에서 `Column("tenant_id", ...)`를 가진 table을 tenant-scoped table로 본다.
 - tenant-scoped `insert(table)`는 `.values(tenant_id=...)`를 가져야 한다.
 - `update(table)`와 `delete(table)`는 `.where(...)` 안에 `tenant_id` 조건을 가져야 한다.
 - dynamic table update/delete도 tenant where guard가 없으면 fail한다.

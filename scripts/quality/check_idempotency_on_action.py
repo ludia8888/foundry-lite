@@ -761,6 +761,18 @@ def _api_actions_path(root: Path) -> Path:
     return root / "apps" / "api" / "foundry_lite_api" / "main.py"
 
 
+def _schema_actions_path(root: Path) -> Path:
+    """Locate the module defining the action_runs table.
+
+    The schema module became a domain-grouped package; older layouts (and the
+    fixture repos in this gate's unit tests) keep a single schema.py.
+    """
+    package_path = root / "libs" / "foundry_lite" / "infrastructure" / "schema" / "actions.py"
+    if package_path.exists():
+        return package_path
+    return root / "libs" / "foundry_lite" / "infrastructure" / "schema.py"
+
+
 def collect_findings(root: Path = ROOT) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
     paths = {
@@ -770,7 +782,7 @@ def collect_findings(root: Path = ROOT) -> list[IdempotencyFinding]:
         "apply_service": root / "libs" / "foundry_lite" / "application" / "services" / "action_apply_service.py",
         "service_helpers": root / "libs" / "foundry_lite" / "application" / "services" / "action_helpers.py",
         "port": root / "libs" / "foundry_lite" / "application" / "ports" / "action_repository.py",
-        "schema": root / "libs" / "foundry_lite" / "infrastructure" / "schema.py",
+        "schema": _schema_actions_path(root),
     }
     parsed = {
         name: _parse_optional_file(path) if name == "service_helpers" else _parse_file(path, root, findings)

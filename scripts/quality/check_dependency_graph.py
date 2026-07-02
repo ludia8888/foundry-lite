@@ -207,6 +207,10 @@ def _default_aggregation_roots() -> list[str]:
         "foundry_lite.application.dependencies",
         "foundry_lite.application.facades",
         "foundry_lite.infrastructure.local_runtime",
+        # The schema package facade re-exports every domain table module so the
+        # historical import surface stays stable; its fan-out grows by one per
+        # new table domain, by design.
+        "foundry_lite.infrastructure.schema",
         # The CoreService DI base type-annotates every injectable dependency, and a
         # bounded-context facade aggregates that context's services + DTOs — both are
         # aggregation points whose fan-out grows with the platform, by design.
