@@ -6,11 +6,9 @@ import base64
 import hashlib
 import re
 import secrets
-import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Protocol, cast
+from typing import cast
 
 from foundry_lite.application.ports import (
     OAuthAccessTokenClaims,
@@ -24,8 +22,9 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.osdk_oauth_session_refs import safe_code_ref, safe_session_ref
+from foundry_lite.application.services.osdk_oauth_session_support import _OAuthAuditBoundary, _OAuthRateLimiter
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import PermissionDenied, RateLimited, ValidationFailed
+from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
 
 _DEFAULT_CODE_TTL_SECONDS = 300
 # Access tokens are stateless: the JWT verifier cannot consult the session store, so a
@@ -37,42 +36,7 @@ _PKCE_METHODS = frozenset({"S256"})
 _CODE_CHALLENGE_MIN_LENGTH = 43
 _CODE_CHALLENGE_MAX_LENGTH = 128
 _CODE_CHALLENGE_PATTERN = re.compile(r"[A-Za-z0-9_-]+")
-_RATE_LIMIT_CAPACITY = 5
-_RATE_LIMIT_WINDOW_SECONDS = 60.0
 _REFRESH_REUSE_REASON = "rotated_refresh_token_reuse"
-
-
-class _OAuthAuditBoundary(Protocol):
-    def _audit(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        *,
-        event_type: str,
-        resource_type: str,
-        resource_id: str | None,
-        action: str,
-        decision: str = "allow",
-        policy_decision: Mapping[str, object] | None = None,
-        before_ref: Mapping[str, object] | None = None,
-        after_ref: Mapping[str, object] | None = None,
-        correlation_id: str | None = None,
-    ) -> None: ...
-
-
-@dataclass
-class _OAuthRateLimiter:
-    buckets: dict[tuple[str, str, str, str], list[float]] = field(default_factory=dict)
-
-    def check(self, ctx: RequestContext, action: str, client_id: str) -> None:
-        now = time.monotonic()
-        key = (ctx.tenant_id, ctx.actor_user_id, client_id, action)
-        recent = [seen_at for seen_at in self.buckets.get(key, []) if now - seen_at < _RATE_LIMIT_WINDOW_SECONDS]
-        if len(recent) >= _RATE_LIMIT_CAPACITY:
-            retry_after = max(1, int(_RATE_LIMIT_WINDOW_SECONDS - (now - recent[0])))
-            raise RateLimited("OSDK OAuth rate limit exceeded", details={"retryAfterSeconds": retry_after})
-        recent.append(now)
-        self.buckets[key] = recent
 
 
 class OsdkOAuthSessionService(CoreService):
