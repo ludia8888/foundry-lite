@@ -75,16 +75,27 @@ class SqlAlchemyModelRegistryRepository:
             )
         )
 
-    def get_aliases(self, *, transaction: Any, tenant_id: str, aliases: list[str]) -> list[ModelAliasRecord]:
+    def get_aliases(
+        self, *, transaction: Any, tenant_id: str, aliases: list[str], environment: str | None = None
+    ) -> list[ModelAliasRecord]:
         if not aliases:
             return []
+        conditions = [
+            db.ai_model_aliases.c.tenant_id == tenant_id,
+            db.ai_model_aliases.c.alias.in_(aliases),
+        ]
+        if environment is not None:
+            conditions.append(db.ai_model_aliases.c.environment == environment)
         rows = (
             transaction.execute(
-                select(db.ai_model_aliases).where(
-                    and_(
-                        db.ai_model_aliases.c.tenant_id == tenant_id,
-                        db.ai_model_aliases.c.alias.in_(aliases),
-                    )
+                select(db.ai_model_aliases)
+                .where(and_(*conditions))
+                # Deterministic order: the unique key is (tenant, alias, environment), so an alias that
+                # exists in several environments never routes nondeterministically via ``aliases[0]``.
+                .order_by(
+                    db.ai_model_aliases.c.environment,
+                    db.ai_model_aliases.c.alias,
+                    db.ai_model_aliases.c.model_id,
                 )
             )
             .mappings()

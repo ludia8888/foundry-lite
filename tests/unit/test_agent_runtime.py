@@ -284,6 +284,39 @@ def test_agent_runtime_retrieves_context_calls_model_and_links_operations(foundr
     assert "Explain Order O-1001 for the operator." not in json.dumps(detail, sort_keys=True)
 
 
+def test_agent_runtime_records_estimated_cost_from_model_pricing(foundry: Any) -> None:
+    prepare_indexed_demo(foundry)
+
+    result = foundry.aip.run_agent_payload(payload=_payload(), ctx=_CTX)
+
+    assert result.run_status == "succeeded"
+    row = _usage_ledger_row(foundry.engine, result.ai_run_id or "")
+    # Demo model pricing: input_per_1k=0.002, output_per_1k=0.006 (foundry.py _demo_model_record).
+    expected = row["input_tokens"] / 1000 * 0.002 + row["output_tokens"] / 1000 * 0.006
+    assert row["estimated_cost"] == pytest.approx(expected)
+    assert row["estimated_cost"] > 0.0
+    assert row["currency"] == "USD"
+
+
+def test_agent_runtime_records_usage_when_model_call_succeeds_then_step_fails(foundry: Any) -> None:
+    prepare_indexed_demo(foundry)
+    # The model call succeeds (and is charged), then the read-only runtime rejects the returned tool
+    # call — the spend must still be recorded in the usage ledger.
+    foundry._services.model_gateway.language_model_adapter = _ToolCallingLanguageModel()
+
+    result = foundry.aip.run_agent_payload(
+        payload={**_payload(), "agentRunId": "agent-runtime-usage-on-failure"},
+        ctx=_CTX,
+    )
+
+    assert result.run_status == "failed"
+    row = _usage_ledger_row(foundry.engine, result.ai_run_id or "")
+    assert row["input_tokens"] == 1
+    assert row["output_tokens"] == 1
+    assert row["estimated_cost"] == pytest.approx(1 / 1000 * 0.002 + 1 / 1000 * 0.006)
+    assert row["estimated_cost"] > 0.0
+
+
 def test_agent_runtime_citation_payload_plain_text_and_empty_claims_skip_resolver() -> None:
     resolver = _UnexpectedCitationResolver()
 
@@ -874,6 +907,14 @@ def _seed_agent_document_context(foundry: Any) -> None:
     foundry.media.configure_content_generation(_CTX, generation="agent-doc-g1")
     foundry.media.index_derivative(_CTX, media_derivative_id=derivative_id, generation="agent-doc-g1")
     foundry.media.promote_content_generation(_CTX, expected_active="", generation="agent-doc-g1")
+
+
+def _usage_ledger_row(engine: Any, ai_run_id: str) -> dict[str, object]:
+    with engine.begin() as conn:
+        row = (
+            conn.execute(select(db.ai_usage_ledger).where(db.ai_usage_ledger.c.ai_run_id == ai_run_id)).mappings().one()
+        )
+    return dict(row)
 
 
 def _table_count(engine: Any, table: Any) -> int:

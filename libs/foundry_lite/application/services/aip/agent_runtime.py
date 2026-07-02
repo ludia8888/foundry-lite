@@ -9,6 +9,7 @@ governed model call.
 
 from __future__ import annotations
 
+from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.application.services.aip.agent_runtime_citations import (
     AgentRuntimeAnswer,
     CitationResolver,
@@ -99,23 +100,28 @@ class AgentRuntimeService(CoreService):
         ai_run_id: str | None = None
         session_id: str | None = None
         seeded = False
+        resolution: ModelResolution | None = None
+        charged_response: ModelResponse | None = None
         try:
             validate_request(ctx, request)
             ai_run_id = request.ai_run_id or new_ai_run_id()
             session_id = request.session_id or f"aip-agent-session-{request.agent_run_id}"
             context_items = self._retrieve_context(ctx, request)
             compiled = self.context_compiler_service.compile(ctx, compile_request(request, context_items))
-            resolution = self.model_gateway_service.resolve_model(ctx, request.model_alias)
+            resolution = self.model_gateway_service.resolve_model(ctx, request.model_alias, request.environment)
             self._seed_ledger(ctx, request, ai_run_id, session_id, context_items, compiled, resolution)
             seeded = True
             self._record_initial_prompt_artifact(ctx, ai_run_id, compiled)
             response = self.model_gateway_service.invoke(ctx, model_request(request, ai_run_id, compiled))
+            # The provider was already called and charged for this attempt; capture it so a failure in a
+            # LATER step (tool/citation/final call) still records the real spend in the usage ledger.
+            charged_response = response
             final_response, answer, tool_execution, action_proposal = self._complete_model_turn(
                 ctx, request, ai_run_id, compiled, response
             )
         except Exception as exc:
             if seeded and ai_run_id is not None:
-                self._fail_seeded_run(ctx, ai_run_id, exc)
+                self._fail_seeded_run(ctx, ai_run_id, exc, resolution, charged_response)
             return failed_result(request, ai_run_id if seeded else None, session_id if seeded else None, exc)
         return self._finish_result(
             ctx,
@@ -127,6 +133,7 @@ class AgentRuntimeService(CoreService):
             answer,
             tool_execution,
             action_proposal,
+            resolution,
         )
 
     def _retrieve_context(self, ctx: RequestContext, request: AgentRuntimeRequest) -> tuple[RetrievedContextItem, ...]:
@@ -156,11 +163,21 @@ class AgentRuntimeService(CoreService):
         answer: AgentRuntimeAnswer,
         tool_execution: AgentRuntimeToolExecution | None,
         action_proposal: AgentRuntimeActionProposalExecution | None,
+        resolution: ModelResolution,
     ) -> AgentRuntimeResult:
         assert ai_run_id is not None
         assert session_id is not None
         self._finish_success(
-            ctx, request, ai_run_id, session_id, context_items, response, answer, tool_execution, action_proposal
+            ctx,
+            request,
+            ai_run_id,
+            session_id,
+            context_items,
+            response,
+            answer,
+            tool_execution,
+            action_proposal,
+            resolution,
         )
         return success_result(
             request, ai_run_id, session_id, context_items, response, answer, tool_execution, action_proposal
@@ -240,13 +257,14 @@ class AgentRuntimeService(CoreService):
         answer: AgentRuntimeAnswer,
         tool_execution: AgentRuntimeToolExecution | None,
         action_proposal: AgentRuntimeActionProposalExecution | None,
+        resolution: ModelResolution,
     ) -> None:
         usage = usage_payload(response, context_items, tool_execution, action_proposal)
         now = ledger_timestamp()
         with self.engine.begin() as transaction:
             self.ai_run_repository.record_usage(
                 transaction=transaction,
-                record=usage_record(ctx, ai_run_id, response, now),
+                record=usage_record(ctx, ai_run_id, response, now, resolution.pricing_json),
             )
             self.ai_run_repository.insert_message_or_get_existing(
                 transaction=transaction,
@@ -381,7 +399,14 @@ class AgentRuntimeService(CoreService):
         guard_final_response(response)
         return response
 
-    def _fail_seeded_run(self, ctx: RequestContext, ai_run_id: str, exc: Exception) -> None:
+    def _fail_seeded_run(
+        self,
+        ctx: RequestContext,
+        ai_run_id: str,
+        exc: Exception,
+        resolution: ModelResolution | None,
+        charged_response: ModelResponse | None,
+    ) -> None:
         try:
             with self.engine.begin() as transaction:
                 if (
@@ -391,6 +416,7 @@ class AgentRuntimeService(CoreService):
                     is None
                 ):
                     return
+                self._record_charged_usage(ctx, transaction, ai_run_id, resolution, charged_response)
                 self.ai_run_repository.append_execution_event(
                     transaction=transaction,
                     record=event_record(ctx, ai_run_id, 99, "failed", error_payload(exc), ledger_timestamp()),
@@ -406,3 +432,20 @@ class AgentRuntimeService(CoreService):
                 )
         except Exception:
             return
+
+    def _record_charged_usage(
+        self,
+        ctx: RequestContext,
+        transaction: TransactionContext,
+        ai_run_id: str,
+        resolution: ModelResolution | None,
+        charged_response: ModelResponse | None,
+    ) -> None:
+        # The provider was already called and charged; record the spend so accounting matches real
+        # usage even though a later step failed the run.
+        if charged_response is None or resolution is None:
+            return
+        self.ai_run_repository.record_usage(
+            transaction=transaction,
+            record=usage_record(ctx, ai_run_id, charged_response, ledger_timestamp(), resolution.pricing_json),
+        )
