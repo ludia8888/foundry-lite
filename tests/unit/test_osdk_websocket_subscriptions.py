@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -174,6 +175,23 @@ def test_object_subscription_websocket_route_rate_denial_is_terminal_event(
     assert event["event"] == "error"
     assert event["error"]["code"] == "RATE_LIMITED"
     assert event["error"]["details"]["retryAfterSeconds"] >= 1
+
+
+def test_api_window_rate_limiter_prunes_expired_buckets(monkeypatch) -> None:
+    # object_type comes from the URL path, so bucket keys are attacker-controlled;
+    # without pruning the limiter grows one bucket per unique key forever (Tier 3
+    # resource-ceiling item in the tricky failure modes checklist).
+    limiter = api_main._ApiWindowRateLimiter()
+    now = 1_000.0
+    monkeypatch.setattr("foundry_lite_api.runtime.time", SimpleNamespace(monotonic=lambda: now))
+    for index in range(300):
+        limiter.retry_after_seconds(("tenant", f"object-{index}"), limit=5, window_seconds=60.0)
+    assert len(limiter.buckets) == 300
+
+    now = 2_000.0
+    limiter.retry_after_seconds(("tenant", "fresh-object"), limit=5, window_seconds=60.0)
+
+    assert set(limiter.buckets) == {("tenant", "fresh-object")}
 
 
 def test_object_subscription_websocket_route_rejects_untrusted_browser_origin(

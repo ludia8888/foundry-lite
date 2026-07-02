@@ -466,6 +466,7 @@ class SqlAlchemyRuntimeRepository:
         event_id: str,
         transition: StatusTransition,
         published_at: str,
+        claimed_at: str,
     ) -> RuntimeRow | None:
         updated = cas_status_update(
             transaction,
@@ -474,13 +475,14 @@ class SqlAlchemyRuntimeRepository:
             row_id=event_id,
             transition=transition,
             values={"published_at": published_at, "claimed_at": None},
+            conditions=[db.outbox_events.c.claimed_at == claimed_at],
         )
         if not updated:
             return None
         return self._outbox_event_row(transaction=transaction, tenant_id=tenant_id, event_id=event_id)
 
     def mark_outbox_event_failed(
-        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition
+        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition, claimed_at: str
     ) -> RuntimeRow | None:
         updated = cas_status_update(
             transaction,
@@ -489,6 +491,7 @@ class SqlAlchemyRuntimeRepository:
             row_id=event_id,
             transition=transition,
             values={"published_at": None, "claimed_at": None},
+            conditions=[db.outbox_events.c.claimed_at == claimed_at],
         )
         if not updated:
             return None

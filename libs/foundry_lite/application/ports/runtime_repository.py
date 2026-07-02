@@ -221,14 +221,26 @@ class RuntimeRepository(Protocol):
         event_id: str,
         transition: StatusTransition,
         published_at: str,
+        claimed_at: str,
     ) -> RuntimeRow | None:
-        """CAS a publishing outbox row into the published terminal state."""
+        """CAS a publishing outbox row into the published terminal state.
+
+        ``claimed_at`` fences the transition to the exact claim the caller made:
+        if the row was reclaimed and re-claimed by another worker, the stored
+        claim differs and this returns None instead of overwriting a live claim.
+        """
         ...
 
     def mark_outbox_event_failed(
-        self, *, transaction: TransactionContext, tenant_id: str, event_id: str, transition: StatusTransition
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        event_id: str,
+        transition: StatusTransition,
+        claimed_at: str,
     ) -> RuntimeRow | None:
-        """CAS a publishing outbox row into the failed terminal state."""
+        """CAS a publishing outbox row into the failed terminal state, fenced by ``claimed_at``."""
         ...
 
     def update_outbox_event_for_retry(

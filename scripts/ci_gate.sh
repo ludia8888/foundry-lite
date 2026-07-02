@@ -94,15 +94,17 @@ run_static_gate() {
 run_coverage_gate() {
   maybe_run_testcontainers_preflight
 
-  echo "== Dynamic: pytest with branch coverage (xdist parallel) =="
+  echo "== Dynamic: pytest with branch coverage =="
   # pytest-randomly is auto-loaded and shuffles test order per run, exposing
   # hidden inter-test dependencies (state leaks across fixtures, shared module
   # globals, etc.). A consistent --randomly-seed is logged so failures can be
-  # reproduced exactly. pytest-xdist spreads tests across cores; coverage data
-  # is combined across workers by pytest-cov, and worksteal keeps slow
-  # testcontainers suites from serializing the tail.
+  # reproduced exactly. This lane runs serially on purpose: per-layer coverage
+  # is the gate's output, and sharding the suite across xdist workers shifted
+  # measured domain-layer coverage below threshold (import-time-only lines are
+  # attributed to whichever worker imports the module first), so the layer
+  # thresholds are only trustworthy from a single-process run. Wall-clock
+  # parallelism comes from the separate CI lanes, not from sharding this one.
   uv run pytest tests \
-    -n auto --dist worksteal \
     --cov=libs/foundry_lite \
     --cov=apps/api \
     --cov=apps/cli \

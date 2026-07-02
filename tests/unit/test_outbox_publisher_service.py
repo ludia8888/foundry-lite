@@ -6,7 +6,13 @@ from typing import NoReturn, cast
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.ports import OUTBOX_PUBLISHING, OutboxEventRecord, StreamPublishRequest
+from foundry_lite.application.ports import (
+    OUTBOX_PUBLISHED,
+    OUTBOX_PUBLISHING,
+    OUTBOX_PUBLISHING_RECLAIM,
+    OutboxEventRecord,
+    StreamPublishRequest,
+)
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.adapters.scale_foundation import LocalStreamAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -80,6 +86,63 @@ def test_operations_publish_pending_outbox_reclaims_and_republishes_stuck_publis
     assert result["published"] == 1
     assert [event.key for event in events] == ["outbox_stuck_1"]
     assert runs["outboxEvents"][0]["status"] == "published"
+
+
+def test_reclaimed_publishing_row_rejects_a_stale_workers_mark_published(tmp_path: Path) -> None:
+    # BUG 1 (fencing): worker A claims an event, its publish hangs past the lease,
+    # worker B reclaims and re-claims the row, then A's delayed mark_published must
+    # NOT land on B's fresh claim — otherwise the event is marked published while
+    # B's publish is still in flight (double publish / false terminal state).
+    _, dependencies = _foundry(tmp_path)
+    repo = dependencies.runtime_repository
+    _insert_outbox(dependencies, event_id="outbox_fence_1", request_id="req-fence")
+
+    with dependencies.engine.begin() as conn:
+        claimed_a = repo.mark_outbox_event_publishing(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            event_id="outbox_fence_1",
+            transition=OUTBOX_PUBLISHING,
+            claimed_at="2020-01-01T00:00:00+00:00",
+        )
+    assert claimed_a is not None
+    fence_a = str(claimed_a["claimed_at"])
+
+    # Worker B reclaims the stale claim and takes a fresh one.
+    with dependencies.engine.begin() as conn:
+        reclaimed = repo.reclaim_stale_publishing_events(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            transition=OUTBOX_PUBLISHING_RECLAIM,
+            claimed_before="2020-06-01T00:00:00+00:00",
+        )
+        assert reclaimed == 1
+    with dependencies.engine.begin() as conn:
+        claimed_b = repo.mark_outbox_event_publishing(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            event_id="outbox_fence_1",
+            transition=OUTBOX_PUBLISHING,
+            claimed_at="2020-12-31T00:00:00+00:00",
+        )
+    assert claimed_b is not None and claimed_b["claimed_at"] != fence_a
+
+    # Worker A's delayed mark_published carries its OWN (now superseded) fence.
+    with dependencies.engine.begin() as conn:
+        published = repo.mark_outbox_event_published(
+            transaction=conn,
+            tenant_id="tenant-demo",
+            event_id="outbox_fence_1",
+            transition=OUTBOX_PUBLISHED,
+            published_at="2021-01-01T00:00:00+00:00",
+            claimed_at=fence_a,
+        )
+
+    assert published is None
+    with dependencies.engine.begin() as conn:
+        row = repo._outbox_event_row(transaction=conn, tenant_id="tenant-demo", event_id="outbox_fence_1")
+    assert row is not None and row["status"] == "publishing"
+    assert row["claimed_at"] == claimed_b["claimed_at"]
 
 
 def _foundry(

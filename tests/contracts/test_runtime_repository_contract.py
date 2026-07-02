@@ -334,20 +334,31 @@ class FakeRuntimeRepository:
         event_id: str,
         transition: StatusTransition,
         published_at: str,
+        claimed_at: str,
     ) -> RuntimeRow | None:
         del transaction
         for row in self.tables["outbox_events"]:
-            if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
+            if (
+                row["tenant_id"] == tenant_id
+                and row["id"] == event_id
+                and row["status"] in transition.from_statuses
+                and row["claimed_at"] == claimed_at
+            ):
                 row.update(status=transition.to_status, published_at=published_at, claimed_at=None)
                 return cast(RuntimeRow, dict(row))
         return None
 
     def mark_outbox_event_failed(
-        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition
+        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition, claimed_at: str
     ) -> RuntimeRow | None:
         del transaction
         for row in self.tables["outbox_events"]:
-            if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
+            if (
+                row["tenant_id"] == tenant_id
+                and row["id"] == event_id
+                and row["status"] in transition.from_statuses
+                and row["claimed_at"] == claimed_at
+            ):
                 row.update(status=transition.to_status, published_at=None, claimed_at=None)
                 return cast(RuntimeRow, dict(row))
         return None
@@ -1683,6 +1694,7 @@ def test_runtime_repository_contract_claims_and_publishes_outbox_event(
             event_id=str(pending[0]["id"]),
             transition=OUTBOX_PUBLISHED,
             published_at="2026-06-10T00:00:03Z",
+            claimed_at="2026-06-10T00:00:01Z",
         )
 
     assert [row["id"] for row in pending] == ["outbox_2"]
@@ -1758,6 +1770,7 @@ def test_runtime_repository_contract_fails_and_dead_letters_outbox_event(
             tenant_id="tenant-demo",
             event_id="outbox_1",
             transition=OUTBOX_PUBLISH_FAILED,
+            claimed_at="2026-06-10T00:00:01Z",
         )
         harness.repository.insert_dead_letter_event(
             transaction=transaction,

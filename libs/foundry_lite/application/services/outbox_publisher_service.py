@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Literal, TypedDict
 
 from foundry_lite.application.ports import (
@@ -28,7 +28,10 @@ MAX_OUTBOX_PUBLISH_BATCH_SIZE = 500
 # published/failed leaves the row stranded in publishing forever. Each publish cycle first
 # requeues rows whose claim is older than this lease so no event is silently lost. The
 # window is generous relative to a single publish so a still-in-flight claim is not reclaimed
-# out from under a live worker; downstream idempotency absorbs an at-least-once re-publish.
+# out from under a live worker. Delivery is at-least-once: a crash after the external publish
+# succeeds but before the row is marked published re-publishes the event on reclaim, so
+# consumers must dedupe on the event id. mark_published/mark_failed are fenced by the claim
+# timestamp, so a worker whose lease was reclaimed cannot mark a row another worker now owns.
 OUTBOX_PUBLISH_LEASE_TIMEOUT_SECONDS = 300
 
 
@@ -99,17 +102,26 @@ class OutboxPublisherService(CoreService):
         if claimed is None:
             result["skipped"] += 1
             return
+        fence = _row_text(claimed, "claimed_at")
         try:
             self.stream_adapter.publish_event(_stream_request(claimed, ctx=ctx, stream_name=stream_name))
         except Exception as exc:  # noqa: BLE001 - failures become durable DLQ evidence for operators.
-            dead_letter_id = self._mark_failed(ctx=ctx, row=claimed, exc=exc)
-            result["failed"] += 1
+            dead_letter_id = self._mark_failed(ctx=ctx, row=claimed, fence=fence, exc=exc)
             if dead_letter_id is not None:
+                result["failed"] += 1
                 result["deadLetterEventIds"].append(dead_letter_id)
+            else:
+                # The claim was reclaimed under us before we could fail it; another
+                # worker now owns the row, so this attempt is a no-op, not a failure.
+                result["skipped"] += 1
             return
-        self._mark_published(ctx, claimed)
-        result["published"] += 1
-        result["eventIds"].append(event_id)
+        if self._mark_published(ctx, claimed, fence=fence):
+            result["published"] += 1
+            result["eventIds"].append(event_id)
+        else:
+            # Our claim was superseded before mark_published landed; the row is
+            # owned by another worker. Counting it as published would be a lie.
+            result["skipped"] += 1
 
     def _claim_event(self, ctx: RequestContext, event_id: str) -> RuntimeRow | None:
         with self.engine.begin() as conn:
@@ -119,10 +131,10 @@ class OutboxPublisherService(CoreService):
                 tenant_id=ctx.tenant_id,
                 event_id=event_id,
                 transition=OUTBOX_PUBLISHING,
-                claimed_at=_now(),
+                claimed_at=_lease_now(),
             )
 
-    def _mark_published(self, ctx: RequestContext, row: RuntimeRow) -> None:
+    def _mark_published(self, ctx: RequestContext, row: RuntimeRow, *, fence: str) -> bool:
         event_id = _row_text(row, "id")
         with self.engine.begin() as conn:
             published = self.runtime_repository.mark_outbox_event_published(
@@ -131,11 +143,14 @@ class OutboxPublisherService(CoreService):
                 event_id=event_id,
                 transition=OUTBOX_PUBLISHED,
                 published_at=_now(),
+                claimed_at=fence,
             )
             if published is not None:
                 self._audit_publish(conn, ctx, published, status="published")
+                return True
+        return False
 
-    def _mark_failed(self, *, ctx: RequestContext, row: RuntimeRow, exc: Exception) -> str | None:
+    def _mark_failed(self, *, ctx: RequestContext, row: RuntimeRow, fence: str, exc: Exception) -> str | None:
         event_id = _row_text(row, "id")
         failed_at = _now()
         error = self.runtime_service._error_payload(
@@ -151,6 +166,7 @@ class OutboxPublisherService(CoreService):
                 tenant_id=ctx.tenant_id,
                 event_id=event_id,
                 transition=OUTBOX_PUBLISH_FAILED,
+                claimed_at=fence,
             )
             if failed is not None:
                 dead_letter_id = self._insert_dead_letter(conn, row=failed, ctx=ctx, error=error, failed_at=failed_at)
@@ -207,13 +223,21 @@ class OutboxPublisherService(CoreService):
         )
 
 
-def _lease_cutoff() -> str:
-    """ISO timestamp before which a publishing claim is considered stale and requeued.
+def _lease_now() -> str:
+    """Canonical UTC timestamp used for the outbox claim time.
 
-    Matches the _now() representation (local-offset ISO 8601) so the repository can compare
-    it against stored claimed_at values as ordered strings on the same host.
+    Both the claim and the staleness cutoff use this UTC ISO-8601 form so the
+    repository's lexicographic ``claimed_at < cutoff`` comparison is also a
+    chronological comparison regardless of the host timezone. The prior
+    local-offset representation broke ordering across hosts in different zones
+    and across DST transitions, reclaiming live claims early or never.
     """
-    return (datetime.now().astimezone() - timedelta(seconds=OUTBOX_PUBLISH_LEASE_TIMEOUT_SECONDS)).isoformat()
+    return datetime.now(UTC).isoformat()
+
+
+def _lease_cutoff() -> str:
+    """UTC timestamp before which a publishing claim is considered stale and requeued."""
+    return (datetime.now(UTC) - timedelta(seconds=OUTBOX_PUBLISH_LEASE_TIMEOUT_SECONDS)).isoformat()
 
 
 def _bounded_limit(limit: int) -> int:

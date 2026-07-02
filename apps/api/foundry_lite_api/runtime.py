@@ -25,12 +25,21 @@ class _ApiWindowRateLimiter:
 
     def retry_after_seconds(self, key: tuple[str, ...], *, limit: int, window_seconds: float) -> int | None:
         now = time.monotonic()
+        self._prune_expired_buckets(now, window_seconds)
         recent = [seen_at for seen_at in self.buckets.get(key, []) if now - seen_at < window_seconds]
         if len(recent) >= limit:
             return max(1, int(window_seconds - (now - recent[0])))
         recent.append(now)
         self.buckets[key] = recent
         return None
+
+    def _prune_expired_buckets(self, now: float, window_seconds: float) -> None:
+        # Bucket keys include the URL-path object_type, so they are effectively
+        # attacker-controlled; without pruning the dict grows one entry per
+        # unique key forever. Live keys are bounded by request rate x window.
+        expired = [key for key, seen in self.buckets.items() if not seen or now - seen[-1] >= window_seconds]
+        for key in expired:
+            del self.buckets[key]
 
 
 configure_observability("foundry-lite-api")
