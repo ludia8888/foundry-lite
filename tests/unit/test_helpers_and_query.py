@@ -500,6 +500,38 @@ def test_link_reports_missing_target_object(foundry: FoundryLite) -> None:
     assert links[0]["warning"]["type"] == "link_target_missing"
 
 
+def test_link_fanout_is_bounded_by_cap(foundry: FoundryLite, monkeypatch) -> None:
+    from foundry_lite.application.services.object_store import links as links_module
+
+    ctx = prepare_indexed_demo(foundry)
+    monkeypatch.setattr(links_module, "MAX_LINK_FANOUT", 1)
+
+    links = foundry.objects.links("Customer", "C-100", "OrderCustomer", ctx=ctx)
+
+    assert len(links) == 1
+
+
+def test_link_target_resolution_is_batched(foundry: FoundryLite, monkeypatch) -> None:
+    from foundry_lite.infrastructure.repositories.object_read_repository import (
+        SqlAlchemyObjectReadRepository,
+    )
+
+    ctx = prepare_indexed_demo(foundry)
+    original = SqlAlchemyObjectReadRepository.object_records
+    calls = {"count": 0}
+
+    def _spy(self, **kwargs):  # type: ignore[no-untyped-def]
+        calls["count"] += 1
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(SqlAlchemyObjectReadRepository, "object_records", _spy)
+
+    links = foundry.objects.links("Customer", "C-100", "OrderCustomer", ctx=ctx)
+
+    assert len(links) == 2  # C-100 fans out to O-1001 and O-1003
+    assert calls["count"] == 1  # one batched read, not one query per target
+
+
 def test_link_reverse_traverses_customer_to_orders(foundry: FoundryLite) -> None:
     ctx = prepare_indexed_demo(foundry)
 

@@ -35,7 +35,7 @@ class ObjectReadHarness(Protocol):
 
 @dataclass
 class FakeObjectReadRepository:
-    object_records: list[dict[str, Any]] = field(default_factory=list)
+    record_rows: list[dict[str, Any]] = field(default_factory=list)
     object_links: list[dict[str, Any]] = field(default_factory=list)
     property_data_types: dict[tuple[str, str, str], str] = field(default_factory=dict)
 
@@ -49,7 +49,7 @@ class FakeObjectReadRepository:
         object_type_id: str | None = None,
     ) -> ObjectRecordRow | None:
         del transaction
-        for row in self.object_records:
+        for row in self.record_rows:
             if (
                 row["tenant_id"] == tenant_id
                 and row["object_type_api_name"] == object_type_api_name
@@ -59,6 +59,25 @@ class FakeObjectReadRepository:
             ):
                 return cast(ObjectRecordRow, dict(row))
         return None
+
+    def object_records(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        object_ids: Sequence[str],
+    ) -> list[ObjectRecordRow]:
+        del transaction
+        wanted = set(object_ids)
+        return [
+            cast(ObjectRecordRow, dict(row))
+            for row in self.record_rows
+            if row["tenant_id"] == tenant_id
+            and row["object_type_api_name"] == object_type_api_name
+            and row["object_id"] in wanted
+            and row.get("is_active", True) is True
+        ]
 
     def active_object_rows(
         self,
@@ -71,7 +90,7 @@ class FakeObjectReadRepository:
         del transaction
         rows = [
             cast(ObjectRecordRow, dict(row))
-            for row in self.object_records
+            for row in self.record_rows
             if row["tenant_id"] == tenant_id
             and row["object_type_api_name"] == object_type_api_name
             and (object_type_id is None or row["object_type_id"] == object_type_id)
@@ -117,9 +136,10 @@ class FakeObjectReadRepository:
         link_type_api_name: str,
         from_api_name: str,
         from_object_id: str,
+        limit: int | None = None,
     ) -> list[ObjectLinkRow]:
         del transaction
-        return [
+        rows = [
             cast(ObjectLinkRow, dict(row))
             for row in self.object_links
             if row["tenant_id"] == tenant_id
@@ -129,6 +149,8 @@ class FakeObjectReadRepository:
             and row["from_object_id"] == from_object_id
             and row["deleted"] is False
         ]
+        rows.sort(key=lambda row: row["to_object_id"])
+        return rows[:limit] if limit is not None else rows
 
     def latest_object_change_sequence(
         self,
@@ -141,7 +163,7 @@ class FakeObjectReadRepository:
         del transaction
         rows = [
             row
-            for row in self.object_records
+            for row in self.record_rows
             if row["tenant_id"] == tenant_id
             and row["object_type_api_name"] == object_type_api_name
             and row.get("is_active", True) is True
@@ -157,9 +179,10 @@ class FakeObjectReadRepository:
         link_type_api_name: str,
         to_api_name: str,
         to_object_id: str,
+        limit: int | None = None,
     ) -> list[ObjectLinkRow]:
         del transaction
-        return [
+        rows = [
             cast(ObjectLinkRow, dict(row))
             for row in self.object_links
             if row["tenant_id"] == tenant_id
@@ -169,6 +192,8 @@ class FakeObjectReadRepository:
             and row["to_object_id"] == to_object_id
             and row["deleted"] is False
         ]
+        rows.sort(key=lambda row: row["from_object_id"])
+        return rows[:limit] if limit is not None else rows
 
     def _property_data_types(self, object_type_api_name: str, object_type_id: str | None) -> dict[str, str]:
         return {
@@ -188,7 +213,7 @@ class FakeObjectReadHarness:
         yield None
 
     def add_object(self, **kwargs: Any) -> None:
-        self.repository.object_records.append(_object_row(**kwargs))
+        self.repository.record_rows.append(_object_row(**kwargs))
 
     def add_property_type(self, **kwargs: Any) -> None:
         self.repository.property_data_types[
@@ -819,6 +844,53 @@ def test_object_read_repository_contract_lists_active_incoming_links(
 
     assert [row["id"] for row in rows] == ["link_1", "link_2"]
     assert [row["from_object_id"] for row in rows] == ["O-1", "O-2"]
+
+
+def test_object_read_repository_contract_caps_link_fanout_with_limit(
+    harness: ObjectReadHarness,
+) -> None:
+    for index in range(5):
+        harness.add_link(row_id=f"link_{index}", to_object_id=f"C-{index}")
+
+    with harness.transaction() as transaction:
+        outgoing = harness.repository.active_links_from(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            link_type_api_name="OrderCustomer",
+            from_api_name="Order",
+            from_object_id="O-1",
+            limit=2,
+        )
+        incoming = harness.repository.active_links_to(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            link_type_api_name="OrderCustomer",
+            to_api_name="Customer",
+            to_object_id="C-1",
+            limit=1,
+        )
+
+    assert len(outgoing) == 2
+    assert len(incoming) == 1
+
+
+def test_object_read_repository_contract_reads_many_records_in_one_batch(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_object(row_id="obj_order_1", object_id="O-1")
+    harness.add_object(row_id="obj_order_2", object_id="O-2")
+    harness.add_object(row_id="obj_other_tenant", tenant_id="tenant-other", object_id="O-2")
+
+    with harness.transaction() as transaction:
+        rows = harness.repository.object_records(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            object_ids=["O-1", "O-2", "O-missing"],
+        )
+
+    assert {row["object_id"] for row in rows} == {"O-1", "O-2"}
+    assert all(row["tenant_id"] == "tenant-demo" for row in rows)
 
 
 def test_object_read_repository_contract_reads_latest_object_change_sequence(

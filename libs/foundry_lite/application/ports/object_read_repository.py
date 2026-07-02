@@ -156,6 +156,17 @@ class ObjectReadRepository(Protocol):
         """Return one object record for a tenant and object reference."""
         ...
 
+    def object_records(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_api_name: str,
+        object_ids: Sequence[str],
+    ) -> list[ObjectRecordRow]:
+        """Return object records for many ids of one type in a single batch read."""
+        ...
+
     def active_object_rows(
         self,
         *,
@@ -202,8 +213,9 @@ class ObjectReadRepository(Protocol):
         link_type_api_name: str,
         from_api_name: str,
         from_object_id: str,
+        limit: int | None = None,
     ) -> list[ObjectLinkRow]:
-        """Return non-deleted outgoing links for one object and link type."""
+        """Return non-deleted outgoing links for one object and link type, bounded by limit."""
         ...
 
     def active_links_to(
@@ -214,6 +226,7 @@ class ObjectReadRepository(Protocol):
         link_type_api_name: str,
         to_api_name: str,
         to_object_id: str,
+        limit: int | None = None,
     ) -> list[ObjectLinkRow]:
-        """Return non-deleted incoming links for one object and link type."""
+        """Return non-deleted incoming links for one object and link type, bounded by limit."""
         ...

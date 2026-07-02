@@ -14,8 +14,11 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.object_store.query_protocols import ObjectRecordLookup
 from foundry_lite.domain.context import RequestContext
+
+# Ceiling on how many links one object may fan out to in a single response.
+# Bounds both the DB read and the batched target resolution below.
+MAX_LINK_FANOUT = 1_000
 
 
 class _OsdkScopeBoundary(Protocol):
@@ -31,8 +34,7 @@ class _OsdkScopeBoundary(Protocol):
 
 class ObjectLinksService(CoreService):
     required_dependencies = ("engine", "policy", "object_read_repository")
-    required_collaborators = ("object_records_service", "osdk_application_service")
-    object_records_service: ObjectRecordLookup
+    required_collaborators = ("osdk_application_service",)
     osdk_application_service: _OsdkScopeBoundary
 
     def get_links(
@@ -53,6 +55,7 @@ class ObjectLinksService(CoreService):
                 link_type_api_name=link_type_api_name,
                 from_api_name=object_type_api_name,
                 from_object_id=object_id,
+                limit=MAX_LINK_FANOUT,
             )
             if links:
                 return self._link_payloads(conn, ctx, link_type_api_name, object_type_api_name, object_id, links)
@@ -62,6 +65,7 @@ class ObjectLinksService(CoreService):
                 link_type_api_name=link_type_api_name,
                 to_api_name=object_type_api_name,
                 to_object_id=object_id,
+                limit=MAX_LINK_FANOUT,
             )
             return self._link_payloads(
                 conn,
@@ -92,10 +96,11 @@ class ObjectLinksService(CoreService):
         *,
         direction: Literal["forward", "reverse"] = "forward",
     ) -> list[ObjectLinkPayload]:
+        targets_by_ref = self._resolve_targets(conn, ctx, links, direction)
         results: list[ObjectLinkPayload] = []
         for link in links:
             target_type, target_id = self._target_ref(link, direction)
-            target = self.object_records_service._object_record(conn, ctx, target_type, target_id)
+            target = targets_by_ref.get((target_type, target_id))
             if target is None:
                 results.append(
                     self._missing_target_payload(
@@ -109,6 +114,31 @@ class ObjectLinksService(CoreService):
                 continue
             results.append(self._link_payload(ctx, link_type_api_name, object_type_api_name, object_id, target))
         return results
+
+    def _resolve_targets(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        links: Sequence[ObjectLinkRow],
+        direction: Literal["forward", "reverse"],
+    ) -> dict[tuple[str, str], ObjectRecordRow]:
+        # Batch one read per distinct target type so link fan-out never triggers
+        # a per-target N+1 round-trip.
+        ids_by_type: dict[str, list[str]] = {}
+        for link in links:
+            target_type, target_id = self._target_ref(link, direction)
+            ids_by_type.setdefault(target_type, []).append(target_id)
+        resolved: dict[tuple[str, str], ObjectRecordRow] = {}
+        for target_type, target_ids in ids_by_type.items():
+            rows = self.object_read_repository.object_records(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_api_name=target_type,
+                object_ids=target_ids,
+            )
+            for row in rows:
+                resolved[(row["object_type_api_name"], row["object_id"])] = row
+        return resolved
 
     def _link_payload(
         self,
