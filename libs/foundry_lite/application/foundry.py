@@ -110,7 +110,7 @@ class FoundryLite:
         self.transforms = TransformPipeline(services.transform.entrypoint)
         self.ontology = OntologyRegistry(services.ontology)
         self.objects = ObjectStore(services.object_store, services.ontology_search)
-        self.actions = ActionGateway(services.action)
+        self.actions = ActionGateway(services.action.entrypoint)
         self.auth = AuthGateway(services.osdk_oauth_sessions)
         self.aip = AipWorkspace(
             services.agent_runtime,
@@ -133,7 +133,7 @@ class FoundryLite:
         self.erasure = ErasureGateway(services.erasure)
         self.developer_console = DeveloperConsole(services.osdk_applications)
         self.operations = OperationsConsole(
-            services.action,
+            services.action.entrypoint,
             services.runtime,
             services.materialization,
             services.record_dlq,

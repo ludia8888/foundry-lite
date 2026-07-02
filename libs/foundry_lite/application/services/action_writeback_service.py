@@ -1,4 +1,4 @@
-"""Application service helpers for action writeback operations workflows."""
+"""Action writeback and reconciliation use case service."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from foundry_lite.application.action_types import (
     ActionWritebackRecoveryItem,
     ActionWritebackRecoveryResult,
 )
-from foundry_lite.application.ports import ActionRepository, TransactionManager
 from foundry_lite.application.services.action_reconciliation import ActionWritebackReconciliationWorkflow
 from foundry_lite.application.services.action_workflow import (
     ActionObjectIndexer,
@@ -20,17 +19,23 @@ from foundry_lite.application.services.action_workflow import (
     ExternalWritebackAdapter,
     RealExternalWritebackRunner,
 )
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.security.policy import PolicyService
 
 
-class ActionWritebackOperationsMixin:
-    action_repository: ActionRepository
-    engine: TransactionManager
+class ActionWritebackService(CoreService):
+    """Own external writeback adapter state and operator reconciliation workflows."""
+
+    required_dependencies = ("engine", "policy", "action_repository")
+    required_collaborators = (
+        "object_indexing_service",
+        "object_records_service",
+        "ontology_service",
+        "runtime_service",
+    )
     object_indexing_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
     ontology_service: ActionOntologyLookup
-    policy: PolicyService
     runtime_service: ActionRuntimeBoundary
     _external_writeback_adapter: ExternalWritebackAdapter | None = None
 
@@ -92,13 +97,13 @@ class ActionWritebackOperationsMixin:
             ctx=ctx,
         )
 
-    def _writeback_recorder(self) -> ActionWritebackRecorder:
+    def writeback_recorder(self) -> ActionWritebackRecorder:
         return ActionWritebackRecorder(
             action_repository=self.action_repository,
             runtime_service=self.runtime_service,
         )
 
-    def _real_writeback_runner(self, command: ActionApplyCommand) -> RealExternalWritebackRunner | None:
+    def real_writeback_runner(self, command: ActionApplyCommand) -> RealExternalWritebackRunner | None:
         adapter = self._external_writeback_adapter
         if adapter is None or command.external_writeback_uri is None:
             return None

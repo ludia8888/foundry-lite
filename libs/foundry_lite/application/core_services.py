@@ -7,6 +7,7 @@ from typing import TypedDict
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.action_service import ActionService
+from foundry_lite.application.services.action_services import ActionServices
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
 from foundry_lite.application.services.aip.agent_runtime import AgentRuntimeService
 from foundry_lite.application.services.aip.approval_execution import ApprovalExecutionService
@@ -49,6 +50,7 @@ from foundry_lite.application.services.transform_services import TransformServic
 __all__ = [
     "CoreServices",
     "ActionService",
+    "ActionServices",
     "AgentRuntimeService",
     "ActionProposalService",
     "ApprovalExecutionService",
@@ -107,7 +109,7 @@ class CoreServices:
     service attributes, replacing the previous facade-level MRO.
     """
 
-    action: ActionService
+    action: ActionServices
     agent_runtime: AgentRuntimeService
     action_proposal: ActionProposalService
     approval_execution: ApprovalExecutionService
@@ -172,7 +174,7 @@ def _compose_core_services(
     service_type: type[CoreServices], dependencies: CoreDependencies, shared: _SharedCoreServices
 ) -> CoreServices:
     return service_type(
-        action=build_service(ActionService, dependencies),
+        action=ActionServices.create(dependencies),
         agent_runtime=build_service(AgentRuntimeService, dependencies),
         action_proposal=build_service(ActionProposalService, dependencies),
         approval_execution=build_service(ApprovalExecutionService, dependencies),
@@ -218,7 +220,7 @@ def _bind_core_service_collaborators(services: CoreServices) -> None:
 
 def _core_service_items(services: CoreServices) -> list[CoreService]:
     return [
-        services.action,
+        *services.action.items(),
         services.agent_runtime,
         services.action_proposal,
         services.approval_execution,
@@ -268,7 +270,10 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
 
 def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
-        "action_service": services.action,
+        "action_apply_service": services.action.apply,
+        "action_service": services.action.entrypoint,
+        "action_validation_service": services.action.validation,
+        "action_writeback_service": services.action.writeback,
         "agent_runtime_service": services.agent_runtime,
         "action_proposal_service": services.action_proposal,
         "approval_execution_service": services.approval_execution,

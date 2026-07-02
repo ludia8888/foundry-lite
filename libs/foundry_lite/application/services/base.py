@@ -63,7 +63,10 @@ from foundry_lite.security.tenant_context import bind_tenant_context_public_meth
 CollaboratorMap = Mapping[str, object]
 
 SERVICE_COLLABORATORS: Mapping[str, str] = {
+    "action_apply_service": "ActionApplyService",
     "action_service": "ActionService",
+    "action_validation_service": "ActionValidationService",
+    "action_writeback_service": "ActionWritebackService",
     "agent_runtime_service": "AgentRuntimeService",
     "action_proposal_service": "ActionProposalService",
     "backup_restore_service": "BackupRestoreService",

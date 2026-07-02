@@ -5,7 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol
 
-from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, RuntimeRunType, TransactionContext
+from foundry_lite.application.ports import (
+    ActionTypeRow,
+    ObjectRecordRow,
+    OsdkResourceOperation,
+    OsdkResourceType,
+    RuntimeRunType,
+    TransactionContext,
+)
 from foundry_lite.application.ports.action_repository import ActionErrorPayload, ObjectProperties
 from foundry_lite.domain.context import RequestContext
 
@@ -110,3 +117,14 @@ class ActionRuntimeBoundary(Protocol):
         correlation_id: str | None = None,
         adapter: str | None = None,
     ) -> ActionErrorPayload: ...
+
+
+class ActionOsdkScopeBoundary(Protocol):
+    def require_resource_scope(
+        self,
+        ctx: RequestContext,
+        *,
+        resource_type: OsdkResourceType,
+        resource_api_name: str,
+        operation: OsdkResourceOperation,
+    ) -> None: ...

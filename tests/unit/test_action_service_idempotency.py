@@ -5,8 +5,8 @@ from typing import Any
 
 import pytest
 from foundry_lite.application.ports.action_repository import ActionRunRecord, ActionRunRow
+from foundry_lite.application.services.action_apply_service import ActionApplyService
 from foundry_lite.application.services.action_helpers import action_request_fingerprint
-from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied
 
@@ -64,6 +64,10 @@ class _AllowOsdkScope:
         return None
 
 
+class _UnusedWriteback:
+    pass
+
+
 class _WriteOpenRuntime:
     """Runtime stub for a tenant that is not in restore mode (write traffic open)."""
 
@@ -107,11 +111,12 @@ class _WriteOpenRuntime:
         )
 
 
-def test_action_service_replays_when_insert_loses_idempotency_race() -> None:
+def test_action_apply_service_replays_when_insert_loses_idempotency_race() -> None:
     repository = _RaceActionRepository()
-    service = ActionService(engine=_FakeEngine(), policy=_AllowPolicy(), action_repository=repository)
+    service = ActionApplyService(engine=_FakeEngine(), policy=_AllowPolicy(), action_repository=repository)
     service.bind_collaborators(
         {
+            "action_writeback_service": _UnusedWriteback(),
             "object_indexing_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),
             "ontology_service": _Ontology(),
@@ -143,9 +148,10 @@ def test_protected_runtime_blocks_action_failure_injection_before_run_insert(mon
     monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
     repository = _RaceActionRepository()
     runtime = _WriteOpenRuntime()
-    service = ActionService(engine=_FakeEngine(), policy=_AllowPolicy(), action_repository=repository)
+    service = ActionApplyService(engine=_FakeEngine(), policy=_AllowPolicy(), action_repository=repository)
     service.bind_collaborators(
         {
+            "action_writeback_service": _UnusedWriteback(),
             "object_indexing_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),
             "ontology_service": _Ontology(),

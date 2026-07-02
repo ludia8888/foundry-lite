@@ -165,15 +165,16 @@ intermediate states.
   bounded context (`DatasetWorkspace`, `TransformPipeline`, `OntologyRegistry`,
   `ObjectStore`, `ActionGateway`, `MaterializationRunner`, `OperationsConsole`,
   `SupplyChainDemo`), each holding explicit public forwarders,
-  while `CoreServices` constructs `ActionService`, Dataset service group,
-  Object service group, Transform, Ontology, Materialization, Runtime, and Demo
+  while `CoreServices` constructs Action, Dataset, Object, Transform, Ontology,
+  Materialization, Runtime, and Demo service groups or focused services
   services with service-specific dependency injection. A service receives only
   the `CoreDependencies` fields listed in its `required_dependencies`; for
-  example, `ActionService` receives `engine`, `policy`, and `action_repository`,
-  not storage or transform adapters. A service also receives only the
-  collaborator services listed in its `required_collaborators`; for example,
-  `ActionService` receives runtime, ontology, object-record, and object-indexing
-  collaborators, not all 16 services. Cross-service helper access now uses
+  example, `ActionApplyService` receives `engine`, `policy`, and
+  `action_repository`, not storage or transform adapters. A service also
+  receives only the collaborator services listed in its `required_collaborators`;
+  for example, `ActionApplyService` receives writeback, runtime, ontology,
+  object-record, object-indexing, and OSDK-scope collaborators, not all
+  services. Cross-service helper access now uses
   explicit collaborator attributes such as `runtime_service._audit(...)` rather
   than `__getattr__` method lookup. These rules are held in check by static gates:
   `check_service_dependencies.py`, `check_service_call_graph.py`, Tach, AST-grep,
@@ -187,7 +188,7 @@ intermediate states.
   across the bounded-context sub-facades, which keeps API/CLI/test entrypoints
   stable while services continue to evolve independently.
 
-- Transform bounded-context split: Transform is now split into pure domain rules plus explicit application use-case services for definition, run, scheduler, graph, and transform Record DLQ replay. `TransformService` remains as the compatibility entrypoint for `foundry.transforms.*`, API callers, and SDK-facing contracts, while `TransformServices` registers the subservices in the dependency/collaborator graph so quality gates can inspect each responsibility separately. Action bounded-context split is intentionally future follow-up work after this Transform-first pattern stays stable.
+- Transform bounded-context split: Transform is now split into pure domain rules plus explicit application use-case services for definition, run, scheduler, graph, and the current partial transform row-DLQ replay path. `TransformService` remains as the compatibility entrypoint for `foundry.transforms.*`, API callers, and SDK-facing contracts, while `TransformServices` registers the subservices in the dependency/collaborator graph so quality gates can inspect each responsibility separately. Action bounded-context split is also current: `ActionService` remains the compatibility entrypoint for `foundry.actions.*`, API callers, Operations writeback controls, and SDK-facing contracts, while `ActionServices` registers apply, validation, and writeback use-case services separately.
 
 ## Quality Signal Boundaries
 
