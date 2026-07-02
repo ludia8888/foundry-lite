@@ -749,10 +749,22 @@ def _check_schema(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyF
     return findings
 
 
+def _api_actions_path(root: Path) -> Path:
+    """Locate the module that defines the action apply route.
+
+    The API app was split into per-resource routers; older layouts (and the
+    fixture repos in this gate's unit tests) keep the route in main.py.
+    """
+    routers_path = root / "apps" / "api" / "foundry_lite_api" / "routers" / "actions.py"
+    if routers_path.exists():
+        return routers_path
+    return root / "apps" / "api" / "foundry_lite_api" / "main.py"
+
+
 def collect_findings(root: Path = ROOT) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
     paths = {
-        "api": root / "apps" / "api" / "foundry_lite_api" / "main.py",
+        "api": _api_actions_path(root),
         "foundry": root / "libs" / "foundry_lite" / "application" / "facades" / "action_gateway.py",
         "service": root / "libs" / "foundry_lite" / "application" / "services" / "action_service.py",
         "apply_service": root / "libs" / "foundry_lite" / "application" / "services" / "action_apply_service.py",

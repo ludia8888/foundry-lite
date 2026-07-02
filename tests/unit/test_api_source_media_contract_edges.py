@@ -33,6 +33,7 @@ from foundry_lite.infrastructure.secrets.local_vault import (
     _secret_record,
 )
 from foundry_lite_api import main as api_main
+from foundry_lite_api import runtime as api_runtime
 from foundry_lite_worker import outbox_publisher
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -254,7 +255,7 @@ def _upload(filename: str, body: bytes, content_type: str = "text/plain") -> Upl
 
 
 def test_api_media_and_aip_routes_delegate_with_serialized_payloads(monkeypatch) -> None:
-    monkeypatch.setattr(api_main, "foundry", _fake_foundry())
+    monkeypatch.setattr(api_runtime, "foundry", _fake_foundry())
     request = _request()
 
     media_set = api_main.create_media_set(
@@ -370,7 +371,7 @@ def test_api_media_and_aip_routes_delegate_with_serialized_payloads(monkeypatch)
     )
     assert release["promoted_channel"] == "prod"
 
-    monkeypatch.setattr(api_main, "foundry", SimpleNamespace(aip=_AiEvalFailureAip()))
+    monkeypatch.setattr(api_runtime, "foundry", SimpleNamespace(aip=_AiEvalFailureAip()))
     with pytest.raises(HTTPException) as eval_error:
         api_main.run_aip_eval(
             request,
@@ -402,7 +403,7 @@ def test_api_media_and_aip_routes_delegate_with_serialized_payloads(monkeypatch)
 
 
 def test_api_source_upload_and_webhook_routes_delegate_to_source_workspace(monkeypatch) -> None:
-    monkeypatch.setattr(api_main, "foundry", _fake_foundry())
+    monkeypatch.setattr(api_runtime, "foundry", _fake_foundry())
     request = _request()
     manifest = json.dumps(
         {
@@ -483,7 +484,7 @@ def test_api_source_upload_and_webhook_routes_delegate_to_source_workspace(monke
 
 
 def test_api_dataset_quality_and_error_edges(monkeypatch) -> None:
-    monkeypatch.setattr(api_main, "foundry", _fake_foundry())
+    monkeypatch.setattr(api_runtime, "foundry", _fake_foundry())
     request = _request()
 
     assert api_main.list_dataset_quality_contract_checks(request, "raw", "orders")["checks"] == []
@@ -507,7 +508,7 @@ def test_api_dataset_quality_and_error_edges(monkeypatch) -> None:
         is False
     )
 
-    monkeypatch.setattr(api_main, "foundry", SimpleNamespace(sources=_FailingSources()))
+    monkeypatch.setattr(api_runtime, "foundry", SimpleNamespace(sources=_FailingSources()))
     with pytest.raises(HTTPException) as exc_info:
         api_main.list_sources(request)
     assert exc_info.value.status_code == 400
@@ -903,7 +904,7 @@ def test_api_remaining_error_edges_and_approval_execution(monkeypatch) -> None:
         sources=_RaisingNamespace(),
         transforms=_RaisingNamespace(),
     )
-    monkeypatch.setattr(api_main, "foundry", raising_foundry)
+    monkeypatch.setattr(api_runtime, "foundry", raising_foundry)
 
     invocations = [
         lambda: api_main.list_dataset_quality_contract_checks(request, "raw", "orders"),
@@ -1070,7 +1071,7 @@ def test_api_remaining_error_edges_and_approval_execution(monkeypatch) -> None:
             invoke()
         assert exc_info.value.detail["code"] == "VALIDATION_FAILED"
 
-    monkeypatch.setattr(api_main, "foundry", _fake_foundry())
+    monkeypatch.setattr(api_runtime, "foundry", _fake_foundry())
     with pytest.raises(HTTPException) as missing_key:
         api_main.execute_approved_action(
             request,

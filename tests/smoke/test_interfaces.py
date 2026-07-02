@@ -32,6 +32,7 @@ from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter, RestPullC
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.infrastructure.secrets import EnvSecretProvider
 from foundry_lite_api import main as api_main
+from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.main import _header_or_request, app, healthz
 from foundry_lite_cli.main import _dispatch, _fresh_supply_chain_demo, _json_arg, _params, _storage_root_for_args, main
 from sqlalchemy import create_engine, insert, select
@@ -101,7 +102,7 @@ def test_api_action_validate_route_does_not_require_idempotency(monkeypatch) -> 
     class FakeFoundry:
         actions = FakeActions()
 
-    monkeypatch.setattr(api_main, "foundry", FakeFoundry())
+    monkeypatch.setattr(api_runtime, "foundry", FakeFoundry())
     response = TestClient(app).post(
         "/api/actions/ApproveOrder/validate",
         json={
@@ -121,7 +122,7 @@ def test_api_action_target_shape_is_validated_before_core(monkeypatch) -> None:
         def apply_action(self, *_args, **_kwargs):
             raise AssertionError("invalid request should not reach foundry")
 
-    monkeypatch.setattr(api_main, "foundry", FailingCore())
+    monkeypatch.setattr(api_runtime, "foundry", FailingCore())
     response = TestClient(app).post(
         "/api/actions/ApproveOrder/apply",
         headers={"Idempotency-Key": "invalid-target-shape"},
@@ -141,7 +142,7 @@ def test_action_expected_object_version_required(monkeypatch) -> None:
         def apply_action(self, *_args, **_kwargs):
             raise AssertionError("invalid request should not reach foundry")
 
-    monkeypatch.setattr(api_main, "foundry", FailingCore())
+    monkeypatch.setattr(api_runtime, "foundry", FailingCore())
     response = TestClient(app).post(
         "/api/actions/ApproveOrder/apply",
         headers={"Idempotency-Key": "missing-expected-version"},
@@ -160,7 +161,7 @@ def test_api_validation_errors_preserve_request_id_without_raw_input(monkeypatch
         def apply_action(self, *_args, **_kwargs):
             raise AssertionError("invalid request should not reach foundry")
 
-    monkeypatch.setattr(api_main, "foundry", FailingCore())
+    monkeypatch.setattr(api_runtime, "foundry", FailingCore())
     response = TestClient(app).post(
         "/api/actions/ApproveOrder/apply",
         headers={"Idempotency-Key": "invalid-params-shape"},
@@ -233,7 +234,7 @@ def test_api_read_endpoint_domain_errors_preserve_request_id(monkeypatch) -> Non
         insights = FailingInsights()
         operations = FailingOperations()
 
-    monkeypatch.setattr(api_main, "foundry", FailingFoundry())
+    monkeypatch.setattr(api_runtime, "foundry", FailingFoundry())
     client = TestClient(app)
     headers = {"X-Tenant-ID": "tenant-demo", "X-User-ID": "ops-user", "X-Roles": "admin,ops_manager"}
     requests = [
@@ -291,7 +292,7 @@ def test_cli_supply_chain_demo_repeats_with_parseable_json_output(tmp_path, monk
 
 def test_api_object_set_create_and_query(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
 
     response = TestClient(app).post(
         "/api/object-sets",
@@ -326,7 +327,7 @@ def test_api_object_set_create_and_query(foundry, monkeypatch) -> None:
 
 def test_source_csv_upload_api_commits_and_lists_source(monkeypatch, tmp_path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     ctx = demo_admin_context()
     headers = {
         "X-Tenant-ID": ctx.tenant_id,
@@ -371,7 +372,7 @@ def test_api_source_wizard_explore_and_managed_sync_run(monkeypatch, tmp_path) -
     conn.close()
 
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     ctx = demo_admin_context()
     base_headers = {
         "X-Tenant-ID": ctx.tenant_id,
@@ -517,7 +518,7 @@ def test_api_source_wizard_explore_and_managed_sync_run(monkeypatch, tmp_path) -
 
 def test_api_ontology_catalog_returns_active_object_action_and_link_metadata(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
 
     response = TestClient(app).get(
         "/api/ontology/catalog",
@@ -547,7 +548,7 @@ def test_api_ontology_catalog_returns_active_object_action_and_link_metadata(fou
 
 def test_api_insight_reviews_create_assign_and_decide_with_audit_evidence(foundry, monkeypatch) -> None:
     ctx = demo_admin_context()
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {
         "X-Tenant-ID": ctx.tenant_id,
@@ -645,7 +646,7 @@ def test_api_observability_detect_returns_active_incident_report(monkeypatch) ->
     class FakeFoundry:
         operations = FakeOperations()
 
-    monkeypatch.setattr(api_main, "foundry", FakeFoundry())
+    monkeypatch.setattr(api_runtime, "foundry", FakeFoundry())
     response = TestClient(app).post(
         "/api/operations/observability/detect",
         headers={"X-User-ID": "ops-user", "X-Roles": "ops_manager"},
@@ -722,7 +723,7 @@ def test_api_observability_incident_lifecycle_routes(monkeypatch) -> None:
     class FakeFoundry:
         operations = FakeOperations()
 
-    monkeypatch.setattr(api_main, "foundry", FakeFoundry())
+    monkeypatch.setattr(api_runtime, "foundry", FakeFoundry())
     client = TestClient(app)
     headers = {"X-User-ID": "ops-user", "X-Roles": "ops_manager"}
     recorded = client.post(
@@ -823,7 +824,7 @@ def test_api_backup_restore_preflight_returns_commit_point_report(monkeypatch) -
     class FakeFoundry:
         operations = FakeOperations()
 
-    monkeypatch.setattr(api_main, "foundry", FakeFoundry())
+    monkeypatch.setattr(api_runtime, "foundry", FakeFoundry())
     client = TestClient(app)
     response = client.post(
         "/api/operations/backup-restore/preflight",
@@ -898,7 +899,7 @@ def test_api_backup_restore_mode_start_and_status_return_pause_gate(monkeypatch)
     class FakeFoundry:
         operations = FakeOperations()
 
-    monkeypatch.setattr(api_main, "foundry", FakeFoundry())
+    monkeypatch.setattr(api_runtime, "foundry", FakeFoundry())
     client = TestClient(app)
     headers = {"X-User-ID": "ops-user", "X-Roles": "ops_manager"}
     started = client.post(
@@ -948,7 +949,7 @@ def test_api_webhook_ingest_verifies_signature_and_appends_dataset(foundry, monk
         "X-Roles": ",".join(ctx.roles),
     }
     foundry.datasets.ensure("raw.webhook_orders", ctx=ctx, primary_key=["event_id"])
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
     client = TestClient(app)
 
@@ -1043,7 +1044,7 @@ def test_api_webhook_service_principal_auth_records_service_actor(foundry, monke
         "X-Foundry-Lite-Signature": _webhook_signature(body, secret, timestamp),
     }
     foundry.datasets.ensure(dataset_ref, ctx=ctx, primary_key=["event_id"])
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
     client = TestClient(app)
 
@@ -1122,8 +1123,8 @@ def test_api_webhook_ingest_service_principal_bypasses_strict_user_auth_provider
         ),
     }
     foundry.datasets.ensure(dataset_ref, ctx=ctx, primary_key=["event_id"])
-    monkeypatch.setattr(api_main, "foundry", foundry)
-    monkeypatch.setattr(api_main, "auth_provider", RejectingAuthProvider())
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "auth_provider", RejectingAuthProvider())
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
 
     response = TestClient(app).post(
@@ -1155,7 +1156,7 @@ def test_api_webhook_rejects_oversized_body_before_commit(foundry, monkeypatch) 
         "X-Roles": ",".join(ctx.roles),
     }
     foundry.datasets.ensure("raw.webhook_oversized_orders", ctx=ctx, primary_key=["event_id"])
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     monkeypatch.setenv(WEBHOOK_BODY_LIMIT_ENV, "16")
 
     response = TestClient(app).post(
@@ -1185,7 +1186,7 @@ def test_api_webhook_missing_secret_leaves_operator_evidence(foundry, monkeypatc
         "X-Roles": ",".join(ctx.roles),
     }
     foundry.datasets.ensure("raw.webhook_missing_secret_orders", ctx=ctx, primary_key=["event_id"])
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     monkeypatch.delenv(api_main.WEBHOOK_SIGNING_KEY_ENV, raising=False)
     client = TestClient(app)
 
@@ -1216,7 +1217,7 @@ def test_webhook_same_event_id_different_payload_is_deduped(foundry, monkeypatch
     duplicate_body = b'{"order_id":"O-9002","status":"PENDING","timestamp":"2026-06-15T01:00:05Z"}'
     changed_body = b'{"order_id":"O-9002","status":"SHIPPED","timestamp":"2026-06-15T01:00:06Z"}'
     foundry.datasets.ensure("raw.webhook_dedupe_orders", ctx=ctx, primary_key=["event_id"])
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
     client = TestClient(app)
 
@@ -1274,7 +1275,7 @@ def test_webhook_signature_replay_and_clock_skew_policy(foundry, monkeypatch) ->
         "X-Roles": ",".join(ctx.roles),
     }
     foundry.datasets.ensure("raw.webhook_replay_orders", ctx=ctx, primary_key=["event_id"])
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
     client = TestClient(app)
 
@@ -1315,7 +1316,7 @@ def test_webhook_ack_not_sent_before_append_commit_or_has_replay_strategy(tmp_pa
         dependencies=replace(dependencies, compute_adapter=_RowsToParquetFailingComputeAdapter())
     )
     failing_foundry.datasets.ensure("raw.webhook_commit_fail_orders", ctx=ctx, primary_key=["event_id"])
-    monkeypatch.setattr(api_main, "foundry", failing_foundry)
+    monkeypatch.setattr(api_runtime, "foundry", failing_foundry)
     monkeypatch.setenv(api_main.WEBHOOK_SIGNING_KEY_ENV, secret)
 
     response = TestClient(app).post(
@@ -1335,7 +1336,7 @@ def test_webhook_ack_not_sent_before_append_commit_or_has_replay_strategy(tmp_pa
 
 def test_api_operations_runs_cursor_pages_action_runs(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
 
@@ -1439,7 +1440,7 @@ def test_api_ai_operations_run_detail_returns_safe_ledger_payload(monkeypatch) -
     class AiFoundry:
         operations = AiOperations()
 
-    monkeypatch.setattr(api_main, "foundry", AiFoundry())
+    monkeypatch.setattr(api_runtime, "foundry", AiFoundry())
     response = TestClient(app).get(
         "/api/operations/runs/ai/ai-run-ops",
         headers={"X-User-ID": "ops-user", "X-Roles": "ops_manager"},
@@ -1453,7 +1454,7 @@ def test_api_ai_operations_run_detail_returns_safe_ledger_payload(monkeypatch) -
 
 
 def test_api_aip_builder_validate_returns_read_only_release_preflight(foundry, monkeypatch) -> None:
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     response = TestClient(app).post(
         "/api/aip/builder/validate",
         headers={"X-Tenant-ID": "tenant-demo", "X-User-ID": "ops-user", "X-Roles": "admin,ops_manager"},
@@ -1512,7 +1513,7 @@ def test_api_aip_builder_validate_returns_read_only_release_preflight(foundry, m
 def test_api_aip_builder_run_executes_logic_and_links_operations_detail(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
     order = foundry.objects.get("Order", "O-1001", ctx=ctx)
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     headers = {
         "X-Tenant-ID": "tenant-demo",
         "X-User-ID": "ops-user",
@@ -1617,7 +1618,7 @@ def test_api_aip_builder_run_executes_logic_and_links_operations_detail(foundry,
 
 def test_api_aip_agent_run_calls_model_and_links_operations_detail(foundry, monkeypatch) -> None:
     prepare_indexed_demo(foundry)
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     headers = {
         "X-Tenant-ID": "tenant-demo",
         "X-User-ID": "ops-user",
@@ -1693,7 +1694,7 @@ def test_api_aip_agent_run_calls_model_and_links_operations_detail(foundry, monk
 
 
 def test_api_aip_eval_and_release_surface_persists_gate_evidence(foundry, monkeypatch) -> None:
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-Tenant-ID": "tenant-demo", "X-User-ID": "ops-user", "X-Roles": "admin,ops_manager"}
 
@@ -1747,7 +1748,7 @@ def test_api_aip_eval_and_release_surface_persists_gate_evidence(foundry, monkey
 
 
 def test_api_media_upload_commit_and_reference_surface(foundry, monkeypatch) -> None:
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {
         "X-Tenant-ID": "tenant-demo",
@@ -1832,7 +1833,7 @@ def test_api_media_upload_commit_and_reference_surface(foundry, monkeypatch) -> 
 
 
 def test_api_transform_sql_register_writes_server_managed_entrypoint(foundry, monkeypatch) -> None:
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     headers = {
         "X-Tenant-ID": "tenant-demo",
         "X-User-ID": "pipeline-builder",
@@ -1878,7 +1879,7 @@ def test_api_transform_scheduler_preview_and_tick(monkeypatch) -> None:
     class _Foundry:
         transforms = _Transforms()
 
-    monkeypatch.setattr(api_main, "foundry", _Foundry())
+    monkeypatch.setattr(api_runtime, "foundry", _Foundry())
     client = TestClient(app)
     headers = {"X-Tenant-ID": "tenant-transform-scheduler", "X-Roles": "admin,data_engineer"}
 
@@ -1897,7 +1898,7 @@ def test_api_transform_scheduler_preview_and_tick(monkeypatch) -> None:
 
 def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     viewer_headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": "viewer-api", "X-Roles": "viewer"}
     finance_headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": "finance-api", "X-Roles": "finance"}
@@ -1959,7 +1960,7 @@ def test_api_security_roles_mask_and_audit_denials(foundry, monkeypatch) -> None
 
 def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {
         "X-Tenant-ID": ctx.tenant_id,
@@ -2303,7 +2304,7 @@ def test_api_operations_retry_dead_letter_event(foundry, monkeypatch) -> None:
     ctx = prepare_indexed_demo(foundry)
     _approve_order_for_materialization(foundry, ctx, idempotency_key="api-dlq-materialization")
     _seed_dead_letter_event(foundry.engine, tenant_id=ctx.tenant_id, outbox_id="outbox_api_retry", dlq_id="dlq_api")
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
 
@@ -2344,7 +2345,7 @@ def test_api_operations_retry_dead_letter_event_keeps_dlq_when_reprocess_fails(f
         dlq_id="dlq_api_failed",
         materialization="ops_missing_materialization",
     )
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
 
@@ -2362,7 +2363,7 @@ def test_api_operations_retry_dead_letter_event_keeps_dlq_when_reprocess_fails(f
 def test_api_operations_outbox_publish_pending_batch(foundry, monkeypatch) -> None:
     ctx = demo_admin_context()
     _seed_pending_outbox(foundry.engine, tenant_id=ctx.tenant_id, event_id="outbox_api_publish")
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
 
@@ -2387,7 +2388,7 @@ def test_api_operations_outbox_publish_pending_batch(foundry, monkeypatch) -> No
 
 def test_api_operations_admin_overview_lists_current_and_future_admin_surfaces(foundry, monkeypatch) -> None:
     ctx = demo_admin_context()
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
 
@@ -2431,7 +2432,7 @@ def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundr
         payload_hash="payload-hash-contract",
         metadata_overrides={"recordDlqKind": "data_quality_contract"},
     )
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-Tenant-ID": ctx.tenant_id, "X-User-ID": ctx.actor_user_id, "X-Roles": "ops_manager"}
 
@@ -2510,7 +2511,7 @@ def test_api_transform_dead_letter_retry_requires_idempotency_key(monkeypatch) -
     class _Foundry:
         transforms = _Transforms()
 
-    monkeypatch.setattr(api_main, "foundry", _Foundry())
+    monkeypatch.setattr(api_runtime, "foundry", _Foundry())
     client = TestClient(app)
     missing = client.post("/api/operations/dead-letter-records/dlqr_api_transform/retry-transform")
     response = client.post(
@@ -2528,7 +2529,7 @@ def test_api_operations_workflow_start_status_and_audit(foundry, monkeypatch) ->
     ctx = demo_admin_context()
     headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
     foundry.datasets.ensure("raw.workflow_orders", ctx=ctx, primary_key=["order_id"])
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
 
     started = client.post(
@@ -2568,7 +2569,7 @@ def test_api_connector_onboarding_create_test_start_and_fetch_workflow(tmp_path,
             secret_provider=secret_provider,
         )
     )
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(app)
     headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
 
@@ -2647,7 +2648,7 @@ def test_api_operations_reconciliation_resolves_action_writeback(foundry, monkey
         for row in foundry.operations.list_runs(ctx=ctx)["actionWritebacks"]
         if row["idempotency_key"] == idempotency_key
     ][0]
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
 
     response = TestClient(app).post(
         f"/api/operations/reconciliation/{writeback['id']}/resolve",
@@ -2680,7 +2681,7 @@ def test_api_operations_reconciliation_queue_lists_unresolved_writebacks(foundry
             simulate_writeback_outcome_unknown=True,
             ctx=ctx,
         )
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
 
     queued = TestClient(app).get(
         "/api/operations/reconciliation/writebacks?status=outcome_unknown&limit=5",
@@ -2730,7 +2731,7 @@ def test_api_operations_reconciliation_approval_releases_sensitive_writeback(
         for row in foundry.operations.list_runs(ctx=ctx)["actionWritebacks"]
         if row["idempotency_key"] == idempotency_key
     ][0]
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
 
     response = TestClient(app).post(
         f"/api/operations/reconciliation/{writeback['id']}/approve-recovery",
@@ -2838,7 +2839,7 @@ def test_api_operation_errors_preserve_request_id(monkeypatch) -> None:
         objects = _Objects()
         transforms = _Transforms()
 
-    monkeypatch.setattr(api_main, "foundry", FailingCore())
+    monkeypatch.setattr(api_runtime, "foundry", FailingCore())
     client = TestClient(app)
 
     listing = client.get("/api/operations/runs", params={"runType": "missing"})
@@ -2987,7 +2988,7 @@ def test_api_object_set_errors_preserve_request_id(monkeypatch) -> None:
     class FailingCore:
         objects = _Objects()
 
-    monkeypatch.setattr(api_main, "foundry", FailingCore())
+    monkeypatch.setattr(api_runtime, "foundry", FailingCore())
     client = TestClient(app)
 
     query = client.get("/api/object-sets", params={"objectType": "Missing"})

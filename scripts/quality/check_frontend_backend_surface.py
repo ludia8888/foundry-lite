@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_API = ROOT / "apps" / "api" / "foundry_lite_api" / "main.py"
+DEFAULT_API = ROOT / "apps" / "api" / "foundry_lite_api"
 DEFAULT_MATRIX = ROOT / "docs" / "frontend-api-sdk-surface-matrix.json"
 DEFAULT_SDK = ROOT / "packages" / "sdk-ts" / "src" / "generated.ts"
 DEFAULT_WEB = ROOT / "apps" / "web" / "index.html"
@@ -463,31 +463,40 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def _api_source_paths(api_path: Path) -> list[Path]:
+    """API surface sources: a single module or every module in the app package."""
+    if api_path.is_dir():
+        return sorted(path for path in api_path.rglob("*.py") if "__pycache__" not in path.parts)
+    return [api_path]
+
+
 def _fastapi_routes(api_path: Path) -> set[str]:
-    tree = ast.parse(api_path.read_text(encoding="utf-8"), filename=str(api_path))
     routes: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            continue
-        for decorator in node.decorator_list:
-            route = _route_from_decorator(decorator)
-            if route:
-                routes.add(route)
+    for source_path in _api_source_paths(api_path):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for decorator in node.decorator_list:
+                route = _route_from_decorator(decorator)
+                if route:
+                    routes.add(route)
     return routes
 
 
 def _fastapi_idempotency_routes(api_path: Path) -> set[str]:
-    tree = ast.parse(api_path.read_text(encoding="utf-8"), filename=str(api_path))
     routes: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            continue
-        if not _function_requires_idempotency_key(node):
-            continue
-        for decorator in node.decorator_list:
-            route = _route_from_decorator(decorator)
-            if route:
-                routes.add(route)
+    for source_path in _api_source_paths(api_path):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            if not _function_requires_idempotency_key(node):
+                continue
+            for decorator in node.decorator_list:
+                route = _route_from_decorator(decorator)
+                if route:
+                    routes.add(route)
     return routes
 
 
@@ -1274,7 +1283,7 @@ def collect_findings(
     screen_recipe_path: Path | None = None,
     sdk_package_path: Path | None = None,
 ) -> list[FrontendBackendSurfaceFinding]:
-    api = _path_or(api_path, root / "apps" / "api" / "foundry_lite_api" / "main.py")
+    api = _path_or(api_path, root / "apps" / "api" / "foundry_lite_api")
     matrix_file = _path_or(matrix_path, root / "docs" / "frontend-api-sdk-surface-matrix.json")
     sdk = _path_or(sdk_path, root / "packages" / "sdk-ts" / "src" / "generated.ts")
     web = _path_or(web_path, root / "apps" / "web" / "index.html")
