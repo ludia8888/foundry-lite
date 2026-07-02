@@ -49,6 +49,35 @@ class SqlAlchemyObjectReadRepository:
         )
         return cast(ObjectRecordRow, dict(row)) if row else None
 
+    def object_records(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        object_ids: Sequence[str],
+    ) -> list[ObjectRecordRow]:
+        if not object_ids:
+            return []
+        rows = (
+            transaction.execute(
+                select(db.object_records).where(
+                    and_(
+                        *_active_object_conditions(
+                            tenant_id,
+                            object_type_api_name,
+                            None,
+                            include_deleted=True,
+                        ),
+                        db.object_records.c.object_id.in_(list(object_ids)),
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(ObjectRecordRow, dict(row)) for row in rows]
+
     def active_object_rows(
         self,
         *,
@@ -111,23 +140,25 @@ class SqlAlchemyObjectReadRepository:
         link_type_api_name: str,
         from_api_name: str,
         from_object_id: str,
+        limit: int | None = None,
     ) -> list[ObjectLinkRow]:
-        rows = (
-            transaction.execute(
-                select(db.object_links).where(
-                    and_(
-                        db.object_links.c.tenant_id == tenant_id,
-                        db.object_links.c.link_type_api_name == link_type_api_name,
-                        db.object_links.c.is_active == True,  # noqa: E712
-                        db.object_links.c.from_api_name == from_api_name,
-                        db.object_links.c.from_object_id == from_object_id,
-                        db.object_links.c.deleted == False,  # noqa: E712
-                    )
+        statement = (
+            select(db.object_links)
+            .where(
+                and_(
+                    db.object_links.c.tenant_id == tenant_id,
+                    db.object_links.c.link_type_api_name == link_type_api_name,
+                    db.object_links.c.is_active == True,  # noqa: E712
+                    db.object_links.c.from_api_name == from_api_name,
+                    db.object_links.c.from_object_id == from_object_id,
+                    db.object_links.c.deleted == False,  # noqa: E712
                 )
             )
-            .mappings()
-            .all()
+            .order_by(db.object_links.c.to_object_id)
         )
+        if limit is not None:
+            statement = statement.limit(limit)
+        rows = transaction.execute(statement).mappings().all()
         return [cast(ObjectLinkRow, dict(row)) for row in rows]
 
     def latest_object_change_sequence(
@@ -160,23 +191,25 @@ class SqlAlchemyObjectReadRepository:
         link_type_api_name: str,
         to_api_name: str,
         to_object_id: str,
+        limit: int | None = None,
     ) -> list[ObjectLinkRow]:
-        rows = (
-            transaction.execute(
-                select(db.object_links).where(
-                    and_(
-                        db.object_links.c.tenant_id == tenant_id,
-                        db.object_links.c.link_type_api_name == link_type_api_name,
-                        db.object_links.c.is_active == True,  # noqa: E712
-                        db.object_links.c.to_api_name == to_api_name,
-                        db.object_links.c.to_object_id == to_object_id,
-                        db.object_links.c.deleted == False,  # noqa: E712
-                    )
+        statement = (
+            select(db.object_links)
+            .where(
+                and_(
+                    db.object_links.c.tenant_id == tenant_id,
+                    db.object_links.c.link_type_api_name == link_type_api_name,
+                    db.object_links.c.is_active == True,  # noqa: E712
+                    db.object_links.c.to_api_name == to_api_name,
+                    db.object_links.c.to_object_id == to_object_id,
+                    db.object_links.c.deleted == False,  # noqa: E712
                 )
             )
-            .mappings()
-            .all()
+            .order_by(db.object_links.c.from_object_id)
         )
+        if limit is not None:
+            statement = statement.limit(limit)
+        rows = transaction.execute(statement).mappings().all()
         return [cast(ObjectLinkRow, dict(row)) for row in rows]
 
     def _property_data_types(
