@@ -54,4 +54,12 @@ class ObjectIndexingServices:
         )
 
     def items(self) -> tuple[CoreService, ...]:
-        return (self.cdc, self.links, self.ontology_reindex, self.record_mutations, self.rebuild, self.shadow)
+        return (
+            self.cdc,
+            self.entrypoint,
+            self.links,
+            self.ontology_reindex,
+            self.record_mutations,
+            self.rebuild,
+            self.shadow,
+        )

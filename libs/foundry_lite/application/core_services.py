@@ -345,6 +345,7 @@ def _data_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
 def _object_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
         "object_cdc_indexing_service": services.object_store.indexing_services.cdc,
+        "object_indexing_service": services.object_store.indexing,
         "object_index_rebuild_service": services.object_store.indexing_services.rebuild,
         "object_index_record_mutation_service": services.object_store.indexing_services.record_mutations,
         "object_index_shadow_service": services.object_store.indexing_services.shadow,

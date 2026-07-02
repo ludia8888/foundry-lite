@@ -103,6 +103,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "prompt_artifact_service": "PromptArtifactService",
     "materialization_service": "MaterializationService",
     "object_cdc_indexing_service": "ObjectCdcIndexingService",
+    "object_indexing_service": "ObjectIndexingService",
     "object_index_rebuild_service": "ObjectIndexRebuildService",
     "object_index_record_mutation_service": "ObjectIndexRecordMutationService",
     "object_index_shadow_service": "ObjectIndexShadowService",

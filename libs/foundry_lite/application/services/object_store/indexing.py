@@ -14,6 +14,7 @@ from foundry_lite.application.ports import (
     TabularRow,
     TransactionContext,
 )
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.object_store.indexing_cdc_service import ObjectCdcIndexingService
 from foundry_lite.application.services.object_store.indexing_ontology_reindex_service import (
     ObjectOntologyReindexService,
@@ -25,7 +26,7 @@ from foundry_lite.application.services.object_store.indexing_types import Object
 from foundry_lite.domain.context import RequestContext
 
 
-class ObjectIndexingService:
+class ObjectIndexingService(CoreService):
     """Stable public service surface backed by explicit indexing use cases."""
 
     required_dependencies = ()
