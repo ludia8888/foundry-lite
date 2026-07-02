@@ -14,7 +14,11 @@ from foundry_lite.application.ports.ai_run_repository import (
     AiSessionRecord,
 )
 from foundry_lite.application.ports.tool_executor import ConfirmationPolicy, ToolEffect
-from foundry_lite.application.services.aip.logic_runtime import LogicBlock, LogicRuntimeError
+from foundry_lite.application.services.aip.logic_runtime import (
+    LogicBlock,
+    LogicRuntimeError,
+    _topological_order,
+)
 from foundry_lite.application.services.aip.tool_broker import ToolSpec
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
@@ -459,3 +463,30 @@ def test_logic_runtime_has_json_serializable_public_result(foundry: Any) -> None
     )
 
     json.dumps(result.output_json, sort_keys=True)
+
+
+def test_topological_order_handles_deep_chains_without_recursion_error() -> None:
+    # Deepest-dependent block first forces a full depth-N walk; a recursive DFS
+    # would raise RecursionError well before this length.
+    depth = 6000
+    chain = [LogicBlock("b0", "Input")]
+    for index in range(1, depth):
+        chain.append(LogicBlock(f"b{index}", "Condition", depends_on=(f"b{index - 1}",)))
+    blocks = tuple(reversed(chain))
+
+    ordered = _topological_order(blocks)
+
+    assert len(ordered) == depth
+    assert ordered[0].block_id == "b0"
+
+
+def test_topological_order_detects_cycles_iteratively() -> None:
+    blocks = (
+        LogicBlock("a", "Condition", depends_on=("b",)),
+        LogicBlock("b", "Condition", depends_on=("a",)),
+    )
+
+    with pytest.raises(LogicRuntimeError) as excinfo:
+        _topological_order(blocks)
+
+    assert excinfo.value.reason == "cycle_detected"

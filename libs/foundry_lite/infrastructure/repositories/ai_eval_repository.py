@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from sqlalchemy import and_, insert, select
+from sqlalchemy.exc import IntegrityError
 
 from foundry_lite.application.ports.ai_eval_repository import (
     AiAgentReleaseRecord,
@@ -138,7 +139,7 @@ class SqlAlchemyAiEvalRepository:
         summary_json: AiEvalJsonObject,
         completed_at: str,
     ) -> AiEvalRow | None:
-        cas_status_update(
+        updated = cas_status_update(
             transaction,
             db.ai_eval_runs,
             tenant_id=tenant_id,
@@ -146,6 +147,10 @@ class SqlAlchemyAiEvalRepository:
             transition=transition,
             values={"passed": is_passed, "summary_json": dict(summary_json), "completed_at": completed_at},
         )
+        if not updated:
+            # CAS matched no running row; surface the miss as a port-level ``None``
+            # so the service can raise the conflict as a business decision.
+            return None
         return self.eval_run_by_id(transaction=transaction, tenant_id=tenant_id, eval_run_id=eval_run_id)
 
     def eval_run_by_id(self, *, transaction: Any, tenant_id: str, eval_run_id: str) -> AiEvalRow | None:
@@ -192,6 +197,21 @@ class SqlAlchemyAiEvalRepository:
                 created_at=record.created_at,
             )
         )
+
+    def create_release_if_absent(self, *, transaction: Any, record: AiAgentReleaseRecord) -> AiEvalRow | None:
+        savepoint = transaction.begin_nested()
+        try:
+            self.create_release(transaction=transaction, record=record)
+        except IntegrityError:
+            savepoint.rollback()
+            return self.release_by_agent_channel(
+                transaction=transaction,
+                tenant_id=record.tenant_id,
+                agent_version_id=record.agent_version_id,
+                release_channel=record.release_channel,
+            )
+        savepoint.commit()
+        return None
 
     def release_by_agent_channel(
         self, *, transaction: Any, tenant_id: str, agent_version_id: str, release_channel: str

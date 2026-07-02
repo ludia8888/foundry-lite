@@ -7,7 +7,7 @@ from typing import Any
 from foundry_lite.application.ports.tool_executor import ConfirmationPolicy, ToolEffect
 from foundry_lite.application.services.aip.logic_runtime import LogicBlock
 from foundry_lite.application.services.aip.tool_broker import ToolSpec
-from foundry_lite.application.services.aip.visual_builder import VisualBuilderContextSource
+from foundry_lite.application.services.aip.visual_builder import VisualBuilderContextSource, _has_cycle
 from foundry_lite.domain.context import RequestContext
 
 _CTX = RequestContext(
@@ -316,3 +316,27 @@ def _tool_inputs() -> dict[str, object]:
         "version": "2026-06-25",
         "arguments": {"object_type": "Order", "object_id": "O-1001"},
     }
+
+
+def test_has_cycle_handles_deep_chains_without_recursion_error() -> None:
+    # A deeply-nested valid chain must not raise RecursionError before reaching
+    # validation; a recursive DFS crashes to a 500 in ``validate_draft``.
+    depth = 6000
+    chain = [LogicBlock("b0", "Input")]
+    for index in range(1, depth):
+        chain.append(LogicBlock(f"b{index}", "Condition", depends_on=(f"b{index - 1}",)))
+    blocks = tuple(reversed(chain))
+    by_id = {block.block_id: block for block in blocks}
+
+    assert _has_cycle(blocks, by_id) is False
+
+
+def test_has_cycle_detects_deep_cycle_iteratively() -> None:
+    depth = 6000
+    chain = [LogicBlock("b0", "Input", depends_on=(f"b{depth - 1}",))]
+    for index in range(1, depth):
+        chain.append(LogicBlock(f"b{index}", "Condition", depends_on=(f"b{index - 1}",)))
+    blocks = tuple(reversed(chain))
+    by_id = {block.block_id: block for block in blocks}
+
+    assert _has_cycle(blocks, by_id) is True

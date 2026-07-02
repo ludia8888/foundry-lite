@@ -285,30 +285,29 @@ def _missing_dependency_issue(
 
 
 def _has_cycle(blocks: Sequence[LogicBlock], by_id: Mapping[str, LogicBlock]) -> bool:
-    visiting: set[str] = set()
+    """Iterative DFS cycle detection so deep dependency chains cannot raise RecursionError."""
     visited: set[str] = set()
-    return any(_visit_has_cycle(block, by_id, visiting, visited) for block in blocks if block.block_id in by_id)
-
-
-def _visit_has_cycle(block: LogicBlock, by_id: Mapping[str, LogicBlock], visiting: set[str], visited: set[str]) -> bool:
-    if block.block_id in visited:
-        return False
-    if block.block_id in visiting:
-        return True
-    visiting.add(block.block_id)
-    has_cycle = any(
-        _visit_dependency_has_cycle(dependency, by_id, visiting, visited) for dependency in block.depends_on
-    )
-    visiting.remove(block.block_id)
-    visited.add(block.block_id)
-    return has_cycle
-
-
-def _visit_dependency_has_cycle(
-    dependency_id: str, by_id: Mapping[str, LogicBlock], visiting: set[str], visited: set[str]
-) -> bool:
-    dependency = by_id.get(dependency_id)
-    return False if dependency is None else _visit_has_cycle(dependency, by_id, visiting, visited)
+    for root in blocks:
+        if root.block_id not in by_id or root.block_id in visited:
+            continue
+        on_path: set[str] = {root.block_id}
+        stack: list[tuple[LogicBlock, int]] = [(root, 0)]
+        while stack:
+            block, index = stack[-1]
+            if index < len(block.depends_on):
+                stack[-1] = (block, index + 1)
+                dependency = by_id.get(block.depends_on[index])
+                if dependency is None or dependency.block_id in visited:
+                    continue
+                if dependency.block_id in on_path:
+                    return True
+                on_path.add(dependency.block_id)
+                stack.append((dependency, 0))
+            else:
+                stack.pop()
+                on_path.discard(block.block_id)
+                visited.add(block.block_id)
+    return False
 
 
 def _block_safety_issues(

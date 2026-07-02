@@ -251,10 +251,11 @@ def _validate_request(request: LogicRunRequest) -> None:
 def _topological_order(blocks: Sequence[LogicBlock]) -> tuple[LogicBlock, ...]:
     by_id = _blocks_by_id(blocks)
     visited: set[str] = set()
-    visiting: set[str] = set()
     ordered: list[LogicBlock] = []
-    for block in blocks:
-        _visit(block, by_id, visited, visiting, ordered)
+    for root in blocks:
+        if root.block_id in visited:
+            continue
+        _visit_iterative(root, by_id, visited, ordered)
     return tuple(ordered)
 
 
@@ -270,26 +271,34 @@ def _blocks_by_id(blocks: Sequence[LogicBlock]) -> dict[str, LogicBlock]:
     return by_id
 
 
-def _visit(
-    block: LogicBlock,
+def _visit_iterative(
+    root: LogicBlock,
     by_id: Mapping[str, LogicBlock],
     visited: set[str],
-    visiting: set[str],
     ordered: list[LogicBlock],
 ) -> None:
-    if block.block_id in visited:
-        return
-    if block.block_id in visiting:
-        raise LogicRuntimeError("cycle_detected", "logic graph contains a dependency cycle")
-    visiting.add(block.block_id)
-    for dependency_id in block.depends_on:
-        dependency = by_id.get(dependency_id)
-        if dependency is None:
-            raise LogicRuntimeError("missing_dependency", f"block {block.block_id} depends on {dependency_id}")
-        _visit(dependency, by_id, visited, visiting, ordered)
-    visiting.remove(block.block_id)
-    visited.add(block.block_id)
-    ordered.append(block)
+    """Iterative post-order DFS so deep dependency chains cannot raise RecursionError."""
+    on_path: set[str] = {root.block_id}
+    stack: list[tuple[LogicBlock, int]] = [(root, 0)]
+    while stack:
+        block, index = stack[-1]
+        if index < len(block.depends_on):
+            stack[-1] = (block, index + 1)
+            dependency_id = block.depends_on[index]
+            dependency = by_id.get(dependency_id)
+            if dependency is None:
+                raise LogicRuntimeError("missing_dependency", f"block {block.block_id} depends on {dependency_id}")
+            if dependency.block_id in visited:
+                continue
+            if dependency.block_id in on_path:
+                raise LogicRuntimeError("cycle_detected", "logic graph contains a dependency cycle")
+            on_path.add(dependency.block_id)
+            stack.append((dependency, 0))
+        else:
+            stack.pop()
+            on_path.discard(block.block_id)
+            visited.add(block.block_id)
+            ordered.append(block)
 
 
 def _input_output(request: LogicRunRequest, block: LogicBlock) -> JsonObject:

@@ -15,11 +15,14 @@ from foundry_lite.application.services.aip.eval_service import (
     ReleasePromotionRequest,
 )
 from foundry_lite.domain.context import RequestContext, demo_admin_context
+from foundry_lite.domain.errors import ConflictDetected, PermissionDenied
 from foundry_lite.infrastructure.repositories.ai_eval_repository import SqlAlchemyAiEvalRepository
 from foundry_lite.infrastructure.schema import create_database
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 
-_CTX = RequestContext(tenant_id="tenant-demo", actor_user_id="release-manager")
+_CTX = RequestContext(tenant_id="tenant-demo", actor_user_id="release-manager", roles=("admin",))
+_VIEWER_CTX = RequestContext(tenant_id="tenant-demo", actor_user_id="viewer", roles=("viewer",))
 
 
 def test_foundry_aip_facade_runs_eval_and_promotes_release(foundry: Any) -> None:
@@ -392,10 +395,143 @@ def test_ai_eval_case_axis_changes_require_version_bump() -> None:
     assert excinfo.value.reason == "case_definition_conflict"
 
 
+def test_run_eval_requires_permission() -> None:
+    env = _eval_service()
+
+    with pytest.raises(PermissionDenied) as excinfo:
+        env.run_eval(
+            _VIEWER_CTX,
+            _request(cases=(_case("security-denies-cross-tenant", "security", {"decision": "denied"}),)),
+        )
+
+    assert excinfo.value.details["permission"] == "aip:evals:run"
+
+
+def test_promote_release_requires_permission() -> None:
+    env = _eval_service()
+    result = env.run_eval(
+        _CTX,
+        _request(
+            cases=(
+                _case("security-denies-cross-tenant", "security", {"decision": "denied"}),
+                _case("action-requires-review", "action", {"execution": "proposal_only"}),
+            )
+        ),
+    )
+
+    with pytest.raises(PermissionDenied) as excinfo:
+        env.promote_release(
+            _VIEWER_CTX,
+            ReleasePromotionRequest(
+                agent_version_id="agent-v1", target_release_channel="stable", eval_run_id=result.eval_run_id
+            ),
+        )
+
+    assert excinfo.value.details["permission"] == "aip:releases:promote"
+
+
+def test_run_eval_conflicts_when_completion_matches_no_running_row() -> None:
+    """A CAS miss on completion must fail closed with a conflict, not silently succeed."""
+    env = _eval_service()
+    env.ai_eval_repository = _NoCompletionRepository(env.ai_eval_repository)
+
+    with pytest.raises(ConflictDetected):
+        env.run_eval(
+            _CTX,
+            _request(cases=(_case("security-denies-cross-tenant", "security", {"decision": "denied"}),)),
+        )
+
+
+class _NoCompletionRepository:
+    """Delegates to a real repository but simulates a lost completion CAS race."""
+
+    def __init__(self, delegate: Any) -> None:
+        self._delegate = delegate
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def complete_run(self, **kwargs: Any) -> Any:
+        return None
+
+
+def test_promote_release_reconciles_concurrent_first_promotion() -> None:
+    """A racing first-time promotion hits the unique constraint but resolves idempotently, not a 500."""
+    env = _eval_service()
+    result = env.run_eval(
+        _CTX,
+        _request(
+            cases=(
+                _case("security-denies-cross-tenant", "security", {"decision": "denied"}),
+                _case("action-requires-review", "action", {"execution": "proposal_only"}),
+            )
+        ),
+    )
+    request = ReleasePromotionRequest(
+        agent_version_id="agent-v1", target_release_channel="stable", eval_run_id=result.eval_run_id
+    )
+    env.ai_eval_repository = _RaceOnceRepository(env.ai_eval_repository, request)
+
+    release = env.promote_release(_CTX, request)
+
+    assert release.status == "active"
+    assert release.eval_run_id == result.eval_run_id
+
+
+class _RaceOnceRepository:
+    """Delegates to a real repository but hides the release on the first pre-check.
+
+    This forces ``promote_release`` past the existence guard and into the unique
+    constraint, exercising the idempotent reconcile path deterministically.
+    """
+
+    def __init__(self, delegate: Any, racing_request: ReleasePromotionRequest) -> None:
+        self._delegate = delegate
+        self._racing_request = racing_request
+        self._hidden = True
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def release_by_agent_channel(self, **kwargs: Any) -> Any:
+        if self._hidden:
+            self._hidden = False
+            self._delegate.create_release(
+                transaction=kwargs["transaction"],
+                record=_racing_release_record(self._racing_request, kwargs),
+            )
+            return None
+        return self._delegate.release_by_agent_channel(**kwargs)
+
+
+def _racing_release_record(request: ReleasePromotionRequest, kwargs: Mapping[str, Any]) -> Any:
+    from foundry_lite.application.ports.ai_eval_repository import AiAgentReleaseRecord
+    from foundry_lite.application.services.aip.eval_identifiers import ai_agent_release_id
+
+    tenant_id = str(kwargs["tenant_id"])
+    release_id = ai_agent_release_id(tenant_id, request.agent_version_id, request.target_release_channel)
+    return AiAgentReleaseRecord(
+        id=release_id,
+        tenant_id=tenant_id,
+        agent_version_id=request.agent_version_id,
+        release_channel=request.target_release_channel,
+        eval_run_id=request.eval_run_id,
+        status="active",
+        policy_version=request.policy_version,
+        promoted_by="racing-winner",
+        promoted_at="2026-07-02T00:00:00Z",
+        created_at="2026-07-02T00:00:00Z",
+    )
+
+
 def _eval_service() -> EvalService:
     engine = create_engine("sqlite:///:memory:", future=True)
     create_database(engine)
-    service = EvalService(engine=engine, ai_eval_repository=SqlAlchemyAiEvalRepository(engine))
+    service = EvalService(
+        engine=engine,
+        ai_eval_repository=SqlAlchemyAiEvalRepository(engine),
+        policy=PolicyService(allow_unwired_classification_provider=True),
+    )
     service.bind_collaborators({"runtime_service": _RecordingRuntime()})
     return service
 
