@@ -36,7 +36,6 @@ from foundry_lite.application.primitives import (
     _normalize_duckdb_type,
     _required_row,
     _sql_identifier,
-    _sql_literal,
     _write_rows_to_csv,
 )
 from foundry_lite.domain.errors import ValidationFailed
@@ -167,23 +166,25 @@ class DuckDBComputeAdapter:
     def _execute_sql_transform(self, plan: SqlTransformPlan) -> TransformExecutionResult:
         sql = plan.sql_template
         target_path = plan.target_path
-        con = duckdb.connect()
+        # Transform SQL is user-supplied via POST /api/transforms/sql, so it runs with DuckDB
+        # filesystem and network access disabled. This blocks replacement scans
+        # (e.g. FROM '/other-tenant/data.parquet') and glob(), which a denylist regex cannot
+        # reliably catch. Declared inputs are loaded via PyArrow and registered as in-memory
+        # views, and the result is written with PyArrow, so no trusted I/O depends on DuckDB's
+        # file layer.
+        con = duckdb.connect(config={"enable_external_access": False})
         try:
             for index, (dataset_ref, input_paths) in enumerate(plan.input_paths_by_ref.items()):
                 view = f"input_{index}"
                 _sql_identifier(view)
-                con.read_parquet(_parquet_path_strings(input_paths)).create_view(view, replace=True)
+                con.register(view, _read_arrow_tables(input_paths))
                 sql = sql.replace(f"{{{{ input('{dataset_ref}') }}}}", view)
             unresolved = INPUT_PATTERN.findall(sql)
             if unresolved:
                 raise ValidationFailed("transform has unresolved inputs", details={"inputs": unresolved})
+            result_table = con.sql(sql).to_arrow_table()
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            # target_path is SQL-escaped by _sql_literal; transform SQL is
-            # trusted local project code authored by registered transforms.
-            # If transform SQL ever becomes user-supplied, this must be
-            # replaced with parameterised DuckDB execution.
-            # nosemgrep: foundry-lite-no-fstring-sql -- trusted local SQL; remove if user-supplied
-            con.execute(f"copy ({sql}) to {_sql_literal(target_path)} (format parquet)")  # nosec B608
+            pq.write_table(result_table, target_path)
             return TransformExecutionResult()
         finally:
             con.close()
@@ -501,13 +502,6 @@ def _read_arrow_tables(paths: InputFilePaths) -> Any:
     if len(parquet_paths) == 1:
         return pq.read_table(parquet_paths[0])
     return pa.concat_tables([pq.read_table(path) for path in parquet_paths])
-
-
-def _parquet_path_strings(paths: InputFilePaths) -> str | list[str]:
-    parquet_paths = _input_path_tuple(paths)
-    if len(parquet_paths) == 1:
-        return str(parquet_paths[0])
-    return [str(path) for path in parquet_paths]
 
 
 def _input_path_tuple(paths: InputFilePaths) -> tuple[Path, ...]:

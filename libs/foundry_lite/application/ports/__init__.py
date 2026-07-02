@@ -364,6 +364,7 @@ from foundry_lite.application.ports.transaction_context import (
     OUTBOX_PUBLISH_FAILED,
     OUTBOX_PUBLISHED,
     OUTBOX_PUBLISHING,
+    OUTBOX_PUBLISHING_RECLAIM,
     OUTBOX_RETRY_PENDING,
     SYNC_RUN_COMMITTED,
     TRANSFORM_RUN_SUCCEEDED,

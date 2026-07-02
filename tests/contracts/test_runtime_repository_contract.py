@@ -35,6 +35,7 @@ from foundry_lite.application.ports.transaction_context import (
     OUTBOX_PUBLISH_FAILED,
     OUTBOX_PUBLISHED,
     OUTBOX_PUBLISHING,
+    OUTBOX_PUBLISHING_RECLAIM,
     OUTBOX_RETRY_PENDING,
     WORKFLOW_RUN_FAILED,
     WORKFLOW_RUN_STARTING,
@@ -299,14 +300,31 @@ class FakeRuntimeRepository:
         return None
 
     def mark_outbox_event_publishing(
-        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition
+        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition, claimed_at: str
     ) -> RuntimeRow | None:
         del transaction
         for row in self.tables["outbox_events"]:
             if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
-                row.update(status=transition.to_status, attempts=int(row["attempts"]) + 1)
+                row.update(status=transition.to_status, attempts=int(row["attempts"]) + 1, claimed_at=claimed_at)
                 return cast(RuntimeRow, dict(row))
         return None
+
+    def reclaim_stale_publishing_events(
+        self, *, transaction: Any, tenant_id: str, transition: StatusTransition, claimed_before: str
+    ) -> int:
+        del transaction
+        reclaimed = 0
+        for row in self.tables["outbox_events"]:
+            claimed_at = row.get("claimed_at")
+            if (
+                row["tenant_id"] == tenant_id
+                and row["status"] in transition.from_statuses
+                and claimed_at is not None
+                and str(claimed_at) < claimed_before
+            ):
+                row.update(status=transition.to_status, claimed_at=None, published_at=None)
+                reclaimed += 1
+        return reclaimed
 
     def mark_outbox_event_published(
         self,
@@ -320,7 +338,7 @@ class FakeRuntimeRepository:
         del transaction
         for row in self.tables["outbox_events"]:
             if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
-                row.update(status=transition.to_status, published_at=published_at)
+                row.update(status=transition.to_status, published_at=published_at, claimed_at=None)
                 return cast(RuntimeRow, dict(row))
         return None
 
@@ -330,7 +348,7 @@ class FakeRuntimeRepository:
         del transaction
         for row in self.tables["outbox_events"]:
             if row["tenant_id"] == tenant_id and row["id"] == event_id and row["status"] in transition.from_statuses:
-                row.update(status=transition.to_status, published_at=None)
+                row.update(status=transition.to_status, published_at=None, claimed_at=None)
                 return cast(RuntimeRow, dict(row))
         return None
 
@@ -1650,12 +1668,14 @@ def test_runtime_repository_contract_claims_and_publishes_outbox_event(
             tenant_id="tenant-demo",
             event_id=str(pending[0]["id"]),
             transition=OUTBOX_PUBLISHING,
+            claimed_at="2026-06-10T00:00:01Z",
         )
         stale_claim = harness.repository.mark_outbox_event_publishing(
             transaction=transaction,
             tenant_id="tenant-demo",
             event_id=str(pending[0]["id"]),
             transition=OUTBOX_PUBLISHING,
+            claimed_at="2026-06-10T00:00:02Z",
         )
         published = harness.repository.mark_outbox_event_published(
             transaction=transaction,
@@ -1669,10 +1689,53 @@ def test_runtime_repository_contract_claims_and_publishes_outbox_event(
     assert claimed is not None
     assert claimed["status"] == "publishing"
     assert claimed["attempts"] == 1
+    assert claimed["claimed_at"] == "2026-06-10T00:00:01Z"
     assert stale_claim is None
     assert published is not None
     assert published["status"] == "published"
     assert published["published_at"] == "2026-06-10T00:00:03Z"
+    assert published["claimed_at"] is None
+
+
+def test_runtime_repository_contract_reclaims_only_stale_publishing_claims(
+    harness: RuntimeRepositoryHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        for event_id, key in (("stale_event", "dsv_stale"), ("fresh_event", "dsv_fresh")):
+            harness.repository.insert_outbox_event(
+                transaction=transaction,
+                record=_outbox_record(event_id=event_id, idempotency_key=key),
+            )
+        harness.repository.mark_outbox_event_publishing(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id="stale_event",
+            transition=OUTBOX_PUBLISHING,
+            claimed_at="2026-06-10T00:00:00Z",
+        )
+        harness.repository.mark_outbox_event_publishing(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id="fresh_event",
+            transition=OUTBOX_PUBLISHING,
+            claimed_at="2026-06-10T00:10:00Z",
+        )
+
+        reclaimed = harness.repository.reclaim_stale_publishing_events(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            transition=OUTBOX_PUBLISHING_RECLAIM,
+            claimed_before="2026-06-10T00:05:00Z",
+        )
+
+        stale = harness.repository.pending_outbox_events(transaction=transaction, tenant_id="tenant-demo", limit=10)
+
+    assert reclaimed == 1
+    reclaimed_ids = {row["id"]: row for row in stale}
+    assert "stale_event" in reclaimed_ids
+    assert reclaimed_ids["stale_event"]["status"] == "pending"
+    assert reclaimed_ids["stale_event"]["claimed_at"] is None
+    assert "fresh_event" not in reclaimed_ids
 
 
 def test_runtime_repository_contract_fails_and_dead_letters_outbox_event(
@@ -1688,6 +1751,7 @@ def test_runtime_repository_contract_fails_and_dead_letters_outbox_event(
             tenant_id="tenant-demo",
             event_id="outbox_1",
             transition=OUTBOX_PUBLISHING,
+            claimed_at="2026-06-10T00:00:01Z",
         )
         failed = harness.repository.mark_outbox_event_failed(
             transaction=transaction,

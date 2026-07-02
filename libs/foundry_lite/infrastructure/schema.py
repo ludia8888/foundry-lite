@@ -856,6 +856,7 @@ outbox_events = Table(
     Column("idempotency_key", String),
     Column("correlation_id", String),
     Column("created_at", String, nullable=False),
+    Column("claimed_at", String),
     Column("published_at", String),
     UniqueConstraint("tenant_id", "event_type", "idempotency_key", name="uq_outbox_idempotency"),
 )
@@ -1836,6 +1837,36 @@ def tenant_rls_tables() -> tuple[Table, ...]:
 def create_database(engine: Engine) -> None:
     metadata.create_all(engine)
     apply_postgres_rls(engine)
+    _stamp_migration_head_if_unversioned(engine)
+
+
+def _stamp_migration_head_if_unversioned(engine: Engine) -> None:
+    """Bind a create_all-bootstrapped database to the Alembic migration lineage.
+
+    create_all builds the current (head) schema but records no alembic_version row,
+    so a later `alembic upgrade head` restarts from base and fails on already-existing
+    tables. Stamping head once makes bootstrap and the migration chain converge: fresh
+    databases become migration-ready and run_migrations treats them as already at head
+    (a no-op) instead of leaving two divergent lineages. Databases already under Alembic
+    control are left untouched so their pending migrations still run.
+    """
+    from pathlib import Path
+
+    from sqlalchemy import inspect as sqlalchemy_inspect
+
+    with engine.connect() as connection:
+        if sqlalchemy_inspect(connection).has_table("alembic_version"):
+            return
+        from alembic import command
+        from alembic.config import Config
+
+        repo_root = Path(__file__).resolve().parents[3]
+        config = Config(str(repo_root / "alembic.ini"))
+        config.set_main_option("script_location", str(repo_root / "migrations"))
+        config.attributes["connection"] = connection
+        command.stamp(config, "head")
+        if connection.in_transaction():
+            connection.commit()
 
 
 def apply_postgres_rls(engine: Engine) -> None:

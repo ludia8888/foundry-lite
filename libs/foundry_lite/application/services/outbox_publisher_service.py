@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, timedelta
 from typing import Literal, TypedDict
 
 from foundry_lite.application.ports import (
     OUTBOX_PUBLISH_FAILED,
     OUTBOX_PUBLISHED,
     OUTBOX_PUBLISHING,
+    OUTBOX_PUBLISHING_RECLAIM,
     DeadLetterEventRecord,
     RuntimeJsonObject,
     RuntimeRow,
@@ -22,6 +24,12 @@ from foundry_lite.domain.context import RequestContext
 
 DEFAULT_OUTBOX_STREAM_NAME = "foundry-lite-outbox"
 MAX_OUTBOX_PUBLISH_BATCH_SIZE = 500
+# A worker that crashes between claiming an event (pending -> publishing) and marking it
+# published/failed leaves the row stranded in publishing forever. Each publish cycle first
+# requeues rows whose claim is older than this lease so no event is silently lost. The
+# window is generous relative to a single publish so a still-in-flight claim is not reclaimed
+# out from under a live worker; downstream idempotency absorbs an at-least-once re-publish.
+OUTBOX_PUBLISH_LEASE_TIMEOUT_SECONDS = 300
 
 
 class OutboxPublishBatchResult(TypedDict):
@@ -52,11 +60,22 @@ class OutboxPublisherService(CoreService):
         resolved_ctx = ctx or RequestContext()
         bounded_limit = _bounded_limit(limit)
         self.runtime_service._require_or_audit(resolved_ctx, "operations:retry", "outbox", stream_name)
+        self._reclaim_stale_publishing(resolved_ctx)
         pending = self._pending_events(resolved_ctx, bounded_limit)
         result = _empty_result(stream_name=stream_name, requested=len(pending))
         for row in pending:
             self._publish_one(row=row, ctx=resolved_ctx, stream_name=stream_name, result=result)
         return result
+
+    def _reclaim_stale_publishing(self, ctx: RequestContext) -> int:
+        with self.engine.begin() as conn:
+            self.runtime_service._require_outbox_retry_open(conn, ctx)
+            return self.runtime_repository.reclaim_stale_publishing_events(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                transition=OUTBOX_PUBLISHING_RECLAIM,
+                claimed_before=_lease_cutoff(),
+            )
 
     def _pending_events(self, ctx: RequestContext, limit: int) -> list[RuntimeRow]:
         with self.engine.begin() as conn:
@@ -100,6 +119,7 @@ class OutboxPublisherService(CoreService):
                 tenant_id=ctx.tenant_id,
                 event_id=event_id,
                 transition=OUTBOX_PUBLISHING,
+                claimed_at=_now(),
             )
 
     def _mark_published(self, ctx: RequestContext, row: RuntimeRow) -> None:
@@ -185,6 +205,15 @@ class OutboxPublisherService(CoreService):
             after_ref={"status": status, "error": dict(error or {})},
             correlation_id=_row_text(row, "correlation_id"),
         )
+
+
+def _lease_cutoff() -> str:
+    """ISO timestamp before which a publishing claim is considered stale and requeued.
+
+    Matches the _now() representation (local-offset ISO 8601) so the repository can compare
+    it against stored claimed_at values as ordered strings on the same host.
+    """
+    return (datetime.now().astimezone() - timedelta(seconds=OUTBOX_PUBLISH_LEASE_TIMEOUT_SECONDS)).isoformat()
 
 
 def _bounded_limit(limit: int) -> int:

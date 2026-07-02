@@ -191,9 +191,26 @@ class RuntimeRepository(Protocol):
         ...
 
     def mark_outbox_event_publishing(
-        self, *, transaction: TransactionContext, tenant_id: str, event_id: str, transition: StatusTransition
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        event_id: str,
+        transition: StatusTransition,
+        claimed_at: str,
     ) -> RuntimeRow | None:
-        """CAS a pending outbox row into the publishing claim state."""
+        """CAS a pending outbox row into the publishing claim state, recording the claim time."""
+        ...
+
+    def reclaim_stale_publishing_events(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        transition: StatusTransition,
+        claimed_before: str,
+    ) -> int:
+        """Requeue outbox rows stuck in publishing whose claim predates the lease cutoff."""
         ...
 
     def mark_outbox_event_published(

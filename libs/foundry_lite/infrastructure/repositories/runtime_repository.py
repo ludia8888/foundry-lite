@@ -37,7 +37,7 @@ from foundry_lite.application.ports.transaction_context import (
 )
 from foundry_lite.application.ports.workflow_adapter import WorkflowLedgerStatus, WorkflowRunRecord, WorkflowRunRow
 from foundry_lite.infrastructure import schema as db
-from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_update, cas_status_update_many
 
 
 class SqlAlchemyRuntimeRepository:
@@ -412,7 +412,7 @@ class SqlAlchemyRuntimeRepository:
         return [cast(RuntimeRow, dict(row)) for row in rows]
 
     def mark_outbox_event_publishing(
-        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition
+        self, *, transaction: Any, tenant_id: str, event_id: str, transition: StatusTransition, claimed_at: str
     ) -> RuntimeRow | None:
         updated = cas_status_update(
             transaction,
@@ -420,11 +420,26 @@ class SqlAlchemyRuntimeRepository:
             tenant_id=tenant_id,
             row_id=event_id,
             transition=transition,
-            values={"attempts": db.outbox_events.c.attempts + 1},
+            values={"attempts": db.outbox_events.c.attempts + 1, "claimed_at": claimed_at},
         )
         if not updated:
             return None
         return self._outbox_event_row(transaction=transaction, tenant_id=tenant_id, event_id=event_id)
+
+    def reclaim_stale_publishing_events(
+        self, *, transaction: Any, tenant_id: str, transition: StatusTransition, claimed_before: str
+    ) -> int:
+        return cas_status_update_many(
+            transaction,
+            db.outbox_events,
+            tenant_id=tenant_id,
+            transition=transition,
+            values={"claimed_at": None, "published_at": None},
+            conditions=[
+                db.outbox_events.c.claimed_at.isnot(None),
+                db.outbox_events.c.claimed_at < claimed_before,
+            ],
+        )
 
     def mark_outbox_event_published(
         self,
@@ -441,7 +456,7 @@ class SqlAlchemyRuntimeRepository:
             tenant_id=tenant_id,
             row_id=event_id,
             transition=transition,
-            values={"published_at": published_at},
+            values={"published_at": published_at, "claimed_at": None},
         )
         if not updated:
             return None
@@ -456,7 +471,7 @@ class SqlAlchemyRuntimeRepository:
             tenant_id=tenant_id,
             row_id=event_id,
             transition=transition,
-            values={"published_at": None},
+            values={"published_at": None, "claimed_at": None},
         )
         if not updated:
             return None
@@ -488,7 +503,7 @@ class SqlAlchemyRuntimeRepository:
             tenant_id=tenant_id,
             row_id=event_id,
             transition=transition,
-            values={"attempts": 0, "published_at": None},
+            values={"attempts": 0, "published_at": None, "claimed_at": None},
         )
         if not updated:
             return None

@@ -6,7 +6,7 @@ from typing import NoReturn, cast
 
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.foundry import FoundryLite
-from foundry_lite.application.ports import OutboxEventRecord, StreamPublishRequest
+from foundry_lite.application.ports import OUTBOX_PUBLISHING, OutboxEventRecord, StreamPublishRequest
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.infrastructure.adapters.scale_foundation import LocalStreamAdapter
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
@@ -56,6 +56,30 @@ def test_operations_publish_pending_outbox_dead_letters_stream_failures(tmp_path
     error = cast(dict[str, object], runs["deadLetterEvents"][0]["error"])
     trace = cast(dict[str, object], error["trace"])
     assert trace["adapter"] == "failing-stream"
+
+
+def test_operations_publish_pending_outbox_reclaims_and_republishes_stuck_publishing_event(tmp_path: Path) -> None:
+    foundry, dependencies = _foundry(tmp_path)
+    ctx = demo_admin_context()
+    _insert_outbox(dependencies, event_id="outbox_stuck_1", request_id=ctx.request_id)
+    # Simulate a worker that crashed after claiming the event but before publishing it:
+    # the row is stranded in publishing with a claim older than the lease window.
+    with dependencies.engine.begin() as transaction:
+        dependencies.runtime_repository.mark_outbox_event_publishing(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            event_id="outbox_stuck_1",
+            transition=OUTBOX_PUBLISHING,
+            claimed_at="2020-01-01T00:00:00+00:00",
+        )
+
+    result = foundry.operations.publish_pending_outbox(ctx=ctx, stream_name="ops-outbox", limit=10)
+    events = dependencies.stream_adapter.read_events("ops-outbox")
+    runs = foundry.operations.list_runs(ctx=ctx)
+
+    assert result["published"] == 1
+    assert [event.key for event in events] == ["outbox_stuck_1"]
+    assert runs["outboxEvents"][0]["status"] == "published"
 
 
 def _foundry(
