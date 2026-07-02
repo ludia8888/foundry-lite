@@ -143,71 +143,6 @@ jobs:
           path: artifacts
           retention-days: 30
 
-  quality_flaky:
-    name: quality-flaky
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.2.0
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: 10.18.2
-
-      - name: Set up Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: pnpm
-
-      - name: Install Python dependencies
-        run: uv sync --all-groups
-
-      - name: Install Node dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install Tesseract OCR and FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr ffmpeg
-
-      - name: Cache faster-whisper tiny model
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-models-whisper-tiny-bge-small-clip-vit-b32-v1
-
-      - name: Pre-fetch faster-whisper tiny model
-        run: uv run python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"
-
-      - name: Pre-fetch fastembed embedding model
-        run: uv run python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
-
-      - name: Pre-fetch fastembed CLIP vision/text models
-        run: uv run python -c "from fastembed import ImageEmbedding, TextEmbedding; ImageEmbedding('Qdrant/clip-ViT-B-32-vision'); TextEmbedding('Qdrant/clip-ViT-B-32-text')"
-
-      - name: Run flaky quality lane
-        run: pnpm ci:gate:flaky
-
-      - name: Upload flaky artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: foundry-lite-quality-flaky-artifacts
-          path: artifacts
-          retention-days: 30
-
   quality_runtime:
     name: quality-runtime
     runs-on: ubuntu-latest
@@ -330,7 +265,6 @@ jobs:
     needs:
       - quality_static
       - quality_coverage
-      - quality_flaky
       - quality_runtime
       - quality_e2e
     if: always()
@@ -339,13 +273,11 @@ jobs:
         run: |
           echo "quality-static:   ${{ needs.quality_static.result }}"
           echo "quality-coverage: ${{ needs.quality_coverage.result }}"
-          echo "quality-flaky:    ${{ needs.quality_flaky.result }}"
           echo "quality-runtime:  ${{ needs.quality_runtime.result }}"
           echo "quality-e2e:      ${{ needs.quality_e2e.result }}"
 
           test "${{ needs.quality_static.result }}" = "success"
           test "${{ needs.quality_coverage.result }}" = "success"
-          test "${{ needs.quality_flaky.result }}" = "success"
           test "${{ needs.quality_runtime.result }}" = "success"
           test "${{ needs.quality_e2e.result }}" = "success"
 

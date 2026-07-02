@@ -11,6 +11,7 @@
     "ci:gate:coverage": "bash scripts/ci_gate.sh coverage",
     "ci:gate:flaky": "bash scripts/ci_gate.sh flaky",
     "ci:gate:runtime": "bash scripts/ci_gate.sh runtime",
+    "ci:gate:runtime-full": "bash scripts/ci_gate.sh runtime-full",
     "ci:gate:e2e": "bash scripts/ci_gate.sh e2e",
     "ci:gate:release": "bash scripts/ci_gate.sh release",
     "dev": "PYTHONPATH=.:libs:apps/api:apps/cli uv run python -m foundry_lite_api.main",
