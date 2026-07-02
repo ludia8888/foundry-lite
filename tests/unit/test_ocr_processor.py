@@ -100,3 +100,25 @@ def test_default_engine_without_a_bundled_ocr_library_is_a_validation_failure() 
     with pytest.raises(OcrDocumentError) as excinfo:
         _default_ocr_engine("/sandbox/page.png")
     assert excinfo.value.reason == "ocr_engine_unavailable"
+
+
+def test_repeated_timeouts_do_not_accumulate_worker_threads() -> None:
+    # A per-call ThreadPoolExecutor abandoned on timeout (shutdown wait=False) leaks one live
+    # thread per timeout; repeated timeouts must NOT grow the thread count unboundedly.
+    release = threading.Event()
+
+    def _blocking(_path: str) -> Sequence[str]:
+        release.wait(timeout=10)
+        return ["never"]
+
+    adapter = OcrProcessorAdapter(timeout_seconds=0, ocr_engine=_blocking)
+    baseline = threading.active_count()
+    try:
+        for _ in range(20):
+            with pytest.raises(AdapterError) as excinfo:
+                adapter.process(_request())
+            assert excinfo.value.failure.kind == "timeout"
+        # Bounded by the shared executor, not ~20 leaked threads.
+        assert threading.active_count() - baseline <= 8
+    finally:
+        release.set()

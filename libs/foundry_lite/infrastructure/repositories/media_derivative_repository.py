@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from sqlalchemy import and_, desc, insert, select
+from sqlalchemy import and_, delete, desc, insert, select
 from sqlalchemy.engine import Engine
 
 from foundry_lite.application.ports.media_derivative_repository import (
@@ -37,7 +37,22 @@ class SqlAlchemyMediaDerivativeRepository:
     ) -> MediaDerivativeRecord | None:
         existing = self._derivative_by_spec(transaction, record)
         if existing is not None:
-            return existing
+            if existing.status != "FAILED":
+                return existing
+            # A prior FAILED derivative is orphan operator-evidence (the durable failure
+            # record is the FAILED run row, which never points at it). If we returned it, a
+            # retry would try to COMMIT a FAILED row and its STAGED->COMMITTED CAS would match
+            # 0 rows forever — no COMMITTED derivative could EVER be produced for this
+            # version+spec. Purge it so a retry can stage + commit a fresh derivative instead
+            # of colliding forever on uq_media_derivative_spec.
+            transaction.execute(
+                delete(db.media_derivatives).where(
+                    and_(
+                        db.media_derivatives.c.tenant_id == record.tenant_id,
+                        db.media_derivatives.c.id == existing.media_derivative_id,
+                    )
+                )
+            )
         # uq(source_version, kind, spec_hash, model_version, params_hash) backstops a race.
         transaction.execute(
             insert(db.media_derivatives).values(tenant_id=record.tenant_id, **_derivative_values(record))

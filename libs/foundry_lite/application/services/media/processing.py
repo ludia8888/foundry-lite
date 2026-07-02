@@ -75,10 +75,17 @@ class MediaProcessingService(CoreService):
             )
         envelope = dict(version.security_envelope)
         run_id = self._open_run(ctx, media_item_version_id, spec, spec_hash)
-        result = self._run_processor(ctx, version.blob_key, spec, spec_hash, media_item_version_id)
-        if isinstance(result, AdapterError):
-            return self._record_failure(ctx, media_item_version_id, spec, spec_hash, envelope, result, run_id)
-        return self._commit_derivative(ctx, media_item_version_id, spec, spec_hash, envelope, result, run_id)
+        # The run row is committed in its own txn above; any failure past this point (commit
+        # CAS conflict, IntegrityError, outbox failure) must still land the run in a durable
+        # FAILED verdict rather than leaving it stuck RUNNING forever with no reaper.
+        try:
+            result = self._run_processor(ctx, version.blob_key, spec, spec_hash, media_item_version_id)
+            if isinstance(result, AdapterError):
+                return self._record_failure(ctx, media_item_version_id, spec, spec_hash, envelope, result, run_id)
+            return self._commit_derivative(ctx, media_item_version_id, spec, spec_hash, envelope, result, run_id)
+        except Exception as exc:
+            self._fail_open_run(ctx, run_id, exc)
+            raise
 
     def list_media_runs(
         self, ctx: RequestContext, *, source_media_item_version_id: str | None = None, limit: int = 50
@@ -269,6 +276,24 @@ class MediaProcessingService(CoreService):
             failure_kind=failure_kind,
             failure_reason=failure_reason,
         )
+
+    def _fail_open_run(self, ctx: RequestContext, run_id: str, exc: Exception) -> None:
+        # Durable safety net (mirrors _fail_seeded_run): a crash on the commit path rolled back
+        # its own txn, so mark the run FAILED in a fresh txn. The CAS RUNNING->FAILED makes this
+        # a no-op if the run already reached a verdict, and we never leak the raw error message
+        # (it may carry secrets) — only the exception type is recorded as durable evidence.
+        try:
+            with self.engine.begin() as conn:
+                self._finish_run(
+                    conn,
+                    ctx,
+                    run_id,
+                    status="FAILED",
+                    failure_kind="unknown",
+                    failure_reason=f"processing failed after run opened: {exc.__class__.__name__}",
+                )
+        except Exception:
+            return
 
     def _emit_events(
         self,

@@ -32,6 +32,10 @@ from foundry_lite.application.ports.media_processor import (
 
 _DERIVATIVE_KIND = "ocr_v1"
 _DEFAULT_TIMEOUT_SECONDS = 60
+# Cap on live worker threads. An in-thread OCR call cannot be force-cancelled, so on timeout
+# we abandon the worker; a SHARED bounded pool (not a fresh pool per call) means repeated
+# timeouts reuse a fixed set of threads instead of leaking one live thread per timeout.
+_MAX_WORKER_THREADS = 4
 
 # source_path -> one text block per page/region (a single image yields one block).
 OcrEngine = Callable[[str], Sequence[str]]
@@ -61,7 +65,9 @@ def _tesseract_ocr_engine(source_path: str) -> list[str]:
     pil_image = import_module("PIL.Image")
     try:
         with pil_image.open(source_path) as image:
-            text = pytesseract.image_to_string(image)
+            # timeout kills the tesseract SUBPROCESS if it hangs, so the actual work stops
+            # (the outer worker thread cannot cancel an in-thread call) — no zombie tesseract.
+            text = pytesseract.image_to_string(image, timeout=_DEFAULT_TIMEOUT_SECONDS)
     except Exception as exc:  # noqa: BLE001 - any decode/OCR error is an undecodable-image validation failure
         raise OcrDocumentError("undecodable_image") from exc
     return [text.strip()]
@@ -75,6 +81,7 @@ class OcrProcessorAdapter:
     def __init__(self, *, timeout_seconds: int = _DEFAULT_TIMEOUT_SECONDS, ocr_engine: OcrEngine | None = None) -> None:
         self._timeout_seconds = timeout_seconds
         self._ocr_engine = ocr_engine or _default_ocr_engine
+        self._executor = ThreadPoolExecutor(max_workers=_MAX_WORKER_THREADS, thread_name_prefix="ocr")
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -124,19 +131,15 @@ class OcrProcessorAdapter:
 
     def _ocr_within_timeout(self, request: MediaProcessingRequest) -> Sequence[str]:
         assert request.source_path is not None
-        # Not a context manager: on timeout we abandon the worker (shutdown wait=False)
-        # rather than block on shutdown(wait=True) for a hung OCR call.
-        pool = ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(self._ocr_engine, request.source_path)
+        # Shared bounded pool: on timeout we abandon the worker (an in-thread OCR call cannot be
+        # cancelled) but reuse a fixed thread set, so repeated timeouts do not leak threads.
+        future = self._executor.submit(self._ocr_engine, request.source_path)
         try:
-            result = future.result(timeout=self._timeout_seconds)
-            pool.shutdown(wait=True)
-            return result
+            return future.result(timeout=self._timeout_seconds)
         except FuturesTimeoutError as exc:
-            pool.shutdown(wait=False)
+            future.cancel()
             raise self._error("timeout", "ocr timed out", request, is_retryable=True) from exc
         except OcrDocumentError as exc:
-            pool.shutdown(wait=False)
             raise self._error("validation", exc.reason, request, is_retryable=False) from exc
 
     def _error(self, kind: str, reason: str, request: MediaProcessingRequest, *, is_retryable: bool) -> AdapterError:

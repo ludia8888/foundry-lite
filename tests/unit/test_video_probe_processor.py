@@ -103,3 +103,57 @@ def test_default_runner_without_a_bundled_ffprobe_is_unavailable() -> None:
     with pytest.raises(VideoProbeError) as excinfo:
         _default_probe_runner("/sandbox/clip.mp4")
     assert excinfo.value.reason == "probe_engine_unavailable"
+
+
+def test_ffprobe_invocation_restricts_protocols_to_prevent_lfi_ssrf(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A crafted container (concat/playlist referencing a local file URL or a link-local metadata
+    # endpoint) must not let ffprobe read local files or reach the network: the arg list must pin
+    # an allow-list of protocols and disable stdin.
+    from foundry_lite.infrastructure.adapters import video_probe_processor as vpp
+
+    captured: list[list[str]] = []
+
+    class _FakePopen:
+        def __init__(self, args: list[str], **_: object) -> None:
+            captured.append(args)
+            self.returncode = 0
+
+        def communicate(self, timeout: object = None) -> tuple[bytes, bytes]:
+            return (b"{}", b"")
+
+    monkeypatch.setattr(vpp.subprocess, "Popen", _FakePopen)
+    vpp._run_ffprobe("/sandbox/clip.mp4")
+
+    args = captured[0]
+    assert "-protocol_whitelist" in args
+    whitelist = args[args.index("-protocol_whitelist") + 1]
+    assert "http" not in whitelist and "tcp" not in whitelist
+    assert set(whitelist.split(",")) <= {"file", "crypto"}
+    assert "-nostdin" in args
+    # protocol restriction must precede the input path it guards.
+    assert args.index("-protocol_whitelist") < args.index("/sandbox/clip.mp4")
+
+
+def test_ffmpeg_scene_select_restricts_protocols_to_prevent_lfi_ssrf(monkeypatch: pytest.MonkeyPatch) -> None:
+    from foundry_lite.infrastructure.adapters import video_probe_processor as vpp
+
+    captured: list[list[str]] = []
+
+    class _FakePopen:
+        def __init__(self, args: list[str], **_: object) -> None:
+            captured.append(args)
+            self.returncode = 0
+
+        def communicate(self, timeout: object = None) -> tuple[bytes, bytes]:
+            return (b"", b"")
+
+    monkeypatch.setattr(vpp.subprocess, "Popen", _FakePopen)
+    vpp._run_ffmpeg_scene_select("/sandbox/clip.mp4", 0.3, "/sandbox/out")
+
+    args = captured[0]
+    assert "-protocol_whitelist" in args
+    whitelist = args[args.index("-protocol_whitelist") + 1]
+    assert "http" not in whitelist and "tcp" not in whitelist
+    assert "-nostdin" in args
+    # protocol restriction is an input option and must precede -i.
+    assert args.index("-protocol_whitelist") < args.index("-i")
