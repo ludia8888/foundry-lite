@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 import pytest
-from foundry_lite.infrastructure.adapters.iceberg_dataset_storage import _iceberg_compatible_type
+from foundry_lite.infrastructure.adapters.iceberg_arrow import _iceberg_compatible_type
 from foundry_lite.infrastructure.repositories.object_read_repository import (
     INVALID_SQL_VALUE,
     _cursor_sql_value,
