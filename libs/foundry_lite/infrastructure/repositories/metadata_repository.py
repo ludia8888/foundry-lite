@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import insert, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 
 from foundry_lite.infrastructure import schema as db
 
@@ -49,7 +50,15 @@ class SqlAlchemyMetadataRepository:
     ) -> None:
         with self.engine.begin() as conn:
             existing = conn.execute(select(db.users.c.id).where(db.users.c.id == user_id)).first()
-            if existing is None:
+            if existing is not None:
+                return
+            # check-then-insert races when two processes bootstrap against the
+            # same database concurrently (e.g. parallel test collection each
+            # importing the API module's module-level FoundryLite singleton).
+            # A savepoint-guarded insert makes ensure_user idempotent under that
+            # race: a duplicate loses the insert and is treated as already-present.
+            savepoint = conn.begin_nested()
+            try:
                 conn.execute(
                     insert(db.users).values(
                         id=user_id,
@@ -59,6 +68,9 @@ class SqlAlchemyMetadataRepository:
                         created_at=created_at,
                     )
                 )
+                savepoint.commit()
+            except IntegrityError:
+                savepoint.rollback()
 
 
 class SqlAlchemyDestructiveDevelopmentAdmin:
