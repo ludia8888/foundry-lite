@@ -7,11 +7,8 @@ from typing import cast
 
 from foundry_lite.application.ports import (
     OUTBOX_RETRY_PENDING,
-    AuditEventRecord,
     DatasetTransactionRepository,
-    LineageEdgeRecord,
     LineageEdgeRow,
-    OutboxEventRecord,
     RuntimeJsonObject,
     RuntimeLookupTable,
     RuntimeRetryPlan,
@@ -21,12 +18,10 @@ from foundry_lite.application.ports import (
     RuntimeRunDetail,
     RuntimeRunLink,
     RuntimeRunQueryResult,
-    RuntimeRunRelationRecord,
     RuntimeRunSnapshot,
     RuntimeRunType,
     TransactionContext,
 )
-from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.runtime_detail_payload import (
     dataset_transaction_for_row,
@@ -43,9 +38,8 @@ from foundry_lite.application.services.runtime_error_payloads import (
     link_dlq_retry,
     redact_sensitive,
     require_outbox_retry_open,
-    require_write_traffic_open,
-    runtime_error_payload,
 )
+from foundry_lite.application.services.runtime_evidence_service import RuntimeEvidenceService
 from foundry_lite.application.services.runtime_observability import RuntimeObservabilityMixin
 from foundry_lite.application.services.runtime_run_paging import (
     OPERATIONS_RUN_DEFAULT_LIMIT,
@@ -61,7 +55,7 @@ from foundry_lite.application.services.runtime_run_queries import (
     source_run_chain,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import NotFound, PermissionDenied
+from foundry_lite.domain.errors import NotFound
 
 
 class RuntimeService(RuntimeObservabilityMixin, CoreService):
@@ -75,6 +69,7 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
     )
     required_collaborators = ()
     dataset_transaction_repository: DatasetTransactionRepository
+    evidence_service: RuntimeEvidenceService
 
     def lineage_for_resource(
         self,
@@ -271,13 +266,8 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
         resource_type: str,
         resource_id: str,
     ) -> None:
-        require_write_traffic_open(
-            self.engine,
-            self.runtime_repository,
-            ctx,
-            operation=operation,
-            resource_type=resource_type,
-            resource_id=resource_id,
+        self.evidence_service._require_write_traffic_open(
+            ctx, operation=operation, resource_type=resource_type, resource_id=resource_id
         )
 
     def _require_or_audit(
@@ -287,20 +277,7 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
         resource_type: str,
         resource_id: str,
     ) -> None:
-        try:
-            self.policy.require(ctx, permission)
-        except PermissionDenied:
-            with self.engine.begin() as conn:
-                self._audit(
-                    conn,
-                    ctx,
-                    event_type="permission.denied",
-                    resource_type=resource_type,
-                    resource_id=resource_id,
-                    action=permission,
-                    decision="deny",
-                )
-            raise
+        self.evidence_service._require_or_audit(ctx, permission, resource_type, resource_id)
 
     def _select_by_id(self, conn: TransactionContext, table: RuntimeLookupTable, row_id: str) -> RuntimeRow | None:
         return self.runtime_repository.row_by_id(transaction=conn, table=table, row_id=row_id)
@@ -341,25 +318,18 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
         after_ref: Mapping[str, object] | None = None,
         correlation_id: str | None = None,
     ) -> None:
-        self.runtime_repository.insert_audit_event(
-            transaction=conn,
-            record=AuditEventRecord(
-                event_id=_new_id("audit"),
-                tenant_id=ctx.tenant_id,
-                actor_user_id=ctx.actor_user_id,
-                event_type=event_type,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                action=action,
-                decision=decision,
-                policy_decision=dict(policy_decision or {}),
-                before_ref=dict(before_ref or {}),
-                after_ref=dict(after_ref or {}),
-                correlation_id=correlation_id or ctx.request_id,
-                request_id=ctx.request_id,
-                metadata={},
-                created_at=_now(),
-            ),
+        self.evidence_service._audit(
+            conn,
+            ctx,
+            event_type=event_type,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            action=action,
+            decision=decision,
+            policy_decision=policy_decision,
+            before_ref=before_ref,
+            after_ref=after_ref,
+            correlation_id=correlation_id,
         )
 
     def _outbox(
@@ -374,25 +344,16 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
         idempotency_key: str,
         correlation_id: str,
     ) -> str | None:
-        event_id = _new_id("outbox")
-        inserted = self.runtime_repository.insert_outbox_event(
-            transaction=conn,
-            record=OutboxEventRecord(
-                event_id=event_id,
-                tenant_id=ctx.tenant_id,
-                event_type=event_type,
-                aggregate_type=aggregate_type,
-                aggregate_id=aggregate_id,
-                payload=dict(payload),
-                status="pending",
-                attempts=0,
-                idempotency_key=idempotency_key,
-                correlation_id=correlation_id,
-                created_at=_now(),
-                published_at=None,
-            ),
+        return self.evidence_service._outbox(
+            conn,
+            ctx,
+            event_type,
+            aggregate_type,
+            aggregate_id,
+            payload,
+            idempotency_key=idempotency_key,
+            correlation_id=correlation_id,
         )
-        return event_id if inserted else None
 
     def _lineage(
         self,
@@ -405,20 +366,7 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
         relation: str,
         run_id: str,
     ) -> None:
-        self.runtime_repository.insert_lineage_edge(
-            transaction=conn,
-            record=LineageEdgeRecord(
-                edge_id=_new_id("lineage"),
-                tenant_id=ctx.tenant_id,
-                from_resource_type=from_type,
-                from_resource_id=from_id,
-                to_resource_type=to_type,
-                to_resource_id=to_id,
-                relation=relation,
-                created_by_run_id=run_id,
-                created_at=_now(),
-            ),
-        )
+        self.evidence_service._lineage(conn, ctx, from_type, from_id, to_type, to_id, relation, run_id)
 
     def _run_relation(
         self,
@@ -434,21 +382,17 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
         resource_id: str,
         metadata: Mapping[str, object] | None = None,
     ) -> bool:
-        return self.runtime_repository.insert_run_relation(
-            transaction=conn,
-            record=RuntimeRunRelationRecord(
-                relation_id=_new_id("run_relation"),
-                tenant_id=ctx.tenant_id,
-                source_run_type=source_run_type,
-                source_run_id=source_run_id,
-                target_run_type=target_run_type,
-                target_run_id=target_run_id,
-                relation=relation,
-                resource_type=resource_type,
-                resource_id=resource_id,
-                metadata=dict(metadata or {}),
-                created_at=_now(),
-            ),
+        return self.evidence_service._run_relation(
+            conn,
+            ctx,
+            source_run_type=source_run_type,
+            source_run_id=source_run_id,
+            target_run_type=target_run_type,
+            target_run_id=target_run_id,
+            relation=relation,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            metadata=metadata,
         )
 
     def _error_payload(
@@ -460,4 +404,6 @@ class RuntimeService(RuntimeObservabilityMixin, CoreService):
         correlation_id: str | None = None,
         adapter: str | None = None,
     ) -> Mapping[str, object]:
-        return runtime_error_payload(exc, ctx, run_id=run_id, correlation_id=correlation_id, adapter=adapter)
+        return self.evidence_service._error_payload(
+            exc, ctx, run_id=run_id, correlation_id=correlation_id, adapter=adapter
+        )

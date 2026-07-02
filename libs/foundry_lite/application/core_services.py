@@ -20,6 +20,7 @@ from foundry_lite.application.services.aip.model_gateway import ModelGatewayServ
 from foundry_lite.application.services.aip.prompt_artifact_service import PromptArtifactService
 from foundry_lite.application.services.aip.tool_broker import ToolBrokerService
 from foundry_lite.application.services.aip.visual_builder import VisualBuilderService
+from foundry_lite.application.services.backup_restore_services import BackupRestoreServices
 from foundry_lite.application.services.base import CoreService, build_service, collaborator_kwargs
 from foundry_lite.application.services.connector_onboarding_service import ConnectorOnboardingService
 from foundry_lite.application.services.dataset_service import DatasetServices
@@ -29,10 +30,11 @@ from foundry_lite.application.services.media_service import MediaServices
 from foundry_lite.application.services.object_service import ObjectServices
 from foundry_lite.application.services.ontology_search import OntologySearchService
 from foundry_lite.application.services.ontology_service import OntologyService
+from foundry_lite.application.services.ontology_services import OntologyServices
 from foundry_lite.application.services.osdk_application_service import OsdkApplicationService
+from foundry_lite.application.services.osdk_application_services import OsdkApplicationServices
 from foundry_lite.application.services.osdk_oauth_session_service import OsdkOAuthSessionService
 from foundry_lite.application.services.runtime_bundle import (
-    BackupRestoreService,
     ErasureService,
     IcebergMaintenanceService,
     InsightReviewService,
@@ -41,6 +43,7 @@ from foundry_lite.application.services.runtime_bundle import (
     RuntimeService,
     WorkflowOrchestrationService,
 )
+from foundry_lite.application.services.runtime_evidence_service import RuntimeEvidenceService
 from foundry_lite.application.services.source_management_service import SourceManagementService
 from foundry_lite.application.services.source_onboarding_service import SourceOnboardingService
 from foundry_lite.application.services.source_scheduler_service import SourceSchedulerService
@@ -54,7 +57,7 @@ __all__ = [
     "AgentRuntimeService",
     "ActionProposalService",
     "ApprovalExecutionService",
-    "BackupRestoreService",
+    "BackupRestoreServices",
     "BuilderRuntimeService",
     "ConnectorOnboardingService",
     "ContextCompilerService",
@@ -75,10 +78,13 @@ __all__ = [
     "ObjectServices",
     "OntologySearchService",
     "OntologyService",
+    "OntologyServices",
     "OsdkApplicationService",
+    "OsdkApplicationServices",
     "OsdkOAuthSessionService",
     "OutboxPublisherService",
     "RecordDlqService",
+    "RuntimeEvidenceService",
     "RuntimeService",
     "SourceManagementService",
     "SourceOnboardingService",
@@ -90,7 +96,7 @@ __all__ = [
 
 
 class _SharedCoreServices(TypedDict):
-    backup_restore: BackupRestoreService
+    backup_restore: BackupRestoreServices
     dataset: DatasetServices
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
@@ -113,7 +119,7 @@ class CoreServices:
     agent_runtime: AgentRuntimeService
     action_proposal: ActionProposalService
     approval_execution: ApprovalExecutionService
-    backup_restore: BackupRestoreService
+    backup_restore: BackupRestoreServices
     builder_runtime: BuilderRuntimeService
     connector_onboarding: ConnectorOnboardingService
     source_management: SourceManagementService
@@ -135,31 +141,33 @@ class CoreServices:
     tool_broker: ToolBrokerService
     visual_builder: VisualBuilderService
     object_store: ObjectServices
-    ontology: OntologyService
+    ontology: OntologyServices
     ontology_search: OntologySearchService
-    osdk_applications: OsdkApplicationService
+    osdk_applications: OsdkApplicationServices
     osdk_oauth_sessions: OsdkOAuthSessionService
     outbox_publisher: OutboxPublisherService
     record_dlq: RecordDlqService
+    runtime_evidence: RuntimeEvidenceService
     runtime: RuntimeService
     transform: TransformServices
     workflow: WorkflowOrchestrationService
 
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> CoreServices:
-        services = _new_core_services(cls, dependencies)
+        services = _new_core_services(dependencies)
+        _bind_runtime_evidence_boundary(services)
         _bind_core_service_collaborators(services)
         return services
 
 
-def _new_core_services(service_type: type[CoreServices], dependencies: CoreDependencies) -> CoreServices:
+def _new_core_services(dependencies: CoreDependencies) -> CoreServices:
     shared = _shared_core_services(dependencies)
-    return _compose_core_services(service_type, dependencies, shared)
+    return _compose_core_services(dependencies, shared)
 
 
 def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices:
     return {
-        "backup_restore": build_service(BackupRestoreService, dependencies),
+        "backup_restore": BackupRestoreServices.create(dependencies),
         "dataset": DatasetServices.create(dependencies),
         "iceberg_maintenance": build_service(IcebergMaintenanceService, dependencies),
         "insight_review": build_service(InsightReviewService, dependencies),
@@ -170,10 +178,8 @@ def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices
     }
 
 
-def _compose_core_services(
-    service_type: type[CoreServices], dependencies: CoreDependencies, shared: _SharedCoreServices
-) -> CoreServices:
-    return service_type(
+def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreServices) -> CoreServices:
+    return CoreServices(
         action=ActionServices.create(dependencies),
         agent_runtime=build_service(AgentRuntimeService, dependencies),
         action_proposal=build_service(ActionProposalService, dependencies),
@@ -200,16 +206,21 @@ def _compose_core_services(
         tool_broker=build_service(ToolBrokerService, dependencies),
         visual_builder=build_service(VisualBuilderService, dependencies),
         object_store=shared["object_store"],
-        ontology=build_service(OntologyService, dependencies),
+        ontology=OntologyServices.create(dependencies),
         ontology_search=build_service(OntologySearchService, dependencies),
-        osdk_applications=build_service(OsdkApplicationService, dependencies),
+        osdk_applications=OsdkApplicationServices.create(dependencies),
         osdk_oauth_sessions=build_service(OsdkOAuthSessionService, dependencies),
         outbox_publisher=build_service(OutboxPublisherService, dependencies),
         record_dlq=build_service(RecordDlqService, dependencies),
+        runtime_evidence=build_service(RuntimeEvidenceService, dependencies),
         runtime=build_service(RuntimeService, dependencies),
         transform=TransformServices.create(dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies),
     )
+
+
+def _bind_runtime_evidence_boundary(services: CoreServices) -> None:
+    services.runtime.evidence_service = services.runtime_evidence
 
 
 def _bind_core_service_collaborators(services: CoreServices) -> None:
@@ -224,7 +235,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.agent_runtime,
         services.action_proposal,
         services.approval_execution,
-        services.backup_restore,
+        *services.backup_restore.items(),
         services.builder_runtime,
         services.connector_onboarding,
         services.source_management,
@@ -246,12 +257,13 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.tool_broker,
         services.visual_builder,
         *services.object_store.items(),
-        services.ontology,
+        *services.ontology.items(),
         services.ontology_search,
-        services.osdk_applications,
+        *services.osdk_applications.items(),
         services.osdk_oauth_sessions,
         services.outbox_publisher,
         services.record_dlq,
+        services.runtime_evidence,
         services.runtime,
         *services.transform.items(),
         services.workflow,
@@ -277,7 +289,13 @@ def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "agent_runtime_service": services.agent_runtime,
         "action_proposal_service": services.action_proposal,
         "approval_execution_service": services.approval_execution,
-        "backup_restore_service": services.backup_restore,
+        "backup_restore_artifact_execution_service": services.backup_restore.artifact_execution,
+        "backup_restore_artifact_restore_service": services.backup_restore.artifact_restore,
+        "backup_restore_artifact_service": services.backup_restore.artifact,
+        "backup_restore_mode_service": services.backup_restore.mode,
+        "backup_restore_preflight_service": services.backup_restore.preflight,
+        "backup_restore_service": services.backup_restore.entrypoint,
+        "backup_restore_validation_service": services.backup_restore.validation,
         "builder_runtime_service": services.builder_runtime,
         "connector_onboarding_service": services.connector_onboarding,
         "source_management_service": services.source_management,
@@ -307,7 +325,10 @@ def _media_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
 def _data_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
         "dataset_ingest_service": services.dataset.ingest,
-        "dataset_quality_service": services.dataset.quality,
+        "dataset_quality_api_service": services.dataset.quality_api,
+        "dataset_quality_contract_service": services.dataset.quality_contract,
+        "dataset_quality_runtime_service": services.dataset.quality_runtime,
+        "dataset_quality_service": services.dataset.quality_runtime,
         "dataset_registry_service": services.dataset.registry,
         "dataset_transaction_service": services.dataset.transaction,
         "dataset_version_service": services.dataset.version,
@@ -323,15 +344,28 @@ def _data_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
 
 def _object_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
-        "object_indexing_service": services.object_store.indexing,
+        "object_cdc_indexing_service": services.object_store.indexing_services.cdc,
+        "object_index_rebuild_service": services.object_store.indexing_services.rebuild,
+        "object_index_record_mutation_service": services.object_store.indexing_services.record_mutations,
+        "object_index_shadow_service": services.object_store.indexing_services.shadow,
+        "object_link_indexing_service": services.object_store.indexing_services.links,
         "object_links_service": services.object_store.links,
+        "object_ontology_reindex_service": services.object_store.indexing_services.ontology_reindex,
         "object_query_service": services.object_store.query,
         "object_records_service": services.object_store.records,
         "object_search_service": services.object_store.search,
         "object_sets_service": services.object_store.sets,
         "object_subscription_service": services.object_store.subscriptions,
-        "ontology_service": services.ontology,
-        "osdk_application_service": services.osdk_applications,
+        "ontology_activation_service": services.ontology.activation,
+        "ontology_catalog_service": services.ontology.catalog,
+        "ontology_lookup_service": services.ontology.lookup,
+        "ontology_reindex_contract_service": services.ontology.reindex_contract,
+        "ontology_service": services.ontology.entrypoint,
+        "osdk_application_client_service": services.osdk_applications.client,
+        "osdk_application_idempotency_service": services.osdk_applications.idempotency,
+        "osdk_application_scope_service": services.osdk_applications.scope,
+        "osdk_application_service": services.osdk_applications.entrypoint,
+        "osdk_application_sdk_service": services.osdk_applications.sdk,
         "osdk_oauth_session_service": services.osdk_oauth_sessions,
     }
 

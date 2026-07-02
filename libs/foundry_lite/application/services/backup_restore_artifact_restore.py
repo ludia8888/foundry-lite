@@ -16,15 +16,26 @@ from foundry_lite.application.ports import (
     BackupRestorePostRestoreValidationReport,
     BackupRestorePreflightReport,
     RuntimeJsonObject,
-    TransactionContext,
 )
 from foundry_lite.application.ports.transaction_context import TransactionManager
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.backup_restore_preflight_service import BackupRestorePreflightService
 from foundry_lite.application.services.backup_restore_validation import (
+    BackupRestoreValidationService,
     post_restore_validation_report,
     restore_mode_report,
 )
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
+from foundry_lite.domain.backup_restore.artifact_restore import (
+    artifact_restore_findings as _domain_artifact_restore_findings,
+)
+from foundry_lite.domain.backup_restore.artifact_restore import (
+    latest_versions_by_dataset as _domain_latest_versions_by_dataset,
+)
+from foundry_lite.domain.backup_restore.artifact_restore import (
+    require_artifact_tenant as _domain_require_artifact_tenant,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
 
@@ -33,39 +44,20 @@ ARTIFACT_RESTORE_VALIDATED_EVENT = "backup_restore.artifact_restore_validated"
 ARTIFACT_RESTORE_FAILED_EVENT = "backup_restore.artifact_restore_failed"
 
 
-class BackupRestoreArtifactRestoreMixin:
+class BackupRestoreArtifactRestoreService(CoreService):
     """Verified backup artifact restore-mode entrypoint."""
 
+    required_dependencies = ("engine", "backup_artifact_store")
+    required_collaborators = (
+        "backup_restore_preflight_service",
+        "backup_restore_validation_service",
+        "runtime_service",
+    )
+    backup_restore_preflight_service: BackupRestorePreflightService
+    backup_restore_validation_service: BackupRestoreValidationService
     engine: TransactionManager
     backup_artifact_store: BackupArtifactStore
     runtime_service: DatasetRuntimeBoundary
-
-    def restore_preflight_report(
-        self,
-        *,
-        ctx: RequestContext | None = None,
-        backup_id: str | None = None,
-    ) -> BackupRestorePreflightReport:
-        raise NotImplementedError
-
-    def _existing_restore_mode_report(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport | None:
-        raise NotImplementedError
-
-    def _audit_restore_mode(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        report: BackupRestoreModeReport,
-    ) -> None:
-        raise NotImplementedError
-
-    def _audit_post_restore_validation(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        report: BackupRestorePostRestoreValidationReport,
-    ) -> None:
-        raise NotImplementedError
 
     def restore_from_backup_artifact(
         self,
@@ -79,20 +71,23 @@ class BackupRestoreArtifactRestoreMixin:
     ) -> BackupRestoreArtifactRestoreReport:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "operations:retry", "backup_restore", artifact_ref)
-        artifact = self._read_restore_artifact(ctx, artifact_ref, artifact_hash)
+        artifact = self.read_restore_artifact(ctx, artifact_ref, artifact_hash)
         receipt = artifact["receipt"]
         preflight = artifact["preflightReport"]
         resolved_restore_id = restore_id or f"restore-{preflight['backupId']}"
-        self._require_artifact_tenant(ctx, receipt)
-        self._audit_artifact_restore_requested(ctx, receipt, resolved_restore_id)
-        current = self.restore_preflight_report(ctx=ctx, backup_id=f"{preflight['backupId']}:current")
+        self.require_artifact_tenant(ctx, receipt)
+        self.audit_artifact_restore_requested(ctx, receipt, resolved_restore_id)
+        current = self.backup_restore_preflight_service.restore_preflight_report(
+            ctx=ctx,
+            backup_id=f"{preflight['backupId']}:current",
+        )
         findings = _artifact_restore_findings(preflight, current)
         if findings:
             report = _artifact_restore_report(ctx, artifact, resolved_restore_id, findings, None, None)
             self._audit_artifact_restore_report(ctx, report)
             return report
-        mode = self._restore_mode_from_artifact(ctx, resolved_restore_id, preflight)
-        validation = self._post_restore_from_artifact(
+        mode = self.restore_mode_from_artifact(ctx, resolved_restore_id, preflight)
+        validation = self.post_restore_from_artifact(
             ctx,
             mode,
             preflight,
@@ -103,7 +98,7 @@ class BackupRestoreArtifactRestoreMixin:
         self._audit_artifact_restore_report(ctx, report)
         return report
 
-    def _read_restore_artifact(
+    def read_restore_artifact(
         self,
         ctx: RequestContext,
         artifact_ref: str,
@@ -121,21 +116,21 @@ class BackupRestoreArtifactRestoreMixin:
                 details={"artifact_ref": artifact_ref, "reason": exc.reason},
             ) from exc
 
-    def _restore_mode_from_artifact(
+    def restore_mode_from_artifact(
         self,
         ctx: RequestContext,
         restore_id: str,
         preflight: BackupRestorePreflightReport,
     ) -> BackupRestoreModeReport:
-        existing = self._existing_restore_mode_report(ctx, restore_id)
+        existing = self.backup_restore_validation_service.existing_restore_mode_report(ctx, restore_id)
         if existing is not None:
             return existing
         mode = restore_mode_report(ctx, restore_id, preflight)
         with self.engine.begin() as conn:
-            self._audit_restore_mode(conn, ctx, mode)
+            self.backup_restore_validation_service.audit_restore_mode(conn, ctx, mode)
         return mode
 
-    def _post_restore_from_artifact(
+    def post_restore_from_artifact(
         self,
         ctx: RequestContext,
         mode: BackupRestoreModeReport,
@@ -147,10 +142,10 @@ class BackupRestoreArtifactRestoreMixin:
             return None
         validation = post_restore_validation_report(ctx, mode, preflight, validation_id)
         with self.engine.begin() as conn:
-            self._audit_post_restore_validation(conn, ctx, validation)
+            self.backup_restore_validation_service.audit_post_restore_validation(conn, ctx, validation)
         return validation
 
-    def _audit_artifact_restore_requested(
+    def audit_artifact_restore_requested(
         self,
         ctx: RequestContext,
         receipt: BackupRestoreArtifactReceipt,
@@ -202,104 +197,27 @@ class BackupRestoreArtifactRestoreMixin:
                 correlation_id=ctx.request_id,
             )
 
-    def _require_artifact_tenant(self, ctx: RequestContext, receipt: BackupRestoreArtifactReceipt) -> None:
-        if receipt["tenantId"] == ctx.tenant_id:
-            return
-        raise ConflictDetected(
-            "backup artifact tenant does not match request context",
-            details={"artifact_tenant_id": receipt["tenantId"], "request_tenant_id": ctx.tenant_id},
-        )
+    def require_artifact_tenant(self, ctx: RequestContext, receipt: BackupRestoreArtifactReceipt) -> None:
+        _domain_require_artifact_tenant(ctx.tenant_id, receipt["tenantId"])
 
 
 def _artifact_restore_findings(
     artifact_preflight: BackupRestorePreflightReport,
     current_preflight: BackupRestorePreflightReport,
 ) -> list[RuntimeJsonObject]:
-    findings: list[RuntimeJsonObject] = []
-    if artifact_preflight["status"] != "ready":
-        findings.append({"check": "artifact_preflight", "status": artifact_preflight["status"]})
-    if current_preflight["status"] != "ready":
-        findings.append({"check": "current_preflight", "status": current_preflight["status"]})
-    findings.extend(_artifact_version_findings(artifact_preflight, current_preflight))
-    return findings
-
-
-def _artifact_version_findings(
-    artifact_preflight: BackupRestorePreflightReport,
-    current_preflight: BackupRestorePreflightReport,
-) -> list[RuntimeJsonObject]:
-    current_by_version = {version["versionId"]: version for version in current_preflight["datasetVersions"]}
-    latest_by_dataset = _latest_versions_by_dataset(current_preflight["datasetVersions"])
-    findings: list[RuntimeJsonObject] = []
-    for artifact_version in artifact_preflight["datasetVersions"]:
-        current_version = current_by_version.get(artifact_version["versionId"])
-        findings.extend(_version_mismatch_findings(artifact_version, current_version))
-        latest = latest_by_dataset.get((artifact_version["datasetId"], artifact_version["branch"]))
-        if latest is not None and latest["versionId"] != artifact_version["versionId"]:
-            findings.append(_serving_head_finding(artifact_version, latest))
-    return findings
+    return [dict(finding) for finding in _domain_artifact_restore_findings(artifact_preflight, current_preflight)]
 
 
 def _latest_versions_by_dataset(
     versions: Sequence[Mapping[str, object]],
 ) -> dict[tuple[str, str], Mapping[str, object]]:
-    latest: dict[tuple[str, str], Mapping[str, object]] = {}
-    for version in versions:
-        key = (str(version["datasetId"]), str(version["branch"]))
-        current = latest.get(key)
-        if current is None or _version_number(version) > _version_number(current):
-            latest[key] = version
-    return latest
-
-
-def _version_mismatch_findings(
-    artifact_version: Mapping[str, object],
-    current_version: Mapping[str, object] | None,
-) -> list[RuntimeJsonObject]:
-    if current_version is None:
-        return [
-            {
-                "check": "artifact_dataset_version_present",
-                "status": "missing",
-                "versionId": artifact_version["versionId"],
-            }
-        ]
-    mismatches = _mismatched_version_fields(artifact_version, current_version)
-    if not mismatches:
-        return []
-    return [{"check": "artifact_dataset_version_integrity", "status": "mismatch", "fields": mismatches}]
-
-
-def _mismatched_version_fields(
-    artifact_version: Mapping[str, object],
-    current_version: Mapping[str, object],
-) -> list[str]:
-    fields = ("datasetId", "manifestUri", "rowCount", "byteSize", "manifestContentHashes", "status")
-    return [field for field in fields if artifact_version.get(field) != current_version.get(field)]
+    return _domain_latest_versions_by_dataset(versions)
 
 
 def _artifact_restore_event_type(report: BackupRestoreArtifactRestoreReport) -> str:
     if report["status"] == "validated":
         return ARTIFACT_RESTORE_VALIDATED_EVENT
     return ARTIFACT_RESTORE_FAILED_EVENT
-
-
-def _version_number(version: Mapping[str, object]) -> int:
-    value = version["versionNumber"]
-    return int(value) if isinstance(value, int | str) else 0
-
-
-def _serving_head_finding(
-    artifact_version: Mapping[str, object],
-    latest: Mapping[str, object],
-) -> RuntimeJsonObject:
-    return {
-        "check": "serving_head_matches_artifact",
-        "status": "blocked",
-        "datasetId": artifact_version["datasetId"],
-        "artifactVersionId": artifact_version["versionId"],
-        "currentHeadVersionId": latest["versionId"],
-    }
 
 
 def _artifact_restore_report(

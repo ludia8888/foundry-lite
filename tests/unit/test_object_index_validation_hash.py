@@ -3,13 +3,13 @@ from __future__ import annotations
 import pytest
 from foundry_lite.application.ports import DatasetVersionRow, ObjectTypeRow
 from foundry_lite.application.ports.object_read_repository import ObjectRecordRow
-from foundry_lite.application.services.object_store.indexing_rebuild_service import _require_unique_source_object_ids
 from foundry_lite.application.services.object_store.indexing_types import (
     ObjectIndexRebuildPlan,
     ObjectIndexSourceRow,
     object_index_stats,
 )
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.object_store import require_unique_source_object_ids
 
 
 def _record(**overrides: object) -> ObjectRecordRow:
@@ -86,13 +86,15 @@ def test_source_snapshot_duplicate_object_ids_fail_closed_before_reindex_writes(
     )
 
     with pytest.raises(ValidationFailed) as raised:
-        _require_unique_source_object_ids(
-            plan,
-            [
-                ObjectIndexSourceRow(object_id="O-1001", base_patch={"amount": 100}),
-                ObjectIndexSourceRow(object_id="O-1002", base_patch={"amount": 200}),
-                ObjectIndexSourceRow(object_id="O-1001", base_patch={"amount": 300}),
-            ],
+        source_rows = [
+            ObjectIndexSourceRow(object_id="O-1001", base_patch={"amount": 100}),
+            ObjectIndexSourceRow(object_id="O-1002", base_patch={"amount": 200}),
+            ObjectIndexSourceRow(object_id="O-1001", base_patch={"amount": 300}),
+        ]
+        require_unique_source_object_ids(
+            plan.object_type_api_name,
+            [source.object_id for source in source_rows],
+            source_dataset_version_id=plan.source_dataset_version_id,
         )
 
     assert raised.value.details["duplicateObjectIds"] == ["O-1001"]

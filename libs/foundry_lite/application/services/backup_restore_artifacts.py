@@ -12,26 +12,23 @@ from foundry_lite.application.runtime_repository_backup_restore import (
     BackupRestoreArtifactReceipt,
     BackupRestorePreflightReport,
 )
+from foundry_lite.application.services.backup_restore_preflight_service import BackupRestorePreflightService
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
 
 
-class BackupRestoreArtifactMixin:
+class BackupRestoreArtifactService(CoreService):
     """Backup artifact creation flow layered on top of restore preflight."""
 
+    required_dependencies = ("engine", "backup_artifact_store", "runtime_repository")
+    required_collaborators = ("backup_restore_preflight_service", "runtime_service")
+    backup_restore_preflight_service: BackupRestorePreflightService
     engine: TransactionManager
     backup_artifact_store: BackupArtifactStore
     runtime_repository: RuntimeRepository
     runtime_service: DatasetRuntimeBoundary
-
-    def restore_preflight_report(
-        self,
-        *,
-        ctx: RequestContext | None = None,
-        backup_id: str | None = None,
-    ) -> BackupRestorePreflightReport:
-        raise NotImplementedError
 
     def create_backup_artifact(
         self,
@@ -45,7 +42,10 @@ class BackupRestoreArtifactMixin:
         existing = _existing_backup_artifact_receipt(self.runtime_repository, ctx, resolved_backup_id)
         if existing is not None:
             return existing
-        report = self.restore_preflight_report(ctx=ctx, backup_id=resolved_backup_id)
+        report = self.backup_restore_preflight_service.restore_preflight_report(
+            ctx=ctx,
+            backup_id=resolved_backup_id,
+        )
         if report["status"] != "ready":
             self._audit_backup_artifact_failed(ctx, report)
             raise ConflictDetected(

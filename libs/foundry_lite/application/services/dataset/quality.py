@@ -18,7 +18,6 @@ from foundry_lite.application.ports.dataset_quality_repository import (
 from foundry_lite.application.primitives import StagedFileStats, _new_id, _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary, DatasetVersionLookup
-from foundry_lite.application.services.dataset.quality_api import DatasetQualityApiMixin
 from foundry_lite.application.services.dataset.quality_helpers import (
     DEFAULT_QUALITY_CONTRACT_KEY,
     DatasetQualityRunContext,
@@ -38,12 +37,13 @@ from foundry_lite.application.services.dataset.schema_evolution import (
     build_schema_evolution_result,
 )
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.dataset.quality import default_primary_key_checks
 
 
-class DatasetQualityService(DatasetQualityApiMixin, CoreService):
+class DatasetQualityRuntimeService(CoreService):
+    """Commit-time dataset quality validation use cases."""
+
     required_dependencies = (
-        "engine",
-        "policy",
         "compute_adapter",
         "dataset_quality_repository",
         "dataset_transaction_repository",
@@ -147,13 +147,7 @@ class DatasetQualityService(DatasetQualityApiMixin, CoreService):
         checks: list[DatasetCheckConfig] = []
         if not _allows_empty_dataset(candidate_checks):
             checks.append({"type": "row_count_min", "min": 1})
-        primary_key = list(dataset["primary_key"])
-        for pk in primary_key:
-            checks.append({"type": "not_null", "columns": [pk]})
-        if len(primary_key) == 1:
-            checks.append({"type": "unique", "column": primary_key[0]})
-        elif len(primary_key) > 1:
-            checks.append({"type": "unique_tuple", "columns": primary_key})
+        checks.extend(default_primary_key_checks(list(dataset["primary_key"])))
         checks.extend(check for check in candidate_checks if check.get("type") != "allow_empty")
         return _unique_checks(checks)
 

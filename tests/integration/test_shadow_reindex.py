@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import RuntimeRow
-from foundry_lite.application.services.object_store.indexing import ObjectIndexingService
+from foundry_lite.application.services.object_store.indexing_rebuild_service import ObjectIndexRebuildService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
@@ -189,7 +189,7 @@ def test_shadow_reindex_catches_up_delta_edits_before_switch(
 ) -> None:
     ctx = prepare_indexed_demo(foundry)
     order = foundry.objects.get("Order", "O-1001", ctx=ctx)
-    original_read = ObjectIndexingService._read_index_source_rows
+    original_read = ObjectIndexRebuildService._read_index_source_rows
     applied: dict[str, object] = {}
 
     def read_then_apply_delta_edit(self, plan):
@@ -208,7 +208,7 @@ def test_shadow_reindex_catches_up_delta_edits_before_switch(
             )
         return rows
 
-    monkeypatch.setattr(ObjectIndexingService, "_read_index_source_rows", read_then_apply_delta_edit)
+    monkeypatch.setattr(ObjectIndexRebuildService, "_read_index_source_rows", read_then_apply_delta_edit)
 
     result = foundry.objects.shadow_reindex("Order", ctx=ctx)
     after_switch = foundry.objects.get("Order", "O-1001", ctx=ctx)
@@ -227,13 +227,13 @@ def test_index_progress_cursor_advances_only_after_bulk_upsert_commit(
 ) -> None:
     ctx = prepare_indexed_demo(foundry)
     before = foundry.objects.get("Order", "O-1001", ctx=ctx)
-    original_index_object_source_row = ObjectIndexingService._index_object_source_row
+    original_index_object_source_row = ObjectIndexRebuildService._index_object_source_row
 
     def fail_during_bulk_upsert(self, conn, ctx, plan, source):
         original_index_object_source_row(self, conn, ctx, plan, source)
         raise RuntimeError("injected bulk upsert failure")
 
-    monkeypatch.setattr(ObjectIndexingService, "_index_object_source_row", fail_during_bulk_upsert)
+    monkeypatch.setattr(ObjectIndexRebuildService, "_index_object_source_row", fail_during_bulk_upsert)
 
     with pytest.raises(RuntimeError, match="injected bulk upsert failure"):
         foundry.objects.reindex("Order", ctx=ctx)

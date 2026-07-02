@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol, cast
 
 from foundry_lite.application.ports import (
     OsdkApplicationRepository,
     OsdkApplicationResourceRow,
-    OsdkApplicationRow,
     OsdkLanguage,
     OsdkReleaseArtifactRow,
     OsdkSdkCompatibilityWindowRow,
@@ -21,6 +20,7 @@ from foundry_lite.application.ports import (
     TransactionManager,
 )
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.osdk_application_artifacts import (
     _artifact_record,
     _compatibility_window_record,
@@ -37,12 +37,14 @@ from foundry_lite.application.services.osdk_application_artifacts import (
     artifact_payload,
     write_release_artifact,
 )
+from foundry_lite.application.services.osdk_application_idempotency import OsdkApplicationIdempotencyService
 from foundry_lite.application.services.osdk_application_records import (
     _channel,
     _language,
     _positive_ttl,
     _require_idempotency_key,
 )
+from foundry_lite.application.services.osdk_application_scope import OsdkApplicationScopeService
 from foundry_lite.application.services.osdk_application_types import (
     _DEFAULT_DOWNLOAD_TOKEN_TTL_SECONDS,
     _ArtifactDraft,
@@ -65,22 +67,16 @@ class _AuditCallable(Protocol):
     ) -> None: ...
 
 
-class OsdkApplicationSdkMixin:
+class OsdkApplicationSdkService(CoreService):
+    required_dependencies = ("engine", "policy", "osdk_application_repository", "root")
+    required_collaborators = ("osdk_application_scope_service", "osdk_application_idempotency_service")
+
     engine: TransactionManager
     osdk_application_repository: OsdkApplicationRepository
     policy: PolicyService
     root: Path
-    _audit: _AuditCallable
-    _idempotent_download_response: Callable[
-        [TransactionContext, RequestContext, str, Mapping[str, object], Callable[[str], RuntimeJsonObject]],
-        RuntimeJsonObject,
-    ]
-    _idempotent_response: Callable[
-        [TransactionContext, RequestContext, str, str, Mapping[str, object], Callable[[], RuntimeJsonObject]],
-        RuntimeJsonObject,
-    ]
-    _require_application: Callable[[TransactionContext, RequestContext, str], OsdkApplicationRow]
-    _resources: Callable[[TransactionContext, RequestContext, str], list[OsdkApplicationResourceRow]]
+    osdk_application_scope_service: OsdkApplicationScopeService
+    osdk_application_idempotency_service: OsdkApplicationIdempotencyService
 
     def create_sdk_version(
         self,
@@ -97,8 +93,8 @@ class OsdkApplicationSdkMixin:
         _require_idempotency_key(idempotency_key)
         language_value = _language(language)
         with self.engine.begin() as conn:
-            app = self._require_application(conn, ctx, app_id)
-            resources = self._resources(conn, ctx, app_id)
+            app = self.osdk_application_scope_service._require_application(conn, ctx, app_id)
+            resources = self.osdk_application_scope_service._resources(conn, ctx, app_id)
             latest = self._latest_released(conn, ctx, app_id, language_value)
             decision = _release_decision(latest, resources, requested_bump)
             artifact = self._build_release_artifact(app, resources, decision, language_value, package_name)
@@ -123,7 +119,7 @@ class OsdkApplicationSdkMixin:
         _require_idempotency_key(idempotency_key)
         request = {"appId": app_id, "versionId": version_id, "channel": channel}
         with self.engine.begin() as conn:
-            response = self._idempotent_response(
+            response = self.osdk_application_idempotency_service._idempotent_response(
                 conn,
                 ctx,
                 "osdk.sdk_version.promote",
@@ -139,7 +135,7 @@ class OsdkApplicationSdkMixin:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "developer_console:read")
         with self.engine.begin() as conn:
-            self._require_application(conn, ctx, app_id)
+            self.osdk_application_scope_service._require_application(conn, ctx, app_id)
             language_value = _language(language) if language is not None else None
             return self.osdk_application_repository.release_channels_for_application(
                 transaction=conn, tenant_id=ctx.tenant_id, app_id=app_id, language=language_value
@@ -165,7 +161,7 @@ class OsdkApplicationSdkMixin:
             "supportedUntil": supported_until,
         }
         with self.engine.begin() as conn:
-            response = self._idempotent_response(
+            response = self.osdk_application_idempotency_service._idempotent_response(
                 conn,
                 ctx,
                 "osdk.sdk_version.compatibility_window.create",
@@ -188,7 +184,7 @@ class OsdkApplicationSdkMixin:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "developer_console:read")
         with self.engine.begin() as conn:
-            self._require_application(conn, ctx, app_id)
+            self.osdk_application_scope_service._require_application(conn, ctx, app_id)
             return self.osdk_application_repository.compatibility_windows_for_application(
                 transaction=conn, tenant_id=ctx.tenant_id, app_id=app_id
             )
@@ -197,7 +193,7 @@ class OsdkApplicationSdkMixin:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "developer_console:read")
         with self.engine.begin() as conn:
-            self._require_application(conn, ctx, app_id)
+            self.osdk_application_scope_service._require_application(conn, ctx, app_id)
             versions = self.osdk_application_repository.sdk_versions_for_application(
                 transaction=conn, tenant_id=ctx.tenant_id, app_id=app_id
             )
@@ -224,7 +220,7 @@ class OsdkApplicationSdkMixin:
         _require_idempotency_key(idempotency_key)
         request = {"appId": app_id, "versionId": version_id, "artifactKind": artifact_kind, "ttlSeconds": ttl_seconds}
         with self.engine.begin() as conn:
-            return self._idempotent_download_response(
+            return self.osdk_application_idempotency_service._idempotent_download_response(
                 conn,
                 ctx,
                 idempotency_key,
@@ -265,7 +261,7 @@ class OsdkApplicationSdkMixin:
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "developer_console:read")
         with self.engine.begin() as conn:
-            self._require_application(conn, ctx, app_id)
+            self.osdk_application_scope_service._require_application(conn, ctx, app_id)
             return self.osdk_application_repository.sdk_versions_for_application(
                 transaction=conn, tenant_id=ctx.tenant_id, app_id=app_id
             )
@@ -305,7 +301,7 @@ class OsdkApplicationSdkMixin:
         channel_row = self.osdk_application_repository.upsert_release_channel(
             transaction=conn, record=_release_channel_record(ctx, row, _channel(channel))
         )
-        self._audit(conn, ctx, "osdk.sdk_version.channel_promoted", channel_row)
+        self.osdk_application_scope_service._audit(conn, ctx, "osdk.sdk_version.channel_promoted", channel_row)
         return cast(RuntimeJsonObject, channel_row)
 
     def _create_compatibility_window_json(
@@ -324,7 +320,7 @@ class OsdkApplicationSdkMixin:
         window = self.osdk_application_repository.insert_compatibility_window(
             transaction=conn, record=_compatibility_window_record(ctx, old_row, new_row, supported_until)
         )
-        self._audit(conn, ctx, "osdk.sdk_version.compatibility_window_created", window)
+        self.osdk_application_scope_service._audit(conn, ctx, "osdk.sdk_version.compatibility_window_created", window)
         return cast(RuntimeJsonObject, window)
 
     def _create_download_token_json(
@@ -345,7 +341,7 @@ class OsdkApplicationSdkMixin:
             transaction=conn,
             record=_download_token_record(ctx, artifact, raw_token, expires_at),
         )
-        self._audit(conn, ctx, "osdk.release_artifact.download_token_created", artifact)
+        self.osdk_application_scope_service._audit(conn, ctx, "osdk.release_artifact.download_token_created", artifact)
         return {"downloadToken": raw_token, "artifactId": artifact["id"], "expiresAt": row["expires_at"]}
 
     def _require_release_artifact(
@@ -431,4 +427,6 @@ class OsdkApplicationSdkMixin:
         self, conn: TransactionContext, ctx: RequestContext, row: OsdkSdkVersionRow, decision: _ReleaseDecision
     ) -> None:
         event = "osdk.sdk_version.released" if decision.release_status == "released" else "osdk.sdk_version.blocked"
-        self._audit(conn, ctx, event, row, after_ref={"sdkVersion": row, "requiredBump": decision.required_bump})
+        self.osdk_application_scope_service._audit(
+            conn, ctx, event, row, after_ref={"sdkVersion": row, "requiredBump": decision.required_bump}
+        )

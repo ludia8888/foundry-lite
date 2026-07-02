@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import pytest
 from foundry_lite.domain.errors import ValidationFailed
-from foundry_lite.domain.transform import (
-    TransformScheduleSpec,
-    decide_transform_schedule,
+from foundry_lite.domain.transform.graph import validate_transform_graph_bounds
+from foundry_lite.domain.transform.rules import (
     normalize_transform_language,
     normalize_transform_output_mode,
     output_transaction_type_for_mode,
     safe_transform_path_token,
-    validate_transform_graph_bounds,
+)
+from foundry_lite.domain.transform.scheduler import (
+    TransformScheduleSpec,
+    decide_transform_schedule,
 )
 
 

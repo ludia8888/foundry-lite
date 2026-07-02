@@ -12,6 +12,7 @@ from foundry_lite.application.ports import (
     ObjectTypeRow,
     TransactionContext,
 )
+from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
 
 
@@ -44,7 +45,7 @@ class SetOntologyLookup(Protocol):
     ) -> ObjectTypeRow: ...
 
 
-class SetRuntimeBoundary(Protocol):
+class SetRuntimeBoundary(RuntimeEvidenceBoundary, Protocol):
     def _require_write_traffic_open(
         self,
         ctx: RequestContext,

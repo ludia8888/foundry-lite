@@ -21,20 +21,29 @@ from foundry_lite.application.services.backup_restore_mode import (
     RESTORE_MODE_RESUME_APPROVED_EVENT,
     RESTORE_MODE_STARTED_EVENT,
 )
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
+from foundry_lite.domain.backup_restore.restore_mode import (
+    post_restore_validation_findings as _domain_post_restore_validation_findings,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
 
 
-class BackupRestoreValidationMixin:
+class BackupRestoreValidationService(CoreService):
+    """Post-restore validation and restore-mode audit boundary."""
+
+    required_dependencies = ("runtime_repository",)
+    required_collaborators = ("runtime_service",)
     runtime_repository: RuntimeRepository
     runtime_service: DatasetRuntimeBoundary
 
-    def _existing_restore_mode_report(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport | None:
-        raise NotImplementedError
+    def existing_restore_mode_report(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport | None:
+        snapshot = self.runtime_repository.list_runs(tenant_id=ctx.tenant_id)
+        return latest_restore_mode_report(snapshot["auditEvents"], restore_id)
 
-    def _approval_candidate(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport:
-        current = self._existing_restore_mode_report(ctx, restore_id)
+    def approval_candidate(self, ctx: RequestContext, restore_id: str) -> BackupRestoreModeReport:
+        current = self.existing_restore_mode_report(ctx, restore_id)
         if current is None:
             raise NotFound("restore mode not found", details={"restore_id": restore_id})
         if current["status"] == "blocked":
@@ -44,7 +53,7 @@ class BackupRestoreValidationMixin:
             )
         return current
 
-    def _required_passed_post_restore_validation(
+    def required_passed_post_restore_validation(
         self,
         ctx: RequestContext,
         restore_id: str,
@@ -64,7 +73,7 @@ class BackupRestoreValidationMixin:
             )
         return report
 
-    def _audit_restore_mode(
+    def audit_restore_mode(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
@@ -81,7 +90,7 @@ class BackupRestoreValidationMixin:
             correlation_id=ctx.request_id,
         )
 
-    def _audit_post_restore_validation(
+    def audit_post_restore_validation(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
@@ -177,15 +186,7 @@ def resume_approved_report(
 
 def post_restore_validation_findings(preflight: BackupRestorePreflightReport) -> list[RuntimeJsonObject]:
     """Return blocking validation findings that prevent restore resume approval."""
-    findings: list[RuntimeJsonObject] = []
-    if preflight["status"] != "ready":
-        findings.append({"check": "metadata_storage_preflight", "status": preflight["status"]})
-    if len(preflight["datasetVersions"]) == 0:
-        findings.append({"check": "dataset_version_inventory", "status": "missing"})
-    if len(preflight["activeIndexPointers"]) == 0:
-        findings.append({"check": "object_index_pointer", "status": "missing"})
-    findings.extend(_missing_runtime_evidence(preflight["highWatermarks"]))
-    return findings
+    return [dict(finding) for finding in _domain_post_restore_validation_findings(preflight)]
 
 
 def restore_mode_event_type(report: BackupRestoreModeReport) -> str:
@@ -214,6 +215,27 @@ def latest_post_restore_validation_report(
     if isinstance(after_ref, dict) and isinstance(after_ref.get("validationId"), str):
         return cast(BackupRestorePostRestoreValidationReport, after_ref)
     raise ValueError("post-restore validation audit event is missing report payload")
+
+
+def latest_restore_mode_report(
+    audit_events: Sequence[RuntimeRow],
+    restore_id: str,
+) -> BackupRestoreModeReport | None:
+    """Return the latest restore mode report for one restore id."""
+    rows = [
+        row
+        for row in audit_events
+        if row.get("event_type")
+        in {RESTORE_MODE_BLOCKED_EVENT, RESTORE_MODE_RESUME_APPROVED_EVENT, RESTORE_MODE_STARTED_EVENT}
+        and row.get("resource_id") == restore_id
+    ]
+    if not rows:
+        return None
+    latest = max(rows, key=_created_at)
+    after_ref = latest.get("after_ref")
+    if isinstance(after_ref, dict) and isinstance(after_ref.get("restoreId"), str):
+        return cast(BackupRestoreModeReport, after_ref)
+    raise ValueError("restore-mode audit event is missing report payload")
 
 
 def post_restore_validation_event_type() -> str:
@@ -268,14 +290,6 @@ def _post_restore_validation_summary(
         "findingCount": len(findings),
         "outboxResumeEligible": len(findings) == 0,
     }
-
-
-def _missing_runtime_evidence(high_watermarks: RuntimeJsonObject) -> list[RuntimeJsonObject]:
-    findings: list[RuntimeJsonObject] = []
-    for table_name in ("actionRuns", "materializationRuns"):
-        if _watermark_count(high_watermarks, table_name) == 0:
-            findings.append({"check": table_name, "status": "missing"})
-    return findings
 
 
 def _watermark_count(high_watermarks: RuntimeJsonObject, table_name: str) -> int:

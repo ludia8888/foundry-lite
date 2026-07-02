@@ -28,6 +28,11 @@ from foundry_lite.application.ports.dataset_quality_repository import (
 )
 from foundry_lite.application.primitives import _json_hash, _new_id, _now
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.dataset.quality import (
+    allows_empty_dataset,
+    dataset_quality_policy_status,
+    is_row_quarantine_check,
+)
 from foundry_lite.domain.errors import ValidationFailed
 
 SUPPORTED_DATASET_CHECK_TYPES = frozenset(
@@ -52,7 +57,7 @@ class DatasetQualityRunContext:
 
 
 def _allows_empty_dataset(extra_checks: Sequence[DatasetCheckConfig]) -> bool:
-    return any(check.get("type") == "allow_empty" for check in extra_checks)
+    return allows_empty_dataset(extra_checks)
 
 
 def _dataset_ref(dataset: DatasetRow) -> str:
@@ -258,14 +263,7 @@ def _check_name(check: DatasetCheckConfig) -> str:
 
 
 def _quality_policy_status(result: DatasetCheckResult, check: DatasetCheckConfig) -> str:
-    if str(result.get("status")) != "failed":
-        return "PASS"
-    severity = _check_severity(check)
-    if severity in {"warn", "warning"}:
-        return "WARN"
-    if severity in {"quarantine", "quarantined"} and _is_row_quarantine_check(check):
-        return "QUARANTINE"
-    return "BLOCK_COMMIT"
+    return dataset_quality_policy_status(result.get("status"), check.get("type"), _check_severity(check))
 
 
 def _validate_dataset_check_config(check: DatasetCheckConfig) -> None:
@@ -307,7 +305,7 @@ def _check_severity(check: DatasetCheckConfig) -> str:
 
 
 def _is_row_quarantine_check(check: DatasetCheckConfig) -> bool:
-    return str(check.get("type")) in {"not_null", "unique", "unique_tuple", "accepted_values"}
+    return is_row_quarantine_check(check.get("type"))
 
 
 def _failed_row_indexes(rows: Sequence[Mapping[str, object]], check: DatasetCheckConfig) -> list[int]:

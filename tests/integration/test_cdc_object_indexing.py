@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import ObjectIndexRepository, ObjectRecordCdcUpdate, TabularRow, TransactionContext
-from foundry_lite.application.services.object_store.indexing import ObjectIndexingService
+from foundry_lite.application.services.object_store.indexing_cdc_service import ObjectCdcIndexingService
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.compute import DuckDBComputeAdapter
@@ -333,14 +333,14 @@ def test_cdc_source_transaction_group_not_partially_committed_without_status(
         _cdc_event("topic:0:50", "c", 50, after={"order_id": "O-5001", "status": "NEW", "amount": 100}),
         _cdc_event("topic:0:51", "c", 51, after={"order_id": "O-5002", "status": "NEW", "amount": 200}),
     ]
-    original_apply = ObjectIndexingService._apply_cdc_event
+    original_apply = ObjectCdcIndexingService._apply_cdc_event
 
     def fail_on_second(self, conn, ctx, object_type, event):
         if event.object_id == "O-5002":
             raise RuntimeError("injected mid-group cdc failure")
         return original_apply(self, conn, ctx, object_type, event)
 
-    monkeypatch.setattr(ObjectIndexingService, "_apply_cdc_event", fail_on_second)
+    monkeypatch.setattr(ObjectCdcIndexingService, "_apply_cdc_event", fail_on_second)
 
     with pytest.raises(RuntimeError, match="injected mid-group cdc failure"):
         foundry.objects.index_cdc_events("Order", group, ctx=ctx)

@@ -48,7 +48,7 @@ class DemoService(CoreService):
         "dataset_ingest_service",
         "dataset_registry_service",
         "materialization_service",
-        "object_indexing_service",
+        "object_index_rebuild_service",
         "object_query_service",
         "ontology_service",
         "transform_service",
@@ -57,7 +57,7 @@ class DemoService(CoreService):
     dataset_ingest_service: DemoDatasetIngest
     dataset_registry_service: DemoDatasetRegistry
     materialization_service: DemoMaterializer
-    object_indexing_service: DemoObjectIndexer
+    object_index_rebuild_service: DemoObjectIndexer
     object_query_service: DemoObjectQuery
     ontology_service: DemoOntologyApplier
     transform_service: DemoTransformRunner
@@ -122,8 +122,8 @@ class DemoService(CoreService):
         ontology = self.ontology_service.apply_ontology(
             SUPPLY_CHAIN_DEMO_ROOT / "ontology" / "order-customer.yaml", ctx=ctx
         )
-        order_index = self.object_indexing_service.index_rebuild("Order", ctx=ctx)
-        customer_index = self.object_indexing_service.index_rebuild("Customer", ctx=ctx)
+        order_index = self.object_index_rebuild_service.index_rebuild("Order", ctx=ctx)
+        customer_index = self.object_index_rebuild_service.index_rebuild("Customer", ctx=ctx)
         return DemoIndexArtifacts(ontology=ontology, order_index=order_index, customer_index=customer_index)
 
     def _approve_demo_order(self, ctx: RequestContext) -> ActionApplyResponse:
@@ -145,7 +145,7 @@ class DemoService(CoreService):
 
     def _refresh_demo_customer_risk(self, ctx: RequestContext) -> DemoCustomerRiskArtifacts:
         customer_risk = self.transform_service.run_transform("customer_risk", ctx=ctx)
-        customer_reindex = self.object_indexing_service.index_rebuild("Customer", ctx=ctx)
+        customer_reindex = self.object_index_rebuild_service.index_rebuild("Customer", ctx=ctx)
         customer = self.object_query_service.get_object("Customer", "C-100", ctx=ctx, include_explain=True)
         return DemoCustomerRiskArtifacts(
             customer_risk=customer_risk,

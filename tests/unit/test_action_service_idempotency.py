@@ -117,7 +117,7 @@ def test_action_apply_service_replays_when_insert_loses_idempotency_race() -> No
     service.bind_collaborators(
         {
             "action_writeback_service": _UnusedWriteback(),
-            "object_indexing_service": _UnexpectedMutation(),
+            "object_index_record_mutation_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),
             "ontology_service": _Ontology(),
             "osdk_application_service": _AllowOsdkScope(),
@@ -152,7 +152,7 @@ def test_protected_runtime_blocks_action_failure_injection_before_run_insert(mon
     service.bind_collaborators(
         {
             "action_writeback_service": _UnusedWriteback(),
-            "object_indexing_service": _UnexpectedMutation(),
+            "object_index_record_mutation_service": _UnexpectedMutation(),
             "object_records_service": _UnexpectedMutation(),
             "ontology_service": _Ontology(),
             "osdk_application_service": _AllowOsdkScope(),

@@ -1,9 +1,4 @@
-"""Object-link indexing methods for the object-index rebuild path.
-
-Extracted from ``indexing_rebuild_service`` as a mixin so that module stays
-under the application module-size budget. ``ObjectIndexingRebuildMixin`` inherits
-this mixin, so the combined indexing service exposes all rebuild + link methods.
-"""
+"""Object-link indexing use-case service for the object-index rebuild path."""
 
 from __future__ import annotations
 
@@ -18,15 +13,23 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.object_store.index_records import build_object_link_insert
 from foundry_lite.application.services.object_store.indexing_protocols import IndexOntologyLookup
 from foundry_lite.application.services.object_store.indexing_types import ObjectIndexRebuildPlan
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.object_store.indexing import (
+    SOURCE_MISSING_DELETION_REASON,
+    should_delete_missing_source_link,
+    should_refresh_existing_link,
+)
 
 
-class ObjectIndexingLinkMixin:
-    """Object-link indexing methods shared into the rebuild service."""
+class ObjectLinkIndexingService(CoreService):
+    """Indexes source-derived object links for a rebuild plan."""
 
+    required_dependencies = ("object_index_repository",)
+    required_collaborators = ("ontology_service",)
     object_index_repository: ObjectIndexRepository
     ontology_service: IndexOntologyLookup
 
@@ -83,7 +86,8 @@ class ObjectIndexingLinkMixin:
             to_object_id=str(to_id),
             index_version=plan.index_version,
         )
-        if existing:
+        if should_refresh_existing_link(is_present=existing is not None):
+            assert existing is not None
             self._refresh_existing_link(conn, ctx, plan, existing)
             return 1
         self._insert_new_link(conn, ctx, plan, link, str(from_id), str(to_id))
@@ -97,8 +101,6 @@ class ObjectIndexingLinkMixin:
         source_link_keys: set[tuple[str, str, str]],
     ) -> None:
         """Mark links deleted when their source row is gone on a full rebuild."""
-        if plan.mode != "full":
-            return
         links = self.object_index_repository.object_links_for_index_version(
             transaction=conn,
             tenant_id=ctx.tenant_id,
@@ -107,7 +109,11 @@ class ObjectIndexingLinkMixin:
         )
         for link in links:
             link_key = (link["link_type_id"], link["from_object_id"], link["to_object_id"])
-            if link["deleted"] or link_key in source_link_keys:
+            if not should_delete_missing_source_link(
+                is_deleted=bool(link["deleted"]),
+                is_present_in_source=link_key in source_link_keys,
+                index_mode=plan.mode,
+            ):
                 continue
             self.object_index_repository.mark_object_link_deleted_from_source(
                 transaction=conn,
@@ -116,7 +122,7 @@ class ObjectIndexingLinkMixin:
                     tenant_id=ctx.tenant_id,
                     source_dataset_version_id=plan.source_dataset_version_id,
                     link_version=int(link["link_version"]) + 1,
-                    deletion_reason="source_missing",
+                    deletion_reason=SOURCE_MISSING_DELETION_REASON,
                     updated_at=_now(),
                 ),
             )

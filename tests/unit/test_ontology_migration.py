@@ -9,12 +9,11 @@ from foundry_lite.application.ports.ontology_repository import (
     ObjectTypeRow,
     PropertyTypeRow,
 )
-from foundry_lite.application.services.ontology_migration import (
-    OntologyMigrationChange,
-    OntologyMigrationPlan,
+from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.ontology.migration import (
     build_ontology_migration_plan,
 )
-from foundry_lite.application.services.ontology_migration_changes import (
+from foundry_lite.domain.ontology.migration_changes import (
     blocked_action_removed,
     blocked_action_target_changed,
     blocked_link_backing_changed,
@@ -32,8 +31,11 @@ from foundry_lite.application.services.ontology_migration_changes import (
     warning_parameter_became_optional,
     warning_property_reindex,
 )
-from foundry_lite.application.services.ontology_migration_types import reindex_operation
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.ontology.migration_types import (
+    OntologyMigrationChange,
+    OntologyMigrationPlan,
+    reindex_operation,
+)
 
 
 def test_ontology_migration_blocks_property_rename_without_consumer_mapping() -> None:

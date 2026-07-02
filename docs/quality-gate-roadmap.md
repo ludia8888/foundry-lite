@@ -76,6 +76,8 @@
 | 20  | required_collaborators 명시     | `check_service_dependencies`            | 선언/사용 일치               | ✅   |
 | 21  | 소유 service 명시 호출          | `check_service_call_graph`              | cycle 0, depth≤7, fan-out≤10 | ✅   |
 | 22  | Strategy/Specification 테스트성 | `check_strategy_specification_tests.py` | missing direct test 0        | ✅   |
+| 22.1 | 새 service/facade Mixin 성장 금지 | `check_no_service_mixin_growth.py`     | allowlist 밖 Mixin 0         | ✅   |
+| 22.2 | Domain rule 직접 테스트성       | `check_domain_rule_tests.py`            | missing direct domain test 0 | ✅   |
 
 ### §4.3 Scale Foundation
 
@@ -181,11 +183,11 @@
 
 | 상태                | 개수   | 비율     |
 | ------------------- | ------ | -------- |
-| ✅ 강제             | 54     | 82%      |
+| ✅ 강제             | 56     | 82%      |
 | △ 부분              | 12     | 18%      |
 | ❌ 미강제           | 0      | 0%       |
 | ⏳ 미해당 (구현 전) | 0      | 0%       |
-| **합계**            | **66** | **100%** |
+| **합계**            | **68** | **100%** |
 
 **현재 게이트는 문서 약속의 약 82%를 정량적으로 완전 강제하고, 나머지 18%는
 부분 강제한다.** 직접 미강제(❌) 조항은 0개이며, 다음 목표는 △ 부분 강제 항목을

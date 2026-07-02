@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.ports.ontology_repository import OntologyVersionRow
+from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
 
 
@@ -71,7 +72,7 @@ class IndexOntologyLookup(Protocol):
     ) -> Mapping[str, object]: ...
 
 
-class IndexRuntimeBoundary(Protocol):
+class IndexRuntimeBoundary(RuntimeEvidenceBoundary, Protocol):
     def _require_write_traffic_open(
         self,
         ctx: RequestContext,

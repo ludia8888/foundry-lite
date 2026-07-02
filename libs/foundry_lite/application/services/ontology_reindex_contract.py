@@ -1,20 +1,26 @@
-"""Application service helpers for ontology reindex contract workflows."""
+"""Ontology reindex contract use-case service."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 
-from foundry_lite.application.ports import ObjectTypeRow, OntologyRepository, TransactionContext
-from foundry_lite.application.services.ontology_migration_types import (
+from foundry_lite.application.ports import TransactionContext
+from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected
+from foundry_lite.domain.ontology.migration_types import (
     complete_object_reindex_config,
     pending_object_reindex_operation,
 )
-from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound
 
 
-class OntologyReindexContractMixin:
-    ontology_repository: OntologyRepository
+class OntologyReindexContractService(CoreService):
+    """Close required ontology object-reindex contracts after a rebuild."""
+
+    required_dependencies = ("ontology_repository",)
+    required_collaborators = ("ontology_lookup_service",)
+    ontology_lookup_service: OntologyLookupService
 
     def _complete_object_reindex_contract(
         self,
@@ -26,8 +32,8 @@ class OntologyReindexContractMixin:
         dataset_version_id: str,
         completed_at: str,
     ) -> dict[str, object]:
-        row = self._object_type_by_id(conn, ctx, object_type_id)
-        operation = self._pending_object_reindex_operation(row, reindex_key)
+        row = self.ontology_lookup_service._object_type_by_id(conn, ctx, object_type_id)
+        operation = self._pending_object_reindex_operation(row["config"], reindex_key)
         config = complete_object_reindex_config(
             row["config"],
             operation,
@@ -38,27 +44,12 @@ class OntologyReindexContractMixin:
         self._update_object_type_config(conn, ctx, object_type_id, reindex_key, config)
         return config
 
-    def _object_type_by_id(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type_id: str,
-    ) -> ObjectTypeRow:
-        row = self.ontology_repository.object_type_by_id(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            object_type_id=object_type_id,
-        )
-        if row is None:
-            raise NotFound("object type not found", details={"object_type_id": object_type_id})
-        return row
-
     def _pending_object_reindex_operation(
         self,
-        row: ObjectTypeRow,
+        config: Mapping[str, object],
         reindex_key: str,
     ) -> Mapping[str, object]:
-        operation = pending_object_reindex_operation(row["config"], reindex_key)
+        operation = pending_object_reindex_operation(config, reindex_key)
         if operation is None:
             raise ConflictDetected(
                 "ontology object reindex plan is no longer pending",

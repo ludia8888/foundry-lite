@@ -1,12 +1,10 @@
-"""Application service helpers for indexing cdc service workflows."""
+"""Object CDC indexing use-case service."""
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
 from foundry_lite.application.ports import (
-    IndexRunCursor,
     IndexRunRecord,
     ObjectIndexCdcResult,
     ObjectIndexRepository,
@@ -19,6 +17,7 @@ from foundry_lite.application.ports import (
     TransactionManager,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.object_store.cdc_indexing import (
     cdc_cursor,
     cdc_event_should_skip,
@@ -33,76 +32,36 @@ from foundry_lite.application.services.object_store.indexing_protocols import (
     IndexOntologyLookup,
     IndexRuntimeBoundary,
 )
+from foundry_lite.application.services.object_store.indexing_record_mutations import ObjectIndexRecordMutationService
 from foundry_lite.application.services.object_store.indexing_types import (
     ObjectCdcEvent,
     ObjectIndexCdcCounts,
-    ObjectIndexRebuildCounts,
     object_index_cdc_response,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
+from foundry_lite.domain.object_store.cdc import cdc_deletion_reason
 
 
-class ObjectIndexingCdcMixin(ABC):
+class ObjectCdcIndexingService(CoreService):
+    """Applies ordered CDC events into the active object index."""
+
+    required_dependencies = ("engine", "object_index_repository")
+    required_collaborators = (
+        "object_index_record_mutation_service",
+        "object_records_service",
+        "ontology_service",
+        "runtime_service",
+    )
     engine: TransactionManager
     object_index_repository: ObjectIndexRepository
+    object_index_record_mutation_service: ObjectIndexRecordMutationService
     object_records_service: IndexObjectRecords
     ontology_service: IndexOntologyLookup
     runtime_service: IndexRuntimeBoundary
 
-    @abstractmethod
-    def _mark_index_run_succeeded(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run_id: str,
-        counts: ObjectIndexRebuildCounts | ObjectIndexCdcCounts,
-        cursor: IndexRunCursor | None = None,
-    ) -> None: ...
-
-    @abstractmethod
-    def _mark_index_run_failed(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        run_id: str,
-        exc: Exception,
-        adapter: str = "compute_adapter.rows_from_parquet",
-    ) -> None: ...
-
-    @abstractmethod
-    def _record_conflicts_for_base_update(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type: ObjectTypeRow,
-        object_id: str,
-        existing: ObjectRecordRow,
-        base_patch: ObjectPropertyMap,
-        source_dataset_version_id: str,
-    ) -> None: ...
-
-    @abstractmethod
-    def _merge_properties(
-        self,
-        conn: TransactionContext,
-        object_type_id: str,
-        base: ObjectPropertyMap,
-        edits: ObjectPropertyMap,
-    ) -> ObjectPropertyMap: ...
-
-    @abstractmethod
-    def _emit_object_changed(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type_api_name: str,
-        object_id: str,
-        source_dataset_version_id: str,
-    ) -> None: ...
-
-    @abstractmethod
-    def _require_object_index(self, ctx: RequestContext, resource_type: str, resource_id: str) -> None: ...
+    def _require_object_index(self, ctx: RequestContext, resource_type: str, resource_id: str) -> None:
+        self.runtime_service._require_or_audit(ctx, "object:index", resource_type, resource_id)
 
     def index_cdc_events(
         self,
@@ -123,18 +82,43 @@ class ObjectIndexingCdcMixin(ABC):
             object_type = self._cdc_object_type(conn, ctx, object_type_api_name)
             run_id = self._create_cdc_index_run(conn, ctx, object_type, events)
         try:
-            with self.engine.begin() as conn:
-                object_type = self._cdc_object_type(conn, ctx, object_type_api_name)
-                parsed = self._parse_cdc_events(conn, object_type, events)
-                counts = self._persist_cdc_events(conn, ctx, object_type, parsed)
-                cursor = cdc_cursor(parsed, counts.events_skipped)
-                self._mark_index_run_succeeded(conn, ctx, run_id, counts, cursor=cursor)
-                self._audit_cdc_index(conn, ctx, object_type, run_id, counts)
+            counts = self._run_cdc_index_batch(ctx, object_type_api_name, events, run_id)
             return object_index_cdc_response(run_id, object_type_api_name, counts)
         except Exception as exc:
-            with self.engine.begin() as conn:
-                self._mark_index_run_failed(conn, ctx, run_id, exc, adapter="cdc_object_indexer")
+            self._fail_cdc_index_run(ctx, run_id, exc)
             raise
+
+    def _run_cdc_index_batch(
+        self,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        events: Sequence[ObjectPropertyMap],
+        run_id: str,
+    ) -> ObjectIndexCdcCounts:
+        with self.engine.begin() as conn:
+            object_type = self._cdc_object_type(conn, ctx, object_type_api_name)
+            parsed = self._parse_cdc_events(conn, object_type, events)
+            counts = self._persist_cdc_events(conn, ctx, object_type, parsed)
+            cursor = cdc_cursor(parsed, counts.events_skipped)
+            self.object_index_record_mutation_service.mark_index_run_succeeded(
+                conn,
+                ctx,
+                run_id,
+                counts,
+                cursor=cursor,
+            )
+            self._audit_cdc_index(conn, ctx, object_type, run_id, counts)
+            return counts
+
+    def _fail_cdc_index_run(self, ctx: RequestContext, run_id: str, exc: Exception) -> None:
+        with self.engine.begin() as conn:
+            self.object_index_record_mutation_service.mark_index_run_failed(
+                conn,
+                ctx,
+                run_id,
+                exc,
+                adapter="cdc_object_indexer",
+            )
 
     def _cdc_object_type(
         self,
@@ -238,7 +222,7 @@ class ObjectIndexingCdcMixin(ABC):
         if existing is None:
             self._insert_cdc_object_record(conn, ctx, object_type, event, deleted=False)
             return True
-        self._record_conflicts_for_base_update(
+        self.object_index_record_mutation_service.record_conflicts_for_base_update(
             conn,
             ctx,
             object_type,
@@ -272,7 +256,14 @@ class ObjectIndexingCdcMixin(ABC):
         deleted: bool,
     ) -> None:
         base_patch = dict(event.base_patch)
-        current = dict(self._merge_properties(conn, object_type["id"], base_patch, {}))
+        current = dict(
+            self.object_index_record_mutation_service.merge_properties(
+                conn,
+                object_type["id"],
+                base_patch,
+                {},
+            )
+        )
         index_version = self.object_index_repository.active_index_version(
             transaction=conn,
             tenant_id=ctx.tenant_id,
@@ -283,7 +274,7 @@ class ObjectIndexingCdcMixin(ABC):
             transaction=conn,
             record=_cdc_object_insert(ctx, object_type, event, base_patch, current, index_version, deleted, now),
         )
-        self._emit_object_changed(
+        self.object_index_record_mutation_service.emit_object_changed(
             conn,
             ctx,
             object_type["api_name"],
@@ -302,7 +293,14 @@ class ObjectIndexingCdcMixin(ABC):
         deleted: bool,
     ) -> bool:
         base_patch = dict(event.base_patch or existing["base_properties"])
-        current = dict(self._merge_properties(conn, object_type["id"], base_patch, existing["edit_properties"]))
+        current = dict(
+            self.object_index_record_mutation_service.merge_properties(
+                conn,
+                object_type["id"],
+                base_patch,
+                existing["edit_properties"],
+            )
+        )
         updated = self.object_index_repository.update_object_record_from_cdc(
             transaction=conn,
             record=_build_cdc_object_record_update(existing, ctx, current, base_patch, event, deleted=deleted),
@@ -315,7 +313,7 @@ class ObjectIndexingCdcMixin(ABC):
                 "CDC object record changed during update",
                 details={"objectType": object_type["api_name"], "objectId": event.object_id},
             )
-        self._emit_object_changed(
+        self.object_index_record_mutation_service.emit_object_changed(
             conn,
             ctx,
             object_type["api_name"],
@@ -349,7 +347,7 @@ class ObjectIndexingCdcMixin(ABC):
 
 
 def _cdc_deletion_reason(deleted: bool) -> str | None:
-    return "source_deleted" if deleted else None
+    return cdc_deletion_reason(deleted)
 
 
 def _cdc_object_insert(

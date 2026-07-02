@@ -23,6 +23,7 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import CommitResult, StagedFileStats, _now
 from foundry_lite.application.services.dataset.schema_evolution import DatasetSchemaEvolutionResult
+from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
 
@@ -179,7 +180,7 @@ class DatasetQualityBoundary(Protocol):
     ) -> list[DatasetCheckResult]: ...
 
 
-class DatasetRuntimeBoundary(Protocol):
+class DatasetRuntimeBoundary(RuntimeEvidenceBoundary, Protocol):
     def _require_write_traffic_open(
         self,
         ctx: RequestContext,

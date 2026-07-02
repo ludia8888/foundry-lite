@@ -28,12 +28,12 @@ class ActionWritebackService(CoreService):
 
     required_dependencies = ("engine", "policy", "action_repository")
     required_collaborators = (
-        "object_indexing_service",
+        "object_index_record_mutation_service",
         "object_records_service",
         "ontology_service",
         "runtime_service",
     )
-    object_indexing_service: ActionObjectIndexer
+    object_index_record_mutation_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
     ontology_service: ActionOntologyLookup
     runtime_service: ActionRuntimeBoundary
@@ -118,7 +118,7 @@ class ActionWritebackService(CoreService):
             engine=self.engine,
             policy=self.policy,
             action_repository=self.action_repository,
-            object_indexing_service=self.object_indexing_service,
+            object_indexing_service=self.object_index_record_mutation_service,
             object_records_service=self.object_records_service,
             ontology_service=self.ontology_service,
             runtime_service=self.runtime_service,

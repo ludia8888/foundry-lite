@@ -11,6 +11,7 @@ from foundry_lite.application.ports import (
     DatasetVersionRow,
     TransactionContext,
 )
+from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
 
 
@@ -28,7 +29,7 @@ class OntologyDatasetVersions(Protocol):
     def _schema_for_version(self, dataset_id: str, schema_version: int) -> DatasetSchemaRow: ...
 
 
-class OntologyRuntimeBoundary(Protocol):
+class OntologyRuntimeBoundary(RuntimeEvidenceBoundary, Protocol):
     def _require_write_traffic_open(
         self,
         ctx: RequestContext,

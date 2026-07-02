@@ -60,14 +60,14 @@ class ActionApplyService(CoreService):
     required_dependencies = ("engine", "policy", "action_repository")
     required_collaborators = (
         "action_writeback_service",
-        "object_indexing_service",
+        "object_index_record_mutation_service",
         "object_records_service",
         "ontology_service",
         "osdk_application_service",
         "runtime_service",
     )
     action_writeback_service: ActionWritebackService
-    object_indexing_service: ActionObjectIndexer
+    object_index_record_mutation_service: ActionObjectIndexer
     object_records_service: ActionObjectRecordLookup
     ontology_service: ActionOntologyLookup
     osdk_application_service: ActionOsdkScopeBoundary
@@ -424,7 +424,7 @@ class ActionApplyService(CoreService):
     def _mutation_unit_of_work(self) -> ActionMutationUnitOfWork:
         return ActionMutationUnitOfWork(
             action_repository=self.action_repository,
-            object_indexing_service=self.object_indexing_service,
+            object_indexing_service=self.object_index_record_mutation_service,
             runtime_service=self.runtime_service,
             policy=self.policy,
         )

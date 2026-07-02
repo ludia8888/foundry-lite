@@ -16,6 +16,7 @@ from foundry_lite.application.services.object_store.cdc_indexing import (
 )
 from foundry_lite.application.services.object_store.indexing_types import ObjectCdcEvent
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.object_store.cdc import cdc_deletion_reason, require_cdc_ordering, should_skip_cdc_event
 
 
 def test_cdc_event_parser_supports_json_envelope_fields() -> None:
@@ -259,6 +260,21 @@ def test_cdc_ordering_and_property_versions_are_monotonic() -> None:
     assert versions["status"] == 3
     assert versions["amount"] == 1
     assert versions["_cdc"] == {"eventId": "topic:0:8", "ordering": event.ordering}
+
+
+def test_cdc_object_store_domain_rules_are_service_free() -> None:
+    previous = {"lsn": 8, "source_ts_ms": 1700000000008, "table": "orders"}
+    older = {"lsn": 7, "source_ts_ms": 1700000000007, "table": "orders"}
+    newer = {"lsn": 9, "source_ts_ms": 1700000000009, "table": "orders"}
+
+    assert should_skip_cdc_event(previous, "topic:0:8", older, "topic:0:7")
+    assert should_skip_cdc_event(previous, "topic:0:8", previous, "topic:0:8")
+    assert not should_skip_cdc_event(previous, "topic:0:8", newer, "topic:0:9")
+    assert cdc_deletion_reason(True) == "source_deleted"
+    assert cdc_deletion_reason(False) is None
+
+    with pytest.raises(ValidationFailed, match="stream offset"):
+        require_cdc_ordering({"lsn": 1}, "event-without-offset")
 
 
 def _object_type(*, backing: dict[str, object] | None = None) -> ObjectTypeRow:

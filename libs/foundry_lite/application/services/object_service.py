@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.base import CoreService, build_service
 from foundry_lite.application.services.object_store.indexing import ObjectIndexingService
+from foundry_lite.application.services.object_store.indexing_services import ObjectIndexingServices
 from foundry_lite.application.services.object_store.links import ObjectLinksService
 from foundry_lite.application.services.object_store.query import ObjectQueryService
 from foundry_lite.application.services.object_store.records import ObjectRecordsService
@@ -20,6 +21,7 @@ class ObjectServices:
     """Object-store application service group without multiple-inheritance composition."""
 
     indexing: ObjectIndexingService
+    indexing_services: ObjectIndexingServices
     links: ObjectLinksService
     query: ObjectQueryService
     records: ObjectRecordsService
@@ -29,8 +31,10 @@ class ObjectServices:
 
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> ObjectServices:
+        indexing_services = ObjectIndexingServices.create(dependencies)
         return cls(
-            indexing=build_service(ObjectIndexingService, dependencies),
+            indexing=indexing_services.entrypoint,
+            indexing_services=indexing_services,
             links=build_service(ObjectLinksService, dependencies),
             query=build_service(ObjectQueryService, dependencies),
             records=build_service(ObjectRecordsService, dependencies),
@@ -40,4 +44,12 @@ class ObjectServices:
         )
 
     def items(self) -> tuple[CoreService, ...]:
-        return (self.indexing, self.links, self.query, self.records, self.search, self.sets, self.subscriptions)
+        return (
+            *self.indexing_services.items(),
+            self.links,
+            self.query,
+            self.records,
+            self.search,
+            self.sets,
+            self.subscriptions,
+        )

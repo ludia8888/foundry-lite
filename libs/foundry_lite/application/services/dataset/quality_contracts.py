@@ -12,6 +12,7 @@ from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetQualityContractCheckSnapshot,
     DatasetQualityContractVersionRow,
 )
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
 from foundry_lite.application.services.dataset.quality_helpers import (
     _contract_check_audit_ref,
@@ -22,7 +23,11 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
 
 
-class DatasetQualityContractMixin:
+class DatasetQualityContractService(CoreService):
+    """Dataset quality contract repository and audit boundary."""
+
+    required_dependencies = ("dataset_quality_repository",)
+    required_collaborators = ("runtime_service",)
     dataset_quality_repository: DatasetQualityRepository
     runtime_service: DatasetRuntimeBoundary
 
