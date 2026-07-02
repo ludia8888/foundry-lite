@@ -401,6 +401,24 @@ class SqlAlchemyDatasetTransactionRepository:
         )
         return updated
 
+    def fail_sync_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        sync_run_id: str,
+        error: Mapping[str, object],
+        completed_at: str,
+    ) -> bool:
+        return cas_status_update(
+            transaction,
+            db.sync_runs,
+            tenant_id=tenant_id,
+            row_id=sync_run_id,
+            transition=dataset_run_failed_transition("sync"),
+            values={"error": dict(error), "completed_at": completed_at},
+        )
+
     def insert_sync_run(self, *, transaction: Any, record: SyncRunRecord) -> None:
         transaction.execute(
             insert(db.sync_runs).values(

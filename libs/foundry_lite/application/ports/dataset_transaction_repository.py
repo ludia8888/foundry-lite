@@ -358,6 +358,18 @@ class DatasetTransactionRepository(Protocol):
         """Persist a newly received sync run inside the caller transaction."""
         ...
 
+    def fail_sync_run(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        sync_run_id: str,
+        error: DatasetRunError,
+        completed_at: str,
+    ) -> bool:
+        """CAS an EXTRACTING sync run into the FAILED terminal state (watchdog recovery)."""
+        ...
+
     def sync_run_by_id(
         self,
         *,
