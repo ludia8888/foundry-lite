@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess  # nosec B404 — this driver exists to spawn the gate tools
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -191,6 +193,10 @@ class CheckResult:
     output: str
 
 
+def _safe_check_name(name: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-") or "check"
+
+
 def _gitleaks_check() -> tuple[str, list[str]] | None:
     if shutil.which("gitleaks"):
         return (
@@ -223,20 +229,38 @@ def _all_checks() -> list[tuple[str, list[str]]]:
     return checks
 
 
+def _env_for_check(name: str, env: dict[str, str]) -> tuple[dict[str, str], Path | None]:
+    check_env = dict(env)
+    if check_env.get("FOUNDRY_LITE_HOME"):
+        return check_env, None
+
+    # Several static gates collect/import tests. Importing the API composition
+    # root bootstraps a local FoundryLite runtime, so parallel static checks must
+    # not share the default .foundry-lite database.
+    home = Path(tempfile.mkdtemp(prefix=f"foundry-lite-static-{_safe_check_name(name)}-"))
+    check_env["FOUNDRY_LITE_HOME"] = str(home)
+    return check_env, home
+
+
 def _run_check(name: str, command: list[str], env: dict[str, str]) -> CheckResult:
     started = time.perf_counter()
-    completed = subprocess.run(  # nosec B603 — fixed gate commands, shell=False
-        command,
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    output = (completed.stdout + completed.stderr).strip()
-    return CheckResult(name, completed.returncode, time.perf_counter() - started, output)
+    check_env, ephemeral_home = _env_for_check(name, env)
+    try:
+        completed = subprocess.run(  # nosec B603 — fixed gate commands, shell=False
+            command,
+            cwd=ROOT,
+            env=check_env,
+            capture_output=True,
+            text=True,
+        )
+        output = (completed.stdout + completed.stderr).strip()
+        return CheckResult(name, completed.returncode, time.perf_counter() - started, output)
+    finally:
+        if ephemeral_home is not None:
+            shutil.rmtree(ephemeral_home, ignore_errors=True)
 
 
-def _check_env() -> dict[str, str]:
+def _base_env() -> dict[str, str]:
     env = dict(os.environ)
     env.setdefault("PYTHONPATH", ".:libs:apps/cli:apps/api:apps/worker")
     if not env.get("SSL_CERT_FILE"):
@@ -244,6 +268,10 @@ def _check_env() -> dict[str, str]:
 
         env["SSL_CERT_FILE"] = certifi.where()
     return env
+
+
+def _check_env() -> dict[str, str]:
+    return _base_env()
 
 
 def _run_checks(checks: list[tuple[str, list[str]]], env: dict[str, str], jobs: int) -> list[CheckResult]:
