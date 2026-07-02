@@ -149,6 +149,16 @@ class AiEvalRepository(Protocol):
         """Persist one eval-backed release-channel promotion."""
         ...
 
+    def create_release_if_absent(
+        self, *, transaction: TransactionContext, record: AiAgentReleaseRecord
+    ) -> AiEvalRow | None:
+        """Insert a promotion, returning the winning row when a concurrent promotion won the race.
+
+        Returns ``None`` when this call created the row; returns the pre-existing
+        row when a unique-constraint conflict resolves idempotently.
+        """
+        ...
+
     def release_by_agent_channel(
         self, *, transaction: TransactionContext, tenant_id: str, agent_version_id: str, release_channel: str
     ) -> AiEvalRow | None:

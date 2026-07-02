@@ -286,10 +286,10 @@ class AipBuilderValidateRequest(BaseModel):
     prompt_version_id: str = Field(alias="promptVersionId")
     context_sources: list[AipBuilderContextSourceRequest] = Field(alias="contextSources")
     tool_manifest: list[AipBuilderToolSpecRequest] = Field(alias="toolManifest")
-    logic_blocks: list[AipBuilderLogicBlockRequest] = Field(alias="logicBlocks")
+    logic_blocks: list[AipBuilderLogicBlockRequest] = Field(alias="logicBlocks", max_length=500)
     eval_axes: list[str] = Field(alias="evalAxes")
     agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
-    max_logic_blocks: int = Field(default=25, alias="maxLogicBlocks")
+    max_logic_blocks: int = Field(default=25, ge=1, le=500, alias="maxLogicBlocks")
 
 
 class AipBuilderRunRequest(AipBuilderValidateRequest):
@@ -365,7 +365,7 @@ class AipEvalRunRequest(BaseModel):
     suite_description: str = Field(default="", alias="suiteDescription")
     agent_version_id: str = Field(alias="agentVersionId")
     candidate_release_channel: str = Field(alias="candidateReleaseChannel")
-    cases: list[AipEvalCaseRequest]
+    cases: list[AipEvalCaseRequest] = Field(max_length=500)
     min_score: float = Field(default=1.0, alias="minScore")
     required_axes: list[str] = Field(default_factory=list, alias="requiredAxes")
 

@@ -133,6 +133,52 @@ def test_ai_eval_repository_round_trips_sqlite_rows() -> None:
         assert repo.eval_run_by_id(transaction=transaction, tenant_id="tenant-other", eval_run_id="eval-run-1") is None
 
 
+def test_complete_run_returns_none_when_cas_matches_no_running_row() -> None:
+    """A second completion (CAS matches no running row) must report the miss as None, not a stale row."""
+    engine = create_engine("sqlite:///:memory:", future=True)
+    create_database(engine)
+    repo = SqlAlchemyAiEvalRepository(engine)
+
+    with engine.begin() as transaction:
+        repo.create_run(
+            transaction=transaction,
+            record=AiEvalRunRecord(
+                id="eval-run-1",
+                tenant_id="tenant-demo",
+                suite_id="suite-1",
+                agent_version_id="agent-v1",
+                candidate_release_channel="stable",
+                status="running",
+                min_score=1.0,
+                is_passed=False,
+                summary_json={},
+                started_at="2026-06-26T00:00:00Z",
+                completed_at=None,
+            ),
+        )
+        first = repo.complete_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            eval_run_id="eval-run-1",
+            transition=AI_EVAL_RUN_PASSED,
+            is_passed=True,
+            summary_json={"score": 1.0, "passed": True},
+            completed_at="2026-06-26T00:01:00Z",
+        )
+        second = repo.complete_run(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            eval_run_id="eval-run-1",
+            transition=AI_EVAL_RUN_PASSED,
+            is_passed=True,
+            summary_json={"score": 1.0, "passed": True},
+            completed_at="2026-06-26T00:02:00Z",
+        )
+
+        assert first is not None
+        assert second is None
+
+
 def test_ai_eval_migration_applies_postgres_rls_to_tenant_tables() -> None:
     migration = Path("migrations/versions/b9d1f3a5c7e9_aip_ai_evals_release.py").read_text(encoding="utf-8")
 

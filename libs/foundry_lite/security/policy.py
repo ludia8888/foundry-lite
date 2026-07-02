@@ -54,6 +54,12 @@ class PolicyService:
         "insight:create": {"admin", "data_engineer"},
         "insight:review": {"admin", "ops_manager"},
         "media:search": {"admin", "data_engineer", "ops_manager"},
+        # AIP eval runs record durable release-gate evidence, so they are
+        # operator/engineer only (viewers and finance are excluded). Release
+        # promotion is a deploy-gate decision, restricted further to admins and
+        # ops managers, mirroring action execution and operations retry.
+        "aip:evals:run": {"admin", "data_engineer", "ops_manager"},
+        "aip:releases:promote": {"admin", "ops_manager"},
         "action:execute:ApproveOrder": {"admin", "ops_manager"},
         "developer_console:read": {"admin", "data_engineer", "ops_manager"},
         "developer_console:manage": {"admin", "data_engineer"},
