@@ -202,6 +202,14 @@ class DatasetQualityService:
     ) -> DatasetCheckResult | None:
         return self._dataset_quality_runtime_service._schema_compatibility_error(conn, dataset, next_schema)
 
+    def _execute_check(
+        self,
+        parquet_path: Path,
+        row_count: int,
+        check: DatasetCheckConfig,
+    ) -> DatasetCheckResult:
+        return self._dataset_quality_runtime_service._execute_check(parquet_path, row_count, check)
+
     def _checks_for_dataset(
         self,
         conn: TransactionContext,
