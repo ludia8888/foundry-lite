@@ -62,6 +62,15 @@ class MediaTransactionService(CoreService):
     def commit(self, ctx: RequestContext, *, media_transaction_id: str) -> MediaCommitResult:
         with self.engine.begin() as conn:
             tx = self._require_transaction(conn, ctx, media_transaction_id)
+            if tx.status == "COMMITTED":
+                # Idempotent replay: the versions are already COMMITTED, no events re-emitted.
+                # Re-read them read-only — never re-run the STAGED->COMMITTED flip, or a version
+                # staged late under this already-committed transaction (TOCTOU residue) would be
+                # silently committed with no head advanced and no outbox event (Invariant 10).
+                committed = self.media_repository.fetch_committed_versions(
+                    transaction=conn, tenant_id=ctx.tenant_id, media_transaction_id=media_transaction_id
+                )
+                return self._result(media_transaction_id, committed, self._current_heads(conn, ctx, committed))
             committed_at = _now()
             committed = self.media_repository.commit_staged_versions(
                 transaction=conn,
@@ -69,9 +78,6 @@ class MediaTransactionService(CoreService):
                 media_transaction_id=media_transaction_id,
                 committed_at=committed_at,
             )
-            if tx.status == "COMMITTED":
-                # Idempotent replay: the versions are already COMMITTED, no events re-emitted.
-                return self._result(media_transaction_id, committed, self._current_heads(conn, ctx, committed))
             heads = self._advance_heads(conn, ctx, committed, committed_at)
             tx_after = self.media_repository.commit_transaction(
                 transaction=conn,
