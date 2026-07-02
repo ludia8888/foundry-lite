@@ -181,6 +181,10 @@ def release_workflow_run_lease(
     )
     if row is None or not _workflow_lease_matches(row, lease_owner_id, lease_token):
         return None
+    # The Python guard above is only a fast pre-check: the row can be taken over
+    # between that read and this CAS. Fence the UPDATE on the lease owner/token so
+    # a superseded worker cannot overwrite the live owner's status and cursor.
+    lease = db.workflow_runs.c.output["workerLease"]
     updated = cas_status_update(
         transaction,
         db.workflow_runs,
@@ -192,6 +196,10 @@ def release_workflow_run_lease(
             "error": dict(error) if error is not None else None,
             "completed_at": completed_at,
         },
+        conditions=[
+            lease["ownerId"].as_string() == lease_owner_id,
+            lease["leaseToken"].as_string() == lease_token,
+        ],
     )
     if not updated:
         return None
