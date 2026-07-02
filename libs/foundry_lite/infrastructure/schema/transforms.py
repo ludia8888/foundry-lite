@@ -36,6 +36,9 @@ transform_runs = Table(
     Column("error", JSON),
     Column("created_at", String, nullable=False),
     Column("completed_at", String),
+    # Set once when a FAILED run's retry is claimed, so a second retry of the
+    # same failed run cannot open another output-producing transaction.
+    Column("retried_at", String),
 )
 
 

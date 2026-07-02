@@ -172,6 +172,21 @@ class TransformRepository(Protocol):
         """Persist a newly received transform run."""
         ...
 
+    def claim_failed_transform_run_for_retry(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        transform_run_id: str,
+        claimed_at: str,
+    ) -> bool:
+        """CAS-claim a FAILED run for retry, returning False if already claimed.
+
+        Fences retry so two retries of the same failed run cannot both open an
+        output-producing transaction (append-mode has no snapshot-base guard).
+        """
+        ...
+
     def update_transform_run_terminal(
         self,
         *,

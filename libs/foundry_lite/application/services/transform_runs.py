@@ -104,6 +104,7 @@ def start_failed_transform_retry(
     transform_repository: TransformRepository,
 ) -> TransformRunPlan:
     failed_run = _failed_transform_run(conn, ctx, transform_run_id, transform_repository)
+    _claim_failed_run_for_retry(conn, ctx, transform_run_id, transform_repository)
     snapshot = _required_run_definition_snapshot(failed_run, transform_run_id)
     transform = _transform_from_run_snapshot(failed_run, ctx, transform_run_id, snapshot)
     source = _source_from_run_snapshot(snapshot, transform_run_id)
@@ -175,6 +176,28 @@ def _failed_transform_run(
     if row["status"] != "FAILED":
         raise ValidationFailed("transform run is not failed", details={"transform_run_id": transform_run_id})
     return row
+
+
+def _claim_failed_run_for_retry(
+    conn: TransactionContext,
+    ctx: RequestContext,
+    transform_run_id: str,
+    transform_repository: TransformRepository,
+) -> None:
+    # Atomically fence retry: a second retry of the same FAILED run (append-mode
+    # has no snapshot-base guard) would otherwise open a second output-producing
+    # transaction and commit a duplicate output version.
+    claimed = transform_repository.claim_failed_transform_run_for_retry(
+        transaction=conn,
+        tenant_id=ctx.tenant_id,
+        transform_run_id=transform_run_id,
+        claimed_at=_now(),
+    )
+    if not claimed:
+        raise ConflictDetected(
+            "transform run retry already claimed",
+            details={"transform_run_id": transform_run_id},
+        )
 
 
 def _insert_transform_run(
