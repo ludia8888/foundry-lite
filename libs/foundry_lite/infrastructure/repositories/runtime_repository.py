@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from sqlalchemy import and_, delete, desc, false, func, insert, or_, select
+from sqlalchemy import and_, delete, desc, insert, or_, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 
+import foundry_lite.infrastructure.repositories.runtime_workflow_runs as runtime_workflow_runs
 from foundry_lite.application.ports import (
     AuditEventRecord,
     DeadLetterEventRecord,
@@ -29,14 +30,30 @@ from foundry_lite.application.ports import (
     StoredObservabilityIncidentStatus,
 )
 from foundry_lite.application.ports.transaction_context import (
-    WORKFLOW_RUN_CANCELLED,
-    WORKFLOW_RUN_FAILED,
-    WORKFLOW_RUN_LEASE_RUNNING,
-    WORKFLOW_RUN_SUCCEEDED,
     StatusTransition,
 )
 from foundry_lite.application.ports.workflow_adapter import WorkflowLedgerStatus, WorkflowRunRecord, WorkflowRunRow
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.repositories.runtime_observability_sql import (
+    _observability_incident_by_dedupe,
+    _observability_incident_db_row,
+    _observability_incident_response,
+    _observability_insert_values,
+    _observability_status_values,
+    _observability_update_values,
+)
+from foundry_lite.infrastructure.repositories.runtime_tables import (
+    _in_or_none,
+    _is_outbox_idempotency_duplicate,
+    _is_run_relation_duplicate,
+    _lookup_table,
+    _relation_columns,
+    _rows_table,
+    _rows_timestamp_column,
+    _run_query_conditions,
+    _run_table,
+    _run_timestamp_column,
+)
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_update, cas_status_update_many
 
 
@@ -519,16 +536,9 @@ class SqlAlchemyRuntimeRepository:
         return cast(RuntimeRow, dict(row)) if row else None
 
     def workflow_run_by_id(self, *, transaction: Any, tenant_id: str, workflow_run_id: str) -> WorkflowRunRow | None:
-        row = (
-            transaction.execute(
-                select(db.workflow_runs).where(
-                    and_(db.workflow_runs.c.tenant_id == tenant_id, db.workflow_runs.c.id == workflow_run_id)
-                )
-            )
-            .mappings()
-            .first()
+        return runtime_workflow_runs.workflow_run_by_id(
+            transaction=transaction, tenant_id=tenant_id, workflow_run_id=workflow_run_id
         )
-        return cast(WorkflowRunRow, dict(row)) if row else None
 
     def workflow_run_by_idempotency(
         self,
@@ -538,59 +548,14 @@ class SqlAlchemyRuntimeRepository:
         workflow_name: str,
         idempotency_key: str,
     ) -> WorkflowRunRow | None:
-        row = (
-            transaction.execute(
-                select(db.workflow_runs).where(
-                    and_(
-                        db.workflow_runs.c.tenant_id == tenant_id,
-                        db.workflow_runs.c.workflow_name == workflow_name,
-                        db.workflow_runs.c.idempotency_key == idempotency_key,
-                    )
-                )
-            )
-            .mappings()
-            .first()
+        return runtime_workflow_runs.workflow_run_by_idempotency(
+            transaction=transaction, tenant_id=tenant_id, workflow_name=workflow_name, idempotency_key=idempotency_key
         )
-        return cast(WorkflowRunRow, dict(row)) if row else None
 
     def insert_workflow_run_or_get_existing(
         self, *, transaction: Any, record: WorkflowRunRecord
     ) -> WorkflowRunRow | None:
-        savepoint = transaction.begin_nested()
-        try:
-            transaction.execute(
-                insert(db.workflow_runs).values(
-                    id=record.workflow_run_id,
-                    tenant_id=record.tenant_id,
-                    workflow_name=record.workflow_name,
-                    workflow_profile=record.workflow_profile,
-                    status=record.status,
-                    idempotency_key=record.idempotency_key,
-                    request_fingerprint=record.request_fingerprint,
-                    input=dict(record.input),
-                    output=dict(record.output),
-                    error=dict(record.error) if record.error is not None else None,
-                    dataset_id=record.dataset_id,
-                    audit_event_id=record.audit_event_id,
-                    attempts=record.attempts,
-                    created_at=record.created_at,
-                    started_at=record.started_at,
-                    completed_at=record.completed_at,
-                )
-            )
-        except IntegrityError:
-            savepoint.rollback()
-            existing = self.workflow_run_by_idempotency(
-                transaction=transaction,
-                tenant_id=record.tenant_id,
-                workflow_name=record.workflow_name,
-                idempotency_key=record.idempotency_key,
-            )
-            if existing is not None:
-                return existing
-            raise
-        savepoint.commit()
-        return None
+        return runtime_workflow_runs.insert_workflow_run_or_get_existing(transaction=transaction, record=record)
 
     def update_workflow_run_status(
         self,
@@ -604,24 +569,16 @@ class SqlAlchemyRuntimeRepository:
         started_at: str | None,
         completed_at: str | None,
     ) -> WorkflowRunRow | None:
-        values: dict[str, object] = {"output": dict(output), "error": dict(error) if error is not None else None}
-        if started_at is not None:
-            values["started_at"] = started_at
-        if completed_at is not None:
-            values["completed_at"] = completed_at
-        if transition.to_status == "starting":
-            values["attempts"] = db.workflow_runs.c.attempts + 1
-        updated = cas_status_update(
-            transaction,
-            db.workflow_runs,
+        return runtime_workflow_runs.update_workflow_run_status(
+            transaction=transaction,
             tenant_id=tenant_id,
-            row_id=workflow_run_id,
+            workflow_run_id=workflow_run_id,
             transition=transition,
-            values=values,
+            output=output,
+            error=error,
+            started_at=started_at,
+            completed_at=completed_at,
         )
-        if not updated:
-            return None
-        return self.workflow_run_by_id(transaction=transaction, tenant_id=tenant_id, workflow_run_id=workflow_run_id)
 
     def claim_workflow_run_lease(
         self,
@@ -631,30 +588,9 @@ class SqlAlchemyRuntimeRepository:
         lease_owner_id: str,
         now: str,
     ) -> WorkflowRunRow | None:
-        existing = self.insert_workflow_run_or_get_existing(transaction=transaction, record=record)
-        row = existing or self.workflow_run_by_id(
-            transaction=transaction,
-            tenant_id=record.tenant_id,
-            workflow_run_id=record.workflow_run_id,
+        return runtime_workflow_runs.claim_workflow_run_lease(
+            transaction=transaction, record=record, lease_owner_id=lease_owner_id, now=now
         )
-        if row is None:
-            return None
-        if existing is None:
-            return row
-        if not _workflow_lease_claimable(row, lease_owner_id, now):
-            return None
-        attempts = _workflow_lease_attempts(row, lease_owner_id)
-        updated = cas_status_update(
-            transaction,
-            db.workflow_runs,
-            tenant_id=record.tenant_id,
-            row_id=row["id"],
-            transition=WORKFLOW_RUN_LEASE_RUNNING,
-            values=_workflow_lease_claim_values(record, attempts),
-        )
-        if not updated:
-            return None
-        return self.workflow_run_by_id(transaction=transaction, tenant_id=record.tenant_id, workflow_run_id=row["id"])
 
     def release_workflow_run_lease(
         self,
@@ -669,28 +605,17 @@ class SqlAlchemyRuntimeRepository:
         error: RuntimeRow | None,
         completed_at: str,
     ) -> WorkflowRunRow | None:
-        row = self.workflow_run_by_id(
+        return runtime_workflow_runs.release_workflow_run_lease(
             transaction=transaction,
             tenant_id=tenant_id,
             workflow_run_id=workflow_run_id,
+            lease_owner_id=lease_owner_id,
+            lease_token=lease_token,
+            status=status,
+            output=output,
+            error=error,
+            completed_at=completed_at,
         )
-        if row is None or not _workflow_lease_matches(row, lease_owner_id, lease_token):
-            return None
-        updated = cas_status_update(
-            transaction,
-            db.workflow_runs,
-            tenant_id=tenant_id,
-            row_id=workflow_run_id,
-            transition=_workflow_lease_release_transition(status),
-            values={
-                "output": dict(output),
-                "error": dict(error) if error is not None else None,
-                "completed_at": completed_at,
-            },
-        )
-        if not updated:
-            return None
-        return self.workflow_run_by_id(transaction=transaction, tenant_id=tenant_id, workflow_run_id=workflow_run_id)
 
     def link_workflow_audit_event(
         self,
@@ -700,14 +625,9 @@ class SqlAlchemyRuntimeRepository:
         workflow_run_id: str,
         audit_event_id: str,
     ) -> WorkflowRunRow | None:
-        result = transaction.execute(
-            db.workflow_runs.update()
-            .where(and_(db.workflow_runs.c.tenant_id == tenant_id, db.workflow_runs.c.id == workflow_run_id))
-            .values(audit_event_id=audit_event_id)
+        return runtime_workflow_runs.link_workflow_audit_event(
+            transaction=transaction, tenant_id=tenant_id, workflow_run_id=workflow_run_id, audit_event_id=audit_event_id
         )
-        if result.rowcount != 1:
-            return None
-        return self.workflow_run_by_id(transaction=transaction, tenant_id=tenant_id, workflow_run_id=workflow_run_id)
 
     def delete_dead_letter_event(self, *, transaction: Any, tenant_id: str, event_id: str) -> bool:
         result = transaction.execute(
@@ -885,355 +805,5 @@ class SqlAlchemyRuntimeRepository:
         return [cast(RuntimeRunRelationRow, dict(row)) for row in rows]
 
 
-def _lookup_table(table: RuntimeLookupTable) -> Any:
-    return {
-        "transforms": db.transforms,
-        "materializations": db.materializations,
-    }[table]
-
-
-def _observability_incident_db_row(
-    transaction: Any,
-    *,
-    tenant_id: str,
-    incident_id: str,
-) -> Mapping[str, Any] | None:
-    row = (
-        transaction.execute(
-            select(db.observability_incidents).where(
-                and_(
-                    db.observability_incidents.c.tenant_id == tenant_id,
-                    db.observability_incidents.c.id == incident_id,
-                )
-            )
-        )
-        .mappings()
-        .first()
-    )
-    return dict(row) if row else None
-
-
-def _observability_incident_by_dedupe(
-    transaction: Any,
-    tenant_id: str,
-    dedupe_key: str,
-) -> Mapping[str, Any] | None:
-    row = (
-        transaction.execute(
-            select(db.observability_incidents).where(
-                and_(
-                    db.observability_incidents.c.tenant_id == tenant_id,
-                    db.observability_incidents.c.dedupe_key == dedupe_key,
-                )
-            )
-        )
-        .mappings()
-        .first()
-    )
-    return dict(row) if row else None
-
-
-def _observability_insert_values(tenant_id: str, incident: ObservabilityIncident) -> dict[str, object]:
-    observed_at = incident["lastObservedAt"]
-    return {
-        "id": incident["id"],
-        "tenant_id": tenant_id,
-        "detector_id": incident["detectorId"],
-        "detector_type": incident["detectorType"],
-        "config_version": incident["configVersion"],
-        "status": "open",
-        "severity": incident["severity"],
-        "owner": incident["owner"],
-        "message": incident["message"],
-        "dedupe_key": incident["dedupeKey"],
-        "first_observed_at": incident["firstObservedAt"],
-        "last_observed_at": observed_at,
-        "occurrence_count": 1,
-        "evidence": dict(incident["evidence"]),
-        "evidence_links": list(incident["evidenceLinks"]),
-        "threshold": dict(incident["threshold"]),
-        "created_at": observed_at,
-        "updated_at": observed_at,
-    }
-
-
-def _observability_update_values(
-    incident: ObservabilityIncident,
-    existing: Mapping[str, Any],
-) -> dict[str, object | None]:
-    occurrence_increment = 0 if existing.get("last_observed_at") == incident["lastObservedAt"] else 1
-    values: dict[str, object | None] = {
-        "detector_id": incident["detectorId"],
-        "detector_type": incident["detectorType"],
-        "config_version": incident["configVersion"],
-        "severity": incident["severity"],
-        "owner": incident["owner"],
-        "message": incident["message"],
-        "last_observed_at": incident["lastObservedAt"],
-        "occurrence_count": int(existing["occurrence_count"]) + occurrence_increment,
-        "evidence": dict(incident["evidence"]),
-        "evidence_links": list(incident["evidenceLinks"]),
-        "threshold": dict(incident["threshold"]),
-        "updated_at": incident["lastObservedAt"],
-    }
-    if existing.get("status") == "resolved":
-        values.update(_observability_reopen_values())
-    return values
-
-
-def _observability_reopen_values() -> dict[str, object | None]:
-    return {
-        "status": "open",
-        "acknowledged_at": None,
-        "acknowledged_by": None,
-        "resolved_at": None,
-        "resolved_by": None,
-        "resolution_reason": None,
-    }
-
-
-def _observability_status_values(
-    status: StoredObservabilityIncidentStatus,
-    actor_user_id: str,
-    updated_at: str,
-    resolution_reason: str | None,
-) -> dict[str, object | None]:
-    values: dict[str, object | None] = {"status": status, "updated_at": updated_at}
-    if status == "acknowledged":
-        values.update({"acknowledged_at": updated_at, "acknowledged_by": actor_user_id})
-    if status == "resolved":
-        values.update(
-            {
-                "resolved_at": updated_at,
-                "resolved_by": actor_user_id,
-                "resolution_reason": resolution_reason,
-            }
-        )
-    return values
-
-
-def _observability_incident_response(row: Mapping[str, Any]) -> StoredObservabilityIncident:
-    return {
-        "id": str(row["id"]),
-        "detectorId": str(row["detector_id"]),
-        "detectorType": cast(Any, row["detector_type"]),
-        "configVersion": str(row["config_version"]),
-        "status": cast(StoredObservabilityIncidentStatus, row["status"]),
-        "severity": cast(Any, row["severity"]),
-        "owner": str(row["owner"]),
-        "message": str(row["message"]),
-        "dedupeKey": str(row["dedupe_key"]),
-        "firstObservedAt": str(row["first_observed_at"]),
-        "lastObservedAt": str(row["last_observed_at"]),
-        "occurrenceCount": int(row["occurrence_count"]),
-        "evidence": cast(RuntimeJsonObject, row["evidence"] or {}),
-        "evidenceLinks": cast(list[Any], row["evidence_links"] or []),
-        "threshold": cast(RuntimeJsonObject, row["threshold"] or {}),
-        "acknowledgedAt": cast(str | None, row.get("acknowledged_at")),
-        "acknowledgedBy": cast(str | None, row.get("acknowledged_by")),
-        "resolvedAt": cast(str | None, row.get("resolved_at")),
-        "resolvedBy": cast(str | None, row.get("resolved_by")),
-        "resolutionReason": cast(str | None, row.get("resolution_reason")),
-    }
-
-
-def _is_outbox_idempotency_duplicate(transaction: Any, record: OutboxEventRecord) -> bool:
-    if record.idempotency_key is None:
-        return False
-    row = (
-        transaction.execute(
-            select(db.outbox_events.c.id)
-            .where(
-                and_(
-                    db.outbox_events.c.tenant_id == record.tenant_id,
-                    db.outbox_events.c.event_type == record.event_type,
-                    db.outbox_events.c.idempotency_key == record.idempotency_key,
-                )
-            )
-            .limit(1)
-        )
-        .mappings()
-        .first()
-    )
-    return row is not None
-
-
-def _is_run_relation_duplicate(transaction: Any, record: RuntimeRunRelationRecord) -> bool:
-    row = (
-        transaction.execute(
-            select(db.runtime_run_relations.c.id)
-            .where(
-                and_(
-                    db.runtime_run_relations.c.tenant_id == record.tenant_id,
-                    db.runtime_run_relations.c.source_run_type == record.source_run_type,
-                    db.runtime_run_relations.c.source_run_id == record.source_run_id,
-                    db.runtime_run_relations.c.target_run_type == record.target_run_type,
-                    db.runtime_run_relations.c.target_run_id == record.target_run_id,
-                    db.runtime_run_relations.c.relation == record.relation,
-                    db.runtime_run_relations.c.resource_type == record.resource_type,
-                    db.runtime_run_relations.c.resource_id == record.resource_id,
-                )
-            )
-            .limit(1)
-        )
-        .mappings()
-        .first()
-    )
-    return row is not None
-
-
 # Run tables that lineage edges attribute work to (``created_by_run_id``).
 _LINEAGE_RUN_TYPES: tuple[RuntimeRunType, ...] = ("sync", "transform", "index", "materialization", "ai")
-
-
-def _relation_columns(runtime_table: Any) -> list[Any]:
-    # Mirror the correlation logic in runtime_run_queries._is_relation_key: match on
-    # *_id / id / correlation_id columns, but never the tenant_id scope column.
-    return [
-        column
-        for column in runtime_table.c
-        if column.name != "tenant_id" and (column.name.endswith("_id") or column.name in {"id", "correlation_id"})
-    ]
-
-
-def _workflow_lease_claimable(row: WorkflowRunRow, lease_owner_id: str, now: str) -> bool:
-    if row["status"] in {"succeeded", "failed", "cancelled", "start_unknown"}:
-        return True
-    lease = _workflow_lease(row)
-    if lease is None:
-        return False
-    if lease.get("ownerId") == lease_owner_id:
-        return True
-    expires_at = lease.get("leaseExpiresAt")
-    return isinstance(expires_at, str) and expires_at <= now
-
-
-def _workflow_lease_claim_values(record: WorkflowRunRecord, attempts: int) -> dict[str, object]:
-    return {
-        "output": dict(record.output),
-        "error": dict(record.error) if record.error is not None else None,
-        "attempts": attempts,
-        "started_at": record.started_at,
-        "completed_at": None,
-    }
-
-
-def _workflow_lease_release_transition(status: WorkflowLedgerStatus) -> StatusTransition:
-    if status == "cancelled":
-        return WORKFLOW_RUN_CANCELLED
-    if status == "failed":
-        return WORKFLOW_RUN_FAILED
-    return WORKFLOW_RUN_SUCCEEDED
-
-
-def _workflow_lease_matches(row: WorkflowRunRow, lease_owner_id: str, lease_token: str) -> bool:
-    lease = _workflow_lease(row)
-    return lease is not None and lease.get("ownerId") == lease_owner_id and lease.get("leaseToken") == lease_token
-
-
-def _workflow_lease_attempts(row: WorkflowRunRow, lease_owner_id: str) -> int:
-    attempts = row["attempts"]
-    current = attempts if isinstance(attempts, int) and not isinstance(attempts, bool) else 0
-    lease = _workflow_lease(row)
-    if row["status"] == "running" and lease is not None and lease.get("ownerId") == lease_owner_id:
-        return current
-    return current + 1
-
-
-def _workflow_lease(row: WorkflowRunRow) -> Mapping[str, object] | None:
-    output = row.get("output")
-    if not isinstance(output, Mapping):
-        return None
-    lease = output.get("workerLease")
-    return lease if isinstance(lease, Mapping) else None
-
-
-def _in_or_none(column: Any, values: list[str]) -> Any:
-    # Build an IN clause only when there are values; empty IN clauses are noise.
-    return column.in_(values) if values else None
-
-
-def _rows_timestamp_column(table: RuntimeRowsTable) -> Any:
-    # Recency column used to window each table to its most recent rows.
-    if table == "dead_letter_events":
-        return db.dead_letter_events.c.failed_at
-    if table == "ai_execution_runs":
-        return db.ai_execution_runs.c.started_at
-    return _rows_table(table).c.created_at
-
-
-def _rows_table(table: RuntimeRowsTable) -> Any:
-    return {
-        "sync_runs": db.sync_runs,
-        "transform_runs": db.transform_runs,
-        "index_runs": db.index_runs,
-        "action_runs": db.action_runs,
-        "action_writebacks": db.action_writebacks,
-        "materialization_runs": db.materialization_runs,
-        "outbox_events": db.outbox_events,
-        "dead_letter_events": db.dead_letter_events,
-        "workflow_runs": db.workflow_runs,
-        "ai_execution_runs": db.ai_execution_runs,
-        "audit_events": db.audit_events,
-        "object_edits": db.object_edits,
-        "object_records": db.object_records,
-    }[table]
-
-
-def _run_table(run_type: RuntimeRunType) -> Any:
-    return {
-        "sync": db.sync_runs,
-        "transform": db.transform_runs,
-        "index": db.index_runs,
-        "action": db.action_runs,
-        "action_writeback": db.action_writebacks,
-        "materialization": db.materialization_runs,
-        "outbox": db.outbox_events,
-        "dead_letter": db.dead_letter_events,
-        "workflow": db.workflow_runs,
-        "ai": db.ai_execution_runs,
-        "audit": db.audit_events,
-    }[run_type]
-
-
-def _run_timestamp_column(run_type: RuntimeRunType) -> Any:
-    if run_type == "dead_letter":
-        return db.dead_letter_events.c.failed_at
-    if run_type == "ai":
-        return db.ai_execution_runs.c.started_at
-    return _run_table(run_type).c.created_at
-
-
-def _run_query_conditions(
-    runtime_table: Any,
-    run_type: RuntimeRunType,
-    tenant_id: str,
-    status: str | None,
-    since: str | None,
-    until: str | None,
-    cursor: RuntimeRunPageCursor | None,
-) -> list[Any]:
-    timestamp = _run_timestamp_column(run_type)
-    conditions = [runtime_table.c.tenant_id == tenant_id, _run_status_condition(runtime_table, run_type, status)]
-    if since:
-        conditions.append(timestamp >= since)
-    if until:
-        conditions.append(timestamp <= until)
-    if cursor is not None:
-        conditions.append(
-            or_(
-                timestamp < cursor["timestamp"],
-                and_(timestamp == cursor["timestamp"], runtime_table.c.id < cursor["run_id"]),
-            )
-        )
-    return conditions
-
-
-def _run_status_condition(runtime_table: Any, run_type: RuntimeRunType, status: str | None) -> Any:
-    if status is None or status == "":
-        return True
-    normalized = status.lower()
-    if run_type == "dead_letter":
-        return True if normalized == "dead_lettered" else false()
-    column = runtime_table.c.decision if run_type == "audit" else runtime_table.c.status
-    return func.lower(column) == normalized
