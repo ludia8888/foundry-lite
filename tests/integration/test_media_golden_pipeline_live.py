@@ -71,6 +71,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyMediaReferenceBindingRepository,
     SqlAlchemyMediaRepository,
 )
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 from testcontainers.core.container import DockerContainer
 
@@ -273,7 +274,10 @@ def plane(minio_server: MinioServer, es_url: str, tmp_path: Path) -> _Plane:
         completion_model_adapter=LocalCompletionAdapter(),
     )
     binding = MediaReferenceBindingService(
-        engine=engine, media_repository=repo, media_reference_binding_repository=binding_repo
+        engine=engine,
+        policy=PolicyService(allow_unwired_classification_provider=True),
+        media_repository=repo,
+        media_reference_binding_repository=binding_repo,
     )
     binding.bind_collaborators({"runtime_service": runtime})
     access_pattern = MediaAccessPatternService(
@@ -288,7 +292,8 @@ def plane(minio_server: MinioServer, es_url: str, tmp_path: Path) -> _Plane:
         engine, repo, deriv, storage, AsrProcessorAdapter(asr_engine=_faster_whisper_asr_engine)
     )
     return _Plane(
-        ctx=RequestContext(),
+        # A writer cleared for the confidential media so bind()'s authorization gate passes.
+        ctx=RequestContext(roles=("admin", "data_engineer")),
         engine=engine,
         deriv=deriv,
         catalog=catalog,

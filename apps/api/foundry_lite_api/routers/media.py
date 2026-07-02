@@ -9,6 +9,7 @@ from typing import cast
 from fastapi import APIRouter, Form, Header, Query, Request, UploadFile
 from foundry_lite.application.ports.content_index import HybridContentQuery
 from foundry_lite.application.ports.media_processor import ProcessorSpec
+from foundry_lite.application.services.media.clearance import allowed_media_classifications
 from foundry_lite.application.upload_limits import max_media_upload_bytes
 from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
 
@@ -172,15 +173,16 @@ def index_media_derivative(
 @router.post("/api/media/content/search")
 def search_media_content(request: Request, payload: MediaSearchRequest) -> list[JsonObject]:
     try:
+        ctx = _ctx(request)
+        # The classification allow-list is a SERVER decision from ctx roles; the client value is
+        # never trusted for the security decision (omitting it must not grant full clearance).
         query = HybridContentQuery(
-            tenant_id=_ctx(request).tenant_id,
+            tenant_id=ctx.tenant_id,
             text=payload.text,
             top_k=payload.top_k,
-            allowed_classifications=_optional_tuple(payload.allowed_classifications),
+            allowed_classifications=allowed_media_classifications(ctx),
         )
-        return [
-            cast(JsonObject, asdict(hit)) for hit in runtime.foundry.media.search_content(_ctx(request), query=query)
-        ]
+        return [cast(JsonObject, asdict(hit)) for hit in runtime.foundry.media.search_content(ctx, query=query)]
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
@@ -289,12 +291,16 @@ def resolve_media_reference(
     allowed_classifications: list[str] | None = MEDIA_REFERENCE_ALLOWED_CLASSIFICATIONS_QUERY,
 ) -> JsonObject | None:
     try:
+        ctx = _ctx(request)
+        # Mask by the caller's server-derived clearance, not the client-supplied query param: an
+        # omitted value must still mask restricted media, never fall back to full clearance.
+        del allowed_classifications
         resolved = runtime.foundry.media.resolve_bound_reference(
-            _ctx(request),
+            ctx,
             holder_type=holder_type,
             holder_id=holder_id,
             property_name=property_name,
-            allowed_classifications=_optional_tuple(allowed_classifications),
+            allowed_classifications=allowed_media_classifications(ctx),
         )
         return cast(JsonObject, asdict(resolved)) if resolved is not None else None
     except FoundryLiteError as exc:
@@ -336,7 +342,3 @@ def _processor_spec(payload: MediaProcessRequest) -> ProcessorSpec:
         model_version=payload.model_version,
         parameters=payload.parameters,
     )
-
-
-def _optional_tuple(values: list[str] | None) -> tuple[str, ...] | None:
-    return tuple(values) if values is not None else None
