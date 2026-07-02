@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -13,6 +14,7 @@ from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.infrastructure.auth import JwtOidcAuthConfig, JwtOidcAuthProvider
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite_api import main as api_main
+from foundry_lite_api import runtime as api_runtime
 from starlette.websockets import WebSocketDisconnect
 
 from tests.conftest import prepare_indexed_demo
@@ -28,7 +30,7 @@ def test_object_subscription_websocket_route_streams_snapshot_with_app_scope(
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = prepare_indexed_demo(foundry)
     app = _create_subscription_app(foundry, ctx, client_id="orders-ws-client")
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
 
     with client.websocket_connect(
@@ -57,8 +59,8 @@ def test_object_subscription_websocket_route_accepts_oauth_bearer_subprotocol(
     ctx = prepare_indexed_demo(foundry)
     _create_subscription_app(foundry, ctx, client_id="orders-oauth-ws-client")
     token = _oauth_access_token(foundry, ctx)
-    monkeypatch.setattr(api_main, "foundry", foundry)
-    monkeypatch.setattr(api_main, "auth_provider", verifier)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "auth_provider", verifier)
     client = TestClient(api_main.app)
 
     with client.websocket_connect(
@@ -78,7 +80,7 @@ def test_object_subscription_websocket_route_returns_permission_error_without_su
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = prepare_indexed_demo(foundry)
     app = _create_subscription_app(foundry, ctx, client_id="orders-denied-ws-client")
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
 
     with client.websocket_connect(
@@ -106,8 +108,8 @@ def test_object_subscription_websocket_route_fanout_scale_uses_isolated_snapshot
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = prepare_indexed_demo(foundry)
     app = _create_subscription_app(foundry, ctx, client_id="orders-fanout-client")
-    monkeypatch.setattr(api_main, "foundry", foundry)
-    monkeypatch.setattr(api_main, "websocket_subscription_rate_limiter", api_main._ApiWindowRateLimiter())
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "websocket_subscription_rate_limiter", api_main._ApiWindowRateLimiter())
     client = TestClient(api_main.app)
     events = []
 
@@ -135,7 +137,7 @@ def test_object_subscription_websocket_route_denies_cross_tenant_app_scope(
         actor_user_id="other-user",
         roles=demo_admin_context().roles,
     )
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
 
     with client.websocket_connect(
@@ -156,10 +158,10 @@ def test_object_subscription_websocket_route_rate_denial_is_terminal_event(
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = prepare_indexed_demo(foundry)
     app = _create_subscription_app(foundry, ctx, client_id="orders-rate-client")
-    monkeypatch.setattr(api_main, "foundry", foundry)
-    monkeypatch.setattr(api_main, "WEBSOCKET_SUBSCRIPTION_CONNECT_LIMIT", 1)
-    monkeypatch.setattr(api_main, "WEBSOCKET_SUBSCRIPTION_CONNECT_WINDOW_SECONDS", 60.0)
-    monkeypatch.setattr(api_main, "websocket_subscription_rate_limiter", api_main._ApiWindowRateLimiter())
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "WEBSOCKET_SUBSCRIPTION_CONNECT_LIMIT", 1)
+    monkeypatch.setattr(api_runtime, "WEBSOCKET_SUBSCRIPTION_CONNECT_WINDOW_SECONDS", 60.0)
+    monkeypatch.setattr(api_runtime, "websocket_subscription_rate_limiter", api_main._ApiWindowRateLimiter())
     client = TestClient(api_main.app)
     headers = _subscription_headers(ctx, app, "orders-rate-client")
 
@@ -175,6 +177,23 @@ def test_object_subscription_websocket_route_rate_denial_is_terminal_event(
     assert event["error"]["details"]["retryAfterSeconds"] >= 1
 
 
+def test_api_window_rate_limiter_prunes_expired_buckets(monkeypatch) -> None:
+    # object_type comes from the URL path, so bucket keys are attacker-controlled;
+    # without pruning the limiter grows one bucket per unique key forever (Tier 3
+    # resource-ceiling item in the tricky failure modes checklist).
+    limiter = api_main._ApiWindowRateLimiter()
+    now = 1_000.0
+    monkeypatch.setattr("foundry_lite_api.runtime.time", SimpleNamespace(monotonic=lambda: now))
+    for index in range(300):
+        limiter.retry_after_seconds(("tenant", f"object-{index}"), limit=5, window_seconds=60.0)
+    assert len(limiter.buckets) == 300
+
+    now = 2_000.0
+    limiter.retry_after_seconds(("tenant", "fresh-object"), limit=5, window_seconds=60.0)
+
+    assert set(limiter.buckets) == {("tenant", "fresh-object")}
+
+
 def test_object_subscription_websocket_route_rejects_untrusted_browser_origin(
     monkeypatch,
     tmp_path: Path,
@@ -182,7 +201,7 @@ def test_object_subscription_websocket_route_rejects_untrusted_browser_origin(
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = prepare_indexed_demo(foundry)
     app = _create_subscription_app(foundry, ctx, client_id="orders-origin-client")
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
 
     with pytest.raises(WebSocketDisconnect):

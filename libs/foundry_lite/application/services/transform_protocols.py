@@ -15,6 +15,7 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.primitives import CommitResult
+from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
 
 DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
@@ -121,7 +122,7 @@ class TransformDatasetVersions(Protocol):
         ...
 
 
-class TransformRuntimeBoundary(Protocol):
+class TransformRuntimeBoundary(RuntimeEvidenceBoundary, Protocol):
     """Runtime policy, audit, and lineage hooks used by transforms."""
 
     def _require_write_traffic_open(

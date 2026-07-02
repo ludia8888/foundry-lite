@@ -16,11 +16,13 @@ from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite_api import main as api_main
+from foundry_lite_api import runtime as api_runtime
+from foundry_lite_api import webhooks as api_webhooks
 
 
 def test_developer_console_osdk_application_route_requires_idempotency_key(monkeypatch, tmp_path: Path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
     headers = _admin_headers()
     payload = {
@@ -52,7 +54,7 @@ def test_object_subscription_stream_route_fails_before_open_when_app_scope_is_mi
     monkeypatch, tmp_path: Path
 ) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
 
     response = client.post(
@@ -94,7 +96,7 @@ def test_osdk_oauth_api_routes_issue_refresh_and_revoke_session(monkeypatch, tmp
         idempotency_key="api-oauth-client",
         ctx=ctx,
     )
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
     verifier = "api-verifier"
     authorized = client.get(
@@ -161,7 +163,7 @@ def test_osdk_oauth_api_routes_rate_limit_returns_retryable_429(monkeypatch, tmp
         idempotency_key="api-oauth-rate-client",
         ctx=ctx,
     )
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
     params = {
         "clientId": "orders-oauth-rate-client",
@@ -181,7 +183,7 @@ def test_osdk_oauth_api_routes_rate_limit_returns_retryable_429(monkeypatch, tmp
 
 def test_developer_console_osdk_lifecycle_routes_round_trip(monkeypatch, tmp_path: Path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
     headers = _admin_headers()
 
@@ -323,7 +325,7 @@ def test_developer_console_osdk_lifecycle_routes_round_trip(monkeypatch, tmp_pat
 
 def test_developer_console_and_oauth_routes_normalize_error_paths(monkeypatch, tmp_path: Path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
     headers = _admin_headers()
     missing_app = "osdk_app_missing"
@@ -461,7 +463,7 @@ def test_api_helper_edge_paths_are_token_safe(monkeypatch) -> None:
 
 
 def test_api_webhook_body_and_request_context_helper_edges(monkeypatch) -> None:
-    monkeypatch.setattr(api_main, "max_webhook_body_bytes", lambda: 4)
+    monkeypatch.setattr(api_webhooks, "max_webhook_body_bytes", lambda: 4)
     too_large = _StreamingRequest({"content-length": "5"}, [b"12345"])
     streamed_too_large = _StreamingRequest({}, [b"12", b"345"])
     service_request = _StreamingRequest({"X-Request-ID": "req-webhook"}, [])

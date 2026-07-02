@@ -86,8 +86,9 @@ forbidden_modules =
 ignore_imports =
     # Composition root wires concrete adapters once; this is the intended
     # boundary crossing where vendor concretion is allowed.
-    foundry_lite_api.main -> foundry_lite.infrastructure.local_runtime
-    foundry_lite_api.main -> foundry_lite.infrastructure.auth
+    foundry_lite_api.runtime -> foundry_lite.infrastructure.local_runtime
+    foundry_lite_api.runtime -> foundry_lite.infrastructure.auth
+    foundry_lite_api.request_context -> foundry_lite.infrastructure.auth
     foundry_lite_cli.main -> foundry_lite.infrastructure.local_runtime
     foundry_lite_worker.outbox_publisher -> foundry_lite.infrastructure.local_runtime
     foundry_lite_worker.source_scheduler -> foundry_lite.infrastructure.local_runtime

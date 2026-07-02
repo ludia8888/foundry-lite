@@ -27,6 +27,7 @@ from foundry_lite.infrastructure.adapters import S3DatasetStorageAdapter, S3Data
 from foundry_lite.infrastructure.adapters.s3_dataset_storage import _verify_parquet_footer
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from foundry_lite.infrastructure.repositories import SqlAlchemyDatasetTransactionRepository
+from foundry_lite_api import runtime as api_runtime
 from testcontainers.core.container import DockerContainer
 
 MINIO_ACCESS_KEY = "foundry_lite"
@@ -738,7 +739,7 @@ def test_s3_api_end_to_end_preview_reads_through_s3_and_surfaces_corruption(
     committed = foundry.datasets.upload_csv("raw.orders", _csv_file(tmp_path), ctx=ctx)
 
     # Drive the real FastAPI entrypoint against the S3-backed composition root.
-    monkeypatch.setattr(api_main, "foundry", foundry)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
     client = TestClient(api_main.app)
     headers = {"X-User-ID": ctx.actor_user_id, "X-Roles": ",".join(ctx.roles)}
 

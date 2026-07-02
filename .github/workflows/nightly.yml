@@ -1,0 +1,153 @@
+name: Foundry-lite Nightly Gate
+
+# Suite-property gates live here instead of the PR gate. Flakiness and the
+# per-capability ratchet rehearsal are properties of the whole suite, not of
+# one diff: re-proving them on every PR added ~45 minutes of wall clock while
+# a 3-iteration rerun only catches a 5%-flaky test ~14% of the time. Nightly
+# runs 7 iterations (~30% per night, compounding daily) and the full serial
+# ratchet rehearsal, with more statistical power at zero PR latency.
+
+on:
+  schedule:
+    - cron: "0 17 * * *" # 02:00 KST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundry-lite-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality_flaky_nightly:
+    name: quality-flaky-nightly
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.18.2
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install Python dependencies
+        run: uv sync --all-groups
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Tesseract OCR and FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr ffmpeg
+
+      - name: Cache faster-whisper tiny model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-whisper-tiny-bge-small-clip-vit-b32-v1
+
+      - name: Pre-fetch faster-whisper tiny model
+        run: uv run python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"
+
+      - name: Pre-fetch fastembed embedding model
+        run: uv run python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+
+      - name: Pre-fetch fastembed CLIP vision/text models
+        run: uv run python -c "from fastembed import ImageEmbedding, TextEmbedding; ImageEmbedding('Qdrant/clip-ViT-B-32-vision'); TextEmbedding('Qdrant/clip-ViT-B-32-text')"
+
+      - name: Run flaky quality lane (7 iterations)
+        env:
+          FOUNDRY_LITE_FLAKY_ITERATIONS: "7"
+        run: pnpm ci:gate:flaky
+
+      - name: Upload flaky artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: foundry-lite-nightly-flaky-artifacts
+          path: artifacts
+          retention-days: 30
+
+  quality_runtime_full:
+    name: quality-runtime-full
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.18.2
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install Python dependencies
+        run: uv sync --all-groups
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Tesseract OCR and FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr ffmpeg
+
+      - name: Cache faster-whisper tiny model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-whisper-tiny-bge-small-clip-vit-b32-v1
+
+      - name: Pre-fetch faster-whisper tiny model
+        run: uv run python -c "from faster_whisper import WhisperModel; WhisperModel('tiny', device='cpu', compute_type='int8')"
+
+      - name: Pre-fetch fastembed embedding model
+        run: uv run python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5')"
+
+      - name: Pre-fetch fastembed CLIP vision/text models
+        run: uv run python -c "from fastembed import ImageEmbedding, TextEmbedding; ImageEmbedding('Qdrant/clip-ViT-B-32-vision'); TextEmbedding('Qdrant/clip-ViT-B-32-text')"
+
+      - name: Run full runtime ratchet rehearsal
+        run: pnpm ci:gate:runtime-full
+
+      - name: Upload runtime artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: foundry-lite-nightly-runtime-artifacts
+          path: artifacts
+          retention-days: 30

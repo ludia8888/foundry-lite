@@ -107,10 +107,10 @@ class FoundryLite:
 
     def _attach_facades(self, services: CoreServices) -> None:
         self.datasets = DatasetWorkspace(services.dataset)
-        self.transforms = TransformPipeline(services.transform)
-        self.ontology = OntologyRegistry(services.ontology)
+        self.transforms = TransformPipeline(services.transform.entrypoint)
+        self.ontology = OntologyRegistry(services.ontology.entrypoint)
         self.objects = ObjectStore(services.object_store, services.ontology_search)
-        self.actions = ActionGateway(services.action)
+        self.actions = ActionGateway(services.action.entrypoint)
         self.auth = AuthGateway(services.osdk_oauth_sessions)
         self.aip = AipWorkspace(
             services.agent_runtime,
@@ -131,13 +131,13 @@ class FoundryLite:
             services.source_scheduler,
         )
         self.erasure = ErasureGateway(services.erasure)
-        self.developer_console = DeveloperConsole(services.osdk_applications)
+        self.developer_console = DeveloperConsole(services.osdk_applications.entrypoint)
         self.operations = OperationsConsole(
-            services.action,
+            services.action.entrypoint,
             services.runtime,
             services.materialization,
             services.record_dlq,
-            services.backup_restore,
+            services.backup_restore.entrypoint,
             services.iceberg_maintenance,
             services.workflow,
             services.prompt_artifact,

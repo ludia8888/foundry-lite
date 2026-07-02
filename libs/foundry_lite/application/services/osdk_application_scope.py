@@ -18,6 +18,7 @@ from foundry_lite.application.ports import (
     TransactionManager,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.osdk_application_artifacts import _is_expired, _snapshot_scopes
 from foundry_lite.application.services.osdk_application_records import (
     _application_record,
@@ -34,7 +35,10 @@ from foundry_lite.domain.errors import NotFound, PermissionDenied
 from foundry_lite.security.policy import PolicyService
 
 
-class OsdkApplicationScopeMixin:
+class OsdkApplicationScopeService(CoreService):
+    required_dependencies = ("engine", "policy", "osdk_application_repository")
+    required_collaborators = ("runtime_service",)
+
     engine: TransactionManager
     osdk_application_repository: OsdkApplicationRepository
     policy: PolicyService

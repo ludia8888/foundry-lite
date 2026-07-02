@@ -117,6 +117,14 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.12"
 exclude = ['scripts/vulture_allowlist\.py']
+# scripts/sdk_generator must map to the single module name
+# scripts.sdk_generator.* (the entrypoint imports it by that name); without
+# explicit package bases mypy maps the same files under a second name and
+# fails with "source file found twice".
+explicit_package_bases = true
+# scripts/quality is its own base so its same-directory sibling import
+# (_proof_matrix_lib) keeps resolving as a top-level module.
+mypy_path = ["libs", "apps/api", "apps/cli", "apps/worker", "scripts/quality"]
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true

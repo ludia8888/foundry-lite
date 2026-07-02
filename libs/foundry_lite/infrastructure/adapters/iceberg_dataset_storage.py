@@ -5,16 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from foundry_lite.application.ports import (
     DatasetManifest,
-    DatasetManifestColumnStats,
     DatasetManifestFile,
     DatasetStagedFile,
     DatasetVersionRow,
@@ -34,14 +32,46 @@ from foundry_lite.application.ports.iceberg_maintenance import (
     IcebergMaintenanceSnapshot,
 )
 from foundry_lite.infrastructure.adapters.dataset_manifest_metadata import parquet_manifest_file_metadata
+from foundry_lite.infrastructure.adapters.iceberg_arrow import (
+    _arrow_schema_hash,
+    _arrow_table_row_hash,
+    _iceberg_compatible_arrow_table,
+)
+from foundry_lite.infrastructure.adapters.iceberg_maintenance import (
+    _committed_snapshot_versions,
+    _current_compaction_candidate,
+    _empty_maintenance_plan,
+    _empty_maintenance_run,
+    _empty_rewrite_result,
+    _maintenance_plan,
+    _maintenance_run,
+    _maintenance_snapshot,
+    _maintenance_snapshot_properties,
+    _MaintenanceRewriteResult,
+    _retained_snapshot_ids,
+    _rewrite_result,
+    _utc_now_iso,
+)
+from foundry_lite.infrastructure.adapters.iceberg_manifests import (
+    _BRANCH_PROP,
+    _CREATED_AT_PROP,
+    _DATASET_PROP,
+    _SCHEMA_PROP,
+    _VERSION_PROP,
+    _copy_expected_manifest_metadata,
+    _dataset_manifest,
+    _expected_files,
+    _files_by_uri,
+    _matches_manifest_filter,
+    _matching_expected_files,
+    _path_sha256,
+    _snapshot_properties,
+    _snapshot_token,
+    _staged_files_row_count,
+    _uploaded_row_count,
+    _verify_downloaded_snapshot_file,
+)
 
-_VERSION_PROP = "foundry.version_id"
-_DATASET_PROP = "foundry.dataset_ref"
-_BRANCH_PROP = "foundry.branch"
-_SCHEMA_PROP = "foundry.schema_hash"
-_CREATED_AT_PROP = "foundry.created_at"
-_MAINTENANCE_KIND_PROP = "foundry.maintenance.kind"
-_MAINTENANCE_BEFORE_SNAPSHOT_PROP = "foundry.maintenance.before_snapshot_id"
 _URI_SCHEME = "iceberg://"
 
 
@@ -58,20 +88,6 @@ class IcebergDatasetStorageAdapterConfig:
     s3_secret_access_key: str | None = field(default=None, repr=False)
     s3_region: str = "us-east-1"
     s3_path_style_enabled: bool = True
-
-
-@dataclass(frozen=True)
-class _MaintenanceRewriteResult:
-    """Compaction evidence for the current Iceberg snapshot."""
-
-    before_snapshot_id: int | None
-    after_snapshot_id: int | None
-    compacted_snapshot_id: int | None
-    rewritten_data_file_count: int
-    output_data_file_count: int
-    before_row_hash: str | None
-    after_row_hash: str | None
-    is_row_hash_preserved: bool | None
 
 
 class IcebergDatasetStorageAdapter:
@@ -1129,591 +1145,3 @@ def _is_corrupt_metadata(exc: Exception) -> bool:
 def _sanitize(value: str) -> str:
     """Sanitize."""
     return "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in value)
-
-
-def _expected_files(sidecar: Mapping[str, object]) -> Mapping[str, DatasetManifestFile]:
-    """Expected files."""
-    files = sidecar.get("files")
-    if not isinstance(files, list):
-        raise ValueError("Iceberg Foundry sidecar manifest does not contain a file list")
-    expected: dict[str, DatasetManifestFile] = {}
-    for raw in files:
-        if not isinstance(raw, dict):
-            raise ValueError("Iceberg Foundry sidecar manifest contains a malformed file entry")
-        raw_file = cast(Mapping[str, object], raw)
-        entry: DatasetManifestFile = {
-            "uri": str(raw_file["uri"]),
-            "format": str(raw_file["format"]),
-            "row_count": int(str(raw_file["row_count"])),
-            "byte_size": int(str(raw_file["byte_size"])),
-            "content_hash": str(raw_file["content_hash"]),
-        }
-        _copy_raw_manifest_metadata(entry, raw_file)
-        expected[entry["uri"]] = entry
-    return expected
-
-
-def _matching_expected_files(
-    expected_files: Mapping[str, DatasetManifestFile],
-    partition_filter: Mapping[str, object] | None,
-) -> list[DatasetManifestFile]:
-    files = list(expected_files.values())
-    if partition_filter is None:
-        return files
-    return [file for file in files if _matches_manifest_filter(file, partition_filter)]
-
-
-def _copy_raw_manifest_metadata(entry: DatasetManifestFile, raw_file: Mapping[str, object]) -> None:
-    partition_values = raw_file.get("partition_values")
-    if isinstance(partition_values, dict):
-        entry["partition_values"] = dict(partition_values)
-    column_stats = _raw_column_stats(raw_file.get("column_stats"))
-    if column_stats:
-        entry["column_stats"] = column_stats
-    sort_bounds = _raw_column_stats(raw_file.get("sort_bounds"))
-    if sort_bounds:
-        entry["sort_bounds"] = sort_bounds
-
-
-def _raw_column_stats(raw: object) -> dict[str, DatasetManifestColumnStats]:
-    if not isinstance(raw, dict):
-        return {}
-    parsed: dict[str, DatasetManifestColumnStats] = {}
-    for column, stats in raw.items():
-        if isinstance(stats, dict):
-            parsed[str(column)] = _raw_stats(stats)
-    return parsed
-
-
-def _raw_stats(raw: Mapping[str, object]) -> DatasetManifestColumnStats:
-    stats: DatasetManifestColumnStats = {}
-    if "min" in raw:
-        stats["min"] = raw["min"]
-    if "max" in raw:
-        stats["max"] = raw["max"]
-    if "null_count" in raw:
-        stats["null_count"] = int(str(raw["null_count"]))
-    return stats
-
-
-def _copy_expected_manifest_metadata(
-    entry: DatasetManifestFile,
-    expected: DatasetManifestFile | None,
-) -> None:
-    if expected is None:
-        return
-    if "partition_values" in expected:
-        entry["partition_values"] = expected["partition_values"]
-    if "column_stats" in expected:
-        entry["column_stats"] = expected["column_stats"]
-    if "sort_bounds" in expected:
-        entry["sort_bounds"] = expected["sort_bounds"]
-
-
-def _verify_downloaded_snapshot_file(target: Path, manifest_file: DatasetManifestFile) -> None:
-    if target.stat().st_size != manifest_file["byte_size"]:
-        raise ValueError(f"Iceberg data file byte size mismatch: {manifest_file['uri']}")
-    if _path_sha256(target) != manifest_file["content_hash"]:
-        raise ValueError(f"Iceberg data file content hash mismatch: {manifest_file['uri']}")
-
-
-def _path_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _matches_manifest_filter(
-    manifest_file: DatasetManifestFile,
-    partition_filter: Mapping[str, object],
-) -> bool:
-    return all(_file_might_match_value(manifest_file, key, value) for key, value in partition_filter.items())
-
-
-def _file_might_match_value(manifest_file: DatasetManifestFile, key: str, value: object) -> bool:
-    partition_values = manifest_file.get("partition_values") or {}
-    if key in partition_values:
-        return partition_values.get(key) == value
-    stats = _stats_for_column(manifest_file, key)
-    if stats is None:
-        return True
-    if value is None:
-        return int(stats.get("null_count", 0)) > 0
-    if int(stats.get("null_count", 0)) >= int(manifest_file.get("row_count", 0)):
-        return False
-    return _value_within_bounds(value, stats)
-
-
-def _stats_for_column(manifest_file: DatasetManifestFile, key: str) -> DatasetManifestColumnStats | None:
-    column_stats = manifest_file.get("column_stats") or {}
-    sort_bounds = manifest_file.get("sort_bounds") or {}
-    return column_stats.get(key) or sort_bounds.get(key)
-
-
-def _value_within_bounds(value: object, stats: DatasetManifestColumnStats) -> bool:
-    lower = stats.get("min")
-    upper = stats.get("max")
-    if lower is not None and _safe_less(value, lower):
-        return False
-    if upper is not None and _safe_greater(value, upper):
-        return False
-    return True
-
-
-def _safe_less(left: object, right: object) -> bool:
-    try:
-        return bool(cast(Any, left) < cast(Any, right))
-    except TypeError:
-        return False
-
-
-def _safe_greater(left: object, right: object) -> bool:
-    try:
-        return bool(cast(Any, left) > cast(Any, right))
-    except TypeError:
-        return False
-
-
-def _part_row_count(staged_file: DatasetStagedFile, total_row_count: int) -> int:
-    return total_row_count if staged_file.row_count is None else staged_file.row_count
-
-
-def _staged_files_row_count(staged_files: Sequence[DatasetStagedFile], total_row_count: int) -> int:
-    return sum(_part_row_count(staged_file, total_row_count) for staged_file in staged_files)
-
-
-def _uploaded_row_count(staged_file: DatasetStagedFile, actual_row_count: int) -> int:
-    if staged_file.row_count is not None and staged_file.row_count != actual_row_count:
-        raise ValueError("dataset staged file row count does not match parquet content")
-    return actual_row_count
-
-
-def _files_by_uri(files: Sequence[DatasetManifestFile]) -> Mapping[str, DatasetManifestFile]:
-    return {file["uri"]: file for file in files}
-
-
-def _snapshot_properties(
-    version_id: str,
-    dataset_ref: str,
-    branch: str,
-    schema_hash: str,
-    created_at: str,
-) -> dict[str, str]:
-    return {
-        _VERSION_PROP: version_id,
-        _DATASET_PROP: dataset_ref,
-        _BRANCH_PROP: branch,
-        _SCHEMA_PROP: schema_hash,
-        _CREATED_AT_PROP: created_at,
-    }
-
-
-def _dataset_manifest(
-    version_id: str,
-    dataset_ref: str,
-    branch: str,
-    schema_hash: str,
-    files: list[DatasetManifestFile],
-    created_at: str,
-    profile_name: str,
-) -> DatasetManifest:
-    return {
-        "version_id": version_id,
-        "dataset": dataset_ref,
-        "branch": branch,
-        "schema_hash": schema_hash,
-        "files": files,
-        "created_at": created_at,
-        "storage_profile": profile_name,
-    }
-
-
-def _empty_maintenance_run(
-    profile_name: str,
-    dataset_ref: str,
-    dataset_id: str,
-    branch: str,
-    identifier: str,
-    policy: IcebergMaintenancePolicy,
-) -> IcebergMaintenanceRun:
-    rewrite = _empty_rewrite_result(None)
-    empty_plan = _empty_maintenance_plan(profile_name, dataset_ref, dataset_id, branch, identifier, policy)
-    return _maintenance_run(
-        profile_name,
-        empty_plan,
-        empty_plan,
-        rewrite,
-        expired_snapshot_ids=[],
-        skipped_expiration_snapshot_ids=[],
-        orphan_cleanup_file_uris=[],
-    )
-
-
-def _empty_maintenance_plan(
-    profile_name: str,
-    dataset_ref: str,
-    dataset_id: str,
-    branch: str,
-    identifier: str,
-    policy: IcebergMaintenancePolicy,
-) -> IcebergMaintenancePlan:
-    return {
-        "dataset_ref": dataset_ref,
-        "dataset_id": dataset_id,
-        "branch": branch,
-        "storage_profile": profile_name,
-        "table_identifier": identifier,
-        "current_snapshot_id": None,
-        "policy": policy,
-        "snapshots": [],
-        "compaction_candidates": [],
-        "orphan_snapshots": [],
-        "protected_snapshot_ids": [],
-        "retained_snapshot_ids": [],
-        "deletable_snapshot_ids": [],
-        "status": "no_table",
-    }
-
-
-def _maintenance_run(
-    profile_name: str,
-    before_plan: IcebergMaintenancePlan,
-    after_plan: IcebergMaintenancePlan,
-    rewrite: _MaintenanceRewriteResult,
-    *,
-    expired_snapshot_ids: list[int],
-    skipped_expiration_snapshot_ids: list[int],
-    orphan_cleanup_file_uris: list[str],
-) -> IcebergMaintenanceRun:
-    status = _maintenance_run_status(rewrite, expired_snapshot_ids, before_plan["status"])
-    return {
-        "dataset_ref": before_plan["dataset_ref"],
-        "dataset_id": before_plan["dataset_id"],
-        "branch": before_plan["branch"],
-        "storage_profile": profile_name,
-        "table_identifier": before_plan["table_identifier"],
-        "status": status,
-        "policy": before_plan["policy"],
-        "before_snapshot_id": rewrite.before_snapshot_id,
-        "after_snapshot_id": rewrite.after_snapshot_id,
-        "compacted_snapshot_id": rewrite.compacted_snapshot_id,
-        "rewritten_data_file_count": rewrite.rewritten_data_file_count,
-        "output_data_file_count": rewrite.output_data_file_count,
-        "before_row_hash": rewrite.before_row_hash,
-        "after_row_hash": rewrite.after_row_hash,
-        "is_row_hash_preserved": rewrite.is_row_hash_preserved,
-        "expired_snapshot_ids": sorted(expired_snapshot_ids),
-        "protected_snapshot_ids": after_plan["protected_snapshot_ids"],
-        "retained_snapshot_ids": after_plan["retained_snapshot_ids"],
-        "skipped_expiration_snapshot_ids": sorted(skipped_expiration_snapshot_ids),
-        "orphan_cleanup_file_uris": sorted(orphan_cleanup_file_uris),
-        "before_plan_status": before_plan["status"],
-        "after_plan_status": after_plan["status"],
-    }
-
-
-def _maintenance_run_status(
-    rewrite: _MaintenanceRewriteResult,
-    expired_snapshot_ids: list[int],
-    before_plan_status: str,
-) -> str:
-    if before_plan_status == "no_table":
-        return "no_table"
-    if rewrite.compacted_snapshot_id is None and not expired_snapshot_ids:
-        return "skipped"
-    return "completed"
-
-
-def _maintenance_plan(
-    profile_name: str,
-    dataset_ref: str,
-    dataset_id: str,
-    branch: str,
-    identifier: str,
-    policy: IcebergMaintenancePolicy,
-    snapshots: list[IcebergMaintenanceSnapshot],
-    current: Any | None,
-) -> IcebergMaintenancePlan:
-    candidates = _snapshots_with_reasons(snapshots)
-    orphans = _orphan_snapshots(snapshots)
-    return {
-        "dataset_ref": dataset_ref,
-        "dataset_id": dataset_id,
-        "branch": branch,
-        "storage_profile": profile_name,
-        "table_identifier": identifier,
-        "current_snapshot_id": _current_snapshot_id(current),
-        "policy": policy,
-        "snapshots": snapshots,
-        "compaction_candidates": candidates,
-        "orphan_snapshots": orphans,
-        "protected_snapshot_ids": _protected_snapshot_ids(snapshots),
-        "retained_snapshot_ids": _plan_retained_snapshot_ids(snapshots),
-        "deletable_snapshot_ids": _deletable_snapshot_ids(orphans),
-        "status": _maintenance_plan_status(candidates, orphans),
-    }
-
-
-def _snapshots_with_reasons(snapshots: list[IcebergMaintenanceSnapshot]) -> list[IcebergMaintenanceSnapshot]:
-    return [snapshot for snapshot in snapshots if snapshot["reason_codes"]]
-
-
-def _orphan_snapshots(snapshots: list[IcebergMaintenanceSnapshot]) -> list[IcebergMaintenanceSnapshot]:
-    return [snapshot for snapshot in snapshots if "orphan_snapshot" in snapshot["reason_codes"]]
-
-
-def _protected_snapshot_ids(snapshots: list[IcebergMaintenanceSnapshot]) -> list[int]:
-    return sorted(snapshot["snapshot_id"] for snapshot in snapshots if snapshot["is_protected"])
-
-
-def _plan_retained_snapshot_ids(snapshots: list[IcebergMaintenanceSnapshot]) -> list[int]:
-    retained = (
-        snapshot["snapshot_id"] for snapshot in snapshots if "retention_min_snapshot" in snapshot["protected_by"]
-    )
-    return sorted(set(retained))
-
-
-def _deletable_snapshot_ids(orphans: list[IcebergMaintenanceSnapshot]) -> list[int]:
-    return sorted(snapshot["snapshot_id"] for snapshot in orphans if not snapshot["is_protected"])
-
-
-def _current_compaction_candidate(plan: IcebergMaintenancePlan) -> IcebergMaintenanceSnapshot | None:
-    compaction_reasons = {"too_many_files", "small_files", "read_amplification"}
-    for snapshot in plan["compaction_candidates"]:
-        if snapshot["is_current"] and compaction_reasons & set(snapshot["reason_codes"]):
-            return snapshot
-    return None
-
-
-def _empty_rewrite_result(snapshot_id: int | None) -> _MaintenanceRewriteResult:
-    return _MaintenanceRewriteResult(
-        before_snapshot_id=snapshot_id,
-        after_snapshot_id=snapshot_id,
-        compacted_snapshot_id=None,
-        rewritten_data_file_count=0,
-        output_data_file_count=0,
-        before_row_hash=None,
-        after_row_hash=None,
-        is_row_hash_preserved=None,
-    )
-
-
-def _rewrite_result(
-    before_snapshot_id: int,
-    after_snapshot_id: int,
-    before_file_count: int,
-    output_file_count: int,
-    before_row_hash: str,
-    after_row_hash: str,
-) -> _MaintenanceRewriteResult:
-    return _MaintenanceRewriteResult(
-        before_snapshot_id=before_snapshot_id,
-        after_snapshot_id=after_snapshot_id,
-        compacted_snapshot_id=after_snapshot_id,
-        rewritten_data_file_count=before_file_count,
-        output_data_file_count=output_file_count,
-        before_row_hash=before_row_hash,
-        after_row_hash=after_row_hash,
-        is_row_hash_preserved=before_row_hash == after_row_hash,
-    )
-
-
-def _current_snapshot_id(current: Any | None) -> int | None:
-    if current is None:
-        return None
-    return int(current.snapshot_id)
-
-
-def _maintenance_plan_status(
-    candidates: list[IcebergMaintenanceSnapshot],
-    orphans: list[IcebergMaintenanceSnapshot],
-) -> str:
-    if candidates or orphans:
-        return "maintenance_needed"
-    return "healthy"
-
-
-def _maintenance_snapshot(
-    snapshot: Any,
-    manifest_uri: str,
-    files: list[DatasetManifestFile],
-    *,
-    current_snapshot_id: int | None,
-    committed_version_id: str | None,
-    retained_snapshot_ids: set[int],
-    policy: IcebergMaintenancePolicy,
-) -> IcebergMaintenanceSnapshot:
-    snapshot_id = int(snapshot.snapshot_id)
-    file_count = len(files)
-    total_bytes = sum(file["byte_size"] for file in files)
-    row_count = sum(file["row_count"] for file in files)
-    average = int(total_bytes / file_count) if file_count else 0
-    protected_by = _protected_reasons(snapshot_id, current_snapshot_id, committed_version_id, retained_snapshot_ids)
-    return {
-        "snapshot_id": snapshot_id,
-        "version_id": _snapshot_version_id(snapshot, committed_version_id),
-        "manifest_uri": manifest_uri,
-        "file_count": file_count,
-        "row_count": row_count,
-        "total_bytes": total_bytes,
-        "average_file_size_bytes": average,
-        "read_amplification": float(file_count),
-        "is_current": snapshot_id == current_snapshot_id,
-        "is_protected": bool(protected_by),
-        "protected_by": protected_by,
-        "reason_codes": _maintenance_reason_codes(file_count, average, committed_version_id, policy),
-    }
-
-
-def _protected_reasons(
-    snapshot_id: int,
-    current_snapshot_id: int | None,
-    committed_version_id: str | None,
-    retained_snapshot_ids: set[int],
-) -> list[str]:
-    reasons: list[str] = []
-    if snapshot_id == current_snapshot_id:
-        reasons.append("current_snapshot")
-    if committed_version_id is not None:
-        reasons.append(f"committed_db_version:{committed_version_id}")
-    if snapshot_id in retained_snapshot_ids:
-        reasons.append("retention_min_snapshot")
-    return reasons
-
-
-def _maintenance_reason_codes(
-    file_count: int,
-    average_file_size_bytes: int,
-    committed_version_id: str | None,
-    policy: IcebergMaintenancePolicy,
-) -> list[str]:
-    reasons: list[str] = []
-    if committed_version_id is None:
-        reasons.append("orphan_snapshot")
-    if file_count > policy["file_count_threshold"]:
-        reasons.append("too_many_files")
-    if file_count and average_file_size_bytes < policy["small_file_threshold_bytes"]:
-        reasons.append("small_files")
-    if float(file_count) > policy["read_amplification_threshold"]:
-        reasons.append("read_amplification")
-    return reasons
-
-
-def _snapshot_version_id(snapshot: Any, committed_version_id: str | None) -> str | None:
-    value = snapshot.summary.additional_properties.get(_VERSION_PROP)
-    return value if isinstance(value, str) and value else committed_version_id
-
-
-def _maintenance_snapshot_properties(
-    snapshot: Any,
-    dataset_ref: str,
-    branch: str,
-    before_snapshot_id: int,
-) -> dict[str, str]:
-    created_at = _utc_now_iso()
-    schema_hash = str(snapshot.summary.additional_properties.get(_SCHEMA_PROP) or "")
-    return {
-        _VERSION_PROP: f"maintenance:{before_snapshot_id}:{created_at}",
-        _DATASET_PROP: dataset_ref,
-        _BRANCH_PROP: branch,
-        _SCHEMA_PROP: schema_hash,
-        _CREATED_AT_PROP: created_at,
-        _MAINTENANCE_KIND_PROP: "compaction",
-        _MAINTENANCE_BEFORE_SNAPSHOT_PROP: str(before_snapshot_id),
-    }
-
-
-def _arrow_table_row_hash(arrow_table: Any) -> str:
-    rows = sorted(
-        json.dumps(row, default=str, sort_keys=True, separators=(",", ":")) for row in arrow_table.to_pylist()
-    )
-    digest = hashlib.sha256()
-    for row in rows:
-        digest.update(row.encode("utf-8"))
-        digest.update(b"\n")
-    return digest.hexdigest()
-
-
-def _arrow_schema_hash(arrow_table: Any) -> str:
-    return hashlib.sha256(str(arrow_table.schema).encode("utf-8")).hexdigest()
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _committed_snapshot_versions(
-    committed_versions: list[DatasetVersionRow],
-    parse_manifest_uri: object,
-) -> dict[int, str]:
-    parser = cast(Callable[[str], tuple[str, int]], parse_manifest_uri)
-    committed: dict[int, str] = {}
-    for version in committed_versions:
-        try:
-            _, snapshot_id = parser(version["manifest_uri"])
-        except ValueError:
-            continue
-        committed[snapshot_id] = version["id"]
-    return committed
-
-
-def _retained_snapshot_ids(
-    snapshots: Sequence[Any],
-    current: Any | None,
-    committed: Mapping[int, str],
-    policy: IcebergMaintenancePolicy,
-) -> set[int]:
-    retained = set(committed)
-    if current is not None:
-        retained.add(int(current.snapshot_id))
-    minimum = policy["retention_min_snapshots"]
-    retained.update(int(snapshot.snapshot_id) for snapshot in snapshots[-minimum:])
-    return retained
-
-
-def _iceberg_compatible_arrow_table(arrow_table: Any) -> Any:
-    """Normalize Arrow types that Iceberg v2 cannot commit as-is."""
-    pa = import_module("pyarrow")
-    schema = arrow_table.schema
-    fields = [_iceberg_compatible_field(pa, field) for field in schema]
-    converted_schema = pa.schema(fields, metadata=schema.metadata)
-    if converted_schema.equals(schema, check_metadata=True):
-        return arrow_table
-    return arrow_table.cast(converted_schema, safe=False)
-
-
-def _iceberg_compatible_field(pa: Any, field: Any) -> Any:
-    """Return the field with an Iceberg-compatible type, preserving field metadata."""
-    converted_type = _iceberg_compatible_type(pa, field.type)
-    if converted_type == field.type:
-        return field
-    return field.with_type(converted_type)
-
-
-def _iceberg_compatible_type(pa: Any, data_type: Any) -> Any:
-    """Return an Iceberg-compatible Arrow type."""
-    if pa.types.is_timestamp(data_type) and data_type.unit == "ns":
-        return pa.timestamp("us", tz=data_type.tz)
-    if pa.types.is_struct(data_type):
-        return pa.struct([_iceberg_compatible_field(pa, child) for child in data_type])
-    if pa.types.is_fixed_size_list(data_type):
-        return pa.list_(_iceberg_compatible_field(pa, data_type.value_field), list_size=data_type.list_size)
-    if pa.types.is_list(data_type):
-        return pa.list_(_iceberg_compatible_field(pa, data_type.value_field))
-    if pa.types.is_large_list(data_type):
-        return pa.large_list(_iceberg_compatible_field(pa, data_type.value_field))
-    if pa.types.is_map(data_type):
-        key_field = _iceberg_compatible_field(pa, data_type.key_field)
-        item_field = _iceberg_compatible_field(pa, data_type.item_field)
-        return pa.map_(key_field.type, item_field.type, keys_sorted=data_type.keys_sorted)
-    return data_type
-
-
-def _snapshot_token(files: list[DatasetManifestFile]) -> str:
-    """Snapshot token."""
-    if len(files) == 1:
-        return files[0]["content_hash"]
-    parts = "|".join(sorted(f"{f['content_hash']}:{f['byte_size']}:{f['row_count']}" for f in files))
-    return hashlib.sha256(parts.encode()).hexdigest()

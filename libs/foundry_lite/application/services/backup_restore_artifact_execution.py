@@ -6,13 +6,9 @@ from collections.abc import Sequence
 
 from foundry_lite.application.ports import (
     AdapterError,
-    BackupArtifactStore,
     BackupRestoreArtifact,
-    BackupRestoreArtifactReceipt,
     BackupRestoreArtifactRestoredVersion,
     BackupRestoreArtifactRestoreReport,
-    BackupRestoreModeReport,
-    BackupRestorePostRestoreValidationReport,
     BackupRestorePreflightReport,
     DatasetRepository,
     DatasetRow,
@@ -45,7 +41,12 @@ from foundry_lite.application.services.backup_restore_artifact_execution_helpers
     staged_files,
     validate_source_files,
 )
-from foundry_lite.application.services.backup_restore_artifact_restore import _artifact_restore_findings
+from foundry_lite.application.services.backup_restore_artifact_restore import (
+    BackupRestoreArtifactRestoreService,
+    _artifact_restore_findings,
+)
+from foundry_lite.application.services.backup_restore_preflight_service import BackupRestorePreflightService
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
 from foundry_lite.application.services.dataset.transaction_models import DatasetCommitArtifacts
 from foundry_lite.application.services.dataset.transaction_payloads import (
@@ -56,62 +57,31 @@ from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
 
 
-class BackupRestoreArtifactExecutionMixin:
+class BackupRestoreArtifactExecutionService(CoreService):
     """Execute a verified artifact restore by committing new dataset heads."""
 
+    required_dependencies = (
+        "engine",
+        "dataset_repository",
+        "dataset_storage",
+        "dataset_transaction_repository",
+        "dataset_version_repository",
+        "runtime_repository",
+    )
+    required_collaborators = (
+        "backup_restore_artifact_restore_service",
+        "backup_restore_preflight_service",
+        "runtime_service",
+    )
+    backup_restore_artifact_restore_service: BackupRestoreArtifactRestoreService
+    backup_restore_preflight_service: BackupRestorePreflightService
     engine: TransactionManager
-    backup_artifact_store: BackupArtifactStore
     dataset_repository: DatasetRepository
     dataset_storage: DatasetStorageAdapter
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
     runtime_repository: RuntimeRepository
     runtime_service: DatasetRuntimeBoundary
-
-    def restore_preflight_report(
-        self,
-        *,
-        ctx: RequestContext | None = None,
-        backup_id: str | None = None,
-    ) -> BackupRestorePreflightReport:
-        raise NotImplementedError
-
-    def _read_restore_artifact(
-        self,
-        ctx: RequestContext,
-        artifact_ref: str,
-        artifact_hash: str | None,
-    ) -> BackupRestoreArtifact:
-        raise NotImplementedError
-
-    def _require_artifact_tenant(self, ctx: RequestContext, receipt: BackupRestoreArtifactReceipt) -> None:
-        raise NotImplementedError
-
-    def _audit_artifact_restore_requested(
-        self,
-        ctx: RequestContext,
-        receipt: BackupRestoreArtifactReceipt,
-        restore_id: str,
-    ) -> None:
-        raise NotImplementedError
-
-    def _restore_mode_from_artifact(
-        self,
-        ctx: RequestContext,
-        restore_id: str,
-        preflight: BackupRestorePreflightReport,
-    ) -> BackupRestoreModeReport:
-        raise NotImplementedError
-
-    def _post_restore_from_artifact(
-        self,
-        ctx: RequestContext,
-        mode: BackupRestoreModeReport,
-        preflight: BackupRestorePreflightReport,
-        validation_id: str | None,
-        should_run: bool,
-    ) -> BackupRestorePostRestoreValidationReport | None:
-        raise NotImplementedError
 
     def execute_backup_artifact_restore(
         self,
@@ -125,15 +95,15 @@ class BackupRestoreArtifactExecutionMixin:
     ) -> BackupRestoreArtifactRestoreReport:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "operations:retry", "backup_restore", artifact_ref)
-        artifact = self._read_restore_artifact(ctx, artifact_ref, artifact_hash)
+        artifact = self.backup_restore_artifact_restore_service.read_restore_artifact(ctx, artifact_ref, artifact_hash)
         receipt = artifact["receipt"]
         preflight = artifact["preflightReport"]
         resolved_restore_id = restore_id or f"restore-{preflight['backupId']}"
-        self._require_artifact_tenant(ctx, receipt)
+        self.backup_restore_artifact_restore_service.require_artifact_tenant(ctx, receipt)
         existing = existing_execution_report(self.runtime_repository, ctx, resolved_restore_id)
         if existing is not None:
             return require_same_artifact(existing, receipt)
-        self._audit_artifact_restore_requested(ctx, receipt, resolved_restore_id)
+        self.backup_restore_artifact_restore_service.audit_artifact_restore_requested(ctx, receipt, resolved_restore_id)
         return self._execute_verified_artifact_restore(
             ctx,
             artifact,
@@ -150,20 +120,27 @@ class BackupRestoreArtifactExecutionMixin:
         validation_id: str | None,
         should_run_post_restore_validation: bool,
     ) -> BackupRestoreArtifactRestoreReport:
-        current = self.restore_preflight_report(ctx=ctx, backup_id=f"{artifact['preflightReport']['backupId']}:current")
+        current = self.backup_restore_preflight_service.restore_preflight_report(
+            ctx=ctx,
+            backup_id=f"{artifact['preflightReport']['backupId']}:current",
+        )
         findings = _artifact_restore_findings(artifact["preflightReport"], current)
         blocking = blocking_restore_findings(findings)
         if blocking:
             report = execution_report(ctx, artifact, restore_id, blocking, None, None, [])
             self._audit_execution_report(ctx, report)
             return report
-        mode = self._restore_mode_from_artifact(ctx, restore_id, artifact["preflightReport"])
+        mode = self.backup_restore_artifact_restore_service.restore_mode_from_artifact(
+            ctx,
+            restore_id,
+            artifact["preflightReport"],
+        )
         restored = self._restore_dataset_heads(ctx, artifact, current, restore_id)
-        post_restore = self.restore_preflight_report(
+        post_restore = self.backup_restore_preflight_service.restore_preflight_report(
             ctx=ctx,
             backup_id=f"{artifact['preflightReport']['backupId']}:restored",
         )
-        validation = self._post_restore_from_artifact(
+        validation = self.backup_restore_artifact_restore_service.post_restore_from_artifact(
             ctx,
             mode,
             post_restore,

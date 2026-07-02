@@ -12,11 +12,14 @@ from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetQualityContractVersionCreateResult,
     DatasetQualityContractVersionList,
     DatasetQualityContractVersionRecord,
+    DatasetQualityContractVersionRow,
     DatasetQualityResultHistory,
     DatasetQualityResultSummary,
 )
 from foundry_lite.application.primitives import _new_id, _now
-from foundry_lite.application.services.dataset.quality_contracts import DatasetQualityContractMixin
+from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
+from foundry_lite.application.services.dataset.quality_contracts import DatasetQualityContractService
 from foundry_lite.application.services.dataset.quality_helpers import (
     DEFAULT_QUALITY_CONTRACT_KEY,
     _check_name,
@@ -35,10 +38,16 @@ from foundry_lite.domain.errors import NotFound, ValidationFailed
 from foundry_lite.security.policy import PolicyService
 
 
-class DatasetQualityApiMixin(DatasetQualityContractMixin):
+class DatasetQualityApiService(CoreService):
+    """Dataset quality contract and result API use cases."""
+
+    required_dependencies = ("engine", "policy", "dataset_quality_repository")
+    required_collaborators = ("dataset_quality_contract_service", "runtime_service")
+    dataset_quality_contract_service: DatasetQualityContractService
     dataset_quality_repository: DatasetQualityRepository
     engine: TransactionManager
     policy: PolicyService
+    runtime_service: DatasetRuntimeBoundary
 
     def list_contract_checks(
         self,
@@ -143,7 +152,12 @@ class DatasetQualityApiMixin(DatasetQualityContractMixin):
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "dataset:read")
         with self.engine.begin() as conn:
-            row = self._required_contract_version_by_id(conn, ctx, str(dataset["id"]), contract_version_id)
+            row = self.dataset_quality_contract_service._required_contract_version_by_id(
+                conn,
+                ctx,
+                str(dataset["id"]),
+                contract_version_id,
+            )
         return _contract_version(row, dataset)
 
     def create_contract_check(
@@ -169,19 +183,15 @@ class DatasetQualityApiMixin(DatasetQualityContractMixin):
         contract_config = _contract_check_config(config, severity)
         check_name = _check_name(contract_config)
         with self.engine.begin() as conn:
-            existing = self.dataset_quality_repository.check_by_name(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                dataset_id=dataset_id,
-                name=check_name,
+            return self._create_contract_check_in_transaction(
+                conn,
+                ctx,
+                dataset,
+                dataset_id,
+                check_name,
+                contract_config,
+                enabled,
             )
-            if existing is not None:
-                return {"check": _contract_check(existing), "isIdempotentReplay": True}
-            record = _contract_check_record(ctx, dataset_id, check_name, contract_config, enabled)
-            self.dataset_quality_repository.insert_check(transaction=conn, record=record)
-            persisted = self._required_contract_check(conn, ctx, dataset_id, check_name)
-            self._audit_contract_check_created(conn, ctx, dataset, persisted)
-            return {"check": _contract_check(persisted), "isIdempotentReplay": False}
 
     def create_data_contract_version(
         self,
@@ -207,8 +217,13 @@ class DatasetQualityApiMixin(DatasetQualityContractMixin):
         with self.engine.begin() as conn:
             record = self._data_contract_version_record(conn, ctx, dataset_id, key, owner_user_id, description)
             self.dataset_quality_repository.insert_contract_version(transaction=conn, record=record)
-            row = self._required_contract_version_by_id(conn, ctx, dataset_id, record.contract_version_id)
-            self._audit_contract_version_created(conn, ctx, dataset, row)
+            row = self.dataset_quality_contract_service._required_contract_version_by_id(
+                conn,
+                ctx,
+                dataset_id,
+                record.contract_version_id,
+            )
+            self.dataset_quality_contract_service._audit_contract_version_created(conn, ctx, dataset, row)
         return {"contractVersion": _contract_version(row, dataset), "isIdempotentReplay": False}
 
     def activate_data_contract_version(
@@ -228,22 +243,7 @@ class DatasetQualityApiMixin(DatasetQualityContractMixin):
             resource_id=dataset_id,
         )
         with self.engine.begin() as conn:
-            before = self._required_contract_version_by_id(conn, ctx, dataset_id, contract_version_id)
-            updated = self.dataset_quality_repository.activate_contract_version(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                dataset_id=dataset_id,
-                contract_key=before["contract_key"],
-                contract_version_id=contract_version_id,
-                activated_at=_now(),
-            )
-            if not updated:
-                raise NotFound(
-                    "dataset quality contract version not found",
-                    details={"contract_version_id": contract_version_id},
-                )
-            after = self._required_contract_version_by_id(conn, ctx, dataset_id, contract_version_id)
-            self._audit_contract_version_activated(conn, ctx, dataset, after)
+            after = self._activate_contract_version_in_transaction(conn, ctx, dataset, dataset_id, contract_version_id)
         return _contract_version(after, dataset)
 
     def update_contract_check(
@@ -266,14 +266,102 @@ class DatasetQualityApiMixin(DatasetQualityContractMixin):
             resource_id=dataset_id,
         )
         with self.engine.begin() as conn:
-            before = self._required_contract_check_by_id(conn, ctx, dataset_id, check_id)
-            record = _updated_contract_check_record(before, config=config, severity=severity, enabled=enabled)
-            self._ensure_no_contract_check_name_conflict(conn, ctx, dataset_id, record.name, check_id)
-            if not self.dataset_quality_repository.update_check(transaction=conn, record=record):
-                raise NotFound("dataset quality contract check not found", details={"check_id": check_id})
-            after = self._required_contract_check_by_id(conn, ctx, dataset_id, check_id)
-            self._audit_contract_check_updated(conn, ctx, dataset, before, after)
-            return _contract_check(after)
+            return self._update_contract_check_in_transaction(
+                conn,
+                ctx,
+                dataset,
+                dataset_id,
+                check_id,
+                config,
+                severity,
+                enabled,
+            )
+
+    def _create_contract_check_in_transaction(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        dataset_id: str,
+        check_name: str,
+        contract_config: DatasetCheckConfig,
+        enabled: bool,
+    ) -> DatasetQualityContractCheckCreateResult:
+        existing = self.dataset_quality_repository.check_by_name(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            dataset_id=dataset_id,
+            name=check_name,
+        )
+        if existing is not None:
+            return {"check": _contract_check(existing), "isIdempotentReplay": True}
+        record = _contract_check_record(ctx, dataset_id, check_name, contract_config, enabled)
+        self.dataset_quality_repository.insert_check(transaction=conn, record=record)
+        persisted = self.dataset_quality_contract_service._required_contract_check(conn, ctx, dataset_id, check_name)
+        self.dataset_quality_contract_service._audit_contract_check_created(conn, ctx, dataset, persisted)
+        return {"check": _contract_check(persisted), "isIdempotentReplay": False}
+
+    def _activate_contract_version_in_transaction(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        dataset_id: str,
+        contract_version_id: str,
+    ) -> DatasetQualityContractVersionRow:
+        before = self.dataset_quality_contract_service._required_contract_version_by_id(
+            conn,
+            ctx,
+            dataset_id,
+            contract_version_id,
+        )
+        updated = self.dataset_quality_repository.activate_contract_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            dataset_id=dataset_id,
+            contract_key=before["contract_key"],
+            contract_version_id=contract_version_id,
+            activated_at=_now(),
+        )
+        if not updated:
+            raise NotFound(
+                "dataset quality contract version not found",
+                details={"contract_version_id": contract_version_id},
+            )
+        after = self.dataset_quality_contract_service._required_contract_version_by_id(
+            conn,
+            ctx,
+            dataset_id,
+            contract_version_id,
+        )
+        self.dataset_quality_contract_service._audit_contract_version_activated(conn, ctx, dataset, after)
+        return after
+
+    def _update_contract_check_in_transaction(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset: DatasetRow,
+        dataset_id: str,
+        check_id: str,
+        config: DatasetCheckConfig | None,
+        severity: str | None,
+        enabled: bool | None,
+    ) -> DatasetQualityContractCheck:
+        before = self.dataset_quality_contract_service._required_contract_check_by_id(conn, ctx, dataset_id, check_id)
+        record = _updated_contract_check_record(before, config=config, severity=severity, enabled=enabled)
+        self.dataset_quality_contract_service._ensure_no_contract_check_name_conflict(
+            conn,
+            ctx,
+            dataset_id,
+            record.name,
+            check_id,
+        )
+        if not self.dataset_quality_repository.update_check(transaction=conn, record=record):
+            raise NotFound("dataset quality contract check not found", details={"check_id": check_id})
+        after = self.dataset_quality_contract_service._required_contract_check_by_id(conn, ctx, dataset_id, check_id)
+        self.dataset_quality_contract_service._audit_contract_check_updated(conn, ctx, dataset, before, after)
+        return _contract_check(after)
 
     def _data_contract_version_record(
         self,
@@ -300,7 +388,7 @@ class DatasetQualityApiMixin(DatasetQualityContractMixin):
             status="DRAFT",
             owner_user_id=owner_user_id,
             description=description,
-            checks_snapshot=self._snapshot_contract_checks(conn, ctx, dataset_id),
+            checks_snapshot=self.dataset_quality_contract_service._snapshot_contract_checks(conn, ctx, dataset_id),
             schema_version_id=latest_schema["id"] if latest_schema else None,
             schema_version=int(latest_schema["version"]) if latest_schema else None,
             created_at=_now(),

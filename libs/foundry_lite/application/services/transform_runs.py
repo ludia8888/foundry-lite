@@ -30,9 +30,7 @@ from foundry_lite.application.services.transform_sql_guards import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound, ValidationFailed
-
-SUPPORTED_TRANSFORM_OUTPUT_MODES = ("snapshot", "append")
-TRANSFORM_OUTPUT_MODE_ALIASES = {"incremental": "append"}
+from foundry_lite.domain.transform import output_transaction_type_for_mode
 
 
 @dataclass(frozen=True)
@@ -106,6 +104,7 @@ def start_failed_transform_retry(
     transform_repository: TransformRepository,
 ) -> TransformRunPlan:
     failed_run = _failed_transform_run(conn, ctx, transform_run_id, transform_repository)
+    _claim_failed_run_for_retry(conn, ctx, transform_run_id, transform_repository)
     snapshot = _required_run_definition_snapshot(failed_run, transform_run_id)
     transform = _transform_from_run_snapshot(failed_run, ctx, transform_run_id, snapshot)
     source = _source_from_run_snapshot(snapshot, transform_run_id)
@@ -177,6 +176,28 @@ def _failed_transform_run(
     if row["status"] != "FAILED":
         raise ValidationFailed("transform run is not failed", details={"transform_run_id": transform_run_id})
     return row
+
+
+def _claim_failed_run_for_retry(
+    conn: TransactionContext,
+    ctx: RequestContext,
+    transform_run_id: str,
+    transform_repository: TransformRepository,
+) -> None:
+    # Atomically fence retry: a second retry of the same FAILED run (append-mode
+    # has no snapshot-base guard) would otherwise open a second output-producing
+    # transaction and commit a duplicate output version.
+    claimed = transform_repository.claim_failed_transform_run_for_retry(
+        transaction=conn,
+        tenant_id=ctx.tenant_id,
+        transform_run_id=transform_run_id,
+        claimed_at=_now(),
+    )
+    if not claimed:
+        raise ConflictDetected(
+            "transform run retry already claimed",
+            details={"transform_run_id": transform_run_id},
+        )
 
 
 def _insert_transform_run(
@@ -314,21 +335,6 @@ def _python_entrypoint_parts(entrypoint: str) -> tuple[str, str | None]:
     if separator and not function_name.strip():
         raise ValidationFailed("Python transform entrypoint function is empty", details={"entrypoint": entrypoint})
     return path, function_name.strip() or None
-
-
-def normalize_transform_output_mode(mode: str) -> str:
-    raw = mode.strip().lower()
-    normalized = TRANSFORM_OUTPUT_MODE_ALIASES.get(raw, raw)
-    if normalized in SUPPORTED_TRANSFORM_OUTPUT_MODES:
-        return normalized
-    raise ValidationFailed(
-        "unsupported transform output mode",
-        details={"mode": mode, "supported_modes": ["snapshot", "append", "incremental"]},
-    )
-
-
-def output_transaction_type_for_mode(mode: str) -> str:
-    return "APPEND" if normalize_transform_output_mode(mode) == "append" else "SNAPSHOT"
 
 
 def _definition_snapshot(transform: TransformRow, source: TransformSource) -> dict[str, object]:

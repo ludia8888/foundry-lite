@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from foundry_lite.application.ports import DatasetTransactionRow
+from foundry_lite.application.ports import DatasetTransactionRow, TransactionContext
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.protocols import DatasetRuntimeBoundary
@@ -66,6 +66,7 @@ class DatasetRecoveryService(CoreService):
             )
             if not aborted:
                 return None
+            failed_run_id = self._fail_associated_sync_run(conn, ctx, transaction_id)
             self.runtime_service._audit(
                 conn,
                 ctx,
@@ -73,9 +74,36 @@ class DatasetRecoveryService(CoreService):
                 resource_type="dataset_transaction",
                 resource_id=transaction_id,
                 action="abort_stale_open_transaction",
-                after_ref={"stagingCleanup": staging_cleanup, "abortReason": WATCHDOG_ABORT_REASON},
+                after_ref={
+                    "stagingCleanup": staging_cleanup,
+                    "abortReason": WATCHDOG_ABORT_REASON,
+                    "failedSyncRunId": failed_run_id,
+                },
             )
         return transaction_id
+
+    def _fail_associated_sync_run(
+        self, conn: TransactionContext, ctx: RequestContext, transaction_id: str
+    ) -> str | None:
+        # A crash leaves both the transaction OPEN and its sync_run EXTRACTING;
+        # aborting the transaction without failing the run leaves the run
+        # non-terminal forever (sync_run vs dataset_transaction divergence).
+        sync_run = self.dataset_transaction_repository.sync_run_by_transaction_id(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            transaction_id=transaction_id,
+        )
+        if sync_run is None or sync_run["status"] != "EXTRACTING":
+            return None
+        run_id = str(sync_run["id"])
+        self.dataset_transaction_repository.fail_sync_run(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            sync_run_id=run_id,
+            error={"kind": "ABORTED", "message": "sync run abandoned; recovered by watchdog"},
+            completed_at=_now(),
+        )
+        return run_id
 
     def _claim_watchdog_abort(self, ctx: RequestContext, tx: DatasetTransactionRow) -> DatasetTransactionRow | None:
         if tx["status"] == "ABORTING":

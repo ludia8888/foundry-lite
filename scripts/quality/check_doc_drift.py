@@ -18,6 +18,7 @@ import json
 import re
 import sys
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -397,20 +398,28 @@ def _looks_like_script_basename(reference: str) -> bool:
     return reference.endswith((".py", ".sh", ".yml", ".yaml", ".toml", ".md")) or reference.startswith("check_")
 
 
+@lru_cache(maxsize=8)
+def _path_suffix_index(source_paths: tuple[Path, ...], root: Path) -> frozenset[str]:
+    # Every "/"-aligned suffix of every repo-relative path, so reference
+    # lookups are O(1) instead of rescanning all source paths per reference.
+    suffixes: set[str] = set()
+    for path in source_paths:
+        parts = _repo_relative(path, root=root).split("/")
+        for start in range(len(parts)):
+            suffixes.add("/".join(parts[start:]))
+    return frozenset(suffixes)
+
+
 def _path_exists_by_suffix(reference: str, source_paths: list[Path], *, root: Path) -> bool:
     normalized = reference.strip("/")
     direct = root / normalized
     if direct.exists():
         return True
-    for path in source_paths:
-        rel = _repo_relative(path, root=root)
-        if rel == normalized or rel.endswith(f"/{normalized}"):
-            return True
-        if path.name == normalized:
-            return True
+    suffixes = _path_suffix_index(tuple(source_paths), root)
+    if normalized in suffixes:
+        return True
     if reference.startswith("check_") and "." not in Path(reference).name:
-        script_name = f"{reference}.py"
-        return any(path.name == script_name for path in source_paths)
+        return f"{reference}.py" in suffixes
     return False
 
 

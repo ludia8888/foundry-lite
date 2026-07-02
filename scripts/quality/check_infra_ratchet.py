@@ -234,10 +234,16 @@ def _ci_findings(root: Path) -> list[InfraRatchetFinding]:
     if not ci_path.exists():
         findings.append(_missing_file(ci_path))
     else:
+        # Static checks are wired through the parallel driver the gate invokes,
+        # so the wiring surface is ci_gate.sh plus run_static_checks.py.
+        static_driver_path = root / "scripts" / "quality" / "run_static_checks.py"
+        ci_text = _text(ci_path)
+        if static_driver_path.exists():
+            ci_text = f"{ci_text}\n{_text(static_driver_path)}"
         findings.extend(
             _missing_terms(
                 ci_path,
-                _text(ci_path),
+                ci_text,
                 (
                     "scripts/quality/check_infra_ratchet.py",
                     "scripts/quality/check_checklist_evidence.py",

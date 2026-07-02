@@ -13,12 +13,17 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.osdk_application_artifacts import _request_hash, _with_download_token
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
+from foundry_lite.domain.platform.idempotency import StoredIdempotency, decide_idempotency
 
 
-class OsdkApplicationIdempotencyMixin:
+class OsdkApplicationIdempotencyService(CoreService):
+    required_dependencies = ("osdk_application_repository", "root")
+    required_collaborators = ()
+
     osdk_application_repository: OsdkApplicationRepository
     root: Path
 
@@ -76,8 +81,13 @@ class OsdkApplicationIdempotencyMixin:
         )
         if row is None:
             return None
-        if row["request_hash"] != request_hash:
-            raise ConflictDetected("OSDK Developer Console idempotency key reused with a different request")
+        decision = decide_idempotency(
+            StoredIdempotency(request_hash=str(row["request_hash"]), response=row["response_json"]),
+            request_hash,
+            conflict_message="OSDK Developer Console idempotency key reused with a different request",
+        )
+        if decision == "new":
+            return None
         return row["response_json"]
 
     def _store_idempotency_record(

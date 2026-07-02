@@ -98,6 +98,63 @@ def test_failed_upload_oom_leaves_recoverable_aborted_or_stale_open_tx(tmp_path:
     assert any(event["event_type"] == "dataset.transaction.aborted_by_watchdog" for event in audit_events)
 
 
+def _seed_sync_run(
+    foundry: FoundryLite,
+    dataset_id: str,
+    *,
+    sync_run_id: str,
+    transaction_id: str,
+    status: str = "EXTRACTING",
+) -> None:
+    ctx = demo_admin_context()
+    with foundry.engine.begin() as conn:
+        conn.execute(
+            insert(db.sync_runs).values(
+                id=sync_run_id,
+                tenant_id=ctx.tenant_id,
+                sync_name="raw.events",
+                source_type="csv",
+                output_dataset_id=dataset_id,
+                transaction_id=transaction_id,
+                committed_version_id=None,
+                status=status,
+                error=None,
+                created_at="2026-06-10T00:00:00Z",
+                completed_at=None,
+            )
+        )
+
+
+def test_watchdog_abort_fails_the_associated_sync_run(tmp_path: Path) -> None:
+    # A crash between opening the transaction and committing leaves both the
+    # dataset transaction OPEN and its sync_run EXTRACTING. The watchdog must
+    # move the run to a terminal FAILED state too — otherwise the tx is ABORTED
+    # while the sync_run stays EXTRACTING forever (Tier 1: sync_run status vs
+    # dataset_transaction status divergence).
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("raw.events", ctx=ctx, primary_key=["id"])
+    dataset_id = str(foundry.datasets.get("raw.events", ctx=ctx)["id"])
+    _seed_transaction(foundry, dataset_id, tx_id="dstx_run_stale", created_at="2026-06-10T00:00:00Z")
+    _seed_sync_run(foundry, dataset_id, sync_run_id="sync_stale", transaction_id="dstx_run_stale")
+
+    aborted = foundry.datasets.abort_stale_open_transactions("2026-06-12T00:00:00Z", ctx=ctx)
+
+    with foundry.engine.begin() as conn:
+        tx_row = dict(
+            conn.execute(select(db.dataset_transactions).where(db.dataset_transactions.c.id == "dstx_run_stale"))
+            .mappings()
+            .one()
+        )
+        run_row = dict(conn.execute(select(db.sync_runs).where(db.sync_runs.c.id == "sync_stale")).mappings().one())
+
+    assert aborted == ["dstx_run_stale"]
+    assert tx_row["status"] == "ABORTED"
+    assert run_row["status"] == "FAILED"
+    assert run_row["completed_at"] is not None
+    assert run_row["error"] is not None
+
+
 def test_stale_recovery_skips_cleanup_when_watchdog_claim_loses(tmp_path: Path) -> None:
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
     foundry = FoundryLite(dependencies=dependencies)

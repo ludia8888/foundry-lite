@@ -10,7 +10,7 @@ from foundry_lite.application.ports import DatasetStagedFile, TransactionContext
 from foundry_lite.application.ports.compute_adapter import SqlTransformPlan, TransformExecutionResult, TransformPlan
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.application.services.materialization_service import MaterializationRunPlan, MaterializationService
-from foundry_lite.application.services.transform_service import TransformService
+from foundry_lite.application.services.transform_run_service import TransformRunService
 from foundry_lite.domain.context import RequestContext, demo_admin_context
 from foundry_lite.domain.errors import ConflictDetected, ExternalSystemError, InvariantViolation, ValidationFailed
 from foundry_lite.infrastructure import schema as db
@@ -358,6 +358,54 @@ def test_transform_retry_after_commit_does_not_create_second_output_version(tmp_
     assert [version["id"] for version in versions] == [first.version_id]
 
 
+def test_transform_append_retry_is_fenced_against_double_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An append-mode transform has no snapshot-base guard, so two retries of the
+    # same FAILED run would each open an output-producing transaction and commit
+    # a duplicate output version (Tier 1: transform retry creates two outputs).
+    # The retry claim must be atomically fenced: only the first retry runs.
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "append-retry-fence")
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("raw.fence_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.fence_orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv("raw.fence_orders", _csv(tmp_path, "fence_orders.csv", "O-1", 100), ctx=ctx)
+    sql_path = tmp_path / "fence_orders.sql"
+    sql_path.write_text("select order_id, amount from {{ input('raw.fence_orders') }}", encoding="utf-8")
+    foundry.transforms.register(
+        "fence_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.fence_orders"},
+        output_dataset_ref="clean.fence_orders",
+        mode="append",
+        ctx=ctx,
+    )
+
+    # Force the first run to FAIL after the output commit via a lineage failure,
+    # leaving a FAILED run whose cause is gone once the patch is undone.
+    def fail_lineage(self: TransformRunService, *_args: object) -> None:
+        del self, _args
+        raise RuntimeError("lineage insert exploded after output commit")
+
+    monkeypatch.setattr(TransformRunService, "_record_transform_lineage", fail_lineage)
+    with pytest.raises(InvariantViolation, match="dataset commit metadata persistence failed"):
+        foundry.transforms.run("fence_orders", ctx=ctx)
+    monkeypatch.undo()
+
+    failed_run = next(
+        run for run in foundry.operations.list_runs(ctx=ctx)["transformRuns"] if run["status"] == "FAILED"
+    )
+
+    foundry.transforms.retry_run(failed_run["id"], ctx=ctx)
+    with pytest.raises(ConflictDetected, match="retry already claimed"):
+        foundry.transforms.retry_run(failed_run["id"], ctx=ctx)
+
+    versions = foundry.datasets.list_versions("clean.fence_orders", ctx=ctx)
+    assert len(versions) == 1
+
+
 def test_transform_output_and_lineage_commit_atomically(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -380,11 +428,11 @@ def test_transform_output_and_lineage_commit_atomically(
         ctx=ctx,
     )
 
-    def fail_lineage(self: TransformService, *_args: object) -> None:
+    def fail_lineage(self: TransformRunService, *_args: object) -> None:
         del self, _args
         raise RuntimeError("lineage insert exploded after output commit")
 
-    monkeypatch.setattr(TransformService, "_record_transform_lineage", fail_lineage)
+    monkeypatch.setattr(TransformRunService, "_record_transform_lineage", fail_lineage)
 
     with pytest.raises(InvariantViolation, match="dataset commit metadata persistence failed") as exc_info:
         foundry.transforms.run("atomic_orders", ctx=ctx)

@@ -1,41 +1,213 @@
-"""Application service helpers for indexing rebuild service workflows."""
+"""Object-index rebuild use-case service."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 
 from foundry_lite.application.ports import (
-    ObjectConflictRecord,
+    ObjectIndexRebuildResult,
     ObjectIndexRepository,
+    ObjectIndexShadowRebuildResult,
     ObjectPropertyMap,
-    ObjectRecordInsert,
     ObjectRecordRow,
     ObjectRecordSourceDeletion,
-    ObjectRecordSourceUpdate,
     ObjectTypeRow,
     PropertyTypeRow,
     TabularRow,
     TransactionContext,
 )
-from foundry_lite.application.primitives import _json_hash, _new_id, _now
-from foundry_lite.application.services.object_store.indexing_link_service import ObjectIndexingLinkMixin
+from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.indexing_link_service import ObjectLinkIndexingService
 from foundry_lite.application.services.object_store.indexing_protocols import (
+    IndexDatasetRegistry,
+    IndexDatasetTransactionFiles,
+    IndexDatasetVersions,
+    IndexObjectRecords,
     IndexOntologyLookup,
     IndexRuntimeBoundary,
 )
+from foundry_lite.application.services.object_store.indexing_record_factory import new_object_record_insert
+from foundry_lite.application.services.object_store.indexing_record_mutations import ObjectIndexRecordMutationService
+from foundry_lite.application.services.object_store.indexing_runs import (
+    _start_failed_index_replay_plan,
+    _start_index_rebuild_plan,
+)
+from foundry_lite.application.services.object_store.indexing_shadow_service import ObjectIndexShadowService
 from foundry_lite.application.services.object_store.indexing_types import (
     ObjectIndexRebuildCounts,
     ObjectIndexRebuildPlan,
     ObjectIndexSourceRow,
+    object_index_rebuild_response,
+    object_index_shadow_response,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.object_store.indexing import (
+    SOURCE_MISSING_DELETION_REASON,
+    require_unique_source_object_ids,
+    should_delete_missing_source_item,
+    should_emit_source_object_change,
+)
 
 
-class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
+class ObjectIndexRebuildService(CoreService):
+    """Runs snapshot/shadow object-index rebuild use cases."""
+
+    required_dependencies = ("engine", "compute_adapter", "object_index_repository")
+    required_collaborators = (
+        "dataset_registry_service",
+        "dataset_transaction_service",
+        "dataset_version_service",
+        "object_index_record_mutation_service",
+        "object_index_shadow_service",
+        "object_link_indexing_service",
+        "object_records_service",
+        "ontology_service",
+        "runtime_service",
+    )
+    dataset_registry_service: IndexDatasetRegistry
+    dataset_transaction_service: IndexDatasetTransactionFiles
+    dataset_version_service: IndexDatasetVersions
+    object_index_record_mutation_service: ObjectIndexRecordMutationService
+    object_index_shadow_service: ObjectIndexShadowService
+    object_link_indexing_service: ObjectLinkIndexingService
+    object_records_service: IndexObjectRecords
     object_index_repository: ObjectIndexRepository
     ontology_service: IndexOntologyLookup
     runtime_service: IndexRuntimeBoundary
+
+    def index_rebuild(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> ObjectIndexRebuildResult:
+        ctx = ctx or RequestContext()
+        self._require_object_index(ctx, "object_type", object_type_api_name)
+        self._require_write_traffic(ctx, "index_rebuild", "object_type", object_type_api_name)
+        with self.engine.begin() as conn:
+            plan = _start_index_rebuild_plan(
+                conn=conn,
+                ctx=ctx,
+                object_type_api_name=object_type_api_name,
+                dataset_registry_service=self.dataset_registry_service,
+                dataset_version_service=self.dataset_version_service,
+                ontology_service=self.ontology_service,
+                object_index_repository=self.object_index_repository,
+            )
+        return self._run_rebuild_plan(ctx, plan)
+
+    def index_shadow_rebuild(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        expected_count: int | None = None,
+        expected_hash: str | None = None,
+    ) -> ObjectIndexShadowRebuildResult:
+        ctx = ctx or RequestContext()
+        self._require_object_index(ctx, "object_type", object_type_api_name)
+        self._require_write_traffic(ctx, "index_shadow_rebuild", "object_type", object_type_api_name)
+        with self.engine.begin() as conn:
+            plan = _start_index_rebuild_plan(
+                conn=conn,
+                ctx=ctx,
+                object_type_api_name=object_type_api_name,
+                dataset_registry_service=self.dataset_registry_service,
+                dataset_version_service=self.dataset_version_service,
+                ontology_service=self.ontology_service,
+                object_index_repository=self.object_index_repository,
+                mode="shadow",
+            )
+        return self._run_shadow_rebuild_plan(ctx, plan, expected_count, expected_hash)
+
+    def index_replay_run(
+        self,
+        index_run_id: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> ObjectIndexRebuildResult:
+        ctx = ctx or RequestContext()
+        self._require_object_index(ctx, "index_run", index_run_id)
+        self.runtime_service._require_or_audit(ctx, "operations:retry", "index_run", index_run_id)
+        self._require_write_traffic(ctx, "index_replay_run", "index_run", index_run_id)
+        with self.engine.begin() as conn:
+            plan = _start_failed_index_replay_plan(
+                conn=conn,
+                ctx=ctx,
+                index_run_id=index_run_id,
+                dataset_version_service=self.dataset_version_service,
+                ontology_service=self.ontology_service,
+                object_index_repository=self.object_index_repository,
+            )
+        return self._run_rebuild_plan(ctx, plan)
+
+    def _run_rebuild_plan(self, ctx: RequestContext, plan: ObjectIndexRebuildPlan) -> ObjectIndexRebuildResult:
+        try:
+            rows = self._read_index_source_rows(plan)
+            with self.engine.begin() as conn:
+                counts = self._persist_index_rebuild(conn, ctx, plan, rows)
+                self._finish_index_rebuild(conn, ctx, plan, counts)
+            return object_index_rebuild_response(plan, counts)
+        except Exception as exc:
+            self._fail_index_run(ctx, plan.run_id, exc)
+            raise
+
+    def _run_shadow_rebuild_plan(
+        self,
+        ctx: RequestContext,
+        plan: ObjectIndexRebuildPlan,
+        expected_count: int | None,
+        expected_hash: str | None,
+    ) -> ObjectIndexShadowRebuildResult:
+        try:
+            rows = self._read_index_source_rows(plan)
+            with self.engine.begin() as conn:
+                counts = self._persist_index_rebuild(conn, ctx, plan, rows)
+                validation = self.object_index_shadow_service.validate_shadow_index(
+                    conn,
+                    ctx,
+                    plan,
+                    expected_count,
+                    expected_hash,
+                )
+                self.object_index_shadow_service.switch_shadow_index(conn, ctx, plan, counts, validation)
+            return object_index_shadow_response(plan, counts, validation)
+        except Exception as exc:
+            self._fail_index_run(ctx, plan.run_id, exc)
+            raise
+
+    def _require_object_index(self, ctx: RequestContext, resource_type: str, resource_id: str) -> None:
+        self.runtime_service._require_or_audit(ctx, "object:index", resource_type, resource_id)
+
+    def _require_write_traffic(
+        self,
+        ctx: RequestContext,
+        operation: str,
+        resource_type: str,
+        resource_id: str,
+    ) -> None:
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation=operation,
+            resource_type=resource_type,
+            resource_id=resource_id,
+        )
+
+    def _read_index_source_rows(self, plan: ObjectIndexRebuildPlan) -> Sequence[TabularRow]:
+        parquet_path = self.dataset_transaction_service._version_file_path(plan.dataset_version)
+        return self.compute_adapter.rows_from_parquet(parquet_path)
+
+    def _fail_index_run(
+        self,
+        ctx: RequestContext,
+        run_id: str,
+        exc: Exception,
+        adapter: str = "compute_adapter.rows_from_parquet",
+    ) -> None:
+        with self.engine.begin() as conn:
+            self.object_index_record_mutation_service.mark_index_run_failed(conn, ctx, run_id, exc, adapter)
 
     def _persist_index_rebuild(
         self,
@@ -47,13 +219,17 @@ class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
         objects_upserted = 0
         source_object_ids: set[str] = set()
         source_rows = self._source_rows_from_dataset_rows(conn, plan, rows)
-        _require_unique_source_object_ids(plan, source_rows)
+        require_unique_source_object_ids(
+            plan.object_type_api_name,
+            [source.object_id for source in source_rows],
+            source_dataset_version_id=plan.source_dataset_version_id,
+        )
         for source in source_rows:
             source_object_ids.add(source.object_id)
             self._index_object_source_row(conn, ctx, plan, source)
             objects_upserted += 1
         objects_deleted = self._delete_missing_source_records(conn, ctx, plan, source_object_ids)
-        links_upserted = self._index_links_for_object_type(conn, ctx, plan, rows)
+        links_upserted = self.object_link_indexing_service._index_links_for_object_type(conn, ctx, plan, rows)
         return ObjectIndexRebuildCounts(len(rows), objects_upserted, objects_deleted, links_upserted)
 
     def _source_rows_from_dataset_rows(
@@ -85,8 +261,8 @@ class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
             changed = True
         else:
             changed = self._refresh_existing_object_record(conn, ctx, plan, source, existing, active)
-        if changed and plan.mode == "full":
-            self._emit_object_changed(
+        if should_emit_source_object_change(is_changed=changed, index_mode=plan.mode):
+            self.object_index_record_mutation_service.emit_object_changed(
                 conn,
                 ctx,
                 plan.object_type["api_name"],
@@ -101,8 +277,6 @@ class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
         plan: ObjectIndexRebuildPlan,
         source_object_ids: set[str],
     ) -> int:
-        if plan.mode != "full":
-            return 0
         records = self.object_index_repository.object_records_for_index_version(
             transaction=conn,
             tenant_id=ctx.tenant_id,
@@ -111,7 +285,11 @@ class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
         )
         deleted_count = 0
         for record in records:
-            if record["deleted"] or str(record["object_id"]) in source_object_ids:
+            if not should_delete_missing_source_item(
+                is_deleted=bool(record["deleted"]),
+                is_present_in_source=str(record["object_id"]) in source_object_ids,
+                index_mode=plan.mode,
+            ):
                 continue
             self._mark_source_missing_record_deleted(conn, ctx, plan, record)
             deleted_count += 1
@@ -132,11 +310,17 @@ class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
                 tenant_id=ctx.tenant_id,
                 source_dataset_version_id=plan.source_dataset_version_id,
                 object_version=int(record["object_version"]) + 1,
-                deletion_reason="source_missing",
+                deletion_reason=SOURCE_MISSING_DELETION_REASON,
                 updated_at=_now(),
             ),
         )
-        self._emit_object_changed(conn, ctx, plan.object_type["api_name"], object_id, plan.source_dataset_version_id)
+        self.object_index_record_mutation_service.emit_object_changed(
+            conn,
+            ctx,
+            plan.object_type["api_name"],
+            object_id,
+            plan.source_dataset_version_id,
+        )
 
     def _source_row_from_dataset_row(
         self,
@@ -162,7 +346,7 @@ class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
         object_type_api_name: str,
         object_id: str,
     ) -> ObjectRecordRow | None:
-        raise NotImplementedError
+        return self.object_records_service._object_record(conn, ctx, object_type_api_name, object_id)
 
     def _base_patch_from_dataset_row(
         self,
@@ -190,30 +374,23 @@ class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
         base_patch = dict(source.base_patch)
         edit_properties = dict(active["edit_properties"]) if active is not None else {}
         property_versions = dict(active["property_versions"]) if active is not None else None
-        current = self._merge_properties(conn, plan.object_type["id"], base_patch, edit_properties)
-        current_properties = dict(current)
-        now = _now()
+        current = self.object_index_record_mutation_service.merge_properties(
+            conn,
+            plan.object_type["id"],
+            base_patch,
+            edit_properties,
+        )
         self.object_index_repository.insert_object_record(
             transaction=conn,
-            record=ObjectRecordInsert(
-                record_id=_new_id("obj"),
-                tenant_id=ctx.tenant_id,
-                object_type_id=plan.object_type["id"],
-                object_type_api_name=plan.object_type["api_name"],
-                object_id=source.object_id,
-                properties=current_properties,
-                base_properties=base_patch,
-                edit_properties=edit_properties,
-                property_versions=property_versions or {key: 1 for key in current_properties},
-                source_dataset_version_id=plan.source_dataset_version_id,
-                source_hash=_json_hash(base_patch),
-                object_version=active["object_version"] if active is not None else 1,
-                deleted=False,
-                deletion_reason=None,
-                created_at=now,
-                updated_at=now,
-                index_version=plan.index_version,
-                is_active=plan.mode == "full",
+            record=new_object_record_insert(
+                ctx,
+                plan,
+                source,
+                active,
+                base_patch,
+                edit_properties,
+                property_versions,
+                current,
             ),
         )
 
@@ -228,10 +405,15 @@ class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
     ) -> bool:
         base_patch = dict(source.base_patch)
         edit_source = active or existing
-        current = self._merge_properties(conn, plan.object_type["id"], base_patch, edit_source["edit_properties"])
+        current = self.object_index_record_mutation_service.merge_properties(
+            conn,
+            plan.object_type["id"],
+            base_patch,
+            edit_source["edit_properties"],
+        )
         if self._reindex_is_noop(plan, existing, base_patch, current):
             return False
-        self._record_conflicts_for_base_update(
+        self.object_index_record_mutation_service.record_conflicts_for_base_update(
             conn,
             ctx,
             plan.object_type,
@@ -240,7 +422,14 @@ class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
             base_patch,
             source_dataset_version_id=plan.source_dataset_version_id,
         )
-        self._update_object_record_from_source(conn, ctx, existing, current, base_patch, plan.source_dataset_version_id)
+        self.object_index_record_mutation_service.update_object_record_from_source(
+            conn,
+            ctx,
+            existing,
+            current,
+            base_patch,
+            plan.source_dataset_version_id,
+        )
         return True
 
     def _reindex_is_noop(
@@ -259,147 +448,29 @@ class ObjectIndexingRebuildMixin(ObjectIndexingLinkMixin):
             and dict(current) == existing["properties"]
         )
 
-    def _emit_object_changed(
+    def _finish_index_rebuild(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
-        object_type_api_name: str,
-        object_id: str,
-        source_dataset_version_id: str,
+        plan: ObjectIndexRebuildPlan,
+        counts: ObjectIndexRebuildCounts,
     ) -> None:
-        self.runtime_service._outbox(
+        self.object_index_record_mutation_service.mark_index_run_succeeded(conn, ctx, plan.run_id, counts)
+        self._audit_index_rebuild(conn, ctx, plan, counts)
+
+    def _audit_index_rebuild(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        plan: ObjectIndexRebuildPlan,
+        counts: ObjectIndexRebuildCounts,
+    ) -> None:
+        self.runtime_service._audit(
             conn,
             ctx,
-            "object.changed",
-            "object",
-            f"{object_type_api_name}/{object_id}",
-            {"objectType": object_type_api_name, "objectId": object_id},
-            idempotency_key=f"{source_dataset_version_id}:{object_type_api_name}:{object_id}",
-            correlation_id=source_dataset_version_id,
+            event_type="object.index.rebuilt",
+            resource_type="object_type",
+            resource_id=plan.object_type["id"],
+            action="index_rebuild",
+            after_ref={"objects_upserted": counts.objects_upserted},
         )
-
-    def _record_conflicts_for_base_update(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type: ObjectTypeRow,
-        object_id: str,
-        existing: ObjectRecordRow,
-        base_patch: ObjectPropertyMap,
-        source_dataset_version_id: str,
-    ) -> None:
-        for prop in self.ontology_service._properties_for_object_type(conn, object_type["id"]):
-            if prop["edit_policy"] != "conflict_requires_review":
-                continue
-            self._insert_conflict_if_needed(
-                conn,
-                ctx,
-                object_type,
-                object_id,
-                existing,
-                base_patch,
-                prop,
-                source_dataset_version_id,
-            )
-
-    def _insert_conflict_if_needed(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type: ObjectTypeRow,
-        object_id: str,
-        existing: ObjectRecordRow,
-        base_patch: ObjectPropertyMap,
-        prop: PropertyTypeRow,
-        source_dataset_version_id: str,
-    ) -> None:
-        api_name = prop["api_name"]
-        if api_name not in existing["edit_properties"]:
-            return
-        if existing["edit_properties"][api_name] == base_patch.get(api_name):
-            return
-        self.object_index_repository.insert_object_conflict(
-            transaction=conn,
-            record=ObjectConflictRecord(
-                conflict_id=_new_id("conflict"),
-                tenant_id=ctx.tenant_id,
-                object_type_id=object_type["id"],
-                object_id=object_id,
-                property_api_name=api_name,
-                source_value=base_patch.get(api_name),
-                edit_value=existing["edit_properties"][api_name],
-                source_dataset_version_id=source_dataset_version_id,
-                edit_id=None,
-                status="open",
-                created_at=_now(),
-            ),
-        )
-
-    def _merge_properties(
-        self,
-        conn: TransactionContext,
-        object_type_id: str,
-        base: ObjectPropertyMap,
-        edits: ObjectPropertyMap,
-    ) -> ObjectPropertyMap:
-        current: dict[str, object] = {}
-        for prop in self.ontology_service._properties_for_object_type(conn, object_type_id):
-            name = prop["api_name"]
-            policy = prop["edit_policy"]
-            if policy == "edit_only":
-                if name in edits:
-                    current[name] = edits[name]
-            elif policy in {"edit_wins", "conflict_requires_review"}:
-                current[name] = edits[name] if name in edits else base.get(name)
-            elif policy == "source_wins":
-                current[name] = base[name] if name in base else edits.get(name)
-            else:
-                current[name] = base.get(name)
-        return current
-
-    def _update_object_record_from_source(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        existing: ObjectRecordRow,
-        properties: ObjectPropertyMap,
-        base_properties: ObjectPropertyMap,
-        source_dataset_version_id: str,
-    ) -> None:
-        current_properties = dict(properties)
-        current_base_properties = dict(base_properties)
-        self.object_index_repository.update_object_record_from_source(
-            transaction=conn,
-            record=ObjectRecordSourceUpdate(
-                record_id=existing["id"],
-                tenant_id=ctx.tenant_id,
-                properties=current_properties,
-                base_properties=current_base_properties,
-                source_dataset_version_id=source_dataset_version_id,
-                source_hash=_json_hash(current_base_properties),
-                object_version=existing["object_version"] + 1,
-                updated_at=_now(),
-            ),
-        )
-
-
-def _require_unique_source_object_ids(
-    plan: ObjectIndexRebuildPlan,
-    source_rows: Sequence[ObjectIndexSourceRow],
-) -> None:
-    seen: set[str] = set()
-    duplicates: set[str] = set()
-    for source in source_rows:
-        if source.object_id in seen:
-            duplicates.add(source.object_id)
-        seen.add(source.object_id)
-    if not duplicates:
-        return
-    raise ValidationFailed(
-        "object source snapshot contains duplicate primary keys",
-        details={
-            "objectType": plan.object_type_api_name,
-            "sourceDatasetVersionId": plan.source_dataset_version_id,
-            "duplicateObjectIds": sorted(duplicates),
-        },
-    )

@@ -16,6 +16,7 @@ from foundry_lite.application.ports.ai_run_repository import (
     AiUsageLedgerRecord,
 )
 from foundry_lite.application.services.ai_operations_payload import ai_operations_payload
+from foundry_lite.application.services.runtime_evidence_service import RuntimeEvidenceService
 from foundry_lite.application.services.runtime_service import RuntimeService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.infrastructure import schema as db
@@ -36,14 +37,21 @@ def test_ai_operations_run_list_and_detail_expose_safe_ledger_trace() -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     db.create_database(engine)
     ai_repository = SqlAlchemyAiRunRepository(engine)
+    runtime_repository = SqlAlchemyRuntimeRepository(engine)
+    policy = PolicyService(allow_unwired_classification_provider=True)
     _seed_ai_ledger(ai_repository, engine)
     service = RuntimeService(
         engine=engine,
-        policy=PolicyService(allow_unwired_classification_provider=True),
-        runtime_repository=SqlAlchemyRuntimeRepository(engine),
+        policy=policy,
+        runtime_repository=runtime_repository,
         ai_run_repository=ai_repository,
         dataset_transaction_repository=SqlAlchemyDatasetTransactionRepository(engine),
         dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),
+    )
+    service.evidence_service = RuntimeEvidenceService(
+        engine=engine,
+        policy=policy,
+        runtime_repository=runtime_repository,
     )
 
     listed = service.query_runs(ctx=_CTX, run_type="ai", limit=1)

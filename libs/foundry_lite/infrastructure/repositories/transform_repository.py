@@ -17,7 +17,7 @@ from foundry_lite.application.ports.transform_repository import (
     TransformRunRow,
 )
 from foundry_lite.infrastructure import schema as db
-from foundry_lite.infrastructure.repositories.status_cas import cas_status_update
+from foundry_lite.infrastructure.repositories.status_cas import cas_status_guarded_update, cas_status_update
 
 
 class SqlAlchemyTransformRepository:
@@ -165,6 +165,24 @@ class SqlAlchemyTransformRepository:
             .first()
         )
         return cast(TransformRunRow, dict(row)) if row else None
+
+    def claim_failed_transform_run_for_retry(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transform_run_id: str,
+        claimed_at: str,
+    ) -> bool:
+        return cas_status_guarded_update(
+            transaction,
+            db.transform_runs,
+            tenant_id=tenant_id,
+            row_id=transform_run_id,
+            allowed_statuses=("FAILED",),
+            values={"retried_at": claimed_at},
+            conditions=[db.transform_runs.c.retried_at.is_(None)],
+        )
 
     def insert_transform_run(self, *, transaction: Any, record: TransformRunRecord) -> None:
         transaction.execute(

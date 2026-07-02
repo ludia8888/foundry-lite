@@ -30,6 +30,7 @@ from foundry_lite.application.ports import (
     TransformRepository,
     WorkflowAdapter,
 )
+from foundry_lite.application.ports.backup_artifact_store import BackupArtifactStore
 from foundry_lite.application.ports.citation_source import CitationSourceVerifier
 from foundry_lite.application.ports.completion_model import CompletionModelAdapter
 from foundry_lite.application.ports.content_index import ContentIndexAdapter
@@ -63,10 +64,19 @@ from foundry_lite.security.tenant_context import bind_tenant_context_public_meth
 CollaboratorMap = Mapping[str, object]
 
 SERVICE_COLLABORATORS: Mapping[str, str] = {
+    "action_apply_service": "ActionApplyService",
     "action_service": "ActionService",
+    "action_validation_service": "ActionValidationService",
+    "action_writeback_service": "ActionWritebackService",
     "agent_runtime_service": "AgentRuntimeService",
     "action_proposal_service": "ActionProposalService",
+    "backup_restore_artifact_execution_service": "BackupRestoreArtifactExecutionService",
+    "backup_restore_artifact_restore_service": "BackupRestoreArtifactRestoreService",
+    "backup_restore_artifact_service": "BackupRestoreArtifactService",
+    "backup_restore_mode_service": "BackupRestoreModeService",
+    "backup_restore_preflight_service": "BackupRestorePreflightService",
     "backup_restore_service": "BackupRestoreService",
+    "backup_restore_validation_service": "BackupRestoreValidationService",
     "builder_runtime_service": "BuilderRuntimeService",
     "citation_service": "CitationService",
     "connector_onboarding_service": "ConnectorOnboardingService",
@@ -78,7 +88,10 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "media_transaction_service": "MediaTransactionService",
     "media_upload_service": "MediaUploadService",
     "dataset_ingest_service": "DatasetIngestService",
-    "dataset_quality_service": "DatasetQualityService",
+    "dataset_quality_api_service": "DatasetQualityApiService",
+    "dataset_quality_contract_service": "DatasetQualityContractService",
+    "dataset_quality_runtime_service": "DatasetQualityRuntimeService",
+    "dataset_quality_service": "DatasetQualityRuntimeService",
     "dataset_registry_service": "DatasetRegistryService",
     "dataset_transaction_service": "DatasetTransactionService",
     "dataset_version_service": "DatasetVersionService",
@@ -89,20 +102,39 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "model_gateway_service": "ModelGatewayService",
     "prompt_artifact_service": "PromptArtifactService",
     "materialization_service": "MaterializationService",
+    "object_cdc_indexing_service": "ObjectCdcIndexingService",
     "object_indexing_service": "ObjectIndexingService",
+    "object_index_rebuild_service": "ObjectIndexRebuildService",
+    "object_index_record_mutation_service": "ObjectIndexRecordMutationService",
+    "object_index_shadow_service": "ObjectIndexShadowService",
+    "object_link_indexing_service": "ObjectLinkIndexingService",
     "object_links_service": "ObjectLinksService",
+    "object_ontology_reindex_service": "ObjectOntologyReindexService",
     "object_query_service": "ObjectQueryService",
     "object_records_service": "ObjectRecordsService",
     "object_search_service": "ObjectSearchService",
     "object_sets_service": "ObjectSetsService",
     "object_subscription_service": "ObjectSubscriptionService",
+    "osdk_application_client_service": "OsdkApplicationClientService",
+    "osdk_application_idempotency_service": "OsdkApplicationIdempotencyService",
+    "osdk_application_scope_service": "OsdkApplicationScopeService",
+    "ontology_activation_service": "OntologyActivationService",
+    "ontology_catalog_service": "OntologyCatalogService",
+    "ontology_lookup_service": "OntologyLookupService",
+    "ontology_reindex_contract_service": "OntologyReindexContractService",
     "ontology_service": "OntologyService",
     "osdk_application_service": "OsdkApplicationService",
+    "osdk_application_sdk_service": "OsdkApplicationSdkService",
     "osdk_oauth_session_service": "OsdkOAuthSessionService",
     "outbox_publisher_service": "OutboxPublisherService",
     "record_dlq_service": "RecordDlqService",
     "runtime_service": "RuntimeService",
     "tool_broker_service": "ToolBrokerService",
+    "transform_definition_service": "TransformDefinitionService",
+    "transform_dlq_replay_service": "TransformDlqReplayService",
+    "transform_graph_service": "TransformGraphService",
+    "transform_run_service": "TransformRunService",
+    "transform_scheduler_service": "TransformSchedulerService",
     "transform_service": "TransformService",
     "visual_builder_service": "VisualBuilderService",
     "workflow_orchestration_service": "WorkflowOrchestrationService",
@@ -125,6 +157,7 @@ class CoreService:
 
     root: Path
     storage_root: Path
+    backup_artifact_store: BackupArtifactStore
     compute_adapter: ComputeAdapter
     connector_adapter: ConnectorAdapter
     connector_registry_repository: ConnectorRegistryRepository

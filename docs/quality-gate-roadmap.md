@@ -76,6 +76,8 @@
 | 20  | required_collaborators 명시     | `check_service_dependencies`            | 선언/사용 일치               | ✅   |
 | 21  | 소유 service 명시 호출          | `check_service_call_graph`              | cycle 0, depth≤7, fan-out≤10 | ✅   |
 | 22  | Strategy/Specification 테스트성 | `check_strategy_specification_tests.py` | missing direct test 0        | ✅   |
+| 22.1 | 새 service/facade Mixin 성장 금지 | `check_no_service_mixin_growth.py`     | allowlist 밖 Mixin 0         | ✅   |
+| 22.2 | Domain rule 직접 테스트성       | `check_domain_rule_tests.py`            | missing direct domain test 0 | ✅   |
 
 ### §4.3 Scale Foundation
 
@@ -181,11 +183,11 @@
 
 | 상태                | 개수   | 비율     |
 | ------------------- | ------ | -------- |
-| ✅ 강제             | 54     | 82%      |
+| ✅ 강제             | 56     | 82%      |
 | △ 부분              | 12     | 18%      |
 | ❌ 미강제           | 0      | 0%       |
 | ⏳ 미해당 (구현 전) | 0      | 0%       |
-| **합계**            | **66** | **100%** |
+| **합계**            | **68** | **100%** |
 
 **현재 게이트는 문서 약속의 약 82%를 정량적으로 완전 강제하고, 나머지 18%는
 부분 강제한다.** 직접 미강제(❌) 조항은 0개이며, 다음 목표는 △ 부분 강제 항목을
@@ -562,7 +564,7 @@ Self-test: `tests/unit/test_quality_data_platform_sprint_status.py`가 현재 re
 ### Tier G15A — schema revision guard (✅ 완료 2026-06-11)
 
 `scripts/quality/check_schema_revision_guard.py`는
-`libs/foundry_lite/infrastructure/schema.py`의 SQLAlchemy metadata를 정규화해
+`libs/foundry_lite/infrastructure/schema` 패키지의 SQLAlchemy metadata를 정규화해
 fingerprint를 만들고, 최신 `infra/schema_revisions/*.json` snapshot과 비교한다.
 비개발자 관점으로 말하면, DB 설계도를 바꿨는데 변경 이력 도장을 찍지 않는 일을
 release gate에서 막는 장치다.
@@ -597,7 +599,7 @@ AST로 읽고 tenant-scoped table에 대한 insert/update/delete가 tenant bound
 
 검사 기준:
 
-- `schema.py`에서 `Column("tenant_id", ...)`를 가진 table을 tenant-scoped table로 본다.
+- `libs/foundry_lite/infrastructure/schema` 패키지에서 `Column("tenant_id", ...)`를 가진 table을 tenant-scoped table로 본다.
 - tenant-scoped `insert(table)`는 `.values(tenant_id=...)`를 가져야 한다.
 - `update(table)`와 `delete(table)`는 `.where(...)` 안에 `tenant_id` 조건을 가져야 한다.
 - dynamic table update/delete도 tenant where guard가 없으면 fail한다.

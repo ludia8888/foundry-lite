@@ -1,83 +1,42 @@
-"""Application service helpers for transform service workflows."""
+"""Compatibility entrypoint for the Transform bounded context."""
 
 from __future__ import annotations
 
-import hashlib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from foundry_lite.application.ports import (
-    DatasetTransactionRepository,
-    DatasetTransactionRow,
-    TransactionContext,
     TransformCheck,
-    TransformExecutionResult,
     TransformRecordDlqRetryResult,
     TransformRetryResult,
     TransformRow,
 )
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.transform_definition_registration import TransformDefinitionRegistrationMixin
-from foundry_lite.application.services.transform_execution_mixin import TransformExecutionMixin
-from foundry_lite.application.services.transform_graph import TransformGraphMixin
-from foundry_lite.application.services.transform_protocols import (
-    TransformDatasetRegistry,
-    TransformDatasetTransactions,
-    TransformDatasetVersions,
-    TransformRuntimeBoundary,
-)
-from foundry_lite.application.services.transform_protocols import (
-    require_transform_write_open as require_write_open,
-)
-from foundry_lite.application.services.transform_record_dlq import transform_dead_letter_summary
-from foundry_lite.application.services.transform_record_dlq_replay import retry_transform_record_dlq
-from foundry_lite.application.services.transform_runs import (
-    TransformRunPlan,
-    mark_transform_run_succeeded,
-    normalize_transform_output_mode,
-    start_failed_transform_retry,
-    start_transform_run,
-    validate_sql_transform_uses_declared_inputs,
-)
-from foundry_lite.application.services.transform_scheduler_mixin import TransformSchedulerMixin
-from foundry_lite.application.services.transform_watermarks import transform_output_platform_watermark
+from foundry_lite.application.services.transform_definition_service import TransformDefinitionService
+from foundry_lite.application.services.transform_dlq_replay_service import TransformDlqReplayService
+from foundry_lite.application.services.transform_graph import TransformGraphService
+from foundry_lite.application.services.transform_run_service import TransformRunService
+from foundry_lite.application.services.transform_scheduler_service import TransformSchedulerService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import (
-    ConflictDetected,
-    DatasetCommitBlocked,
-    InvariantViolation,
-    NotFound,
-    ValidationFailed,
-)
 
 
-class TransformService(
-    TransformExecutionMixin,
-    TransformSchedulerMixin,
-    TransformDefinitionRegistrationMixin,
-    TransformGraphMixin,
-    CoreService,
-):
-    required_dependencies = (
-        "root",
-        "engine",
-        "policy",
-        "compute_adapter",
-        "dataset_transaction_repository",
-        "transform_repository",
-    )
+class TransformService(CoreService):
+    """Stable public service entrypoint that delegates to focused use cases."""
+
+    required_dependencies = ()
     required_collaborators = (
-        "dataset_registry_service",
-        "dataset_transaction_service",
-        "dataset_version_service",
-        "runtime_service",
+        "transform_definition_service",
+        "transform_dlq_replay_service",
+        "transform_graph_service",
+        "transform_run_service",
+        "transform_scheduler_service",
     )
-    dataset_registry_service: TransformDatasetRegistry
-    dataset_transaction_service: TransformDatasetTransactions
-    dataset_version_service: TransformDatasetVersions
-    runtime_service: TransformRuntimeBoundary
-    dataset_transaction_repository: DatasetTransactionRepository
+    transform_definition_service: TransformDefinitionService
+    transform_dlq_replay_service: TransformDlqReplayService
+    transform_graph_service: TransformGraphService
+    transform_run_service: TransformRunService
+    transform_scheduler_service: TransformSchedulerService
 
     def register_transform(
         self,
@@ -91,16 +50,13 @@ class TransformService(
         mode: str = "snapshot",
         language: str = "sql",
     ) -> TransformRow:
-        ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
-        require_write_open(self.runtime_service, ctx, "register_transform", "transform", api_name)
-        return self._register_transform_definition(
-            ctx,
+        return self.transform_definition_service.register_transform(
             api_name,
             entrypoint=entrypoint,
             inputs=inputs,
             output_dataset_ref=output_dataset_ref,
             checks=checks,
+            ctx=ctx,
             mode=mode,
             language=language,
         )
@@ -116,158 +72,49 @@ class TransformService(
         ctx: RequestContext | None = None,
         mode: str = "snapshot",
     ) -> TransformRow:
-        ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
-        require_write_open(self.runtime_service, ctx, "register_sql_transform", "transform", api_name)
-        entrypoint = self._write_registered_sql(ctx, api_name, sql)
-        return self._register_transform_definition(
-            ctx,
+        return self.transform_definition_service.register_sql_transform(
             api_name,
-            entrypoint=entrypoint,
+            sql=sql,
             inputs=inputs,
             output_dataset_ref=output_dataset_ref,
             checks=checks,
+            ctx=ctx,
             mode=mode,
-            language="sql",
-        )
-
-    def _write_registered_sql(self, ctx: RequestContext, api_name: str, sql: str) -> Path:
-        if not sql.strip():
-            raise ValidationFailed("SQL transform body is required", details={"api_name": api_name})
-        validate_sql_transform_uses_declared_inputs(sql)
-        entrypoint = _registered_sql_entrypoint(self.root, ctx.tenant_id, api_name)
-        entrypoint.parent.mkdir(parents=True, exist_ok=True)
-        entrypoint.write_text(sql, encoding="utf-8")
-        return entrypoint
-
-    def _register_transform_definition(
-        self,
-        ctx: RequestContext,
-        api_name: str,
-        *,
-        entrypoint: str | Path,
-        inputs: Mapping[str, str],
-        output_dataset_ref: str,
-        checks: Sequence[TransformCheck] | None,
-        mode: str,
-        language: str,
-    ) -> TransformRow:
-        language = _supported_transform_language(language)
-        mode = normalize_transform_output_mode(mode)
-        normalized_checks = self._normalized_checks(checks)
-        with self.engine.begin() as conn:
-            if existing := self._transform_by_api_name(conn, ctx, api_name):
-                return self._replace_transform_definition(
-                    conn,
-                    ctx,
-                    existing,
-                    api_name,
-                    entrypoint,
-                    inputs,
-                    output_dataset_ref,
-                    normalized_checks,
-                    mode,
-                    language,
-                )
-            return self._create_transform_definition(
-                conn,
-                ctx,
-                api_name,
-                entrypoint=entrypoint,
-                inputs=inputs,
-                output_dataset_ref=output_dataset_ref,
-                checks=normalized_checks,
-                mode=mode,
-                language=language,
-            )
-
-    def _transform_by_api_name(
-        self, conn: TransactionContext, ctx: RequestContext, api_name: str
-    ) -> TransformRow | None:
-        return self.transform_repository.transform_by_api_name(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            api_name=api_name,
         )
 
     def run_transform(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
-        ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
-        require_write_open(self.runtime_service, ctx, "run_transform", "transform", api_name)
-        result, _plan = self._run_transform_internal(ctx, api_name)
-        return result
+        return self.transform_run_service.run_transform(api_name, ctx=ctx)
 
-    def _run_transform_internal(self, ctx: RequestContext, api_name: str) -> tuple[CommitResult, TransformRunPlan]:
-        with self.engine.begin() as conn:
-            plan = start_transform_run(
-                conn=conn,
-                ctx=ctx,
-                api_name=api_name,
-                dataset_registry_service=self.dataset_registry_service,
-                dataset_transaction_service=self.dataset_transaction_service,
-                dataset_version_service=self.dataset_version_service,
-                transform_repository=self.transform_repository,
-            )
-        staged = self.dataset_transaction_service._staging_file(
-            plan.output_dataset, plan.transaction_id, "part-00000.parquet"
+    def run_transform_graph(
+        self,
+        api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        max_depth: int = 7,
+        max_runs: int = 50,
+    ) -> dict[str, object]:
+        return self.transform_graph_service.run_transform_graph(
+            api_name,
+            ctx=ctx,
+            max_depth=max_depth,
+            max_runs=max_runs,
         )
-        result = self._execute_and_finalize_plan(ctx, plan, staged)
-        return result, plan
 
-    def _execute_and_finalize_plan(
+    def preview_due_transform_runs(
         self,
-        ctx: RequestContext,
-        plan: TransformRunPlan,
-        staged: Path,
         *,
-        should_audit_retry: bool = False,
-    ) -> CommitResult:
-        try:
-            execution = self._execute_transform_plan(plan, staged)
-            dead_letter_ids = self._persist_transform_dead_letters(ctx, plan, execution)
-            return self._finalize_executed_transform(
-                ctx,
-                plan,
-                staged,
-                execution,
-                dead_letter_ids,
-                should_audit_retry=should_audit_retry,
-            )
-        except Exception as exc:
-            self._abort_transform_run(ctx, plan, exc)
-            if isinstance(exc, ValidationFailed | NotFound | ConflictDetected | InvariantViolation):
-                raise
-            raise ValidationFailed("transform failed", details={"error": str(exc)}) from exc
+        ctx: RequestContext | None = None,
+        max_runs: int = 50,
+    ) -> dict[str, object]:
+        return self.transform_scheduler_service.preview_due_transform_runs(ctx=ctx, max_runs=max_runs)
 
-    def _finalize_executed_transform(
+    def run_due_transform_runs(
         self,
-        ctx: RequestContext,
-        plan: TransformRunPlan,
-        staged: Path,
-        execution: TransformExecutionResult,
-        dead_letter_ids: Sequence[str],
         *,
-        should_audit_retry: bool = False,
-        after_transform_commit: Callable[[TransactionContext, CommitResult], None] | None = None,
-    ) -> CommitResult:
-        blocked: DatasetCommitBlocked | None = None
-        with self.engine.begin() as conn:
-            try:
-                return self._finalize_transform_run(
-                    conn,
-                    ctx,
-                    plan,
-                    staged,
-                    execution,
-                    dead_letter_ids,
-                    should_audit_retry=should_audit_retry,
-                    after_transform_commit=after_transform_commit,
-                )
-            except DatasetCommitBlocked as exc:
-                blocked = exc
-        if blocked is not None:
-            raise blocked
-        raise InvariantViolation("transform finalization did not return a commit result")
+        ctx: RequestContext | None = None,
+        max_runs: int = 50,
+    ) -> dict[str, object]:
+        return self.transform_scheduler_service.run_due_transform_runs(ctx=ctx, max_runs=max_runs)
 
     def retry_transform_run(
         self,
@@ -275,23 +122,7 @@ class TransformService(
         *,
         ctx: RequestContext | None = None,
     ) -> TransformRetryResult:
-        ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "operations:retry", "transform_run", transform_run_id)
-        require_write_open(self.runtime_service, ctx, "retry_transform_run", "transform_run", transform_run_id)
-        with self.engine.begin() as conn:
-            plan = start_failed_transform_retry(
-                conn=conn,
-                ctx=ctx,
-                transform_run_id=transform_run_id,
-                dataset_registry_service=self.dataset_registry_service,
-                dataset_transaction_service=self.dataset_transaction_service,
-                transform_repository=self.transform_repository,
-            )
-        staged = self.dataset_transaction_service._staging_file(
-            plan.output_dataset, plan.transaction_id, "part-00000.parquet"
-        )
-        result = self._execute_and_finalize_plan(ctx, plan, staged, should_audit_retry=True)
-        return _transform_retry_response(plan, result)
+        return self.transform_run_service.retry_transform_run(transform_run_id, ctx=ctx)
 
     def retry_transform_dead_letter_record(
         self,
@@ -300,189 +131,8 @@ class TransformService(
         idempotency_key: str,
         ctx: RequestContext | None = None,
     ) -> TransformRecordDlqRetryResult:
-        ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "operations:retry", "dead_letter_record", record_id)
-        require_write_open(
-            self.runtime_service,
-            ctx,
-            "retry_transform_dead_letter_record",
-            "dead_letter_record",
+        return self.transform_dlq_replay_service.retry_transform_dead_letter_record(
             record_id,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
         )
-        return retry_transform_record_dlq(self, record_id, idempotency_key=idempotency_key, ctx=ctx)
-
-    def _finalize_transform_run(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        plan: TransformRunPlan,
-        staged: Path,
-        execution: TransformExecutionResult,
-        dead_letter_ids: Sequence[str],
-        *,
-        should_audit_retry: bool = False,
-        after_transform_commit: Callable[[TransactionContext, CommitResult], None] | None = None,
-    ) -> CommitResult:
-        def after_persist(conn: TransactionContext, result: CommitResult) -> None:
-            self._record_transform_lineage(conn, ctx, plan, result)
-            mark_transform_run_succeeded(self.transform_repository, conn, ctx, plan.run_id, result)
-            if should_audit_retry:
-                self._audit_transform_retry(conn, ctx, plan, result)
-            if after_transform_commit is not None:
-                after_transform_commit(conn, result)
-
-        return self.dataset_transaction_service._finalize_open_transaction(
-            conn,
-            ctx,
-            dataset=plan.output_dataset,
-            transaction_id=plan.transaction_id,
-            staged_parquet=staged,
-            run_id=plan.run_id,
-            audit_action="transform_output_commit",
-            outbox_event_type="dataset.version.committed",
-            extra_checks=plan.checks,
-            transaction_metadata=self._transform_transaction_metadata(conn, ctx, plan, execution, dead_letter_ids),
-            after_persist=after_persist,
-        )
-
-    def _transform_transaction_metadata(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        plan: TransformRunPlan,
-        execution: TransformExecutionResult,
-        dead_letter_ids: Sequence[str],
-    ) -> Mapping[str, object] | None:
-        metadata: dict[str, object] = {}
-        if execution.dead_letters:
-            metadata.update(transform_dead_letter_summary(execution, dead_letter_ids))
-        watermark = transform_output_platform_watermark(
-            output_dataset=plan.output_dataset,
-            input_versions=plan.input_versions,
-            input_transactions=self._input_transactions_by_ref(conn, ctx, plan),
-        )
-        if watermark is not None:
-            metadata["platformWatermark"] = watermark
-        return metadata or None
-
-    def _input_transactions_by_ref(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        plan: TransformRunPlan,
-    ) -> Mapping[str, DatasetTransactionRow | None]:
-        return {
-            dataset_ref: self.dataset_transaction_repository.committed_transaction_by_version(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                committed_version_id=version_id,
-            )
-            for dataset_ref, version_id in plan.input_versions.items()
-        }
-
-    def _record_transform_lineage(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        plan: TransformRunPlan,
-        result: CommitResult,
-    ) -> None:
-        for version_id in plan.input_versions.values():
-            self.runtime_service._lineage(
-                conn,
-                ctx,
-                "dataset_version",
-                version_id,
-                "dataset_version",
-                result.version_id,
-                "input_to",
-                plan.run_id,
-            )
-
-    def _abort_transform_run(
-        self,
-        ctx: RequestContext,
-        plan: TransformRunPlan,
-        exc: Exception,
-    ) -> None:
-        """Abort the output transaction and mark the transform run failed."""
-        self.dataset_transaction_service._abort_transaction_after_error(
-            ctx,
-            plan.transaction_id,
-            plan.run_id,
-            exc,
-            "transform",
-            adapter="compute_adapter.execute_transform",
-        )
-
-    def _audit_transform_retry(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        plan: TransformRunPlan,
-        result: CommitResult,
-    ) -> None:
-        if plan.retry_of_run_id is None:
-            return
-        self.runtime_service._audit(
-            conn,
-            ctx,
-            event_type="transform.run.retry_requested",
-            resource_type="transform_run",
-            resource_id=plan.run_id,
-            action="operations:retry",
-            before_ref={"transform_run_id": plan.retry_of_run_id},
-            after_ref={"transform_run_id": plan.run_id, "output_version_id": result.version_id},
-            correlation_id=plan.run_id,
-        )
-        self.runtime_service._run_relation(
-            conn,
-            ctx,
-            source_run_type="transform",
-            source_run_id=plan.retry_of_run_id,
-            target_run_type="transform",
-            target_run_id=plan.run_id,
-            relation="retry_of",
-            resource_type="transform",
-            resource_id=plan.transform_id,
-            metadata={"outputVersionId": result.version_id},
-        )
-
-
-def _transform_retry_response(plan: TransformRunPlan, result: CommitResult) -> TransformRetryResult:
-    return {
-        "original_run_id": plan.retry_of_run_id or "",
-        "transform_run_id": plan.run_id,
-        "dataset_id": result.dataset_id,
-        "dataset_ref": result.dataset_ref,
-        "transaction_id": result.transaction_id,
-        "version_id": result.version_id,
-        "version_number": result.version_number,
-        "row_count": result.row_count,
-        "manifest_uri": result.manifest_uri,
-        "schema_hash": result.schema_hash,
-    }
-
-
-def _supported_transform_language(language: str) -> str:
-    normalized = language.strip().lower()
-    if normalized in {"sql", "python"}:
-        return normalized
-    raise ValidationFailed(
-        "unsupported transform language",
-        details={"language": language, "supported_languages": ["sql", "python"]},
-    )
-
-
-def _registered_sql_entrypoint(root: Path, tenant_id: str, api_name: str) -> Path:
-    tenant_slug = _safe_transform_path_token(tenant_id, "tenant_id")
-    slug = _safe_transform_path_token(api_name, "api_name")
-    digest = hashlib.sha256(f"{tenant_id}:{api_name}".encode()).hexdigest()[:12]
-    return root / "registered-transforms" / tenant_slug / f"{slug}-{digest}.sql"
-
-
-def _safe_transform_path_token(value: str, field_name: str) -> str:
-    token = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value).strip("._-")
-    if not token:
-        raise ValidationFailed(f"transform {field_name} must contain at least one safe character")
-    return token

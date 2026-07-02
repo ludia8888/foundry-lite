@@ -360,6 +360,8 @@ def _service_required_contract_findings(
     path: Path,
     root: Path,
     helper_tree: ast.Module | None,
+    *,
+    service_label: str,
 ) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
     if not _is_required_keyword_only(function, "idempotency_key"):
@@ -369,7 +371,7 @@ def _service_required_contract_findings(
                 path=_repo_relative(path, root),
                 line=function.lineno,
                 column=function.col_offset + 1,
-                message="ActionService.apply_action must require idempotency_key",
+                message=f"{service_label}.apply_action must require idempotency_key",
             )
         )
     if not _has_empty_key_validation(function) and not _helper_validates_empty_key(
@@ -381,7 +383,7 @@ def _service_required_contract_findings(
                 path=_repo_relative(path, root),
                 line=function.lineno,
                 column=function.col_offset + 1,
-                message="ActionService.apply_action must reject empty idempotency keys",
+                message=f"{service_label}.apply_action must reject empty idempotency keys",
             )
         )
     return findings
@@ -392,9 +394,12 @@ def _service_replay_findings(
     function: ast.FunctionDef,
     path: Path,
     root: Path,
+    *,
+    class_name: str,
+    service_label: str,
 ) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
-    reachable = _reachable_service_methods(tree, class_name="ActionService", start=function)
+    reachable = _reachable_service_methods(tree, class_name=class_name, start=function)
     if not _reachable_has_call(reachable, "_existing_action_run"):
         findings.append(
             IdempotencyFinding(
@@ -402,7 +407,7 @@ def _service_replay_findings(
                 path=_repo_relative(path, root),
                 line=function.lineno,
                 column=function.col_offset + 1,
-                message="ActionService.apply_action must look up an existing action_run before inserting",
+                message=f"{service_label}.apply_action must look up an existing action_run before inserting",
             )
         )
     lookup_after_insert_line = _lookup_after_insert_line(reachable)
@@ -413,7 +418,7 @@ def _service_replay_findings(
                 path=_repo_relative(path, root),
                 line=lookup_after_insert_line,
                 column=1,
-                message="ActionService.apply_action must check idempotency before inserting a new action_run",
+                message=f"{service_label}.apply_action must check idempotency before inserting a new action_run",
             )
         )
     if _reachable_has_call(reachable, "_insert_action_run") and not _reachable_has_replay_response(reachable):
@@ -423,7 +428,7 @@ def _service_replay_findings(
                 path=_repo_relative(path, root),
                 line=function.lineno,
                 column=function.col_offset + 1,
-                message="ActionService.apply_action must return the existing action_run on idempotent replay",
+                message=f"{service_label}.apply_action must return the existing action_run on idempotent replay",
             )
         )
     if not _reachable_has_request_fingerprint_guard(reachable):
@@ -434,7 +439,7 @@ def _service_replay_findings(
                 line=function.lineno,
                 column=function.col_offset + 1,
                 message=(
-                    "ActionService must compare the stored request_fingerprint before replaying an idempotency key"
+                    f"{service_label} must compare the stored request_fingerprint before replaying an idempotency key"
                 ),
             )
         )
@@ -459,9 +464,15 @@ def _service_finding(
 
 
 def _service_lookup_findings(
-    tree: ast.Module, function: ast.FunctionDef, path: Path, root: Path
+    tree: ast.Module,
+    function: ast.FunctionDef,
+    path: Path,
+    root: Path,
+    *,
+    class_name: str,
+    service_label: str,
 ) -> list[IdempotencyFinding]:
-    existing = _function_def(tree, "_existing_action_run", class_name="ActionService")
+    existing = _function_def(tree, "_existing_action_run", class_name=class_name)
     if existing is not None and _has_call_keyword(
         existing,
         "action_repository.action_run_by_idempotency",
@@ -474,23 +485,29 @@ def _service_lookup_findings(
             path,
             root,
             code="service_repository_idempotency_lookup_missing",
-            message="ActionService must query the repository by idempotency_key",
+            message=f"{service_label} must query the repository by idempotency_key",
         )
     ]
 
 
 def _service_insert_findings(
-    tree: ast.Module, function: ast.FunctionDef, path: Path, root: Path
+    tree: ast.Module,
+    function: ast.FunctionDef,
+    path: Path,
+    root: Path,
+    *,
+    class_name: str,
+    service_label: str,
 ) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
-    insert_action_run = _function_def(tree, "_insert_action_run", class_name="ActionService")
+    insert_action_run = _function_def(tree, "_insert_action_run", class_name=class_name)
     required_fields = {
         "idempotency_key": "service_action_run_record_missing_idempotency_key",
         REQUEST_FINGERPRINT_FIELD: "service_action_run_record_missing_request_fingerprint",
     }
     messages = {
-        "idempotency_key": "ActionService must persist idempotency_key on ActionRunRecord",
-        REQUEST_FINGERPRINT_FIELD: "ActionService must persist request_fingerprint on ActionRunRecord",
+        "idempotency_key": f"{service_label} must persist idempotency_key on ActionRunRecord",
+        REQUEST_FINGERPRINT_FIELD: f"{service_label} must persist request_fingerprint on ActionRunRecord",
     }
     for field_name, code in required_fields.items():
         if insert_action_run is not None and _has_call_keyword(insert_action_run, "ActionRunRecord", field_name):
@@ -509,15 +526,17 @@ def _service_conflict_findings(
     path: Path,
     root: Path,
     helper_tree: ast.Module | None,
+    *,
+    service_label: str,
 ) -> list[IdempotencyFinding]:
     required_constants = {
         IDEMPOTENCY_CONFLICT_AUDIT_EVENT: (
             "service_idempotency_conflict_audit_missing",
-            "ActionService must audit same-key/different-request idempotency conflicts",
+            f"{service_label} must audit same-key/different-request idempotency conflicts",
         ),
         IDEMPOTENCY_CONFLICT_MESSAGE: (
             "service_idempotency_conflict_error_missing",
-            "ActionService must reject same-key/different-request replays as a conflict",
+            f"{service_label} must reject same-key/different-request replays as a conflict",
         ),
     }
     findings: list[IdempotencyFinding] = []
@@ -533,11 +552,18 @@ def _service_helper_findings(
     path: Path,
     root: Path,
     helper_tree: ast.Module | None,
+    *,
+    class_name: str,
+    service_label: str,
 ) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
-    findings.extend(_service_lookup_findings(tree, function, path, root))
-    findings.extend(_service_insert_findings(tree, function, path, root))
-    findings.extend(_service_conflict_findings(tree, function, path, root, helper_tree))
+    findings.extend(
+        _service_lookup_findings(tree, function, path, root, class_name=class_name, service_label=service_label)
+    )
+    findings.extend(
+        _service_insert_findings(tree, function, path, root, class_name=class_name, service_label=service_label)
+    )
+    findings.extend(_service_conflict_findings(tree, function, path, root, helper_tree, service_label=service_label))
     return findings
 
 
@@ -565,9 +591,64 @@ def _check_action_service(
             message="ActionService must expose apply_action",
         )
         return findings
-    findings.extend(_service_required_contract_findings(function, path, root, helper_tree))
-    findings.extend(_service_replay_findings(tree, function, path, root))
-    findings.extend(_service_helper_findings(tree, function, path, root, helper_tree))
+    findings.extend(
+        _service_required_contract_findings(function, path, root, helper_tree, service_label="ActionService")
+    )
+    if not _has_call_keyword(function, "action_apply_service.apply_action", "idempotency_key"):
+        findings.append(
+            IdempotencyFinding(
+                code="service_apply_delegate_missing_idempotency_key",
+                path=_repo_relative(path, root),
+                line=function.lineno,
+                column=function.col_offset + 1,
+                message="ActionService.apply_action must pass idempotency_key into ActionApplyService",
+            )
+        )
+    return findings
+
+
+def _check_action_apply_service(
+    tree: ast.Module,
+    path: Path,
+    root: Path,
+    *,
+    helper_tree: ast.Module | None = None,
+) -> list[IdempotencyFinding]:
+    findings: list[IdempotencyFinding] = []
+    function = _function_def(tree, "apply_action", class_name="ActionApplyService")
+    if function is None:
+        _add_function_missing(
+            findings,
+            code="action_apply_service_apply_action_missing",
+            path=path,
+            root=root,
+            message="ActionApplyService must expose apply_action",
+        )
+        return findings
+    findings.extend(
+        _service_required_contract_findings(function, path, root, helper_tree, service_label="ActionApplyService")
+    )
+    findings.extend(
+        _service_replay_findings(
+            tree,
+            function,
+            path,
+            root,
+            class_name="ActionApplyService",
+            service_label="ActionApplyService",
+        )
+    )
+    findings.extend(
+        _service_helper_findings(
+            tree,
+            function,
+            path,
+            root,
+            helper_tree,
+            class_name="ActionApplyService",
+            service_label="ActionApplyService",
+        )
+    )
     return findings
 
 
@@ -668,15 +749,40 @@ def _check_schema(tree: ast.Module, path: Path, root: Path) -> list[IdempotencyF
     return findings
 
 
+def _api_actions_path(root: Path) -> Path:
+    """Locate the module that defines the action apply route.
+
+    The API app was split into per-resource routers; older layouts (and the
+    fixture repos in this gate's unit tests) keep the route in main.py.
+    """
+    routers_path = root / "apps" / "api" / "foundry_lite_api" / "routers" / "actions.py"
+    if routers_path.exists():
+        return routers_path
+    return root / "apps" / "api" / "foundry_lite_api" / "main.py"
+
+
+def _schema_actions_path(root: Path) -> Path:
+    """Locate the module defining the action_runs table.
+
+    The schema module became a domain-grouped package; older layouts (and the
+    fixture repos in this gate's unit tests) keep a single schema.py.
+    """
+    package_path = root / "libs" / "foundry_lite" / "infrastructure" / "schema" / "actions.py"
+    if package_path.exists():
+        return package_path
+    return root / "libs" / "foundry_lite" / "infrastructure" / "schema.py"
+
+
 def collect_findings(root: Path = ROOT) -> list[IdempotencyFinding]:
     findings: list[IdempotencyFinding] = []
     paths = {
-        "api": root / "apps" / "api" / "foundry_lite_api" / "main.py",
+        "api": _api_actions_path(root),
         "foundry": root / "libs" / "foundry_lite" / "application" / "facades" / "action_gateway.py",
         "service": root / "libs" / "foundry_lite" / "application" / "services" / "action_service.py",
+        "apply_service": root / "libs" / "foundry_lite" / "application" / "services" / "action_apply_service.py",
         "service_helpers": root / "libs" / "foundry_lite" / "application" / "services" / "action_helpers.py",
         "port": root / "libs" / "foundry_lite" / "application" / "ports" / "action_repository.py",
-        "schema": root / "libs" / "foundry_lite" / "infrastructure" / "schema.py",
+        "schema": _schema_actions_path(root),
     }
     parsed = {
         name: _parse_optional_file(path) if name == "service_helpers" else _parse_file(path, root, findings)
@@ -691,6 +797,15 @@ def collect_findings(root: Path = ROOT) -> list[IdempotencyFinding]:
             _check_action_service(
                 parsed["service"],
                 paths["service"],
+                root,
+                helper_tree=parsed["service_helpers"],
+            )
+        )
+    if parsed["apply_service"] is not None:
+        findings.extend(
+            _check_action_apply_service(
+                parsed["apply_service"],
+                paths["apply_service"],
                 root,
                 helper_tree=parsed["service_helpers"],
             )

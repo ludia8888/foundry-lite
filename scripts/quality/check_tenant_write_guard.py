@@ -67,10 +67,8 @@ def _is_tenant_column(node: ast.AST) -> bool:
     )
 
 
-def tenant_scoped_tables(
-    schema_path: Path = ROOT / "libs" / "foundry_lite" / "infrastructure" / "schema.py",
-) -> set[str]:
-    tree = ast.parse(schema_path.read_text(encoding="utf-8"), filename=str(schema_path))
+def _tenant_scoped_tables_in_file(source_path: Path) -> set[str]:
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
     tables: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
@@ -78,6 +76,18 @@ def tenant_scoped_tables(
         if _func_name(node.value.func) != "Table" or not any(_is_tenant_column(arg) for arg in node.value.args):
             continue
         tables.update(target.id for target in node.targets if isinstance(target, ast.Name))
+    return tables
+
+
+def tenant_scoped_tables(
+    schema_path: Path = ROOT / "libs" / "foundry_lite" / "infrastructure" / "schema",
+) -> set[str]:
+    # schema is a package of domain-grouped table modules; a single-module
+    # schema.py path (used by older layouts and unit-test fixtures) still works.
+    source_paths = sorted(schema_path.glob("*.py")) if schema_path.is_dir() else [schema_path]
+    tables: set[str] = set()
+    for source_path in source_paths:
+        tables.update(_tenant_scoped_tables_in_file(source_path))
     return tables
 
 

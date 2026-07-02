@@ -21,6 +21,7 @@ from foundry_lite.application.services.backup_restore_mode import (
 from foundry_lite.application.services.runtime_redaction import redact_sensitive as redact_sensitive
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, ValidationFailed
+from foundry_lite.domain.platform.traffic import decide_write_traffic
 
 AuditWriter = Callable[..., None]
 RunRelationWriter = Callable[..., bool]
@@ -300,18 +301,9 @@ def require_write_traffic_open(
             table="audit_events",
             tenant_id=ctx.tenant_id,
         )
-    restore_mode = active_restore_mode_report(audit_events)
-    if restore_mode is None:
-        return
-    raise ConflictDetected(
-        "restore mode blocks write traffic",
-        details={
-            "restore_id": restore_mode["restoreId"],
-            "status": restore_mode["status"],
-            "operation": operation,
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "is_write_traffic_paused": restore_mode["is_write_traffic_paused"],
-            "is_serving_traffic_open": restore_mode["is_serving_traffic_open"],
-        },
+    decide_write_traffic(
+        active_restore_mode_report(audit_events),
+        operation=operation,
+        resource_type=resource_type,
+        resource_id=resource_id,
     )

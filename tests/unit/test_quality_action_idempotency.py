@@ -108,6 +108,20 @@ class ActionGateway:
     )
     _write(
         root / "libs" / "foundry_lite" / "application" / "services" / "action_service.py",
+        """
+class ValidationFailed(Exception):
+    pass
+
+
+class ActionService:
+    def apply_action(self, action_api_name: str, *, idempotency_key: str):
+        if not idempotency_key:
+            raise ValidationFailed("idempotency key is required")
+        return self.action_apply_service.apply_action(action_api_name, idempotency_key=idempotency_key)
+""",
+    )
+    _write(
+        root / "libs" / "foundry_lite" / "application" / "services" / "action_apply_service.py",
         f"""
 class ValidationFailed(Exception):
     pass
@@ -123,7 +137,7 @@ class ActionRunRecord:
 {record_assign}
 
 
-class ActionService:
+class ActionApplyService:
     def apply_action(self, action_api_name: str, *, idempotency_key: str):
         if not idempotency_key:
             raise ValidationFailed("idempotency key is required")
@@ -212,7 +226,7 @@ def action_replay_response(existing):
 """,
     )
     _write(
-        tmp_path / "libs" / "foundry_lite" / "application" / "services" / "action_service.py",
+        tmp_path / "libs" / "foundry_lite" / "application" / "services" / "action_apply_service.py",
         """
 from .action_helpers import action_command, action_replay_response
 
@@ -227,7 +241,7 @@ class ActionRunRecord:
         self.request_fingerprint = request_fingerprint
 
 
-class ActionService:
+class ActionApplyService:
     def apply_action(self, action_api_name: str, *, idempotency_key: str):
         command = action_command(action_api_name, "Order", "order-1", 1, {}, idempotency_key, False)
         with self.engine.begin() as conn:

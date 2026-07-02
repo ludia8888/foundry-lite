@@ -2,27 +2,35 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from foundry_lite.application.ports import TransactionContext, TransactionManager, TransformRepository, TransformRow
 from foundry_lite.application.primitives import CommitResult
+from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.transform_protocols import TransformRuntimeBoundary
 from foundry_lite.application.services.transform_protocols import (
     require_transform_write_open as require_write_open,
 )
 from foundry_lite.application.services.transform_runs import TransformRunPlan
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.transform import validate_transform_graph_bounds
 
 
-class TransformGraphMixin:
+class _TransformRunner(Protocol):
+    def run_transform_internal(self, ctx: RequestContext, api_name: str) -> tuple[CommitResult, TransformRunPlan]:
+        """Run one transform without public entrypoint authorization."""
+        ...
+
+
+class TransformGraphService(CoreService):
     """Bounded downstream transform graph trigger behavior."""
 
+    required_dependencies = ("engine", "transform_repository")
+    required_collaborators = ("runtime_service", "transform_run_service")
     engine: TransactionManager
-    transform_repository: TransformRepository
     runtime_service: TransformRuntimeBoundary
-
-    def _run_transform_internal(self, ctx: RequestContext, api_name: str) -> tuple[CommitResult, TransformRunPlan]:
-        """Run one transform through the concrete transform service."""
-        raise NotImplementedError
+    transform_repository: TransformRepository
+    transform_run_service: _TransformRunner
 
     def run_transform_graph(
         self,
@@ -34,8 +42,7 @@ class TransformGraphMixin:
     ) -> dict[str, object]:
         """Run one transform and its downstream graph within explicit bounds."""
         ctx = ctx or RequestContext()
-        if max_depth < 1 or max_depth > 7 or max_runs < 1 or max_runs > 50:
-            raise ValidationFailed("transform graph bounds must be depth 1-7 and runs 1-50")
+        max_depth, max_runs = validate_transform_graph_bounds(max_depth, max_runs)
         root_result, root_plan = self._run_transform_for_graph(ctx, api_name)
         downstream: list[dict[str, object]] = []
         self._run_downstream_graph(ctx, root_plan, root_result, max_depth, max_runs, downstream, {api_name})
@@ -45,7 +52,7 @@ class TransformGraphMixin:
         """Apply authorization and write guards before graph-owned execution."""
         self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
         require_write_open(self.runtime_service, ctx, "run_transform_graph", "transform", api_name)
-        return self._run_transform_internal(ctx, api_name)
+        return self.transform_run_service.run_transform_internal(ctx, api_name)
 
     def _run_downstream_graph(
         self,

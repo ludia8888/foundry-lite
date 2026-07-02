@@ -180,6 +180,27 @@ def test_compute_adapter_contract_sql_transform_reads_multiple_input_files(
     ]
 
 
+def test_duckdb_sql_transform_cannot_read_files_outside_declared_inputs(tmp_path: Path) -> None:
+    """Transform SQL is user-supplied via the HTTP API, so DuckDB must run it with filesystem
+    access disabled. A replacement scan (bare path in FROM) and glob() both bypass the guard
+    regex, so this pins the runtime sandbox that actually stops cross-tenant file exfiltration."""
+    import duckdb
+
+    adapter = DuckDBComputeAdapter()
+    declared = tmp_path / "declared.parquet"
+    adapter.rows_to_parquet([{"order_id": "O-1", "amount": 10}], declared, ["order_id", "amount"])
+    victim = tmp_path / "other-tenant.parquet"
+    adapter.rows_to_parquet([{"secret": "OTHER_TENANT_ROW"}], victim, ["secret"])
+
+    for sql in (f"select * from '{victim}'", "select count(*) from glob('/etc/*')"):
+        target_path = tmp_path / "exfiltrated.parquet"
+        with pytest.raises(duckdb.Error):
+            adapter.execute_transform(
+                SqlTransformPlan(sql_template=sql, input_paths_by_ref={}, target_path=target_path)
+            )
+        assert not target_path.exists()
+
+
 def test_compute_adapter_contract_unsupported_transform_plan_raises_typed_error(
     adapter: ComputeAdapter,
 ) -> None:

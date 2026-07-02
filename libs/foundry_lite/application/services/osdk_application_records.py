@@ -20,17 +20,20 @@ from foundry_lite.application.primitives import _new_id
 from foundry_lite.application.services.osdk_application_types import (
     _CHANNELS,
     _LANGUAGES,
-    _OPERATIONS,
     _RESOURCE_TYPES,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied, ValidationFailed
+from foundry_lite.domain.platform.idempotency import require_idempotency_key
+from foundry_lite.domain.platform.scopes import (
+    is_scope_allowed,
+    resource_scope,
+    validate_resource_scope,
+)
 
 
 def scope_for(resource_type: OsdkResourceType, resource_api_name: str, operation: OsdkResourceOperation) -> str:
-    if resource_type not in _RESOURCE_TYPES or operation not in _OPERATIONS:
-        raise ValidationFailed("unsupported OSDK resource scope request")
-    return f"osdk:{resource_type}:{resource_api_name}:{operation}"
+    return resource_scope(resource_type, resource_api_name, operation)
 
 
 def _application_record(
@@ -90,17 +93,14 @@ def _scopes(raw: object, resource_type: OsdkResourceType, resource_api_name: str
 
 
 def _validate_scope(scope: str, resource_type: OsdkResourceType, resource_api_name: str) -> None:
-    prefix = f"osdk:{resource_type}:{resource_api_name}:"
-    if not scope.startswith(prefix) or scope.rsplit(":", 1)[-1] not in _OPERATIONS:
-        raise ValidationFailed("OSDK application resource scope does not match its resource")
+    validate_resource_scope(scope, resource_type, resource_api_name)
 
 
 def _scope_allowed(
     expected_scope: str, token_scopes: Sequence[str], resources: Sequence[OsdkApplicationResourceRow]
 ) -> bool:
-    if expected_scope not in set(token_scopes) and "osdk:*" not in set(token_scopes):
-        return False
-    return any(expected_scope in set(row["scopes"]) for row in resources)
+    granted = tuple(scope for row in resources for scope in row["scopes"])
+    return is_scope_allowed(expected_scope, token_scopes, granted)
 
 
 def _raise_scope_denied(expected_scope: str, resource_type: str, resource_api_name: str) -> None:
@@ -141,8 +141,7 @@ def _require_api_name(value: str, field: str) -> None:
 
 
 def _require_idempotency_key(value: str) -> None:
-    if not value:
-        raise ValidationFailed("Idempotency-Key is required for OSDK Developer Console mutations")
+    require_idempotency_key(value, surface="OSDK Developer Console mutations")
 
 
 def _clean_strings(values: Sequence[str]) -> list[str]:

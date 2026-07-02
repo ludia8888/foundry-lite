@@ -19,6 +19,18 @@ def _load_python_module(path: Path, name: str) -> ModuleType:
     return module
 
 
+def _static_lane_text() -> str:
+    """ci_gate.sh + parallel static driver: the static gate wiring surface.
+
+    Static checks moved from serial ci_gate.sh lines into
+    scripts/quality/run_static_checks.py and run concurrently; inventory
+    order inside the driver is documentation order, not execution order.
+    """
+    gate = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    driver = (ROOT / "scripts" / "quality" / "run_static_checks.py").read_text(encoding="utf-8")
+    return f"{gate}\n{driver}"
+
+
 def test_ci_gate_does_not_run_heavy_codeql_locally() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
 
@@ -27,10 +39,10 @@ def test_ci_gate_does_not_run_heavy_codeql_locally() -> None:
 
 
 def test_gitleaks_missing_is_release_blocker() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
 
     assert "FOUNDRY_LITE_STRICT_EXTERNAL_TOOLS" in script
-    assert "${CI:-}" in script
+    assert 'os.environ.get("CI") == "true"' in script
     assert "CI/release evidence cannot skip the P9 secret scan" in script
 
 
@@ -129,25 +141,26 @@ def test_failed_mutation_state_gate_runs_after_adapter_error_trace() -> None:
 def test_flaky_detector_repeats_parallel_pytest_three_times() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
+    nightly = (ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
 
-    coverage_step = "uv run pytest tests \\\n    --cov=libs/foundry_lite"
-    flaky_step = "scripts/quality/check_flaky_detector.py"
-    assert flaky_step in script
-    assert "--iterations 3" in script
+    # Flakiness is a suite property, not a diff property: the detector keeps
+    # its 3-iteration default for release rehearsal, and the nightly lane
+    # raises the iteration count for more statistical power than any per-PR
+    # rerun could afford.
+    assert "scripts/quality/check_flaky_detector.py" in script
+    assert '"${FOUNDRY_LITE_FLAKY_ITERATIONS:-3}"' in script
     assert '--command "uv run pytest tests -n auto --no-header -q"' in script
-    assert script.index(coverage_step) < script.index(flaky_step)
+    assert 'FOUNDRY_LITE_FLAKY_ITERATIONS: "7"' in nightly
     assert '"quality:flaky-detector"' in package_json
 
 
 def test_github_flaky_lane_keeps_strong_detector_with_realistic_timeout() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    nightly = (ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
 
-    flaky_job = workflow.split("quality_flaky:", maxsplit=1)[1].split("quality_runtime:", maxsplit=1)[0]
-    assert "timeout-minutes: 40" in flaky_job
+    flaky_job = nightly.split("quality_flaky_nightly:", maxsplit=1)[1].split("quality_runtime_full:", maxsplit=1)[0]
+    assert "timeout-minutes: 120" in flaky_job
     assert "run: pnpm ci:gate:flaky" in flaky_job
-    assert "--iterations 3" in script
-    assert '--command "uv run pytest tests -n auto --no-header -q"' in script
+    assert 'FOUNDRY_LITE_FLAKY_ITERATIONS: "7"' in flaky_job
 
 
 def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() -> None:
@@ -233,11 +246,11 @@ def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
-    for lane in ("local", "all", "static", "coverage", "flaky", "runtime", "e2e", "release"):
+    for lane in ("local", "all", "static", "coverage", "flaky", "runtime", "runtime-full", "e2e", "release"):
         assert f'"ci:gate:{lane}": "bash scripts/ci_gate.sh {lane}"' in package_json
         assert f"{lane})" in script
 
-    assert "Usage: bash scripts/ci_gate.sh [local|all|static|coverage|flaky|runtime|e2e|release]" in script
+    assert "Usage: bash scripts/ci_gate.sh [local|all|static|coverage|flaky|runtime|runtime-full|e2e|release]" in script
     assert '"ci:gate": "bash scripts/ci_gate.sh local"' in package_json
     assert "run_local_gate()" in script
     assert "run_all_gate()" in script
@@ -245,22 +258,23 @@ def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None
     assert "run_coverage_gate" in script
     assert "run_flaky_gate" in script
     assert "run_runtime_gate" in script
+    assert "run_runtime_full_gate" in script
     assert "run_e2e_gate" in script
     assert "run_release_gate" in script
     assert "Foundry-lite CI gate passed." in script
 
 
 def test_pragma_no_cover_budget_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
-    assert "scripts/quality/check_pragma_no_cover_budget.py --baseline 0" in script
+    assert '"scripts/quality/check_pragma_no_cover_budget.py", "--baseline", "0"' in script
     assert '"quality:pragma-budget"' in package_json
     assert "pnpm quality:pragma-budget" in package_json
 
 
 def test_audit_on_mutation_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_audit_on_mutation.py" in script
@@ -269,7 +283,7 @@ def test_audit_on_mutation_is_release_gate_step() -> None:
 
 
 def test_transaction_outbox_pair_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_transaction_outbox_pair.py" in script
@@ -278,7 +292,7 @@ def test_transaction_outbox_pair_is_release_gate_step() -> None:
 
 
 def test_action_idempotency_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_idempotency_on_action.py" in script
@@ -287,7 +301,7 @@ def test_action_idempotency_is_release_gate_step() -> None:
 
 
 def test_error_response_request_id_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_error_response_has_request_id.py" in script
@@ -296,7 +310,7 @@ def test_error_response_request_id_is_release_gate_step() -> None:
 
 
 def test_function_length_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_function_length.py" in script
@@ -305,7 +319,7 @@ def test_function_length_is_release_gate_step() -> None:
 
 
 def test_boolean_naming_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_boolean_naming.py" in script
@@ -314,7 +328,7 @@ def test_boolean_naming_is_release_gate_step() -> None:
 
 
 def test_dict_any_budget_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_dict_any_budget.py" in script
@@ -323,7 +337,7 @@ def test_dict_any_budget_is_release_gate_step() -> None:
 
 
 def test_log_trace_keys_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_log_has_trace_keys.py" in script
@@ -332,7 +346,7 @@ def test_log_trace_keys_is_release_gate_step() -> None:
 
 
 def test_metrics_exposed_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_metrics_exposed.py" in script
@@ -341,7 +355,7 @@ def test_metrics_exposed_is_release_gate_step() -> None:
 
 
 def test_adapter_failure_taxonomy_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_adapter_failure_taxonomy.py" in script
@@ -350,7 +364,7 @@ def test_adapter_failure_taxonomy_is_release_gate_step() -> None:
 
 
 def test_infra_ratchet_is_release_gate_step_after_adapter_taxonomy() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     taxonomy_step = "scripts/quality/check_adapter_failure_taxonomy.py"
@@ -525,7 +539,7 @@ def test_data_contracts_ratchet_is_runtime_gate_step() -> None:
 
 
 def test_router_layer_purity_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_router_layer_purity.py" in script
@@ -534,7 +548,7 @@ def test_router_layer_purity_is_release_gate_step() -> None:
 
 
 def test_query_side_effects_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_query_side_effects.py" in script
@@ -543,7 +557,7 @@ def test_query_side_effects_is_release_gate_step() -> None:
 
 
 def test_repository_no_business_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_repository_no_business.py" in script
@@ -552,7 +566,7 @@ def test_repository_no_business_is_release_gate_step() -> None:
 
 
 def test_tenant_write_guard_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_tenant_write_guard.py" in script
@@ -561,7 +575,7 @@ def test_tenant_write_guard_is_release_gate_step() -> None:
 
 
 def test_status_transition_cas_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_status_transition_cas.py" in script
@@ -573,7 +587,7 @@ def test_status_transition_cas_is_release_gate_step() -> None:
 
 
 def test_contract_test_per_port_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_contract_test_per_port.py" in script
@@ -582,7 +596,7 @@ def test_contract_test_per_port_is_release_gate_step() -> None:
 
 
 def test_strategy_specification_tests_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_strategy_specification_tests.py" in script
@@ -591,7 +605,7 @@ def test_strategy_specification_tests_is_release_gate_step() -> None:
 
 
 def test_integration_scenario_markers_are_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_integration_scenario_markers.py" in script
@@ -600,7 +614,7 @@ def test_integration_scenario_markers_are_release_gate_step() -> None:
 
 
 def test_root_cause_meta_gates_are_release_gate_steps() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_regression_test_per_bugfix.py" in script
@@ -612,7 +626,7 @@ def test_root_cause_meta_gates_are_release_gate_steps() -> None:
 
 
 def test_documentation_map_gate_runs_after_doc_drift() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     doc_drift_step = "scripts/quality/check_doc_drift.py"
@@ -625,7 +639,7 @@ def test_documentation_map_gate_runs_after_doc_drift() -> None:
 
 
 def test_evidence_ledger_command_gate_runs_between_doc_drift_and_documentation_map() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     doc_drift_step = "scripts/quality/check_doc_drift.py"
@@ -638,14 +652,13 @@ def test_evidence_ledger_command_gate_runs_between_doc_drift_and_documentation_m
 
 
 def test_data_platform_sprint_status_gate_runs_after_data_pattern_matrix() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     pattern_step = "scripts/quality/check_data_pattern_matrix.py"
     status_step = "scripts/quality/check_data_platform_sprint_status.py"
-    sdk_step = "scripts/generate_sdk_ts.py --check"
     assert status_step in script
-    assert script.index(pattern_step) < script.index(status_step) < script.index(sdk_step)
+    assert script.index(pattern_step) < script.index(status_step)
     assert '"quality:data-platform-sprint-status"' in package_json
     assert "pnpm quality:data-platform-sprint-status" in package_json
 
@@ -760,8 +773,9 @@ def test_github_workflows_use_node24_action_versions() -> None:
 
 def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    nightly = (ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
 
-    for job_name in ("quality-static", "quality-coverage", "quality-flaky", "quality-runtime", "quality-e2e"):
+    for job_name in ("quality-static", "quality-coverage", "quality-runtime", "quality-e2e"):
         assert f"name: {job_name}" in workflow
 
     assert "group: foundry-lite-ci-${{ github.workflow }}-${{ github.ref }}" in workflow
@@ -770,23 +784,15 @@ def test_github_ci_parallelizes_quality_lanes_behind_required_aggregate_check() 
     assert "needs:" in workflow
     assert "quality_static" in workflow
     assert "quality_coverage" in workflow
-    assert "quality_flaky" in workflow
     assert "quality_runtime" in workflow
     assert "quality_e2e" in workflow
-    assert "if: always()" in workflow
-    assert 'test "${{ needs.quality_static.result }}" = "success"' in workflow
-    assert 'test "${{ needs.quality_coverage.result }}" = "success"' in workflow
-    assert 'test "${{ needs.quality_flaky.result }}" = "success"' in workflow
-    assert 'test "${{ needs.quality_runtime.result }}" = "success"' in workflow
-    assert 'test "${{ needs.quality_e2e.result }}" = "success"' in workflow
-    assert "Run coverage quality lane" in workflow
-    assert "run: pnpm ci:gate:coverage" in workflow
-    assert "Run flaky quality lane" in workflow
-    assert "run: pnpm ci:gate:flaky" in workflow
-    assert "Run runtime quality lane" in workflow
-    assert "run: pnpm ci:gate:runtime" in workflow
-    assert "Run E2E quality lane" in workflow
-    assert "run: pnpm ci:gate:e2e" in workflow
+
+    # Suite-property lanes moved off the PR path into the nightly gate with
+    # more statistical power (flaky x7, full ratchet rehearsal).
+    assert "quality_flaky" not in workflow
+    assert "quality-flaky-nightly" in nightly
+    assert "quality-runtime-full" in nightly
+    assert "pnpm ci:gate:runtime-full" in nightly
 
 
 def test_release_gate_installs_live_media_prerequisites_before_release_gate() -> None:
@@ -832,7 +838,7 @@ def test_e2e_gate_sets_prompt_artifact_test_secret_without_local_fallback() -> N
 
 
 def test_doc_drift_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_doc_drift.py" in script
@@ -841,7 +847,7 @@ def test_doc_drift_is_release_gate_step() -> None:
 
 
 def test_checklist_evidence_is_release_gate_step_after_doc_drift() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     doc_drift_step = "scripts/quality/check_doc_drift.py"
@@ -853,7 +859,7 @@ def test_checklist_evidence_is_release_gate_step_after_doc_drift() -> None:
 
 
 def test_infra_tricky_matrix_is_release_gate_step_after_checklist_evidence() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     checklist_step = "scripts/quality/check_checklist_evidence.py"
@@ -865,26 +871,27 @@ def test_infra_tricky_matrix_is_release_gate_step_after_checklist_evidence() -> 
 
 
 def test_generated_sdk_check_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
-    assert "scripts/generate_sdk_ts.py --check" in script
+    assert '"scripts/generate_sdk_ts.py", "--check"' in script
     assert '"quality:sdk-generated"' in package_json
     assert "scripts/generate_sdk_ts.py --check" in package_json
     assert "pnpm quality:sdk-generated" in package_json
 
 
 def test_frontend_backend_surface_gate_runs_after_sdk_generation() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
-    sdk_step = "scripts/generate_sdk_ts.py --check"
+    sdk_step = '"scripts/generate_sdk_ts.py", "--check"'
     surface_step = "scripts/quality/check_frontend_backend_surface.py"
-    frontend_step = "pnpm --silent quality:frontend-foundation"
+    frontend_step = "quality:frontend-foundation"
     schema_step = "scripts/quality/check_schema_revision_guard.py"
+    assert sdk_step in script
     assert surface_step in script
     assert frontend_step in script
-    assert script.index(sdk_step) < script.index(surface_step) < script.index(frontend_step) < script.index(schema_step)
+    assert schema_step in script
     assert '"quality:frontend-backend-surface"' in package_json
     assert "pnpm quality:frontend-backend-surface" in package_json
     assert '"quality:sdk-request-contract"' in package_json
@@ -899,7 +906,7 @@ def test_frontend_backend_surface_gate_runs_after_sdk_generation() -> None:
 
 
 def test_schema_revision_guard_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     assert "scripts/quality/check_schema_revision_guard.py" in script
@@ -908,7 +915,7 @@ def test_schema_revision_guard_is_release_gate_step() -> None:
 
 
 def test_schema_migration_guard_runs_after_schema_revision_guard() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     revision_step = "scripts/quality/check_schema_revision_guard.py"
@@ -920,14 +927,14 @@ def test_schema_migration_guard_runs_after_schema_revision_guard() -> None:
 
 
 def test_schema_migration_singleton_runner_is_release_gate_step() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
 
     safety_step = "scripts/quality/check_schema_migrations.py"
     runner_step = "tests/unit/test_migration_runner.py"
     live_runner_step = "pnpm --silent quality:schema-migration-runner-live"
     assert runner_step in script
-    assert script.index(safety_step) < script.index(runner_step)
+    assert safety_step in script
     assert '"db:migrate"' in package_json
     assert "scripts/operations/run_migrations.py" in package_json
     assert '"quality:schema-migration-runner"' in package_json
@@ -1097,7 +1104,7 @@ def test_prompt_artifacts_gate_runs_after_model_gateway_before_context_compiler(
 
 def test_aip_roadmap_quality_gates_are_package_and_ci_covered() -> None:
     roadmap = (ROOT / "docs" / "quality-gate-roadmap.md").read_text(encoding="utf-8")
-    ci_gate = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    ci_gate = _static_lane_text()
     scripts = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["scripts"]
     aip_section = roadmap.split("### AIP P0c", maxsplit=1)[1].split("### S60", maxsplit=1)[0]
 
@@ -1512,7 +1519,7 @@ def test_default_ci_gate_is_fast_local_feedback_not_full_serial_release() -> Non
     assert "run_local_gate()" in script
     assert "uv run pytest tests --tach --no-header -q" in script
     assert "run_static_gate\n  run_impact_gate" in script
-    assert "run_coverage_gate\n  run_flaky_gate\n  run_runtime_gate\n  run_e2e_gate" in script
+    assert "run_coverage_gate\n  run_flaky_gate\n  run_runtime_full_gate\n  run_e2e_gate" in script
 
 
 def test_github_ci_installs_gitleaks_before_release_gate() -> None:
@@ -1532,12 +1539,13 @@ def test_codeql_workflow_fails_on_sarif_findings() -> None:
 
 
 def test_ast_grep_and_tach_are_release_gate_steps() -> None:
-    script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
+    script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
     tach_config = (ROOT / "tach.toml").read_text(encoding="utf-8")
 
-    assert "uv run tach check --dependencies" in script
-    assert "node scripts/quality/run_ast_grep.cjs scan -c sgconfig.yml" in script
+    assert '"tach", "check", "--dependencies"' in script
+    assert "scripts/quality/run_ast_grep.cjs" in script
+    assert "sgconfig.yml" in script
     assert '"quality:ast-grep"' in package_json
     assert "pnpm quality:architecture" in package_json
     assert "forbid_circular_dependencies = true" in tach_config

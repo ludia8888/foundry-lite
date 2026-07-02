@@ -169,8 +169,29 @@ class FakeTransformRepository:
                 "error": record.error,
                 "created_at": record.created_at,
                 "completed_at": record.completed_at,
+                "retried_at": None,
             }
         )
+
+    def claim_failed_transform_run_for_retry(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        transform_run_id: str,
+        claimed_at: str,
+    ) -> bool:
+        del transaction
+        for row in self.transform_runs:
+            if (
+                row["tenant_id"] == tenant_id
+                and row["id"] == transform_run_id
+                and row["status"] == "FAILED"
+                and row.get("retried_at") is None
+            ):
+                row["retried_at"] = claimed_at
+                return True
+        return False
 
     def update_transform_run_terminal(
         self,

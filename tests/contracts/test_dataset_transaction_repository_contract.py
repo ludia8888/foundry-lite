@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from threading import Barrier, Event
@@ -300,6 +301,22 @@ class FakeDatasetTransactionRepository:
         if row is None or row["tenant_id"] != tenant_id:
             return None
         return dict(row)
+
+    def fail_sync_run(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        sync_run_id: str,
+        error: Mapping[str, object],
+        completed_at: str,
+    ) -> bool:
+        del transaction
+        row = self.sync_runs_store.get(sync_run_id)
+        if row is None or row["tenant_id"] != tenant_id or row["status"] != "EXTRACTING":
+            return False
+        row.update(status="FAILED", error=dict(error), completed_at=completed_at)
+        return True
 
     def insert_dead_letter_record(self, *, transaction: Any, record: DeadLetterRecord) -> bool:
         del transaction

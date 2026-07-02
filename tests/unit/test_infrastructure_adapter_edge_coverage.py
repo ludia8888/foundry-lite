@@ -14,7 +14,10 @@ from foundry_lite.application.ports.backup_artifact_store import (
     BackupArtifactNotFoundError,
 )
 from foundry_lite.infrastructure.adapters import dataset_manifest_metadata as metadata
+from foundry_lite.infrastructure.adapters import iceberg_arrow
 from foundry_lite.infrastructure.adapters import iceberg_dataset_storage as ice
+from foundry_lite.infrastructure.adapters import iceberg_maintenance as ice_maint
+from foundry_lite.infrastructure.adapters import iceberg_manifests as ice_manif
 from foundry_lite.infrastructure.adapters.iceberg_dataset_storage import (
     IcebergDatasetStorageAdapter,
     IcebergDatasetStorageAdapterConfig,
@@ -96,23 +99,23 @@ def test_iceberg_manifest_filter_and_schema_helpers_cover_closed_edges() -> None
     assert ice._is_missing_table(FileNotFoundError("missing"))
     assert ice._is_corrupt_metadata(type("ValidationError", (Exception,), {})("bad"))
     assert ice._sanitize("tenant-demo/orders") == "tenant_demo_orders"
-    assert ice._file_might_match_value(manifest_file, "nullable", None)
-    assert not ice._file_might_match_value(all_null_file, "amount", 10)
-    assert ice._safe_less(object(), 1) is False
-    assert ice._safe_greater(object(), 1) is False
-    assert ice._copy_expected_manifest_metadata(dict(manifest_file), None) is None
-    assert ice._current_compaction_candidate({**_plan(), "compaction_candidates": []}) is None
-    assert ice._current_snapshot_id(None) is None
-    assert ice._current_snapshot_id(SimpleNamespace(snapshot_id=5)) == 5
-    assert ice._retained_snapshot_ids(
+    assert ice_manif._file_might_match_value(manifest_file, "nullable", None)
+    assert not ice_manif._file_might_match_value(all_null_file, "amount", 10)
+    assert ice_manif._safe_less(object(), 1) is False
+    assert ice_manif._safe_greater(object(), 1) is False
+    assert ice_manif._copy_expected_manifest_metadata(dict(manifest_file), None) is None
+    assert ice_maint._current_compaction_candidate({**_plan(), "compaction_candidates": []}) is None
+    assert ice_maint._current_snapshot_id(None) is None
+    assert ice_maint._current_snapshot_id(SimpleNamespace(snapshot_id=5)) == 5
+    assert ice_maint._retained_snapshot_ids(
         [SimpleNamespace(snapshot_id=1), SimpleNamespace(snapshot_id=2), SimpleNamespace(snapshot_id=3)],
         SimpleNamespace(snapshot_id=4),
         {9: "version-9"},
         _policy(),
     ) == {2, 3, 4, 9}
-    assert pa.types.is_fixed_size_list(ice._iceberg_compatible_type(pa, fixed))
-    assert pa.types.is_list(ice._iceberg_compatible_type(pa, regular))
-    assert pa.types.is_struct(ice._iceberg_compatible_type(pa, struct))
+    assert pa.types.is_fixed_size_list(iceberg_arrow._iceberg_compatible_type(pa, fixed))
+    assert pa.types.is_list(iceberg_arrow._iceberg_compatible_type(pa, regular))
+    assert pa.types.is_struct(iceberg_arrow._iceberg_compatible_type(pa, struct))
 
 
 def test_iceberg_adapter_error_helpers_and_fake_io_paths(tmp_path: Path) -> None:
@@ -176,7 +179,7 @@ def test_iceberg_merge_and_empty_maintenance_helpers_cover_multi_file_edges(tmp_
             DatasetStagedFile(path=second, row_count=1),
         ),
     )
-    empty = ice._empty_maintenance_run("iceberg", "raw.orders", "dataset-orders", "main", "ns.table", _policy())
+    empty = ice_maint._empty_maintenance_run("iceberg", "raw.orders", "dataset-orders", "main", "ns.table", _policy())
 
     assert merged.exists()
     assert empty["status"] == "no_table"
