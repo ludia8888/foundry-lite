@@ -19,6 +19,7 @@ from foundry_lite.application.ports.search_adapter import (
     SearchIndexMapping,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.row_policies import row_policy_scope, row_visible
 from foundry_lite.application.services.object_store.search_projection_context import (
     search_projection_context as projection_ctx,
 )
@@ -287,6 +288,9 @@ class ObjectSearchService(CoreService):
         with self.engine.begin() as conn:
             object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
             object_type_id = record_scope_object_type_id(object_type)
+            # Search hits re-read source rows, so row policies filter here: a
+            # projection hit must never surface a row the caller cannot query.
+            scope = row_policy_scope(object_type, ctx.roles)
             rows = [
                 (hit, self._record_if_active(conn, ctx, object_type_api_name, hit.document_id, object_type_id))
                 for hit in hits
@@ -300,7 +304,7 @@ class ObjectSearchService(CoreService):
                 search_projection_version=hit.document.version,
             )
             for hit, row in rows
-            if row is not None
+            if row is not None and row_visible(scope, row["properties"])
         ]
 
     def _record_if_active(

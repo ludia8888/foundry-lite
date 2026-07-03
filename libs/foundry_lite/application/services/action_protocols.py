@@ -8,6 +8,7 @@ from typing import Protocol
 from foundry_lite.application.ports import (
     ActionTypeRow,
     ObjectRecordRow,
+    ObjectTypeRow,
     OsdkResourceOperation,
     OsdkResourceType,
     RuntimeRunType,
@@ -52,6 +53,13 @@ class ActionOntologyLookup(Protocol):
         ctx: RequestContext,
         action_type_id: str,
     ) -> ActionTypeRow: ...
+
+    def _active_object_type(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        api_name: str,
+    ) -> ObjectTypeRow: ...
 
 
 class ActionRuntimeBoundary(Protocol):

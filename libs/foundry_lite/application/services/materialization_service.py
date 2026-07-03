@@ -301,9 +301,9 @@ class MaterializationService(CoreService):
         )
 
     def list_materialization_specs(self, *, ctx: RequestContext | None = None) -> list[Mapping[str, object]]:
-        """List runnable spec names so operators can discover ontology-declared materializations."""
+        """List runnable specs; pure permission check because reads must not write audit rows."""
         ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "materialization:run", "materialization", "specs")
+        self.policy.require(ctx, "materialization:run")
         with self.engine.begin() as conn:
             return list(available_materialization_specs(self.ontology_service, conn, ctx))
 

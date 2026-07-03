@@ -64,6 +64,7 @@ from foundry_lite.application.services.action_protocols import (
     ActionRuntimeBoundary,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.row_policies import visible_record
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -272,8 +273,12 @@ class ActionBatchApplyService(CoreService):
         """Validate every target before mutating any: all-or-nothing needs the full failure set."""
         records: list[ObjectRecordRow] = []
         failures: list[TargetFailure] = []
+        # Hidden targets fail per-target as NotFound (record=None path), so one
+        # row-policy-hidden id rejects the batch exactly like a missing id.
+        target_type = self.ontology_service._active_object_type(conn, ctx, command.object_type)
         for target in command.targets:
             record = self.object_records_service._object_record(conn, ctx, command.object_type, target.object_id)
+            record = visible_record(record, target_type, ctx.roles)
             if record is not None and (invariant := action_target_record_error(action_type, record)) is not None:
                 raise invariant
             error = target_request_error(action_type, record, target.expected_object_version, command.params)

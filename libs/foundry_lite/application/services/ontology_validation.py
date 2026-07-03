@@ -19,6 +19,7 @@ from foundry_lite.application.services.materialization_types import (
 )
 from foundry_lite.application.services.ontology_catalog import build_ontology_catalog as build_ontology_catalog
 from foundry_lite.application.services.ontology_migration_types import OntologyMigrationPlan
+from foundry_lite.application.services.ontology_row_policy_validation import validate_yaml_row_policies
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
     action_type_definition,
@@ -201,6 +202,7 @@ def _validate_yaml_object_type(
     _validate_yaml_property_contracts(object_api_name, property_defs.values())
     _validate_yaml_primary_key(object_def, property_defs, columns)
     _validate_yaml_title_property(object_def, property_defs)
+    validate_yaml_row_policies(object_def, property_defs)
     _validate_yaml_dataset_properties(object_api_name, property_defs.values(), columns)
     _validate_yaml_action_mutations(definition, object_api_name, property_defs)
 

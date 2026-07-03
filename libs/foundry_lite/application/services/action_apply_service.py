@@ -45,6 +45,7 @@ from foundry_lite.application.services.action_workflow import (
 )
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.row_policies import visible_record
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -184,6 +185,10 @@ class ActionApplyService(CoreService):
                 if replay is not None:
                     return replay
                 record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
+                # A target hidden by row policies becomes NotFound (record=None
+                # path) so restricted users cannot act on rows they cannot see.
+                target_type = self.ontology_service._active_object_type(conn, ctx, command.object_type)
+                record = visible_record(record, target_type, ctx.roles)
                 if record is not None and (error := action_target_record_error(action_type, record)) is not None:
                     raise error
                 outcome = self._complete_received_action_run(

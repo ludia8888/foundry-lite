@@ -46,6 +46,7 @@ from foundry_lite.application.services.ontology_yaml import (
     mapping_sequence,
     object_type_backing,
     object_type_materialization_config,
+    object_type_row_policies,
     optional_bool,
     optional_str,
     property_derivation,
@@ -237,9 +238,9 @@ class OntologyActivationService(CoreService):
         migration_plan: OntologyMigrationPlan,
         api_name: str,
     ) -> dict[str, object]:
-        # titleProperty and materialization ride in the existing config JSON so
-        # no schema migration is needed; they coexist with the reindex
-        # serving-contract entries.
+        # titleProperty, materialization, and rowPolicies ride in the existing
+        # config JSON so no schema migration is needed; they coexist with the
+        # reindex serving-contract entries.
         config = object_type_serving_config(migration_plan, api_name)
         title_property = optional_str(item, "titleProperty")
         if title_property is not None:
@@ -247,6 +248,9 @@ class OntologyActivationService(CoreService):
         materialization = object_type_materialization_config(item)
         if materialization is not None:
             config["materialization"] = materialization
+        row_policies = object_type_row_policies(item)
+        if row_policies:
+            config["rowPolicies"] = list(row_policies)
         return config
 
     def _import_properties_for_object_type(

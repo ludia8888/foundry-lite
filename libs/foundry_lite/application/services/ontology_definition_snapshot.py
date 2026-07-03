@@ -16,6 +16,7 @@ from foundry_lite.application.ports.ontology_repository import (
     ObjectTypeRow,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.object_store.row_policies import persisted_row_policies
 
 JsonObject = dict[str, object]
 
@@ -55,6 +56,12 @@ def _object_type_definition(row: ObjectTypeRow, properties: Sequence[PropertyTyp
     materialization = row["config"].get("materialization")
     if isinstance(materialization, Mapping):
         definition["materialization"] = dict(materialization)
+    # Row policies must survive rollback for the same reason — dropping (or
+    # silently skipping) one on restore would fail open on a security control,
+    # so malformed persisted entries raise via persisted_row_policies instead.
+    policies = persisted_row_policies(row["config"])
+    if policies:
+        definition["rowPolicies"] = [{"role": role, "filter": dict(policy_filter)} for role, policy_filter in policies]
     return definition
 
 

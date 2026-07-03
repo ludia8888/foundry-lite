@@ -76,6 +76,7 @@ class OntologyCatalogObject(TypedDict):
     primaryKeyProperty: str
     titleProperty: str | None
     materialization: OntologyJsonObject | None
+    rowPolicies: Sequence[OntologyJsonObject]
     backing: ObjectTypeBacking
     properties: Sequence[OntologyCatalogProperty]
     actions: Sequence[OntologyCatalogAction]

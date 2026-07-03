@@ -141,6 +141,25 @@ def object_type_materialization_config(item: YamlObject) -> OntologyJsonObject |
     }
 
 
+def object_type_row_policies(item: YamlObject) -> tuple[OntologyJsonObject, ...]:
+    """Build the optional per-object-type row policy declarations from YAML.
+
+    Each policy grants one role visibility over rows matching a query-filter
+    AST. The normalized ``{role, filter}`` shape is persisted in the object
+    type's config JSON (like titleProperty/materialization) so row security
+    needs no schema migration and survives snapshot/rollback replay.
+    """
+    policies: list[OntologyJsonObject] = []
+    for policy in mapping_sequence(item, "rowPolicies"):
+        policies.append(
+            {
+                "role": required_str(policy, "role"),
+                "filter": dict(required_mapping(policy, "filter")),
+            }
+        )
+    return tuple(policies)
+
+
 def link_type_backing(item: YamlObject) -> LinkTypeBacking:
     """Build a link-type backing payload from YAML."""
     backing = required_mapping(item, "backing")
