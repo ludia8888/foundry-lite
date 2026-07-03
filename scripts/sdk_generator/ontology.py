@@ -28,6 +28,9 @@ class PropertyDef:
 class ObjectDef:
     api_name: str
     properties: tuple[PropertyDef, ...]
+    # Part of the fingerprinted contract: retitling an object type must surface
+    # as SDK drift just like adding or removing a property.
+    title_property: str | None = None
 
 
 @dataclass(frozen=True)
@@ -70,7 +73,26 @@ def load_ontology(path: Path) -> OntologyDef:
 def _object_def(value: object) -> ObjectDef:
     row = _mapping(value, "objectTypes[]")
     properties = tuple(_property_def(item) for item in _sequence(row.get("properties"), "properties"))
-    return ObjectDef(api_name=_string(row.get("apiName"), "object apiName"), properties=properties)
+    api_name = _string(row.get("apiName"), "object apiName")
+    return ObjectDef(
+        api_name=api_name,
+        properties=properties,
+        title_property=_title_property(row, api_name, properties),
+    )
+
+
+def _title_property(
+    row: Mapping[str, object],
+    api_name: str,
+    properties: tuple[PropertyDef, ...],
+) -> str | None:
+    value = row.get("titleProperty")
+    if value is None:
+        return None
+    title = _string(value, "object titleProperty")
+    if title not in {prop.api_name for prop in properties}:
+        raise ValueError(f"object {api_name} titleProperty must reference a declared property")
+    return title
 
 
 def _property_def(value: object) -> PropertyDef:

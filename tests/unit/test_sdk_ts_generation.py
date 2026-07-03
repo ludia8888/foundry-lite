@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from scripts import generate_sdk_ts as sdk
+from scripts.sdk_generator.surface import contract_fingerprint
 
 
 def _type_block(source: str, type_name: str) -> str:
@@ -49,6 +52,10 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "readonly objects: typeof $Objects;" in generated
     assert "readonly actions: typeof $Actions;" in generated
     assert "export const Order = {" in generated
+    assert "  readonly titleProperty: string | null;" in generated
+    assert 'titleProperty: "orderId",' in generated
+    assert 'titleProperty: "name",' in generated
+    assert "titleProperty: string | null;" in _type_block(generated, "OntologyCatalogObject")
     assert "export const $Objects = { Order, Customer } as const;" in generated
     assert "export const OrderCustomer = {" in generated
     assert "export const $Links = { OrderCustomer } as const;" in generated
@@ -456,6 +463,7 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "releases: {",
         "mediaUploadFormData(payload)",
         "export const Order = Object.freeze({",
+        'titleProperty: "orderId",',
         "export const $Objects = Object.freeze({ Order, Customer });",
         "export const OrderCustomer = Object.freeze({",
         "export const $Links = Object.freeze({ OrderCustomer });",
@@ -1057,3 +1065,25 @@ def test_generated_sdk_files_match_active_ontology() -> None:
         )
         == 0
     )
+
+
+def test_title_property_changes_the_ontology_contract_fingerprint(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    original_path = tmp_path / "original.yaml"
+    original_path.write_text(ontology_text, encoding="utf-8")
+    retitled_path = tmp_path / "retitled.yaml"
+    retitled_path.write_text(ontology_text.replace("titleProperty: orderId", "titleProperty: status", 1), "utf-8")
+
+    original = contract_fingerprint(sdk.load_ontology(original_path))
+    retitled = contract_fingerprint(sdk.load_ontology(retitled_path))
+
+    assert original != retitled
+
+
+def test_sdk_generator_rejects_dangling_title_property(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    ontology_path = tmp_path / "ontology.yaml"
+    ontology_path.write_text(ontology_text.replace("titleProperty: orderId", "titleProperty: missing", 1), "utf-8")
+
+    with pytest.raises(ValueError, match="titleProperty must reference a declared property"):
+        sdk.load_ontology(ontology_path)

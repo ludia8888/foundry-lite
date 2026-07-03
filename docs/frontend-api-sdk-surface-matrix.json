@@ -2261,6 +2261,16 @@
       "reason": "Legacy approved-action execution route kept for compatibility; new frontend SDK callers use client.insights.reviews.executeApprovedAction(...)."
     },
     {
+      "route": "POST /api/ontology/apply",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology apply is an IaC/CI control-plane operation (ontology:activate) driven by pipelines and the CLI, not the browser frontend SDK."
+    },
+    {
+      "route": "POST /api/ontology/rollback",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology rollback restores an archived version through the activation path; it is an operator/CI control-plane action, not a browser frontend SDK control."
+    },
+    {
       "route": "POST /api/sources/webhook-listeners/{source_name}/events",
       "accessClass": "server-to-server-ingest",
       "reason": "Source webhook listener event ingest is a signed external-system callback, not a browser frontend SDK control."

@@ -234,6 +234,7 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyCatalogResult,
     OntologyJsonObject,
     OntologyRepository,
+    OntologyRollbackResult,
     OntologyValidationResult,
     OntologyVersionRecord,
     OntologyVersionRow,

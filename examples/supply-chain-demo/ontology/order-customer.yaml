@@ -2,6 +2,7 @@ objectTypes:
   - apiName: Order
     displayName: Order
     primaryKey: orderId
+    titleProperty: orderId
     backing:
       dataset: clean.orders
       mode: snapshot
@@ -43,6 +44,7 @@ objectTypes:
   - apiName: Customer
     displayName: Customer
     primaryKey: customerId
+    titleProperty: name
     backing:
       dataset: clean.customers
       mode: snapshot

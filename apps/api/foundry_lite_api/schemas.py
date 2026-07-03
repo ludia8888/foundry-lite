@@ -240,6 +240,18 @@ class OntologyValidateRequest(BaseModel):
     yaml_text: str = Field(alias="yaml")
 
 
+class OntologyApplyRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    yaml_text: str = Field(alias="yamlText")
+
+
+class OntologyRollbackRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    version_number: int = Field(alias="versionNumber", ge=1)
+
+
 class AipBuilderContextSourceRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

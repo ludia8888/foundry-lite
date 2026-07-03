@@ -147,6 +147,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ontology_sub = ontology.add_subparsers(dest="command", required=True)
     ont_apply = ontology_sub.add_parser("apply")
     ont_apply.add_argument("path")
+    ont_rollback = ontology_sub.add_parser("rollback")
+    ont_rollback.add_argument("version_number", type=int)
 
     index = sub.add_parser("index")
     index_sub = index.add_subparsers(dest="command", required=True)
@@ -346,6 +348,7 @@ def _handlers() -> dict[tuple[str, str], Handler]:
         ("transform", "run"): lambda foundry, ctx, args: foundry.transforms.run(args.name, ctx=ctx),
         ("transform", "retry"): _transform_retry,
         ("ontology", "apply"): lambda foundry, ctx, args: foundry.ontology.apply(args.path, ctx=ctx),
+        ("ontology", "rollback"): lambda foundry, ctx, args: foundry.ontology.rollback(args.version_number, ctx=ctx),
         ("index", "rebuild"): lambda foundry, ctx, args: foundry.objects.reindex(args.object_type, ctx=ctx),
         ("index", "replay"): lambda foundry, ctx, args: foundry.objects.reindex(args.object_type, ctx=ctx),
         ("index", "replay-run"): lambda foundry, ctx, args: foundry.objects.replay_index_run(args.run_id, ctx=ctx),

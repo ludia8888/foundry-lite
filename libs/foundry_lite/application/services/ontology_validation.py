@@ -14,6 +14,7 @@ from foundry_lite.application.ports.ontology_repository import (
     PropertyTypeRow,
 )
 from foundry_lite.application.services.ontology_catalog import build_ontology_catalog as build_ontology_catalog
+from foundry_lite.application.services.ontology_migration_types import OntologyMigrationPlan
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
     action_type_definition,
@@ -85,13 +86,21 @@ def validate_persisted_link(
         )
 
 
-def ontology_validation_result(definition: YamlObject) -> OntologyValidationResult:
-    """Build the success payload returned by ontology preview validation."""
+def ontology_validation_result(
+    definition: YamlObject,
+    migration_plan: OntologyMigrationPlan,
+) -> OntologyValidationResult:
+    """Build the success payload returned by ontology preview validation.
+
+    The migration plan is reported (never enforced) here so operators can see
+    blocked changes, warnings, and reindex work before deciding to apply.
+    """
     return {
         "status": "valid",
         "object_type_count": len(mapping_sequence(definition, "objectTypes")),
         "link_type_count": len(mapping_sequence(definition, "linkTypes")),
         "action_type_count": len(mapping_sequence(definition, "actionTypes")),
+        "migration_plan": migration_plan.to_payload(),
     }
 
 
@@ -185,6 +194,7 @@ def _validate_yaml_object_type(
     property_defs = _property_definitions_by_api(object_def)
     _validate_yaml_property_contracts(object_api_name, property_defs.values())
     _validate_yaml_primary_key(object_def, property_defs, columns)
+    _validate_yaml_title_property(object_def, property_defs)
     _validate_yaml_dataset_properties(object_api_name, property_defs.values(), columns)
     _validate_yaml_action_mutations(definition, object_api_name, property_defs)
 
@@ -279,6 +289,28 @@ def _validate_yaml_primary_key(
         raise ValidationFailed("primary key column missing", details={"column": pk_column})
     if bool(columns[pk_column].get("nullable")):
         raise ValidationFailed("primary key column must be non-null", details={"column": pk_column})
+
+
+def _validate_yaml_title_property(
+    object_def: YamlObject,
+    property_defs: Mapping[str, YamlObject],
+) -> None:
+    """Ensure an optional titleProperty names a declared property.
+
+    The title property renders per-record display titles in generated SDKs and
+    UIs, so a dangling reference would break every consumer at read time.
+    """
+    title_property = optional_str(object_def, "titleProperty")
+    if title_property is None:
+        return
+    if title_property not in property_defs:
+        raise ValidationFailed(
+            "titleProperty must reference a declared property",
+            details={
+                "objectType": required_str(object_def, "apiName"),
+                "titleProperty": title_property,
+            },
+        )
 
 
 def _validate_yaml_dataset_properties(

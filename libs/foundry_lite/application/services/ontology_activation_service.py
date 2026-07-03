@@ -48,6 +48,7 @@ from foundry_lite.application.services.ontology_yaml import (
     optional_bool,
     optional_str,
     property_derivation,
+    require_yaml_text_within_limit,
     required_str,
     schema_columns,
     yaml_object,
@@ -82,6 +83,21 @@ class OntologyActivationService(CoreService):
         with self.engine.begin() as conn:
             return self._apply_loaded_ontology(conn, ctx, definition)
 
+    def apply_ontology_text(
+        self,
+        yaml_text: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> OntologyApplyResult:
+        """Apply ontology YAML supplied as text (IaC over REST) via the same path as file apply."""
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
+        require_ontology_write_open(self.runtime_service, ctx, "apply_ontology", "ontology", "draft")
+        require_yaml_text_within_limit(yaml_text)
+        definition = self._load_ontology_text(yaml_text)
+        with self.engine.begin() as conn:
+            return self._apply_loaded_ontology(conn, ctx, definition)
+
     def validate_yaml_text(
         self,
         yaml_text: str,
@@ -90,10 +106,12 @@ class OntologyActivationService(CoreService):
     ) -> OntologyValidationResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "ontology:validate", "ontology", "draft")
+        require_yaml_text_within_limit(yaml_text)
         definition = self._load_ontology_text(yaml_text)
         with self.engine.begin() as conn:
             validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
-        return ontology_validation_result(definition)
+            migration_plan = self._candidate_migration_plan(conn, ctx, definition)
+        return ontology_validation_result(definition, migration_plan)
 
     def _apply_loaded_ontology(
         self,
@@ -111,7 +129,11 @@ class OntologyActivationService(CoreService):
         self._validate_ontology(conn, ctx, ontology_version_id)
         self._activate_ontology_version(conn, ctx, ontology_version_id)
         self._record_ontology_activation(conn, ctx, ontology_version_id, version_number, migration_plan)
-        return {"ontology_version_id": ontology_version_id, "version_number": version_number}
+        return {
+            "ontology_version_id": ontology_version_id,
+            "version_number": version_number,
+            "migration_plan": migration_plan.to_payload(),
+        }
 
     def _load_ontology_definition(self, yaml_path: str | Path) -> YamlObject:
         definition: object = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8"))
@@ -203,10 +225,24 @@ class OntologyActivationService(CoreService):
                 description=optional_str(item, "description"),
                 primary_key_property=required_str(item, "primaryKey"),
                 backing=object_type_backing(item),
-                config=object_type_serving_config(migration_plan, api_name),
+                config=self._object_type_config(item, migration_plan, api_name),
             ),
         )
         return object_id
+
+    def _object_type_config(
+        self,
+        item: YamlObject,
+        migration_plan: OntologyMigrationPlan,
+        api_name: str,
+    ) -> dict[str, object]:
+        # titleProperty rides in the existing config JSON so no schema migration
+        # is needed; it coexists with the reindex serving-contract entries.
+        config = object_type_serving_config(migration_plan, api_name)
+        title_property = optional_str(item, "titleProperty")
+        if title_property is not None:
+            config["titleProperty"] = title_property
+        return config
 
     def _import_properties_for_object_type(
         self,

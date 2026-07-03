@@ -10,6 +10,7 @@ from foundry_lite.application.services.ontology_activation_service import Ontolo
 from foundry_lite.application.services.ontology_catalog_service import OntologyCatalogService
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
 from foundry_lite.application.services.ontology_reindex_contract import OntologyReindexContractService
+from foundry_lite.application.services.ontology_rollback_service import OntologyRollbackService
 from foundry_lite.application.services.ontology_service import OntologyService
 
 
@@ -22,6 +23,7 @@ class OntologyServices:
     entrypoint: OntologyService
     lookup: OntologyLookupService
     reindex_contract: OntologyReindexContractService
+    rollback: OntologyRollbackService
 
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> OntologyServices:
@@ -29,11 +31,13 @@ class OntologyServices:
         catalog = build_service(OntologyCatalogService, dependencies)
         lookup = build_service(OntologyLookupService, dependencies)
         reindex_contract = build_service(OntologyReindexContractService, dependencies)
+        rollback = build_service(OntologyRollbackService, dependencies)
         entrypoint = OntologyService(
             activation_service=activation,
             catalog_service=catalog,
             lookup_service=lookup,
             reindex_contract_service=reindex_contract,
+            rollback_service=rollback,
         )
         return cls(
             activation=activation,
@@ -41,6 +45,7 @@ class OntologyServices:
             entrypoint=entrypoint,
             lookup=lookup,
             reindex_contract=reindex_contract,
+            rollback=rollback,
         )
 
     def items(self) -> tuple[CoreService, ...]:
@@ -49,4 +54,5 @@ class OntologyServices:
             self.catalog,
             self.lookup,
             self.reindex_contract,
+            self.rollback,
         )

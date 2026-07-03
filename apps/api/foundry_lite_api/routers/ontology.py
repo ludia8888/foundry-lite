@@ -1,4 +1,4 @@
-"""Ontology catalog and validation routes."""
+"""Ontology catalog, validation, apply, and rollback routes."""
 
 from __future__ import annotations
 
@@ -9,7 +9,12 @@ from foundry_lite.domain.errors import FoundryLiteError
 from foundry_lite_api import runtime
 from foundry_lite_api.errors import _handle_error
 from foundry_lite_api.request_context import _ctx
-from foundry_lite_api.schemas import OntologyValidateRequest
+from foundry_lite_api.schemas import (
+    JsonObject,
+    OntologyApplyRequest,
+    OntologyRollbackRequest,
+    OntologyValidateRequest,
+)
 
 router = APIRouter()
 
@@ -28,3 +33,31 @@ def validate_ontology(request: Request, payload: OntologyValidateRequest) -> Ont
         return runtime.foundry.ontology.validate(payload.yaml_text, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/apply")
+def apply_ontology(request: Request, payload: OntologyApplyRequest) -> JsonObject:
+    try:
+        result = runtime.foundry.ontology.apply_text(payload.yaml_text, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+    return {
+        "ontologyVersionId": result["ontology_version_id"],
+        "versionNumber": result["version_number"],
+        "migrationPlan": result["migration_plan"],
+    }
+
+
+@router.post("/api/ontology/rollback")
+def rollback_ontology(request: Request, payload: OntologyRollbackRequest) -> JsonObject:
+    try:
+        result = runtime.foundry.ontology.rollback(payload.version_number, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+    return {
+        "ontologyVersionId": result["ontology_version_id"],
+        "versionNumber": result["version_number"],
+        "rolledBackFromVersionNumber": result["rolled_back_from_version_number"],
+        "rolledBackToVersionNumber": result["rolled_back_to_version_number"],
+        "migrationPlan": result["migration_plan"],
+    }

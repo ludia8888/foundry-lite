@@ -16,6 +16,17 @@ class OntologyApplyResult(TypedDict):
 
     ontology_version_id: str
     version_number: int
+    migration_plan: OntologyJsonObject
+
+
+class OntologyRollbackResult(TypedDict):
+    """Public result returned after restoring an archived ontology version as a new version."""
+
+    ontology_version_id: str
+    version_number: int
+    rolled_back_from_version_number: int | None
+    rolled_back_to_version_number: int
+    migration_plan: OntologyJsonObject
 
 
 class OntologyValidationResult(TypedDict):
@@ -25,6 +36,7 @@ class OntologyValidationResult(TypedDict):
     object_type_count: int
     link_type_count: int
     action_type_count: int
+    migration_plan: OntologyJsonObject
 
 
 class OntologyCatalogProperty(TypedDict):
@@ -62,6 +74,7 @@ class OntologyCatalogObject(TypedDict):
     displayName: str
     description: str | None
     primaryKeyProperty: str
+    titleProperty: str | None
     backing: ObjectTypeBacking
     properties: Sequence[OntologyCatalogProperty]
     actions: Sequence[OntologyCatalogAction]
@@ -409,6 +422,21 @@ class OntologyRepository(Protocol):
 
     def active_ontology_version(self, *, transaction: TransactionContext, tenant_id: str) -> OntologyVersionRow | None:
         """Return the active ontology version for a tenant."""
+        ...
+
+    def ontology_version_by_number(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        version_number: int,
+    ) -> OntologyVersionRow | None:
+        """Return one ontology version by its tenant-scoped version number.
+
+        Rollback addresses history by the stable version number operators see in
+        the catalog, not by internal ids, so restoring an archived version needs
+        this lookup.
+        """
         ...
 
     def object_type_for_version(

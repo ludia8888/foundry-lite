@@ -19,6 +19,7 @@ def _osdk_type_lines() -> list[str]:
         '  readonly kind: "object";',
         "  readonly apiName: TInstance['objectType'];",
         "  readonly primaryKey: string;",
+        "  readonly titleProperty: string | null;",
         "  readonly properties: readonly string[];",
         "  readonly __instance?: TInstance;",
         "};",
@@ -750,11 +751,13 @@ def _ts_ontology_index_lines() -> list[str]:
 def _osdk_object_constant_lines(object_def: ObjectDef) -> list[str]:
     property_names = ", ".join(json.dumps(prop.api_name) for prop in object_def.properties)
     primary_key = json.dumps(_primary_key_property(object_def))
+    title_property = json.dumps(object_def.title_property)
     return [
         f"export const {object_def.api_name} = {{",
         '  kind: "object",',
         f'  apiName: "{object_def.api_name}",',
         f"  primaryKey: {primary_key},",
+        f"  titleProperty: {title_property},",
         f"  properties: [{property_names}],",
         f"}} as const satisfies OsdkObjectType<{object_def.api_name}>;",
     ]

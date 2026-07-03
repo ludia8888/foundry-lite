@@ -439,11 +439,13 @@ def _web_ontology_index_lines() -> list[str]:
 def _web_osdk_object_constant_lines(object_def: ObjectDef) -> list[str]:
     property_names = ", ".join(json.dumps(prop.api_name) for prop in object_def.properties)
     primary_key = json.dumps(_primary_key_property(object_def))
+    title_property = json.dumps(object_def.title_property)
     return [
         f"export const {object_def.api_name} = Object.freeze({{",
         '  kind: "object",',
         f'  apiName: "{object_def.api_name}",',
         f"  primaryKey: {primary_key},",
+        f"  titleProperty: {title_property},",
         f"  properties: Object.freeze([{property_names}]),",
         "});",
     ]

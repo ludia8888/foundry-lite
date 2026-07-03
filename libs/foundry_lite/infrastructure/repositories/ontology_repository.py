@@ -264,6 +264,27 @@ class SqlAlchemyOntologyRepository:
         )
         return cast(OntologyVersionRow, dict(row)) if row else None
 
+    def ontology_version_by_number(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        version_number: int,
+    ) -> OntologyVersionRow | None:
+        row = (
+            transaction.execute(
+                select(db.ontology_versions).where(
+                    and_(
+                        db.ontology_versions.c.tenant_id == tenant_id,
+                        db.ontology_versions.c.version_number == version_number,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(OntologyVersionRow, dict(row)) if row else None
+
     def object_type_for_version(
         self,
         *,

@@ -160,6 +160,19 @@ class FakeOntologyRepository:
                 return cast(OntologyVersionRow, dict(row))
         return None
 
+    def ontology_version_by_number(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        version_number: int,
+    ) -> OntologyVersionRow | None:
+        del transaction
+        for row in self.ontology_versions:
+            if row["tenant_id"] == tenant_id and row["version_number"] == version_number:
+                return cast(OntologyVersionRow, dict(row))
+        return None
+
     def object_type_for_version(
         self,
         *,
@@ -542,6 +555,40 @@ def test_ontology_repository_contract_activation_requires_draft_state(harness: O
     assert activated is False
     assert rows["ont_archived"]["status"] == "archived"
     assert rows["ont_archived"]["activated_at"] is None
+
+
+def test_ontology_repository_contract_finds_versions_by_tenant_scoped_number(
+    harness: OntologyHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_ontology_version(
+            transaction=transaction,
+            record=_ontology_version_record("ont_archived", version_number=1, status="archived"),
+        )
+        harness.repository.insert_ontology_version(
+            transaction=transaction,
+            record=_ontology_version_record(
+                "ont_other_tenant",
+                tenant_id="tenant-other",
+                version_number=2,
+                status="active",
+            ),
+        )
+        found = harness.repository.ontology_version_by_number(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            version_number=1,
+        )
+        missing = harness.repository.ontology_version_by_number(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            version_number=2,
+        )
+
+    assert found is not None
+    assert found["id"] == "ont_archived"
+    assert found["status"] == "archived"
+    assert missing is None
 
 
 def test_ontology_repository_contract_rejects_two_active_versions_for_one_tenant(

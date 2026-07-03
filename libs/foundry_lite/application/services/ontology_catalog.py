@@ -55,11 +55,18 @@ def _catalog_object(
         "displayName": row["display_name"],
         "description": row["description"],
         "primaryKeyProperty": row["primary_key_property"],
+        "titleProperty": _title_property(row),
         "backing": row["backing"],
         "properties": [_catalog_property(item) for item in properties],
         "actions": [_catalog_action(item) for item in actions],
         "config": row["config"],
     }
+
+
+def _title_property(row: ObjectTypeRow) -> str | None:
+    """Surface the per-record display-title property stored in config JSON."""
+    value = row["config"].get("titleProperty")
+    return value if isinstance(value, str) else None
 
 
 def _catalog_property(row: PropertyTypeRow) -> OntologyCatalogProperty:

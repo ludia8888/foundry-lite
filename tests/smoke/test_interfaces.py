@@ -2064,12 +2064,17 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     valid_ontology = Path("examples/supply-chain-demo/ontology/order-customer.yaml").read_text(encoding="utf-8")
     ontology_validation = client.post("/api/ontology/validate", headers=headers, json={"yaml": valid_ontology})
     assert ontology_validation.status_code == 200
-    assert ontology_validation.json() == {
+    ontology_validation_payload = ontology_validation.json()
+    ontology_migration_plan = ontology_validation_payload.pop("migration_plan")
+    assert ontology_validation_payload == {
         "status": "valid",
         "object_type_count": 2,
         "link_type_count": 1,
         "action_type_count": 1,
     }
+    assert ontology_migration_plan["status"] == "compatible"
+    assert ontology_migration_plan["changes"] == []
+    assert ontology_migration_plan["objectReindexPlan"] == []
     with foundry.engine.begin() as conn:
         ontology_rows = conn.execute(select(db.ontology_versions.c.status)).scalars().all()
     assert ontology_rows == ["active"]
