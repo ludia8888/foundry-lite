@@ -333,7 +333,11 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "connections": ["create", "list", "get", "update"],
         "resources": ["upsert", "test", "startSync"],
     }
-    assert ts_surface["ontology"] == ["catalog", "validate"]
+    assert ts_surface["ontology"] == {
+        "_self": ["catalog", "validate", "apply", "rollback"],
+        "proposals": ["submit", "list", "get", "update", "assign", "decide", "execute", "withdraw"],
+        "resources": ["usage", "dependents"],
+    }
     assert ts_surface["aip"] == {
         "builder": ["validate", "run"],
         "agent": ["run"],
@@ -352,7 +356,10 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     }
     assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide", "executeApprovedAction"]}
     objects_surface = cast(dict[str, object], ts_surface["objects"])
-    assert objects_surface["generic"] == ["get", "query", "links", "subscribe"]
+    assert objects_surface["generic"] == ["get", "query", "links", "subscribe", "aggregate"]
+    assert objects_surface["Order"] == ["get", "query", "aggregate"]
+    assert ts_surface["interfaces"] == {"generic": ["query"], "Asset": ["query"]}
+    assert ts_surface["functions"] == {"generic": ["execute"], "orderRiskSummary": ["execute"]}
     assert ts_surface["auth"] == {"osdkOAuth": ["authorize", "token", "refresh", "revoke"]}
     assert ts_surface["developerConsole"] == {
         "osdkApplications": [
@@ -380,8 +387,8 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         ],
     }
     assert ts_surface["objectSets"] == ["list", "create", "get"]
-    assert ts_surface["actions"] == {"ApproveOrder": ["apply", "validate"]}
-    assert ts_surface["materializations"] == ["run"]
+    assert ts_surface["actions"] == {"ApproveOrder": ["apply", "validate", "applyBatch"]}
+    assert ts_surface["materializations"] == ["run", "list"]
     assert ts_surface["transforms"] == ["registerSql", "run", "previewDue", "tick"]
     assert ts_surface["operations"] == {
         "admin": ["overview", "taskPlan"],
@@ -438,6 +445,95 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "assertFoundryLiteSdkFresh",
         "streamFoundryLiteOperationEvents",
     ]
+
+
+def test_sdk_generator_emits_pending_route_client_methods() -> None:
+    """S65: ontology governance, aggregate, batch-apply, interface/function, and materialization list surfaces."""
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    generated = sdk.render_typescript(ontology)
+    browser_sdk = sdk.render_web_javascript(ontology)
+    surface = json.loads(sdk.render_client_surface_json(sdk.client_surface(ontology)))
+
+    # SDK_CLIENT_SURFACE registry carries every new method.
+    assert surface["ontology"]["_self"] == ["catalog", "validate", "apply", "rollback"]
+    assert surface["ontology"]["proposals"] == [
+        "submit",
+        "list",
+        "get",
+        "update",
+        "assign",
+        "decide",
+        "execute",
+        "withdraw",
+    ]
+    assert surface["ontology"]["resources"] == ["usage", "dependents"]
+    assert surface["objects"]["generic"] == ["get", "query", "links", "subscribe", "aggregate"]
+    assert surface["objects"]["Order"] == ["get", "query", "aggregate"]
+    assert surface["actions"] == {"ApproveOrder": ["apply", "validate", "applyBatch"]}
+    assert surface["interfaces"] == {"generic": ["query"], "Asset": ["query"]}
+    assert surface["functions"] == {"generic": ["execute"], "orderRiskSummary": ["execute"]}
+    assert surface["materializations"] == ["run", "list"]
+
+    # TypeScript package output: typed method declarations plus request/response types.
+    ts_fragments = [
+        "apply(payload: OntologyApplyRequest): Promise<OntologyApplyResult>;",
+        "rollback(payload: OntologyRollbackRequest): Promise<OntologyRollbackResult>;",
+        "usage(resourceType: string, apiName: string, options?: OntologyResourceUsageOptions)",
+        "dependents(resourceType: string, apiName: string): Promise<OntologyResourceDependentsResult>;",
+        "submit(payload: OntologyProposalSubmitRequest, options: { idempotencyKey: string })",
+        "list(filters?: OntologyProposalListFilters): Promise<OntologyProposalListResult>;",
+        "get(proposalId: string): Promise<OntologyProposalPayload>;",
+        "update(proposalId: string, payload: OntologyProposalUpdateRequest)",
+        "assign(proposalId: string, payload: OntologyProposalAssignRequest)",
+        "decide(proposalId: string, payload: OntologyProposalDecisionRequest)",
+        "execute(proposalId: string, payload: OntologyProposalExecuteRequest)",
+        "withdraw(proposalId: string, payload?: OntologyProposalWithdrawRequest)",
+        "aggregate(objectType: string, payload: ObjectAggregateRequest): Promise<ObjectAggregationResult>;",
+        "aggregate(payload: ObjectAggregateRequest): Promise<ObjectAggregationResult>;",
+        "applyBatch(payload: ApproveOrderApplyBatchRequest, options: { idempotencyKey: string })",
+        "export type ApproveOrderApplyBatchRequest = {",
+        "export type ActionBatchApplyResponse = {",
+        "query(interfaceType: string, payload?: InterfaceQueryRequest)",
+        "query(payload?: InterfaceQueryRequest): Promise<ObjectQueryResult<GenericObject>>;",
+        "execute(functionType: string, payload?: FunctionExecuteRequest): Promise<FunctionExecutionResult>;",
+        "execute(payload?: FunctionExecuteRequest): Promise<FunctionExecutionResult>;",
+        "list(): Promise<MaterializationSpecList>;",
+        "export type OntologyProposalPayload = {",
+        "export type ObjectAggregateRequest = {",
+        "export type FunctionExecutionResult = {",
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.proposals.submit")',
+        "requireIdempotencyKey(",
+    ]
+    for fragment in ts_fragments:
+        assert fragment in generated, fragment
+    assert '"ApproveOrder.applyBatch",' in generated
+
+    # Browser output: same named methods with matching paths and header conventions.
+    web_fragments = [
+        "apply: (payload) => request(`/api/ontology/apply`, {",
+        "rollback: (payload) => request(`/api/ontology/rollback`, {",
+        "${encodeURIComponent(apiName)}/usage${suffix}`",
+        "${encodeURIComponent(apiName)}/dependents`",
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.proposals.submit")',
+        "return request(`/api/ontology/proposals${suffix}`);",
+        "get: (proposalId) => request(`/api/ontology/proposals/${encodeURIComponent(proposalId)}`)",
+        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/update`",
+        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/assign`",
+        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/decide`",
+        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/execute`",
+        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/withdraw`",
+        "`/api/objects/${encodeURIComponent(objectType)}/aggregate`",
+        "aggregate: (payload) => request(`/api/objects/Order/aggregate`, {",
+        "applyBatch: (payload, options) => request(`/api/actions/ApproveOrder/apply-batch`, {",
+        'requireIdempotencyKey(options?.idempotencyKey, "ApproveOrder.applyBatch")',
+        "`/api/interfaces/${encodeURIComponent(interfaceType)}/query`",
+        "query: (payload = {}) => request(`/api/interfaces/Asset/query`, {",
+        "`/api/functions/${encodeURIComponent(functionType)}/execute`",
+        "execute: (payload = {}) => request(`/api/functions/orderRiskSummary/execute`, {",
+        "list: () => request(`/api/materializations`)",
+    ]
+    for fragment in web_fragments:
+        assert fragment in browser_sdk, fragment
 
 
 def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:

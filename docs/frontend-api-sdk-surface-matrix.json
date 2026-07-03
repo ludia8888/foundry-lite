@@ -196,6 +196,151 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "ontology.apply",
+      "route": "POST /api/ontology/apply",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.apply",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology apply activates a new ontology version through ontology:activate, returns the new ontologyVersionId, versionNumber, and migrationPlan, and leaves ontology activation audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.rollback",
+      "route": "POST /api/ontology/rollback",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.rollback",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology rollback restores an archived version through the same ontology:activate activation path and returns rolled-back-from/to version numbers plus the migration plan as operator evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.resources.usage",
+      "route": "GET /api/ontology/resources/{resource_type}/{api_name}/usage",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.resources.usage",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology resource usage is a read-only governance read model (ontology:read) returning windowed action run, index run, and audit event usage evidence for one active ontology resource.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.resources.dependents",
+      "route": "GET /api/ontology/resources/{resource_type}/{api_name}/dependents",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.resources.dependents",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology resource dependents is a read-only governance read model (ontology:read) returning backing dataset, action, link, writeback, side-effect, and OSDK application dependency evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.submit",
+      "route": "POST /api/ontology/proposals",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.submit",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Ontology proposal submission requires Idempotency-Key, revalidates the submitted yaml, snapshots the migration plan at submit time, and stores tenant-scoped proposal state with audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.list",
+      "route": "GET /api/ontology/proposals",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal queue reads return cursor-paged tenant-scoped proposal rows with status, fingerprint, assignee, and revision evidence for the review-then-apply flow.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.get",
+      "route": "GET /api/ontology/proposals/{proposal_id}",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal detail returns yamlText, submitted migration plan, decision, execution status, and timeline evidence for one governance proposal.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.update",
+      "route": "POST /api/ontology/proposals/{proposal_id}/update",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.update",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal in-place revision is fingerprint-gated (expectedFingerprint conditional update), revalidates the new yaml, and records revision count/timeline evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.assign",
+      "route": "POST /api/ontology/proposals/{proposal_id}/assign",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.assign",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal reviewer assignment records the reviewer on the tenant-scoped proposal row and leaves assignment audit evidence for separation-of-duties review.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.decide",
+      "route": "POST /api/ontology/proposals/{proposal_id}/decide",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.decide",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal approve/reject re-validates against the current active ontology, is fingerprint-gated, enforces separation of duties (ontology:activate), and records the decision with comment evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.execute",
+      "route": "POST /api/ontology/proposals/{proposal_id}/execute",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.execute",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal execution applies an approved fingerprint-matched proposal through the same activation path as direct apply and records the applied ontology version as execution evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.withdraw",
+      "route": "POST /api/ontology/proposals/{proposal_id}/withdraw",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.withdraw",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal withdrawal by its submitter records the withdrawal reason and timestamp on the proposal timeline without touching the active ontology version.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "aip.builder.validate",
       "route": "POST /api/aip/builder/validate",
       "productArea": "aip-builder",
@@ -568,6 +713,42 @@
       "sdkSurface": "objects.generic.subscribe",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "ObjectSet subscription streams send a masked snapshot, watermark, object_changed events, and out_of_date evidence through the same object query permission path.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "objects.generic.aggregate",
+      "route": "POST /api/objects/{object_type}/aggregate",
+      "productArea": "object-explorer",
+      "sdkSurface": "objects.generic.aggregate",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Server-side object aggregation returns grouped count/sum/avg/min/max metrics computed inside the object read boundary so masked or filtered rows never reach the browser.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "interfaces.generic.query",
+      "route": "POST /api/interfaces/{interface_type}/query",
+      "productArea": "object-explorer",
+      "sdkSurface": "interfaces.generic.query",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Interface-scoped polymorphic query unions every implementing object type through the same object query permission and masking path and returns one merged page.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "functions.generic.execute",
+      "route": "POST /api/functions/{function_type}/execute",
+      "productArea": "ontology",
+      "sdkSurface": "functions.generic.execute",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Registered ontology function execution runs the read/compute-only Logic DAG through ToolBroker guards and returns logicRunId, aiRunId, status, output, and resultHash run evidence.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -1937,6 +2118,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "materializations.list",
+      "route": "GET /api/materializations",
+      "productArea": "operations-console",
+      "sdkSurface": "materializations.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Materialization spec discovery lists runnable built-in plus ontology-declared specs behind materialization:run so operator screens can offer only real materialization targets.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "actions.generated.validate",
       "route": "POST /api/actions/{action_type}/validate",
       "productArea": "action-workspace",
@@ -1956,6 +2149,19 @@
       "rawRequestPolicy": "named-sdk-only",
       "requiresIdempotencyKey": true,
       "operatorEvidence": "Generated action calls include Idempotency-Key and expectedObjectVersion; action/audit/outbox rows carry durable evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.generated.applyBatch",
+      "route": "POST /api/actions/{action_type}/apply-batch",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.ApproveOrder.applyBatch",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Generated batch action calls include Idempotency-Key and per-target expectedObjectVersion; the all-or-nothing multi-target mutation returns one actionRunId with per-target edit evidence.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -2261,94 +2467,9 @@
       "reason": "Legacy approved-action execution route kept for compatibility; new frontend SDK callers use client.insights.reviews.executeApprovedAction(...)."
     },
     {
-      "route": "GET /api/materializations",
-      "accessClass": "operator-control-plane",
-      "reason": "Materialization spec discovery (built-in plus ontology-declared) is an operator/CLI control-plane aid (materialization:run), not a browser frontend SDK control."
-    },
-    {
-      "route": "POST /api/objects/{object_type}/aggregate",
-      "accessClass": "server-side-read-pending-sdk",
-      "reason": "Server-side object aggregation currently backs the Python OSDK aggregate call; wiring the browser SDK objects.generic.aggregate method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
-    },
-    {
-      "route": "POST /api/actions/{action_type}/apply-batch",
-      "accessClass": "server-side-write-pending-sdk",
-      "reason": "Batch action apply (Idempotency-Key header, all-or-nothing multi-target mutation) currently serves server-side and API callers; wiring the browser SDK actions.<ActionType>.applyBatch method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
-    },
-    {
-      "route": "POST /api/ontology/apply",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology apply is an IaC/CI control-plane operation (ontology:activate) driven by pipelines and the CLI, not the browser frontend SDK."
-    },
-    {
-      "route": "POST /api/ontology/rollback",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology rollback restores an archived version through the activation path; it is an operator/CI control-plane action, not a browser frontend SDK control."
-    },
-    {
-      "route": "GET /api/ontology/resources/{resource_type}/{api_name}/usage",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology resource usage is a read-only operator/governance read model (ontology:read) mirroring Ontology Manager's usage tab; wiring a named browser SDK method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
-    },
-    {
-      "route": "GET /api/ontology/resources/{resource_type}/{api_name}/dependents",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology resource dependents is a read-only operator/governance read model (ontology:read) mirroring Ontology Manager's dependents view; wiring a named browser SDK method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
-    },
-    {
-      "route": "POST /api/ontology/proposals",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology change proposal submission is an IaC/governance control-plane operation (ontology:validate) driven by pipelines and the CLI, not the browser frontend SDK."
-    },
-    {
-      "route": "GET /api/ontology/proposals",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology change proposal queue is a governance/operator read model (ontology:validate) for the review-then-apply flow, not a browser frontend SDK control."
-    },
-    {
-      "route": "GET /api/ontology/proposals/{proposal_id}",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology change proposal detail (yaml, migration plans, timeline) is a governance/operator read model (ontology:validate), not a browser frontend SDK control."
-    },
-    {
-      "route": "POST /api/ontology/proposals/{proposal_id}/assign",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology proposal reviewer assignment is a governance control-plane action (ontology:activate), not a browser frontend SDK control."
-    },
-    {
-      "route": "POST /api/ontology/proposals/{proposal_id}/decide",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology proposal approve/reject re-validates against the current active ontology and enforces separation of duties (ontology:activate); it is a governance control-plane action, not a browser frontend SDK control."
-    },
-    {
-      "route": "POST /api/ontology/proposals/{proposal_id}/execute",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology proposal execution applies an approved proposal through the same activation path as direct apply (ontology:activate); it is an operator/CI control-plane action, not a browser frontend SDK control."
-    },
-    {
-      "route": "POST /api/ontology/proposals/{proposal_id}/update",
-      "accessClass": "server-side-write-pending-sdk",
-      "reason": "Ontology proposal in-place revision by its submitter (fingerprint-gated conditional update, revalidated yaml) currently serves server-side and API callers; wiring the browser SDK ontology.updateProposal method (generator surface + request-contract coverage) lands in the immediately following change."
-    },
-    {
-      "route": "POST /api/ontology/proposals/{proposal_id}/withdraw",
-      "accessClass": "operator-control-plane",
-      "reason": "Ontology proposal withdrawal by its submitter is a governance control-plane action (ontology:validate), not a browser frontend SDK control."
-    },
-    {
       "route": "POST /api/sources/webhook-listeners/{source_name}/events",
       "accessClass": "server-to-server-ingest",
       "reason": "Source webhook listener event ingest is a signed external-system callback, not a browser frontend SDK control."
-    },
-    {
-      "route": "POST /api/interfaces/{interface_type}/query",
-      "accessClass": "server-side-read-pending-sdk",
-      "reason": "Interface-scoped polymorphic object query currently serves server-side and API callers; wiring a named browser SDK interfaces.query method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
-    },
-    {
-      "route": "POST /api/functions/{function_type}/execute",
-      "accessClass": "server-side-read-pending-sdk",
-      "reason": "Registered ontology function execution (read/compute-only Logic DAG) currently serves server-side and API callers; wiring a named browser SDK functions.execute method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
     }
   ]
 }

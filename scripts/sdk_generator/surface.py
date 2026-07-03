@@ -59,12 +59,18 @@ class SdkClientSurface:
     media: tuple[OperationClientSurface, ...]
     objects: tuple[ObjectClientSurface, ...]
     actions: tuple[ActionClientSurface, ...]
+    interfaces: tuple[OperationClientSurface, ...]
+    functions: tuple[OperationClientSurface, ...]
     object_sets: tuple[str, ...]
     materializations: tuple[str, ...]
     aip: tuple[OperationClientSurface, ...]
     transforms: tuple[str, ...]
     operations: tuple[OperationClientSurface, ...]
     helpers: tuple[str, ...]
+
+
+ONTOLOGY_PROPOSAL_METHODS = ("submit", "list", "get", "update", "assign", "decide", "execute", "withdraw")
+ONTOLOGY_RESOURCE_METHODS = ("usage", "dependents")
 
 
 def client_surface(ontology: OntologyDef) -> SdkClientSurface:
@@ -123,7 +129,7 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
                 ),
             ),
         ),
-        ontology=("catalog", "validate"),
+        ontology=("catalog", "validate", "apply", "rollback"),
         insights=(
             OperationClientSurface(
                 "reviews",
@@ -140,13 +146,26 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             OperationClientSurface("processingRuns", ("list", "get")),
             OperationClientSurface("references", ("bind", "resolve")),
         ),
-        objects=tuple(ObjectClientSurface(item.api_name, item.api_name, ("get", "query")) for item in ontology.objects),
+        objects=tuple(
+            ObjectClientSurface(item.api_name, item.api_name, ("get", "query", "aggregate"))
+            for item in ontology.objects
+        ),
         actions=tuple(
-            ActionClientSurface(item.api_name, item.target, f"{item.api_name}ApplyRequest", ("apply", "validate"))
+            ActionClientSurface(
+                item.api_name, item.target, f"{item.api_name}ApplyRequest", ("apply", "validate", "applyBatch")
+            )
             for item in ontology.actions
         ),
+        interfaces=(
+            OperationClientSurface("generic", ("query",)),
+            *(OperationClientSurface(item.api_name, ("query",)) for item in ontology.interfaces),
+        ),
+        functions=(
+            OperationClientSurface("generic", ("execute",)),
+            *(OperationClientSurface(item.api_name, ("execute",)) for item in ontology.functions),
+        ),
         object_sets=("list", "create", "get"),
-        materializations=("run",),
+        materializations=("run", "list"),
         aip=(
             OperationClientSurface("builder", ("validate", "run")),
             OperationClientSurface("agent", ("run",)),
@@ -235,11 +254,17 @@ def _operation_surface_payload(items: tuple[OperationClientSurface, ...]) -> dic
     return payload
 
 
+def _methods_payload(
+    items: tuple[ActionClientSurface, ...] | tuple[ObjectClientSurface, ...] | tuple[OperationClientSurface, ...],
+) -> dict[str, list[str]]:
+    return {item.api_name: list(item.methods) for item in items}
+
+
 def render_client_surface_json(surface: SdkClientSurface) -> str:
     payload: dict[str, object] = {
-        "actions": {item.api_name: list(item.methods) for item in surface.actions},
-        "auth": {item.api_name: list(item.methods) for item in surface.auth},
-        "connectors": {item.api_name: list(item.methods) for item in surface.connectors},
+        "actions": _methods_payload(surface.actions),
+        "auth": _methods_payload(surface.auth),
+        "connectors": _methods_payload(surface.connectors),
         "sources": _operation_surface_payload(surface.sources),
         "datasets": {
             "_self": list(surface.datasets),
@@ -248,18 +273,24 @@ def render_client_surface_json(surface: SdkClientSurface) -> str:
             "qualityResults": ["list", "summary"],
         },
         "helpers": list(surface.helpers),
-        "developerConsole": {item.api_name: list(item.methods) for item in surface.developer_console},
-        "insights": {item.api_name: list(item.methods) for item in surface.insights},
-        "aip": {item.api_name: list(item.methods) for item in surface.aip},
-        "media": {item.api_name: list(item.methods) for item in surface.media},
+        "developerConsole": _methods_payload(surface.developer_console),
+        "insights": _methods_payload(surface.insights),
+        "aip": _methods_payload(surface.aip),
+        "media": _methods_payload(surface.media),
         "materializations": list(surface.materializations),
         "objectSets": list(surface.object_sets),
         "objects": {
-            "generic": ["get", "query", "links", "subscribe"],
-            **{item.api_name: list(item.methods) for item in surface.objects},
+            "generic": ["get", "query", "links", "subscribe", "aggregate"],
+            **_methods_payload(surface.objects),
         },
-        "ontology": list(surface.ontology),
-        "operations": {item.api_name: list(item.methods) for item in surface.operations},
+        "interfaces": _methods_payload(surface.interfaces),
+        "functions": _methods_payload(surface.functions),
+        "ontology": {
+            "_self": list(surface.ontology),
+            "proposals": list(ONTOLOGY_PROPOSAL_METHODS),
+            "resources": list(ONTOLOGY_RESOURCE_METHODS),
+        },
+        "operations": _methods_payload(surface.operations),
         "system": list(surface.system),
         "transforms": list(surface.transforms),
     }

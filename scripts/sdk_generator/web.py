@@ -8,6 +8,7 @@ from scripts.sdk_generator.ontology import OntologyDef
 from scripts.sdk_generator.surface import (
     ActionClientSurface,
     ObjectClientSurface,
+    SdkClientSurface,
     client_surface,
     contract_fingerprint,
     render_client_surface_json,
@@ -1522,6 +1523,89 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         '        headers: { "Content-Type": "application/json" },',
         "        body: JSON.stringify(payload),",
         "      }),",
+        "      apply: (payload) => request(`/api/ontology/apply`, {",
+        '        method: "POST",',
+        '        headers: { "Content-Type": "application/json" },',
+        "        body: JSON.stringify(payload),",
+        "      }),",
+        "      rollback: (payload) => request(`/api/ontology/rollback`, {",
+        '        method: "POST",',
+        '        headers: { "Content-Type": "application/json" },',
+        "        body: JSON.stringify(payload),",
+        "      }),",
+        "      resources: {",
+        "        usage: (resourceType, apiName, options = {}) => {",
+        "          const params = new URLSearchParams();",
+        "          if (options.windowDays !== undefined) params.set('windowDays', String(options.windowDays));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "          return request(",
+        (
+            "            `/api/ontology/resources/${encodeURIComponent(resourceType)}/"
+            "${encodeURIComponent(apiName)}/usage${suffix}`,"
+        ),
+        "          );",
+        "        },",
+        "        dependents: (resourceType, apiName) => request(",
+        (
+            "          `/api/ontology/resources/${encodeURIComponent(resourceType)}/"
+            "${encodeURIComponent(apiName)}/dependents`,"
+        ),
+        "        ),",
+        "      },",
+        "      proposals: {",
+        "        submit: (payload, options) => request(`/api/ontology/proposals`, {",
+        '          method: "POST",',
+        "          headers: {",
+        '            "Content-Type": "application/json",',
+        ('            "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "ontology.proposals.submit"),'),
+        "          },",
+        "          body: JSON.stringify(payload),",
+        "        }),",
+        "        list: (filters = {}) => {",
+        "          const params = new URLSearchParams();",
+        "          if (filters.status) params.set('status', filters.status);",
+        "          if (filters.cursor) params.set('cursor', filters.cursor);",
+        "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "          return request(`/api/ontology/proposals${suffix}`);",
+        "        },",
+        "        get: (proposalId) => request(`/api/ontology/proposals/${encodeURIComponent(proposalId)}`),",
+        "        update: (proposalId, payload) => request(",
+        "          `/api/ontology/proposals/${encodeURIComponent(proposalId)}/update`,",
+        (
+            '          { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "        ),",
+        "        assign: (proposalId, payload) => request(",
+        "          `/api/ontology/proposals/${encodeURIComponent(proposalId)}/assign`,",
+        (
+            '          { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "        ),",
+        "        decide: (proposalId, payload) => request(",
+        "          `/api/ontology/proposals/${encodeURIComponent(proposalId)}/decide`,",
+        (
+            '          { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "        ),",
+        "        execute: (proposalId, payload) => request(",
+        "          `/api/ontology/proposals/${encodeURIComponent(proposalId)}/execute`,",
+        (
+            '          { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "        ),",
+        "        withdraw: (proposalId, payload = {}) => request(",
+        "          `/api/ontology/proposals/${encodeURIComponent(proposalId)}/withdraw`,",
+        (
+            '          { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "        ),",
+        "      },",
         "    },",
         "    insights: {",
         "      reviews: {",
@@ -1597,6 +1681,13 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         "          `/api/objects/${encodeURIComponent(objectType)}/${encodeURIComponent(id)}` +",
         "            `/links/${encodeURIComponent(linkType)}`,",
         "        ),",
+        "        aggregate: (objectType, payload) => request(",
+        "          `/api/objects/${encodeURIComponent(objectType)}/aggregate`,",
+        (
+            '          { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "        ),",
         "        subscribe: (objectType, payload = {}, streamOptions = {}) =>",
         "          streamObjectSubscription(options, objectType, payload, streamOptions),",
         "      },",
@@ -1604,6 +1695,10 @@ def render_web_javascript(ontology: OntologyDef) -> str:
     lines.extend(_web_object_client_lines(surface.objects))
     lines.extend(["    },", "    actions: {"])
     lines.extend(_web_action_client_lines(surface.actions))
+    lines.extend(["    },", "    interfaces: {"])
+    lines.extend(_web_interface_client_lines(surface))
+    lines.extend(["    },", "    functions: {"])
+    lines.extend(_web_function_client_lines(surface))
     lines += [
         "    },",
         "    objectSets: {",
@@ -1623,6 +1718,7 @@ def render_web_javascript(ontology: OntologyDef) -> str:
         "        `/api/materializations/${encodeURIComponent(apiName)}/run`,",
         '        { method: "POST" },',
         "      ),",
+        "      list: () => request(`/api/materializations`),",
         "    },",
         "    aip: {",
         "      builder: {",
@@ -1829,6 +1925,14 @@ def _web_object_client_lines(objects: Sequence[ObjectClientSurface]) -> list[str
                 ),
                 "          body: JSON.stringify(payload),",
                 "        }),",
+                f"        aggregate: (payload) => request(`/api/objects/{object_def.api_name}/aggregate`, {{",
+                '          method: "POST",',
+                (
+                    '          headers: { "Content-Type": "application/json", '
+                    f'"X-Foundry-Lite-Object": "{object_def.api_name}" }},'
+                ),
+                "          body: JSON.stringify(payload),",
+                "        }),",
                 "      },",
             ]
         )
@@ -1864,6 +1968,88 @@ def _web_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str
                 "            expectedObjectVersion: payload.expectedObjectVersion,",
                 "            params: payload.params,",
                 "          }),",
+                "        }),",
+                (
+                    "        applyBatch: (payload, options) => "
+                    f"request(`/api/actions/{action_def.api_name}/apply-batch`, {{"
+                ),
+                '          method: "POST",',
+                "          headers: {",
+                '            "Content-Type": "application/json",',
+                (
+                    '            "Idempotency-Key": requireIdempotencyKey('
+                    f'options?.idempotencyKey, "{action_def.api_name}.applyBatch"),'
+                ),
+                "          },",
+                "          body: JSON.stringify({",
+                f'            objectType: "{action_def.target}",',
+                "            targets: payload.targets,",
+                "            params: payload.params,",
+                "          }),",
+                "        }),",
+                "      },",
+            ]
+        )
+    return lines
+
+
+def _web_interface_client_lines(surface: SdkClientSurface) -> list[str]:
+    lines: list[str] = []
+    for interface_def in surface.interfaces:
+        if interface_def.api_name == "generic":
+            lines.extend(
+                [
+                    "      generic: {",
+                    "        query: (interfaceType, payload = {}) => request(",
+                    "          `/api/interfaces/${encodeURIComponent(interfaceType)}/query`,",
+                    (
+                        '          { method: "POST", headers: { "Content-Type": "application/json" }, '
+                        "body: JSON.stringify(payload) },"
+                    ),
+                    "        ),",
+                    "      },",
+                ]
+            )
+            continue
+        lines.extend(
+            [
+                f"      {interface_def.api_name}: {{",
+                f"        query: (payload = {{}}) => request(`/api/interfaces/{interface_def.api_name}/query`, {{",
+                '          method: "POST",',
+                '          headers: { "Content-Type": "application/json" },',
+                "          body: JSON.stringify(payload),",
+                "        }),",
+                "      },",
+            ]
+        )
+    return lines
+
+
+def _web_function_client_lines(surface: SdkClientSurface) -> list[str]:
+    lines: list[str] = []
+    for function_def in surface.functions:
+        if function_def.api_name == "generic":
+            lines.extend(
+                [
+                    "      generic: {",
+                    "        execute: (functionType, payload = {}) => request(",
+                    "          `/api/functions/${encodeURIComponent(functionType)}/execute`,",
+                    (
+                        '          { method: "POST", headers: { "Content-Type": "application/json" }, '
+                        "body: JSON.stringify(payload) },"
+                    ),
+                    "        ),",
+                    "      },",
+                ]
+            )
+            continue
+        lines.extend(
+            [
+                f"      {function_def.api_name}: {{",
+                f"        execute: (payload = {{}}) => request(`/api/functions/{function_def.api_name}/execute`, {{",
+                '          method: "POST",',
+                '          headers: { "Content-Type": "application/json" },',
+                "          body: JSON.stringify(payload),",
                 "        }),",
                 "      },",
             ]
