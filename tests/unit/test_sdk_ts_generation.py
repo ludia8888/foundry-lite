@@ -335,6 +335,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     }
     assert ts_surface["ontology"] == {
         "_self": ["catalog", "validate", "apply", "rollback"],
+        "branches": ["create", "list", "get", "update", "diff", "rebase", "propose", "abandon"],
         "proposals": ["submit", "list", "get", "update", "assign", "decide", "execute", "withdraw"],
         "resources": ["usage", "dependents"],
     }
@@ -466,6 +467,16 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "execute",
         "withdraw",
     ]
+    assert surface["ontology"]["branches"] == [
+        "create",
+        "list",
+        "get",
+        "update",
+        "diff",
+        "rebase",
+        "propose",
+        "abandon",
+    ]
     assert surface["ontology"]["resources"] == ["usage", "dependents"]
     assert surface["objects"]["generic"] == ["get", "query", "links", "subscribe", "aggregate"]
     assert surface["objects"]["Order"] == ["get", "query", "aggregate"]
@@ -488,6 +499,18 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "decide(proposalId: string, payload: OntologyProposalDecisionRequest)",
         "execute(proposalId: string, payload: OntologyProposalExecuteRequest)",
         "withdraw(proposalId: string, payload?: OntologyProposalWithdrawRequest)",
+        "create(payload: OntologyBranchCreateRequest, options: { idempotencyKey: string })",
+        "list(filters?: OntologyBranchListFilters): Promise<OntologyBranchListResult>;",
+        "get(branchId: string): Promise<OntologyBranchDetailPayload>;",
+        "update(branchId: string, payload: OntologyBranchUpdateRequest): Promise<OntologyBranchPayload>;",
+        "diff(branchId: string): Promise<OntologyBranchDiffResult>;",
+        "rebase(branchId: string, payload: OntologyBranchRebaseRequest): Promise<OntologyBranchPayload>;",
+        "propose(branchId: string, payload: OntologyBranchProposeRequest, options: { idempotencyKey: string })",
+        "abandon(branchId: string): Promise<OntologyBranchPayload>;",
+        "export type OntologyBranchPayload = {",
+        "export type OntologyBranchDiffResult = {",
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.create")',
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.propose")',
         "aggregate(objectType: string, payload: ObjectAggregateRequest): Promise<ObjectAggregationResult>;",
         "aggregate(payload: ObjectAggregateRequest): Promise<ObjectAggregationResult>;",
         "applyBatch(payload: ApproveOrderApplyBatchRequest, options: { idempotencyKey: string })",
@@ -522,6 +545,15 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/decide`",
         "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/execute`",
         "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/withdraw`",
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.create")',
+        "return request(`/api/ontology/branches${suffix}`);",
+        "get: (branchId) => request(`/api/ontology/branches/${encodeURIComponent(branchId)}`)",
+        "`/api/ontology/branches/${encodeURIComponent(branchId)}/update`",
+        "diff: (branchId) => request(`/api/ontology/branches/${encodeURIComponent(branchId)}/diff`)",
+        "`/api/ontology/branches/${encodeURIComponent(branchId)}/rebase`",
+        "`/api/ontology/branches/${encodeURIComponent(branchId)}/propose`",
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.propose")',
+        "`/api/ontology/branches/${encodeURIComponent(branchId)}/abandon`",
         "`/api/objects/${encodeURIComponent(objectType)}/aggregate`",
         "aggregate: (payload) => request(`/api/objects/Order/aggregate`, {",
         "applyBatch: (payload, options) => request(`/api/actions/ApproveOrder/apply-batch`, {",

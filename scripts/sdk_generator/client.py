@@ -289,6 +289,22 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "Promise<OntologyProposalPayload>;"
         ),
         "    };",
+        "    branches: {",
+        (
+            "      create(payload: OntologyBranchCreateRequest, options: { idempotencyKey: string }): "
+            "Promise<OntologyBranchPayload>;"
+        ),
+        "      list(filters?: OntologyBranchListFilters): Promise<OntologyBranchListResult>;",
+        "      get(branchId: string): Promise<OntologyBranchDetailPayload>;",
+        ("      update(branchId: string, payload: OntologyBranchUpdateRequest): Promise<OntologyBranchPayload>;"),
+        "      diff(branchId: string): Promise<OntologyBranchDiffResult>;",
+        ("      rebase(branchId: string, payload: OntologyBranchRebaseRequest): Promise<OntologyBranchPayload>;"),
+        (
+            "      propose(branchId: string, payload: OntologyBranchProposeRequest, "
+            "options: { idempotencyKey: string }): Promise<OntologyBranchPayload>;"
+        ),
+        "      abandon(branchId: string): Promise<OntologyBranchPayload>;",
+        "    };",
         "  };",
         "  insights: {",
         "    reviews: {",
@@ -2421,6 +2437,69 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
             '            { method: "POST", headers: { "Content-Type": "application/json" }, '
             "body: JSON.stringify(payload) },"
         ),
+        "          ),",
+        "      },",
+        "      branches: {",
+        "        create: (payload: OntologyBranchCreateRequest, options: { idempotencyKey: string }) =>",
+        "          request<OntologyBranchPayload>(`/api/ontology/branches`, {",
+        '            method: "POST",',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        (
+            '              "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.create"),'
+        ),
+        "            },",
+        "            body: JSON.stringify(payload),",
+        "          }),",
+        "        list: (filters: OntologyBranchListFilters = {}) => {",
+        "          const params = new URLSearchParams();",
+        "          if (filters.status) params.set('status', filters.status);",
+        "          if (filters.cursor) params.set('cursor', filters.cursor);",
+        "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "          return request<OntologyBranchListResult>(`/api/ontology/branches${suffix}`);",
+        "        },",
+        "        get: (branchId: string) =>",
+        "          request<OntologyBranchDetailPayload>(`/api/ontology/branches/${encodeURIComponent(branchId)}`),",
+        "        update: (branchId: string, payload: OntologyBranchUpdateRequest) =>",
+        "          request<OntologyBranchPayload>(",
+        "            `/api/ontology/branches/${encodeURIComponent(branchId)}/update`,",
+        (
+            '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "          ),",
+        "        diff: (branchId: string) =>",
+        "          request<OntologyBranchDiffResult>(`/api/ontology/branches/${encodeURIComponent(branchId)}/diff`),",
+        "        rebase: (branchId: string, payload: OntologyBranchRebaseRequest) =>",
+        "          request<OntologyBranchPayload>(",
+        "            `/api/ontology/branches/${encodeURIComponent(branchId)}/rebase`,",
+        (
+            '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "          ),",
+        "        propose: (branchId: string, payload: OntologyBranchProposeRequest, "
+        "options: { idempotencyKey: string }) =>",
+        "          request<OntologyBranchPayload>(",
+        "            `/api/ontology/branches/${encodeURIComponent(branchId)}/propose`,",
+        "            {",
+        '              method: "POST",',
+        "              headers: {",
+        '                "Content-Type": "application/json",',
+        (
+            '                "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.propose"),'
+        ),
+        "              },",
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "        abandon: (branchId: string) =>",
+        "          request<OntologyBranchPayload>(",
+        "            `/api/ontology/branches/${encodeURIComponent(branchId)}/abandon`,",
+        '            { method: "POST" },',
         "          ),",
         "      },",
         "    },",

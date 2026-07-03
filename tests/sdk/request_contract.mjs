@@ -679,6 +679,97 @@ await expectSdkCall(
   },
 );
 await expectSdkCall(
+  "ontology.branches.create",
+  () =>
+    client.ontology.branches.create(
+      { name: "supplier-risk-redesign" },
+      { idempotencyKey: "branch-create-key" },
+    ),
+  {
+    path: "/api/ontology/branches",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "branch-create-key" },
+    body: { name: "supplier-risk-redesign" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "ontology.branches.create",
+  () => client.ontology.branches.create({ name: "supplier-risk-redesign" }),
+  "ontology.branches.create",
+);
+await expectSdkCall(
+  "ontology.branches.list",
+  () => client.ontology.branches.list({ status: "open", cursor: "cursor/1", limit: 25 }),
+  {
+    path: "/api/ontology/branches?status=open&cursor=cursor%2F1&limit=25",
+  },
+);
+await expectSdkCall("ontology.branches.get", () => client.ontology.branches.get("branch/1"), {
+  path: "/api/ontology/branches/branch%2F1",
+});
+await expectSdkCall(
+  "ontology.branches.update",
+  () =>
+    client.ontology.branches.update("branch/1", {
+      yamlText: "objectTypes: []",
+      expectedFingerprint: "sha256:branch",
+    }),
+  {
+    path: "/api/ontology/branches/branch%2F1/update",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { yamlText: "objectTypes: []", expectedFingerprint: "sha256:branch" },
+  },
+);
+await expectSdkCall("ontology.branches.diff", () => client.ontology.branches.diff("branch/1"), {
+  path: "/api/ontology/branches/branch%2F1/diff",
+});
+await expectSdkCall(
+  "ontology.branches.rebase",
+  () =>
+    client.ontology.branches.rebase("branch/1", {
+      expectedFingerprint: "sha256:branch",
+      resolutions: [{ kind: "objectType", apiName: "Order", use: "branch" }],
+    }),
+  {
+    path: "/api/ontology/branches/branch%2F1/rebase",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      expectedFingerprint: "sha256:branch",
+      resolutions: [{ kind: "objectType", apiName: "Order", use: "branch" }],
+    },
+  },
+);
+await expectSdkCall(
+  "ontology.branches.propose",
+  () =>
+    client.ontology.branches.propose(
+      "branch/1",
+      { title: "Merge supplier risk redesign", description: "Branch merge request" },
+      { idempotencyKey: "branch-propose-key" },
+    ),
+  {
+    path: "/api/ontology/branches/branch%2F1/propose",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "branch-propose-key" },
+    body: { title: "Merge supplier risk redesign", description: "Branch merge request" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "ontology.branches.propose",
+  () => client.ontology.branches.propose("branch/1", { title: "Merge supplier risk redesign" }),
+  "ontology.branches.propose",
+);
+await expectSdkCall(
+  "ontology.branches.abandon",
+  () => client.ontology.branches.abandon("branch/1"),
+  {
+    path: "/api/ontology/branches/branch%2F1/abandon",
+    method: "POST",
+  },
+);
+await expectSdkCall(
   "aip.builder.validate",
   () =>
     client.aip.builder.validate({

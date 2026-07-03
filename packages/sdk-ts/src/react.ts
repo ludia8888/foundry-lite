@@ -149,6 +149,15 @@ import type {
   ObjectAggregateRequest,
   ObjectAggregationGroup,
   ObjectAggregationResult,
+  OntologyBranchCreateRequest,
+  OntologyBranchDetailPayload,
+  OntologyBranchDiffResource,
+  OntologyBranchDiffResult,
+  OntologyBranchListResult,
+  OntologyBranchPayload,
+  OntologyBranchProposeRequest,
+  OntologyBranchRebaseRequest,
+  OntologyBranchUpdateRequest,
   OntologyCatalog,
   OntologyCatalogAction,
   OntologyCatalogLink,
@@ -7835,6 +7844,396 @@ export function useFoundryLiteProvidedOntologyProposalReview(
 ): FoundryLiteOntologyProposalReviewState {
   const client = useFoundryLiteClient();
   return useFoundryLiteOntologyProposalReview(client, options);
+}
+
+export type FoundryLiteOntologyBranchesOptions = FoundryLiteCursorPaginationOptions<
+  OntologyBranchListResult,
+  OntologyBranchPayload
+> & {
+  key?: readonly unknown[];
+  status?: string;
+  pageSize?: number;
+};
+
+export type FoundryLiteOntologyBranchesState = FoundryLiteCursorPaginationState<
+  OntologyBranchListResult,
+  OntologyBranchPayload
+> & {
+  branches: OntologyBranchPayload[];
+  status: string | null;
+  hasBranches: boolean;
+};
+
+/**
+ * Cursor-paginated ontology branch list over `client.ontology.branches.list`,
+ * mirroring `useFoundryLiteOntologyProposalQueue`: `items`/`branches`
+ * accumulate loaded pages, `loadMore` follows `nextCursor`, and changing
+ * `status` (open/merged/abandoned) resets and reloads the list.
+ */
+export function useFoundryLiteOntologyBranches(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  options: FoundryLiteOntologyBranchesOptions = {},
+): FoundryLiteOntologyBranchesState {
+  const { key, status, pageSize, ...paginationOptions } = options;
+  const queryKey = useMemo(
+    () => key ?? ["ontology", "branches", status ?? null, pageSize ?? null],
+    [key, pageSize, status],
+  );
+  const loadPage = useCallback(
+    (cursor: string | null) => client.ontology.branches.list({ status, cursor, limit: pageSize }),
+    [client, pageSize, status],
+  );
+  const pagination = useFoundryLiteCursorPagination<OntologyBranchListResult, OntologyBranchPayload>(
+    queryKey,
+    loadPage,
+    paginationOptions,
+  );
+  return {
+    ...pagination,
+    branches: pagination.items,
+    status: status ?? null,
+    hasBranches: pagination.items.length > 0,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyBranches}. */
+export function useFoundryLiteProvidedOntologyBranches(
+  options: FoundryLiteOntologyBranchesOptions = {},
+): FoundryLiteOntologyBranchesState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyBranches(client, options);
+}
+
+export type FoundryLiteOntologyBranchOptions = FoundryLiteQueryOptions<OntologyBranchDetailPayload> & {
+  key?: readonly unknown[];
+};
+
+export type FoundryLiteOntologyBranchState = FoundryLiteQueryState<OntologyBranchDetailPayload> & {
+  branch: OntologyBranchDetailPayload | null;
+  branchId: string | null;
+  fingerprint: string | null;
+  baseStale: boolean;
+  yamlText: string | null;
+  baseYamlText: string | null;
+  hasBranch: boolean;
+  canLoadBranch: boolean;
+  disabledReason: string | null;
+  refetch(): Promise<OntologyBranchDetailPayload | null>;
+};
+
+/**
+ * Detail view of one ontology branch (`client.ontology.branches.get`) with
+ * `refetch` for pulling working-copy updates. `fingerprint` is the branch's
+ * `contentFingerprint` — thread it as `expectedFingerprint` into
+ * update/rebase calls — and `baseStale` signals that main moved since the
+ * branch's base, so a rebase is required before propose.
+ */
+export function useFoundryLiteOntologyBranch(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  branchId: string | null | undefined,
+  options: FoundryLiteOntologyBranchOptions = {},
+): FoundryLiteOntologyBranchState {
+  const { key, enabled = true, ...queryOptions } = options;
+  const canLoadBranch = Boolean(branchId);
+  const queryKey = useMemo(
+    () => key ?? ["ontology", "branches", "detail", branchId ?? null],
+    [key, branchId],
+  );
+  const load = useCallback(() => {
+    if (!branchId) throw foundryLiteOntologyBranchNotSelectedError();
+    return client.ontology.branches.get(branchId);
+  }, [client, branchId]);
+  const query = useFoundryLiteQuery(queryKey, load, {
+    ...queryOptions,
+    enabled: enabled && canLoadBranch,
+  });
+  return {
+    ...query,
+    branch: query.data,
+    branchId: branchId ?? null,
+    fingerprint: query.data?.contentFingerprint ?? null,
+    baseStale: query.data?.baseStale ?? false,
+    yamlText: query.data?.yamlText ?? null,
+    baseYamlText: query.data?.baseYamlText ?? null,
+    hasBranch: query.data !== null,
+    canLoadBranch,
+    disabledReason: canLoadBranch ? null : "Select a branch before loading its detail.",
+    refetch: query.reload,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyBranch}. */
+export function useFoundryLiteProvidedOntologyBranch(
+  branchId: string | null | undefined,
+  options: FoundryLiteOntologyBranchOptions = {},
+): FoundryLiteOntologyBranchState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyBranch(client, branchId, options);
+}
+
+export type FoundryLiteOntologyBranchDiffOptions = FoundryLiteQueryOptions<OntologyBranchDiffResult> & {
+  key?: readonly unknown[];
+};
+
+export type FoundryLiteOntologyBranchDiffState = FoundryLiteQueryState<OntologyBranchDiffResult> & {
+  diff: OntologyBranchDiffResult | null;
+  branchId: string | null;
+  resources: OntologyBranchDiffResource[];
+  conflicts: OntologyBranchDiffResource[];
+  hasConflicts: boolean;
+  baseStale: boolean;
+  migrationPlan: Record<string, unknown> | null;
+  canLoadDiff: boolean;
+  disabledReason: string | null;
+  refetch(): Promise<OntologyBranchDiffResult | null>;
+};
+
+/**
+ * Three-way branch diff (`client.ontology.branches.diff`): per-resource
+ * branch-vs-base-vs-active classification (`resources`), the subset both
+ * sides changed (`conflicts` — each needs a `use: main|branch` resolution at
+ * rebase time), `baseStale` (main moved since the branch base), and the
+ * merge-time `migrationPlan` for impact screens.
+ */
+export function useFoundryLiteOntologyBranchDiff(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  branchId: string | null | undefined,
+  options: FoundryLiteOntologyBranchDiffOptions = {},
+): FoundryLiteOntologyBranchDiffState {
+  const { key, enabled = true, ...queryOptions } = options;
+  const canLoadDiff = Boolean(branchId);
+  const queryKey = useMemo(
+    () => key ?? ["ontology", "branches", "diff", branchId ?? null],
+    [key, branchId],
+  );
+  const load = useCallback(() => {
+    if (!branchId) throw foundryLiteOntologyBranchNotSelectedError();
+    return client.ontology.branches.diff(branchId);
+  }, [client, branchId]);
+  const query = useFoundryLiteQuery(queryKey, load, {
+    ...queryOptions,
+    enabled: enabled && canLoadDiff,
+  });
+  return {
+    ...query,
+    diff: query.data,
+    branchId: branchId ?? null,
+    resources: query.data?.resources ?? [],
+    conflicts: query.data?.conflicts ?? [],
+    hasConflicts: (query.data?.conflicts.length ?? 0) > 0,
+    baseStale: query.data?.baseStale ?? false,
+    migrationPlan: query.data?.migrationPlan ?? null,
+    canLoadDiff,
+    disabledReason: canLoadDiff ? null : "Select a branch before loading its diff.",
+    refetch: query.reload,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyBranchDiff}. */
+export function useFoundryLiteProvidedOntologyBranchDiff(
+  branchId: string | null | undefined,
+  options: FoundryLiteOntologyBranchDiffOptions = {},
+): FoundryLiteOntologyBranchDiffState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyBranchDiff(client, branchId, options);
+}
+
+export type FoundryLiteOntologyBranchOperation =
+  | "create"
+  | "update"
+  | "rebase"
+  | "propose"
+  | "abandon";
+
+export type FoundryLiteOntologyBranchCreatePayload = OntologyBranchCreateRequest & {
+  idempotencyKey?: string;
+};
+
+export type FoundryLiteOntologyBranchUpdatePayload = OntologyBranchUpdateRequest & {
+  branchId: string;
+};
+
+export type FoundryLiteOntologyBranchRebasePayload = OntologyBranchRebaseRequest & {
+  branchId: string;
+};
+
+export type FoundryLiteOntologyBranchProposePayload = OntologyBranchProposeRequest & {
+  branchId: string;
+  idempotencyKey?: string;
+};
+
+export type FoundryLiteOntologyBranchAbandonPayload = {
+  branchId: string;
+};
+
+export type FoundryLiteOntologyBranchMutationsOptions = {
+  actionLock?: InFlightActionLock;
+  onSuccess?: (branch: OntologyBranchPayload, operation: FoundryLiteOntologyBranchOperation) => void;
+  onError?: (error: FoundryLiteApiError, operation: FoundryLiteOntologyBranchOperation) => void;
+};
+
+export type FoundryLiteOntologyBranchMutationsState = {
+  create: FoundryLiteMutationState<OntologyBranchPayload, FoundryLiteOntologyBranchCreatePayload>;
+  update: FoundryLiteMutationState<OntologyBranchPayload, FoundryLiteOntologyBranchUpdatePayload>;
+  rebase: FoundryLiteMutationState<OntologyBranchPayload, FoundryLiteOntologyBranchRebasePayload>;
+  propose: FoundryLiteMutationState<OntologyBranchPayload, FoundryLiteOntologyBranchProposePayload>;
+  abandon: FoundryLiteMutationState<OntologyBranchPayload, FoundryLiteOntologyBranchAbandonPayload>;
+  branch: OntologyBranchPayload | null;
+  fingerprint: string | null;
+  proposal: OntologyProposalPayload | null;
+  lastOperation: FoundryLiteOntologyBranchOperation | null;
+  isRunning: boolean;
+  error: FoundryLiteApiError | null;
+  requestId: string | null;
+  retryable: boolean;
+};
+
+export function foundryLiteOntologyBranchMutationLockKey(
+  operation: FoundryLiteOntologyBranchOperation,
+  resourceKey: string,
+): string {
+  return `ontology:branch:${operation}:${resourceKey}`;
+}
+
+/**
+ * Branch working-copy mutations over `client.ontology.branches.*`: `create`
+ * (Idempotency-Key resolved from `payload.idempotencyKey` and otherwise
+ * generated with the exported `idempotencyKey` helper, mirroring
+ * `useFoundryLiteOntologyProposalSubmit`), fingerprint-CAS `update`/`rebase`
+ * (thread `expectedFingerprint` from `useFoundryLiteOntologyBranch().fingerprint`
+ * or this hook's `fingerprint`, which tracks the latest mutation result),
+ * `propose` (same Idempotency-Key convention; requires a rebased/up-to-date
+ * base), and `abandon`. Every mutation resolves to the updated branch payload,
+ * so `fingerprint` always carries the next `expectedFingerprint` to use.
+ */
+export function useFoundryLiteOntologyBranchMutations(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  options: FoundryLiteOntologyBranchMutationsOptions = {},
+): FoundryLiteOntologyBranchMutationsState {
+  const [branch, setBranch] = useState<OntologyBranchPayload | null>(null);
+  const [lastOperation, setLastOperation] = useState<FoundryLiteOntologyBranchOperation | null>(
+    null,
+  );
+  const [lastError, setLastError] = useState<FoundryLiteApiError | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
+  const branchMutationOptions = useCallback(
+    <TPayload,>(
+      operation: FoundryLiteOntologyBranchOperation,
+      resourceKey: (payload: TPayload) => string,
+    ): FoundryLiteMutationOptions<OntologyBranchPayload, TPayload> => ({
+      actionLock: optionsRef.current.actionLock,
+      lockKey: (payload: TPayload) =>
+        foundryLiteOntologyBranchMutationLockKey(operation, resourceKey(payload)),
+      onSuccess: (result: OntologyBranchPayload) => {
+        setBranch(result);
+        setLastOperation(operation);
+        setLastError(null);
+        optionsRef.current.onSuccess?.(result, operation);
+      },
+      onError: (error: FoundryLiteApiError) => {
+        setLastOperation(operation);
+        setLastError(error);
+        optionsRef.current.onError?.(error, operation);
+      },
+    }),
+    [],
+  );
+
+  const create = useFoundryLiteMutation(
+    (payload: FoundryLiteOntologyBranchCreatePayload) => {
+      const { idempotencyKey: payloadIdempotencyKey, ...request } = payload;
+      const resolvedIdempotencyKey =
+        payloadIdempotencyKey ??
+        foundryLiteGeneratedIdempotencyKey("ontology.branches.create", request.name);
+      return client.ontology.branches.create(request, { idempotencyKey: resolvedIdempotencyKey });
+    },
+    branchMutationOptions<FoundryLiteOntologyBranchCreatePayload>("create", (payload) => payload.name),
+  );
+  const update = useFoundryLiteMutation(
+    (payload: FoundryLiteOntologyBranchUpdatePayload) => {
+      const { branchId, ...request } = payload;
+      return client.ontology.branches.update(branchId, request);
+    },
+    branchMutationOptions<FoundryLiteOntologyBranchUpdatePayload>(
+      "update",
+      (payload) => `${payload.branchId}:${payload.expectedFingerprint}`,
+    ),
+  );
+  const rebase = useFoundryLiteMutation(
+    (payload: FoundryLiteOntologyBranchRebasePayload) => {
+      const { branchId, ...request } = payload;
+      return client.ontology.branches.rebase(branchId, request);
+    },
+    branchMutationOptions<FoundryLiteOntologyBranchRebasePayload>(
+      "rebase",
+      (payload) => `${payload.branchId}:${payload.expectedFingerprint}`,
+    ),
+  );
+  const propose = useFoundryLiteMutation(
+    (payload: FoundryLiteOntologyBranchProposePayload) => {
+      const { branchId, idempotencyKey: payloadIdempotencyKey, ...request } = payload;
+      const resolvedIdempotencyKey =
+        payloadIdempotencyKey ??
+        foundryLiteGeneratedIdempotencyKey("ontology.branches.propose", branchId);
+      return client.ontology.branches.propose(branchId, request, {
+        idempotencyKey: resolvedIdempotencyKey,
+      });
+    },
+    branchMutationOptions<FoundryLiteOntologyBranchProposePayload>(
+      "propose",
+      (payload) => payload.branchId,
+    ),
+  );
+  const abandon = useFoundryLiteMutation(
+    (payload: FoundryLiteOntologyBranchAbandonPayload) =>
+      client.ontology.branches.abandon(payload.branchId),
+    branchMutationOptions<FoundryLiteOntologyBranchAbandonPayload>(
+      "abandon",
+      (payload) => payload.branchId,
+    ),
+  );
+
+  return {
+    create,
+    update,
+    rebase,
+    propose,
+    abandon,
+    branch,
+    fingerprint: branch?.contentFingerprint ?? null,
+    proposal: branch?.proposal ?? null,
+    lastOperation,
+    isRunning:
+      create.isRunning ||
+      update.isRunning ||
+      rebase.isRunning ||
+      propose.isRunning ||
+      abandon.isRunning,
+    error: lastError,
+    requestId: lastError?.requestId ?? null,
+    retryable: lastError?.retryable ?? false,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyBranchMutations}. */
+export function useFoundryLiteProvidedOntologyBranchMutations(
+  options: FoundryLiteOntologyBranchMutationsOptions = {},
+): FoundryLiteOntologyBranchMutationsState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyBranchMutations(client, options);
+}
+
+function foundryLiteOntologyBranchNotSelectedError(): FoundryLiteApiError {
+  return new FoundryLiteApiError(
+    0,
+    "BRANCH_NOT_SELECTED",
+    "Select an ontology branch before loading it.",
+    { missingFields: ["branchId"] },
+    null,
+    false,
+  );
 }
 
 export type FoundryLiteOntologyResourceInsightsOptions = {

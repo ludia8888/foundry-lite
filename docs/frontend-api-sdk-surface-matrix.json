@@ -341,6 +341,104 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "ontology.branches.create",
+      "route": "POST /api/ontology/branches",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Ontology branch creation requires Idempotency-Key, snapshots the active ontology version as the branch base and working copy, and replays the same open branch for the same name/creator instead of duplicating it.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.list",
+      "route": "GET /api/ontology/branches",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch list is a cursor-paged tenant-scoped read returning per-branch status, contentFingerprint, and baseStale drift against the current active ontology version.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.get",
+      "route": "GET /api/ontology/branches/{branch_id}",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch detail returns the working-copy yamlText, base snapshot baseYamlText, contentFingerprint for CAS mutations, and the baseStale drift flag.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.update",
+      "route": "POST /api/ontology/branches/{branch_id}/update",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.update",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch content update is fingerprint-gated (expectedFingerprint conditional update), size-bounded, structurally validated, and never touches the active catalog.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.diff",
+      "route": "GET /api/ontology/branches/{branch_id}/diff",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.diff",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch diff classifies every resource three ways (branch vs base vs current active), lists per-resource conflicts, and carries the merge-time migration plan for the UI.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.rebase",
+      "route": "POST /api/ontology/branches/{branch_id}/rebase",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.rebase",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch rebase re-anchors the branch on the current active ontology under an expectedFingerprint CAS guard with explicit per-resource conflict resolutions (use main|branch).",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.propose",
+      "route": "POST /api/ontology/branches/{branch_id}/propose",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.propose",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Ontology branch propose requires Idempotency-Key, enforces an up-to-date (rebased) base, submits the branch content through the existing proposal governance flow, and replays the live proposal for identical content.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.abandon",
+      "route": "POST /api/ontology/branches/{branch_id}/abandon",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.abandon",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch abandon terminally closes an open branch (creator or ontology:activate holder), frees its name for reuse, and replays idempotently once abandoned.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "aip.builder.validate",
       "route": "POST /api/aip/builder/validate",
       "productArea": "aip-builder",
@@ -2470,46 +2568,6 @@
       "route": "POST /api/sources/webhook-listeners/{source_name}/events",
       "accessClass": "server-to-server-ingest",
       "reason": "Source webhook listener event ingest is a signed external-system callback, not a browser frontend SDK control."
-    },
-    {
-      "route": "POST /api/ontology/branches",
-      "accessClass": "server-side-write-pending-sdk",
-      "reason": "Ontology branch creation snapshots the active ontology as an isolated working copy (Idempotency-Key replay by name/creator). SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
-    },
-    {
-      "route": "GET /api/ontology/branches",
-      "accessClass": "server-side-read-pending-sdk",
-      "reason": "Ontology branch list is a cursor-paged tenant-scoped read that also reconciles executed-proposal branches to merged. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
-    },
-    {
-      "route": "GET /api/ontology/branches/{branch_id}",
-      "accessClass": "server-side-read-pending-sdk",
-      "reason": "Ontology branch detail returns the working-copy yaml, base snapshot, fingerprint, and baseStale drift flag. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
-    },
-    {
-      "route": "POST /api/ontology/branches/{branch_id}/update",
-      "accessClass": "server-side-write-pending-sdk",
-      "reason": "Ontology branch content update is fingerprint-CAS-gated, size-bounded, and structurally validated without touching the active catalog. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
-    },
-    {
-      "route": "GET /api/ontology/branches/{branch_id}/diff",
-      "accessClass": "server-side-read-pending-sdk",
-      "reason": "Ontology branch diff is a three-way resource-level classification (branch vs base vs current active) plus the merge-time migration plan. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
-    },
-    {
-      "route": "POST /api/ontology/branches/{branch_id}/rebase",
-      "accessClass": "server-side-write-pending-sdk",
-      "reason": "Ontology branch rebase re-anchors the branch on the current active ontology with explicit per-resource conflict resolutions (use main|branch). SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
-    },
-    {
-      "route": "POST /api/ontology/branches/{branch_id}/propose",
-      "accessClass": "server-side-write-pending-sdk",
-      "reason": "Ontology branch propose submits the branch content through the existing proposal governance flow and requires an up-to-date (rebased) base. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
-    },
-    {
-      "route": "POST /api/ontology/branches/{branch_id}/abandon",
-      "accessClass": "server-side-write-pending-sdk",
-      "reason": "Ontology branch abandon terminally closes an open branch (creator or ontology:activate holder) and frees its name. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
     }
   ]
 }

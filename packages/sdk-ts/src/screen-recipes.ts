@@ -57,6 +57,16 @@ import type {
   MediaUploadRequest,
   ObjectApiName,
   ObjectTypeRegistry,
+  OntologyBranchCreateRequest,
+  OntologyBranchDetailPayload,
+  OntologyBranchDiffResult,
+  OntologyBranchListFilters,
+  OntologyBranchListResult,
+  OntologyBranchPayload,
+  OntologyBranchProposeRequest,
+  OntologyBranchRebaseRequest,
+  OntologyBranchRebaseResolution,
+  OntologyBranchUpdateRequest,
   OntologyCatalog,
   OntologyObjectReindexResult,
   OntologyProposalAssignRequest,
@@ -334,10 +344,18 @@ export type OntologyBuilderProposalInput = {
   idempotencyKey: string;
 };
 
+export type OntologyBuilderBranchInput = {
+  name: string;
+  createIdempotencyKey: string;
+  proposeIdempotencyKey?: string;
+  rebaseResolutions?: OntologyBranchRebaseResolution[];
+};
+
 export type OntologyBuilderRunInput = {
   dataset?: DatasetExplorerSelection;
   yamlText: string;
   proposal: OntologyBuilderProposalInput;
+  branch?: OntologyBuilderBranchInput;
   submitWhenBlocked?: boolean;
   assign?: OntologyProposalAssignRequest;
   decision?: { decision: string; comment?: string | null };
@@ -354,6 +372,8 @@ export type OntologyBuilderRecipeState = {
   validation: OntologyValidationResult | null;
   migrationPlan: Record<string, unknown> | null;
   isBlocked: boolean;
+  branch: OntologyBranchPayload | null;
+  branchDiff: OntologyBranchDiffResult | null;
   proposal: OntologyProposalPayload | null;
   reindexResults: OntologyObjectReindexResult[];
   driftReport: FoundryLiteSdkDriftReport | null;
@@ -1394,6 +1414,8 @@ export function ontologyBuilderInitialState(): OntologyBuilderRecipeState {
     validation: null,
     migrationPlan: null,
     isBlocked: false,
+    branch: null,
+    branchDiff: null,
     proposal: null,
     reindexResults: [],
     driftReport: null,
@@ -1577,6 +1599,12 @@ function ontologyBuilderReindexOperations(
  * -> Review(assign/decide) -> Execute -> Reindex status, plus an SDK drift
  * check step. `steps`/`navigation` feed screen chrome; the named methods back
  * each panel; `run` drives the whole governed flow with `onState` snapshots.
+ * Passing the optional `input.branch` flag routes the draft through an
+ * isolated ontology branch instead of a direct proposal submit: create branch
+ * -> write the draft onto the branch (fingerprint-CAS) -> diff -> rebase when
+ * the base is stale (per-resource `use: main|branch` resolutions) -> propose
+ * the branch, then the existing review/execute/reindex/drift path continues
+ * unchanged.
  */
 export function createOntologyBuilderRecipe(
   client: Pick<FoundryLiteGeneratedClient, "datasets" | "ontology" | "operations">,
@@ -1630,6 +1658,23 @@ export function createOntologyBuilderRecipe(
       client.ontology.proposals.execute(proposalId, payload),
     withdrawProposal: (proposalId: string, payload?: OntologyProposalWithdrawRequest) =>
       client.ontology.proposals.withdraw(proposalId, payload),
+    createBranch: (payload: OntologyBranchCreateRequest, options: { idempotencyKey: string }) =>
+      client.ontology.branches.create(payload, options),
+    listBranches: (filters?: OntologyBranchListFilters): Promise<OntologyBranchListResult> =>
+      client.ontology.branches.list(filters),
+    getBranch: (branchId: string): Promise<OntologyBranchDetailPayload> =>
+      client.ontology.branches.get(branchId),
+    updateBranch: (branchId: string, payload: OntologyBranchUpdateRequest) =>
+      client.ontology.branches.update(branchId, payload),
+    diffBranch: (branchId: string) => client.ontology.branches.diff(branchId),
+    rebaseBranch: (branchId: string, payload: OntologyBranchRebaseRequest) =>
+      client.ontology.branches.rebase(branchId, payload),
+    proposeBranch: (
+      branchId: string,
+      payload: OntologyBranchProposeRequest,
+      options: { idempotencyKey: string },
+    ) => client.ontology.branches.propose(branchId, payload, options),
+    abandonBranch: (branchId: string) => client.ontology.branches.abandon(branchId),
     replayObjectReindex,
     loadSdkDriftReport,
     assertSdkFresh: async (): Promise<OntologyCatalog> => {
@@ -1675,14 +1720,56 @@ export function createOntologyBuilderRecipe(
           return emit(ontologyBuilderState(state, { phase: "blocked" }), options.onState);
         }
         state = emit(ontologyBuilderState(state, { phase: "submit_proposal" }), options.onState);
-        let proposal = await client.ontology.proposals.submit(
-          {
+        let proposal: OntologyProposalPayload;
+        if (input.branch) {
+          // Optional branch path: draft-on-branch -> diff -> rebase-if-stale
+          // -> propose through the same proposal governance flow.
+          let branch = await client.ontology.branches.create(
+            { name: input.branch.name },
+            { idempotencyKey: input.branch.createIdempotencyKey },
+          );
+          state = emit(ontologyBuilderState(state, { branch }), options.onState);
+          branch = await client.ontology.branches.update(branch.id, {
             yamlText: input.yamlText,
-            title: input.proposal.title,
-            description: input.proposal.description ?? null,
-          },
-          { idempotencyKey: input.proposal.idempotencyKey },
-        );
+            expectedFingerprint: branch.contentFingerprint,
+          });
+          state = emit(ontologyBuilderState(state, { branch }), options.onState);
+          const branchDiff = await client.ontology.branches.diff(branch.id);
+          state = emit(ontologyBuilderState(state, { branchDiff }), options.onState);
+          if (branchDiff.baseStale) {
+            branch = await client.ontology.branches.rebase(branch.id, {
+              expectedFingerprint: branch.contentFingerprint,
+              resolutions: input.branch.rebaseResolutions ?? [],
+            });
+            state = emit(ontologyBuilderState(state, { branch }), options.onState);
+          }
+          branch = await client.ontology.branches.propose(
+            branch.id,
+            {
+              title: input.proposal.title,
+              description: input.proposal.description ?? null,
+            },
+            {
+              idempotencyKey:
+                input.branch.proposeIdempotencyKey ?? input.proposal.idempotencyKey,
+            },
+          );
+          state = emit(ontologyBuilderState(state, { branch }), options.onState);
+          const proposedBranchProposal = branch.proposal;
+          if (!proposedBranchProposal) {
+            throw new Error("ontology branch propose did not return the created proposal");
+          }
+          proposal = proposedBranchProposal;
+        } else {
+          proposal = await client.ontology.proposals.submit(
+            {
+              yamlText: input.yamlText,
+              title: input.proposal.title,
+              description: input.proposal.description ?? null,
+            },
+            { idempotencyKey: input.proposal.idempotencyKey },
+          );
+        }
         state = emit(
           ontologyBuilderState(state, {
             phase: "await_review",

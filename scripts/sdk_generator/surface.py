@@ -70,6 +70,7 @@ class SdkClientSurface:
 
 
 ONTOLOGY_PROPOSAL_METHODS = ("submit", "list", "get", "update", "assign", "decide", "execute", "withdraw")
+ONTOLOGY_BRANCH_METHODS = ("create", "list", "get", "update", "diff", "rebase", "propose", "abandon")
 ONTOLOGY_RESOURCE_METHODS = ("usage", "dependents")
 
 
@@ -287,6 +288,7 @@ def render_client_surface_json(surface: SdkClientSurface) -> str:
         "functions": _methods_payload(surface.functions),
         "ontology": {
             "_self": list(surface.ontology),
+            "branches": list(ONTOLOGY_BRANCH_METHODS),
             "proposals": list(ONTOLOGY_PROPOSAL_METHODS),
             "resources": list(ONTOLOGY_RESOURCE_METHODS),
         },
