@@ -8,6 +8,7 @@ from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.base import CoreService, build_service
 from foundry_lite.application.services.ontology_activation_service import OntologyActivationService
 from foundry_lite.application.services.ontology_catalog_service import OntologyCatalogService
+from foundry_lite.application.services.ontology_insights_service import OntologyInsightsService
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
 from foundry_lite.application.services.ontology_reindex_contract import OntologyReindexContractService
 from foundry_lite.application.services.ontology_rollback_service import OntologyRollbackService
@@ -21,6 +22,7 @@ class OntologyServices:
     activation: OntologyActivationService
     catalog: OntologyCatalogService
     entrypoint: OntologyService
+    insights: OntologyInsightsService
     lookup: OntologyLookupService
     reindex_contract: OntologyReindexContractService
     rollback: OntologyRollbackService
@@ -29,6 +31,7 @@ class OntologyServices:
     def create(cls, dependencies: CoreDependencies) -> OntologyServices:
         activation = build_service(OntologyActivationService, dependencies)
         catalog = build_service(OntologyCatalogService, dependencies)
+        insights = build_service(OntologyInsightsService, dependencies)
         lookup = build_service(OntologyLookupService, dependencies)
         reindex_contract = build_service(OntologyReindexContractService, dependencies)
         rollback = build_service(OntologyRollbackService, dependencies)
@@ -43,6 +46,7 @@ class OntologyServices:
             activation=activation,
             catalog=catalog,
             entrypoint=entrypoint,
+            insights=insights,
             lookup=lookup,
             reindex_contract=reindex_contract,
             rollback=rollback,
@@ -52,6 +56,7 @@ class OntologyServices:
         return (
             self.activation,
             self.catalog,
+            self.insights,
             self.lookup,
             self.reindex_contract,
             self.rollback,

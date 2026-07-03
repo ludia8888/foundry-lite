@@ -327,27 +327,36 @@ class MaterializationService(CoreService):
                 # silently repaired by the resolved declaration.
                 supported_materialization_type(str(existing["materialization_type"]))
                 return _materialization_with_spec(existing, spec)
-            materialization_id = _new_id("mat")
-            self.materialization_repository.insert_materialization(
-                transaction=conn,
-                record=MaterializationRecord(
-                    materialization_id=materialization_id,
-                    tenant_id=ctx.tenant_id,
-                    api_name=api_name,
-                    materialization_type=spec.materialization_type,
-                    source_ref=spec.source,
-                    target_ref=spec.target,
-                    trigger_config={"type": "manual"},
-                    enabled=True,
-                ),
-            )
-            row = self.materialization_repository.materialization_by_id(
-                transaction=conn,
+            return self._insert_materialization(conn, ctx, api_name, spec)
+
+    def _insert_materialization(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        api_name: str,
+        spec: MaterializationSpec,
+    ) -> MaterializationRow:
+        materialization_id = _new_id("mat")
+        self.materialization_repository.insert_materialization(
+            transaction=conn,
+            record=MaterializationRecord(
                 materialization_id=materialization_id,
-            )
-            if row is None:
-                raise InvariantViolation("materialization insert failed")
-            return row
+                tenant_id=ctx.tenant_id,
+                api_name=api_name,
+                materialization_type=spec.materialization_type,
+                source_ref=spec.source,
+                target_ref=spec.target,
+                trigger_config={"type": "manual"},
+                enabled=True,
+            ),
+        )
+        row = self.materialization_repository.materialization_by_id(
+            transaction=conn,
+            materialization_id=materialization_id,
+        )
+        if row is None:
+            raise InvariantViolation("materialization insert failed")
+        return row
 
     def _materialization_watermark(
         self,

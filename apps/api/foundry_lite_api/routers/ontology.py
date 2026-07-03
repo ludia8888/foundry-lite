@@ -1,9 +1,16 @@
-"""Ontology catalog, validation, apply, and rollback routes."""
+"""Ontology catalog, validation, apply, rollback, and resource insight routes."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 from foundry_lite.application.ports import OntologyCatalogResult, OntologyValidationResult
+from foundry_lite.application.services.ontology_insights import (
+    DEFAULT_USAGE_WINDOW_DAYS,
+    MAX_USAGE_WINDOW_DAYS,
+    OntologyResourceDependentsResult,
+    OntologyResourceType,
+    OntologyResourceUsageResult,
+)
 from foundry_lite.domain.errors import FoundryLiteError
 
 from foundry_lite_api import runtime
@@ -23,6 +30,36 @@ router = APIRouter()
 def ontology_catalog(request: Request) -> OntologyCatalogResult:
     try:
         return runtime.foundry.ontology.catalog(ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/ontology/resources/{resource_type}/{api_name}/usage")
+def ontology_resource_usage(
+    request: Request,
+    resource_type: OntologyResourceType,
+    api_name: str,
+    window_days: int = Query(default=DEFAULT_USAGE_WINDOW_DAYS, ge=1, le=MAX_USAGE_WINDOW_DAYS, alias="windowDays"),
+) -> OntologyResourceUsageResult:
+    try:
+        return runtime.foundry.ontology.resource_usage(
+            resource_type,
+            api_name,
+            window_days=window_days,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/ontology/resources/{resource_type}/{api_name}/dependents")
+def ontology_resource_dependents(
+    request: Request,
+    resource_type: OntologyResourceType,
+    api_name: str,
+) -> OntologyResourceDependentsResult:
+    try:
+        return runtime.foundry.ontology.resource_dependents(resource_type, api_name, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 

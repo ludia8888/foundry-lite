@@ -16,6 +16,19 @@ ObjectProperties = Mapping[str, object]
 ObjectPatch = Mapping[str, object]
 
 
+class ActionRunUsageRow(TypedDict):
+    """Aggregated action-run activity for one ontology usage window.
+
+    Usage read models need counts and recency, not row payloads, so the
+    aggregation lives at the port where each adapter can push it into SQL.
+    """
+
+    status_counts: dict[str, int]
+    total_runs: int
+    distinct_actor_count: int
+    last_run_at: str | None
+
+
 class ActionRunRow(TypedDict):
     """Persisted action run row returned for idempotent replay checks."""
 
@@ -158,6 +171,23 @@ class ActionRepository(Protocol):
         result: ActionResultPayload | None = None,
     ) -> bool:
         """CAS an action run from an allowed state into a terminal state."""
+        ...
+
+    def action_run_usage(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        since: str,
+        action_type_api_name: str | None = None,
+        target_object_type_api_name: str | None = None,
+    ) -> ActionRunUsageRow:
+        """Aggregate tenant action runs created at or after ``since``.
+
+        One method serves both ontology usage read models: the action-type
+        view filters by ``action_type_api_name`` and the object-type view
+        filters by ``target_object_type_api_name``. Filters AND together.
+        """
         ...
 
     def insert_action_writeback(self, *, transaction: TransactionContext, record: ActionWritebackRecord) -> None:

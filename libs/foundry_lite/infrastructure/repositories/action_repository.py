@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import and_, insert, select, update
+from sqlalchemy import and_, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
@@ -14,6 +14,7 @@ from sqlalchemy.engine import Engine
 from foundry_lite.application.ports.action_repository import (
     ActionRunRecord,
     ActionRunRow,
+    ActionRunUsageRow,
     ActionWritebackReconciliation,
     ActionWritebackRecord,
     ObjectEditRecord,
@@ -135,6 +136,37 @@ class SqlAlchemyActionRepository:
                 "completed_at": completed_at,
             },
         )
+
+    def action_run_usage(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        since: str,
+        action_type_api_name: str | None = None,
+        target_object_type_api_name: str | None = None,
+    ) -> ActionRunUsageRow:
+        conditions = [db.action_runs.c.tenant_id == tenant_id, db.action_runs.c.created_at >= since]
+        if action_type_api_name is not None:
+            conditions.append(db.action_runs.c.action_type_api_name == action_type_api_name)
+        if target_object_type_api_name is not None:
+            conditions.append(db.action_runs.c.target_object_type_api_name == target_object_type_api_name)
+        status_rows = transaction.execute(
+            select(db.action_runs.c.status, func.count()).where(and_(*conditions)).group_by(db.action_runs.c.status)
+        ).all()
+        actor_count, last_run_at = transaction.execute(
+            select(
+                func.count(func.distinct(db.action_runs.c.actor_user_id)),
+                func.max(db.action_runs.c.created_at),
+            ).where(and_(*conditions))
+        ).one()
+        status_counts = {str(status): int(count) for status, count in status_rows}
+        return {
+            "status_counts": status_counts,
+            "total_runs": sum(status_counts.values()),
+            "distinct_actor_count": int(actor_count or 0),
+            "last_run_at": cast(str | None, last_run_at),
+        }
 
     def insert_action_writeback(self, *, transaction: Any, record: ActionWritebackRecord) -> None:
         transaction.execute(

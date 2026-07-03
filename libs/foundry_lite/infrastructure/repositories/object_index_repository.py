@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, insert, select, update
+from sqlalchemy import and_, delete, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
@@ -25,7 +25,7 @@ from foundry_lite.application.ports import (
     ObjectRecordSourceDeletion,
     ObjectRecordSourceUpdate,
 )
-from foundry_lite.application.ports.object_index_repository import IndexRunRow
+from foundry_lite.application.ports.object_index_repository import IndexRunRow, IndexRunUsageRow
 from foundry_lite.application.ports.transaction_context import INDEX_RUN_FAILED, INDEX_RUN_SUCCEEDED
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.object_change_sequence import next_object_change_sequence
@@ -69,6 +69,36 @@ class SqlAlchemyObjectIndexRepository:
                 created_at=record.created_at,
             )
         )
+
+    def index_run_usage(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        since: str,
+    ) -> IndexRunUsageRow:
+        conditions = and_(
+            db.index_runs.c.tenant_id == tenant_id,
+            db.index_runs.c.object_type_api_name == object_type_api_name,
+            db.index_runs.c.created_at >= since,
+        )
+        status_rows = transaction.execute(
+            select(db.index_runs.c.status, func.count()).where(conditions).group_by(db.index_runs.c.status)
+        ).all()
+        last_run_at = transaction.execute(select(func.max(db.index_runs.c.created_at)).where(conditions)).scalar_one()
+        last_succeeded_at = transaction.execute(
+            select(func.max(db.index_runs.c.completed_at)).where(
+                and_(conditions, db.index_runs.c.status == "succeeded")
+            )
+        ).scalar_one()
+        status_counts = {str(status): int(count) for status, count in status_rows}
+        return {
+            "status_counts": status_counts,
+            "total_runs": sum(status_counts.values()),
+            "last_run_at": cast(str | None, last_run_at),
+            "last_succeeded_at": cast(str | None, last_succeeded_at),
+        }
 
     def active_index_version(self, *, transaction: Any, tenant_id: str, object_type_id: str) -> str:
         pointer = self._active_index_pointer(transaction, tenant_id, object_type_id)
