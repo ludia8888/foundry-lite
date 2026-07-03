@@ -19,6 +19,10 @@ from foundry_lite_api.request_context import _ctx
 from foundry_lite_api.schemas import (
     JsonObject,
     OntologyApplyRequest,
+    OntologyBranchCreateRequest,
+    OntologyBranchProposeRequest,
+    OntologyBranchRebaseRequest,
+    OntologyBranchUpdateRequest,
     OntologyProposalAssignRequest,
     OntologyProposalDecisionRequest,
     OntologyProposalExecuteRequest,
@@ -226,5 +230,114 @@ def withdraw_ontology_proposal(
             reason=payload.reason if payload is not None else None,
             ctx=_ctx(request),
         )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/branches")
+def create_ontology_branch(
+    request: Request,
+    payload: OntologyBranchCreateRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.create_branch(
+            name=payload.name,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/ontology/branches")
+def list_ontology_branches(
+    request: Request,
+    status: str | None = Query(default=None),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.list_branches(status=status, cursor=cursor, limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/ontology/branches/{branch_id}")
+def get_ontology_branch(request: Request, branch_id: str) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.get_branch(branch_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/branches/{branch_id}/update")
+def update_ontology_branch(
+    request: Request,
+    branch_id: str,
+    payload: OntologyBranchUpdateRequest,
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.update_branch(
+            branch_id,
+            yaml_text=payload.yaml_text,
+            expected_fingerprint=payload.expected_fingerprint,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/ontology/branches/{branch_id}/diff")
+def diff_ontology_branch(request: Request, branch_id: str) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.branch_diff(branch_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/branches/{branch_id}/rebase")
+def rebase_ontology_branch(
+    request: Request,
+    branch_id: str,
+    payload: OntologyBranchRebaseRequest,
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.rebase_branch(
+            branch_id,
+            expected_fingerprint=payload.expected_fingerprint,
+            resolutions=[item.model_dump(by_alias=True) for item in payload.resolutions],
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/branches/{branch_id}/propose")
+def propose_ontology_branch(
+    request: Request,
+    branch_id: str,
+    payload: OntologyBranchProposeRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.propose_branch(
+            branch_id,
+            title=payload.title,
+            description=payload.description,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/branches/{branch_id}/abandon")
+def abandon_ontology_branch(
+    request: Request,
+    branch_id: str,
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.abandon_branch(branch_id, ctx=_ctx(request))
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc

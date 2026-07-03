@@ -79,6 +79,7 @@ from foundry_lite.infrastructure.schema.ontology import (
     interface_types,
     link_types,
     object_types,
+    ontology_branches,
     ontology_versions,
     property_types,
 )
@@ -168,6 +169,7 @@ __all__ = [
     "interface_types",
     "link_types",
     "object_types",
+    "ontology_branches",
     "ontology_versions",
     "property_types",
     "osdk_application_clients",

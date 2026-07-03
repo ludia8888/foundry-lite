@@ -34,6 +34,7 @@ from foundry_lite.infrastructure.repositories.object_index_row_hash_repository i
 )
 from foundry_lite.infrastructure.repositories.object_read_repository import SqlAlchemyObjectReadRepository
 from foundry_lite.infrastructure.repositories.object_set_repository import SqlAlchemyObjectSetRepository
+from foundry_lite.infrastructure.repositories.ontology_branch_repository import SqlAlchemyOntologyBranchRepository
 from foundry_lite.infrastructure.repositories.ontology_repository import SqlAlchemyOntologyRepository
 from foundry_lite.infrastructure.repositories.osdk_application_repository import SqlAlchemyOsdkApplicationRepository
 from foundry_lite.infrastructure.repositories.runtime_repository import SqlAlchemyRuntimeRepository
@@ -64,6 +65,7 @@ __all__ = [
     "SqlAlchemyObjectIndexRowHashRepository",
     "SqlAlchemyObjectReadRepository",
     "SqlAlchemyObjectSetRepository",
+    "SqlAlchemyOntologyBranchRepository",
     "SqlAlchemyOntologyRepository",
     "SqlAlchemyOsdkApplicationRepository",
     "SqlAlchemyOAuthSessionRepository",

@@ -12,13 +12,14 @@ the application module size cap.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
-from foundry_lite.application.ports import TransactionContext
-from foundry_lite.application.ports.insight_review_repository import InsightReviewRow
+from foundry_lite.application.ports import TransactionContext, TransactionManager
+from foundry_lite.application.ports.insight_review_repository import InsightReviewRepository, InsightReviewRow
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.ontology_proposal_payloads import (
     ProposalDecision,
+    ProposalEvent,
     proposal_payload,
     proposal_yaml_text,
     require_fingerprint_match,
@@ -28,6 +29,8 @@ from foundry_lite.application.services.ontology_proposal_payloads import (
     revision_record,
     yaml_fingerprint,
 )
+from foundry_lite.application.services.ontology_protocols import OntologyRuntimeBoundary
+from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.application.services.ontology_yaml import require_yaml_text_within_limit
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -39,13 +42,40 @@ from foundry_lite.domain.errors import (
 
 if TYPE_CHECKING:
     from foundry_lite.application.ports import OntologyValidationResult
-    from foundry_lite.application.services.ontology_proposal_service import OntologyProposalService
 
 _RESOURCE_TYPE = "ontology_proposal"
 
 
+class OntologyProposalBoundary(Protocol):
+    """Surface of ``OntologyProposalService`` these helpers use: the dependency-graph
+    gate forbids importing the service module back into this helper module."""
+
+    engine: TransactionManager
+    insight_review_repository: InsightReviewRepository
+    ontology_service: OntologyService
+    runtime_service: OntologyRuntimeBoundary
+
+    def _audit_denied(
+        self, conn: TransactionContext, ctx: RequestContext, permission: str, proposal_id: str
+    ) -> None: ...
+
+    def _audit_event(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        event: ProposalEvent,
+        row: InsightReviewRow,
+        *,
+        before: InsightReviewRow | None = None,
+    ) -> None: ...
+
+    def _require_proposal_row(self, conn: TransactionContext, ctx: RequestContext, pid: str) -> InsightReviewRow: ...
+
+    def _require_write_open(self, ctx: RequestContext, operation: str, resource_id: str) -> None: ...
+
+
 def update_ontology_proposal(
-    service: OntologyProposalService,
+    service: OntologyProposalBoundary,
     proposal_id: str,
     *,
     yaml_text: str,
@@ -81,7 +111,7 @@ def update_ontology_proposal(
 
 
 def decision_time_plan(
-    service: OntologyProposalService,
+    service: OntologyProposalBoundary,
     ctx: RequestContext,
     row: InsightReviewRow,
     decision: ProposalDecision,
@@ -106,7 +136,7 @@ def decision_time_plan(
 
 
 def _guard_update_or_replay(
-    service: OntologyProposalService,
+    service: OntologyProposalBoundary,
     ctx: RequestContext,
     proposal_id: str,
     yaml_text: str,
@@ -125,7 +155,7 @@ def _guard_update_or_replay(
 
 
 def _store_revision(
-    service: OntologyProposalService,
+    service: OntologyProposalBoundary,
     ctx: RequestContext,
     proposal_id: str,
     *,
@@ -159,7 +189,7 @@ def _store_revision(
 
 
 def _require_update_submitter(
-    service: OntologyProposalService,
+    service: OntologyProposalBoundary,
     conn: TransactionContext,
     ctx: RequestContext,
     row: InsightReviewRow,
@@ -174,7 +204,7 @@ def _require_update_submitter(
 
 
 def _resolve_lost_update_race(
-    service: OntologyProposalService,
+    service: OntologyProposalBoundary,
     conn: TransactionContext,
     ctx: RequestContext,
     proposal_id: str,

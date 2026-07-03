@@ -81,6 +81,11 @@ ONTOLOGY_VERSION_ACTIVE = StatusTransition(("draft",), "active")
 # not-yet-applied proposal (pending or approved) into the terminal rejected state
 # while execution_status records that the submitter withdrew it.
 ONTOLOGY_PROPOSAL_WITHDRAWN = StatusTransition(("pending", "approved"), "rejected")
+# Ontology branches: an open branch becomes merged only once its proposal has
+# been executed (merge-by-proposal), or abandoned by its creator/an activate
+# holder. Both transitions are terminal and CAS-guarded.
+ONTOLOGY_BRANCH_MERGED = StatusTransition(("open",), "merged")
+ONTOLOGY_BRANCH_ABANDONED = StatusTransition(("open",), "abandoned")
 ACTION_RUN_SUCCEEDED = StatusTransition(("received",), "succeeded")
 ACTION_RUN_FAILED = StatusTransition(("received",), "failed")
 ACTION_RUN_CONFLICT = StatusTransition(("received",), "conflict")

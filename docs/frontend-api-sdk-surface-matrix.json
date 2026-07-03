@@ -2470,6 +2470,46 @@
       "route": "POST /api/sources/webhook-listeners/{source_name}/events",
       "accessClass": "server-to-server-ingest",
       "reason": "Source webhook listener event ingest is a signed external-system callback, not a browser frontend SDK control."
+    },
+    {
+      "route": "POST /api/ontology/branches",
+      "accessClass": "server-side-write-pending-sdk",
+      "reason": "Ontology branch creation snapshots the active ontology as an isolated working copy (Idempotency-Key replay by name/creator). SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
+    },
+    {
+      "route": "GET /api/ontology/branches",
+      "accessClass": "server-side-read-pending-sdk",
+      "reason": "Ontology branch list is a cursor-paged tenant-scoped read that also reconciles executed-proposal branches to merged. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
+    },
+    {
+      "route": "GET /api/ontology/branches/{branch_id}",
+      "accessClass": "server-side-read-pending-sdk",
+      "reason": "Ontology branch detail returns the working-copy yaml, base snapshot, fingerprint, and baseStale drift flag. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
+    },
+    {
+      "route": "POST /api/ontology/branches/{branch_id}/update",
+      "accessClass": "server-side-write-pending-sdk",
+      "reason": "Ontology branch content update is fingerprint-CAS-gated, size-bounded, and structurally validated without touching the active catalog. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
+    },
+    {
+      "route": "GET /api/ontology/branches/{branch_id}/diff",
+      "accessClass": "server-side-read-pending-sdk",
+      "reason": "Ontology branch diff is a three-way resource-level classification (branch vs base vs current active) plus the merge-time migration plan. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
+    },
+    {
+      "route": "POST /api/ontology/branches/{branch_id}/rebase",
+      "accessClass": "server-side-write-pending-sdk",
+      "reason": "Ontology branch rebase re-anchors the branch on the current active ontology with explicit per-resource conflict resolutions (use main|branch). SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
+    },
+    {
+      "route": "POST /api/ontology/branches/{branch_id}/propose",
+      "accessClass": "server-side-write-pending-sdk",
+      "reason": "Ontology branch propose submits the branch content through the existing proposal governance flow and requires an up-to-date (rebased) base. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
+    },
+    {
+      "route": "POST /api/ontology/branches/{branch_id}/abandon",
+      "accessClass": "server-side-write-pending-sdk",
+      "reason": "Ontology branch abandon terminally closes an open branch (creator or ontology:activate holder) and frees its name. SDK wiring for ontology branching lands in the immediately following change; until then the route is server-side only."
     }
   ]
 }

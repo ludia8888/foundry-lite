@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.services.base import CoreService, build_service
 from foundry_lite.application.services.ontology_activation_service import OntologyActivationService
+from foundry_lite.application.services.ontology_branch_service import OntologyBranchService
 from foundry_lite.application.services.ontology_catalog_service import OntologyCatalogService
 from foundry_lite.application.services.ontology_insights_service import OntologyInsightsService
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
@@ -21,6 +22,7 @@ class OntologyServices:
     """Grouped ontology services plus the stable compatibility entrypoint."""
 
     activation: OntologyActivationService
+    branches: OntologyBranchService
     catalog: OntologyCatalogService
     entrypoint: OntologyService
     insights: OntologyInsightsService
@@ -32,6 +34,7 @@ class OntologyServices:
     @classmethod
     def create(cls, dependencies: CoreDependencies) -> OntologyServices:
         activation = build_service(OntologyActivationService, dependencies)
+        branches = build_service(OntologyBranchService, dependencies)
         catalog = build_service(OntologyCatalogService, dependencies)
         insights = build_service(OntologyInsightsService, dependencies)
         lookup = build_service(OntologyLookupService, dependencies)
@@ -47,6 +50,7 @@ class OntologyServices:
         )
         return cls(
             activation=activation,
+            branches=branches,
             catalog=catalog,
             entrypoint=entrypoint,
             insights=insights,
@@ -59,6 +63,7 @@ class OntologyServices:
     def items(self) -> tuple[CoreService, ...]:
         return (
             self.activation,
+            self.branches,
             self.catalog,
             self.insights,
             self.lookup,

@@ -229,7 +229,12 @@ class FoundryLite:
 
 
 def _ontology_registry(services: CoreServices) -> OntologyRegistry:
-    return OntologyRegistry(services.ontology.entrypoint, services.ontology.insights, services.ontology.proposals)
+    return OntologyRegistry(
+        services.ontology.entrypoint,
+        services.ontology.insights,
+        services.ontology.proposals,
+        services.ontology.branches,
+    )
 
 
 def _demo_provider_record(now: str) -> ModelProviderRecord:

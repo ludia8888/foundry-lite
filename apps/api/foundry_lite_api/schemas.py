@@ -338,6 +338,37 @@ class OntologyProposalWithdrawRequest(BaseModel):
     reason: str | None = None
 
 
+class OntologyBranchCreateRequest(BaseModel):
+    name: str
+
+
+class OntologyBranchUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    yaml_text: str = Field(alias="yamlText")
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+
+
+class OntologyBranchRebaseResolution(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: str
+    api_name: str = Field(alias="apiName")
+    use: str
+
+
+class OntologyBranchRebaseRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+    resolutions: list[OntologyBranchRebaseResolution] = Field(default_factory=list)
+
+
+class OntologyBranchProposeRequest(BaseModel):
+    title: str
+    description: str | None = None
+
+
 class AipBuilderContextSourceRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

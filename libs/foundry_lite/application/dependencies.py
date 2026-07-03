@@ -48,6 +48,7 @@ from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
 from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
+from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
 from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
@@ -73,6 +74,7 @@ class CoreDependencies:
     ai_eval_repository: AiEvalRepository
     ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository
+    ontology_branch_repository: OntologyBranchRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository

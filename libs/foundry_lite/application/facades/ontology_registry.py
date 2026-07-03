@@ -10,6 +10,7 @@ from foundry_lite.application.ports import (
     OntologyRollbackResult,
     OntologyValidationResult,
 )
+from foundry_lite.application.services.ontology_branch_service import OntologyBranchService
 from foundry_lite.application.services.ontology_insights import (
     DEFAULT_USAGE_WINDOW_DAYS,
     OntologyResourceDependentsResult,
@@ -31,10 +32,12 @@ class OntologyRegistry:
         ontology: OntologyService,
         insights: OntologyInsightsService,
         proposals: OntologyProposalService,
+        branches: OntologyBranchService,
     ) -> None:
         self._ontology = ontology
         self._insights = insights
         self._proposals = proposals
+        self._branches = branches
 
     def apply(self, yaml_path: str | Path, *, ctx: RequestContext | None = None) -> OntologyApplyResult:
         return self._ontology.apply_ontology(yaml_path, ctx=ctx)
@@ -162,3 +165,72 @@ class OntologyRegistry:
 
     def get_proposal(self, proposal_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self._proposals.get_proposal(proposal_id, ctx=ctx)
+
+    def create_branch(
+        self,
+        *,
+        name: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._branches.create_branch(name=name, idempotency_key=idempotency_key, ctx=ctx)
+
+    def get_branch(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        # Reads converge branch status first: once the branch's proposal has
+        # been executed the branch reconciles open -> merged on observation.
+        self._branches.reconcile_branch_merge(branch_id, ctx=ctx)
+        return self._branches.get_branch(branch_id, ctx=ctx)
+
+    def list_branches(
+        self,
+        *,
+        status: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        self._branches.reconcile_proposed_branches(ctx=ctx)
+        return self._branches.list_branches(status=status, cursor=cursor, limit=limit, ctx=ctx)
+
+    def update_branch(
+        self,
+        branch_id: str,
+        *,
+        yaml_text: str,
+        expected_fingerprint: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._branches.update_branch_content(
+            branch_id, yaml_text=yaml_text, expected_fingerprint=expected_fingerprint, ctx=ctx
+        )
+
+    def branch_diff(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self._branches.branch_diff(branch_id, ctx=ctx)
+
+    def rebase_branch(
+        self,
+        branch_id: str,
+        *,
+        expected_fingerprint: str,
+        resolutions: list[dict[str, object]] | None = None,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._branches.rebase_branch(
+            branch_id, resolutions=resolutions, expected_fingerprint=expected_fingerprint, ctx=ctx
+        )
+
+    def propose_branch(
+        self,
+        branch_id: str,
+        *,
+        title: str,
+        idempotency_key: str,
+        description: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._branches.propose_branch(
+            branch_id, title=title, idempotency_key=idempotency_key, description=description, ctx=ctx
+        )
+
+    def abandon_branch(self, branch_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        return self._branches.abandon_branch(branch_id, ctx=ctx)

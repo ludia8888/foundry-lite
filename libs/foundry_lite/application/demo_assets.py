@@ -17,6 +17,7 @@ REQUIRED_SUPPLY_CHAIN_DEMO_FILES = (
     "data/orders.csv",
     "data/customers.csv",
     "transforms/clean_orders.sql",
+    "transforms/clean_order_finance.sql",
     "transforms/clean_customers.sql",
     "transforms/customer_risk.sql",
     "ontology/order-customer.yaml",
@@ -42,6 +43,11 @@ def ensure_supply_chain_demo_files() -> None:
 
 def register_supply_chain_demo_transforms(register_transform: RegisterTransform, ctx: RequestContext) -> None:
     ensure_supply_chain_demo_files()
+    _register_order_demo_transforms(register_transform, ctx)
+    _register_customer_demo_transforms(register_transform, ctx)
+
+
+def _register_order_demo_transforms(register_transform: RegisterTransform, ctx: RequestContext) -> None:
     register_transform(
         "clean_orders",
         entrypoint=supply_chain_demo_path("transforms", "clean_orders.sql"),
@@ -53,6 +59,20 @@ def register_supply_chain_demo_transforms(register_transform: RegisterTransform,
         ],
         ctx=ctx,
     )
+    register_transform(
+        "clean_order_finance",
+        entrypoint=supply_chain_demo_path("transforms", "clean_order_finance.sql"),
+        inputs={"orders": "raw.erp_orders"},
+        output_dataset_ref="clean.order_finance",
+        checks=[
+            {"type": "unique", "column": "order_id"},
+            {"type": "not_null", "columns": ["order_id"]},
+        ],
+        ctx=ctx,
+    )
+
+
+def _register_customer_demo_transforms(register_transform: RegisterTransform, ctx: RequestContext) -> None:
     register_transform(
         "clean_customers",
         entrypoint=supply_chain_demo_path("transforms", "clean_customers.sql"),
