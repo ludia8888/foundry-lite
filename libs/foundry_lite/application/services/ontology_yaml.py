@@ -15,6 +15,7 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyJsonObject,
     PropertyDerivation,
 )
+from foundry_lite.application.services.materialization_types import OBJECT_SNAPSHOT_MODE
 from foundry_lite.domain.errors import ValidationFailed
 
 type YamlObject = Mapping[str, object]
@@ -122,6 +123,22 @@ def object_type_cdc_backing(cdc: YamlObject) -> ObjectTypeCdcBacking:
     if delete_policy is not None:
         payload["deletePolicy"] = delete_policy
     return payload
+
+
+def object_type_materialization_config(item: YamlObject) -> OntologyJsonObject | None:
+    """Build the optional per-object-type materialization declaration from YAML.
+
+    The mode is normalized to an explicit value here so persisted config never
+    depends on YAML defaults; run-time spec resolution then reads a stable
+    shape regardless of which ontology version wrote it.
+    """
+    declared = optional_mapping(item, "materialization")
+    if declared is None:
+        return None
+    return {
+        "dataset": required_str(declared, "dataset"),
+        "mode": optional_str(declared, "mode", OBJECT_SNAPSHOT_MODE) or OBJECT_SNAPSHOT_MODE,
+    }
 
 
 def link_type_backing(item: YamlObject) -> LinkTypeBacking:

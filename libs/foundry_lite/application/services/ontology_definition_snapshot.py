@@ -8,7 +8,7 @@ of forking a second import/activation flow.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRow,
@@ -50,6 +50,11 @@ def _object_type_definition(row: ObjectTypeRow, properties: Sequence[PropertyTyp
     title_property = row["config"].get("titleProperty")
     if isinstance(title_property, str):
         definition["titleProperty"] = title_property
+    # Materialization declarations must survive rollback: the restored version
+    # replays through the same YAML-shaped import path as a fresh apply.
+    materialization = row["config"].get("materialization")
+    if isinstance(materialization, Mapping):
+        definition["materialization"] = dict(materialization)
     return definition
 
 

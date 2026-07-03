@@ -7,6 +7,9 @@ objectTypes:
       dataset: clean.orders
       mode: snapshot
       primaryKeyColumns: [order_id]
+    materialization:
+      dataset: ops.order_current
+      mode: object_snapshot
     properties:
       - apiName: orderId
         column: order_id

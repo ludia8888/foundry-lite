@@ -13,6 +13,10 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyValidationResult,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.materialization_types import (
+    MATERIALIZATION_MODES,
+    materialization_spec_name,
+)
 from foundry_lite.application.services.ontology_catalog import build_ontology_catalog as build_ontology_catalog
 from foundry_lite.application.services.ontology_migration_types import OntologyMigrationPlan
 from foundry_lite.application.services.ontology_yaml import (
@@ -21,6 +25,7 @@ from foundry_lite.application.services.ontology_yaml import (
     link_type_backing,
     mapping_sequence,
     object_type_backing,
+    object_type_materialization_config,
     optional_bool,
     optional_str,
     required_str,
@@ -114,6 +119,7 @@ def validate_ontology_definition(
     object_defs = _object_definitions_by_api(definition)
     link_defs = _link_definitions_by_api(definition)
     _action_definitions_by_api(definition)
+    _validate_yaml_materializations(object_defs.values())
     for object_def in object_defs.values():
         _validate_yaml_object_type(conn, ctx, definition, object_def, dataset_columns_for_ref)
     for link_def in link_defs.values():
@@ -310,6 +316,43 @@ def _validate_yaml_title_property(
                 "objectType": required_str(object_def, "apiName"),
                 "titleProperty": title_property,
             },
+        )
+
+
+def _validate_yaml_materializations(object_defs: Iterable[YamlObject]) -> None:
+    """Validate optional per-object-type materialization declarations.
+
+    Spec names are derived from the target dataset name segment, so a
+    malformed dataset ref or a cross-object duplicate would either be
+    unrunnable or silently shadow another spec at run time — both must fail
+    at apply time instead.
+    """
+    seen_spec_names: dict[str, str] = {}
+    for object_def in object_defs:
+        declared = object_type_materialization_config(object_def)
+        if declared is None:
+            continue
+        object_api_name = required_str(object_def, "apiName")
+        details: dict[str, object] = {"objectType": object_api_name}
+        dataset_ref = str(declared["dataset"])
+        _validate_materialization_dataset_ref(dataset_ref, details)
+        _require_allowed_optional(declared.get("mode"), MATERIALIZATION_MODES, "materialization mode", details)
+        spec_name = materialization_spec_name(dataset_ref)
+        existing = seen_spec_names.get(spec_name)
+        if existing is not None:
+            raise ValidationFailed(
+                "duplicate materialization spec name",
+                details={**details, "specName": spec_name, "conflictsWith": existing},
+            )
+        seen_spec_names[spec_name] = object_api_name
+
+
+def _validate_materialization_dataset_ref(dataset_ref: str, details: Mapping[str, object]) -> None:
+    parts = dataset_ref.split(".")
+    if len(parts) != 2 or not all(parts):
+        raise ValidationFailed(
+            "materialization dataset must be of the form 'namespace.name'",
+            details={**details, "dataset": dataset_ref},
         )
 
 

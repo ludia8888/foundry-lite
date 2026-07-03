@@ -177,6 +177,7 @@ def _build_parser() -> argparse.ArgumentParser:
     materialize_sub = materialize.add_subparsers(dest="command", required=True)
     mat_run = materialize_sub.add_parser("run")
     mat_run.add_argument("name")
+    materialize_sub.add_parser("list")
 
     obj = sub.add_parser("object")
     obj_sub = obj.add_subparsers(dest="command", required=True)
@@ -360,6 +361,7 @@ def _handlers() -> dict[tuple[str, str], Handler]:
         ),
         ("action", "apply"): _action_apply,
         ("materialize", "run"): lambda foundry, ctx, args: foundry.materialization.run(args.name, ctx=ctx),
+        ("materialize", "list"): lambda foundry, ctx, args: foundry.materialization.list_specs(ctx=ctx),
         ("object", "get"): lambda foundry, ctx, args: foundry.objects.get(
             args.object_type,
             args.object_id,

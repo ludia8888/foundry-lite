@@ -56,6 +56,7 @@ def _catalog_object(
         "description": row["description"],
         "primaryKeyProperty": row["primary_key_property"],
         "titleProperty": _title_property(row),
+        "materialization": _materialization(row),
         "backing": row["backing"],
         "properties": [_catalog_property(item) for item in properties],
         "actions": [_catalog_action(item) for item in actions],
@@ -67,6 +68,12 @@ def _title_property(row: ObjectTypeRow) -> str | None:
     """Surface the per-record display-title property stored in config JSON."""
     value = row["config"].get("titleProperty")
     return value if isinstance(value, str) else None
+
+
+def _materialization(row: ObjectTypeRow) -> dict[str, object] | None:
+    """Surface the declared materialization target stored in config JSON."""
+    value = row["config"].get("materialization")
+    return dict(value) if isinstance(value, Mapping) else None
 
 
 def _catalog_property(row: PropertyTypeRow) -> OntologyCatalogProperty:

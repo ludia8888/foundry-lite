@@ -58,6 +58,15 @@ def run_transform(request: Request, api_name: str) -> JsonObject:
         raise _handle_error(exc, request) from exc
 
 
+@router.get("/api/materializations")
+def list_materializations(request: Request) -> JsonObject:
+    """List runnable materialization specs (built-in plus ontology-declared)."""
+    try:
+        return {"specs": runtime.foundry.materialization.list_specs(ctx=_ctx(request))}
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
 @router.post("/api/materializations/{api_name}/run")
 def run_materialization(request: Request, api_name: str) -> JsonObject:
     try:

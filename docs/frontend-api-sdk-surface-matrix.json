@@ -2261,6 +2261,16 @@
       "reason": "Legacy approved-action execution route kept for compatibility; new frontend SDK callers use client.insights.reviews.executeApprovedAction(...)."
     },
     {
+      "route": "GET /api/materializations",
+      "accessClass": "operator-control-plane",
+      "reason": "Materialization spec discovery (built-in plus ontology-declared) is an operator/CLI control-plane aid (materialization:run), not a browser frontend SDK control."
+    },
+    {
+      "route": "POST /api/objects/{object_type}/aggregate",
+      "accessClass": "server-side-read-pending-sdk",
+      "reason": "Server-side object aggregation currently backs the Python OSDK aggregate call; wiring the browser SDK objects.generic.aggregate method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
+    },
+    {
       "route": "POST /api/ontology/apply",
       "accessClass": "operator-control-plane",
       "reason": "Ontology apply is an IaC/CI control-plane operation (ontology:activate) driven by pipelines and the CLI, not the browser frontend SDK."

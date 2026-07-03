@@ -89,6 +89,14 @@ class OntologyService(CoreService):
     def _active_ontology_version(self, conn: TransactionContext, ctx: RequestContext) -> OntologyVersionRow:
         return self.lookup_service._active_ontology_version(conn, ctx)
 
+    def _object_types_for_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> list[ObjectTypeRow]:
+        return list(self.lookup_service._object_types_for_version(conn, ctx, ontology_version_id))
+
     def _active_object_type(self, conn: TransactionContext, ctx: RequestContext, api_name: str) -> ObjectTypeRow:
         return self.lookup_service._active_object_type(conn, ctx, api_name)
 
