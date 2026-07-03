@@ -291,6 +291,198 @@ def test_decision_replay_and_conflicting_second_decision(foundry, tmp_path) -> N
         )
 
 
+def _update_yaml() -> str:
+    return _yaml_text(_order_definition(extra_properties=[_note_property(), _note_property("note2")]))
+
+
+def test_submitter_update_recomputes_plan_and_new_fingerprint_gates_decide(foundry, tmp_path) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry)
+    proposal_id = str(proposal["id"])
+
+    updated = foundry.ontology.update_proposal(
+        proposal_id,
+        yaml_text=_update_yaml(),
+        expected_fingerprint=_fingerprint(proposal),
+        title="Add two notes",
+        description="second draft",
+        ctx=SUBMITTER,
+    )
+    assert updated["status"] == "submitted"
+    assert updated["fingerprint"] != proposal["fingerprint"]
+    assert updated["title"] == "Add two notes"
+    assert updated["revisionCount"] == 1
+    assert updated["lastRevisedAt"] is not None
+
+    detail = foundry.ontology.get_proposal(proposal_id, ctx=SUBMITTER)
+    assert "note2" in str(detail["yamlText"])
+    assert detail["description"] == "second draft"
+    assert cast(dict[str, Any], detail["submittedMigrationPlan"])["status"] == "compatible"
+    assert {"event": "revised", "count": 1}.items() <= detail["timeline"][1].items()
+
+    with raises(ConflictDetected, match="fingerprint mismatch"):
+        foundry.ontology.decide_proposal(
+            proposal_id, decision="approve", expected_fingerprint=_fingerprint(proposal), ctx=REVIEWER
+        )
+    approved = foundry.ontology.decide_proposal(
+        proposal_id, decision="approve", expected_fingerprint=_fingerprint(updated), ctx=REVIEWER
+    )
+    assert approved["status"] == "approved"
+
+
+def test_update_is_submitter_only(foundry, tmp_path) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry)
+
+    with raises(PermissionDenied, match="only the submitter may update"):
+        foundry.ontology.update_proposal(
+            str(proposal["id"]),
+            yaml_text=_update_yaml(),
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=REVIEWER,
+        )
+    with raises(PermissionDenied):
+        foundry.ontology.update_proposal(
+            str(proposal["id"]),
+            yaml_text=_update_yaml(),
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=VIEWER,
+        )
+
+
+def test_update_conflicts_after_decide_withdraw_and_execute(foundry, tmp_path) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    rejected = _submit(foundry, key="upd-rejected", title="Rejected")
+    foundry.ontology.decide_proposal(
+        str(rejected["id"]), decision="reject", expected_fingerprint=_fingerprint(rejected), ctx=REVIEWER
+    )
+    withdrawn = _submit(foundry, key="upd-withdrawn", title="Withdrawn")
+    foundry.ontology.withdraw_proposal(str(withdrawn["id"]), ctx=SUBMITTER)
+    executed = _submit(foundry, key="upd-executed", title="Executed")
+    foundry.ontology.decide_proposal(
+        str(executed["id"]), decision="approve", expected_fingerprint=_fingerprint(executed), ctx=REVIEWER
+    )
+    foundry.ontology.execute_proposal(str(executed["id"]), expected_fingerprint=_fingerprint(executed), ctx=REVIEWER)
+
+    for proposal in (rejected, withdrawn, executed):
+        with raises(ConflictDetected, match="can no longer be updated"):
+            foundry.ontology.update_proposal(
+                str(proposal["id"]),
+                yaml_text=_update_yaml(),
+                expected_fingerprint=_fingerprint(proposal),
+                ctx=SUBMITTER,
+            )
+
+
+def test_update_with_stale_expected_fingerprint_conflicts(foundry, tmp_path) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry)
+    proposal_id = str(proposal["id"])
+    foundry.ontology.update_proposal(
+        proposal_id, yaml_text=_update_yaml(), expected_fingerprint=_fingerprint(proposal), ctx=SUBMITTER
+    )
+
+    with raises(ConflictDetected, match="fingerprint mismatch") as exc_info:
+        foundry.ontology.update_proposal(
+            proposal_id,
+            yaml_text=_yaml_text(_order_definition(extra_properties=[_note_property("note3")])),
+            expected_fingerprint=_fingerprint(proposal),
+            ctx=SUBMITTER,
+        )
+    assert exc_info.value.details["expectedFingerprint"] == _fingerprint(proposal)
+    assert exc_info.value.details["proposalFingerprint"] != _fingerprint(proposal)
+
+
+def test_update_rejects_oversized_or_invalid_yaml_and_empty_title(foundry, tmp_path) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry)
+    proposal_id = str(proposal["id"])
+    expected = _fingerprint(proposal)
+
+    with raises(ValidationFailed, match="exceeds size limit"):
+        foundry.ontology.update_proposal(
+            proposal_id, yaml_text="a" * (1_048_576 + 1), expected_fingerprint=expected, ctx=SUBMITTER
+        )
+    with raises(ValidationFailed):
+        foundry.ontology.update_proposal(
+            proposal_id,
+            yaml_text="objectTypes:\n  - apiName: Broken\n",
+            expected_fingerprint=expected,
+            ctx=SUBMITTER,
+        )
+    with raises(ValidationFailed, match="title is required"):
+        foundry.ontology.update_proposal(
+            proposal_id, yaml_text=_update_yaml(), expected_fingerprint=expected, title="", ctx=SUBMITTER
+        )
+    # Nothing was stored by the rejected attempts.
+    assert foundry.ontology.get_proposal(proposal_id, ctx=SUBMITTER)["fingerprint"] == expected
+
+
+def test_update_replay_with_same_yaml_is_idempotent_without_new_audit(foundry, tmp_path) -> None:
+    admin = _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry)
+    proposal_id = str(proposal["id"])
+    first = foundry.ontology.update_proposal(
+        proposal_id, yaml_text=_update_yaml(), expected_fingerprint=_fingerprint(proposal), ctx=SUBMITTER
+    )
+    replay = foundry.ontology.update_proposal(
+        proposal_id, yaml_text=_update_yaml(), expected_fingerprint=_fingerprint(proposal), ctx=SUBMITTER
+    )
+
+    assert replay["fingerprint"] == first["fingerprint"]
+    assert replay["revisionCount"] == 1
+    revised_events = [
+        event
+        for event in foundry.operations.list_runs(ctx=admin)["auditEvents"]
+        if event["event_type"] == "ontology.proposal.revised" and event["resource_id"] == proposal_id
+    ]
+    assert len(revised_events) == 1
+
+
+def test_update_after_assignment_preserves_reviewer_and_bumps_revision_count(foundry, tmp_path) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry)
+    proposal_id = str(proposal["id"])
+    foundry.ontology.assign_proposal(proposal_id, reviewer_user_id="user-reviewer", ctx=REVIEWER)
+
+    first = foundry.ontology.update_proposal(
+        proposal_id, yaml_text=_update_yaml(), expected_fingerprint=_fingerprint(proposal), ctx=SUBMITTER
+    )
+    assert first["status"] == "in_review"
+    assert first["assigneeUserId"] == "user-reviewer"
+    assert first["revisionCount"] == 1
+
+    second = foundry.ontology.update_proposal(
+        proposal_id,
+        yaml_text=_yaml_text(_order_definition(extra_properties=[_note_property("note3")])),
+        expected_fingerprint=_fingerprint(first),
+        ctx=SUBMITTER,
+    )
+    assert second["assigneeUserId"] == "user-reviewer"
+    assert second["revisionCount"] == 2
+    detail = foundry.ontology.get_proposal(proposal_id, ctx=SUBMITTER)
+    revised = [event for event in detail["timeline"] if event["event"] == "revised"]
+    assert [event["count"] for event in revised] == [2]
+    assert revised[0]["byUserId"] == "user-submitter"
+
+
+def test_update_stores_blocked_plan_flagged_like_submit(foundry, tmp_path) -> None:
+    admin = _prepare_active_ontology(foundry, tmp_path)
+    proposal = _submit(foundry)
+    # Direct apply activates the note property, so a revision without it would
+    # remove an active property: blocked, but storable (flagged) like submit.
+    foundry.ontology.apply_text(_yaml_text(_order_definition(extra_properties=[_note_property()])), ctx=admin)
+
+    updated = foundry.ontology.update_proposal(
+        str(proposal["id"]),
+        yaml_text=_yaml_text(_order_definition()),
+        expected_fingerprint=_fingerprint(proposal),
+        ctx=SUBMITTER,
+    )
+    assert updated["hasBlockedChangesAtSubmit"] is True
+    assert cast(dict[str, Any], updated["submittedMigrationPlan"])["status"] == "blocked"
+
+
 def test_withdraw_is_submitter_only_and_blocks_later_review(foundry, tmp_path) -> None:
     _prepare_active_ontology(foundry, tmp_path)
     proposal = _submit(foundry)
@@ -476,6 +668,60 @@ def test_api_proposal_flow_end_to_end(foundry, tmp_path, monkeypatch: MonkeyPatc
     detail = client.get(f"/api/ontology/proposals/{proposal_id}", headers=SUBMITTER_HEADERS)
     assert detail.status_code == 200
     assert [event["event"] for event in detail.json()["timeline"]] == ["submitted", "assigned", "decided", "applied"]
+
+
+def test_api_proposal_update_happy_path_and_error_mapping(foundry, tmp_path, monkeypatch: MonkeyPatch) -> None:
+    _prepare_active_ontology(foundry, tmp_path)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    client = TestClient(app)
+    proposal = client.post(
+        "/api/ontology/proposals",
+        headers={**SUBMITTER_HEADERS, "Idempotency-Key": "api-update-key"},
+        json={"yamlText": _yaml_text(_order_definition(extra_properties=[_note_property()])), "title": "Add note"},
+    ).json()
+    proposal_id = proposal["id"]
+
+    updated = client.post(
+        f"/api/ontology/proposals/{proposal_id}/update",
+        headers=SUBMITTER_HEADERS,
+        json={"yamlText": _update_yaml(), "expectedFingerprint": proposal["fingerprint"], "title": "Add two notes"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["fingerprint"] != proposal["fingerprint"]
+    assert updated.json()["revisionCount"] == 1
+    assert updated.json()["title"] == "Add two notes"
+
+    non_submitter = client.post(
+        f"/api/ontology/proposals/{proposal_id}/update",
+        headers=REVIEWER_HEADERS,
+        json={"yamlText": _update_yaml(), "expectedFingerprint": updated.json()["fingerprint"]},
+    )
+    assert non_submitter.status_code == 403
+    assert non_submitter.json()["detail"]["code"] == "PERMISSION_DENIED"
+
+    stale = client.post(
+        f"/api/ontology/proposals/{proposal_id}/update",
+        headers=SUBMITTER_HEADERS,
+        json={
+            "yamlText": _yaml_text(_order_definition(extra_properties=[_note_property("note3")])),
+            "expectedFingerprint": proposal["fingerprint"],
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"]["code"] == "CONFLICT"
+
+    client.post(
+        f"/api/ontology/proposals/{proposal_id}/decide",
+        headers=REVIEWER_HEADERS,
+        json={"decision": "reject", "expectedFingerprint": updated.json()["fingerprint"]},
+    )
+    after_decision = client.post(
+        f"/api/ontology/proposals/{proposal_id}/update",
+        headers=SUBMITTER_HEADERS,
+        json={"yamlText": _update_yaml(), "expectedFingerprint": updated.json()["fingerprint"]},
+    )
+    assert after_decision.status_code == 409
+    assert after_decision.json()["detail"]["code"] == "CONFLICT"
 
 
 def test_api_proposal_error_mapping(foundry, tmp_path, monkeypatch: MonkeyPatch) -> None:

@@ -35,17 +35,12 @@ from foundry_lite.application.services.ontology_proposal_payloads import (
     required_text,
     withdrawal_record,
 )
+from foundry_lite.application.services.ontology_proposal_update import decision_time_plan, update_ontology_proposal
 from foundry_lite.application.services.ontology_protocols import OntologyRuntimeBoundary
 from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.application.services.ontology_yaml import require_yaml_text_within_limit
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import (
-    ConflictDetected,
-    FoundryLiteError,
-    NotFound,
-    PermissionDenied,
-    ValidationFailed,
-)
+from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
 
 _RESOURCE_TYPE = "ontology_proposal"
 
@@ -149,8 +144,29 @@ class OntologyProposalService(CoreService):
         # The plan may have drifted since submit: recompute it against the
         # CURRENT active ontology outside the storage transaction (the validate
         # black box owns its own transaction) and store the decision-time plan.
-        plan = self._decision_time_plan(ctx, row, parsed)
+        plan = decision_time_plan(self, ctx, row, parsed)
         return self._store_decision(ctx, proposal_id, parsed, comment, plan)
+
+    def update_proposal(
+        self,
+        proposal_id: str,
+        *,
+        yaml_text: str,
+        expected_fingerprint: str,
+        title: str | None = None,
+        description: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        """Revise a not-yet-decided proposal in place (submitter only)."""
+        return update_ontology_proposal(
+            self,
+            proposal_id,
+            yaml_text=yaml_text,
+            expected_fingerprint=expected_fingerprint,
+            title=title,
+            description=description,
+            ctx=ctx,
+        )
 
     def execute_proposal(
         self,
@@ -236,29 +252,6 @@ class OntologyProposalService(CoreService):
         with self.engine.begin() as conn:
             row = self._require_proposal_row(conn, ctx, proposal_id)
         return proposal_detail_payload(row)
-
-    def _decision_time_plan(
-        self,
-        ctx: RequestContext,
-        row: InsightReviewRow,
-        decision: ProposalDecision,
-    ) -> dict[str, object]:
-        try:
-            validation = self.ontology_service.validate_yaml_text(proposal_yaml_text(row), ctx=ctx)
-        except FoundryLiteError as exc:
-            if decision == "approved":
-                raise ValidationFailed(
-                    "ontology proposal no longer validates against the current active ontology",
-                    details={"proposal_id": row["id"], "error": exc.message, "errorDetails": dict(exc.details)},
-                ) from exc
-            return {"status": "validation_failed", "error": exc.message}
-        plan = dict(validation["migration_plan"])
-        if decision == "approved" and plan.get("blockedChanges"):
-            raise ValidationFailed(
-                "ontology proposal approval refused: migration plan is blocked at decision time",
-                details={"proposal_id": row["id"], "migrationPlan": plan},
-            )
-        return plan
 
     def _store_decision(
         self,

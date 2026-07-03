@@ -23,6 +23,7 @@ from foundry_lite_api.schemas import (
     OntologyProposalDecisionRequest,
     OntologyProposalExecuteRequest,
     OntologyProposalSubmitRequest,
+    OntologyProposalUpdateRequest,
     OntologyProposalWithdrawRequest,
     OntologyRollbackRequest,
     OntologyValidateRequest,
@@ -154,6 +155,25 @@ def assign_ontology_proposal(
         return runtime.foundry.ontology.assign_proposal(
             proposal_id,
             reviewer_user_id=payload.reviewer_user_id,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/proposals/{proposal_id}/update")
+def update_ontology_proposal(
+    request: Request,
+    proposal_id: str,
+    payload: OntologyProposalUpdateRequest,
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.update_proposal(
+            proposal_id,
+            yaml_text=payload.yaml_text,
+            expected_fingerprint=payload.expected_fingerprint,
+            title=payload.title,
+            description=payload.description,
             ctx=_ctx(request),
         )
     except FoundryLiteError as exc:

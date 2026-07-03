@@ -310,6 +310,51 @@ def test_insight_review_withdraw_terminates_pending_and_approved_but_not_execute
     assert executing_withdrawn is None
 
 
+def test_insight_review_update_proposal_content_only_revises_live_undecided_matching_fingerprint() -> None:
+    harness = _sqlalchemy_harness()
+    with harness.transaction() as transaction:
+        for review_id, create_key in (("review_1", "create-1"), ("review_2", "create-2")):
+            harness.repository.insert_review_or_get_existing(
+                transaction=transaction,
+                record=_record(review_id, create_key=create_key, execution_status="pending_review"),
+            )
+        harness.repository.decide_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_2",
+            status="approved",
+            decision={"decision": "approved"},
+            decision_idempotency_key="decision-2",
+            updated_at="2026-06-19T00:00:01Z",
+        )
+        stale_fingerprint = _update_proposal_content(harness, transaction, "review_1", expected="sha256:other")
+        updated = _update_proposal_content(harness, transaction, "review_1", expected="sha256:proposal")
+        decided = _update_proposal_content(harness, transaction, "review_2", expected="sha256:proposal")
+
+    assert stale_fingerprint is None
+    assert decided is None
+    assert updated is not None
+    assert updated["proposal_fingerprint"] == "sha256:revised"
+    assert updated["claim_text"] == "Revised title"
+    assert updated["action_proposal"] == {"yamlText": "objectTypes: []"}
+    assert updated["review_metadata"]["requestId"] == "request-1"
+    assert updated["review_metadata"]["revision"] == {"count": 1, "lastRevisedAt": "2026-06-19T00:00:02Z"}
+
+
+def _update_proposal_content(harness: InsightReviewHarness, transaction: Any, review_id: str, *, expected: str) -> Any:
+    return harness.repository.update_proposal_content(
+        transaction=transaction,
+        tenant_id="tenant-demo",
+        review_id=review_id,
+        expected_fingerprint=expected,
+        proposal_fingerprint="sha256:revised",
+        claim_text="Revised title",
+        action_proposal={"yamlText": "objectTypes: []"},
+        revision={"count": 1, "lastRevisedAt": "2026-06-19T00:00:02Z"},
+        updated_at="2026-06-19T00:00:02Z",
+    )
+
+
 def test_insight_review_proposal_list_filters_and_keyset_pages_by_type() -> None:
     harness = _sqlalchemy_harness()
     with harness.transaction() as transaction:

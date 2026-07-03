@@ -2326,6 +2326,11 @@
       "reason": "Ontology proposal execution applies an approved proposal through the same activation path as direct apply (ontology:activate); it is an operator/CI control-plane action, not a browser frontend SDK control."
     },
     {
+      "route": "POST /api/ontology/proposals/{proposal_id}/update",
+      "accessClass": "server-side-write-pending-sdk",
+      "reason": "Ontology proposal in-place revision by its submitter (fingerprint-gated conditional update, revalidated yaml) currently serves server-side and API callers; wiring the browser SDK ontology.updateProposal method (generator surface + request-contract coverage) lands in the immediately following change."
+    },
+    {
       "route": "POST /api/ontology/proposals/{proposal_id}/withdraw",
       "accessClass": "operator-control-plane",
       "reason": "Ontology proposal withdrawal by its submitter is a governance control-plane action (ontology:validate), not a browser frontend SDK control."

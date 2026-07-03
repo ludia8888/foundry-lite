@@ -22,10 +22,11 @@ from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 ONTOLOGY_PROPOSAL_TYPE = "ontology_change"
 PROPOSAL_STATUSES = ("submitted", "in_review", "approved", "rejected", "applied", "withdrawn")
 ProposalDecision = Literal["approved", "rejected"]
-ProposalEvent = Literal["submitted", "assigned", "decided", "applied", "withdrawn"]
+ProposalEvent = Literal["submitted", "assigned", "revised", "decided", "applied", "withdrawn"]
 PROPOSAL_EVENT_ACTIONS: Mapping[str, str] = {
     "submitted": "ontology:validate",
     "assigned": "ontology:activate",
+    "revised": "ontology:validate",
     "decided": "ontology:activate",
     "applied": "ontology:activate",
     "withdrawn": "ontology:validate",
@@ -153,6 +154,55 @@ def require_fingerprint_match(row: InsightReviewRow, expected_fingerprint: str) 
         )
 
 
+def require_proposal_updatable(row: InsightReviewRow) -> None:
+    """A proposal is revisable only while pending, undecided, and not withdrawn.
+
+    This is the same storage guard the conditional repository update (and
+    withdraw) enforces, surfaced early with the derived status for callers.
+    """
+    if row["status"] == "pending" and row["execution_status"] == _LIVE_EXECUTION_STATUS and row["decision"] is None:
+        return
+    raise ConflictDetected(
+        "ontology proposal can no longer be updated",
+        details={"proposal_id": row["id"], "status": proposal_status(row)},
+    )
+
+
+def revised_proposal_content(
+    row: InsightReviewRow,
+    *,
+    yaml_text: str,
+    title: str | None,
+    description: str | None,
+    validation: OntologyValidationResult,
+) -> tuple[str, dict[str, object]]:
+    """Return the (claim_text, action_proposal) pair for a revised proposal.
+
+    ``title``/``description`` are optional overrides; omitted fields keep the
+    currently stored values.
+    """
+    existing = dict(row["action_proposal"] or {})
+    new_title = title if title is not None else str(row["claim_text"])
+    if description is None:
+        stored = existing.get("description")
+        description = stored if isinstance(stored, str) else None
+    return new_title, _action_proposal(new_title, description, yaml_text, validation)
+
+
+def revision_record(ctx: RequestContext, row: InsightReviewRow, now: str) -> dict[str, object]:
+    """Metadata entry recording the latest in-place revision of a proposal."""
+    return {
+        "count": revision_count(row) + 1,
+        "lastRevisedAt": now,
+        "lastRevisedByUserId": ctx.actor_user_id,
+    }
+
+
+def revision_count(row: InsightReviewRow) -> int:
+    count = _revision_entry(row).get("count", 0)
+    return count if isinstance(count, int) else 0
+
+
 def proposal_status(row: InsightReviewRow) -> str:
     if row["execution_status"] == "withdrawn":
         return "withdrawn"
@@ -195,6 +245,8 @@ def proposal_payload(row: InsightReviewRow) -> dict[str, object]:
         "executionStatus": row["execution_status"],
         "appliedOntologyVersion": _mapping_or_none(metadata.get("appliedOntologyVersion")),
         "withdrawal": _mapping_or_none(metadata.get("withdrawal")),
+        "revisionCount": revision_count(row),
+        "lastRevisedAt": _revision_entry(row).get("lastRevisedAt"),
         "createdAt": row["created_at"],
         "updatedAt": row["updated_at"],
     }
@@ -213,8 +265,22 @@ def proposal_timeline(row: InsightReviewRow) -> list[dict[str, object]]:
     ]
     if row["assignee_user_id"] is not None:
         events.append({"event": "assigned", "assigneeUserId": row["assignee_user_id"]})
+    revision = _revision_entry(row)
+    if revision:
+        events.append(
+            {
+                "event": "revised",
+                "count": revision.get("count"),
+                "at": revision.get("lastRevisedAt"),
+                "byUserId": revision.get("lastRevisedByUserId"),
+            }
+        )
     events.extend(_decision_timeline(row))
     return events
+
+
+def _revision_entry(row: InsightReviewRow) -> dict[str, object]:
+    return _mapping_or_none(dict(row["review_metadata"]).get("revision")) or {}
 
 
 def _decision_timeline(row: InsightReviewRow) -> list[dict[str, object]]:

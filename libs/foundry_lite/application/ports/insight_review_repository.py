@@ -197,6 +197,31 @@ class InsightReviewRepository(Protocol):
         """
         ...
 
+    def update_proposal_content(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        review_id: str,
+        expected_fingerprint: str,
+        proposal_fingerprint: str,
+        claim_text: str,
+        action_proposal: InsightReviewJson,
+        revision: InsightReviewJson,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        """Revise a still-pending, undecided proposal's content in place.
+
+        The conditional update only applies while the review status is
+        ``pending`` (which implies undecided: decisions move status and
+        decision together), execution status is ``pending_review`` (not
+        withdrawn), and the row still carries ``expected_fingerprint``; a
+        concurrent decide/withdraw/update loses cleanly with ``None``. The
+        ``revision`` entry is merged into ``review_metadata`` so reviewers can
+        see that content changed after assignment.
+        """
+        ...
+
     def withdraw_review(
         self,
         *,

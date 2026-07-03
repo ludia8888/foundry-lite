@@ -265,6 +265,47 @@ class SqlAlchemyInsightReviewRepository:
             return None
         return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
 
+    def update_proposal_content(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        review_id: str,
+        expected_fingerprint: str,
+        proposal_fingerprint: str,
+        claim_text: str,
+        action_proposal: InsightReviewJson,
+        revision: InsightReviewJson,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        row = self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+        if row is None:
+            return None
+        updated = cas_status_guarded_update(
+            transaction,
+            db.insight_reviews,
+            tenant_id=tenant_id,
+            row_id=review_id,
+            allowed_statuses=("pending",),
+            values={
+                "claim_text": claim_text,
+                "action_proposal": dict(action_proposal),
+                "proposal_fingerprint": proposal_fingerprint,
+                "review_metadata": {**dict(row["review_metadata"]), "revision": dict(revision)},
+                "updated_at": updated_at,
+            },
+            # status='pending' already implies "undecided": decide_review moves
+            # status and decision together in one CAS, and withdraw flips
+            # execution_status, so these two columns are the full live guard.
+            conditions=(
+                db.insight_reviews.c.execution_status == "pending_review",
+                db.insight_reviews.c.proposal_fingerprint == expected_fingerprint,
+            ),
+        )
+        if not updated:
+            return None
+        return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+
     def withdraw_review(
         self,
         *,

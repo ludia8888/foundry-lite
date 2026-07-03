@@ -113,6 +113,25 @@ class OntologyRegistry:
             ctx=ctx,
         )
 
+    def update_proposal(
+        self,
+        proposal_id: str,
+        *,
+        yaml_text: str,
+        expected_fingerprint: str,
+        title: str | None = None,
+        description: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._proposals.update_proposal(
+            proposal_id,
+            yaml_text=yaml_text,
+            expected_fingerprint=expected_fingerprint,
+            title=title,
+            description=description,
+            ctx=ctx,
+        )
+
     def execute_proposal(
         self,
         proposal_id: str,

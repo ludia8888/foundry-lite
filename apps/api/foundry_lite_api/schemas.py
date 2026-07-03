@@ -305,6 +305,15 @@ class OntologyProposalSubmitRequest(BaseModel):
     description: str | None = None
 
 
+class OntologyProposalUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    yaml_text: str = Field(alias="yamlText")
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+    title: str | None = None
+    description: str | None = None
+
+
 class OntologyProposalAssignRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
