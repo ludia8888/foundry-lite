@@ -14,6 +14,18 @@ from foundry_lite.domain.errors import PermissionDenied
 #: ``property_api_name``, ``column_name`` and ``classification``.
 ClassificationProvider = Callable[[str], Sequence[Mapping[str, object]]]
 
+#: Resolves the ``permissions.allowedRoles`` declared on one action type of the
+#: tenant's active ontology, called as ``(tenant_id, action_api_name)``. ``None``
+#: means the active ontology declares no roles for that action, so enforcement
+#: falls back to the static ``permission_roles`` map. The composition root wires
+#: this to the ontology repository (mirroring ``ClassificationProvider``) so a
+#: newly declared action in YAML is enforced without any policy code change.
+ActionRoleProvider = Callable[[str, str], Sequence[str] | None]
+
+#: Permissions with this prefix gate one action type each; their allowed roles
+#: are declared per action in ontology YAML rather than in the static map.
+ACTION_EXECUTE_PERMISSION_PREFIX = "action:execute:"
+
 #: Classifications that make a property/column sensitive. This is the only
 #: place sensitivity is *defined*; which properties carry it comes from the
 #: ontology, so a new finance/PII property in YAML is protected automatically.
@@ -68,25 +80,68 @@ class PolicyService:
     def __init__(
         self,
         classification_provider: ClassificationProvider | None = None,
+        action_role_provider: ActionRoleProvider | None = None,
         *,
         allow_unwired_classification_provider: bool = False,
+        allow_unwired_action_role_provider: bool = False,
     ) -> None:
         self._classification_provider = classification_provider
+        self._action_role_provider = action_role_provider
         self._allow_unwired_classification_provider = allow_unwired_classification_provider
+        self._allow_unwired_action_role_provider = allow_unwired_action_role_provider
 
     def decide(self, ctx: RequestContext, permission: str) -> PolicyDecision:
-        allowed_roles = self.permission_roles.get(permission, {"admin"})
+        """Role check: ontology-declared action roles first, static map otherwise."""
+        allowed_roles, source = self._allowed_roles(ctx, permission)
         if any(role in allowed_roles for role in ctx.roles):
-            return PolicyDecision(True, f"role matched one of {sorted(allowed_roles)}")
-        return PolicyDecision(False, f"requires one of {sorted(allowed_roles)}")
+            return PolicyDecision(True, f"role matched one of {sorted(allowed_roles)} ({source})")
+        return PolicyDecision(False, f"requires one of {sorted(allowed_roles)} ({source})")
 
     def require(self, ctx: RequestContext, permission: str) -> None:
+        """Raise the typed domain error services expect when a role check fails."""
         decision = self.decide(ctx, permission)
         if not decision.allowed:
             raise PermissionDenied(
                 f"permission denied for {permission}",
                 details={"permission": permission, "reason": decision.reason},
             )
+
+    def _allowed_roles(self, ctx: RequestContext, permission: str) -> tuple[set[str], str]:
+        """Resolve (allowed roles, source) so deny reasons explain where roles came from.
+
+        Order matters for fail-closed semantics: an action's YAML-declared
+        ``allowedRoles`` win over the static map, and an action neither declared in
+        the active ontology nor listed in the static map stays admin-only (the map's
+        default for unknown permissions).
+        """
+        declared = self._ontology_action_roles(ctx, permission)
+        if declared is not None:
+            return declared, "declared by active ontology action definition"
+        if permission in self.permission_roles:
+            return self.permission_roles[permission], "static permission map"
+        return {"admin"}, "unknown permission fails closed to admin"
+
+    def _ontology_action_roles(self, ctx: RequestContext, permission: str) -> set[str] | None:
+        """Roles the active ontology declares for an ``action:execute:*`` permission.
+
+        Admin is added implicitly to match the static map convention (every entry
+        grants admin). An unwired provider fails closed instead of silently
+        ignoring YAML ``allowedRoles`` — the exact bug this resolution prevents.
+        """
+        if not permission.startswith(ACTION_EXECUTE_PERMISSION_PREFIX):
+            return None
+        if self._action_role_provider is None:
+            if self._allow_unwired_action_role_provider:
+                return None
+            raise PermissionDenied(
+                "action role provider is not configured",
+                details={"permission": permission, "action_role_provider": "missing"},
+            )
+        action_api_name = permission.removeprefix(ACTION_EXECUTE_PERMISSION_PREFIX)
+        declared = self._action_role_provider(ctx.tenant_id, action_api_name)
+        if declared is None:
+            return None
+        return set(declared) | {"admin"}
 
     def mask_properties(
         self,

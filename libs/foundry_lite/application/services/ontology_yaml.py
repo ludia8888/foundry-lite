@@ -19,6 +19,20 @@ from foundry_lite.domain.errors import ValidationFailed
 
 type YamlObject = Mapping[str, object]
 
+# Ontology YAML arrives over HTTP as request-body text; bounding it keeps a
+# single oversized payload from stalling parse/validate work for everyone else.
+MAX_ONTOLOGY_YAML_BYTES = 1_048_576
+
+
+def require_yaml_text_within_limit(yaml_text: str) -> None:
+    """Reject ontology YAML text larger than the sanity bound."""
+    byte_size = len(yaml_text.encode("utf-8"))
+    if byte_size > MAX_ONTOLOGY_YAML_BYTES:
+        raise ValidationFailed(
+            "ontology yaml text exceeds size limit",
+            details={"byteSize": byte_size, "maxBytes": MAX_ONTOLOGY_YAML_BYTES},
+        )
+
 
 def yaml_object(value: object, field: str) -> dict[str, object]:
     """Return a string-keyed mapping from YAML input."""
@@ -186,10 +200,41 @@ def _copy_optional_action_fields(definition: ActionTypeDefinition, item: YamlObj
     parameters = tuple(action_parameter(parameter) for parameter in mapping_sequence(item, "parameters"))
     if parameters:
         definition["parameters"] = parameters
-    permissions = optional_mapping(item, "permissions")
+    permissions = action_permissions(item)
     if permissions is not None:
         definition["permissions"] = permissions
     _copy_sequence_fields(definition, item)
+
+
+def action_permissions(item: YamlObject) -> OntologyJsonObject | None:
+    """Validate the optional action permissions block before it is persisted.
+
+    ``allowedRoles`` drives runtime RBAC (see ``PolicyService``), so a malformed
+    declaration must fail activation instead of surfacing later as an
+    unenforceable permission.
+    """
+    permissions = optional_mapping(item, "permissions")
+    if permissions is None:
+        return None
+    if permissions.get("allowedRoles") is not None:
+        string_sequence(permissions["allowedRoles"], "permissions.allowedRoles")
+    return permissions
+
+
+def action_allowed_roles(definition: Mapping[str, object]) -> tuple[str, ...] | None:
+    """Return ``permissions.allowedRoles`` from a persisted action definition.
+
+    ``None`` means the definition declares no role restriction, so the policy
+    falls back to its static permission map; a malformed persisted value raises
+    the same typed error as YAML ingestion (fail closed, never silently open).
+    """
+    permissions = definition.get("permissions")
+    if not isinstance(permissions, Mapping):
+        return None
+    value = permissions.get("allowedRoles")
+    if value is None:
+        return None
+    return string_sequence(value, "permissions.allowedRoles")
 
 
 def _copy_sequence_fields(definition: ActionTypeDefinition, item: YamlObject) -> None:

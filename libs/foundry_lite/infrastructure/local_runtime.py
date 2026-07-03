@@ -22,6 +22,7 @@ from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.services.object_store.query_cursor import (
     require_object_query_cursor_signing_key_for_runtime,
 )
+from foundry_lite.application.services.ontology_yaml import action_allowed_roles
 from foundry_lite.application.services.runtime_run_cursors import require_operations_cursor_signing_key_for_runtime
 from foundry_lite.infrastructure.adapters import (
     AsrProcessorAdapter,
@@ -122,7 +123,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyTransformRepository,
 )
 from foundry_lite.infrastructure.secrets import local_secret_vault_provider, secret_provider_from_env
-from foundry_lite.security.policy import ClassificationProvider, PolicyService
+from foundry_lite.security.policy import ActionRoleProvider, ClassificationProvider, PolicyService
 
 _RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
 _ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV = "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY"
@@ -141,6 +142,31 @@ def _classification_provider(
     def provider(tenant_id: str) -> list[PropertyClassificationRow]:
         with engine.begin() as conn:
             return ontology_repository.active_property_classifications(transaction=conn, tenant_id=tenant_id)
+
+    return provider
+
+
+def _action_role_provider(engine: Engine, ontology_repository: SqlAlchemyOntologyRepository) -> ActionRoleProvider:
+    """Read one action's declared ``permissions.allowedRoles`` from the active ontology.
+
+    Keeps action RBAC ontology-driven (YAML ``allowedRoles`` is enforced, not just
+    persisted) while the security policy stays free of database/vendor SDKs.
+    """
+
+    def provider(tenant_id: str, action_api_name: str) -> tuple[str, ...] | None:
+        with engine.begin() as conn:
+            active = ontology_repository.active_ontology_version(transaction=conn, tenant_id=tenant_id)
+            if active is None:
+                return None
+            row = ontology_repository.enabled_action_type_for_version(
+                transaction=conn,
+                tenant_id=tenant_id,
+                ontology_version_id=active["id"],
+                api_name=action_api_name,
+            )
+        if row is None:
+            return None
+        return action_allowed_roles(row["definition"])
 
     return provider
 
@@ -198,7 +224,10 @@ def create_local_core_dependencies(
         root=root,
         storage_root=object_storage_root,
         engine=engine,
-        policy=PolicyService(classification_provider=_classification_provider(engine, ontology_repository)),
+        policy=PolicyService(
+            classification_provider=_classification_provider(engine, ontology_repository),
+            action_role_provider=_action_role_provider(engine, ontology_repository),
+        ),
         action_repository=SqlAlchemyActionRepository(engine),
         ai_eval_repository=SqlAlchemyAiEvalRepository(engine),
         ai_run_repository=SqlAlchemyAiRunRepository(engine),

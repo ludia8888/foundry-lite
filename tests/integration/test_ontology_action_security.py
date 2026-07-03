@@ -1437,6 +1437,145 @@ def test_only_ops_manager_or_admin_can_execute_approve_order(
     assert any(event["decision"] == "deny" for event in foundry.operations.list_runs(ctx=ops_manager)["auditEvents"])
 
 
+def test_yaml_allowed_roles_grant_execution_beyond_the_static_permission_map(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    # ExpediteOrder exists only in ontology YAML (never in the policy's static
+    # map): its allowedRoles must grant ops_manager, deny other roles, and keep
+    # admin implicitly allowed per the static-map convention.
+    admin_ctx = _prepare_demo_with_ontology(foundry, _expedite_action_ontology(tmp_path, "ops_manager"))
+    ops_manager = RequestContext(actor_user_id="ops-1", roles=("ops_manager",))
+    data_engineer = RequestContext(actor_user_id="engineer-1", roles=("data_engineer",))
+    viewer = RequestContext(actor_user_id="viewer-1", roles=("viewer",))
+    order = foundry.objects.get("Order", "O-1001", ctx=ops_manager)
+
+    for denied_ctx in (data_engineer, viewer):
+        with pytest.raises(PermissionDenied):
+            foundry.actions.apply(
+                "ExpediteOrder",
+                object_type="Order",
+                object_id="O-1001",
+                expected_object_version=order["objectVersion"],
+                params={"reason": "hot order"},
+                idempotency_key=f"expedite-denied-{denied_ctx.actor_user_id}",
+                ctx=denied_ctx,
+            )
+
+    expedited = foundry.actions.apply(
+        "ExpediteOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "hot order"},
+        idempotency_key="expedite-ops",
+        ctx=ops_manager,
+    )
+    admin_order = foundry.objects.get("Order", "O-1001", ctx=admin_ctx)
+    admin_expedited = foundry.actions.apply(
+        "ExpediteOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=admin_order["objectVersion"],
+        params={"reason": "admin override"},
+        idempotency_key="expedite-admin",
+        ctx=admin_ctx,
+    )
+
+    assert expedited["status"] == "succeeded"
+    assert admin_expedited["status"] == "succeeded"
+    denials = [
+        event
+        for event in foundry.operations.list_runs(ctx=admin_ctx)["auditEvents"]
+        if event["event_type"] == "permission.denied" and event["resource_id"] == "ExpediteOrder"
+    ]
+    assert len(denials) == 2
+    assert all(event["decision"] == "deny" for event in denials)
+
+
+def test_unknown_action_is_denied_fail_closed_before_any_side_effect(foundry: FoundryLite) -> None:
+    admin_ctx = prepare_indexed_demo(foundry)
+    ops_manager = RequestContext(actor_user_id="ops-1", roles=("ops_manager",))
+
+    with pytest.raises(PermissionDenied) as excinfo:
+        foundry.actions.apply(
+            "GhostAction",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=1,
+            params={},
+            idempotency_key="ghost-action",
+            ctx=ops_manager,
+        )
+
+    runs = foundry.operations.list_runs(ctx=admin_ctx)
+    assert excinfo.value.details["permission"] == "action:execute:GhostAction"
+    assert _action_row_count(runs, "ghost-action") == 0
+    assert any(
+        event["event_type"] == "permission.denied" and event["resource_id"] == "GhostAction"
+        for event in runs["auditEvents"]
+    )
+
+
+def test_action_execute_permission_does_not_bypass_object_read(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    # connector_ingest is granted execute through YAML allowedRoles but has no
+    # object:read: it must not be able to apply or validate against a target it
+    # cannot view (Palantir semantics), and each denial leaves audit evidence.
+    admin_ctx = _prepare_demo_with_ontology(foundry, _expedite_action_ontology(tmp_path, "connector_ingest"))
+    ingest_only = RequestContext(actor_user_id="ingest-1", roles=("connector_ingest",))
+    order = foundry.objects.get("Order", "O-1001", ctx=admin_ctx)
+
+    with pytest.raises(PermissionDenied) as apply_denied:
+        foundry.actions.apply(
+            "ExpediteOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "cannot read target"},
+            idempotency_key="expedite-no-read",
+            ctx=ingest_only,
+        )
+    with pytest.raises(PermissionDenied) as validate_denied:
+        foundry.actions.validate(
+            "ExpediteOrder",
+            object_type="Order",
+            object_id="O-1001",
+            expected_object_version=order["objectVersion"],
+            params={"reason": "cannot read target"},
+            ctx=ingest_only,
+        )
+
+    # The same execute grant plus a role with object:read may act: the denial
+    # above was precisely the missing read permission, not the execute grant.
+    ingest_reader = RequestContext(actor_user_id="ingest-2", roles=("connector_ingest", "viewer"))
+    applied = foundry.actions.apply(
+        "ExpediteOrder",
+        object_type="Order",
+        object_id="O-1001",
+        expected_object_version=order["objectVersion"],
+        params={"reason": "reader may act"},
+        idempotency_key="expedite-with-read",
+        ctx=ingest_reader,
+    )
+
+    runs = foundry.operations.list_runs(ctx=admin_ctx)
+    read_denials = [
+        event
+        for event in runs["auditEvents"]
+        if event["event_type"] == "permission.denied" and event["resource_id"] == "Order:O-1001"
+    ]
+    assert apply_denied.value.details["permission"] == "object:read"
+    assert validate_denied.value.details["permission"] == "object:read"
+    assert applied["status"] == "succeeded"
+    assert {event["action"] for event in read_denials} == {"apply", "validate"}
+    assert all(event["after_ref"]["permission"] == "object:read" for event in read_denials)
+    assert all(event["after_ref"]["action_type"] == "ExpediteOrder" for event in read_denials)
+    assert _action_row_count(runs, "expedite-no-read") == 0
+
+
 def test_action_rejects_target_object_type_mismatch_before_side_effects(foundry: FoundryLite) -> None:
     prepare_indexed_demo(foundry)
     ctx = demo_admin_context()
@@ -1569,6 +1708,33 @@ def _margin_action_ontology(tmp_path: Path) -> Path:
         valueFrom: params.margin
 """
     path = tmp_path / "order-customer-margin-action.yaml"
+    path.write_text(ontology, encoding="utf-8")
+    return path
+
+
+def _expedite_action_ontology(tmp_path: Path, allowed_role: str) -> Path:
+    """Demo ontology plus an ExpediteOrder action whose roles exist only in YAML.
+
+    ExpediteOrder is intentionally absent from the policy's static permission map,
+    so any grant it carries must come from ``permissions.allowedRoles`` enforcement.
+    """
+    ontology = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
+    ontology = f"""{ontology}
+  - apiName: ExpediteOrder
+    displayName: Expedite order
+    target: Order
+    parameters:
+      - apiName: reason
+        type: string
+        required: true
+    permissions:
+      allowedRoles: [{allowed_role}]
+    mutations:
+      - type: setProperty
+        property: operatorNote
+        valueFrom: params.reason
+"""
+    path = tmp_path / "order-customer-expedite-action.yaml"
     path.write_text(ontology, encoding="utf-8")
     return path
 

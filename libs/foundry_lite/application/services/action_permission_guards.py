@@ -23,7 +23,64 @@ def require_action_permission(
     *,
     action: str = "apply",
 ) -> None:
+    """Require the per-action execute permission, leaving audit evidence on deny."""
     permission = f"action:execute:{action_api_name}"
+    _require_permission_with_audit(
+        engine,
+        policy,
+        runtime_service,
+        ctx,
+        permission,
+        resource_type="action_type",
+        resource_id=action_api_name,
+        action=action,
+        after_ref={"permission": permission},
+    )
+
+
+def require_action_target_read(
+    engine: TransactionManager,
+    policy: PolicyService,
+    runtime_service: SupportsAudit,
+    ctx: RequestContext,
+    action_api_name: str,
+    object_type: str,
+    object_id: str,
+    *,
+    action: str = "apply",
+) -> None:
+    """Deny acting on a target object the caller cannot view.
+
+    Palantir semantics: executing or validating an action presumes the actor can
+    load the target object, so per-action execute permission must never bypass
+    ``object:read`` policy. Denials leave the same audit evidence as execute denials.
+    """
+    _require_permission_with_audit(
+        engine,
+        policy,
+        runtime_service,
+        ctx,
+        "object:read",
+        resource_type="object",
+        resource_id=f"{object_type}:{object_id}",
+        action=action,
+        after_ref={"permission": "object:read", "action_type": action_api_name},
+    )
+
+
+def _require_permission_with_audit(
+    engine: TransactionManager,
+    policy: PolicyService,
+    runtime_service: SupportsAudit,
+    ctx: RequestContext,
+    permission: str,
+    *,
+    resource_type: str,
+    resource_id: str,
+    action: str,
+    after_ref: dict[str, object],
+) -> None:
+    """Shared deny path: a permission failure must be audited before it propagates."""
     try:
         policy.require(ctx, permission)
     except PermissionDenied:
@@ -32,11 +89,11 @@ def require_action_permission(
                 conn,
                 ctx,
                 event_type="permission.denied",
-                resource_type="action_type",
-                resource_id=action_api_name,
+                resource_type=resource_type,
+                resource_id=resource_id,
                 action=action,
                 decision="deny",
-                after_ref={"permission": permission},
+                after_ref=after_ref,
             )
         raise
 

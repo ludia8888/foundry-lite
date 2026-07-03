@@ -30,6 +30,7 @@ from foundry_lite.application.services.action_helpers import (
 )
 from foundry_lite.application.services.action_permission_guards import (
     require_action_permission,
+    require_action_target_read,
     require_failure_injection_for_command,
 )
 from foundry_lite.application.services.action_protocols import ActionOsdkScopeBoundary
@@ -145,6 +146,15 @@ class ActionApplyService(CoreService):
     def _authorize_action_apply(self, ctx: RequestContext, command: ActionApplyCommand) -> None:
         require_failure_injection_for_command(self.engine, self.runtime_service, ctx, command)
         require_action_permission(self.engine, self.policy, self.runtime_service, ctx, command.action_api_name)
+        require_action_target_read(
+            self.engine,
+            self.policy,
+            self.runtime_service,
+            ctx,
+            command.action_api_name,
+            command.object_type,
+            command.object_id,
+        )
         self._require_action_scope(ctx, command.action_api_name, "execute")
         require_action_write_open(self.runtime_service, ctx, "apply", "action_type", command.action_api_name)
 

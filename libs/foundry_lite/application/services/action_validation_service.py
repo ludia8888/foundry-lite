@@ -9,7 +9,10 @@ from foundry_lite.application.services.action_helpers import (
     action_target_record_error,
     require_action_target_api_name,
 )
-from foundry_lite.application.services.action_permission_guards import require_action_permission
+from foundry_lite.application.services.action_permission_guards import (
+    require_action_permission,
+    require_action_target_read,
+)
 from foundry_lite.application.services.action_protocols import ActionOsdkScopeBoundary
 from foundry_lite.application.services.action_validation import action_validation_response
 from foundry_lite.application.services.action_workflow import (
@@ -49,6 +52,16 @@ class ActionValidationService(CoreService):
         ctx = ctx or RequestContext()
         require_action_permission(
             self.engine, self.policy, self.runtime_service, ctx, action_api_name, action="validate"
+        )
+        require_action_target_read(
+            self.engine,
+            self.policy,
+            self.runtime_service,
+            ctx,
+            action_api_name,
+            object_type,
+            object_id,
+            action="validate",
         )
         self._require_action_scope(ctx, action_api_name)
         with self.engine.begin() as conn:
