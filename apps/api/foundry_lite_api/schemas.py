@@ -125,6 +125,21 @@ class ActionApplyRequest(BaseModel):
     params: JsonObject
 
 
+class ActionBatchTargetItemRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    object_id: str = Field(alias="objectId")
+    expected_object_version: int = Field(alias="expectedObjectVersion")
+
+
+class ActionApplyBatchRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    object_type: str = Field(alias="objectType")
+    targets: list[ActionBatchTargetItemRequest]
+    params: JsonObject
+
+
 class ObjectSetCreateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

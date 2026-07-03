@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.action_types import (
     ActionApplyResponse,
+    ActionBatchApplyResponse,
     ActionValidationResponse,
     ActionWritebackQueueResult,
     ActionWritebackReconciliationResult,
@@ -13,6 +14,7 @@ from foundry_lite.application.action_types import (
     ActionWritebackRecoveryResult,
 )
 from foundry_lite.application.services.action_apply_service import ActionApplyService
+from foundry_lite.application.services.action_batch_service import ActionBatchApplyService
 from foundry_lite.application.services.action_validation_service import ActionValidationService
 from foundry_lite.application.services.action_workflow import ExternalWritebackAdapter
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
@@ -27,10 +29,12 @@ class ActionService(CoreService):
     required_dependencies = ()
     required_collaborators = (
         "action_apply_service",
+        "action_batch_apply_service",
         "action_validation_service",
         "action_writeback_service",
     )
     action_apply_service: ActionApplyService
+    action_batch_apply_service: ActionBatchApplyService
     action_validation_service: ActionValidationService
     action_writeback_service: ActionWritebackService
 
@@ -65,6 +69,27 @@ class ActionService(CoreService):
             simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
             simulate_writeback_compensation_required=simulate_writeback_compensation_required,
             external_writeback_uri=external_writeback_uri,
+        )
+
+    def apply_action_batch(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        targets: Sequence[Mapping[str, object]],
+        params: Mapping[str, object],
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> ActionBatchApplyResponse:
+        if not idempotency_key:
+            raise ValidationFailed("idempotency key is required")
+        return self.action_batch_apply_service.apply_action_batch(
+            action_api_name,
+            object_type=object_type,
+            targets=targets,
+            params=params,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
         )
 
     def validate_action(

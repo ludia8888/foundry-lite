@@ -118,6 +118,48 @@ class ActionWritebackQueueResult(TypedDict):
     items: list[ActionWritebackQueueItem]
 
 
+class ActionBatchTargetResult(TypedDict):
+    objectId: str
+    objectEditId: str
+    newObjectVersion: int
+    patch: Mapping[str, object]
+
+
+class ActionBatchApplyResponse(TypedDict):
+    actionRunId: str
+    status: str
+    objectType: str
+    results: list[ActionBatchTargetResult]
+    cacheRefresh: NotRequired[ActionCacheRefreshHint]
+    idempotentReplay: NotRequired[bool]
+
+
+@dataclass(frozen=True)
+class ActionBatchTarget:
+    """One parsed batch target: which object and which version the caller saw."""
+
+    object_id: str
+    expected_object_version: int
+
+
+@dataclass(frozen=True)
+class ActionBatchApplyCommand:
+    """Normalized batch apply request; the fingerprint covers targets so replay detects body drift."""
+
+    action_api_name: str
+    object_type: str
+    targets: tuple[ActionBatchTarget, ...]
+    params: dict[str, object]
+    idempotency_key: str
+    request_fingerprint: str
+
+
+@dataclass(frozen=True)
+class ActionBatchApplyOutcome:
+    response: ActionBatchApplyResponse | None = None
+    deferred_error: Exception | None = None
+
+
 @dataclass(frozen=True)
 class ActionApplyCommand:
     action_api_name: str

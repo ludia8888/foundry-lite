@@ -2271,6 +2271,11 @@
       "reason": "Server-side object aggregation currently backs the Python OSDK aggregate call; wiring the browser SDK objects.generic.aggregate method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
     },
     {
+      "route": "POST /api/actions/{action_type}/apply-batch",
+      "accessClass": "server-side-write-pending-sdk",
+      "reason": "Batch action apply (Idempotency-Key header, all-or-nothing multi-target mutation) currently serves server-side and API callers; wiring the browser SDK actions.<ActionType>.applyBatch method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
+    },
+    {
       "route": "POST /api/ontology/apply",
       "accessClass": "operator-control-plane",
       "reason": "Ontology apply is an IaC/CI control-plane operation (ontology:activate) driven by pipelines and the CLI, not the browser frontend SDK."
@@ -2279,6 +2284,16 @@
       "route": "POST /api/ontology/rollback",
       "accessClass": "operator-control-plane",
       "reason": "Ontology rollback restores an archived version through the activation path; it is an operator/CI control-plane action, not a browser frontend SDK control."
+    },
+    {
+      "route": "GET /api/ontology/resources/{resource_type}/{api_name}/usage",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology resource usage is a read-only operator/governance read model (ontology:read) mirroring Ontology Manager's usage tab; wiring a named browser SDK method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
+    },
+    {
+      "route": "GET /api/ontology/resources/{resource_type}/{api_name}/dependents",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology resource dependents is a read-only operator/governance read model (ontology:read) mirroring Ontology Manager's dependents view; wiring a named browser SDK method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
     },
     {
       "route": "POST /api/sources/webhook-listeners/{source_name}/events",

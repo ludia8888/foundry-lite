@@ -283,6 +283,7 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
 def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
         "action_apply_service": services.action.apply,
+        "action_batch_apply_service": services.action.batch_apply,
         "action_service": services.action.entrypoint,
         "action_validation_service": services.action.validation,
         "action_writeback_service": services.action.writeback,
@@ -359,6 +360,7 @@ def _object_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "object_subscription_service": services.object_store.subscriptions,
         "ontology_activation_service": services.ontology.activation,
         "ontology_catalog_service": services.ontology.catalog,
+        "ontology_insights_service": services.ontology.insights,
         "ontology_lookup_service": services.ontology.lookup,
         "ontology_reindex_contract_service": services.ontology.reindex_contract,
         "ontology_service": services.ontology.entrypoint,

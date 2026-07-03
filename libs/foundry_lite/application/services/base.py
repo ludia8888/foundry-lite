@@ -65,6 +65,7 @@ CollaboratorMap = Mapping[str, object]
 
 SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_apply_service": "ActionApplyService",
+    "action_batch_apply_service": "ActionBatchApplyService",
     "action_service": "ActionService",
     "action_validation_service": "ActionValidationService",
     "action_writeback_service": "ActionWritebackService",
@@ -120,6 +121,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "osdk_application_scope_service": "OsdkApplicationScopeService",
     "ontology_activation_service": "OntologyActivationService",
     "ontology_catalog_service": "OntologyCatalogService",
+    "ontology_insights_service": "OntologyInsightsService",
     "ontology_lookup_service": "OntologyLookupService",
     "ontology_reindex_contract_service": "OntologyReindexContractService",
     "ontology_service": "OntologyService",

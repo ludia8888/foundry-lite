@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
-from foundry_lite.application.action_types import ActionApplyResponse, ActionValidationResponse
+from foundry_lite.application.action_types import (
+    ActionApplyResponse,
+    ActionBatchApplyResponse,
+    ActionValidationResponse,
+)
 from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.observability.tracing import trace_public_methods
@@ -46,6 +50,26 @@ class ActionGateway:
             simulate_writeback_outcome_unknown=simulate_writeback_outcome_unknown,
             simulate_writeback_compensation_required=simulate_writeback_compensation_required,
             external_writeback_uri=external_writeback_uri,
+        )
+
+    def apply_batch(
+        self,
+        action_api_name: str,
+        *,
+        object_type: str,
+        targets: Sequence[Mapping[str, object]],
+        params: Mapping[str, object],
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> ActionBatchApplyResponse:
+        """Apply one action to many targets of the target type atomically (all-or-nothing)."""
+        return self._action.apply_action_batch(
+            action_api_name,
+            object_type=object_type,
+            targets=targets,
+            params=params,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
         )
 
     def validate(
