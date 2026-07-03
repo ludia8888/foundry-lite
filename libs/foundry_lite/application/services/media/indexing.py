@@ -14,7 +14,7 @@ from foundry_lite.application.ports.media_derivative_repository import ContentUn
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.media.protocols import MediaRuntimeBoundary
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound
+from foundry_lite.domain.errors import ConflictDetected, InvariantViolation, NotFound
 
 _PROJECTION_VERSION = 1
 
@@ -105,7 +105,15 @@ class MediaIndexingService(CoreService):
         if not self.embedding_model_adapter.is_available:
             return tuple(_indexed(unit, (), "") for unit in units)
         vectors = self.embedding_model_adapter.embed([unit.text for unit in units])
-        return tuple(_indexed(unit, tuple(vector), model_version) for unit, vector in zip(units, vectors, strict=False))
+        if len(vectors) != len(units):
+            # The port contract is one vector per text; a short/long batch must surface as a
+            # failure, never silently drop trailing units (which would leave them unindexed and
+            # unreported, violating the partial-failure contract).
+            raise InvariantViolation(
+                "embedding model returned a vector count that does not match the content units",
+                details={"units": len(units), "vectors": len(vectors)},
+            )
+        return tuple(_indexed(unit, tuple(vector), model_version) for unit, vector in zip(units, vectors, strict=True))
 
     def _audit_indexed(self, ctx: RequestContext, generation: str, resource_id: str, outcome: IndexingOutcome) -> None:
         with self.engine.begin() as conn:

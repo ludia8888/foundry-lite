@@ -16,11 +16,13 @@ import io
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 from foundry_lite.application.ports.adapter_failure import AdapterError
 from foundry_lite.application.ports.content_index import HybridContentQuery
 from foundry_lite.application.ports.embedding_model import EmbeddingModelError, EmbeddingVector
+from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord, MediaDerivativeRecord
 from foundry_lite.application.ports.media_processor import ProcessorSpec
 from foundry_lite.application.ports.transaction_context import TransactionContext
 from foundry_lite.application.services.media.catalog import MediaCatalogService, MediaSetSpec
@@ -41,6 +43,7 @@ from foundry_lite.infrastructure.adapters.video_probe_processor import VideoScen
 from foundry_lite.infrastructure.repositories import SqlAlchemyMediaDerivativeRepository, SqlAlchemyMediaRepository
 from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Connection
 
 _VISION_SPEC = ProcessorSpec(processor="video_vision_v1", processor_version="1.0", model="clip", model_version="b32")
 # Three frames at ordered timecodes; each maps to a distinct one-hot vector in the shared space.
@@ -229,8 +232,84 @@ def test_visual_search_drops_a_hit_whose_source_unit_was_purged(env: _Env) -> No
         units = env.visual_search.media_derivative_repository.get_content_units(
             transaction=conn, tenant_id=env.ctx.tenant_id, derivative_id=derivative_id
         )
-        conn.execute(db.content_units.delete().where(db.content_units.c.id.in_([u.content_unit_id for u in units])))
+        cast(Connection, conn).execute(
+            db.content_units.delete().where(db.content_units.c.id.in_([u.content_unit_id for u in units]))
+        )
     assert env.visual_search.search_visual(env.ctx, text="a photo of a car") == []
+
+
+def _seed_classified_frames(env: _Env) -> None:
+    """Seed one public and one secret frame (same 'car' vector) into a COMMITTED derivative."""
+    repo = env.visual_search.media_derivative_repository
+    derivative_id = "mder-classified"
+    car = _CAR[2]
+    with env.visual_search.engine.begin() as conn:
+        repo.create_derivative_or_get_existing(
+            transaction=conn,
+            record=MediaDerivativeRecord(
+                media_derivative_id=derivative_id,
+                tenant_id=env.ctx.tenant_id,
+                source_media_item_version_id=env.version_id,
+                derivative_kind="video_scene_vision",
+                processor_spec_hash="spec-classified",
+                processor_name="video_vision_v1",
+                processor_version="1.0",
+                model_name="clip",
+                model_version=CLIP_MODEL_VERSION,
+                params_hash="spec-classified",
+                security_envelope={"tenantId": env.ctx.tenant_id, "classification": "confidential"},
+                status="COMMITTED",
+                created_at="2026-06-30T00:00:00Z",
+            ),
+        )
+        repo.insert_content_units(
+            transaction=conn,
+            records=[
+                ContentUnitRecord(
+                    content_unit_id=cid,
+                    tenant_id=env.ctx.tenant_id,
+                    source_media_item_version_id=env.version_id,
+                    derivative_id=derivative_id,
+                    unit_kind="video_frame_visual",
+                    ordinal=ordinal,
+                    text="",
+                    text_hash=text_hash,
+                    chunk_spec_hash="spec-classified",
+                    security_envelope={"tenantId": env.ctx.tenant_id, "classification": classification},
+                    start_ms=ordinal * 1000,
+                    embedding=car,
+                    created_at="2026-06-30T00:00:00Z",
+                )
+                for ordinal, (cid, text_hash, classification) in enumerate(
+                    [("cu-public", "hp", "public"), ("cu-secret", "hs", "secret")]
+                )
+            ],
+        )
+    env.visual_search.index_visual_derivative(env.ctx, media_derivative_id=derivative_id, generation="v1")
+    env.visual_search.promote(env.ctx, expected_active="", generation="v1")
+
+
+def test_visual_search_masks_over_classified_frame_from_uncleared_caller(env: _Env) -> None:
+    # AIP P0a (visual parity): a caller not cleared for "secret" must never get the secret frame
+    # citation, even though both frames match the query vector.
+    _seed_classified_frames(env)
+    ops = RequestContext(tenant_id=env.ctx.tenant_id, roles=("ops_manager",))
+
+    hits = env.visual_search.search_visual(ops, text="a photo of a car")
+
+    ids = {hit.content_unit_id for hit in hits}
+    assert "cu-public" in ids
+    assert "cu-secret" not in ids
+
+
+def test_visual_search_returns_secret_frame_for_cleared_caller(env: _Env) -> None:
+    # The SAME secret frame is returned once the caller's clearance covers it (admin = full).
+    _seed_classified_frames(env)
+    admin = RequestContext(tenant_id=env.ctx.tenant_id, roles=("admin",))
+
+    hits = env.visual_search.search_visual(admin, text="a photo of a car")
+
+    assert "cu-secret" in {hit.content_unit_id for hit in hits}
 
 
 def test_clip_pinned_query_does_not_match_a_bge_pinned_generation(env: _Env) -> None:

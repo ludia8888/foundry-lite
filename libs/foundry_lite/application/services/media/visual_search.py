@@ -10,9 +10,11 @@ from foundry_lite.application.ports.content_index import (
     ContentSearchHit,
     HybridContentQuery,
     IndexedContentUnit,
+    is_classification_cleared,
 )
 from foundry_lite.application.ports.media_derivative_repository import ContentUnitRecord
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.media.clearance import allowed_media_classifications
 from foundry_lite.application.services.media.protocols import MediaRuntimeBoundary
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, NotFound
@@ -89,8 +91,19 @@ class MediaVisualSearchService(CoreService):
                 correlation_id=ctx.request_id,
             )
 
-    def search_visual(self, ctx: RequestContext, *, text: str, top_k: int = 10) -> list[ContentSearchHit]:
+    def search_visual(
+        self,
+        ctx: RequestContext,
+        *,
+        text: str,
+        top_k: int = 10,
+        allowed_classifications: tuple[str, ...] | None = None,
+    ) -> list[ContentSearchHit]:
         self.policy.require(ctx, "media:search")
+        # The classification clearance is a SERVER decision from ctx (mirrors the text path's
+        # PRE-filter). A caller value is only an internal narrowing hint; it can never widen the
+        # ctx-derived ceiling, so an over-classified frame never enters ranking or is re-read out.
+        allowed = _clearance(ctx, allowed_classifications)
         # Embed the query with the CLIP TEXT tower; match only the dense path (text=None) so a
         # frame's descriptor never lexically biases the visual ranking. With no CLIP model wired
         # the path degrades to no hits (default-off), so unified/visual callers stay keyword-safe.
@@ -103,6 +116,7 @@ class MediaVisualSearchService(CoreService):
             top_k=top_k,
             query_vector=query_vector,
             embedding_model_version=self.vision_embedding_model_adapter.model_version,
+            allowed_classifications=allowed,
         )
         hits = self.content_index_adapter.search(query)
         if not hits:
@@ -112,7 +126,9 @@ class MediaVisualSearchService(CoreService):
                 transaction=conn, ids=[hit.content_unit_id for hit in hits]
             )
         unit_by_id = {unit.content_unit_id: unit for unit in units}
-        return [hit for hit in hits if _is_authoritative(hit, unit_by_id.get(hit.content_unit_id), ctx.tenant_id)]
+        return [
+            hit for hit in hits if _is_authoritative(hit, unit_by_id.get(hit.content_unit_id), ctx.tenant_id, allowed)
+        ]
 
     def _project(self, generation: str, units: list[ContentUnitRecord]) -> VisualIndexingOutcome:
         model_version = self.vision_embedding_model_adapter.model_version
@@ -139,6 +155,16 @@ class MediaVisualSearchService(CoreService):
             )
 
 
+def _clearance(ctx: RequestContext, requested: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    """Intersect any caller-supplied narrowing hint with the ctx-derived clearance ceiling."""
+    ceiling = allowed_media_classifications(ctx)
+    if requested is None:
+        return ceiling
+    if ceiling is None:
+        return requested
+    return tuple(name for name in requested if name in ceiling)
+
+
 def _indexed(unit: ContentUnitRecord, embedding_model_version: str) -> IndexedContentUnit:
     return IndexedContentUnit(
         tenant_id=unit.tenant_id,
@@ -153,14 +179,27 @@ def _indexed(unit: ContentUnitRecord, embedding_model_version: str) -> IndexedCo
         chunk_spec_hash=unit.chunk_spec_hash,
         embedding=unit.embedding,
         embedding_model_version=embedding_model_version,
+        # Pin the frame's classification onto the projection (like the text path) so the index
+        # can PRE-filter by clearance before the kNN ranks — an over-classified frame is never a
+        # candidate for an uncleared caller.
+        classification=str(unit.security_envelope.get("classification", "")),
     )
 
 
-def _is_authoritative(hit: ContentSearchHit, unit: ContentUnitRecord | None, tenant_id: str) -> bool:
+def _is_authoritative(
+    hit: ContentSearchHit,
+    unit: ContentUnitRecord | None,
+    tenant_id: str,
+    allowed_classifications: tuple[str, ...] | None,
+) -> bool:
     if unit is None:
         return False  # stale: the source content unit no longer exists
     if unit.tenant_id != tenant_id or str(unit.security_envelope.get("tenantId", unit.tenant_id)) != tenant_id:
         return False  # ACL: never leak another tenant's content
+    # Defense-in-depth: re-apply the clearance gate against the authoritative DB row so even a
+    # stale/over-broad index that leaked an over-classified frame is dropped here.
+    if not is_classification_cleared(str(unit.security_envelope.get("classification", "")), allowed_classifications):
+        return False
     return hit.text_hash == unit.text_hash  # citation integrity: index must match the truth
 
 

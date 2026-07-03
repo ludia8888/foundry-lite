@@ -60,6 +60,10 @@ class PolicyService:
         # ops managers, mirroring action execution and operations retry.
         "aip:evals:run": {"admin", "data_engineer", "ops_manager"},
         "aip:releases:promote": {"admin", "ops_manager"},
+        # Binding a media version onto an object property writes into the object graph, so it is
+        # gated above plain reads (viewers are excluded) to stop reference poisoning by callers
+        # who may not write the holder.
+        "media:reference:bind": {"admin", "data_engineer", "ops_manager"},
         "action:execute:ApproveOrder": {"admin", "ops_manager"},
         "developer_console:read": {"admin", "data_engineer", "ops_manager"},
         "developer_console:manage": {"admin", "data_engineer"},

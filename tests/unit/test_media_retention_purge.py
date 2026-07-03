@@ -31,6 +31,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyMediaReferenceBindingRepository,
     SqlAlchemyMediaRepository,
 )
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine, insert, select
 
 
@@ -83,7 +84,7 @@ class _Env:
 
     def attach_derived(self, version_id: str) -> tuple[str, str]:
         """Attach one COMMITTED derivative + content unit to a version (purge footprint)."""
-        envelope = {"tenantId": self.ctx.tenant_id, "classification": "confidential"}
+        envelope: dict[str, object] = {"tenantId": self.ctx.tenant_id, "classification": "confidential"}
         derivative_id = _new_id("mder")
         unit_id = _new_id("cu")
         with self.engine.begin() as conn:  # type: ignore[attr-defined]
@@ -180,12 +181,16 @@ def env(tmp_path: Path) -> _Env:
     transaction = MediaTransactionService(engine=engine, media_repository=repo, media_storage=storage)
     transaction.bind_collaborators({"runtime_service": runtime})
     binding = MediaReferenceBindingService(
-        engine=engine, media_repository=repo, media_reference_binding_repository=binding_repo
+        engine=engine,
+        policy=PolicyService(allow_unwired_classification_provider=True),
+        media_repository=repo,
+        media_reference_binding_repository=binding_repo,
     )
     binding.bind_collaborators({"runtime_service": runtime})
     retention = MediaRetentionService(engine=engine, media_repository=repo, media_storage=storage)
     retention.bind_collaborators({"runtime_service": runtime})
-    ctx = RequestContext()
+    # A writer cleared for the confidential media so bind() passes its new authorization gate.
+    ctx = RequestContext(roles=("admin", "data_engineer"))
     media_set = catalog.create_media_set(
         ctx,
         MediaSetSpec(

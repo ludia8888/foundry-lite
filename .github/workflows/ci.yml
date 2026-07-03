@@ -81,7 +81,10 @@ jobs:
   quality_coverage:
     name: quality-coverage
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Coverage runs the full backend suite serially so layer coverage remains
+    # trustworthy. Keep the timeout above observed PR runtime instead of
+    # sharding this lane and weakening the per-layer signal.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6

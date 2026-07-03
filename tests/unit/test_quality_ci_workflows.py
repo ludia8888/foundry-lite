@@ -219,6 +219,15 @@ def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() ->
     assert "run: pnpm ci:gate:e2e" in e2e_job
 
 
+def test_github_coverage_lane_keeps_serial_layer_coverage_from_timing_out() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    coverage_job = workflow.split("quality_coverage:", maxsplit=1)[1].split("quality_runtime:", maxsplit=1)[0]
+    assert "timeout-minutes: 45" in coverage_job
+    assert "run: pnpm ci:gate:coverage" in coverage_job
+    assert "Coverage runs the full backend suite serially" in coverage_job
+
+
 def test_context_compiler_gate_runs_after_ai_ledger_before_ai_evidence() -> None:
     script = (ROOT / "scripts" / "ci_gate.sh").read_text(encoding="utf-8")
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")
