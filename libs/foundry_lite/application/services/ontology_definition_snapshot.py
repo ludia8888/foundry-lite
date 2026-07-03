@@ -54,12 +54,16 @@ def ontology_definition_snapshot(
 
 
 def _object_type_definition(row: ObjectTypeRow, properties: Sequence[PropertyTypeRow]) -> JsonObject:
+    # Multi-datasource property assignments must survive rollback: the
+    # resolved map lives in config JSON, so each dataset property re-emits its
+    # ``datasource`` and replay re-resolves the identical mapping.
+    property_datasources = _persisted_property_datasources(row)
     definition: JsonObject = {
         "apiName": row["api_name"],
         "displayName": row["display_name"],
         "primaryKey": row["primary_key_property"],
         "backing": dict(row["backing"]),
-        "properties": [_property_definition(prop) for prop in properties],
+        "properties": [_property_definition(prop, property_datasources.get(prop["api_name"])) for prop in properties],
     }
     if row["description"] is not None:
         definition["description"] = row["description"]
@@ -85,7 +89,7 @@ def _object_type_definition(row: ObjectTypeRow, properties: Sequence[PropertyTyp
     return definition
 
 
-def _property_definition(row: PropertyTypeRow) -> JsonObject:
+def _property_definition(row: PropertyTypeRow, datasource: str | None = None) -> JsonObject:
     definition: JsonObject = {
         "apiName": row["api_name"],
         "displayName": row["display_name"],
@@ -103,7 +107,16 @@ def _property_definition(row: PropertyTypeRow) -> JsonObject:
         definition["classification"] = row["classification"]
     if row["derivation"]:
         definition["derivation"] = dict(row["derivation"])
+    if datasource is not None and row["source"] == "dataset":
+        definition["datasource"] = datasource
     return definition
+
+
+def _persisted_property_datasources(row: ObjectTypeRow) -> dict[str, str]:
+    declared = row["config"].get("propertyDatasources")
+    if not isinstance(declared, Mapping):
+        return {}
+    return {str(key): str(value) for key, value in declared.items() if isinstance(value, str)}
 
 
 def _link_type_definition(row: LinkTypeRow) -> JsonObject:

@@ -32,6 +32,7 @@ from foundry_lite.application.services.action_permission_guards import (
     require_action_permission,
     require_action_target_read,
     require_failure_injection_for_command,
+    segment_mutation_denied_error,
 )
 from foundry_lite.application.services.action_protocols import ActionOsdkScopeBoundary
 from foundry_lite.application.services.action_workflow import (
@@ -251,7 +252,7 @@ class ActionApplyService(CoreService):
         record: ObjectRecordRow | None,
     ) -> ActionApplyOutcome:
         deferred_error = self._action_request_error(
-            action_type, record, command.expected_object_version, command.params
+            ctx, action_type, record, command.expected_object_version, command.params
         )
         if deferred_error is not None:
             self._fail_action_run(conn, ctx, action_run_id, deferred_error)
@@ -387,6 +388,7 @@ class ActionApplyService(CoreService):
 
     def _action_request_error(
         self,
+        ctx: RequestContext,
         action_type: ActionTypeRow,
         record: ObjectRecordRow | None,
         expected_object_version: int,
@@ -394,6 +396,11 @@ class ActionApplyService(CoreService):
     ) -> Exception | None:
         if record is None:
             return NotFound("target object not found")
+        # A caller who cannot view a mutated property's datasource segment may
+        # not edit through it (checked before request validation so the denial
+        # never leaks precondition/parameter detail).
+        if (segment_error := segment_mutation_denied_error(self.policy, ctx, action_type)) is not None:
+            return segment_error
         if record["object_version"] != expected_object_version:
             return ConflictDetected(
                 "object version conflict",

@@ -22,6 +22,7 @@ def _osdk_type_lines() -> list[str]:
         "  readonly primaryKey: string;",
         "  readonly titleProperty: string | null;",
         "  readonly properties: readonly string[];",
+        "  readonly propertyDatasources: Readonly<Record<string, string>>;",
         "  readonly __instance?: TInstance;",
         "};",
         "export type OsdkActionType<TPayload = unknown, TResult = ActionApplyResponse> = {",
@@ -799,8 +800,17 @@ def _osdk_object_constant_lines(object_def: ObjectDef) -> list[str]:
         f"  primaryKey: {primary_key},",
         f"  titleProperty: {title_property},",
         f"  properties: [{property_names}],",
+        f"  propertyDatasources: {_property_datasources_json(object_def)},",
         f"}} as const satisfies OsdkObjectType<{object_def.api_name}>;",
     ]
+
+
+def _property_datasources_json(object_def: ObjectDef) -> str:
+    """Datasource segment per dataset-backed property (part of the SDK contract)."""
+    return json.dumps(
+        {prop.api_name: prop.datasource for prop in object_def.properties if prop.datasource is not None},
+        separators=(", ", ": "),
+    )
 
 
 def _osdk_interface_constant_lines(interface_def: InterfaceDef) -> list[str]:

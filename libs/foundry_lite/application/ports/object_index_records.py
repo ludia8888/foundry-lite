@@ -19,6 +19,10 @@ class IndexRunSourceRef(TypedDict, total=False):
     """Source position captured when an object index run starts."""
 
     dataset_version_id: str
+    # Multi-datasource runs: dataset_version_id becomes a composite joining
+    # each segment's version id in datasource-declaration order; this map
+    # carries the per-segment versions for operator evidence.
+    segmentDatasetVersionIds: dict[str, str]
     replay_of_run_id: str
     ontologyReindexKey: str
     sourceOntologyVersionId: str

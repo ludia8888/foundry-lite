@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import PermissionDenied
@@ -11,7 +11,9 @@ from foundry_lite.domain.errors import PermissionDenied
 #: Resolves the active ontology's classified properties for a tenant. The
 #: composition root wires this to the ontology repository so the policy never
 #: imports a database/vendor SDK. Each row carries ``object_type_api_name``,
-#: ``property_api_name``, ``column_name`` and ``classification``.
+#: ``property_api_name``, ``column_name`` and ``classification``; rows may
+#: additionally carry ``segment_required_role`` for properties mapped to a
+#: multi-datasource segment gated by ``requiredRole`` (admin implicit).
 ClassificationProvider = Callable[[str], Sequence[Mapping[str, object]]]
 
 #: Resolves the ``permissions.allowedRoles`` declared on one action type of the
@@ -149,7 +151,16 @@ class PolicyService:
         object_type: str,
         properties: dict[str, object],
     ) -> dict[str, object]:
-        return _mask(properties, self.masked_property_names(ctx, object_type))
+        # Segment masking nulls the value (Palantir semantics: the segment's
+        # values simply do not exist for this caller); classification masking
+        # keeps its explicit sentinel and wins when both apply so audit-safe
+        # redaction stays observable.
+        segment_masked = self.segment_masked_property_names(ctx, object_type)
+        classification_masked: set[str] = (
+            set() if _can_read_sensitive(ctx) else self.sensitive_property_names(ctx, object_type)
+        )
+        masked = _mask_null(properties, segment_masked - classification_masked)
+        return _mask(masked, classification_masked)
 
     def mask_sensitive_properties(
         self, ctx: RequestContext, object_type: str, properties: dict[str, object]
@@ -158,14 +169,34 @@ class PolicyService:
         return _mask(properties, self.sensitive_property_names(ctx, object_type))
 
     def masked_property_names(self, ctx: RequestContext, object_type: str) -> set[str]:
-        """Return properties that must not be displayed or used for inference."""
+        """Return properties that must not be displayed or used for inference.
+
+        Segment-masked properties (datasource ``requiredRole`` the caller lacks)
+        compose with classification masking: both are excluded from filters,
+        ordering, aggregation, and search indexing identically.
+        """
+        segment_masked = self.segment_masked_property_names(ctx, object_type)
         if _can_read_sensitive(ctx):
-            return set()
-        return self.sensitive_property_names(ctx, object_type)
+            return segment_masked
+        return self.sensitive_property_names(ctx, object_type) | segment_masked
 
     def sensitive_property_names(self, ctx: RequestContext, object_type: str) -> set[str]:
         """Properties classified sensitive in the tenant's active ontology."""
-        return self._sensitive_sets(ctx)[0].get(object_type, set())
+        return self._sensitive_sets(ctx).sensitive_by_type.get(object_type, set())
+
+    def segment_masked_property_names(self, ctx: RequestContext, object_type: str) -> set[str]:
+        """Properties whose datasource segment the caller may not view.
+
+        A property mapped to a datasource declaring ``requiredRole`` is visible
+        only to callers holding that role (admin implicit); everyone else sees
+        its VALUE as null while the property stays in the schema. The same set
+        gates action mutations: editing requires viewing the segment.
+        """
+        if ctx.has_role("admin"):
+            return set()
+        held = set(ctx.roles)
+        roles_by_property = self._sensitive_sets(ctx).segment_roles_by_type.get(object_type, {})
+        return {name for name, role in roles_by_property.items() if role not in held}
 
     def mask_columns(self, ctx: RequestContext, rows: list[dict[str, object]]) -> list[dict[str, object]]:
         """Apply the same sensitive classification to raw dataset rows (preview)."""
@@ -180,38 +211,67 @@ class PolicyService:
 
     def sensitive_column_names(self, ctx: RequestContext) -> set[str]:
         """Dataset columns backing properties classified sensitive in the active ontology."""
-        return self._sensitive_sets(ctx)[1]
+        return self._sensitive_sets(ctx).sensitive_columns
 
-    def _sensitive_sets(self, ctx: RequestContext) -> tuple[dict[str, set[str]], set[str]]:
-        """Resolve (sensitive properties by object type, sensitive columns) from the ontology."""
+    def _sensitive_sets(self, ctx: RequestContext) -> _PropertyPolicySets:
+        """Resolve classification and segment-role property sets from the ontology."""
         if self._classification_provider is None:
             if not self._allow_unwired_classification_provider:
                 raise PermissionDenied(
                     "classification provider is not configured",
                     details={"classification_provider": "missing"},
                 )
-            return {}, set()
-        properties_by_type: dict[str, set[str]] = {}
-        columns: set[str] = set()
+            return _PropertyPolicySets()
+        sets = _PropertyPolicySets()
         for row in self._classification_provider(ctx.tenant_id):
-            classification = row.get("classification")
-            if classification is None:
-                continue
-            if not _is_known_classification(classification):
-                raise PermissionDenied(
-                    "unsupported property classification",
-                    details={"classification": classification},
-                )
-            if not _is_sensitive(classification):
-                continue
-            object_type = row.get("object_type_api_name")
-            property_name = row.get("property_api_name")
-            if isinstance(object_type, str) and isinstance(property_name, str):
-                properties_by_type.setdefault(object_type, set()).add(property_name)
-            column_name = row.get("column_name")
-            if isinstance(column_name, str):
-                columns.add(column_name)
-        return properties_by_type, columns
+            _collect_segment_role(sets, row)
+            _collect_classification(sets, row)
+        return sets
+
+
+@dataclass
+class _PropertyPolicySets:
+    """Property-level policy inputs resolved from the active ontology."""
+
+    sensitive_by_type: dict[str, set[str]] = field(default_factory=lambda: {})
+    sensitive_columns: set[str] = field(default_factory=lambda: set())
+    #: object type -> property -> datasource segment ``requiredRole``
+    segment_roles_by_type: dict[str, dict[str, str]] = field(default_factory=lambda: {})
+
+
+def _collect_classification(sets: _PropertyPolicySets, row: Mapping[str, object]) -> None:
+    classification = row.get("classification")
+    if classification is None:
+        return
+    if not _is_known_classification(classification):
+        raise PermissionDenied(
+            "unsupported property classification",
+            details={"classification": classification},
+        )
+    if not _is_sensitive(classification):
+        return
+    object_type = row.get("object_type_api_name")
+    property_name = row.get("property_api_name")
+    if isinstance(object_type, str) and isinstance(property_name, str):
+        sets.sensitive_by_type.setdefault(object_type, set()).add(property_name)
+    column_name = row.get("column_name")
+    if isinstance(column_name, str):
+        sets.sensitive_columns.add(column_name)
+
+
+def _collect_segment_role(sets: _PropertyPolicySets, row: Mapping[str, object]) -> None:
+    role = row.get("segment_required_role")
+    if role is None:
+        return
+    if not isinstance(role, str) or not role:
+        raise PermissionDenied(
+            "unsupported datasource segment role",
+            details={"segment_required_role": str(role)},
+        )
+    object_type = row.get("object_type_api_name")
+    property_name = row.get("property_api_name")
+    if isinstance(object_type, str) and isinstance(property_name, str):
+        sets.segment_roles_by_type.setdefault(object_type, {})[property_name] = role
 
 
 def _can_read_sensitive(ctx: RequestContext) -> bool:
@@ -231,4 +291,13 @@ def _mask(values: dict[str, object], names: set[str]) -> dict[str, object]:
     for name in names:
         if name in masked:
             masked[name] = _MASKED
+    return masked
+
+
+def _mask_null(values: dict[str, object], names: set[str]) -> dict[str, object]:
+    """Null out segment-masked values: the caller cannot view that datasource."""
+    masked = dict(values)
+    for name in names:
+        if name in masked:
+            masked[name] = None
     return masked

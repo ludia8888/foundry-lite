@@ -176,7 +176,9 @@ def test_user_edit_on_changed_row_merges_and_records_conflict(foundry: FoundryLi
     assert conflicts[0]["property_api_name"] == "status"
     assert conflicts[0]["source_value"] == "CANCELLED"
     assert conflicts[0]["edit_value"] == "APPROVED"
-    assert conflicts[0]["source_dataset_version_id"] == committed
+    # Order is multi-datasource: the record's source id is the composite of
+    # both segment versions in declaration order (erp first).
+    assert str(conflicts[0]["source_dataset_version_id"]).split("+")[0] == committed
     assert conflicts[0]["status"] == "open"
 
 
@@ -234,10 +236,13 @@ def test_ontology_migration_reindex_stays_full_and_reseeds_changelog(foundry: Fo
 
 
 def _upload_orders(foundry: FoundryLite, tmp_path: Path, ctx: RequestContext, body: str) -> str:
+    # Order is multi-datasource (erp + finance segments): refresh both clean
+    # datasets so the merged PK universe follows the new raw upload.
     csv_path = tmp_path / f"orders_{abs(hash(body))}.csv"
     csv_path.write_text(_ORDERS_HEADER + body, encoding="utf-8")
     foundry.datasets.upload_csv("raw.erp_orders", str(csv_path), ctx=ctx)
     committed = foundry.transforms.run("clean_orders", ctx=ctx)
+    foundry.transforms.run("clean_order_finance", ctx=ctx)
     return committed.version_id
 
 
@@ -248,6 +253,7 @@ def _prepare_indexed_demo_with_conflict_review(foundry: FoundryLite, tmp_path: P
     foundry.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
     foundry.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.order_finance", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
     foundry.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
     foundry.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
@@ -255,6 +261,7 @@ def _prepare_indexed_demo_with_conflict_review(foundry: FoundryLite, tmp_path: P
     foundry.datasets.upload_csv("raw.erp_orders", str(DEMO_ROOT / "data" / "orders.csv"), ctx=ctx)
     foundry.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
     foundry.transforms.run("clean_orders", ctx=ctx)
+    foundry.transforms.run("clean_order_finance", ctx=ctx)
     foundry.transforms.run("clean_customers", ctx=ctx)
     ontology = (DEMO_ROOT / "ontology" / "order-customer.yaml").read_text(encoding="utf-8")
     conflict_ontology = tmp_path / "order-customer-conflict-review.yaml"

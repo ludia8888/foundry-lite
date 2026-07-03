@@ -55,6 +55,7 @@ from foundry_lite.application.services.action_mutations import ActionMutationUni
 from foundry_lite.application.services.action_permission_guards import (
     require_action_permission,
     require_action_target_read,
+    segment_mutation_denied_error,
 )
 from foundry_lite.application.services.action_protocols import (
     ActionObjectIndexer,
@@ -255,6 +256,11 @@ class ActionBatchApplyService(CoreService):
         action_run_id: str,
         command: ActionBatchApplyCommand,
     ) -> ActionBatchApplyOutcome:
+        # One shared patch mutates every target, so a datasource segment the
+        # caller cannot view rejects the whole batch before any target work.
+        if (segment_error := segment_mutation_denied_error(self.policy, ctx, action_type)) is not None:
+            self._fail_batch_run(conn, ctx, action_run_id, segment_error)
+            return ActionBatchApplyOutcome(deferred_error=segment_error)
         records, failures = self._validated_target_records(conn, ctx, action_type, command)
         if failures:
             error = batch_failure_error(failures, len(command.targets))

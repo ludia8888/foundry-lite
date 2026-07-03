@@ -24,6 +24,7 @@ from foundry_lite.application.ports.ontology_repository import (
 )
 from foundry_lite.application.services.ontology_function_validation import function_allowed_roles
 from foundry_lite.application.services.ontology_interface_validation import persisted_implements
+from foundry_lite.domain.ontology.datasources import backing_datasources
 
 
 def build_ontology_catalog(
@@ -100,6 +101,8 @@ def _catalog_object(
     properties: Sequence[PropertyTypeRow],
     actions: Sequence[ActionTypeRow],
 ) -> OntologyCatalogObject:
+    datasources = _property_datasource_names(row)
+    default_datasource = _default_datasource_name(row)
     return {
         "apiName": row["api_name"],
         "displayName": row["display_name"],
@@ -110,10 +113,23 @@ def _catalog_object(
         "rowPolicies": _row_policies(row),
         "implements": list(persisted_implements(row["config"])),
         "backing": row["backing"],
-        "properties": [_catalog_property(item) for item in properties],
+        "properties": [_catalog_property(item, datasources, default_datasource) for item in properties],
         "actions": [_catalog_action(item) for item in actions],
         "config": row["config"],
     }
+
+
+def _property_datasource_names(row: ObjectTypeRow) -> dict[str, str]:
+    """Resolved datasource name per dataset property (persisted for MDO types)."""
+    declared = row["config"].get("propertyDatasources")
+    if not isinstance(declared, Mapping):
+        return {}
+    return {str(key): str(value) for key, value in declared.items() if isinstance(value, str)}
+
+
+def _default_datasource_name(row: ObjectTypeRow) -> str:
+    """Default segment for unmapped dataset properties (first declared datasource)."""
+    return backing_datasources(row["backing"])[0].name
 
 
 def _title_property(row: ObjectTypeRow) -> str | None:
@@ -140,7 +156,11 @@ def _row_policies(row: ObjectTypeRow) -> list[dict[str, object]]:
     return [dict(item) for item in value if isinstance(item, Mapping)]
 
 
-def _catalog_property(row: PropertyTypeRow) -> OntologyCatalogProperty:
+def _catalog_property(
+    row: PropertyTypeRow,
+    datasources: Mapping[str, str],
+    default_datasource: str,
+) -> OntologyCatalogProperty:
     return {
         "apiName": row["api_name"],
         "displayName": row["display_name"],
@@ -154,7 +174,19 @@ def _catalog_property(row: PropertyTypeRow) -> OntologyCatalogProperty:
         "columnName": row["column_name"],
         "editPolicy": row["edit_policy"],
         "derivation": row["derivation"],
+        "datasource": _catalog_property_datasource(row, datasources, default_datasource),
     }
+
+
+def _catalog_property_datasource(
+    row: PropertyTypeRow,
+    datasources: Mapping[str, str],
+    default_datasource: str,
+) -> str | None:
+    """Datasource name for dataset properties: single-dataset types normalize to ``primary``."""
+    if row["source"] != "dataset":
+        return None
+    return datasources.get(row["api_name"], default_datasource)
 
 
 def _catalog_action(row: ActionTypeRow) -> OntologyCatalogAction:

@@ -18,6 +18,7 @@ from foundry_lite.application.services.materialization_types import (
     materialization_spec_name,
 )
 from foundry_lite.application.services.ontology_catalog import build_ontology_catalog as build_ontology_catalog
+from foundry_lite.application.services.ontology_datasource_validation import validate_yaml_object_datasources
 from foundry_lite.application.services.ontology_migration_types import OntologyMigrationPlan
 from foundry_lite.application.services.ontology_row_policy_validation import validate_yaml_row_policies
 from foundry_lite.application.services.ontology_yaml import (
@@ -38,6 +39,7 @@ __all__ = [
     "build_ontology_catalog",
     "ontology_validation_result",
     "validate_ontology_definition",
+    "validate_persisted_action_mutations",
     "validate_persisted_link",
     "validate_persisted_object_type",
 ]
@@ -71,6 +73,15 @@ def validate_persisted_object_type(
     property_by_api = {prop["api_name"]: prop for prop in properties}
     _validate_persisted_primary_key_property(object_type, property_by_api, columns)
     _validate_persisted_dataset_properties(object_type, property_by_api.values(), columns)
+    validate_persisted_action_mutations(actions, property_by_api.values())
+
+
+def validate_persisted_action_mutations(
+    actions: Iterable[ActionTypeRow],
+    properties: Iterable[PropertyTypeRow],
+) -> None:
+    """Ensure persisted action mutations target declared, editable properties."""
+    property_by_api = {prop["api_name"]: prop for prop in properties}
     for action in actions:
         for mutation in action["definition"].get("mutations", []):
             _validate_persisted_action_mutation_property(mutation, property_by_api)
@@ -197,13 +208,14 @@ def _validate_yaml_object_type(
     """Validate one YAML object type against the referenced dataset."""
     object_api_name = required_str(object_def, "apiName")
     _validate_yaml_object_backing(object_def)
-    columns = dataset_columns_for_ref(conn, ctx, object_type_backing(object_def)["dataset"])
     property_defs = _property_definitions_by_api(object_def)
     _validate_yaml_property_contracts(object_api_name, property_defs.values())
-    _validate_yaml_primary_key(object_def, property_defs, columns)
+    # Primary key and property columns validate per datasource segment (a
+    # single-dataset backing is one "primary" segment) so multi-datasource
+    # declarations check every dataset they reference.
+    validate_yaml_object_datasources(conn, ctx, object_def, property_defs, dataset_columns_for_ref)
     _validate_yaml_title_property(object_def, property_defs)
     validate_yaml_row_policies(object_def, property_defs)
-    _validate_yaml_dataset_properties(object_api_name, property_defs.values(), columns)
     _validate_yaml_action_mutations(definition, object_api_name, property_defs)
 
 
@@ -280,25 +292,6 @@ def _ensure_unique_api_name(
     raise ValidationFailed(message, details=details)
 
 
-def _validate_yaml_primary_key(
-    object_def: YamlObject,
-    property_defs: Mapping[str, YamlObject],
-    columns: Mapping[str, Mapping[str, object]],
-) -> None:
-    """Ensure a YAML object primary key maps to a non-null dataset column."""
-    pk_prop = required_str(object_def, "primaryKey")
-    if pk_prop not in property_defs:
-        raise ValidationFailed(
-            "primary key property missing",
-            details={"objectType": required_str(object_def, "apiName")},
-        )
-    pk_column = optional_str(property_defs[pk_prop], "column")
-    if pk_column is None or pk_column not in columns:
-        raise ValidationFailed("primary key column missing", details={"column": pk_column})
-    if bool(columns[pk_column].get("nullable")):
-        raise ValidationFailed("primary key column must be non-null", details={"column": pk_column})
-
-
 def _validate_yaml_title_property(
     object_def: YamlObject,
     property_defs: Mapping[str, YamlObject],
@@ -356,21 +349,6 @@ def _validate_materialization_dataset_ref(dataset_ref: str, details: Mapping[str
             "materialization dataset must be of the form 'namespace.name'",
             details={**details, "dataset": dataset_ref},
         )
-
-
-def _validate_yaml_dataset_properties(
-    object_api_name: str,
-    properties: Iterable[YamlObject],
-    columns: Mapping[str, Mapping[str, object]],
-) -> None:
-    """Ensure YAML dataset-backed properties refer to existing columns."""
-    for prop in properties:
-        source = optional_str(prop, "source", "dataset" if "column" in prop else "edit_layer")
-        if source == "dataset" and optional_str(prop, "column") not in columns:
-            raise ValidationFailed(
-                "property column missing",
-                details={"objectType": object_api_name, "property": required_str(prop, "apiName")},
-            )
 
 
 def _validate_yaml_property_contracts(object_api_name: str, properties: Iterable[YamlObject]) -> None:

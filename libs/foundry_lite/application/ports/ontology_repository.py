@@ -42,6 +42,9 @@ from foundry_lite.application.ports.ontology_definitions import (
     ObjectTypeCdcBacking as ObjectTypeCdcBacking,
 )
 from foundry_lite.application.ports.ontology_definitions import (
+    ObjectTypeDatasourceBacking as ObjectTypeDatasourceBacking,
+)
+from foundry_lite.application.ports.ontology_definitions import (
     OntologyCatalogAction as OntologyCatalogAction,
 )
 from foundry_lite.application.ports.ontology_definitions import (
@@ -65,6 +68,8 @@ from foundry_lite.application.ports.ontology_definitions import (
 from foundry_lite.application.ports.ontology_definitions import (
     OntologyJsonObject as OntologyJsonObject,
 )
+from foundry_lite.application.ports.ontology_definitions import PropertyClassificationRow as PropertyClassificationRow
+from foundry_lite.application.ports.ontology_definitions import PropertyDatasourceRow as PropertyDatasourceRow
 from foundry_lite.application.ports.ontology_definitions import (
     PropertyDerivation as PropertyDerivation,
 )
@@ -146,15 +151,6 @@ class PropertyTypeRow(TypedDict):
     column_name: str | None
     edit_policy: str
     derivation: PropertyDerivation | None
-
-
-class PropertyClassificationRow(TypedDict):
-    """One classified property of the active ontology (security source of truth)."""
-
-    object_type_api_name: str
-    property_api_name: str
-    column_name: str | None
-    classification: str | None
 
 
 class LinkTypeRow(TypedDict):
@@ -422,6 +418,12 @@ class OntologyRepository(Protocol):
         security policy derives masking from these classifications instead of
         hardcoding object/property/column names.
         """
+        ...
+
+    def active_property_datasource_rows(
+        self, *, transaction: TransactionContext, tenant_id: str
+    ) -> list[PropertyDatasourceRow]:
+        """Active properties + object backing/config: raw rows for segment-role masking."""
         ...
 
     def active_ontology_version(self, *, transaction: TransactionContext, tenant_id: str) -> OntologyVersionRow | None:

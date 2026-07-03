@@ -17,12 +17,27 @@ OntologyJsonObject = Mapping[str, object]
 
 
 class ObjectTypeBacking(TypedDict):
-    """Dataset backing declaration for an ontology object type."""
+    """Dataset backing declaration for an ontology object type.
 
-    dataset: str
+    Either ``dataset`` (single-datasource, normalized internally to one
+    datasource named ``primary``) or ``datasources`` (column-wise
+    multi-datasource) is declared — never both.
+    """
+
+    dataset: NotRequired[str]
     mode: NotRequired[str]
     primaryKeyColumns: NotRequired[Sequence[str]]
     cdc: NotRequired[ObjectTypeCdcBacking]
+    datasources: NotRequired[Sequence[ObjectTypeDatasourceBacking]]
+
+
+class ObjectTypeDatasourceBacking(TypedDict):
+    """One declared datasource segment of a multi-datasource object type."""
+
+    name: str
+    dataset: str
+    primaryKeyColumns: NotRequired[Sequence[str]]
+    requiredRole: NotRequired[str]
 
 
 class ObjectTypeCdcBacking(TypedDict):
@@ -31,6 +46,31 @@ class ObjectTypeCdcBacking(TypedDict):
     dataset: str
     primaryKeyColumns: NotRequired[Sequence[str]]
     deletePolicy: NotRequired[str]
+
+
+class PropertyClassificationRow(TypedDict):
+    """One classified property of the active ontology (security source of truth)."""
+
+    object_type_api_name: str
+    property_api_name: str
+    column_name: str | None
+    classification: str | None
+
+
+class PropertyDatasourceRow(TypedDict):
+    """One active property joined with its object type's backing/config JSON.
+
+    Raw material for deriving per-property datasource segment roles (the pure
+    derivation lives in ``foundry_lite.domain.ontology.datasources``); the
+    repository only joins rows, it never interprets the backing declaration.
+    """
+
+    object_type_api_name: str
+    property_api_name: str
+    column_name: str | None
+    source: str
+    backing: ObjectTypeBacking
+    config: OntologyJsonObject
 
 
 class LinkTypeBacking(TypedDict):
@@ -161,6 +201,7 @@ class OntologyCatalogProperty(TypedDict):
     columnName: str | None
     editPolicy: str
     derivation: PropertyDerivation | None
+    datasource: str | None
 
 
 class OntologyCatalogAction(TypedDict):

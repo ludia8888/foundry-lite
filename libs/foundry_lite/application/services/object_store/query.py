@@ -18,6 +18,8 @@ from foundry_lite.application.ports import (
     ObjectTypeRow,
     OsdkResourceOperation,
     OsdkResourceType,
+    RuntimeJsonObject,
+    RuntimeRunLink,
     TransactionContext,
 )
 from foundry_lite.application.ports.object_read_repository import ObjectExplain
@@ -53,6 +55,7 @@ from foundry_lite.domain.errors import (
     NotFound,
     ValidationFailed,
 )
+from foundry_lite.domain.ontology.datasources import split_source_dataset_version_id
 
 OBJECT_QUERY_MAX_LIMIT = 500
 
@@ -143,6 +146,29 @@ class ObjectQueryService(CoreService):
             payload["deletionReason"] = record["deletion_reason"]
         return payload
 
+    def _source_explain_evidence(
+        self,
+        ctx: RequestContext,
+        record: ObjectRecordRow,
+        object_type_api_name: str,
+    ) -> tuple[list[LineageEdgeRow], list[RuntimeRunLink], RuntimeJsonObject | None]:
+        """Lineage/run-chain/badge for the record's source snapshot: a multi-datasource
+        record stores a composite id, so lineage aggregates across every segment while
+        the run chain and badge follow the primary segment."""
+        if not record["source_dataset_version_id"]:
+            return [], [], None
+        segment_version_ids = split_source_dataset_version_id(record["source_dataset_version_id"])
+        lineage_rows: list[LineageEdgeRow] = []
+        for segment_version_id in segment_version_ids:
+            lineage_rows.extend(self.runtime_service.lineage_for_resource(segment_version_id, ctx=ctx))
+        source_run_chain = self.runtime_service.source_run_chain(
+            segment_version_ids[0], object_type_api_name=object_type_api_name, ctx=ctx
+        )
+        late_data_badge = self.runtime_service.late_data_badge_for_source(
+            segment_version_ids[0], object_type_api_name=object_type_api_name, ctx=ctx
+        )
+        return lineage_rows, source_run_chain, late_data_badge
+
     def _object_explain(
         self,
         conn: TransactionContext,
@@ -150,22 +176,10 @@ class ObjectQueryService(CoreService):
         record: ObjectRecordRow,
     ) -> ObjectExplain:
         object_type_api_name = record["object_type_api_name"]
-        lineage_rows: list[LineageEdgeRow] = []
-        source_run_chain = []
-        late_data_badge = None
         properties = self.ontology_service._properties_for_object_type(conn, record["object_type_id"])
-        if record["source_dataset_version_id"]:
-            lineage_rows = self.runtime_service.lineage_for_resource(record["source_dataset_version_id"], ctx=ctx)
-            source_run_chain = self.runtime_service.source_run_chain(
-                record["source_dataset_version_id"],
-                object_type_api_name=object_type_api_name,
-                ctx=ctx,
-            )
-            late_data_badge = self.runtime_service.late_data_badge_for_source(
-                record["source_dataset_version_id"],
-                object_type_api_name=object_type_api_name,
-                ctx=ctx,
-            )
+        lineage_rows, source_run_chain, late_data_badge = self._source_explain_evidence(
+            ctx, record, object_type_api_name
+        )
         # The base/edit layers must honour the same masking as `properties`; a
         # caller who cannot see `properties.margin` must not read it here either.
         explain: ObjectExplain = {

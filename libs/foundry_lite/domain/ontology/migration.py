@@ -39,6 +39,7 @@ from foundry_lite.domain.ontology.migration_changes import (
     warning_property_deprecated,
     warning_property_reindex,
 )
+from foundry_lite.domain.ontology.migration_datasources import datasource_migration_changes
 from foundry_lite.domain.ontology.migration_types import (
     ActionParameterMap,
     OntologyMigrationChange,
@@ -113,6 +114,15 @@ def _single_object_migration_changes(
     candidate: OntologyDefinition,
 ) -> tuple[list[OntologyMigrationChange], OntologyReindexOperation | None]:
     changes = _object_shape_changes(api_name, current, candidate)
+    changes.extend(
+        datasource_migration_changes(
+            api_name,
+            current,
+            current_properties,
+            candidate,
+            _property_definitions_by_api(candidate),
+        )
+    )
     property_changes, reindex_fields = _property_migration_changes(api_name, current_properties, candidate)
     changes.extend(property_changes)
     if _mapping_changed(_mapping(current["backing"]), object_type_backing(candidate)):

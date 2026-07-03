@@ -336,7 +336,9 @@ def test_ontology_mapping_migrates_with_dataset_schema(foundry: FoundryLite, tmp
     assert result["changedFields"] == ["properties.status"]
     assert migrated["properties"]["status"] == "BACKORDERED"
     assert status_lineage["sourceColumn"] == "status_code"
-    assert status_lineage["sourceDatasetVersionId"] == committed.version_id
+    # Order is multi-datasource: the record's source id composes both segment
+    # versions in declaration order, with the refreshed erp version first.
+    assert str(status_lineage["sourceDatasetVersionId"]).split("+")[0] == committed.version_id
 
 
 @pytest.mark.integration_scenario("object_action_audit")
@@ -1672,11 +1674,13 @@ def _prepare_demo_with_ontology(foundry: FoundryLite, ontology_path: Path) -> Re
     foundry.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
     foundry.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.order_finance", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
     foundry.demo.register_transforms(ctx)
     foundry.datasets.upload_csv("raw.erp_orders", str(DEMO_ROOT / "data" / "orders.csv"), ctx=ctx)
     foundry.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
     foundry.transforms.run("clean_orders", ctx=ctx)
+    foundry.transforms.run("clean_order_finance", ctx=ctx)
     foundry.transforms.run("clean_customers", ctx=ctx)
     foundry.ontology.apply(str(ontology_path), ctx=ctx)
     foundry.objects.reindex("Order", ctx=ctx)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from foundry_lite.application.ports.ontology_definitions import ObjectTypeDatasourceBacking
 from foundry_lite.application.ports.ontology_repository import (
     ActionMutationDefinition,
     ActionParameterDefinition,
@@ -103,6 +104,8 @@ def optional_bool(container: YamlObject, key: str, is_default: bool) -> bool:
 def object_type_backing(item: YamlObject) -> ObjectTypeBacking:
     """Build an object-type backing payload from YAML."""
     backing = required_mapping(item, "backing")
+    if backing.get("datasources") is not None:
+        return _multi_datasource_backing(backing)
     payload: ObjectTypeBacking = {"dataset": required_str(backing, "dataset")}
     mode = optional_str(backing, "mode")
     if mode is not None:
@@ -112,6 +115,55 @@ def object_type_backing(item: YamlObject) -> ObjectTypeBacking:
     cdc = optional_mapping(backing, "cdc")
     if cdc is not None:
         payload["cdc"] = object_type_cdc_backing(cdc)
+    return payload
+
+
+def _multi_datasource_backing(backing: YamlObject) -> ObjectTypeBacking:
+    """Build a multi-datasource backing payload from YAML.
+
+    ``cdc`` is single-datasource only (there is no per-segment changelog
+    contract), and mixing top-level ``dataset``/``primaryKeyColumns`` with
+    ``datasources`` would leave two competing declarations, so both fail here
+    instead of surfacing as ambiguous behavior later.
+    """
+    if "cdc" in backing and backing["cdc"] is not None:
+        raise ValidationFailed("cdc backing requires a single-datasource object type")
+    for forbidden in ("dataset", "primaryKeyColumns"):
+        if forbidden in backing:
+            raise ValidationFailed(
+                "backing cannot mix datasources with a top-level dataset declaration",
+                details={"field": forbidden},
+            )
+    datasources = tuple(
+        _backing_datasource(entry, index) for index, entry in enumerate(mapping_sequence(backing, "datasources"))
+    )
+    if not datasources:
+        raise ValidationFailed("backing datasources must declare at least one datasource")
+    payload: ObjectTypeBacking = {"datasources": datasources}
+    mode = optional_str(backing, "mode")
+    if mode is not None:
+        payload["mode"] = mode
+    return payload
+
+
+def _backing_datasource(entry: YamlObject, index: int) -> ObjectTypeDatasourceBacking:
+    payload: ObjectTypeDatasourceBacking = {
+        "name": required_str(entry, "name"),
+        "dataset": required_str(entry, "dataset"),
+    }
+    if "primaryKeyColumns" in entry:
+        columns = string_sequence(entry["primaryKeyColumns"], f"datasources[{index}].primaryKeyColumns")
+        if len(columns) != 1:
+            raise ValidationFailed(
+                "datasource primaryKeyColumns must declare exactly one column",
+                details={"datasource": payload["name"]},
+            )
+        payload["primaryKeyColumns"] = columns
+    required_role = optional_str(entry, "requiredRole")
+    if required_role is not None:
+        if not required_role:
+            raise ValidationFailed("datasource requiredRole must be a non-empty string")
+        payload["requiredRole"] = required_role
     return payload
 
 

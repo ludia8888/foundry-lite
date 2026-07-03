@@ -12,9 +12,15 @@ objectTypes:
     primaryKey: orderId
     titleProperty: orderId
     backing:
-      dataset: clean.orders
       mode: snapshot
-      primaryKeyColumns: [order_id]
+      datasources:
+        - name: erp
+          dataset: clean.orders
+          primaryKeyColumns: [order_id]
+        - name: finance
+          dataset: clean.order_finance
+          primaryKeyColumns: [order_id]
+          requiredRole: finance
     materialization:
       dataset: ops.order_current
       mode: object_snapshot
@@ -42,6 +48,7 @@ objectTypes:
         column: margin
         type: float
         classification: finance
+        datasource: finance
       - apiName: riskScore
         column: risk_score
         type: float

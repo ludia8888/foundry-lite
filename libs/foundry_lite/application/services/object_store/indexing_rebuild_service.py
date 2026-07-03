@@ -26,6 +26,7 @@ from foundry_lite.application.services.object_store.indexing_changelog import (
     source_rows_from_dataset_rows,
 )
 from foundry_lite.application.services.object_store.indexing_link_service import ObjectLinkIndexingService
+from foundry_lite.application.services.object_store.indexing_multi_source import read_merged_source_rows
 from foundry_lite.application.services.object_store.indexing_protocols import (
     IndexDatasetRegistry,
     IndexDatasetTransactionFiles,
@@ -208,6 +209,16 @@ class ObjectIndexRebuildService(CoreService):
         )
 
     def _read_index_source_rows(self, plan: ObjectIndexRebuildPlan) -> Sequence[TabularRow]:
+        if plan.multi_source is not None:
+            # Column-wise multi-datasource: read one parquet per segment and
+            # merge by primary key so downstream machinery sees single-dataset
+            # shaped rows (union of PKs; missing segment values stay null).
+            return read_merged_source_rows(
+                plan.object_type_api_name,
+                plan.multi_source,
+                version_file_path=self.dataset_transaction_service._version_file_path,
+                rows_from_parquet=self.compute_adapter.rows_from_parquet,
+            )
         parquet_path = self.dataset_transaction_service._version_file_path(plan.dataset_version)
         return self.compute_adapter.rows_from_parquet(parquet_path)
 

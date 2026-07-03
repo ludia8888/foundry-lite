@@ -141,6 +141,9 @@ def test_full_reindex_marks_source_missing_object_deleted(foundry: FoundryLite, 
 
     foundry.datasets.upload_csv("raw.erp_orders", str(reduced_orders), ctx=ctx)
     foundry.transforms.run("clean_orders", ctx=ctx)
+    # Order is multi-datasource (union of PKs): the finance segment must also
+    # drop O-1003 before the object counts as source-missing.
+    foundry.transforms.run("clean_order_finance", ctx=ctx)
     result = foundry.objects.reindex("Order", ctx=ctx)
     after_page = foundry.objects.query("Order", ctx=ctx, limit=10)
     deleted_order = foundry.objects.get("Order", "O-1003", ctx=ctx)

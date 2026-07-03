@@ -12,7 +12,6 @@ from foundry_lite.application.ports import (
     ActionTypeRecord,
     LinkTypeRecord,
     ObjectTypeRecord,
-    ObjectTypeRow,
     OntologyApplyResult,
     OntologyValidationResult,
     OntologyVersionRecord,
@@ -22,6 +21,7 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.aip.visual_builder import VisualBuilderService
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.ontology_datasource_validation import yaml_property_datasources
 from foundry_lite.application.services.ontology_function_validation import (
     import_function_types,
     validate_ontology_functions,
@@ -36,6 +36,7 @@ from foundry_lite.application.services.ontology_migration import (
     plan_ontology_migration,
 )
 from foundry_lite.application.services.ontology_migration_types import object_type_serving_config
+from foundry_lite.application.services.ontology_persisted_validation import validate_persisted_ontology
 from foundry_lite.application.services.ontology_protocols import (
     OntologyDatasetRegistry,
     OntologyDatasetVersions,
@@ -45,8 +46,6 @@ from foundry_lite.application.services.ontology_protocols import (
 from foundry_lite.application.services.ontology_validation import (
     ontology_validation_result,
     validate_ontology_definition,
-    validate_persisted_link,
-    validate_persisted_object_type,
 )
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
@@ -243,9 +242,10 @@ class OntologyActivationService(CoreService):
         migration_plan: OntologyMigrationPlan,
         api_name: str,
     ) -> dict[str, object]:
-        # titleProperty, materialization, rowPolicies, and implements ride in
-        # the existing config JSON so no schema migration is needed; they
-        # coexist with the reindex serving-contract entries.
+        # titleProperty, materialization, rowPolicies, implements, and the
+        # resolved property→datasource map ride in the existing config JSON so
+        # no schema migration is needed; they coexist with the reindex
+        # serving-contract entries.
         config = object_type_serving_config(migration_plan, api_name)
         title_property = optional_str(item, "titleProperty")
         if title_property is not None:
@@ -259,6 +259,9 @@ class OntologyActivationService(CoreService):
         implements = object_type_implements(item)
         if implements:
             config["implements"] = list(implements)
+        property_datasources = yaml_property_datasources(item)
+        if property_datasources is not None:
+            config["propertyDatasources"] = property_datasources
         return config
 
     def _import_properties_for_object_type(
@@ -397,38 +400,13 @@ class OntologyActivationService(CoreService):
         ctx: RequestContext,
         ontology_version_id: str,
     ) -> None:
-        object_rows = self.ontology_repository.object_types_for_version(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            ontology_version_id=ontology_version_id,
+        validate_persisted_ontology(
+            self.ontology_repository,
+            conn,
+            ctx,
+            ontology_version_id,
+            self._dataset_columns_for_ref,
         )
-        object_by_api = {row["api_name"]: row for row in object_rows}
-        for object_type in object_rows:
-            self._validate_ontology_object_type(conn, ctx, object_type)
-        for link in self.ontology_repository.link_types_for_version(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            ontology_version_id=ontology_version_id,
-        ):
-            columns = self._dataset_columns_for_ref(conn, ctx, link["backing"]["dataset"])
-            validate_persisted_link(link, object_by_api, columns)
-
-    def _validate_ontology_object_type(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type: ObjectTypeRow,
-    ) -> None:
-        backing = object_type["backing"]
-        if not isinstance(backing, Mapping):
-            raise ValidationFailed("object backing must be a mapping")
-        columns = self._dataset_columns_for_ref(conn, ctx, str(backing["dataset"]))
-        properties = self.ontology_repository.properties_for_object_type(
-            transaction=conn,
-            object_type_id=object_type["id"],
-        )
-        actions = self.ontology_repository.actions_for_target(transaction=conn, object_type_id=object_type["id"])
-        validate_persisted_object_type(object_type, properties, actions, columns)
 
     def _dataset_columns_for_ref(
         self,

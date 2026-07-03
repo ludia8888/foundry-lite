@@ -20,6 +20,28 @@ from foundry_lite.application.ports import (
 
 
 @dataclass(frozen=True)
+class ObjectIndexSourceSegment:
+    """One datasource segment resolved to a concrete dataset version for a rebuild."""
+
+    name: str
+    dataset_ref: str
+    primary_key_column: str
+    # Columns mapped by properties assigned to THIS segment: the merge always
+    # takes their values from this segment's row (null when the PK is absent
+    # here), even if another segment's dataset happens to share a column name.
+    property_columns: tuple[str, ...]
+    dataset_version: DatasetVersionRow
+
+
+@dataclass(frozen=True)
+class ObjectIndexMultiSourcePlan:
+    """How a multi-datasource rebuild merges per-segment rows into one snapshot."""
+
+    primary_key_column: str
+    segments: tuple[ObjectIndexSourceSegment, ...]
+
+
+@dataclass(frozen=True)
 class ObjectIndexRebuildPlan:
     run_id: str
     object_type_api_name: str
@@ -33,6 +55,9 @@ class ObjectIndexRebuildPlan:
     # carries its trigger so the rebuild can force full passes for shadow,
     # ontology-migration, and failed-run-replay flows that change index shape.
     trigger_type: str = "reindex"
+    # Multi-datasource types read one parquet per segment and merge by primary
+    # key (union of PKs); None keeps the legacy single-dataset read untouched.
+    multi_source: ObjectIndexMultiSourcePlan | None = None
 
 
 @dataclass(frozen=True)

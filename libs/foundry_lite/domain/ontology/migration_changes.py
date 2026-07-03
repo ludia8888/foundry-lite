@@ -102,6 +102,73 @@ def warning_property_reindex(
     )
 
 
+def warning_datasource_added(object_api_name: str, datasource_name: str) -> OntologyMigrationChange:
+    """Return a warning change for adding a datasource to an object backing."""
+    return _warning(
+        "object_datasource_added",
+        f"objectTypes.{object_api_name}.backing.datasources.{datasource_name}",
+        "adding a datasource widens the object mapping and the active object index must be rebuilt",
+        has_object_reindex_requirement=True,
+    )
+
+
+def blocked_datasource_removed(object_api_name: str, datasource_name: str) -> OntologyMigrationChange:
+    """Return a blocking change for removing a datasource from an object backing."""
+    return _blocked(
+        "object_datasource_removed",
+        f"objectTypes.{object_api_name}.backing.datasources.{datasource_name}",
+        "removing a datasource silently nulls every property it backs for existing consumers",
+        True,
+    )
+
+
+def blocked_datasource_dataset_changed(
+    object_api_name: str,
+    datasource_name: str,
+    previous: str,
+    next_dataset: str,
+) -> OntologyMigrationChange:
+    """Return a blocking change for rebinding a datasource to another dataset."""
+    return _blocked(
+        "object_datasource_dataset_changed",
+        f"objectTypes.{object_api_name}.backing.datasources.{datasource_name}.dataset",
+        "changing a datasource's dataset rebinds every property of that segment and requires a migration plan",
+        True,
+        details={"previous": previous, "next": next_dataset},
+    )
+
+
+def blocked_property_datasource_moved(
+    object_api_name: str,
+    property_api_name: str,
+    previous: str,
+    next_dataset: str,
+) -> OntologyMigrationChange:
+    """Return a blocking change for moving a property between datasources."""
+    return _blocked(
+        "property_datasource_moved",
+        f"objectTypes.{object_api_name}.properties.{property_api_name}.datasource",
+        "moving a property between datasources changes which dataset and segment role feed its values",
+        True,
+        details={"previous": previous, "next": next_dataset},
+    )
+
+
+def warning_datasource_required_role_changed(
+    object_api_name: str,
+    datasource_name: str,
+    previous: str | None,
+    next_role: str | None,
+) -> OntologyMigrationChange:
+    """Return a warning change for re-scoping a datasource's required access role."""
+    return _warning(
+        "object_datasource_required_role_changed",
+        f"objectTypes.{object_api_name}.backing.datasources.{datasource_name}.requiredRole",
+        "changing a datasource requiredRole re-scopes which callers can read the segment's property values",
+        details={"previous": previous, "next": next_role},
+    )
+
+
 def warning_interface_added(api_name: str) -> OntologyMigrationChange:
     """Return a warning change for adding a new interface type."""
     return _warning(

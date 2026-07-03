@@ -37,6 +37,7 @@ from foundry_lite.application.services.ontology_lookup_service import OntologyLo
 from foundry_lite.application.services.osdk_application_records import scope_for
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
+from foundry_lite.domain.ontology.datasources import primary_dataset_ref
 
 _LINK_TYPE_USAGE_NOTE = (
     "Link types have no dedicated runtime run ledger; usage reports the declared shape with zero run counts."
@@ -208,7 +209,7 @@ class OntologyInsightsService(CoreService):
         cdc = backing.get("cdc")
         properties = self.ontology_lookup_service._properties_for_object_type(conn, row["id"])
         result = base_dependents_result("object_type", api_name)
-        result["backingDatasetRef"] = backing["dataset"]
+        result["backingDatasetRef"] = primary_dataset_ref(backing)
         result["cdcDatasetRef"] = cdc["dataset"] if cdc is not None else None
         result["materialization"] = declared_materialization(row["config"])
         result["titleProperty"] = declared_title_property(row["config"])

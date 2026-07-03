@@ -22,6 +22,10 @@ class PropertyDef:
     ts_type: str
     is_required: bool
     is_sensitive: bool
+    # Datasource segment feeding this property (None for edit-layer
+    # properties). Part of the fingerprinted contract: moving a property to a
+    # differently-governed datasource must surface as SDK drift.
+    datasource: str | None = None
 
 
 @dataclass(frozen=True)
@@ -123,7 +127,8 @@ def _require_known_implements(objects: tuple[ObjectDef, ...], interfaces: tuple[
 
 def _object_def(value: object) -> ObjectDef:
     row = _mapping(value, "objectTypes[]")
-    properties = tuple(_property_def(item) for item in _sequence(row.get("properties"), "properties"))
+    datasource_names = _datasource_names(row)
+    properties = tuple(_property_def(item, datasource_names) for item in _sequence(row.get("properties"), "properties"))
     api_name = _string(row.get("apiName"), "object apiName")
     return ObjectDef(
         api_name=api_name,
@@ -133,6 +138,21 @@ def _object_def(value: object) -> ObjectDef:
             _string(item, "object implements[]") for item in _sequence(row.get("implements"), "implements")
         ),
     )
+
+
+def _datasource_names(row: Mapping[str, object]) -> tuple[str, ...]:
+    """Declared datasource names in order; single-dataset backings normalize to ``primary``."""
+    backing = row.get("backing")
+    if not isinstance(backing, dict):
+        return ("primary",)
+    declared = backing.get("datasources")
+    if not isinstance(declared, list) or not declared:
+        return ("primary",)
+    names: list[str] = []
+    for item in declared:
+        entry = _mapping(item, "backing datasources[]")
+        names.append(_string(entry.get("name"), "datasource name"))
+    return tuple(names)
 
 
 def _interface_def(value: object, objects: tuple[ObjectDef, ...]) -> InterfaceDef:
@@ -180,7 +200,7 @@ def _title_property(
     return title
 
 
-def _property_def(value: object) -> PropertyDef:
+def _property_def(value: object, datasource_names: tuple[str, ...]) -> PropertyDef:
     row = _mapping(value, "properties[]")
     is_sensitive = isinstance(row.get("classification"), str)
     ts_type = _ts_type(_string(row.get("type"), "property type"), is_sensitive=is_sensitive)
@@ -189,7 +209,21 @@ def _property_def(value: object) -> PropertyDef:
         ts_type=ts_type,
         is_required=row.get("nullable") is False,
         is_sensitive=is_sensitive,
+        datasource=_property_datasource(row, datasource_names),
     )
+
+
+def _property_datasource(row: Mapping[str, object], datasource_names: tuple[str, ...]) -> str | None:
+    source = row.get("source", "dataset" if "column" in row else "edit_layer")
+    if source != "dataset":
+        return None
+    declared = row.get("datasource")
+    if declared is None:
+        return datasource_names[0]
+    name = _string(declared, "property datasource")
+    if name not in datasource_names:
+        raise ValueError(f"property datasource {name} must reference a declared backing datasource")
+    return name
 
 
 def _function_def(value: object) -> FunctionDef:

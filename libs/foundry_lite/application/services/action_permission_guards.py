@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from foundry_lite.application.action_types import ActionApplyCommand
-from foundry_lite.application.ports import TransactionManager
+from foundry_lite.application.ports import ActionTypeRow, TransactionManager
 from foundry_lite.application.services.action_helpers import (
     SupportsAudit,
     failure_injection_audit_ref,
@@ -66,6 +68,39 @@ def require_action_target_read(
         action=action,
         after_ref={"permission": "object:read", "action_type": action_api_name},
     )
+
+
+def segment_mutation_denied_error(
+    policy: PolicyService,
+    ctx: RequestContext,
+    action_type: ActionTypeRow,
+) -> PermissionDenied | None:
+    """Deny mutating a property whose datasource segment the caller cannot view.
+
+    Palantir semantics: editing a property requires VIEW access to that
+    property's datasource segment. Segment-masked properties are exactly the
+    ones whose values read as null for this caller, so writing through them
+    would be a blind (and privilege-escalating) edit.
+    """
+    denied = policy.segment_masked_property_names(ctx, str(action_type["target_api_name"]))
+    if not denied:
+        return None
+    blocked = sorted(_mutation_property_names(action_type) & denied)
+    if not blocked:
+        return None
+    return PermissionDenied(
+        "action mutates properties in a datasource segment the caller cannot view",
+        details={"actionType": str(action_type["api_name"]), "properties": blocked},
+    )
+
+
+def _mutation_property_names(action_type: ActionTypeRow) -> set[str]:
+    mutations = action_type["definition"].get("mutations", ())
+    names: set[str] = set()
+    for mutation in mutations:
+        if isinstance(mutation, Mapping) and isinstance(mutation.get("property"), str):
+            names.add(str(mutation["property"]))
+    return names
 
 
 def _require_permission_with_audit(
