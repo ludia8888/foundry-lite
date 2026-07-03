@@ -134,6 +134,21 @@ class ActionApplyRequest(BaseModel):
     params: JsonObject
 
 
+class ActionBatchTargetItemRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    object_id: str = Field(alias="objectId")
+    expected_object_version: int = Field(alias="expectedObjectVersion")
+
+
+class ActionApplyBatchRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    object_type: str = Field(alias="objectType")
+    targets: list[ActionBatchTargetItemRequest]
+    params: JsonObject
+
+
 class ObjectSetCreateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -156,6 +171,32 @@ class ObjectQueryRequest(BaseModel):
     limit: int = Field(default=50, ge=1, le=MAX_OBJECT_QUERY_LIMIT)
     cursor: str | None = None
     search_text: str | None = Field(default=None, alias="search")
+
+
+class InterfaceQueryRequest(BaseModel):
+    """Interface-scoped polymorphic query: single merged page, no cursor."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    filter_ast: JsonObject | None = Field(default=None, alias="filter")
+    order_by: list[dict[str, str]] | None = Field(default=None, alias="orderBy")
+    limit: int = 50
+
+
+class ObjectAggregateMetricRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    function: str
+    property: str | None = None
+    name: str | None = None
+
+
+class ObjectAggregateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    filter_ast: JsonObject | None = Field(default=None, alias="filter")
+    group_by: list[str] | None = Field(default=None, alias="groupBy")
+    select: list[ObjectAggregateMetricRequest]
 
 
 class ObjectSubscriptionRequest(BaseModel):
@@ -252,8 +293,96 @@ class WebhookPayloadRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class FunctionExecuteRequest(BaseModel):
+    inputs: JsonObject = Field(default_factory=dict)
+
+
 class OntologyValidateRequest(BaseModel):
     yaml_text: str = Field(alias="yaml")
+
+
+class OntologyApplyRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    yaml_text: str = Field(alias="yamlText")
+
+
+class OntologyRollbackRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    version_number: int = Field(alias="versionNumber", ge=1)
+
+
+class OntologyProposalSubmitRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    yaml_text: str = Field(alias="yamlText")
+    title: str
+    description: str | None = None
+
+
+class OntologyProposalUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    yaml_text: str = Field(alias="yamlText")
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+    title: str | None = None
+    description: str | None = None
+
+
+class OntologyProposalAssignRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    reviewer_user_id: str = Field(alias="reviewerUserId")
+
+
+class OntologyProposalDecisionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    decision: str
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+    comment: str | None = None
+
+
+class OntologyProposalExecuteRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+
+
+class OntologyProposalWithdrawRequest(BaseModel):
+    reason: str | None = None
+
+
+class OntologyBranchCreateRequest(BaseModel):
+    name: str
+
+
+class OntologyBranchUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    yaml_text: str = Field(alias="yamlText")
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+
+
+class OntologyBranchRebaseResolution(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    kind: str
+    api_name: str = Field(alias="apiName")
+    use: str
+
+
+class OntologyBranchRebaseRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+    resolutions: list[OntologyBranchRebaseResolution] = Field(default_factory=list)
+
+
+class OntologyBranchProposeRequest(BaseModel):
+    title: str
+    description: str | None = None
 
 
 class AipBuilderContextSourceRequest(BaseModel):

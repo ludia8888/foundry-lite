@@ -543,6 +543,232 @@ await expectSdkCall("ontology.validate", () => client.ontology.validate({ yaml: 
   headers: { "Content-Type": "application/json" },
   body: { yaml: "objectTypes: []" },
 });
+await expectSdkCall("ontology.apply", () => client.ontology.apply({ yamlText: "objectTypes: []" }), {
+  path: "/api/ontology/apply",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: { yamlText: "objectTypes: []" },
+});
+await expectSdkCall("ontology.rollback", () => client.ontology.rollback({ versionNumber: 6 }), {
+  path: "/api/ontology/rollback",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: { versionNumber: 6 },
+});
+await expectSdkCall(
+  "ontology.resources.usage",
+  () => client.ontology.resources.usage("object_type", "Order Item", { windowDays: 14 }),
+  {
+    path: "/api/ontology/resources/object_type/Order%20Item/usage?windowDays=14",
+  },
+);
+await expectSdkCall(
+  "ontology.resources.dependents",
+  () => client.ontology.resources.dependents("object_type", "Order Item"),
+  {
+    path: "/api/ontology/resources/object_type/Order%20Item/dependents",
+  },
+);
+await expectSdkCall(
+  "ontology.proposals.submit",
+  () =>
+    client.ontology.proposals.submit(
+      {
+        yamlText: "objectTypes: []",
+        title: "Add supplier risk object",
+        description: "Governance proposal from the ontology workspace",
+      },
+      { idempotencyKey: "proposal-submit-key" },
+    ),
+  {
+    path: "/api/ontology/proposals",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "proposal-submit-key" },
+    body: {
+      yamlText: "objectTypes: []",
+      title: "Add supplier risk object",
+      description: "Governance proposal from the ontology workspace",
+    },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "ontology.proposals.submit",
+  () =>
+    client.ontology.proposals.submit({
+      yamlText: "objectTypes: []",
+      title: "Add supplier risk object",
+    }),
+  "ontology.proposals.submit",
+);
+await expectSdkCall(
+  "ontology.proposals.list",
+  () => client.ontology.proposals.list({ status: "pending", cursor: "cursor/1", limit: 25 }),
+  {
+    path: "/api/ontology/proposals?status=pending&cursor=cursor%2F1&limit=25",
+  },
+);
+await expectSdkCall("ontology.proposals.get", () => client.ontology.proposals.get("proposal/1"), {
+  path: "/api/ontology/proposals/proposal%2F1",
+});
+await expectSdkCall(
+  "ontology.proposals.update",
+  () =>
+    client.ontology.proposals.update("proposal/1", {
+      yamlText: "objectTypes: []",
+      expectedFingerprint: "sha256:proposal",
+      title: "Revised proposal",
+    }),
+  {
+    path: "/api/ontology/proposals/proposal%2F1/update",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      yamlText: "objectTypes: []",
+      expectedFingerprint: "sha256:proposal",
+      title: "Revised proposal",
+    },
+  },
+);
+await expectSdkCall(
+  "ontology.proposals.assign",
+  () => client.ontology.proposals.assign("proposal/1", { reviewerUserId: "ontology/reviewer" }),
+  {
+    path: "/api/ontology/proposals/proposal%2F1/assign",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { reviewerUserId: "ontology/reviewer" },
+  },
+);
+await expectSdkCall(
+  "ontology.proposals.decide",
+  () =>
+    client.ontology.proposals.decide("proposal/1", {
+      decision: "approved",
+      expectedFingerprint: "sha256:proposal",
+      comment: "Migration plan reviewed",
+    }),
+  {
+    path: "/api/ontology/proposals/proposal%2F1/decide",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      decision: "approved",
+      expectedFingerprint: "sha256:proposal",
+      comment: "Migration plan reviewed",
+    },
+  },
+);
+await expectSdkCall(
+  "ontology.proposals.execute",
+  () => client.ontology.proposals.execute("proposal/1", { expectedFingerprint: "sha256:proposal" }),
+  {
+    path: "/api/ontology/proposals/proposal%2F1/execute",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { expectedFingerprint: "sha256:proposal" },
+  },
+);
+await expectSdkCall(
+  "ontology.proposals.withdraw",
+  () => client.ontology.proposals.withdraw("proposal/1", { reason: "superseded by a newer proposal" }),
+  {
+    path: "/api/ontology/proposals/proposal%2F1/withdraw",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { reason: "superseded by a newer proposal" },
+  },
+);
+await expectSdkCall(
+  "ontology.branches.create",
+  () =>
+    client.ontology.branches.create(
+      { name: "supplier-risk-redesign" },
+      { idempotencyKey: "branch-create-key" },
+    ),
+  {
+    path: "/api/ontology/branches",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "branch-create-key" },
+    body: { name: "supplier-risk-redesign" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "ontology.branches.create",
+  () => client.ontology.branches.create({ name: "supplier-risk-redesign" }),
+  "ontology.branches.create",
+);
+await expectSdkCall(
+  "ontology.branches.list",
+  () => client.ontology.branches.list({ status: "open", cursor: "cursor/1", limit: 25 }),
+  {
+    path: "/api/ontology/branches?status=open&cursor=cursor%2F1&limit=25",
+  },
+);
+await expectSdkCall("ontology.branches.get", () => client.ontology.branches.get("branch/1"), {
+  path: "/api/ontology/branches/branch%2F1",
+});
+await expectSdkCall(
+  "ontology.branches.update",
+  () =>
+    client.ontology.branches.update("branch/1", {
+      yamlText: "objectTypes: []",
+      expectedFingerprint: "sha256:branch",
+    }),
+  {
+    path: "/api/ontology/branches/branch%2F1/update",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { yamlText: "objectTypes: []", expectedFingerprint: "sha256:branch" },
+  },
+);
+await expectSdkCall("ontology.branches.diff", () => client.ontology.branches.diff("branch/1"), {
+  path: "/api/ontology/branches/branch%2F1/diff",
+});
+await expectSdkCall(
+  "ontology.branches.rebase",
+  () =>
+    client.ontology.branches.rebase("branch/1", {
+      expectedFingerprint: "sha256:branch",
+      resolutions: [{ kind: "objectType", apiName: "Order", use: "branch" }],
+    }),
+  {
+    path: "/api/ontology/branches/branch%2F1/rebase",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      expectedFingerprint: "sha256:branch",
+      resolutions: [{ kind: "objectType", apiName: "Order", use: "branch" }],
+    },
+  },
+);
+await expectSdkCall(
+  "ontology.branches.propose",
+  () =>
+    client.ontology.branches.propose(
+      "branch/1",
+      { title: "Merge supplier risk redesign", description: "Branch merge request" },
+      { idempotencyKey: "branch-propose-key" },
+    ),
+  {
+    path: "/api/ontology/branches/branch%2F1/propose",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "branch-propose-key" },
+    body: { title: "Merge supplier risk redesign", description: "Branch merge request" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "ontology.branches.propose",
+  () => client.ontology.branches.propose("branch/1", { title: "Merge supplier risk redesign" }),
+  "ontology.branches.propose",
+);
+await expectSdkCall(
+  "ontology.branches.abandon",
+  () => client.ontology.branches.abandon("branch/1"),
+  {
+    path: "/api/ontology/branches/branch%2F1/abandon",
+    method: "POST",
+  },
+);
 await expectSdkCall(
   "aip.builder.validate",
   () =>
@@ -1243,6 +1469,87 @@ await expectSdkCall("objects.generic.query", () => client.objects.generic.query(
   headers: { "Content-Type": "application/json" },
   body: { limit: 10, search: "rush" },
 });
+await expectSdkCall(
+  "objects.generic.aggregate",
+  () =>
+    client.objects.generic.aggregate("Order Item", {
+      select: [{ function: "count", name: "orders" }, { function: "sum", property: "amount" }],
+      groupBy: ["status"],
+      filter: { property: "status", op: "eq", value: "PENDING" },
+    }),
+  {
+    path: "/api/objects/Order%20Item/aggregate",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      select: [{ function: "count", name: "orders" }, { function: "sum", property: "amount" }],
+      groupBy: ["status"],
+      filter: { property: "status", op: "eq", value: "PENDING" },
+    },
+  },
+);
+await expectSdkCall(
+  "objects.Order.aggregate.generated",
+  () => client.objects.Order.aggregate({ select: [{ function: "count" }] }),
+  {
+    path: "/api/objects/Order/aggregate",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Foundry-Lite-Object": "Order" },
+    body: { select: [{ function: "count" }] },
+  },
+);
+coveredSurfaceIds.delete("objects.Order.aggregate.generated");
+await expectSdkCall(
+  "interfaces.generic.query",
+  () =>
+    client.interfaces.generic.query("Asset Kind", {
+      filter: { property: "riskScore", op: "gte", value: 0.5 },
+      orderBy: [{ property: "riskScore", direction: "desc" }],
+      limit: 10,
+    }),
+  {
+    path: "/api/interfaces/Asset%20Kind/query",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      filter: { property: "riskScore", op: "gte", value: 0.5 },
+      orderBy: [{ property: "riskScore", direction: "desc" }],
+      limit: 10,
+    },
+  },
+);
+await expectSdkCall(
+  "interfaces.Asset.query.generated",
+  () => client.interfaces.Asset.query({ limit: 5 }),
+  {
+    path: "/api/interfaces/Asset/query",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { limit: 5 },
+  },
+);
+coveredSurfaceIds.delete("interfaces.Asset.query.generated");
+await expectSdkCall(
+  "functions.generic.execute",
+  () => client.functions.generic.execute("order Risk", { inputs: { objectId: "O-1001" } }),
+  {
+    path: "/api/functions/order%20Risk/execute",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { inputs: { objectId: "O-1001" } },
+  },
+);
+await expectSdkCall(
+  "functions.orderRiskSummary.execute.generated",
+  () => client.functions.orderRiskSummary.execute({ inputs: { objectId: "O-1001" } }),
+  {
+    path: "/api/functions/orderRiskSummary/execute",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { inputs: { objectId: "O-1001" } },
+  },
+);
+coveredSurfaceIds.delete("functions.orderRiskSummary.execute.generated");
 await expectSdkCall("objects.generic.get", () => osdk(sdk.Order).fetchOne("order/osdk", { explain: true }), {
   path: "/api/objects/Order/order%2Fosdk?explain=true",
 });
@@ -3248,6 +3555,9 @@ await expectSdkCall("materializations.run", () => client.materializations.run("D
   path: "/api/materializations/Daily%20Orders/run",
   method: "POST",
 });
+await expectSdkCall("materializations.list", () => client.materializations.list(), {
+  path: "/api/materializations",
+});
 await expectSdkCall(
   "actions.generated.validate",
   () =>
@@ -3317,6 +3627,44 @@ assertMissingIdempotencyFailFast(
       params: { reason: "approved" },
     }),
   "ApproveOrder",
+);
+
+await expectSdkCall(
+  "actions.generated.applyBatch",
+  () =>
+    client.actions.ApproveOrder.applyBatch(
+      {
+        targets: [
+          { objectId: "order/1", expectedObjectVersion: 7 },
+          { objectId: "order/2", expectedObjectVersion: 3 },
+        ],
+        params: { reason: "batch approved" },
+      },
+      { idempotencyKey: "approve-batch-key" },
+    ),
+  {
+    path: "/api/actions/ApproveOrder/apply-batch",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "approve-batch-key" },
+    body: {
+      objectType: "Order",
+      targets: [
+        { objectId: "order/1", expectedObjectVersion: 7 },
+        { objectId: "order/2", expectedObjectVersion: 3 },
+      ],
+      params: { reason: "batch approved" },
+    },
+  },
+);
+
+assertMissingIdempotencyFailFast(
+  "actions.generated.applyBatch",
+  () =>
+    client.actions.ApproveOrder.applyBatch({
+      targets: [{ objectId: "order/1", expectedObjectVersion: 7 }],
+      params: { reason: "batch approved" },
+    }),
+  "ApproveOrder.applyBatch",
 );
 
 await expectSdkCall("objects.Order.query.generated", () => client.objects.Order.query({ limit: 3 }), {

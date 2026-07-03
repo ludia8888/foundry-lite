@@ -9,6 +9,7 @@ from foundry_lite.application.ports import (
     ObjectTypeRow,
     OntologyApplyResult,
     OntologyCatalogResult,
+    OntologyRollbackResult,
     OntologyValidationResult,
     OntologyVersionRow,
     PropertyTypeRow,
@@ -19,6 +20,7 @@ from foundry_lite.application.services.ontology_activation_service import Ontolo
 from foundry_lite.application.services.ontology_catalog_service import OntologyCatalogService
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
 from foundry_lite.application.services.ontology_reindex_contract import OntologyReindexContractService
+from foundry_lite.application.services.ontology_rollback_service import OntologyRollbackService
 from foundry_lite.domain.context import RequestContext
 
 
@@ -32,6 +34,7 @@ class OntologyService(CoreService):
     catalog_service: OntologyCatalogService
     lookup_service: OntologyLookupService
     reindex_contract_service: OntologyReindexContractService
+    rollback_service: OntologyRollbackService
 
     def __init__(
         self,
@@ -40,11 +43,13 @@ class OntologyService(CoreService):
         catalog_service: OntologyCatalogService,
         lookup_service: OntologyLookupService,
         reindex_contract_service: OntologyReindexContractService,
+        rollback_service: OntologyRollbackService,
     ) -> None:
         self.activation_service = activation_service
         self.catalog_service = catalog_service
         self.lookup_service = lookup_service
         self.reindex_contract_service = reindex_contract_service
+        self.rollback_service = rollback_service
 
     def apply_ontology(
         self,
@@ -54,6 +59,14 @@ class OntologyService(CoreService):
     ) -> OntologyApplyResult:
         return self.activation_service.apply_ontology(yaml_path, ctx=ctx)
 
+    def apply_ontology_text(
+        self,
+        yaml_text: str,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> OntologyApplyResult:
+        return self.activation_service.apply_ontology_text(yaml_text, ctx=ctx)
+
     def validate_yaml_text(
         self,
         yaml_text: str,
@@ -62,11 +75,27 @@ class OntologyService(CoreService):
     ) -> OntologyValidationResult:
         return self.activation_service.validate_yaml_text(yaml_text, ctx=ctx)
 
+    def rollback_to_version(
+        self,
+        version_number: int,
+        *,
+        ctx: RequestContext | None = None,
+    ) -> OntologyRollbackResult:
+        return self.rollback_service.rollback_to_version(version_number, ctx=ctx)
+
     def active_catalog(self, *, ctx: RequestContext | None = None) -> OntologyCatalogResult:
         return self.catalog_service.active_catalog(ctx=ctx)
 
     def _active_ontology_version(self, conn: TransactionContext, ctx: RequestContext) -> OntologyVersionRow:
         return self.lookup_service._active_ontology_version(conn, ctx)
+
+    def _object_types_for_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> list[ObjectTypeRow]:
+        return list(self.lookup_service._object_types_for_version(conn, ctx, ontology_version_id))
 
     def _active_object_type(self, conn: TransactionContext, ctx: RequestContext, api_name: str) -> ObjectTypeRow:
         return self.lookup_service._active_object_type(conn, ctx, api_name)

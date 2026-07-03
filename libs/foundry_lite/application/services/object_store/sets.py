@@ -18,7 +18,11 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.query_filters import FILTER_OPERATIONS
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.object_store.set_members import collect_dynamic_object_set_members
+from foundry_lite.application.services.object_store.row_policies import row_policy_scope
+from foundry_lite.application.services.object_store.set_members import (
+    collect_dynamic_object_set_members,
+    collect_static_object_set_members,
+)
 from foundry_lite.application.services.object_store.set_protocols import (
     SetObjectQuery,
     SetOntologyLookup,
@@ -404,7 +408,9 @@ class ObjectSetsService(CoreService):
         include_items: bool,
     ) -> ObjectSetMembers:
         object_ids = list(cast(Sequence[str], row["definition"]["ids"]))
-        if not include_items:
+        # Restricted callers load records even for id-only reads: hidden ids never surface.
+        scope = row_policy_scope(self.ontology_service._active_object_type(conn, ctx, object_type_api_name), ctx.roles)
+        if scope.is_unrestricted and not include_items:
             return object_ids, []
         records = {
             record["object_id"]: record
@@ -415,12 +421,15 @@ class ObjectSetsService(CoreService):
                 object_ids=object_ids,
             )
         }
-        items = [
-            self.object_query_service._object_query_item(ctx, object_type_api_name, records[object_id])
-            for object_id in object_ids
-            if object_id in records
-        ]
-        return object_ids, items
+        return collect_static_object_set_members(
+            self.object_query_service,
+            object_type_api_name,
+            ctx=ctx,
+            object_ids=object_ids,
+            records=records,
+            scope=scope,
+            include_items=include_items,
+        )
 
     def _dynamic_object_set_members(
         self,

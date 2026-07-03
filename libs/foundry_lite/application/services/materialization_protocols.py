@@ -12,6 +12,9 @@ from foundry_lite.application.ports import (
     DatasetRow,
     DatasetRunKind,
     MaterializationRepository,
+    ObjectTypeRow,
+    OntologyVersionRow,
+    PropertyTypeRow,
     RuntimeRow,
     RuntimeRowsTable,
     RuntimeRunType,
@@ -113,6 +116,40 @@ class MaterializationDatasetTransactions(Protocol):
         adapter: str | None = None,
     ) -> None:
         """Abort the open dataset transaction and mark the materialization failed."""
+        ...
+
+
+class MaterializationOntologyLookup(Protocol):
+    """Active-ontology reads used to resolve declared materialization specs.
+
+    Object-snapshot materializations are declared per object type in ontology
+    YAML, so the run path must read the active version's object types (spec
+    resolution) and their properties (snapshot column set) at run time.
+    """
+
+    def _active_ontology_version(self, conn: TransactionContext, ctx: RequestContext) -> OntologyVersionRow:
+        """Return the active ontology version; raises NotFound when none is active."""
+        ...
+
+    def _object_types_for_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> Sequence[ObjectTypeRow]:
+        """Return all object types persisted for one ontology version."""
+        ...
+
+    def _active_object_type(self, conn: TransactionContext, ctx: RequestContext, api_name: str) -> ObjectTypeRow:
+        """Return one active object type by api name; raises NotFound when absent."""
+        ...
+
+    def _properties_for_object_type(
+        self,
+        conn: TransactionContext,
+        object_type_id: str,
+    ) -> list[PropertyTypeRow]:
+        """Return the declared properties backing one object type's snapshot columns."""
         ...
 
 

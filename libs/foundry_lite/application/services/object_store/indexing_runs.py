@@ -16,6 +16,12 @@ from foundry_lite.application.ports.object_index_repository import (
     ObjectIndexRepository,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.object_store.indexing_multi_source import (
+    multi_source_version_id,
+    multi_source_version_ids_by_name,
+    replay_multi_source_plan,
+    resolve_multi_source_plan,
+)
 from foundry_lite.application.services.object_store.indexing_ontology_reindex import (
     pending_ontology_reindex_operation,
 )
@@ -24,9 +30,13 @@ from foundry_lite.application.services.object_store.indexing_protocols import (
     IndexDatasetVersions,
     IndexOntologyLookup,
 )
-from foundry_lite.application.services.object_store.indexing_types import ObjectIndexRebuildPlan
+from foundry_lite.application.services.object_store.indexing_types import (
+    ObjectIndexMultiSourcePlan,
+    ObjectIndexRebuildPlan,
+)
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, ValidationFailed
+from foundry_lite.domain.ontology.datasources import is_multi_datasource_backing, primary_dataset_ref
 
 
 def _start_index_rebuild_plan(
@@ -41,33 +51,24 @@ def _start_index_rebuild_plan(
     mode: str = "full",
 ) -> ObjectIndexRebuildPlan:
     object_type = ontology_service._active_object_type(conn, ctx, object_type_api_name)
-    dataset_ref = object_type["backing"]["dataset"]
-    dataset = dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
-    version = dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
-    run_id = _new_id("index_run")
-    active_index_version = _active_index_version(conn, ctx, object_type, object_index_repository)
-    index_version = run_id if mode == "shadow" else active_index_version
-    _create_index_run(
+    version, source_version_id, multi_source = _resolve_plan_source(
+        conn,
+        ctx,
+        object_type,
+        dataset_registry_service=dataset_registry_service,
+        dataset_version_service=dataset_version_service,
+        ontology_service=ontology_service,
+    )
+    return _rebuild_plan_with_run(
         conn=conn,
         ctx=ctx,
         object_type=object_type,
         object_type_api_name=object_type_api_name,
         version=version,
-        run_id=run_id,
-        mode=mode,
-        index_version=index_version,
+        source_version_id=source_version_id,
+        multi_source=multi_source,
         object_index_repository=object_index_repository,
-        trigger_type=_rebuild_trigger_type(mode),
-    )
-    return ObjectIndexRebuildPlan(
-        run_id,
-        object_type_api_name,
-        object_type,
-        version,
-        version["id"],
-        mode,
-        index_version,
-        active_index_version,
+        mode=mode,
     )
 
 
@@ -84,8 +85,135 @@ def _start_ontology_reindex_plan(
 ) -> ObjectIndexRebuildPlan:
     object_type = ontology_service._active_object_type(conn, ctx, object_type_api_name)
     operation = pending_ontology_reindex_operation(object_type, reindex_key)
-    dataset = dataset_registry_service.get_dataset(object_type["backing"]["dataset"], ctx=ctx)
+    version, source_version_id, multi_source = _resolve_plan_source(
+        conn,
+        ctx,
+        object_type,
+        dataset_registry_service=dataset_registry_service,
+        dataset_version_service=dataset_version_service,
+        ontology_service=ontology_service,
+    )
+    return _start_full_plan_with_run(
+        conn=conn,
+        ctx=ctx,
+        object_type=object_type,
+        object_type_api_name=object_type_api_name,
+        version=version,
+        source_version_id=source_version_id,
+        multi_source=multi_source,
+        object_index_repository=object_index_repository,
+        trigger_type="ontology_migration_reindex",
+        source_ref=_ontology_reindex_source_ref(object_type["config"], operation, reindex_key),
+    )
+
+
+def _resolve_plan_source(
+    conn: TransactionContext,
+    ctx: RequestContext,
+    object_type: ObjectTypeRow,
+    *,
+    dataset_registry_service: IndexDatasetRegistry,
+    dataset_version_service: IndexDatasetVersions,
+    ontology_service: IndexOntologyLookup,
+) -> tuple[DatasetVersionRow, str, ObjectIndexMultiSourcePlan | None]:
+    """Resolve the latest source snapshot: one version, or one per datasource segment."""
+    properties = ontology_service._properties_for_object_type(conn, object_type["id"])
+    multi_source = resolve_multi_source_plan(
+        conn,
+        ctx,
+        object_type,
+        properties,
+        dataset_registry_service=dataset_registry_service,
+        dataset_version_service=dataset_version_service,
+    )
+    if multi_source is not None:
+        return multi_source.segments[0].dataset_version, multi_source_version_id(multi_source), multi_source
+    dataset = dataset_registry_service.get_dataset(primary_dataset_ref(object_type["backing"]), ctx=ctx)
     version = dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
+    return version, version["id"], None
+
+
+def _rebuild_plan_with_run(
+    *,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    object_type: ObjectTypeRow,
+    object_type_api_name: str,
+    version: DatasetVersionRow,
+    source_version_id: str,
+    multi_source: ObjectIndexMultiSourcePlan | None,
+    object_index_repository: ObjectIndexRepository,
+    mode: str,
+) -> ObjectIndexRebuildPlan:
+    """Record a plain (full/shadow) rebuild run and return its plan."""
+    run_id = _new_id("index_run")
+    active_index_version = _active_index_version(conn, ctx, object_type, object_index_repository)
+    index_version = run_id if mode == "shadow" else active_index_version
+    _create_index_run(
+        conn=conn,
+        ctx=ctx,
+        object_type=object_type,
+        object_type_api_name=object_type_api_name,
+        source_version_id=source_version_id,
+        run_id=run_id,
+        mode=mode,
+        index_version=index_version,
+        object_index_repository=object_index_repository,
+        trigger_type=_rebuild_trigger_type(mode),
+        multi_source=multi_source,
+    )
+    return _rebuild_plan(
+        run_id,
+        object_type,
+        object_type_api_name,
+        version,
+        source_version_id,
+        mode,
+        index_version,
+        active_index_version,
+        multi_source,
+    )
+
+
+def _rebuild_plan(
+    run_id: str,
+    object_type: ObjectTypeRow,
+    object_type_api_name: str,
+    version: DatasetVersionRow,
+    source_version_id: str,
+    mode: str,
+    index_version: str,
+    active_index_version: str,
+    multi_source: ObjectIndexMultiSourcePlan | None,
+) -> ObjectIndexRebuildPlan:
+    return ObjectIndexRebuildPlan(
+        run_id,
+        object_type_api_name,
+        object_type,
+        version,
+        source_version_id,
+        mode,
+        index_version,
+        active_index_version,
+        trigger_type=_rebuild_trigger_type(mode),
+        multi_source=multi_source,
+    )
+
+
+def _start_full_plan_with_run(
+    *,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    object_type: ObjectTypeRow,
+    object_type_api_name: str,
+    version: DatasetVersionRow,
+    source_version_id: str,
+    multi_source: ObjectIndexMultiSourcePlan | None,
+    object_index_repository: ObjectIndexRepository,
+    trigger_type: str,
+    source_ref: IndexRunSourceRef,
+) -> ObjectIndexRebuildPlan:
+    """Record a full-mode run for ontology-migration reindexes and failed-run replays."""
     run_id = _new_id("index_run")
     active_index_version = _active_index_version(conn, ctx, object_type, object_index_repository)
     _create_index_run(
@@ -93,23 +221,49 @@ def _start_ontology_reindex_plan(
         ctx=ctx,
         object_type=object_type,
         object_type_api_name=object_type_api_name,
-        version=version,
+        source_version_id=source_version_id,
         run_id=run_id,
         mode="full",
         index_version=active_index_version,
         object_index_repository=object_index_repository,
-        trigger_type="ontology_migration_reindex",
-        source_ref=_ontology_reindex_source_ref(object_type["config"], operation, reindex_key),
+        trigger_type=trigger_type,
+        source_ref=source_ref,
+        multi_source=multi_source,
     )
+    return _full_rebuild_plan(
+        run_id,
+        object_type_api_name,
+        object_type,
+        version,
+        source_version_id,
+        active_index_version,
+        trigger_type=trigger_type,
+        multi_source=multi_source,
+    )
+
+
+def _full_rebuild_plan(
+    run_id: str,
+    object_type_api_name: str,
+    object_type: ObjectTypeRow,
+    version: DatasetVersionRow,
+    source_version_id: str,
+    active_index_version: str,
+    *,
+    trigger_type: str,
+    multi_source: ObjectIndexMultiSourcePlan | None,
+) -> ObjectIndexRebuildPlan:
     return ObjectIndexRebuildPlan(
         run_id,
         object_type_api_name,
         object_type,
         version,
-        version["id"],
+        source_version_id,
         "full",
         active_index_version,
         active_index_version,
+        trigger_type=trigger_type,
+        multi_source=multi_source,
     )
 
 
@@ -124,28 +278,56 @@ def _start_failed_index_replay_plan(
 ) -> ObjectIndexRebuildPlan:
     failed_run = _failed_index_run(conn, ctx, index_run_id, object_index_repository)
     version_id = _source_dataset_version_id(failed_run, index_run_id)
-    version = dataset_version_service._version_by_id(conn, version_id)
-    if version["tenant_id"] != ctx.tenant_id:
-        raise NotFound("dataset version not found", details={"version_id": version_id})
     object_type_api_name = str(failed_run["object_type_api_name"])
     object_type = ontology_service._active_object_type(conn, ctx, object_type_api_name)
     _ensure_replay_object_type_matches(failed_run, object_type)
-    run_id = _new_id("index_run")
-    active_index_version = _active_index_version(conn, ctx, object_type, object_index_repository)
-    _create_index_run(
+    version, multi_source = _replay_plan_source(
+        conn,
+        ctx,
+        object_type,
+        version_id,
+        dataset_version_service=dataset_version_service,
+        ontology_service=ontology_service,
+    )
+    return _start_full_plan_with_run(
         conn=conn,
         ctx=ctx,
         object_type=object_type,
         object_type_api_name=object_type_api_name,
         version=version,
-        run_id=run_id,
-        mode="full",
-        index_version=active_index_version,
+        source_version_id=version_id,
+        multi_source=multi_source,
         object_index_repository=object_index_repository,
         trigger_type="failed_run_replay",
         source_ref={"dataset_version_id": version_id, "replay_of_run_id": index_run_id},
     )
-    return _replay_plan(run_id, object_type_api_name, object_type, version, version_id, active_index_version)
+
+
+def _replay_plan_source(
+    conn: TransactionContext,
+    ctx: RequestContext,
+    object_type: ObjectTypeRow,
+    version_id: str,
+    *,
+    dataset_version_service: IndexDatasetVersions,
+    ontology_service: IndexOntologyLookup,
+) -> tuple[DatasetVersionRow, ObjectIndexMultiSourcePlan | None]:
+    """Rebind a recorded (possibly composite) source version id for replay."""
+    if is_multi_datasource_backing(object_type["backing"]):
+        properties = ontology_service._properties_for_object_type(conn, object_type["id"])
+        multi_source = replay_multi_source_plan(
+            conn,
+            ctx,
+            object_type,
+            properties,
+            version_id,
+            dataset_version_service=dataset_version_service,
+        )
+        return multi_source.segments[0].dataset_version, multi_source
+    version = dataset_version_service._version_by_id(conn, version_id)
+    if version["tenant_id"] != ctx.tenant_id:
+        raise NotFound("dataset version not found", details={"version_id": version_id})
+    return version, None
 
 
 def _failed_index_run(
@@ -179,26 +361,6 @@ def _active_index_version(
     )
 
 
-def _replay_plan(
-    run_id: str,
-    object_type_api_name: str,
-    object_type: ObjectTypeRow,
-    version: DatasetVersionRow,
-    version_id: str,
-    active_index_version: str,
-) -> ObjectIndexRebuildPlan:
-    return ObjectIndexRebuildPlan(
-        run_id,
-        object_type_api_name,
-        object_type,
-        version,
-        version_id,
-        "full",
-        active_index_version,
-        active_index_version,
-    )
-
-
 def _source_dataset_version_id(row: IndexRunRow, index_run_id: str) -> str:
     source_ref: Mapping[str, object] = row["source_ref"]
     version_id = source_ref.get("dataset_version_id")
@@ -221,16 +383,17 @@ def _create_index_run(
     ctx: RequestContext,
     object_type: ObjectTypeRow,
     object_type_api_name: str,
-    version: DatasetVersionRow,
+    source_version_id: str,
     run_id: str,
     mode: str,
     index_version: str,
     object_index_repository: ObjectIndexRepository,
     trigger_type: str = "reindex",
     source_ref: IndexRunSourceRef | None = None,
+    multi_source: ObjectIndexMultiSourcePlan | None = None,
 ) -> None:
     now = _now()
-    source = _index_run_source_ref(version, mode, index_version, source_ref)
+    source = _index_run_source_ref(source_version_id, mode, index_version, source_ref, multi_source)
     object_index_repository.create_index_run(
         transaction=conn,
         record=IndexRunRecord(
@@ -255,12 +418,16 @@ def _create_index_run(
 
 
 def _index_run_source_ref(
-    version: DatasetVersionRow,
+    source_version_id: str,
     mode: str,
     index_version: str,
     source_ref: IndexRunSourceRef | None,
+    multi_source: ObjectIndexMultiSourcePlan | None,
 ) -> IndexRunSourceRef:
-    source: IndexRunSourceRef = {"dataset_version_id": version["id"]}
+    source: IndexRunSourceRef = {"dataset_version_id": source_version_id}
+    if multi_source is not None:
+        # Operator evidence: which concrete version each datasource contributed.
+        source["segmentDatasetVersionIds"] = multi_source_version_ids_by_name(multi_source)
     if source_ref is not None:
         source.update(source_ref)
     source["mode"] = mode

@@ -258,6 +258,53 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
         "  ontology: {",
         "    catalog(): Promise<OntologyCatalog>;",
         "    validate(payload: OntologyValidateRequest): Promise<OntologyValidationResult>;",
+        "    apply(payload: OntologyApplyRequest): Promise<OntologyApplyResult>;",
+        "    rollback(payload: OntologyRollbackRequest): Promise<OntologyRollbackResult>;",
+        "    resources: {",
+        (
+            "      usage(resourceType: string, apiName: string, options?: OntologyResourceUsageOptions): "
+            "Promise<OntologyResourceUsageResult>;"
+        ),
+        "      dependents(resourceType: string, apiName: string): Promise<OntologyResourceDependentsResult>;",
+        "    };",
+        "    proposals: {",
+        (
+            "      submit(payload: OntologyProposalSubmitRequest, options: { idempotencyKey: string }): "
+            "Promise<OntologyProposalPayload>;"
+        ),
+        "      list(filters?: OntologyProposalListFilters): Promise<OntologyProposalListResult>;",
+        "      get(proposalId: string): Promise<OntologyProposalPayload>;",
+        ("      update(proposalId: string, payload: OntologyProposalUpdateRequest): Promise<OntologyProposalPayload>;"),
+        ("      assign(proposalId: string, payload: OntologyProposalAssignRequest): Promise<OntologyProposalPayload>;"),
+        (
+            "      decide(proposalId: string, payload: OntologyProposalDecisionRequest): "
+            "Promise<OntologyProposalPayload>;"
+        ),
+        (
+            "      execute(proposalId: string, payload: OntologyProposalExecuteRequest): "
+            "Promise<OntologyProposalPayload>;"
+        ),
+        (
+            "      withdraw(proposalId: string, payload?: OntologyProposalWithdrawRequest): "
+            "Promise<OntologyProposalPayload>;"
+        ),
+        "    };",
+        "    branches: {",
+        (
+            "      create(payload: OntologyBranchCreateRequest, options: { idempotencyKey: string }): "
+            "Promise<OntologyBranchPayload>;"
+        ),
+        "      list(filters?: OntologyBranchListFilters): Promise<OntologyBranchListResult>;",
+        "      get(branchId: string): Promise<OntologyBranchDetailPayload>;",
+        ("      update(branchId: string, payload: OntologyBranchUpdateRequest): Promise<OntologyBranchPayload>;"),
+        "      diff(branchId: string): Promise<OntologyBranchDiffResult>;",
+        ("      rebase(branchId: string, payload: OntologyBranchRebaseRequest): Promise<OntologyBranchPayload>;"),
+        (
+            "      propose(branchId: string, payload: OntologyBranchProposeRequest, "
+            "options: { idempotencyKey: string }): Promise<OntologyBranchPayload>;"
+        ),
+        "      abandon(branchId: string): Promise<OntologyBranchPayload>;",
+        "    };",
         "  };",
         "  insights: {",
         "    reviews: {",
@@ -286,6 +333,7 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
         "      get(objectType: string, id: string, options?: { explain?: boolean }): Promise<GenericObject>;",
         "      query(objectType: string, payload?: ObjectQueryRequest): Promise<ObjectQueryResult<GenericObject>>;",
         "      links(objectType: string, id: string, linkType: string): Promise<ObjectLinkPayload[]>;",
+        "      aggregate(objectType: string, payload: ObjectAggregateRequest): Promise<ObjectAggregationResult>;",
         (
             "      subscribe(objectType: string, payload?: ObjectSubscriptionRequest, "
             "options?: ObjectSubscriptionOptions): "
@@ -299,20 +347,30 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
                 f"    {object_def.api_name}: {{",
                 f"      get(id: string, options?: {{ explain?: boolean }}): Promise<{object_def.response_type}>;",
                 f"      query(payload?: ObjectQueryRequest): Promise<ObjectQueryResult<{object_def.response_type}>>;",
+                "      aggregate(payload: ObjectAggregateRequest): Promise<ObjectAggregationResult>;",
                 "    };",
             ]
         )
     lines.extend(["  };", "  actions: {"])
     for action_def in surface.actions:
         validate_payload_type = action_def.payload_type.replace("ApplyRequest", "ValidateRequest")
+        batch_payload_type = action_def.payload_type.replace("ApplyRequest", "ApplyBatchRequest")
         lines.extend(
             [
                 f"    {action_def.api_name}: {{",
                 f"      validate(payload: {validate_payload_type}): Promise<ActionValidationResponse>;",
                 f"      apply(payload: {action_def.payload_type}): Promise<ActionApplyResponse>;",
+                (
+                    f"      applyBatch(payload: {batch_payload_type}, options: {{ idempotencyKey: string }}): "
+                    "Promise<ActionBatchApplyResponse>;"
+                ),
                 "    };",
             ]
         )
+    lines.extend(["  };", "  interfaces: {"])
+    lines.extend(_interface_client_type_lines(surface))
+    lines.extend(["  };", "  functions: {"])
+    lines.extend(_function_client_type_lines(surface))
     lines.extend(
         [
             "  };",
@@ -323,6 +381,7 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "  };",
             "  materializations: {",
             "    run(apiName: string): Promise<MaterializationRunResult>;",
+            "    list(): Promise<MaterializationSpecList>;",
             "  };",
             "  aip: {",
             "    builder: {",
@@ -517,6 +576,56 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "",
         ]
     )
+    return lines
+
+
+def _interface_client_type_lines(surface: SdkClientSurface) -> list[str]:
+    lines: list[str] = []
+    for interface_def in surface.interfaces:
+        if interface_def.api_name == "generic":
+            lines.extend(
+                [
+                    "    generic: {",
+                    (
+                        "      query(interfaceType: string, payload?: InterfaceQueryRequest): "
+                        "Promise<ObjectQueryResult<GenericObject>>;"
+                    ),
+                    "    };",
+                ]
+            )
+            continue
+        lines.extend(
+            [
+                f"    {interface_def.api_name}: {{",
+                "      query(payload?: InterfaceQueryRequest): Promise<ObjectQueryResult<GenericObject>>;",
+                "    };",
+            ]
+        )
+    return lines
+
+
+def _function_client_type_lines(surface: SdkClientSurface) -> list[str]:
+    lines: list[str] = []
+    for function_def in surface.functions:
+        if function_def.api_name == "generic":
+            lines.extend(
+                [
+                    "    generic: {",
+                    (
+                        "      execute(functionType: string, payload?: FunctionExecuteRequest): "
+                        "Promise<FunctionExecutionResult>;"
+                    ),
+                    "    };",
+                ]
+            )
+            continue
+        lines.extend(
+            [
+                f"    {function_def.api_name}: {{",
+                "      execute(payload?: FunctionExecuteRequest): Promise<FunctionExecutionResult>;",
+                "    };",
+            ]
+        )
     return lines
 
 
@@ -2235,6 +2344,164 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "        body: JSON.stringify(payload),",
         "        },",
         "      ),",
+        "      apply: (payload: OntologyApplyRequest) => request<OntologyApplyResult>(`/api/ontology/apply`, {",
+        '        method: "POST",',
+        '        headers: { "Content-Type": "application/json" },',
+        "        body: JSON.stringify(payload),",
+        "      }),",
+        "      rollback: (payload: OntologyRollbackRequest) =>",
+        "        request<OntologyRollbackResult>(`/api/ontology/rollback`, {",
+        '          method: "POST",',
+        '          headers: { "Content-Type": "application/json" },',
+        "          body: JSON.stringify(payload),",
+        "        }),",
+        "      resources: {",
+        "        usage: (resourceType: string, apiName: string, options: OntologyResourceUsageOptions = {}) => {",
+        "          const params = new URLSearchParams();",
+        "          if (options.windowDays !== undefined) params.set('windowDays', String(options.windowDays));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "          return request<OntologyResourceUsageResult>(",
+        (
+            "            `/api/ontology/resources/${encodeURIComponent(resourceType)}/"
+            "${encodeURIComponent(apiName)}/usage${suffix}`,"
+        ),
+        "          );",
+        "        },",
+        "        dependents: (resourceType: string, apiName: string) =>",
+        "          request<OntologyResourceDependentsResult>(",
+        (
+            "            `/api/ontology/resources/${encodeURIComponent(resourceType)}/"
+            "${encodeURIComponent(apiName)}/dependents`,"
+        ),
+        "          ),",
+        "      },",
+        "      proposals: {",
+        "        submit: (payload: OntologyProposalSubmitRequest, options: { idempotencyKey: string }) =>",
+        "          request<OntologyProposalPayload>(`/api/ontology/proposals`, {",
+        '            method: "POST",',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        (
+            '              "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "ontology.proposals.submit"),'
+        ),
+        "            },",
+        "            body: JSON.stringify(payload),",
+        "          }),",
+        "        list: (filters: OntologyProposalListFilters = {}) => {",
+        "          const params = new URLSearchParams();",
+        "          if (filters.status) params.set('status', filters.status);",
+        "          if (filters.cursor) params.set('cursor', filters.cursor);",
+        "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "          return request<OntologyProposalListResult>(`/api/ontology/proposals${suffix}`);",
+        "        },",
+        "        get: (proposalId: string) =>",
+        "          request<OntologyProposalPayload>(`/api/ontology/proposals/${encodeURIComponent(proposalId)}`),",
+        "        update: (proposalId: string, payload: OntologyProposalUpdateRequest) =>",
+        "          request<OntologyProposalPayload>(",
+        "            `/api/ontology/proposals/${encodeURIComponent(proposalId)}/update`,",
+        (
+            '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "          ),",
+        "        assign: (proposalId: string, payload: OntologyProposalAssignRequest) =>",
+        "          request<OntologyProposalPayload>(",
+        "            `/api/ontology/proposals/${encodeURIComponent(proposalId)}/assign`,",
+        (
+            '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "          ),",
+        "        decide: (proposalId: string, payload: OntologyProposalDecisionRequest) =>",
+        "          request<OntologyProposalPayload>(",
+        "            `/api/ontology/proposals/${encodeURIComponent(proposalId)}/decide`,",
+        (
+            '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "          ),",
+        "        execute: (proposalId: string, payload: OntologyProposalExecuteRequest) =>",
+        "          request<OntologyProposalPayload>(",
+        "            `/api/ontology/proposals/${encodeURIComponent(proposalId)}/execute`,",
+        (
+            '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "          ),",
+        "        withdraw: (proposalId: string, payload: OntologyProposalWithdrawRequest = {}) =>",
+        "          request<OntologyProposalPayload>(",
+        "            `/api/ontology/proposals/${encodeURIComponent(proposalId)}/withdraw`,",
+        (
+            '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "          ),",
+        "      },",
+        "      branches: {",
+        "        create: (payload: OntologyBranchCreateRequest, options: { idempotencyKey: string }) =>",
+        "          request<OntologyBranchPayload>(`/api/ontology/branches`, {",
+        '            method: "POST",',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        (
+            '              "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.create"),'
+        ),
+        "            },",
+        "            body: JSON.stringify(payload),",
+        "          }),",
+        "        list: (filters: OntologyBranchListFilters = {}) => {",
+        "          const params = new URLSearchParams();",
+        "          if (filters.status) params.set('status', filters.status);",
+        "          if (filters.cursor) params.set('cursor', filters.cursor);",
+        "          if (filters.limit !== undefined) params.set('limit', String(filters.limit));",
+        "          const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "          return request<OntologyBranchListResult>(`/api/ontology/branches${suffix}`);",
+        "        },",
+        "        get: (branchId: string) =>",
+        "          request<OntologyBranchDetailPayload>(`/api/ontology/branches/${encodeURIComponent(branchId)}`),",
+        "        update: (branchId: string, payload: OntologyBranchUpdateRequest) =>",
+        "          request<OntologyBranchPayload>(",
+        "            `/api/ontology/branches/${encodeURIComponent(branchId)}/update`,",
+        (
+            '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "          ),",
+        "        diff: (branchId: string) =>",
+        "          request<OntologyBranchDiffResult>(`/api/ontology/branches/${encodeURIComponent(branchId)}/diff`),",
+        "        rebase: (branchId: string, payload: OntologyBranchRebaseRequest) =>",
+        "          request<OntologyBranchPayload>(",
+        "            `/api/ontology/branches/${encodeURIComponent(branchId)}/rebase`,",
+        (
+            '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "          ),",
+        "        propose: (branchId: string, payload: OntologyBranchProposeRequest, "
+        "options: { idempotencyKey: string }) =>",
+        "          request<OntologyBranchPayload>(",
+        "            `/api/ontology/branches/${encodeURIComponent(branchId)}/propose`,",
+        "            {",
+        '              method: "POST",',
+        "              headers: {",
+        '                "Content-Type": "application/json",',
+        (
+            '                "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.propose"),'
+        ),
+        "              },",
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "        abandon: (branchId: string) =>",
+        "          request<OntologyBranchPayload>(",
+        "            `/api/ontology/branches/${encodeURIComponent(branchId)}/abandon`,",
+        '            { method: "POST" },',
+        "          ),",
+        "      },",
         "    },",
         "    insights: {",
         "      reviews: {",
@@ -2326,6 +2593,14 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "            `/api/objects/${encodeURIComponent(objectType)}/${encodeURIComponent(id)}` +",
         "              `/links/${encodeURIComponent(linkType)}`,",
         "          ),",
+        "        aggregate: (objectType: string, payload: ObjectAggregateRequest) =>",
+        "          request<ObjectAggregationResult>(",
+        "            `/api/objects/${encodeURIComponent(objectType)}/aggregate`,",
+        (
+            '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+            "body: JSON.stringify(payload) },"
+        ),
+        "          ),",
         "        subscribe: (objectType: string, payload: ObjectSubscriptionRequest = {}, options = {}) =>",
         "          streamObjectSubscription<GenericObject>(clientOptions, objectType, payload, options),",
         "      },",
@@ -2333,6 +2608,10 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
     lines.extend(_ts_object_client_lines(surface.objects))
     lines.extend(["    },", "    actions: {"])
     lines.extend(_ts_action_client_lines(surface.actions))
+    lines.extend(["    },", "    interfaces: {"])
+    lines.extend(_ts_interface_client_lines(surface))
+    lines.extend(["    },", "    functions: {"])
+    lines.extend(_ts_function_client_lines(surface))
     lines += [
         "    },",
         "    objectSets: {",
@@ -2352,6 +2631,7 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "        `/api/materializations/${encodeURIComponent(apiName)}/run`,",
         '        { method: "POST" },',
         "      ),",
+        "      list: () => request<MaterializationSpecList>(`/api/materializations`),",
         "    },",
         "    aip: {",
         "      builder: {",
@@ -2582,6 +2862,12 @@ def _ts_object_client_lines(objects: Sequence[ObjectClientSurface]) -> list[str]
                 f"            headers: {{ 'Content-Type': 'application/json', 'X-Foundry-Lite-Object': {path_name} }},",
                 "            body: JSON.stringify(payload),",
                 "          }),",
+                "        aggregate: (payload: ObjectAggregateRequest) =>",
+                (f"          request<ObjectAggregationResult>(`/api/objects/{object_def.api_name}/aggregate`, {{"),
+                '            method: "POST",',
+                f"            headers: {{ 'Content-Type': 'application/json', 'X-Foundry-Lite-Object': {path_name} }},",
+                "            body: JSON.stringify(payload),",
+                "          }),",
                 "      },",
             ]
         )
@@ -2593,7 +2879,9 @@ def _ts_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str]
     for action_def in actions:
         target = json.dumps(action_def.target)
         action_name = json.dumps(action_def.api_name)
+        batch_operation_name = json.dumps(f"{action_def.api_name}.applyBatch")
         validate_payload_type = action_def.payload_type.replace("ApplyRequest", "ValidateRequest")
+        batch_payload_type = action_def.payload_type.replace("ApplyRequest", "ApplyBatchRequest")
         lines.extend(
             [
                 f"      {action_def.api_name}: {{",
@@ -2623,6 +2911,94 @@ def _ts_action_client_lines(actions: Sequence[ActionClientSurface]) -> list[str]
                 "              params: payload.params,",
                 "            }),",
                 "          }),",
+                f"        applyBatch: (payload: {batch_payload_type}, options: {{ idempotencyKey: string }}) =>",
+                f"          request<ActionBatchApplyResponse>(`/api/actions/{action_def.api_name}/apply-batch`, {{",
+                '            method: "POST",',
+                "            headers: {",
+                '              "Content-Type": "application/json",',
+                '              "Idempotency-Key": requireIdempotencyKey(',
+                "                options?.idempotencyKey,",
+                f"                {batch_operation_name},",
+                "              ),",
+                "            },",
+                "            body: JSON.stringify({",
+                f"              objectType: {target},",
+                "              targets: payload.targets,",
+                "              params: payload.params,",
+                "            }),",
+                "          }),",
+                "      },",
+            ]
+        )
+    return lines
+
+
+def _ts_interface_client_lines(surface: SdkClientSurface) -> list[str]:
+    lines: list[str] = []
+    for interface_def in surface.interfaces:
+        if interface_def.api_name == "generic":
+            lines.extend(
+                [
+                    "      generic: {",
+                    "        query: (interfaceType: string, payload: InterfaceQueryRequest = {}) =>",
+                    "          request<ObjectQueryResult<GenericObject>>(",
+                    "            `/api/interfaces/${encodeURIComponent(interfaceType)}/query`,",
+                    (
+                        '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+                        "body: JSON.stringify(payload) },"
+                    ),
+                    "          ),",
+                    "      },",
+                ]
+            )
+            continue
+        lines.extend(
+            [
+                f"      {interface_def.api_name}: {{",
+                "        query: (payload: InterfaceQueryRequest = {}) =>",
+                "          request<ObjectQueryResult<GenericObject>>(",
+                f"            `/api/interfaces/{interface_def.api_name}/query`,",
+                (
+                    '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+                    "body: JSON.stringify(payload) },"
+                ),
+                "          ),",
+                "      },",
+            ]
+        )
+    return lines
+
+
+def _ts_function_client_lines(surface: SdkClientSurface) -> list[str]:
+    lines: list[str] = []
+    for function_def in surface.functions:
+        if function_def.api_name == "generic":
+            lines.extend(
+                [
+                    "      generic: {",
+                    "        execute: (functionType: string, payload: FunctionExecuteRequest = {}) =>",
+                    "          request<FunctionExecutionResult>(",
+                    "            `/api/functions/${encodeURIComponent(functionType)}/execute`,",
+                    (
+                        '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+                        "body: JSON.stringify(payload) },"
+                    ),
+                    "          ),",
+                    "      },",
+                ]
+            )
+            continue
+        lines.extend(
+            [
+                f"      {function_def.api_name}: {{",
+                "        execute: (payload: FunctionExecuteRequest = {}) =>",
+                "          request<FunctionExecutionResult>(",
+                f"            `/api/functions/{function_def.api_name}/execute`,",
+                (
+                    '            { method: "POST", headers: { "Content-Type": "application/json" }, '
+                    "body: JSON.stringify(payload) },"
+                ),
+                "          ),",
                 "      },",
             ]
         )

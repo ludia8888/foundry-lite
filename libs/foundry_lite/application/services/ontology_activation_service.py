@@ -12,7 +12,6 @@ from foundry_lite.application.ports import (
     ActionTypeRecord,
     LinkTypeRecord,
     ObjectTypeRecord,
-    ObjectTypeRow,
     OntologyApplyResult,
     OntologyValidationResult,
     OntologyVersionRecord,
@@ -20,12 +19,24 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.aip.visual_builder import VisualBuilderService
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.ontology_datasource_validation import yaml_property_datasources
+from foundry_lite.application.services.ontology_function_validation import (
+    import_function_types,
+    validate_ontology_functions,
+)
+from foundry_lite.application.services.ontology_interface_validation import (
+    import_interface_types,
+    object_type_implements,
+    validate_ontology_interfaces,
+)
 from foundry_lite.application.services.ontology_migration import (
     OntologyMigrationPlan,
     plan_ontology_migration,
 )
 from foundry_lite.application.services.ontology_migration_types import object_type_serving_config
+from foundry_lite.application.services.ontology_persisted_validation import validate_persisted_ontology
 from foundry_lite.application.services.ontology_protocols import (
     OntologyDatasetRegistry,
     OntologyDatasetVersions,
@@ -35,8 +46,6 @@ from foundry_lite.application.services.ontology_protocols import (
 from foundry_lite.application.services.ontology_validation import (
     ontology_validation_result,
     validate_ontology_definition,
-    validate_persisted_link,
-    validate_persisted_object_type,
 )
 from foundry_lite.application.services.ontology_yaml import (
     YamlObject,
@@ -45,9 +54,12 @@ from foundry_lite.application.services.ontology_yaml import (
     link_type_backing,
     mapping_sequence,
     object_type_backing,
+    object_type_materialization_config,
+    object_type_row_policies,
     optional_bool,
     optional_str,
     property_derivation,
+    require_yaml_text_within_limit,
     required_str,
     schema_columns,
     yaml_object,
@@ -64,21 +76,29 @@ class OntologyActivationService(CoreService):
         "dataset_registry_service",
         "dataset_version_service",
         "runtime_service",
+        "visual_builder_service",
     )
     dataset_registry_service: OntologyDatasetRegistry
     dataset_version_service: OntologyDatasetVersions
     runtime_service: OntologyRuntimeBoundary
+    visual_builder_service: VisualBuilderService
 
-    def apply_ontology(
+    def apply_ontology(self, yaml_path: str | Path, *, ctx: RequestContext | None = None) -> OntologyApplyResult:
+        """Apply ontology YAML from a file through the one text-apply path."""
+        return self.apply_ontology_text(Path(yaml_path).read_text(encoding="utf-8"), ctx=ctx)
+
+    def apply_ontology_text(
         self,
-        yaml_path: str | Path,
+        yaml_text: str,
         *,
         ctx: RequestContext | None = None,
     ) -> OntologyApplyResult:
+        """Apply ontology YAML supplied as text (IaC over REST) via the same path as file apply."""
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
         require_ontology_write_open(self.runtime_service, ctx, "apply_ontology", "ontology", "draft")
-        definition = self._load_ontology_definition(yaml_path)
+        require_yaml_text_within_limit(yaml_text)
+        definition = self._load_ontology_text(yaml_text)
         with self.engine.begin() as conn:
             return self._apply_loaded_ontology(conn, ctx, definition)
 
@@ -90,10 +110,14 @@ class OntologyActivationService(CoreService):
     ) -> OntologyValidationResult:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "ontology:validate", "ontology", "draft")
+        require_yaml_text_within_limit(yaml_text)
         definition = self._load_ontology_text(yaml_text)
         with self.engine.begin() as conn:
             validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
-        return ontology_validation_result(definition)
+            validate_ontology_interfaces(definition)
+            validate_ontology_functions(definition, ctx, self.visual_builder_service)
+            migration_plan = self._candidate_migration_plan(conn, ctx, definition)
+        return ontology_validation_result(definition, migration_plan)
 
     def _apply_loaded_ontology(
         self,
@@ -102,20 +126,24 @@ class OntologyActivationService(CoreService):
         definition: YamlObject,
     ) -> OntologyApplyResult:
         validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
+        validate_ontology_interfaces(definition)
+        functions = validate_ontology_functions(definition, ctx, self.visual_builder_service)
         migration_plan = self._candidate_migration_plan(conn, ctx, definition)
         migration_plan.raise_if_blocked()
         ontology_version_id, version_number = self._create_draft_version(conn, ctx)
+        import_interface_types(self.ontology_repository, conn, ctx, ontology_version_id, definition)
+        import_function_types(self.ontology_repository, conn, ctx, ontology_version_id, functions)
         object_map = self._import_object_types(conn, ctx, ontology_version_id, definition, migration_plan)
         self._import_link_types(conn, ctx, ontology_version_id, definition, object_map)
         self._import_action_types(conn, ctx, ontology_version_id, definition, object_map)
         self._validate_ontology(conn, ctx, ontology_version_id)
         self._activate_ontology_version(conn, ctx, ontology_version_id)
         self._record_ontology_activation(conn, ctx, ontology_version_id, version_number, migration_plan)
-        return {"ontology_version_id": ontology_version_id, "version_number": version_number}
-
-    def _load_ontology_definition(self, yaml_path: str | Path) -> YamlObject:
-        definition: object = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8"))
-        return yaml_object(definition, "ontology yaml")
+        return {
+            "ontology_version_id": ontology_version_id,
+            "version_number": version_number,
+            "migration_plan": migration_plan.to_payload(),
+        }
 
     def _load_ontology_text(self, yaml_text: str) -> YamlObject:
         definition: object = yaml.safe_load(yaml_text)
@@ -203,10 +231,38 @@ class OntologyActivationService(CoreService):
                 description=optional_str(item, "description"),
                 primary_key_property=required_str(item, "primaryKey"),
                 backing=object_type_backing(item),
-                config=object_type_serving_config(migration_plan, api_name),
+                config=self._object_type_config(item, migration_plan, api_name),
             ),
         )
         return object_id
+
+    def _object_type_config(
+        self,
+        item: YamlObject,
+        migration_plan: OntologyMigrationPlan,
+        api_name: str,
+    ) -> dict[str, object]:
+        # titleProperty, materialization, rowPolicies, implements, and the
+        # resolved property→datasource map ride in the existing config JSON so
+        # no schema migration is needed; they coexist with the reindex
+        # serving-contract entries.
+        config = object_type_serving_config(migration_plan, api_name)
+        title_property = optional_str(item, "titleProperty")
+        if title_property is not None:
+            config["titleProperty"] = title_property
+        materialization = object_type_materialization_config(item)
+        if materialization is not None:
+            config["materialization"] = materialization
+        row_policies = object_type_row_policies(item)
+        if row_policies:
+            config["rowPolicies"] = list(row_policies)
+        implements = object_type_implements(item)
+        if implements:
+            config["implements"] = list(implements)
+        property_datasources = yaml_property_datasources(item)
+        if property_datasources is not None:
+            config["propertyDatasources"] = property_datasources
+        return config
 
     def _import_properties_for_object_type(
         self,
@@ -344,38 +400,13 @@ class OntologyActivationService(CoreService):
         ctx: RequestContext,
         ontology_version_id: str,
     ) -> None:
-        object_rows = self.ontology_repository.object_types_for_version(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            ontology_version_id=ontology_version_id,
+        validate_persisted_ontology(
+            self.ontology_repository,
+            conn,
+            ctx,
+            ontology_version_id,
+            self._dataset_columns_for_ref,
         )
-        object_by_api = {row["api_name"]: row for row in object_rows}
-        for object_type in object_rows:
-            self._validate_ontology_object_type(conn, ctx, object_type)
-        for link in self.ontology_repository.link_types_for_version(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            ontology_version_id=ontology_version_id,
-        ):
-            columns = self._dataset_columns_for_ref(conn, ctx, link["backing"]["dataset"])
-            validate_persisted_link(link, object_by_api, columns)
-
-    def _validate_ontology_object_type(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        object_type: ObjectTypeRow,
-    ) -> None:
-        backing = object_type["backing"]
-        if not isinstance(backing, Mapping):
-            raise ValidationFailed("object backing must be a mapping")
-        columns = self._dataset_columns_for_ref(conn, ctx, str(backing["dataset"]))
-        properties = self.ontology_repository.properties_for_object_type(
-            transaction=conn,
-            object_type_id=object_type["id"],
-        )
-        actions = self.ontology_repository.actions_for_target(transaction=conn, object_type_id=object_type["id"])
-        validate_persisted_object_type(object_type, properties, actions, columns)
 
     def _dataset_columns_for_ref(
         self,

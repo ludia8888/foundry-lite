@@ -196,6 +196,249 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "ontology.apply",
+      "route": "POST /api/ontology/apply",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.apply",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology apply activates a new ontology version through ontology:activate, returns the new ontologyVersionId, versionNumber, and migrationPlan, and leaves ontology activation audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.rollback",
+      "route": "POST /api/ontology/rollback",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.rollback",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology rollback restores an archived version through the same ontology:activate activation path and returns rolled-back-from/to version numbers plus the migration plan as operator evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.resources.usage",
+      "route": "GET /api/ontology/resources/{resource_type}/{api_name}/usage",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.resources.usage",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology resource usage is a read-only governance read model (ontology:read) returning windowed action run, index run, and audit event usage evidence for one active ontology resource.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.resources.dependents",
+      "route": "GET /api/ontology/resources/{resource_type}/{api_name}/dependents",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.resources.dependents",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology resource dependents is a read-only governance read model (ontology:read) returning backing dataset, action, link, writeback, side-effect, and OSDK application dependency evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.submit",
+      "route": "POST /api/ontology/proposals",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.submit",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Ontology proposal submission requires Idempotency-Key, revalidates the submitted yaml, snapshots the migration plan at submit time, and stores tenant-scoped proposal state with audit evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.list",
+      "route": "GET /api/ontology/proposals",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal queue reads return cursor-paged tenant-scoped proposal rows with status, fingerprint, assignee, and revision evidence for the review-then-apply flow.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.get",
+      "route": "GET /api/ontology/proposals/{proposal_id}",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal detail returns yamlText, submitted migration plan, decision, execution status, and timeline evidence for one governance proposal.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.update",
+      "route": "POST /api/ontology/proposals/{proposal_id}/update",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.update",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal in-place revision is fingerprint-gated (expectedFingerprint conditional update), revalidates the new yaml, and records revision count/timeline evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.assign",
+      "route": "POST /api/ontology/proposals/{proposal_id}/assign",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.assign",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal reviewer assignment records the reviewer on the tenant-scoped proposal row and leaves assignment audit evidence for separation-of-duties review.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.decide",
+      "route": "POST /api/ontology/proposals/{proposal_id}/decide",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.decide",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal approve/reject re-validates against the current active ontology, is fingerprint-gated, enforces separation of duties (ontology:activate), and records the decision with comment evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.execute",
+      "route": "POST /api/ontology/proposals/{proposal_id}/execute",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.execute",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal execution applies an approved fingerprint-matched proposal through the same activation path as direct apply and records the applied ontology version as execution evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.proposals.withdraw",
+      "route": "POST /api/ontology/proposals/{proposal_id}/withdraw",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.proposals.withdraw",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology proposal withdrawal by its submitter records the withdrawal reason and timestamp on the proposal timeline without touching the active ontology version.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.create",
+      "route": "POST /api/ontology/branches",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Ontology branch creation requires Idempotency-Key, snapshots the active ontology version as the branch base and working copy, and replays the same open branch for the same name/creator instead of duplicating it.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.list",
+      "route": "GET /api/ontology/branches",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch list is a cursor-paged tenant-scoped read returning per-branch status, contentFingerprint, and baseStale drift against the current active ontology version.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.get",
+      "route": "GET /api/ontology/branches/{branch_id}",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch detail returns the working-copy yamlText, base snapshot baseYamlText, contentFingerprint for CAS mutations, and the baseStale drift flag.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.update",
+      "route": "POST /api/ontology/branches/{branch_id}/update",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.update",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch content update is fingerprint-gated (expectedFingerprint conditional update), size-bounded, structurally validated, and never touches the active catalog.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.diff",
+      "route": "GET /api/ontology/branches/{branch_id}/diff",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.diff",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch diff classifies every resource three ways (branch vs base vs current active), lists per-resource conflicts, and carries the merge-time migration plan for the UI.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.rebase",
+      "route": "POST /api/ontology/branches/{branch_id}/rebase",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.rebase",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch rebase re-anchors the branch on the current active ontology under an expectedFingerprint CAS guard with explicit per-resource conflict resolutions (use main|branch).",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.propose",
+      "route": "POST /api/ontology/branches/{branch_id}/propose",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.propose",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Ontology branch propose requires Idempotency-Key, enforces an up-to-date (rebased) base, submits the branch content through the existing proposal governance flow, and replays the live proposal for identical content.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "ontology.branches.abandon",
+      "route": "POST /api/ontology/branches/{branch_id}/abandon",
+      "productArea": "ontology",
+      "sdkSurface": "ontology.branches.abandon",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Ontology branch abandon terminally closes an open branch (creator or ontology:activate holder), frees its name for reuse, and replays idempotently once abandoned.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "aip.builder.validate",
       "route": "POST /api/aip/builder/validate",
       "productArea": "aip-builder",
@@ -568,6 +811,42 @@
       "sdkSurface": "objects.generic.subscribe",
       "rawRequestPolicy": "named-sdk-only",
       "operatorEvidence": "ObjectSet subscription streams send a masked snapshot, watermark, object_changed events, and out_of_date evidence through the same object query permission path.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "objects.generic.aggregate",
+      "route": "POST /api/objects/{object_type}/aggregate",
+      "productArea": "object-explorer",
+      "sdkSurface": "objects.generic.aggregate",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Server-side object aggregation returns grouped count/sum/avg/min/max metrics computed inside the object read boundary so masked or filtered rows never reach the browser.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "interfaces.generic.query",
+      "route": "POST /api/interfaces/{interface_type}/query",
+      "productArea": "object-explorer",
+      "sdkSurface": "interfaces.generic.query",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Interface-scoped polymorphic query unions every implementing object type through the same object query permission and masking path and returns one merged page.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "functions.generic.execute",
+      "route": "POST /api/functions/{function_type}/execute",
+      "productArea": "ontology",
+      "sdkSurface": "functions.generic.execute",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Registered ontology function execution runs the read/compute-only Logic DAG through ToolBroker guards and returns logicRunId, aiRunId, status, output, and resultHash run evidence.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -1937,6 +2216,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "materializations.list",
+      "route": "GET /api/materializations",
+      "productArea": "operations-console",
+      "sdkSurface": "materializations.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Materialization spec discovery lists runnable built-in plus ontology-declared specs behind materialization:run so operator screens can offer only real materialization targets.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "actions.generated.validate",
       "route": "POST /api/actions/{action_type}/validate",
       "productArea": "action-workspace",
@@ -1956,6 +2247,19 @@
       "rawRequestPolicy": "named-sdk-only",
       "requiresIdempotencyKey": true,
       "operatorEvidence": "Generated action calls include Idempotency-Key and expectedObjectVersion; action/audit/outbox rows carry durable evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "actions.generated.applyBatch",
+      "route": "POST /api/actions/{action_type}/apply-batch",
+      "productArea": "action-workspace",
+      "sdkSurface": "actions.ApproveOrder.applyBatch",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Generated batch action calls include Idempotency-Key and per-target expectedObjectVersion; the all-or-nothing multi-target mutation returns one actionRunId with per-target edit evidence.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],

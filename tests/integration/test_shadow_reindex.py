@@ -141,6 +141,9 @@ def test_full_reindex_marks_source_missing_object_deleted(foundry: FoundryLite, 
 
     foundry.datasets.upload_csv("raw.erp_orders", str(reduced_orders), ctx=ctx)
     foundry.transforms.run("clean_orders", ctx=ctx)
+    # Order is multi-datasource (union of PKs): the finance segment must also
+    # drop O-1003 before the object counts as source-missing.
+    foundry.transforms.run("clean_order_finance", ctx=ctx)
     result = foundry.objects.reindex("Order", ctx=ctx)
     after_page = foundry.objects.query("Order", ctx=ctx, limit=10)
     deleted_order = foundry.objects.get("Order", "O-1003", ctx=ctx)
@@ -223,10 +226,13 @@ def test_shadow_reindex_catches_up_delta_edits_before_switch(
 
 
 def test_index_progress_cursor_advances_only_after_bulk_upsert_commit(
-    foundry: FoundryLite, monkeypatch: pytest.MonkeyPatch
+    foundry: FoundryLite, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx = prepare_indexed_demo(foundry)
     before = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    # A changed row is required so the changelog-incremental refresh actually
+    # enters the bulk upsert path where the failure is injected.
+    _upload_orders_with_changed_amount(foundry, tmp_path, ctx, amount="1500.0")
     original_index_object_source_row = ObjectIndexRebuildService._index_object_source_row
 
     def fail_during_bulk_upsert(self, conn, ctx, plan, source):
@@ -268,7 +274,9 @@ def _approve_with_note(
     return foundry.objects.get("Order", "O-1001", ctx=ctx)
 
 
-def _reindex_with_changed_amount(foundry: FoundryLite, tmp_path: Path, ctx: RequestContext, *, amount: str) -> None:
+def _upload_orders_with_changed_amount(
+    foundry: FoundryLite, tmp_path: Path, ctx: RequestContext, *, amount: str
+) -> None:
     modified_csv = tmp_path / "orders_v2.csv"
     modified_csv.write_text(
         "order_id,customer_id,source_status,amount,margin,order_ts,region\n"
@@ -278,6 +286,10 @@ def _reindex_with_changed_amount(foundry: FoundryLite, tmp_path: Path, ctx: Requ
     )
     foundry.datasets.upload_csv("raw.erp_orders", str(modified_csv), ctx=ctx)
     foundry.transforms.run("clean_orders", ctx=ctx)
+
+
+def _reindex_with_changed_amount(foundry: FoundryLite, tmp_path: Path, ctx: RequestContext, *, amount: str) -> None:
+    _upload_orders_with_changed_amount(foundry, tmp_path, ctx, amount=amount)
     foundry.objects.reindex("Order", ctx=ctx)
 
 

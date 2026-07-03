@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 from scripts import generate_sdk_ts as sdk
+from scripts.sdk_generator.surface import contract_fingerprint
 
 
 def _type_block(source: str, type_name: str) -> str:
@@ -49,6 +52,10 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "readonly objects: typeof $Objects;" in generated
     assert "readonly actions: typeof $Actions;" in generated
     assert "export const Order = {" in generated
+    assert "  readonly titleProperty: string | null;" in generated
+    assert 'titleProperty: "orderId",' in generated
+    assert 'titleProperty: "name",' in generated
+    assert "titleProperty: string | null;" in _type_block(generated, "OntologyCatalogObject")
     assert "export const $Objects = { Order, Customer } as const;" in generated
     assert "export const OrderCustomer = {" in generated
     assert "export const $Links = { OrderCustomer } as const;" in generated
@@ -326,7 +333,12 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "connections": ["create", "list", "get", "update"],
         "resources": ["upsert", "test", "startSync"],
     }
-    assert ts_surface["ontology"] == ["catalog", "validate"]
+    assert ts_surface["ontology"] == {
+        "_self": ["catalog", "validate", "apply", "rollback"],
+        "branches": ["create", "list", "get", "update", "diff", "rebase", "propose", "abandon"],
+        "proposals": ["submit", "list", "get", "update", "assign", "decide", "execute", "withdraw"],
+        "resources": ["usage", "dependents"],
+    }
     assert ts_surface["aip"] == {
         "builder": ["validate", "run"],
         "agent": ["run"],
@@ -345,7 +357,10 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     }
     assert ts_surface["insights"] == {"reviews": ["list", "create", "get", "assign", "decide", "executeApprovedAction"]}
     objects_surface = cast(dict[str, object], ts_surface["objects"])
-    assert objects_surface["generic"] == ["get", "query", "links", "subscribe"]
+    assert objects_surface["generic"] == ["get", "query", "links", "subscribe", "aggregate"]
+    assert objects_surface["Order"] == ["get", "query", "aggregate"]
+    assert ts_surface["interfaces"] == {"generic": ["query"], "Asset": ["query"]}
+    assert ts_surface["functions"] == {"generic": ["execute"], "orderRiskSummary": ["execute"]}
     assert ts_surface["auth"] == {"osdkOAuth": ["authorize", "token", "refresh", "revoke"]}
     assert ts_surface["developerConsole"] == {
         "osdkApplications": [
@@ -373,8 +388,8 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         ],
     }
     assert ts_surface["objectSets"] == ["list", "create", "get"]
-    assert ts_surface["actions"] == {"ApproveOrder": ["apply", "validate"]}
-    assert ts_surface["materializations"] == ["run"]
+    assert ts_surface["actions"] == {"ApproveOrder": ["apply", "validate", "applyBatch"]}
+    assert ts_surface["materializations"] == ["run", "list"]
     assert ts_surface["transforms"] == ["registerSql", "run", "previewDue", "tick"]
     assert ts_surface["operations"] == {
         "admin": ["overview", "taskPlan"],
@@ -433,6 +448,126 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     ]
 
 
+def test_sdk_generator_emits_pending_route_client_methods() -> None:
+    """S65: ontology governance, aggregate, batch-apply, interface/function, and materialization list surfaces."""
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    generated = sdk.render_typescript(ontology)
+    browser_sdk = sdk.render_web_javascript(ontology)
+    surface = json.loads(sdk.render_client_surface_json(sdk.client_surface(ontology)))
+
+    # SDK_CLIENT_SURFACE registry carries every new method.
+    assert surface["ontology"]["_self"] == ["catalog", "validate", "apply", "rollback"]
+    assert surface["ontology"]["proposals"] == [
+        "submit",
+        "list",
+        "get",
+        "update",
+        "assign",
+        "decide",
+        "execute",
+        "withdraw",
+    ]
+    assert surface["ontology"]["branches"] == [
+        "create",
+        "list",
+        "get",
+        "update",
+        "diff",
+        "rebase",
+        "propose",
+        "abandon",
+    ]
+    assert surface["ontology"]["resources"] == ["usage", "dependents"]
+    assert surface["objects"]["generic"] == ["get", "query", "links", "subscribe", "aggregate"]
+    assert surface["objects"]["Order"] == ["get", "query", "aggregate"]
+    assert surface["actions"] == {"ApproveOrder": ["apply", "validate", "applyBatch"]}
+    assert surface["interfaces"] == {"generic": ["query"], "Asset": ["query"]}
+    assert surface["functions"] == {"generic": ["execute"], "orderRiskSummary": ["execute"]}
+    assert surface["materializations"] == ["run", "list"]
+
+    # TypeScript package output: typed method declarations plus request/response types.
+    ts_fragments = [
+        "apply(payload: OntologyApplyRequest): Promise<OntologyApplyResult>;",
+        "rollback(payload: OntologyRollbackRequest): Promise<OntologyRollbackResult>;",
+        "usage(resourceType: string, apiName: string, options?: OntologyResourceUsageOptions)",
+        "dependents(resourceType: string, apiName: string): Promise<OntologyResourceDependentsResult>;",
+        "submit(payload: OntologyProposalSubmitRequest, options: { idempotencyKey: string })",
+        "list(filters?: OntologyProposalListFilters): Promise<OntologyProposalListResult>;",
+        "get(proposalId: string): Promise<OntologyProposalPayload>;",
+        "update(proposalId: string, payload: OntologyProposalUpdateRequest)",
+        "assign(proposalId: string, payload: OntologyProposalAssignRequest)",
+        "decide(proposalId: string, payload: OntologyProposalDecisionRequest)",
+        "execute(proposalId: string, payload: OntologyProposalExecuteRequest)",
+        "withdraw(proposalId: string, payload?: OntologyProposalWithdrawRequest)",
+        "create(payload: OntologyBranchCreateRequest, options: { idempotencyKey: string })",
+        "list(filters?: OntologyBranchListFilters): Promise<OntologyBranchListResult>;",
+        "get(branchId: string): Promise<OntologyBranchDetailPayload>;",
+        "update(branchId: string, payload: OntologyBranchUpdateRequest): Promise<OntologyBranchPayload>;",
+        "diff(branchId: string): Promise<OntologyBranchDiffResult>;",
+        "rebase(branchId: string, payload: OntologyBranchRebaseRequest): Promise<OntologyBranchPayload>;",
+        "propose(branchId: string, payload: OntologyBranchProposeRequest, options: { idempotencyKey: string })",
+        "abandon(branchId: string): Promise<OntologyBranchPayload>;",
+        "export type OntologyBranchPayload = {",
+        "export type OntologyBranchDiffResult = {",
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.create")',
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.propose")',
+        "aggregate(objectType: string, payload: ObjectAggregateRequest): Promise<ObjectAggregationResult>;",
+        "aggregate(payload: ObjectAggregateRequest): Promise<ObjectAggregationResult>;",
+        "applyBatch(payload: ApproveOrderApplyBatchRequest, options: { idempotencyKey: string })",
+        "export type ApproveOrderApplyBatchRequest = {",
+        "export type ActionBatchApplyResponse = {",
+        "query(interfaceType: string, payload?: InterfaceQueryRequest)",
+        "query(payload?: InterfaceQueryRequest): Promise<ObjectQueryResult<GenericObject>>;",
+        "execute(functionType: string, payload?: FunctionExecuteRequest): Promise<FunctionExecutionResult>;",
+        "execute(payload?: FunctionExecuteRequest): Promise<FunctionExecutionResult>;",
+        "list(): Promise<MaterializationSpecList>;",
+        "export type OntologyProposalPayload = {",
+        "export type ObjectAggregateRequest = {",
+        "export type FunctionExecutionResult = {",
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.proposals.submit")',
+        "requireIdempotencyKey(",
+    ]
+    for fragment in ts_fragments:
+        assert fragment in generated, fragment
+    assert '"ApproveOrder.applyBatch",' in generated
+
+    # Browser output: same named methods with matching paths and header conventions.
+    web_fragments = [
+        "apply: (payload) => request(`/api/ontology/apply`, {",
+        "rollback: (payload) => request(`/api/ontology/rollback`, {",
+        "${encodeURIComponent(apiName)}/usage${suffix}`",
+        "${encodeURIComponent(apiName)}/dependents`",
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.proposals.submit")',
+        "return request(`/api/ontology/proposals${suffix}`);",
+        "get: (proposalId) => request(`/api/ontology/proposals/${encodeURIComponent(proposalId)}`)",
+        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/update`",
+        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/assign`",
+        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/decide`",
+        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/execute`",
+        "`/api/ontology/proposals/${encodeURIComponent(proposalId)}/withdraw`",
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.create")',
+        "return request(`/api/ontology/branches${suffix}`);",
+        "get: (branchId) => request(`/api/ontology/branches/${encodeURIComponent(branchId)}`)",
+        "`/api/ontology/branches/${encodeURIComponent(branchId)}/update`",
+        "diff: (branchId) => request(`/api/ontology/branches/${encodeURIComponent(branchId)}/diff`)",
+        "`/api/ontology/branches/${encodeURIComponent(branchId)}/rebase`",
+        "`/api/ontology/branches/${encodeURIComponent(branchId)}/propose`",
+        'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.propose")',
+        "`/api/ontology/branches/${encodeURIComponent(branchId)}/abandon`",
+        "`/api/objects/${encodeURIComponent(objectType)}/aggregate`",
+        "aggregate: (payload) => request(`/api/objects/Order/aggregate`, {",
+        "applyBatch: (payload, options) => request(`/api/actions/ApproveOrder/apply-batch`, {",
+        'requireIdempotencyKey(options?.idempotencyKey, "ApproveOrder.applyBatch")',
+        "`/api/interfaces/${encodeURIComponent(interfaceType)}/query`",
+        "query: (payload = {}) => request(`/api/interfaces/Asset/query`, {",
+        "`/api/functions/${encodeURIComponent(functionType)}/execute`",
+        "execute: (payload = {}) => request(`/api/functions/orderRiskSummary/execute`, {",
+        "list: () => request(`/api/materializations`)",
+    ]
+    for fragment in web_fragments:
+        assert fragment in browser_sdk, fragment
+
+
 def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
     ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
     browser_sdk = sdk.render_web_javascript(ontology)
@@ -456,6 +591,7 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
         "releases: {",
         "mediaUploadFormData(payload)",
         "export const Order = Object.freeze({",
+        'titleProperty: "orderId",',
         "export const $Objects = Object.freeze({ Order, Customer });",
         "export const OrderCustomer = Object.freeze({",
         "export const $Links = Object.freeze({ OrderCustomer });",
@@ -1057,3 +1193,124 @@ def test_generated_sdk_files_match_active_ontology() -> None:
         )
         == 0
     )
+
+
+def test_sdk_generator_emits_interface_constants() -> None:
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    generated = sdk.render_typescript(ontology)
+    browser_sdk = sdk.render_web_javascript(ontology)
+
+    assert "export type OsdkInterfaceType = {" in generated
+    assert "export const Asset = {" in generated
+    assert '  apiName: "Asset",' in generated
+    assert '  properties: ["riskScore"],' in generated
+    assert '  implementers: ["Order", "Customer"],' in generated
+    assert "export const $Interfaces = { Asset } as const;" in generated
+    assert "interfaces?: OntologyCatalogInterface[];" in _type_block(generated, "OntologyCatalog")
+    assert "implements?: string[];" in _type_block(generated, "OntologyCatalogObject")
+    assert "export const Asset = Object.freeze({" in browser_sdk
+    assert 'properties: Object.freeze(["riskScore"]),' in browser_sdk
+    assert 'implementers: Object.freeze(["Order", "Customer"]),' in browser_sdk
+    assert "export const $Interfaces = Object.freeze({ Asset });" in browser_sdk
+
+
+def test_interface_changes_the_ontology_contract_fingerprint(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    original_path = tmp_path / "original.yaml"
+    original_path.write_text(ontology_text, encoding="utf-8")
+    renamed_path = tmp_path / "renamed.yaml"
+    renamed_path.write_text(
+        ontology_text.replace("apiName: Asset", "apiName: Resource").replace(
+            "implements: [Asset]", "implements: [Resource]"
+        ),
+        "utf-8",
+    )
+
+    original = contract_fingerprint(sdk.load_ontology(original_path))
+    renamed = contract_fingerprint(sdk.load_ontology(renamed_path))
+
+    assert original != renamed
+
+
+def test_sdk_generator_rejects_dangling_or_non_conforming_implements(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    dangling_path = tmp_path / "dangling.yaml"
+    dangling_path.write_text(ontology_text.replace("implements: [Asset]", "implements: [Ghost]", 1), "utf-8")
+    with pytest.raises(ValueError, match="implements must reference a declared interface"):
+        sdk.load_ontology(dangling_path)
+
+    non_conforming_path = tmp_path / "non-conforming.yaml"
+    non_conforming_path.write_text(ontology_text.replace("apiName: riskScore", "apiName: riskiness", 1), "utf-8")
+    with pytest.raises(ValueError, match="missing riskiness"):
+        sdk.load_ontology(non_conforming_path)
+
+
+def test_title_property_changes_the_ontology_contract_fingerprint(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    original_path = tmp_path / "original.yaml"
+    original_path.write_text(ontology_text, encoding="utf-8")
+    retitled_path = tmp_path / "retitled.yaml"
+    retitled_path.write_text(ontology_text.replace("titleProperty: orderId", "titleProperty: status", 1), "utf-8")
+
+    original = contract_fingerprint(sdk.load_ontology(original_path))
+    retitled = contract_fingerprint(sdk.load_ontology(retitled_path))
+
+    assert original != retitled
+
+
+def test_sdk_generator_rejects_dangling_title_property(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    ontology_path = tmp_path / "ontology.yaml"
+    ontology_path.write_text(ontology_text.replace("titleProperty: orderId", "titleProperty: missing", 1), "utf-8")
+
+    with pytest.raises(ValueError, match="titleProperty must reference a declared property"):
+        sdk.load_ontology(ontology_path)
+
+
+def test_sdk_generator_emits_function_constants() -> None:
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    generated = sdk.render_typescript(ontology)
+    browser_sdk = sdk.render_web_javascript(ontology)
+
+    assert "export type OsdkFunctionType = {" in generated
+    assert "export const orderRiskSummary = {" in generated
+    assert '  apiName: "orderRiskSummary",' in generated
+    assert '  inputs: [{"apiName": "objectId", "type": "string", "required": true}],' in generated
+    assert '  output: "string",' in generated
+    assert "export const $Functions = { orderRiskSummary } as const;" in generated
+    assert 'functionApiNames: ["orderRiskSummary"],' in generated
+    assert "functionTypes?: OntologyCatalogFunction[];" in _type_block(generated, "OntologyCatalog")
+    assert "export const orderRiskSummary = Object.freeze({" in browser_sdk
+    assert "export const $Functions = Object.freeze({ orderRiskSummary });" in browser_sdk
+    assert 'functionApiNames: Object.freeze(["orderRiskSummary"]),' in browser_sdk
+
+
+def test_function_signature_changes_the_ontology_contract_fingerprint(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    original_path = tmp_path / "original.yaml"
+    original_path.write_text(ontology_text, encoding="utf-8")
+    renamed_path = tmp_path / "renamed.yaml"
+    renamed_path.write_text(ontology_text.replace("apiName: orderRiskSummary", "apiName: orderRiskDigest"), "utf-8")
+    retyped_input_path = tmp_path / "retyped-input.yaml"
+    retyped_input_path.write_text(
+        ontology_text.replace(
+            "- apiName: objectId\n        type: string", "- apiName: objectId\n        type: integer"
+        ),
+        "utf-8",
+    )
+
+    original = contract_fingerprint(sdk.load_ontology(original_path))
+    renamed = contract_fingerprint(sdk.load_ontology(renamed_path))
+    retyped = contract_fingerprint(sdk.load_ontology(retyped_input_path))
+
+    assert original != renamed
+    assert original != retyped
+
+
+def test_sdk_generator_rejects_invalid_function_signatures(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    missing_output_path = tmp_path / "missing-output.yaml"
+    missing_output_path.write_text(ontology_text.replace("    output:\n      type: string\n", ""), "utf-8")
+
+    with pytest.raises(ValueError, match="function output must be an object"):
+        sdk.load_ontology(missing_output_path)

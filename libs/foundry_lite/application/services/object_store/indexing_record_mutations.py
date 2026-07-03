@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from foundry_lite.application.ports import (
     IndexRunCursor,
+    IndexRunSourceRef,
     ObjectConflictRecord,
     ObjectIndexRepository,
     ObjectPropertyMap,
@@ -128,6 +129,7 @@ class ObjectIndexRecordMutationService(CoreService):
         run_id: str,
         counts: ObjectIndexRebuildCounts | ObjectIndexCdcCounts,
         cursor: IndexRunCursor | None = None,
+        source_ref_updates: IndexRunSourceRef | None = None,
     ) -> None:
         updated = self.object_index_repository.mark_index_run_succeeded(
             transaction=conn,
@@ -139,6 +141,7 @@ class ObjectIndexRecordMutationService(CoreService):
             links_upserted=counts.links_upserted,
             cursor=cursor or {"last_row": counts.rows_read},
             completed_at=_now(),
+            source_ref_updates=source_ref_updates,
         )
         if not updated:
             raise ConflictDetected("index run terminal state changed concurrently", details={"run_id": run_id})

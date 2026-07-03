@@ -13,6 +13,15 @@ class _ApplyRecorder:
         return {"actionRunId": "action_run_1"}
 
 
+class _BatchApplyRecorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def apply_action_batch(self, action_api_name: str, **kwargs: object) -> dict[str, object]:
+        self.calls.append((action_api_name, kwargs))
+        return {"actionRunId": "action_run_batch_1"}
+
+
 class _ValidationRecorder:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
@@ -37,11 +46,13 @@ class _WritebackRecorder:
 def test_action_service_forwards_to_focused_use_case_services() -> None:
     service = ActionService()
     apply = _ApplyRecorder()
+    batch_apply = _BatchApplyRecorder()
     validation = _ValidationRecorder()
     writeback = _WritebackRecorder()
     service.bind_collaborators(
         {
             "action_apply_service": apply,
+            "action_batch_apply_service": batch_apply,
             "action_validation_service": validation,
             "action_writeback_service": writeback,
         }
@@ -55,6 +66,13 @@ def test_action_service_forwards_to_focused_use_case_services() -> None:
         params={"reason": "ok"},
         idempotency_key="idem-1",
     )
+    batch_applied = service.apply_action_batch(
+        "ApproveOrder",
+        object_type="Order",
+        targets=[{"object_id": "O-1", "expected_object_version": 1}],
+        params={"reason": "ok"},
+        idempotency_key="idem-batch-1",
+    )
     validated = service.validate_action(
         "ApproveOrder",
         object_type="Order",
@@ -65,10 +83,14 @@ def test_action_service_forwards_to_focused_use_case_services() -> None:
     recovered = service.recover_action_writebacks(limit=3)
 
     assert applied == {"actionRunId": "action_run_1"}
+    assert batch_applied == {"actionRunId": "action_run_batch_1"}
     assert validated == {"valid": True}
     assert recovered == {"recovered": []}
     assert apply.calls[0][0] == "ApproveOrder"
     assert apply.calls[0][1]["idempotency_key"] == "idem-1"
+    assert batch_apply.calls[0][0] == "ApproveOrder"
+    assert batch_apply.calls[0][1]["idempotency_key"] == "idem-batch-1"
+    assert batch_apply.calls[0][1]["targets"] == [{"object_id": "O-1", "expected_object_version": 1}]
     assert validation.calls[0][0] == "ApproveOrder"
     assert writeback.calls == [("recover", (), {"limit": 3, "ctx": None})]
 

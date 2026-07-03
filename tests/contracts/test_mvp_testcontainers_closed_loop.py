@@ -24,6 +24,7 @@ def test_testcontainers_connector_snapshot_reaches_materialized_closed_loop(post
     )
     clean_orders = foundry.transforms.run("clean_orders", ctx=ctx)
     foundry.transforms.run("clean_customers", ctx=ctx)
+    clean_order_finance = foundry.transforms.run("clean_order_finance", ctx=ctx)
     foundry.ontology.apply("examples/supply-chain-demo/ontology/order-customer.yaml", ctx=ctx)
     order_index = foundry.objects.reindex("Order", ctx=ctx)
     foundry.objects.reindex("Customer", ctx=ctx)
@@ -34,6 +35,7 @@ def test_testcontainers_connector_snapshot_reaches_materialized_closed_loop(post
     assert raw_orders.row_count == 3
     assert raw_customers.row_count == 2
     assert clean_orders.row_count == 3
+    assert clean_order_finance.row_count == 3
     assert order_index["objects_upserted"] == 3
     assert action["status"] == "succeeded"
     assert action_log.row_count == 1
@@ -91,6 +93,7 @@ def _prepare_supply_chain_metadata(foundry: FoundryLite) -> RequestContext:
     foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
     foundry.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.datasets.ensure("clean.order_finance", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
     foundry.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
     foundry.demo.register_transforms(ctx)

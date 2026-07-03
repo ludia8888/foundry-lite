@@ -9,7 +9,12 @@ from typing import cast
 import anyio.to_thread
 from fastapi import APIRouter, Query, Request, WebSocket
 from fastapi.responses import StreamingResponse
-from foundry_lite.application.ports import ObjectLinkPayload, ObjectPayload, ObjectQueryResult
+from foundry_lite.application.ports import (
+    ObjectAggregationResult,
+    ObjectLinkPayload,
+    ObjectPayload,
+    ObjectQueryResult,
+)
 from foundry_lite.domain.errors import FoundryLiteError, RateLimited
 from pydantic import ValidationError
 
@@ -21,7 +26,13 @@ from foundry_lite_api.request_context import (
     _websocket_ctx,
     _websocket_origin_allowed,
 )
-from foundry_lite_api.schemas import JsonObject, ObjectQueryRequest, ObjectSubscriptionRequest
+from foundry_lite_api.schemas import (
+    InterfaceQueryRequest,
+    JsonObject,
+    ObjectAggregateRequest,
+    ObjectQueryRequest,
+    ObjectSubscriptionRequest,
+)
 from foundry_lite_api.serializers import _sse_json_events, _with_first_event
 
 router = APIRouter()
@@ -118,6 +129,39 @@ def query_objects(request: Request, object_type: str, payload: ObjectQueryReques
             limit=payload.limit,
             cursor=payload.cursor,
             search_text=payload.search_text,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/interfaces/{interface_type}/query")
+def query_interface_objects(
+    request: Request,
+    interface_type: str,
+    payload: InterfaceQueryRequest,
+) -> ObjectQueryResult:
+    """Union query across every object type implementing the interface."""
+    try:
+        return runtime.foundry.objects.query_by_interface(
+            interface_type,
+            ctx=_ctx(request),
+            filter_ast=payload.filter_ast,
+            order_by=payload.order_by,
+            limit=payload.limit,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/objects/{object_type}/aggregate")
+def aggregate_objects(request: Request, object_type: str, payload: ObjectAggregateRequest) -> ObjectAggregationResult:
+    try:
+        return runtime.foundry.objects.aggregate(
+            object_type,
+            ctx=_ctx(request),
+            filter_ast=payload.filter_ast,
+            group_by=payload.group_by,
+            select=[metric.model_dump() for metric in payload.select],
         )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc

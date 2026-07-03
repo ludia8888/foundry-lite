@@ -30,7 +30,9 @@ from foundry_lite.application.services.action_helpers import (
 )
 from foundry_lite.application.services.action_permission_guards import (
     require_action_permission,
+    require_action_target_read,
     require_failure_injection_for_command,
+    segment_mutation_denied_error,
 )
 from foundry_lite.application.services.action_protocols import ActionOsdkScopeBoundary
 from foundry_lite.application.services.action_workflow import (
@@ -44,6 +46,7 @@ from foundry_lite.application.services.action_workflow import (
 )
 from foundry_lite.application.services.action_writeback_service import ActionWritebackService
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.row_policies import visible_record
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -145,6 +148,15 @@ class ActionApplyService(CoreService):
     def _authorize_action_apply(self, ctx: RequestContext, command: ActionApplyCommand) -> None:
         require_failure_injection_for_command(self.engine, self.runtime_service, ctx, command)
         require_action_permission(self.engine, self.policy, self.runtime_service, ctx, command.action_api_name)
+        require_action_target_read(
+            self.engine,
+            self.policy,
+            self.runtime_service,
+            ctx,
+            command.action_api_name,
+            command.object_type,
+            command.object_id,
+        )
         self._require_action_scope(ctx, command.action_api_name, "execute")
         require_action_write_open(self.runtime_service, ctx, "apply", "action_type", command.action_api_name)
 
@@ -174,6 +186,10 @@ class ActionApplyService(CoreService):
                 if replay is not None:
                     return replay
                 record = self.object_records_service._object_record(conn, ctx, command.object_type, command.object_id)
+                # A target hidden by row policies becomes NotFound (record=None
+                # path) so restricted users cannot act on rows they cannot see.
+                target_type = self.ontology_service._active_object_type(conn, ctx, command.object_type)
+                record = visible_record(record, target_type, ctx.roles)
                 if record is not None and (error := action_target_record_error(action_type, record)) is not None:
                     raise error
                 outcome = self._complete_received_action_run(
@@ -236,7 +252,7 @@ class ActionApplyService(CoreService):
         record: ObjectRecordRow | None,
     ) -> ActionApplyOutcome:
         deferred_error = self._action_request_error(
-            action_type, record, command.expected_object_version, command.params
+            ctx, action_type, record, command.expected_object_version, command.params
         )
         if deferred_error is not None:
             self._fail_action_run(conn, ctx, action_run_id, deferred_error)
@@ -372,6 +388,7 @@ class ActionApplyService(CoreService):
 
     def _action_request_error(
         self,
+        ctx: RequestContext,
         action_type: ActionTypeRow,
         record: ObjectRecordRow | None,
         expected_object_version: int,
@@ -379,6 +396,11 @@ class ActionApplyService(CoreService):
     ) -> Exception | None:
         if record is None:
             return NotFound("target object not found")
+        # A caller who cannot view a mutated property's datasource segment may
+        # not edit through it (checked before request validation so the denial
+        # never leaks precondition/parameter detail).
+        if (segment_error := segment_mutation_denied_error(self.policy, ctx, action_type)) is not None:
+            return segment_error
         if record["object_version"] != expected_object_version:
             return ConflictDetected(
                 "object version conflict",

@@ -25,6 +25,7 @@ from foundry_lite.application.services.base import CoreService, build_service, c
 from foundry_lite.application.services.connector_onboarding_service import ConnectorOnboardingService
 from foundry_lite.application.services.dataset_service import DatasetServices
 from foundry_lite.application.services.demo_service import DemoService
+from foundry_lite.application.services.function_execution_service import FunctionExecutionService
 from foundry_lite.application.services.materialization_service import MaterializationService
 from foundry_lite.application.services.media_service import MediaServices
 from foundry_lite.application.services.object_service import ObjectServices
@@ -64,6 +65,7 @@ __all__ = [
     "DemoService",
     "ErasureService",
     "EvalService",
+    "FunctionExecutionService",
     "InsightReviewService",
     "DatasetServices",
     "IcebergMaintenanceService",
@@ -130,6 +132,7 @@ class CoreServices:
     demo: DemoService
     erasure: ErasureService
     evals: EvalService
+    function_execution: FunctionExecutionService
     iceberg_maintenance: IcebergMaintenanceService
     insight_review: InsightReviewService
     materialization: MaterializationService
@@ -195,6 +198,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         demo=build_service(DemoService, dependencies),
         erasure=build_service(ErasureService, dependencies),
         evals=build_service(EvalService, dependencies),
+        function_execution=build_service(FunctionExecutionService, dependencies),
         iceberg_maintenance=shared["iceberg_maintenance"],
         insight_review=shared["insight_review"],
         materialization=build_service(MaterializationService, dependencies),
@@ -246,6 +250,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.demo,
         services.erasure,
         services.evals,
+        services.function_execution,
         services.iceberg_maintenance,
         services.insight_review,
         services.materialization,
@@ -283,6 +288,7 @@ def _collaborator_map(services: CoreServices) -> dict[str, CoreService]:
 def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
     return {
         "action_apply_service": services.action.apply,
+        "action_batch_apply_service": services.action.batch_apply,
         "action_service": services.action.entrypoint,
         "action_validation_service": services.action.validation,
         "action_writeback_service": services.action.writeback,
@@ -303,6 +309,7 @@ def _primary_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "citation_service": services.citation,
         "context_compiler_service": services.context_compiler,
         "demo_service": services.demo,
+        "function_execution_service": services.function_execution,
         "iceberg_maintenance_service": services.iceberg_maintenance,
         "insight_review_service": services.insight_review,
         "logic_runtime_service": services.logic_runtime,
@@ -358,8 +365,11 @@ def _object_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "object_sets_service": services.object_store.sets,
         "object_subscription_service": services.object_store.subscriptions,
         "ontology_activation_service": services.ontology.activation,
+        "ontology_branch_service": services.ontology.branches,
         "ontology_catalog_service": services.ontology.catalog,
+        "ontology_insights_service": services.ontology.insights,
         "ontology_lookup_service": services.ontology.lookup,
+        "ontology_proposal_service": services.ontology.proposals,
         "ontology_reindex_contract_service": services.ontology.reindex_contract,
         "ontology_service": services.ontology.entrypoint,
         "osdk_application_client_service": services.osdk_applications.client,

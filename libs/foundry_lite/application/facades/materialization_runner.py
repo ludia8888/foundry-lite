@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from foundry_lite.application.ports import MaterializationReplayResult
 from foundry_lite.application.primitives import CommitResult
 from foundry_lite.application.services.materialization_service import MaterializationService
@@ -18,6 +20,9 @@ class MaterializationRunner:
 
     def run(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         return self._materialization.materialize(api_name, ctx=ctx)
+
+    def list_specs(self, *, ctx: RequestContext | None = None) -> list[Mapping[str, object]]:
+        return self._materialization.list_materialization_specs(ctx=ctx)
 
     def replay_rows(
         self, materialization_run_id: str, *, ctx: RequestContext | None = None

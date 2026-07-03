@@ -13,6 +13,7 @@ from foundry_lite.application.ports import (
     IndexRunCursor,
     IndexRunError,
     IndexRunRecord,
+    IndexRunSourceRef,
     LinkTypeRow,
     ObjectConflictRecord,
     ObjectIndexLinkRow,
@@ -25,7 +26,7 @@ from foundry_lite.application.ports import (
     ObjectRecordSourceDeletion,
     ObjectRecordSourceUpdate,
 )
-from foundry_lite.application.ports.object_index_repository import IndexRunRow
+from foundry_lite.application.ports.object_index_repository import IndexRunRow, IndexRunUsageRow
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemyObjectIndexRepository
 from sqlalchemy import create_engine, insert, select
@@ -68,6 +69,35 @@ class FakeObjectIndexRepository:
         del transaction
         self.index_runs[record.run_id] = _index_run_row(record)
 
+    def index_run_usage(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        since: str,
+    ) -> IndexRunUsageRow:
+        del transaction
+        rows = [
+            row
+            for row in self.index_runs.values()
+            if row["tenant_id"] == tenant_id
+            and row["object_type_api_name"] == object_type_api_name
+            and row["created_at"] >= since
+        ]
+        status_counts: dict[str, int] = {}
+        for row in rows:
+            status_counts[row["status"]] = status_counts.get(row["status"], 0) + 1
+        succeeded_at = [
+            row["completed_at"] for row in rows if row["status"] == "succeeded" and row["completed_at"] is not None
+        ]
+        return {
+            "status_counts": status_counts,
+            "total_runs": len(rows),
+            "last_run_at": max((row["created_at"] for row in rows), default=None),
+            "last_succeeded_at": max(succeeded_at, default=None),
+        }
+
     def active_index_version(self, *, transaction: Any, tenant_id: str, object_type_id: str) -> str:
         del transaction
         pointer = self.active_index_versions.get((tenant_id, object_type_id))
@@ -90,12 +120,17 @@ class FakeObjectIndexRepository:
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
+        source_ref_updates: IndexRunSourceRef | None = None,
     ) -> bool:
         del transaction
         if self.index_runs[run_id]["tenant_id"] != tenant_id:
             return False
         if self.index_runs[run_id]["status"] != "running":
             return False
+        if source_ref_updates:
+            merged = dict(self.index_runs[run_id]["source_ref"])
+            merged.update(source_ref_updates)
+            self.index_runs[run_id]["source_ref"] = merged
         self.index_runs[run_id].update(
             status="succeeded",
             rows_read=rows_read,
@@ -425,12 +460,19 @@ class SqlAlchemyObjectIndexHarness:
             return [dict(row) for row in rows]
 
 
-def _index_run_record(run_id: str, *, status: str = "running") -> IndexRunRecord:
+def _index_run_record(
+    run_id: str,
+    *,
+    status: str = "running",
+    tenant_id: str = "tenant-demo",
+    object_type_api_name: str = "Order",
+    created_at: str = "2026-06-10T00:00:00Z",
+) -> IndexRunRecord:
     return IndexRunRecord(
         run_id=run_id,
-        tenant_id="tenant-demo",
+        tenant_id=tenant_id,
         object_type_id="ot_order",
-        object_type_api_name="Order",
+        object_type_api_name=object_type_api_name,
         trigger_type="reindex",
         source_ref={"dataset_version_id": "dsv_orders_1"},
         status=status,
@@ -440,9 +482,9 @@ def _index_run_record(run_id: str, *, status: str = "running") -> IndexRunRecord
         objects_deleted=0,
         links_upserted=0,
         error=None,
-        started_at="2026-06-10T00:00:00Z",
+        started_at=created_at,
         completed_at=None,
-        created_at="2026-06-10T00:00:00Z",
+        created_at=created_at,
     )
 
 
@@ -742,6 +784,117 @@ def test_object_index_repository_contract_records_index_run_lifecycle(
     assert failed is not None
     assert failed["status"] == "failed"
     assert failed["error"] == {"type": "ValidationFailed"}
+
+
+def test_object_index_repository_contract_aggregates_index_run_usage(
+    harness: ObjectIndexHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.create_index_run(
+            transaction=transaction,
+            record=_index_run_record("index_run_usage_ok", created_at="2026-06-10T00:00:00Z"),
+        )
+        harness.repository.mark_index_run_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            run_id="index_run_usage_ok",
+            rows_read=1,
+            objects_upserted=1,
+            objects_deleted=0,
+            links_upserted=0,
+            cursor={"last_row": 1},
+            completed_at="2026-06-10T00:02:00Z",
+        )
+        harness.repository.create_index_run(
+            transaction=transaction,
+            record=_index_run_record("index_run_usage_failed", created_at="2026-06-11T00:00:00Z"),
+        )
+        harness.repository.mark_index_run_failed(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            run_id="index_run_usage_failed",
+            error={"type": "ValidationFailed"},
+            completed_at="2026-06-11T00:01:00Z",
+        )
+        harness.repository.create_index_run(
+            transaction=transaction,
+            record=_index_run_record("index_run_before_window", created_at="2026-05-01T00:00:00Z"),
+        )
+        harness.repository.create_index_run(
+            transaction=transaction,
+            record=_index_run_record(
+                "index_run_other_type",
+                object_type_api_name="Customer",
+                created_at="2026-06-11T00:00:01Z",
+            ),
+        )
+        harness.repository.create_index_run(
+            transaction=transaction,
+            record=_index_run_record(
+                "index_run_other_tenant",
+                tenant_id="tenant-other",
+                created_at="2026-06-11T00:00:02Z",
+            ),
+        )
+        usage = harness.repository.index_run_usage(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            since="2026-06-01T00:00:00Z",
+        )
+        empty = harness.repository.index_run_usage(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Unknown",
+            since="2026-06-01T00:00:00Z",
+        )
+
+    assert usage == {
+        "status_counts": {"succeeded": 1, "failed": 1},
+        "total_runs": 2,
+        "last_run_at": "2026-06-11T00:00:00Z",
+        "last_succeeded_at": "2026-06-10T00:02:00Z",
+    }
+    assert empty == {
+        "status_counts": {},
+        "total_runs": 0,
+        "last_run_at": None,
+        "last_succeeded_at": None,
+    }
+
+
+def test_object_index_repository_contract_merges_source_ref_updates_on_success(
+    harness: ObjectIndexHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.create_index_run(transaction=transaction, record=_index_run_record("index_run_changelog"))
+        updated = harness.repository.mark_index_run_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            run_id="index_run_changelog",
+            rows_read=3,
+            objects_upserted=1,
+            objects_deleted=1,
+            links_upserted=0,
+            cursor={"last_row": 3},
+            completed_at="2026-06-10T00:02:00Z",
+            source_ref_updates={"mode": "changelog_incremental", "changed": 1, "deleted": 1, "skipped": 1},
+        )
+
+    row = harness.index_run("index_run_changelog")
+
+    # The additive keys must merge into the stored source_ref (not replace it):
+    # replay needs dataset_version_id to survive while operators read the
+    # refresh mode and per-run counts from the same evidence surface.
+    assert updated is True
+    assert row is not None
+    assert row["source_ref"] == {
+        "dataset_version_id": "dsv_orders_1",
+        "mode": "changelog_incremental",
+        "changed": 1,
+        "deleted": 1,
+        "skipped": 1,
+    }
 
 
 def test_object_index_repository_contract_terminal_index_run_is_not_overwritten(

@@ -63,6 +63,13 @@ class ObjectSubscriptionService(CoreService):
         max_events: int | None = None,
         poll_interval_seconds: float = 1.0,
     ) -> Iterator[RuntimeJsonObject]:
+        """Stream snapshot/diff events for one object type.
+
+        Every snapshot and diff page is materialized through
+        ``query_objects``, so row policies (and masking) apply to streamed
+        events with no separate enforcement here: a restricted subscriber's
+        snapshot holds only visible rows and hidden rows never diff in.
+        """
         ctx = ctx or RequestContext()
         self.policy.require(ctx, "object:read")
         self.osdk_application_service.require_resource_scope(

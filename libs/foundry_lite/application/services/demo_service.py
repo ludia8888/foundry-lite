@@ -69,7 +69,7 @@ class DemoService(CoreService):
         self._register_demo_transforms(ctx)
 
         orders_raw, customers_raw = self._ingest_raw_demo_data(ctx)
-        clean_orders, clean_customers = self._run_clean_demo_transforms(ctx)
+        clean_orders, clean_order_finance, clean_customers = self._run_clean_demo_transforms(ctx)
         index_artifacts = self._index_demo_ontology(ctx)
         action = self._approve_demo_order(ctx)
         action_log, order_current = self._materialize_demo_outputs(ctx)
@@ -78,6 +78,7 @@ class DemoService(CoreService):
             "rawOrdersVersion": orders_raw.version_id,
             "rawCustomersVersion": customers_raw.version_id,
             "cleanOrdersVersion": clean_orders.version_id,
+            "cleanOrderFinanceVersion": clean_order_finance.version_id,
             "cleanCustomersVersion": clean_customers.version_id,
             "ontology": index_artifacts.ontology,
             "orderIndex": index_artifacts.order_index,
@@ -94,6 +95,7 @@ class DemoService(CoreService):
         self.dataset_registry_service.ensure_dataset("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
         self.dataset_registry_service.ensure_dataset("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
         self.dataset_registry_service.ensure_dataset("clean.orders", ctx=ctx, primary_key=["order_id"])
+        self.dataset_registry_service.ensure_dataset("clean.order_finance", ctx=ctx, primary_key=["order_id"])
         self.dataset_registry_service.ensure_dataset("clean.customers", ctx=ctx, primary_key=["customer_id"])
         self.dataset_registry_service.ensure_dataset("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
         self.dataset_registry_service.ensure_dataset("ops.order_current", ctx=ctx, primary_key=["orderId"])
@@ -113,10 +115,11 @@ class DemoService(CoreService):
         )
         return orders_raw, customers_raw
 
-    def _run_clean_demo_transforms(self, ctx: RequestContext) -> tuple[CommitResult, CommitResult]:
+    def _run_clean_demo_transforms(self, ctx: RequestContext) -> tuple[CommitResult, CommitResult, CommitResult]:
         clean_orders = self.transform_service.run_transform("clean_orders", ctx=ctx)
+        clean_order_finance = self.transform_service.run_transform("clean_order_finance", ctx=ctx)
         clean_customers = self.transform_service.run_transform("clean_customers", ctx=ctx)
-        return clean_orders, clean_customers
+        return clean_orders, clean_order_finance, clean_customers
 
     def _index_demo_ontology(self, ctx: RequestContext) -> DemoIndexArtifacts:
         ontology = self.ontology_service.apply_ontology(

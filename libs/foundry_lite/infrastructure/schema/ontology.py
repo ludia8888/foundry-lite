@@ -97,3 +97,59 @@ action_types = Table(
     Column("enabled", Boolean, nullable=False),
     UniqueConstraint("tenant_id", "ontology_version_id", "api_name", name="uq_action_type_api"),
 )
+
+
+interface_types = Table(
+    "interface_types",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ontology_version_id", String, nullable=False),
+    Column("api_name", String, nullable=False),
+    Column("display_name", String, nullable=False),
+    Column("definition", JSON, nullable=False),
+    UniqueConstraint("tenant_id", "ontology_version_id", "api_name", name="uq_interface_type_api"),
+)
+
+
+function_types = Table(
+    "function_types",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ontology_version_id", String, nullable=False),
+    Column("api_name", String, nullable=False),
+    Column("display_name", String, nullable=False),
+    Column("definition", JSON, nullable=False),
+    UniqueConstraint("tenant_id", "ontology_version_id", "api_name", name="uq_function_type_api"),
+)
+
+
+# Ontology branches: isolated working copies of the active ontology definition.
+# Name uniqueness applies only among OPEN branches per tenant, so it is enforced
+# by a conditional insert in the service/repository (a merged or abandoned
+# branch frees its name); the plain index below keeps that lookup cheap.
+ontology_branches = Table(
+    "ontology_branches",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("name", String, nullable=False),
+    Column("status", String, nullable=False),
+    Column("base_version_id", String, nullable=False),
+    Column("base_version_number", Integer, nullable=False),
+    Column("base_yaml_text", Text, nullable=False),
+    Column("content_yaml_text", Text, nullable=False),
+    Column("content_fingerprint", String, nullable=False),
+    Column("created_by", String, nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("rebased_at", String),
+    Column("merged_proposal_id", String),
+    Column("merged_version_number", Integer),
+)
+Index(
+    "ix_ontology_branches_tenant_name",
+    ontology_branches.c.tenant_id,
+    ontology_branches.c.name,
+)

@@ -4,6 +4,7 @@ import json
 from collections.abc import Mapping, Sequence
 from hashlib import sha256
 from pathlib import Path
+from typing import cast
 
 from foundry_lite.application.ports import RuntimeRow, TransactionContext
 from foundry_lite.application.ports.materialization_repository import (
@@ -19,12 +20,18 @@ from foundry_lite.application.services.materialization_protocols import (
     MaterializationDatasetIngest,
     MaterializationDatasetRegistry,
     MaterializationDatasetTransactions,
+    MaterializationOntologyLookup,
     MaterializationRuntimeBoundary,
     mark_materialization_run_succeeded,
 )
+from foundry_lite.application.services.materialization_specs import (
+    available_materialization_specs,
+    object_snapshot_rows,
+    resolve_materialization_spec,
+)
 from foundry_lite.application.services.materialization_types import (
-    MATERIALIZATION_SPECS,
     MaterializationRunPlan,
+    MaterializationSpec,
     supported_materialization_type,
     unsupported_materialization_type,
 )
@@ -44,11 +51,13 @@ class MaterializationService(CoreService):
         "dataset_ingest_service",
         "dataset_registry_service",
         "dataset_transaction_service",
+        "ontology_service",
         "runtime_service",
     )
     dataset_ingest_service: MaterializationDatasetIngest
     dataset_registry_service: MaterializationDatasetRegistry
     dataset_transaction_service: MaterializationDatasetTransactions
+    ontology_service: MaterializationOntologyLookup
     runtime_service: MaterializationRuntimeBoundary
 
     def materialize(
@@ -69,7 +78,7 @@ class MaterializationService(CoreService):
             watermark = self._materialization_watermark(conn, ctx, materialization)
             rows, fieldnames = self._materialization_rows(
                 conn,
-                materialization_type,
+                materialization,
                 ctx=ctx,
                 watermark=watermark,
             )
@@ -107,11 +116,16 @@ class MaterializationService(CoreService):
             )
             if materialization is None:
                 raise NotFound("materialization not found", details={"materialization_run_id": materialization_run_id})
+            # Replay reads through the same resolution as runs so re-declared
+            # specs replay against the declaration that runs use; a spec that
+            # is no longer declared replays from its stored registration.
+            resolved = resolve_materialization_spec(self.ontology_service, conn, ctx, str(run["api_name"]))
+            if resolved is not None:
+                materialization = _materialization_with_spec(materialization, resolved)
             watermark = _run_watermark(run)
-            materialization_type = supported_materialization_type(materialization["materialization_type"])
             rows, _ = self._materialization_rows(
                 conn,
-                materialization_type,
+                materialization,
                 ctx=ctx,
                 watermark=watermark,
             )
@@ -286,44 +300,63 @@ class MaterializationService(CoreService):
             adapter="compute_adapter.rows_to_parquet",
         )
 
+    def list_materialization_specs(self, *, ctx: RequestContext | None = None) -> list[Mapping[str, object]]:
+        """List runnable specs; pure permission check because reads must not write audit rows."""
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "materialization:run")
+        with self.engine.begin() as conn:
+            return list(available_materialization_specs(self.ontology_service, conn, ctx))
+
     def _ensure_materialization(
         self,
         api_name: str,
         *,
         ctx: RequestContext,
     ) -> MaterializationRow:
-        if api_name not in MATERIALIZATION_SPECS:
-            raise NotFound("materialization not found", details={"api_name": api_name})
-        spec = MATERIALIZATION_SPECS[api_name]
         with self.engine.begin() as conn:
+            spec = resolve_materialization_spec(self.ontology_service, conn, ctx, api_name)
+            if spec is None:
+                raise NotFound("materialization not found", details={"api_name": api_name})
             existing = self.materialization_repository.materialization_by_api_name(
                 transaction=conn,
                 tenant_id=ctx.tenant_id,
                 api_name=api_name,
             )
             if existing:
-                return existing
-            materialization_id = _new_id("mat")
-            self.materialization_repository.insert_materialization(
-                transaction=conn,
-                record=MaterializationRecord(
-                    materialization_id=materialization_id,
-                    tenant_id=ctx.tenant_id,
-                    api_name=api_name,
-                    materialization_type=spec.materialization_type,
-                    source_ref=spec.source,
-                    target_ref=spec.target,
-                    trigger_config={"type": "manual"},
-                    enabled=True,
-                ),
-            )
-            row = self.materialization_repository.materialization_by_id(
-                transaction=conn,
+                # A corrupted stored type must fail closed instead of being
+                # silently repaired by the resolved declaration.
+                supported_materialization_type(str(existing["materialization_type"]))
+                return _materialization_with_spec(existing, spec)
+            return self._insert_materialization(conn, ctx, api_name, spec)
+
+    def _insert_materialization(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        api_name: str,
+        spec: MaterializationSpec,
+    ) -> MaterializationRow:
+        materialization_id = _new_id("mat")
+        self.materialization_repository.insert_materialization(
+            transaction=conn,
+            record=MaterializationRecord(
                 materialization_id=materialization_id,
-            )
-            if row is None:
-                raise InvariantViolation("materialization insert failed")
-            return row
+                tenant_id=ctx.tenant_id,
+                api_name=api_name,
+                materialization_type=spec.materialization_type,
+                source_ref=spec.source,
+                target_ref=spec.target,
+                trigger_config={"type": "manual"},
+                enabled=True,
+            ),
+        )
+        row = self.materialization_repository.materialization_by_id(
+            transaction=conn,
+            materialization_id=materialization_id,
+        )
+        if row is None:
+            raise InvariantViolation("materialization insert failed")
+        return row
 
     def _materialization_watermark(
         self,
@@ -350,15 +383,23 @@ class MaterializationService(CoreService):
     def _materialization_rows(
         self,
         conn: TransactionContext,
-        materialization_type: str,
+        materialization: MaterializationRow,
         *,
         ctx: RequestContext,
         watermark: Mapping[str, object],
     ) -> tuple[Sequence[Mapping[str, object]], list[str]]:
+        materialization_type = supported_materialization_type(materialization["materialization_type"])
         if materialization_type == "action_log":
             return self._action_log_materialization_rows(conn, ctx, watermark)
         if materialization_type == "object_snapshot":
-            return self._order_current_materialization_rows(conn, ctx, watermark)
+            return object_snapshot_rows(
+                self.ontology_service,
+                self.materialization_repository,
+                conn,
+                ctx,
+                materialization,
+                watermark,
+            )
         unsupported_materialization_type(materialization_type)
 
     def _action_log_materialization_rows(
@@ -414,61 +455,20 @@ class MaterializationService(CoreService):
             return {}
         return self.policy.mask_sensitive_properties(ctx, object_type, dict(value))
 
-    def _order_current_materialization_rows(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        watermark: Mapping[str, object],
-    ) -> tuple[Sequence[Mapping[str, object]], list[str]]:
-        records = self._order_records_at_watermark(conn, ctx, watermark)
-        rows = [self._order_current_row(record) for record in records]
-        return rows, [
-            "orderId",
-            "customerId",
-            "status",
-            "operatorNote",
-            "amount",
-            "margin",
-            "riskScore",
-            "objectVersion",
-            "updatedAt",
-        ]
 
-    def _order_current_row(self, record: Mapping[str, object]) -> Mapping[str, object]:
-        props = self._row_mapping(record, "properties")
-        return {
-            "orderId": props.get("orderId"),
-            "customerId": props.get("customerId"),
-            "status": props.get("status"),
-            "operatorNote": props.get("operatorNote"),
-            "amount": props.get("amount"),
-            "margin": props.get("margin"),
-            "riskScore": props.get("riskScore"),
-            "objectVersion": record["object_version"],
-            "updatedAt": record["updated_at"],
-        }
+def _materialization_with_spec(row: MaterializationRow, spec: MaterializationSpec) -> MaterializationRow:
+    """Overlay the currently-resolved spec on the stored registration row.
 
-    def _row_mapping(self, row: Mapping[str, object], key: str) -> Mapping[str, object]:
-        value = row.get(key)
-        return value if isinstance(value, Mapping) else {}
-
-    def _order_records_at_watermark(
-        self,
-        conn: TransactionContext,
-        ctx: RequestContext,
-        watermark: Mapping[str, object],
-    ) -> Sequence[Mapping[str, object]]:
-        max_sequence = watermark.get("object_change_sequence_lte")
-        index_version = watermark.get("active_index_version")
-        if not isinstance(max_sequence, int) or not isinstance(index_version, str):
-            return []
-        return self.materialization_repository.object_records_at_watermark(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            object_type_api_name="Order",
-            index_version=index_version,
-            max_object_change_sequence=max_sequence,
-        )
+    The stored row anchors run identity and lineage; the ontology declaration
+    is the source of truth for what a run reads and writes, so a re-declared
+    target dataset or object type takes effect on the next run without
+    rewriting the registration history.
+    """
+    updated = dict(row)
+    updated["materialization_type"] = spec.materialization_type
+    updated["source_ref"] = spec.source.copy()
+    updated["target_ref"] = spec.target.copy()
+    return cast(MaterializationRow, updated)
 
 
 def _materialization_transaction_metadata(plan: MaterializationRunPlan) -> dict[str, object]:

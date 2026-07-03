@@ -147,6 +147,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ontology_sub = ontology.add_subparsers(dest="command", required=True)
     ont_apply = ontology_sub.add_parser("apply")
     ont_apply.add_argument("path")
+    ont_rollback = ontology_sub.add_parser("rollback")
+    ont_rollback.add_argument("version_number", type=int)
 
     index = sub.add_parser("index")
     index_sub = index.add_subparsers(dest="command", required=True)
@@ -175,6 +177,7 @@ def _build_parser() -> argparse.ArgumentParser:
     materialize_sub = materialize.add_subparsers(dest="command", required=True)
     mat_run = materialize_sub.add_parser("run")
     mat_run.add_argument("name")
+    materialize_sub.add_parser("list")
 
     obj = sub.add_parser("object")
     obj_sub = obj.add_subparsers(dest="command", required=True)
@@ -346,6 +349,7 @@ def _handlers() -> dict[tuple[str, str], Handler]:
         ("transform", "run"): lambda foundry, ctx, args: foundry.transforms.run(args.name, ctx=ctx),
         ("transform", "retry"): _transform_retry,
         ("ontology", "apply"): lambda foundry, ctx, args: foundry.ontology.apply(args.path, ctx=ctx),
+        ("ontology", "rollback"): lambda foundry, ctx, args: foundry.ontology.rollback(args.version_number, ctx=ctx),
         ("index", "rebuild"): lambda foundry, ctx, args: foundry.objects.reindex(args.object_type, ctx=ctx),
         ("index", "replay"): lambda foundry, ctx, args: foundry.objects.reindex(args.object_type, ctx=ctx),
         ("index", "replay-run"): lambda foundry, ctx, args: foundry.objects.replay_index_run(args.run_id, ctx=ctx),
@@ -357,6 +361,7 @@ def _handlers() -> dict[tuple[str, str], Handler]:
         ),
         ("action", "apply"): _action_apply,
         ("materialize", "run"): lambda foundry, ctx, args: foundry.materialization.run(args.name, ctx=ctx),
+        ("materialize", "list"): lambda foundry, ctx, args: foundry.materialization.list_specs(ctx=ctx),
         ("object", "get"): lambda foundry, ctx, args: foundry.objects.get(
             args.object_type,
             args.object_id,

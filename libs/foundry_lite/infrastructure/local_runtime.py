@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -22,7 +23,9 @@ from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.application.services.object_store.query_cursor import (
     require_object_query_cursor_signing_key_for_runtime,
 )
+from foundry_lite.application.services.ontology_yaml import action_allowed_roles
 from foundry_lite.application.services.runtime_run_cursors import require_operations_cursor_signing_key_for_runtime
+from foundry_lite.domain.ontology.datasources import property_datasource_rows
 from foundry_lite.infrastructure.adapters import (
     AsrProcessorAdapter,
     DuckDBComputeAdapter,
@@ -112,8 +115,10 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyModelRegistryRepository,
     SqlAlchemyOAuthSessionRepository,
     SqlAlchemyObjectIndexRepository,
+    SqlAlchemyObjectIndexRowHashRepository,
     SqlAlchemyObjectReadRepository,
     SqlAlchemyObjectSetRepository,
+    SqlAlchemyOntologyBranchRepository,
     SqlAlchemyOntologyRepository,
     SqlAlchemyOsdkApplicationRepository,
     SqlAlchemyRuntimeRepository,
@@ -122,7 +127,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyTransformRepository,
 )
 from foundry_lite.infrastructure.secrets import local_secret_vault_provider, secret_provider_from_env
-from foundry_lite.security.policy import ClassificationProvider, PolicyService
+from foundry_lite.security.policy import ActionRoleProvider, ClassificationProvider, PolicyService
 
 _RUNTIME_PROFILE_ENV = "FOUNDRY_LITE_RUNTIME_PROFILE"
 _ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV = "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY"
@@ -132,15 +137,49 @@ _SCHEMA_MUTATION_PROTECTED_PROFILES = frozenset({"production", "prod", "staging"
 def _classification_provider(
     engine: Engine, ontology_repository: SqlAlchemyOntologyRepository
 ) -> ClassificationProvider:
-    """Read the active ontology's classified properties for a tenant.
+    """Read the active ontology's classified and segment-gated properties for a tenant.
 
     Keeps the security policy ontology-driven (no hardcoded sensitive names) while
-    leaving the policy itself free of any database/vendor SDK dependency.
+    leaving the policy itself free of any database/vendor SDK dependency. Rows for
+    multi-datasource segments gated by ``requiredRole`` ride on the same provider
+    (pure derivation via domain rules), so segment masking composes with
+    classification masking without extra policy wiring.
     """
 
-    def provider(tenant_id: str) -> list[PropertyClassificationRow]:
+    def provider(tenant_id: str) -> list[Mapping[str, object]]:
         with engine.begin() as conn:
-            return ontology_repository.active_property_classifications(transaction=conn, tenant_id=tenant_id)
+            classification_rows: list[PropertyClassificationRow] = ontology_repository.active_property_classifications(
+                transaction=conn, tenant_id=tenant_id
+            )
+            datasource_rows = ontology_repository.active_property_datasource_rows(transaction=conn, tenant_id=tenant_id)
+        rows: list[Mapping[str, object]] = list(classification_rows)
+        rows.extend(property_datasource_rows(datasource_rows))
+        return rows
+
+    return provider
+
+
+def _action_role_provider(engine: Engine, ontology_repository: SqlAlchemyOntologyRepository) -> ActionRoleProvider:
+    """Read one action's declared ``permissions.allowedRoles`` from the active ontology.
+
+    Keeps action RBAC ontology-driven (YAML ``allowedRoles`` is enforced, not just
+    persisted) while the security policy stays free of database/vendor SDKs.
+    """
+
+    def provider(tenant_id: str, action_api_name: str) -> tuple[str, ...] | None:
+        with engine.begin() as conn:
+            active = ontology_repository.active_ontology_version(transaction=conn, tenant_id=tenant_id)
+            if active is None:
+                return None
+            row = ontology_repository.enabled_action_type_for_version(
+                transaction=conn,
+                tenant_id=tenant_id,
+                ontology_version_id=active["id"],
+                api_name=action_api_name,
+            )
+        if row is None:
+            return None
+        return action_allowed_roles(row["definition"])
 
     return provider
 
@@ -198,11 +237,15 @@ def create_local_core_dependencies(
         root=root,
         storage_root=object_storage_root,
         engine=engine,
-        policy=PolicyService(classification_provider=_classification_provider(engine, ontology_repository)),
+        policy=PolicyService(
+            classification_provider=_classification_provider(engine, ontology_repository),
+            action_role_provider=_action_role_provider(engine, ontology_repository),
+        ),
         action_repository=SqlAlchemyActionRepository(engine),
         ai_eval_repository=SqlAlchemyAiEvalRepository(engine),
         ai_run_repository=SqlAlchemyAiRunRepository(engine),
         ontology_repository=ontology_repository,
+        ontology_branch_repository=SqlAlchemyOntologyBranchRepository(engine),
         transform_repository=SqlAlchemyTransformRepository(engine),
         materialization_repository=SqlAlchemyMaterializationRepository(engine),
         dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),
@@ -224,6 +267,7 @@ def create_local_core_dependencies(
         dataset_version_repository=SqlAlchemyDatasetVersionRepository(engine),
         insight_review_repository=SqlAlchemyInsightReviewRepository(engine),
         object_index_repository=SqlAlchemyObjectIndexRepository(engine),
+        object_index_row_hash_repository=SqlAlchemyObjectIndexRowHashRepository(engine),
         object_read_repository=SqlAlchemyObjectReadRepository(engine),
         object_set_repository=SqlAlchemyObjectSetRepository(engine),
         osdk_application_repository=SqlAlchemyOsdkApplicationRepository(engine),

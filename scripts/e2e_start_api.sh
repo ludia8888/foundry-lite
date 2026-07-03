@@ -23,6 +23,7 @@ core.demo.seed_files()
 core.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
 core.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
 core.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+core.datasets.ensure("clean.order_finance", ctx=ctx, primary_key=["order_id"])
 core.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
 core.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
 core.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
@@ -31,6 +32,7 @@ core.demo.register_transforms(ctx)
 orders_raw = core.datasets.upload_csv("raw.erp_orders", "examples/supply-chain-demo/data/orders.csv", ctx=ctx)
 customers_raw = core.datasets.upload_csv("raw.crm_customers", "examples/supply-chain-demo/data/customers.csv", ctx=ctx)
 clean_orders = core.transforms.run("clean_orders", ctx=ctx)
+clean_order_finance = core.transforms.run("clean_order_finance", ctx=ctx)
 clean_customers = core.transforms.run("clean_customers", ctx=ctx)
 ontology = core.ontology.apply("examples/supply-chain-demo/ontology/order-customer.yaml", ctx=ctx)
 order_index = core.objects.reindex("Order", ctx=ctx)
@@ -91,6 +93,7 @@ print(
             "rawOrdersVersion": orders_raw.version_id,
             "rawCustomersVersion": customers_raw.version_id,
             "cleanOrdersVersion": clean_orders.version_id,
+            "cleanOrderFinanceVersion": clean_order_finance.version_id,
             "cleanCustomersVersion": clean_customers.version_id,
             "ontology": ontology,
             "orderIndex": order_index,

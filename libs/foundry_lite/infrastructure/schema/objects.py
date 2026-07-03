@@ -40,6 +40,23 @@ object_change_counters = Table(
 )
 
 
+# One row per currently indexed primary key (replaced on each refresh), not one
+# per dataset version: the changelog only needs "what is indexed right now" to
+# diff the next version, and a bounded table keeps the diff read cheap.
+object_index_row_hashes = Table(
+    "object_index_row_hashes",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("object_type_id", String, nullable=False),
+    Column("object_id", String, nullable=False),
+    Column("row_hash", String, nullable=False),
+    Column("dataset_version_id", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    UniqueConstraint("tenant_id", "object_type_id", "object_id", name="uq_object_index_row_hash"),
+)
+
+
 object_record_versions = Table(
     "object_record_versions",
     metadata,

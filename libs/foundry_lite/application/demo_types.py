@@ -12,6 +12,7 @@ class SupplyChainDemoResult(TypedDict):
     rawOrdersVersion: str
     rawCustomersVersion: str
     cleanOrdersVersion: str
+    cleanOrderFinanceVersion: str
     cleanCustomersVersion: str
     ontology: OntologyApplyResult
     orderIndex: ObjectIndexRebuildResult

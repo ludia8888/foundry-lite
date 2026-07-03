@@ -102,6 +102,149 @@ def warning_property_reindex(
     )
 
 
+def warning_datasource_added(object_api_name: str, datasource_name: str) -> OntologyMigrationChange:
+    """Return a warning change for adding a datasource to an object backing."""
+    return _warning(
+        "object_datasource_added",
+        f"objectTypes.{object_api_name}.backing.datasources.{datasource_name}",
+        "adding a datasource widens the object mapping and the active object index must be rebuilt",
+        has_object_reindex_requirement=True,
+    )
+
+
+def blocked_datasource_removed(object_api_name: str, datasource_name: str) -> OntologyMigrationChange:
+    """Return a blocking change for removing a datasource from an object backing."""
+    return _blocked(
+        "object_datasource_removed",
+        f"objectTypes.{object_api_name}.backing.datasources.{datasource_name}",
+        "removing a datasource silently nulls every property it backs for existing consumers",
+        True,
+    )
+
+
+def blocked_datasource_dataset_changed(
+    object_api_name: str,
+    datasource_name: str,
+    previous: str,
+    next_dataset: str,
+) -> OntologyMigrationChange:
+    """Return a blocking change for rebinding a datasource to another dataset."""
+    return _blocked(
+        "object_datasource_dataset_changed",
+        f"objectTypes.{object_api_name}.backing.datasources.{datasource_name}.dataset",
+        "changing a datasource's dataset rebinds every property of that segment and requires a migration plan",
+        True,
+        details={"previous": previous, "next": next_dataset},
+    )
+
+
+def blocked_property_datasource_moved(
+    object_api_name: str,
+    property_api_name: str,
+    previous: str,
+    next_dataset: str,
+) -> OntologyMigrationChange:
+    """Return a blocking change for moving a property between datasources."""
+    return _blocked(
+        "property_datasource_moved",
+        f"objectTypes.{object_api_name}.properties.{property_api_name}.datasource",
+        "moving a property between datasources changes which dataset and segment role feed its values",
+        True,
+        details={"previous": previous, "next": next_dataset},
+    )
+
+
+def warning_datasource_required_role_changed(
+    object_api_name: str,
+    datasource_name: str,
+    previous: str | None,
+    next_role: str | None,
+) -> OntologyMigrationChange:
+    """Return a warning change for re-scoping a datasource's required access role."""
+    return _warning(
+        "object_datasource_required_role_changed",
+        f"objectTypes.{object_api_name}.backing.datasources.{datasource_name}.requiredRole",
+        "changing a datasource requiredRole re-scopes which callers can read the segment's property values",
+        details={"previous": previous, "next": next_role},
+    )
+
+
+def warning_interface_added(api_name: str) -> OntologyMigrationChange:
+    """Return a warning change for adding a new interface type."""
+    return _warning(
+        "interface_added",
+        f"interfaces.{api_name}",
+        "adding an interface is backward-compatible but changes the polymorphic SDK surface",
+    )
+
+
+def blocked_interface_removed(api_name: str) -> OntologyMigrationChange:
+    """Return a blocking change for removing an interface type."""
+    return _blocked(
+        "interface_removed",
+        f"interfaces.{api_name}",
+        "removing an interface breaks OSDK apps that query or type against it",
+        True,
+    )
+
+
+def blocked_interface_property_removed(interface_api_name: str, api_name: str) -> OntologyMigrationChange:
+    """Return a blocking change for removing a shared property contract."""
+    return _blocked(
+        "interface_property_removed",
+        f"interfaces.{interface_api_name}.properties.{api_name}",
+        "removing an interface property breaks consumers reading it across implementing types",
+        True,
+    )
+
+
+def warning_implements_added(object_api_name: str, interface_api_name: str) -> OntologyMigrationChange:
+    """Return a warning change for an object type newly implementing an interface."""
+    return _warning(
+        "object_implements_added",
+        f"objectTypes.{object_api_name}.implements.{interface_api_name}",
+        "implementing an interface is backward-compatible but widens interface query results",
+    )
+
+
+def blocked_implements_removed(object_api_name: str, interface_api_name: str) -> OntologyMigrationChange:
+    """Return a blocking change for an object type dropping an interface it implements."""
+    return _blocked(
+        "object_implements_removed",
+        f"objectTypes.{object_api_name}.implements.{interface_api_name}",
+        "dropping an implements declaration removes the type from interface queries OSDK apps depend on",
+        True,
+    )
+
+
+def warning_function_added(api_name: str) -> OntologyMigrationChange:
+    """Return a warning change for adding a new function type."""
+    return _warning(
+        "function_added",
+        f"functionTypes.{api_name}",
+        "adding a function is backward-compatible but changes the callable SDK surface",
+    )
+
+
+def blocked_function_removed(api_name: str) -> OntologyMigrationChange:
+    """Return a blocking change for removing a function type."""
+    return _blocked(
+        "function_removed",
+        f"functionTypes.{api_name}",
+        "removing a function breaks OSDK apps and Logic callers executing it",
+        True,
+    )
+
+
+def warning_function_definition_changed(api_name: str) -> OntologyMigrationChange:
+    """Return a warning change for changing a function's persisted definition."""
+    return _warning(
+        "function_definition_changed",
+        f"functionTypes.{api_name}",
+        "changing a function definition changes execution behavior for existing callers",
+    )
+
+
 def blocked_link_removed(api_name: str) -> OntologyMigrationChange:
     """Return a blocking change for removing a link type."""
     return _blocked("link_removed", f"linkTypes.{api_name}", "removing a link type breaks graph traversal APIs", True)

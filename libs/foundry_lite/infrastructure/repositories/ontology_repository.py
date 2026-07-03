@@ -11,6 +11,10 @@ from sqlalchemy.engine import Engine
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRecord,
     ActionTypeRow,
+    FunctionTypeRecord,
+    FunctionTypeRow,
+    InterfaceTypeRecord,
+    InterfaceTypeRow,
     LinkTypeRecord,
     LinkTypeRow,
     ObjectTypeRecord,
@@ -18,6 +22,7 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyVersionRecord,
     OntologyVersionRow,
     PropertyClassificationRow,
+    PropertyDatasourceRow,
     PropertyTypeRecord,
     PropertyTypeRow,
 )
@@ -152,6 +157,99 @@ class SqlAlchemyOntologyRepository:
             )
         )
 
+    def insert_interface_type(self, *, transaction: Any, record: InterfaceTypeRecord) -> None:
+        transaction.execute(
+            insert(db.interface_types).values(
+                id=record.interface_type_id,
+                tenant_id=record.tenant_id,
+                ontology_version_id=record.ontology_version_id,
+                api_name=record.api_name,
+                display_name=record.display_name,
+                definition=record.definition,
+            )
+        )
+
+    def interface_types_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ontology_version_id: str,
+    ) -> list[InterfaceTypeRow]:
+        rows = (
+            transaction.execute(
+                select(db.interface_types)
+                .where(
+                    and_(
+                        db.interface_types.c.tenant_id == tenant_id,
+                        db.interface_types.c.ontology_version_id == ontology_version_id,
+                    )
+                )
+                .order_by(db.interface_types.c.api_name)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(InterfaceTypeRow, dict(row)) for row in rows]
+
+    def insert_function_type(self, *, transaction: Any, record: FunctionTypeRecord) -> None:
+        transaction.execute(
+            insert(db.function_types).values(
+                id=record.function_type_id,
+                tenant_id=record.tenant_id,
+                ontology_version_id=record.ontology_version_id,
+                api_name=record.api_name,
+                display_name=record.display_name,
+                definition=record.definition,
+            )
+        )
+
+    def function_types_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ontology_version_id: str,
+    ) -> list[FunctionTypeRow]:
+        rows = (
+            transaction.execute(
+                select(db.function_types)
+                .where(
+                    and_(
+                        db.function_types.c.tenant_id == tenant_id,
+                        db.function_types.c.ontology_version_id == ontology_version_id,
+                    )
+                )
+                .order_by(db.function_types.c.api_name)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(FunctionTypeRow, dict(row)) for row in rows]
+
+    def function_type_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ontology_version_id: str,
+        api_name: str,
+    ) -> FunctionTypeRow | None:
+        row = (
+            transaction.execute(
+                select(db.function_types).where(
+                    and_(
+                        db.function_types.c.tenant_id == tenant_id,
+                        db.function_types.c.ontology_version_id == ontology_version_id,
+                        db.function_types.c.api_name == api_name,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(FunctionTypeRow, dict(row)) if row else None
+
     def object_types_for_version(
         self,
         *,
@@ -237,6 +335,39 @@ class SqlAlchemyOntologyRepository:
         )
         return [cast(PropertyClassificationRow, dict(row)) for row in rows]
 
+    def active_property_datasource_rows(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+    ) -> list[PropertyDatasourceRow]:
+        rows = (
+            transaction.execute(
+                select(
+                    db.object_types.c.api_name.label("object_type_api_name"),
+                    db.property_types.c.api_name.label("property_api_name"),
+                    db.property_types.c.column_name,
+                    db.property_types.c.source,
+                    db.object_types.c.backing,
+                    db.object_types.c.config,
+                )
+                .select_from(
+                    db.property_types.join(
+                        db.object_types, db.object_types.c.id == db.property_types.c.object_type_id
+                    ).join(db.ontology_versions, db.ontology_versions.c.id == db.object_types.c.ontology_version_id)
+                )
+                .where(
+                    and_(
+                        db.property_types.c.tenant_id == tenant_id,
+                        db.ontology_versions.c.status == "active",
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(PropertyDatasourceRow, dict(row)) for row in rows]
+
     def actions_for_target(self, *, transaction: Any, object_type_id: str) -> list[ActionTypeRow]:
         rows = (
             transaction.execute(
@@ -256,6 +387,27 @@ class SqlAlchemyOntologyRepository:
                     and_(
                         db.ontology_versions.c.tenant_id == tenant_id,
                         db.ontology_versions.c.status == "active",
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(OntologyVersionRow, dict(row)) if row else None
+
+    def ontology_version_by_number(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        version_number: int,
+    ) -> OntologyVersionRow | None:
+        row = (
+            transaction.execute(
+                select(db.ontology_versions).where(
+                    and_(
+                        db.ontology_versions.c.tenant_id == tenant_id,
+                        db.ontology_versions.c.version_number == version_number,
                     )
                 )
             )

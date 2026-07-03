@@ -1621,7 +1621,7 @@ browser actions.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 160 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 185 frontend route surfaces
 -> browser SDK helper-contract proof for 25 frontend foundation helpers
 -> SDK TypeScript typecheck for package entrypoints, generated types, optional React helpers, and screen recipes
 -> `@foundry-lite/sdk/screen-recipes` importable recipe builders for core product screens

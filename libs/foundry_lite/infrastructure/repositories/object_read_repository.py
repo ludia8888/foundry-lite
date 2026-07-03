@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any, cast
 
 from sqlalchemy import Float, String, and_, asc, desc, func, literal, or_, select
 from sqlalchemy import cast as sa_cast
 from sqlalchemy.engine import Engine
 
-from foundry_lite.application.ports import ObjectLinkRow, ObjectOrderBy, ObjectQueryCursor, ObjectRecordRow
+from foundry_lite.application.ports import (
+    ObjectAggregationGroup,
+    ObjectAggregationMetric,
+    ObjectLinkRow,
+    ObjectOrderBy,
+    ObjectQueryCursor,
+    ObjectRecordRow,
+)
 from foundry_lite.infrastructure import schema as db
 
 INVALID_SQL_VALUE = object()
@@ -131,6 +138,40 @@ class SqlAlchemyObjectReadRepository:
             .all()
         )
         return [cast(ObjectRecordRow, dict(row)) for row in rows]
+
+    def aggregate_active_object_rows(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        group_by: Sequence[str],
+        metrics: Sequence[ObjectAggregationMetric],
+        group_limit: int,
+        object_type_id: str | None = None,
+        property_object_type_id: str | None = None,
+    ) -> list[ObjectAggregationGroup]:
+        """Aggregate object rows with SQL GROUP BY so rows never leave the database."""
+        property_data_types = self._property_data_types(
+            transaction,
+            tenant_id,
+            object_type_api_name,
+            property_object_type_id or object_type_id,
+        )
+        conditions = _active_object_conditions(tenant_id, object_type_api_name, object_type_id)
+        if filter_ast:
+            conditions.append(_filter_condition(filter_ast, property_data_types))
+        key_columns = [
+            _property_value_expression(name, _require_property_data_type(property_data_types, name))
+            for name in group_by
+        ]
+        metric_columns = [_metric_expression(metric) for metric in metrics]
+        query = select(*key_columns, *metric_columns).where(and_(*conditions)).limit(group_limit)
+        if key_columns:
+            query = query.group_by(*key_columns)
+        rows = transaction.execute(query).all()
+        return [_aggregation_group(tuple(row), group_by, metrics, property_data_types) for row in rows]
 
     def active_links_from(
         self,
@@ -372,6 +413,64 @@ def _number_sql_value(value: object) -> object:
         except ValueError:
             return INVALID_SQL_VALUE
     return INVALID_SQL_VALUE
+
+
+_METRIC_AGGREGATES: dict[str, Callable[[Any], Any]] = {
+    "sum": func.sum,
+    "avg": func.avg,
+    "min": func.min,
+    "max": func.max,
+}
+
+
+def _metric_expression(metric: ObjectAggregationMetric) -> Any:
+    """Build the SQL aggregate for one metric over the JSON property extraction."""
+    if metric["function"] == "count":
+        return func.count()
+    prop = db.object_records.c.properties[str(metric["property"])]
+    return _METRIC_AGGREGATES[metric["function"]](sa_cast(prop.as_float(), Float))
+
+
+def _aggregation_group(
+    row: tuple[Any, ...],
+    group_by: Sequence[str],
+    metrics: Sequence[ObjectAggregationMetric],
+    property_data_types: Mapping[str, str],
+) -> ObjectAggregationGroup:
+    key = {
+        name: _aggregation_key_value(row[index], _require_property_data_type(property_data_types, name))
+        for index, name in enumerate(group_by)
+    }
+    values: dict[str, float | int | None] = {}
+    for offset, metric in enumerate(metrics):
+        values[metric["name"]] = _aggregation_metric_value(row[len(group_by) + offset], metric["function"])
+    return {"key": key, "metrics": values}
+
+
+def _aggregation_key_value(value: object, data_type: str) -> object:
+    """Coerce SQL-extracted JSON key values back to the ontology-declared type.
+
+    The JSON extraction expressions return backend-specific scalars (SQLite may
+    hand back ints for floats, 0/1 for booleans), so the declared data_type is
+    the only stable contract for group keys.
+    """
+    if value is None:
+        return None
+    if data_type == "boolean":
+        return bool(value)
+    if data_type == "integer":
+        return int(float(cast(str | int | float, value)))
+    if _is_number_type(data_type):
+        return float(cast(str | int | float, value))
+    return str(value)
+
+
+def _aggregation_metric_value(value: object, function: str) -> float | int | None:
+    if function == "count":
+        return int(cast(int, value or 0))
+    if value is None:
+        return None
+    return float(cast(str | int | float, value))
 
 
 def _cursor_condition(sort_columns: Sequence[tuple[Any, str, str]], cursor: ObjectQueryCursor | None) -> Any | None:

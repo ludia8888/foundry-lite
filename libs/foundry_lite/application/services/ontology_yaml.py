@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from foundry_lite.application.ports.ontology_definitions import ObjectTypeDatasourceBacking
 from foundry_lite.application.ports.ontology_repository import (
     ActionMutationDefinition,
     ActionParameterDefinition,
@@ -15,9 +16,24 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyJsonObject,
     PropertyDerivation,
 )
+from foundry_lite.application.services.materialization_types import OBJECT_SNAPSHOT_MODE
 from foundry_lite.domain.errors import ValidationFailed
 
 type YamlObject = Mapping[str, object]
+
+# Ontology YAML arrives over HTTP as request-body text; bounding it keeps a
+# single oversized payload from stalling parse/validate work for everyone else.
+MAX_ONTOLOGY_YAML_BYTES = 1_048_576
+
+
+def require_yaml_text_within_limit(yaml_text: str) -> None:
+    """Reject ontology YAML text larger than the sanity bound."""
+    byte_size = len(yaml_text.encode("utf-8"))
+    if byte_size > MAX_ONTOLOGY_YAML_BYTES:
+        raise ValidationFailed(
+            "ontology yaml text exceeds size limit",
+            details={"byteSize": byte_size, "maxBytes": MAX_ONTOLOGY_YAML_BYTES},
+        )
 
 
 def yaml_object(value: object, field: str) -> dict[str, object]:
@@ -88,6 +104,8 @@ def optional_bool(container: YamlObject, key: str, is_default: bool) -> bool:
 def object_type_backing(item: YamlObject) -> ObjectTypeBacking:
     """Build an object-type backing payload from YAML."""
     backing = required_mapping(item, "backing")
+    if backing.get("datasources") is not None:
+        return _multi_datasource_backing(backing)
     payload: ObjectTypeBacking = {"dataset": required_str(backing, "dataset")}
     mode = optional_str(backing, "mode")
     if mode is not None:
@@ -100,6 +118,55 @@ def object_type_backing(item: YamlObject) -> ObjectTypeBacking:
     return payload
 
 
+def _multi_datasource_backing(backing: YamlObject) -> ObjectTypeBacking:
+    """Build a multi-datasource backing payload from YAML.
+
+    ``cdc`` is single-datasource only (there is no per-segment changelog
+    contract), and mixing top-level ``dataset``/``primaryKeyColumns`` with
+    ``datasources`` would leave two competing declarations, so both fail here
+    instead of surfacing as ambiguous behavior later.
+    """
+    if "cdc" in backing and backing["cdc"] is not None:
+        raise ValidationFailed("cdc backing requires a single-datasource object type")
+    for forbidden in ("dataset", "primaryKeyColumns"):
+        if forbidden in backing:
+            raise ValidationFailed(
+                "backing cannot mix datasources with a top-level dataset declaration",
+                details={"field": forbidden},
+            )
+    datasources = tuple(
+        _backing_datasource(entry, index) for index, entry in enumerate(mapping_sequence(backing, "datasources"))
+    )
+    if not datasources:
+        raise ValidationFailed("backing datasources must declare at least one datasource")
+    payload: ObjectTypeBacking = {"datasources": datasources}
+    mode = optional_str(backing, "mode")
+    if mode is not None:
+        payload["mode"] = mode
+    return payload
+
+
+def _backing_datasource(entry: YamlObject, index: int) -> ObjectTypeDatasourceBacking:
+    payload: ObjectTypeDatasourceBacking = {
+        "name": required_str(entry, "name"),
+        "dataset": required_str(entry, "dataset"),
+    }
+    if "primaryKeyColumns" in entry:
+        columns = string_sequence(entry["primaryKeyColumns"], f"datasources[{index}].primaryKeyColumns")
+        if len(columns) != 1:
+            raise ValidationFailed(
+                "datasource primaryKeyColumns must declare exactly one column",
+                details={"datasource": payload["name"]},
+            )
+        payload["primaryKeyColumns"] = columns
+    required_role = optional_str(entry, "requiredRole")
+    if required_role is not None:
+        if not required_role:
+            raise ValidationFailed("datasource requiredRole must be a non-empty string")
+        payload["requiredRole"] = required_role
+    return payload
+
+
 def object_type_cdc_backing(cdc: YamlObject) -> ObjectTypeCdcBacking:
     payload: ObjectTypeCdcBacking = {"dataset": required_str(cdc, "dataset")}
     if "primaryKeyColumns" in cdc:
@@ -108,6 +175,41 @@ def object_type_cdc_backing(cdc: YamlObject) -> ObjectTypeCdcBacking:
     if delete_policy is not None:
         payload["deletePolicy"] = delete_policy
     return payload
+
+
+def object_type_materialization_config(item: YamlObject) -> OntologyJsonObject | None:
+    """Build the optional per-object-type materialization declaration from YAML.
+
+    The mode is normalized to an explicit value here so persisted config never
+    depends on YAML defaults; run-time spec resolution then reads a stable
+    shape regardless of which ontology version wrote it.
+    """
+    declared = optional_mapping(item, "materialization")
+    if declared is None:
+        return None
+    return {
+        "dataset": required_str(declared, "dataset"),
+        "mode": optional_str(declared, "mode", OBJECT_SNAPSHOT_MODE) or OBJECT_SNAPSHOT_MODE,
+    }
+
+
+def object_type_row_policies(item: YamlObject) -> tuple[OntologyJsonObject, ...]:
+    """Build the optional per-object-type row policy declarations from YAML.
+
+    Each policy grants one role visibility over rows matching a query-filter
+    AST. The normalized ``{role, filter}`` shape is persisted in the object
+    type's config JSON (like titleProperty/materialization) so row security
+    needs no schema migration and survives snapshot/rollback replay.
+    """
+    policies: list[OntologyJsonObject] = []
+    for policy in mapping_sequence(item, "rowPolicies"):
+        policies.append(
+            {
+                "role": required_str(policy, "role"),
+                "filter": dict(required_mapping(policy, "filter")),
+            }
+        )
+    return tuple(policies)
 
 
 def link_type_backing(item: YamlObject) -> LinkTypeBacking:
@@ -186,10 +288,41 @@ def _copy_optional_action_fields(definition: ActionTypeDefinition, item: YamlObj
     parameters = tuple(action_parameter(parameter) for parameter in mapping_sequence(item, "parameters"))
     if parameters:
         definition["parameters"] = parameters
-    permissions = optional_mapping(item, "permissions")
+    permissions = action_permissions(item)
     if permissions is not None:
         definition["permissions"] = permissions
     _copy_sequence_fields(definition, item)
+
+
+def action_permissions(item: YamlObject) -> OntologyJsonObject | None:
+    """Validate the optional action permissions block before it is persisted.
+
+    ``allowedRoles`` drives runtime RBAC (see ``PolicyService``), so a malformed
+    declaration must fail activation instead of surfacing later as an
+    unenforceable permission.
+    """
+    permissions = optional_mapping(item, "permissions")
+    if permissions is None:
+        return None
+    if permissions.get("allowedRoles") is not None:
+        string_sequence(permissions["allowedRoles"], "permissions.allowedRoles")
+    return permissions
+
+
+def action_allowed_roles(definition: Mapping[str, object]) -> tuple[str, ...] | None:
+    """Return ``permissions.allowedRoles`` from a persisted action definition.
+
+    ``None`` means the definition declares no role restriction, so the policy
+    falls back to its static permission map; a malformed persisted value raises
+    the same typed error as YAML ingestion (fail closed, never silently open).
+    """
+    permissions = definition.get("permissions")
+    if not isinstance(permissions, Mapping):
+        return None
+    value = permissions.get("allowedRoles")
+    if value is None:
+        return None
+    return string_sequence(value, "permissions.allowedRoles")
 
 
 def _copy_sequence_fields(definition: ActionTypeDefinition, item: YamlObject) -> None:

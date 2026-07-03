@@ -2,13 +2,81 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import NotRequired, Protocol, TypedDict
+from typing import Protocol, TypedDict
 
+from foundry_lite.application.ports.ontology_definitions import (
+    ActionMutationDefinition as ActionMutationDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    ActionParameterDefinition as ActionParameterDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    ActionParameterSchema as ActionParameterSchema,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    ActionTypeDefinition as ActionTypeDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    FunctionInputDefinition as FunctionInputDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    FunctionOutputDefinition as FunctionOutputDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    FunctionTypeDefinition as FunctionTypeDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    InterfacePropertyDefinition as InterfacePropertyDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    InterfaceTypeDefinition as InterfaceTypeDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    LinkTypeBacking as LinkTypeBacking,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    ObjectTypeBacking as ObjectTypeBacking,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    ObjectTypeCdcBacking as ObjectTypeCdcBacking,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    ObjectTypeDatasourceBacking as ObjectTypeDatasourceBacking,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    OntologyCatalogAction as OntologyCatalogAction,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    OntologyCatalogFunction as OntologyCatalogFunction,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    OntologyCatalogInterface as OntologyCatalogInterface,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    OntologyCatalogLink as OntologyCatalogLink,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    OntologyCatalogObject as OntologyCatalogObject,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    OntologyCatalogProperty as OntologyCatalogProperty,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    OntologyCatalogResult as OntologyCatalogResult,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    OntologyJsonObject as OntologyJsonObject,
+)
+from foundry_lite.application.ports.ontology_definitions import PropertyClassificationRow as PropertyClassificationRow
+from foundry_lite.application.ports.ontology_definitions import PropertyDatasourceRow as PropertyDatasourceRow
+from foundry_lite.application.ports.ontology_definitions import (
+    PropertyDerivation as PropertyDerivation,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    RequiredActionMutationFields as RequiredActionMutationFields,
+)
 from foundry_lite.application.ports.transaction_context import TransactionContext
-
-OntologyJsonObject = Mapping[str, object]
 
 
 class OntologyApplyResult(TypedDict):
@@ -16,6 +84,17 @@ class OntologyApplyResult(TypedDict):
 
     ontology_version_id: str
     version_number: int
+    migration_plan: OntologyJsonObject
+
+
+class OntologyRollbackResult(TypedDict):
+    """Public result returned after restoring an archived ontology version as a new version."""
+
+    ontology_version_id: str
+    version_number: int
+    rolled_back_from_version_number: int | None
+    rolled_back_to_version_number: int
+    migration_plan: OntologyJsonObject
 
 
 class OntologyValidationResult(TypedDict):
@@ -25,145 +104,7 @@ class OntologyValidationResult(TypedDict):
     object_type_count: int
     link_type_count: int
     action_type_count: int
-
-
-class OntologyCatalogProperty(TypedDict):
-    """Frontend-safe property metadata for the active ontology catalog."""
-
-    apiName: str
-    displayName: str
-    dataType: str
-    nullable: bool
-    indexed: bool
-    searchable: bool
-    editable: bool
-    classification: str | None
-    source: str
-    columnName: str | None
-    editPolicy: str
-    derivation: PropertyDerivation | None
-
-
-class OntologyCatalogAction(TypedDict):
-    """Frontend-safe action metadata for the active ontology catalog."""
-
-    apiName: str
-    displayName: str
-    target: str
-    parameterSchema: ActionParameterSchema
-    definition: ActionTypeDefinition
-    enabled: bool
-
-
-class OntologyCatalogObject(TypedDict):
-    """Frontend-safe object type metadata for the active ontology catalog."""
-
-    apiName: str
-    displayName: str
-    description: str | None
-    primaryKeyProperty: str
-    backing: ObjectTypeBacking
-    properties: Sequence[OntologyCatalogProperty]
-    actions: Sequence[OntologyCatalogAction]
-    config: OntologyJsonObject
-
-
-class OntologyCatalogLink(TypedDict):
-    """Frontend-safe link type metadata for the active ontology catalog."""
-
-    apiName: str
-    displayName: str
-    fromObjectType: str
-    toObjectType: str
-    cardinality: str
-    backing: LinkTypeBacking
-
-
-class OntologyCatalogResult(TypedDict):
-    """Public read-only catalog for building object/action UI dynamically."""
-
-    ontologyVersionId: str
-    versionNumber: int
-    status: str
-    createdAt: str
-    activatedAt: str | None
-    objectTypes: Sequence[OntologyCatalogObject]
-    linkTypes: Sequence[OntologyCatalogLink]
-
-
-class ObjectTypeBacking(TypedDict):
-    """Dataset backing declaration for an ontology object type."""
-
-    dataset: str
-    mode: NotRequired[str]
-    primaryKeyColumns: NotRequired[Sequence[str]]
-    cdc: NotRequired[ObjectTypeCdcBacking]
-
-
-class ObjectTypeCdcBacking(TypedDict):
-    """Optional CDC changelog source for incremental object indexing."""
-
-    dataset: str
-    primaryKeyColumns: NotRequired[Sequence[str]]
-    deletePolicy: NotRequired[str]
-
-
-class LinkTypeBacking(TypedDict):
-    """Dataset backing declaration for an ontology link type."""
-
-    dataset: str
-    fromKey: str
-    toKey: str
-
-
-class PropertyDerivation(TypedDict, total=False):
-    """Optional derivation metadata for a property type."""
-
-    expression: str
-
-
-class ActionParameterSchema(TypedDict, total=False):
-    """JSON-schema subset used by action parameter validation."""
-
-    type: str
-    required: Sequence[str]
-    properties: OntologyJsonObject
-
-
-class ActionParameterDefinition(TypedDict):
-    """Single action parameter declaration from ontology YAML."""
-
-    apiName: str
-    type: str
-    required: NotRequired[bool]
-
-
-class RequiredActionMutationFields(TypedDict):
-    """Fields every action mutation must declare."""
-
-    type: str
-    property: str
-
-
-class ActionMutationDefinition(RequiredActionMutationFields, total=False):
-    """Single action mutation declared in ontology YAML."""
-
-    value: object
-    valueFrom: str
-
-
-class ActionTypeDefinition(TypedDict, total=False):
-    """Action definition payload persisted with an action type."""
-
-    apiName: str
-    displayName: str
-    target: str
-    parameters: Sequence[ActionParameterDefinition]
-    permissions: OntologyJsonObject
-    preconditions: Sequence[OntologyJsonObject]
-    mutations: Sequence[ActionMutationDefinition]
-    writebacks: Sequence[OntologyJsonObject]
-    sideEffects: Sequence[OntologyJsonObject]
+    migration_plan: OntologyJsonObject
 
 
 class OntologyVersionRow(TypedDict):
@@ -212,15 +153,6 @@ class PropertyTypeRow(TypedDict):
     derivation: PropertyDerivation | None
 
 
-class PropertyClassificationRow(TypedDict):
-    """One classified property of the active ontology (security source of truth)."""
-
-    object_type_api_name: str
-    property_api_name: str
-    column_name: str | None
-    classification: str | None
-
-
 class LinkTypeRow(TypedDict):
     """Persisted ontology link type row."""
 
@@ -250,6 +182,28 @@ class ActionTypeRow(TypedDict):
     parameter_schema: ActionParameterSchema
     definition: ActionTypeDefinition
     enabled: bool
+
+
+class InterfaceTypeRow(TypedDict):
+    """Persisted ontology interface type row."""
+
+    id: str
+    tenant_id: str
+    ontology_version_id: str
+    api_name: str
+    display_name: str
+    definition: InterfaceTypeDefinition
+
+
+class FunctionTypeRow(TypedDict):
+    """Persisted ontology function type row."""
+
+    id: str
+    tenant_id: str
+    ontology_version_id: str
+    api_name: str
+    display_name: str
+    definition: FunctionTypeDefinition
 
 
 @dataclass(frozen=True)
@@ -324,6 +278,26 @@ class ActionTypeRecord:
     enabled: bool
 
 
+@dataclass(frozen=True)
+class InterfaceTypeRecord:
+    interface_type_id: str
+    tenant_id: str
+    ontology_version_id: str
+    api_name: str
+    display_name: str
+    definition: InterfaceTypeDefinition
+
+
+@dataclass(frozen=True)
+class FunctionTypeRecord:
+    function_type_id: str
+    tenant_id: str
+    ontology_version_id: str
+    api_name: str
+    display_name: str
+    definition: FunctionTypeDefinition
+
+
 class OntologyRepository(Protocol):
     """DB boundary for ontology version and type metadata persistence."""
 
@@ -364,6 +338,45 @@ class OntologyRepository(Protocol):
 
     def insert_action_type(self, *, transaction: TransactionContext, record: ActionTypeRecord) -> None:
         """Persist one action type."""
+        ...
+
+    def insert_interface_type(self, *, transaction: TransactionContext, record: InterfaceTypeRecord) -> None:
+        """Persist one interface type."""
+        ...
+
+    def interface_types_for_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ontology_version_id: str,
+    ) -> list[InterfaceTypeRow]:
+        """Return interface types for an ontology version."""
+        ...
+
+    def insert_function_type(self, *, transaction: TransactionContext, record: FunctionTypeRecord) -> None:
+        """Persist one function type."""
+        ...
+
+    def function_types_for_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ontology_version_id: str,
+    ) -> list[FunctionTypeRow]:
+        """Return function types for an ontology version ordered by API name."""
+        ...
+
+    def function_type_for_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ontology_version_id: str,
+        api_name: str,
+    ) -> FunctionTypeRow | None:
+        """Return one function type in a version by API name."""
         ...
 
     def object_types_for_version(
@@ -407,8 +420,29 @@ class OntologyRepository(Protocol):
         """
         ...
 
+    def active_property_datasource_rows(
+        self, *, transaction: TransactionContext, tenant_id: str
+    ) -> list[PropertyDatasourceRow]:
+        """Active properties + object backing/config: raw rows for segment-role masking."""
+        ...
+
     def active_ontology_version(self, *, transaction: TransactionContext, tenant_id: str) -> OntologyVersionRow | None:
         """Return the active ontology version for a tenant."""
+        ...
+
+    def ontology_version_by_number(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        version_number: int,
+    ) -> OntologyVersionRow | None:
+        """Return one ontology version by its tenant-scoped version number.
+
+        Rollback addresses history by the stable version number operators see in
+        the catalog, not by internal ids, so restoring an archived version needs
+        this lookup.
+        """
         ...
 
     def object_type_for_version(

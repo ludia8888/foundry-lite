@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 
-from scripts.sdk_generator.ontology import ActionDef, LinkDef, ObjectDef, OntologyDef
+from scripts.sdk_generator.ontology import ActionDef, FunctionDef, InterfaceDef, LinkDef, ObjectDef, OntologyDef
 from scripts.sdk_generator.surface import (
     _action_alias_entries,
     _link_entries_for_object,
@@ -19,7 +20,9 @@ def _osdk_type_lines() -> list[str]:
         '  readonly kind: "object";',
         "  readonly apiName: TInstance['objectType'];",
         "  readonly primaryKey: string;",
+        "  readonly titleProperty: string | null;",
         "  readonly properties: readonly string[];",
+        "  readonly propertyDatasources: Readonly<Record<string, string>>;",
         "  readonly __instance?: TInstance;",
         "};",
         "export type OsdkActionType<TPayload = unknown, TResult = ActionApplyResponse> = {",
@@ -41,6 +44,23 @@ def _osdk_type_lines() -> list[str]:
         "  readonly toAlias: string;",
         "  readonly __from?: TFrom;",
         "  readonly __to?: TTo;",
+        "};",
+        "export type OsdkInterfaceType = {",
+        '  readonly kind: "interface";',
+        "  readonly apiName: string;",
+        "  readonly properties: readonly string[];",
+        "  readonly implementers: readonly string[];",
+        "};",
+        "export type OsdkFunctionInput = {",
+        "  readonly apiName: string;",
+        "  readonly type: string;",
+        "  readonly required: boolean;",
+        "};",
+        "export type OsdkFunctionType = {",
+        '  readonly kind: "function";',
+        "  readonly apiName: string;",
+        "  readonly inputs: readonly OsdkFunctionInput[];",
+        "  readonly output: string;",
         "};",
         "export type OsdkInstanceData<TObject extends OsdkObjectType> =",
         "  TObject extends OsdkObjectType<infer TInstance> ? TInstance : never;",
@@ -262,30 +282,52 @@ def _osdk_type_lines() -> list[str]:
     ]
 
 
+def _api_names_csv(items: Sequence[ActionDef | FunctionDef | InterfaceDef | LinkDef | ObjectDef]) -> str:
+    return ", ".join(item.api_name for item in items)
+
+
+def _api_name_values_csv(items: Sequence[ActionDef | FunctionDef | InterfaceDef | LinkDef | ObjectDef]) -> str:
+    return ", ".join(json.dumps(item.api_name) for item in items)
+
+
 def _osdk_registry_lines(ontology: OntologyDef) -> list[str]:
     lines: list[str] = []
     for object_def in ontology.objects:
         lines.extend(_osdk_object_constant_lines(object_def))
-    object_names = ", ".join(item.api_name for item in ontology.objects)
-    object_name_values = ", ".join(json.dumps(item.api_name) for item in ontology.objects)
+    object_names = _api_names_csv(ontology.objects)
+    object_name_values = _api_name_values_csv(ontology.objects)
     lines.append(f"export const $Objects = {{ {object_names} }} as const;")
+    for interface_def in ontology.interfaces:
+        lines.extend(_osdk_interface_constant_lines(interface_def))
+    interface_names = _api_names_csv(ontology.interfaces)
+    interface_name_values = _api_name_values_csv(ontology.interfaces)
+    for function_def in ontology.functions:
+        lines.extend(_osdk_function_constant_lines(function_def))
+    function_names = _api_names_csv(ontology.functions)
+    function_name_values = _api_name_values_csv(ontology.functions)
     for link_def in ontology.links:
         lines.extend(_osdk_link_constant_lines(link_def))
-    link_names = ", ".join(item.api_name for item in ontology.links)
-    link_name_values = ", ".join(json.dumps(item.api_name) for item in ontology.links)
+    link_names = _api_names_csv(ontology.links)
+    link_name_values = _api_name_values_csv(ontology.links)
     for action_def in ontology.actions:
         lines.extend(_osdk_action_constant_lines(action_def))
-    action_names = ", ".join(item.api_name for item in ontology.actions)
-    action_name_values = ", ".join(json.dumps(item.api_name) for item in ontology.actions)
+    action_names = _api_names_csv(ontology.actions)
+    action_name_values = _api_name_values_csv(ontology.actions)
     lines.extend(
         [
+            f"export const $Interfaces = {{ {interface_names} }} as const;",
+            f"export const $Functions = {{ {function_names} }} as const;",
             f"export const $Links = {{ {link_names} }} as const;",
             f"export const $Actions = {{ {action_names} }} as const;",
             "export const $Ontology = {",
             "  objects: $Objects,",
+            "  interfaces: $Interfaces,",
+            "  functions: $Functions,",
             "  links: $Links,",
             "  actions: $Actions,",
             f"  objectApiNames: [{object_name_values}],",
+            f"  interfaceApiNames: [{interface_name_values}],",
+            f"  functionApiNames: [{function_name_values}],",
             f"  linkApiNames: [{link_name_values}],",
             f"  actionApiNames: [{action_name_values}],",
             "} as const;",
@@ -750,13 +792,52 @@ def _ts_ontology_index_lines() -> list[str]:
 def _osdk_object_constant_lines(object_def: ObjectDef) -> list[str]:
     property_names = ", ".join(json.dumps(prop.api_name) for prop in object_def.properties)
     primary_key = json.dumps(_primary_key_property(object_def))
+    title_property = json.dumps(object_def.title_property)
     return [
         f"export const {object_def.api_name} = {{",
         '  kind: "object",',
         f'  apiName: "{object_def.api_name}",',
         f"  primaryKey: {primary_key},",
+        f"  titleProperty: {title_property},",
         f"  properties: [{property_names}],",
+        f"  propertyDatasources: {_property_datasources_json(object_def)},",
         f"}} as const satisfies OsdkObjectType<{object_def.api_name}>;",
+    ]
+
+
+def _property_datasources_json(object_def: ObjectDef) -> str:
+    """Datasource segment per dataset-backed property (part of the SDK contract)."""
+    return json.dumps(
+        {prop.api_name: prop.datasource for prop in object_def.properties if prop.datasource is not None},
+        separators=(", ", ": "),
+    )
+
+
+def _osdk_interface_constant_lines(interface_def: InterfaceDef) -> list[str]:
+    property_names = ", ".join(json.dumps(prop.api_name) for prop in interface_def.properties)
+    implementer_names = ", ".join(json.dumps(name) for name in interface_def.implementers)
+    return [
+        f"export const {interface_def.api_name} = {{",
+        '  kind: "interface",',
+        f'  apiName: "{interface_def.api_name}",',
+        f"  properties: [{property_names}],",
+        f"  implementers: [{implementer_names}],",
+        "} as const satisfies OsdkInterfaceType;",
+    ]
+
+
+def _osdk_function_constant_lines(function_def: FunctionDef) -> list[str]:
+    inputs = ", ".join(
+        json.dumps({"apiName": item.api_name, "type": item.ts_type, "required": item.is_required})
+        for item in function_def.inputs
+    )
+    return [
+        f"export const {function_def.api_name} = {{",
+        '  kind: "function",',
+        f'  apiName: "{function_def.api_name}",',
+        f"  inputs: [{inputs}],",
+        f"  output: {json.dumps(function_def.output_ts_type)},",
+        "} as const satisfies OsdkFunctionType;",
     ]
 
 

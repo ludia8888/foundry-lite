@@ -184,6 +184,7 @@ async def _all_infra_body(
         )
         clean_orders = foundry.transforms.run("clean_orders_from_stream", ctx=ctx)
         clean_customers = foundry.transforms.run("clean_customers", ctx=ctx)
+        clean_order_finance = foundry.transforms.run("clean_order_finance_from_stream", ctx=ctx)
         foundry.ontology.apply(str(DEMO_ROOT / "ontology" / "order-customer.yaml"), ctx=ctx)
         order_index = foundry.objects.reindex("Order", ctx=ctx)
         customer_index = foundry.objects.reindex("Customer", ctx=ctx)
@@ -211,6 +212,7 @@ async def _all_infra_body(
     assert raw_orders.manifest_uri.startswith("iceberg://")
     assert clean_orders.manifest_uri.startswith("iceberg://")
     assert clean_customers.manifest_uri.startswith("iceberg://")
+    assert clean_order_finance.manifest_uri.startswith("iceberg://")
     assert action_log.manifest_uri.startswith("iceberg://")
     assert order_current.manifest_uri.startswith("iceberg://")
     assert workflow_run["status"] == "succeeded"
@@ -268,6 +270,7 @@ def _ensure_datasets(foundry: FoundryLite, ctx: RequestContext) -> None:
     foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
     foundry.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
+    foundry.datasets.ensure("clean.order_finance", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("ops.action_log", ctx=ctx, primary_key=["action_run_id"])
     foundry.datasets.ensure("ops.order_current", ctx=ctx, primary_key=["orderId"])
 
@@ -310,6 +313,28 @@ where event_type = 'erp.order.upsert'
         checks=[
             {"type": "unique", "column": "customer_id"},
             {"type": "not_null", "columns": ["customer_id"]},
+        ],
+        ctx=ctx,
+    )
+    clean_order_finance_sql = tmp_path / "clean_order_finance_from_stream.sql"
+    clean_order_finance_sql.write_text(
+        """
+select
+  order_id,
+  cast(margin as double) as margin
+from {{ input('clean.orders') }}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    foundry.transforms.register(
+        "clean_order_finance_from_stream",
+        entrypoint=clean_order_finance_sql,
+        inputs={"orders": "clean.orders"},
+        output_dataset_ref="clean.order_finance",
+        checks=[
+            {"type": "unique", "column": "order_id"},
+            {"type": "not_null", "columns": ["order_id"]},
         ],
         ctx=ctx,
     )

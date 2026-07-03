@@ -13,6 +13,7 @@ from foundry_lite.application.ports.action_repository import (
     ActionRepository,
     ActionRunRecord,
     ActionRunRow,
+    ActionRunUsageRow,
     ActionWritebackReconciliation,
     ActionWritebackRecord,
     ObjectEditRecord,
@@ -127,6 +128,36 @@ class FakeActionRepository:
                 row.update(status=transition.to_status, error=error, result=result, completed_at=completed_at)
                 return True
         return False
+
+    def action_run_usage(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        since: str,
+        action_type_api_name: str | None = None,
+        target_object_type_api_name: str | None = None,
+    ) -> ActionRunUsageRow:
+        del transaction
+        rows = [
+            row
+            for row in self.action_runs
+            if row["tenant_id"] == tenant_id
+            and row["created_at"] >= since
+            and (action_type_api_name is None or row["action_type_api_name"] == action_type_api_name)
+            and (
+                target_object_type_api_name is None or row["target_object_type_api_name"] == target_object_type_api_name
+            )
+        ]
+        status_counts: dict[str, int] = {}
+        for row in rows:
+            status_counts[row["status"]] = status_counts.get(row["status"], 0) + 1
+        return {
+            "status_counts": status_counts,
+            "total_runs": len(rows),
+            "distinct_actor_count": len({row["actor_user_id"] for row in rows}),
+            "last_run_at": max((row["created_at"] for row in rows), default=None),
+        }
 
     def insert_action_writeback(self, *, transaction: Any, record: ActionWritebackRecord) -> None:
         del transaction
@@ -268,27 +299,31 @@ def _action_run_record(
     *,
     tenant_id: str = "tenant-demo",
     action_type_id: str = "atype_approve",
+    action_type_api_name: str = "approveOrder",
     actor_user_id: str = "actor-demo",
+    target_object_type_api_name: str = "Order",
+    status: str = "received",
     idempotency_key: str = "idem-1",
     request_fingerprint: str = "fingerprint-1",
+    created_at: str = "2026-06-10T00:00:00Z",
 ) -> ActionRunRecord:
     return ActionRunRecord(
         action_run_id=run_id,
         tenant_id=tenant_id,
         action_type_id=action_type_id,
-        action_type_api_name="approveOrder",
+        action_type_api_name=action_type_api_name,
         actor_user_id=actor_user_id,
         target_object_type_id="ot_order",
-        target_object_type_api_name="Order",
+        target_object_type_api_name=target_object_type_api_name,
         target_object_id="O-1",
         expected_object_version=1,
         parameters={"status": "APPROVED"},
-        status="received",
+        status=status,
         idempotency_key=idempotency_key,
         request_fingerprint=request_fingerprint,
         result=None,
         error=None,
-        created_at="2026-06-10T00:00:00Z",
+        created_at=created_at,
         completed_at=None,
     )
 
@@ -902,6 +937,96 @@ def test_action_repository_contract_lists_unresolved_writebacks(harness: ActionH
 
     assert [row.writeback_id for row in rows] == ["wb_retryable", "wb_new", "wb_old"]
     assert {row.status for row in rows} == {"outcome_unknown", "compensation_required", "retryable"}
+
+
+def test_action_repository_contract_aggregates_action_run_usage(harness: ActionHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_action_run(
+            transaction=transaction,
+            record=_action_run_record(
+                "arun_recent_a",
+                actor_user_id="actor-a",
+                status="succeeded",
+                idempotency_key="usage-1",
+                created_at="2026-06-10T00:00:05Z",
+            ),
+        )
+        harness.repository.insert_action_run(
+            transaction=transaction,
+            record=_action_run_record(
+                "arun_recent_b",
+                actor_user_id="actor-b",
+                status="failed",
+                idempotency_key="usage-2",
+                created_at="2026-06-11T00:00:00Z",
+            ),
+        )
+        harness.repository.insert_action_run(
+            transaction=transaction,
+            record=_action_run_record(
+                "arun_before_window",
+                actor_user_id="actor-a",
+                status="succeeded",
+                idempotency_key="usage-3",
+                created_at="2026-05-01T00:00:00Z",
+            ),
+        )
+        harness.repository.insert_action_run(
+            transaction=transaction,
+            record=_action_run_record(
+                "arun_ship",
+                action_type_id="atype_ship",
+                action_type_api_name="shipOrder",
+                target_object_type_api_name="Shipment",
+                actor_user_id="actor-a",
+                status="succeeded",
+                idempotency_key="usage-4",
+                created_at="2026-06-11T00:00:01Z",
+            ),
+        )
+        harness.repository.insert_action_run(
+            transaction=transaction,
+            record=_action_run_record(
+                "arun_other_tenant",
+                tenant_id="tenant-other",
+                actor_user_id="actor-c",
+                status="succeeded",
+                idempotency_key="usage-5",
+                created_at="2026-06-11T00:00:02Z",
+            ),
+        )
+        by_action_type = harness.repository.action_run_usage(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            since="2026-06-01T00:00:00Z",
+            action_type_api_name="approveOrder",
+        )
+        by_target = harness.repository.action_run_usage(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            since="2026-06-01T00:00:00Z",
+            target_object_type_api_name="Order",
+        )
+        empty = harness.repository.action_run_usage(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            since="2026-06-01T00:00:00Z",
+            action_type_api_name="unknownAction",
+        )
+
+    assert by_action_type == {
+        "status_counts": {"succeeded": 1, "failed": 1},
+        "total_runs": 2,
+        "distinct_actor_count": 2,
+        "last_run_at": "2026-06-11T00:00:00Z",
+    }
+    assert by_target == by_action_type
+    assert empty == {
+        "status_counts": {},
+        "total_runs": 0,
+        "distinct_actor_count": 0,
+        "last_run_at": None,
+    }
 
 
 def test_action_repository_contract_updates_object_target_and_records_edit(harness: ActionHarness) -> None:

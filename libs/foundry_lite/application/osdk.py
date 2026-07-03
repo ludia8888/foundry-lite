@@ -9,8 +9,8 @@ from typing import TypedDict, cast
 from foundry_lite.application.action_types import ActionApplyResponse, ActionValidationResponse
 from foundry_lite.application.osdk_aggregation import (
     OsdkAggregateResult,
-    aggregate_items,
-    aggregate_query_order,
+    aggregate_request_select,
+    aggregate_result_from_groups,
     build_aggregate_plan,
 )
 from foundry_lite.application.osdk_protocols import OsdkHost
@@ -87,9 +87,16 @@ class OsdkObjectSet:
         return self._replace(order_by=tuple(_compile_order_by(self.object_type, order_by, properties)))
 
     def aggregate(self, request: Mapping[str, object]) -> OsdkAggregateResult:
+        """Compile the request into one server-side aggregate call (no client paging)."""
         plan = build_aggregate_plan(self.object_type.api_name, self.object_type.property_names, request)
-        order_by = aggregate_query_order(self._order_by, plan.group_by)
-        return aggregate_items(plan, self._replace(order_by=order_by).iterate(page_size=500))
+        result = self._client.objects.aggregate(
+            self.object_type.api_name,
+            ctx=self._ctx,
+            filter_ast=self._filter_ast,
+            group_by=list(plan.group_by),
+            select=aggregate_request_select(plan),
+        )
+        return aggregate_result_from_groups(plan, result)
 
     def fetch_one(self, primary_key: str, *, include_explain: bool = False) -> OsdkObject:
         payload = self._client.objects.get(

@@ -33,11 +33,18 @@ def test_ontology_definition_validation_uses_dataset_schema() -> None:
 
     validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
 
-    assert ontology_validation_result(definition) == {
+    assert ontology_validation_result(definition, OntologyMigrationPlan(None, (), ())) == {
         "status": "valid",
         "object_type_count": 1,
         "link_type_count": 0,
         "action_type_count": 1,
+        "migration_plan": {
+            "status": "compatible",
+            "consumerCompatibility": "compatible",
+            "sdkCompatibility": "compatible",
+            "changes": [],
+            "objectReindexPlan": [],
+        },
     }
 
 
@@ -239,6 +246,7 @@ def test_ontology_activation_evidence_includes_migration_plan_payload() -> None:
             "dataset_registry_service": object(),
             "dataset_version_service": object(),
             "runtime_service": runtime,
+            "visual_builder_service": object(),
         }
     )
     operation = reindex_operation("Order", ["backing"])

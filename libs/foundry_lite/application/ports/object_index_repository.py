@@ -2,58 +2,51 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
+from foundry_lite.application.ports.object_index_records import (
+    IndexRunCursor,
+    IndexRunError,
+    IndexRunRecord,
+    IndexRunSourceRef,
+    ObjectConflictRecord,
+    ObjectLinkInsert,
+    ObjectLinkSourceDeletion,
+    ObjectPropertyMap,
+    ObjectPropertyVersions,
+    ObjectRecordCdcUpdate,
+    ObjectRecordInsert,
+    ObjectRecordSourceDeletion,
+    ObjectRecordSourceUpdate,
+)
 from foundry_lite.application.ports.object_read_repository import ObjectRecordRow
 from foundry_lite.application.ports.ontology_repository import LinkTypeRow
 from foundry_lite.application.ports.transaction_context import TransactionContext
 
-ObjectPropertyMap = Mapping[str, object]
-ObjectPropertyVersions = dict[str, object]
-
-
-class IndexRunSourceRef(TypedDict, total=False):
-    """Source position captured when an object index run starts."""
-
-    dataset_version_id: str
-    replay_of_run_id: str
-    ontologyReindexKey: str
-    sourceOntologyVersionId: str
-    changedFields: list[str]
-    cdc_dataset: str
-    event_count: int
-    mode: str
-    index_version: str
-    baseline_count: int
-    baseline_hash: str
-    adapter_profile: str
-    object_id: str
-    request_id: str
-    resource_id: str
-
-
-class IndexRunCursor(TypedDict, total=False):
-    """Progress cursor captured when an object index run finishes."""
-
-    last_row: int
-    last_event_id: str | None
-    last_ordering: Mapping[str, object]
-    events_skipped: int
-    lateDataStatusCounts: Mapping[str, int]
-    lateEventIds: list[str]
-    maxEventTimeLagSeconds: int | None
-
-
-class IndexRunError(TypedDict, total=False):
-    """Normalized error payload stored on failed index runs."""
-
-    type: str
-    message: str
-    details: Mapping[str, object]
-    adapterFailure: Mapping[str, object]
-    trace: Mapping[str, str]
+__all__ = [
+    "IndexRunCursor",
+    "IndexRunError",
+    "IndexRunRecord",
+    "IndexRunSourceRef",
+    "IndexRunUsageRow",
+    "IndexRunRow",
+    "ObjectConflictRecord",
+    "ObjectIndexCdcResult",
+    "ObjectIndexLinkRow",
+    "ObjectIndexRebuildResult",
+    "ObjectIndexRepository",
+    "ObjectIndexShadowRebuildResult",
+    "ObjectIndexValidationResult",
+    "ObjectLinkInsert",
+    "ObjectLinkSourceDeletion",
+    "ObjectPropertyMap",
+    "ObjectPropertyVersions",
+    "ObjectRecordCdcUpdate",
+    "ObjectRecordInsert",
+    "ObjectRecordSourceDeletion",
+    "ObjectRecordSourceUpdate",
+    "OntologyObjectReindexResult",
+]
 
 
 class ObjectIndexLinkRow(TypedDict):
@@ -77,6 +70,19 @@ class ObjectIndexLinkRow(TypedDict):
     deleted: bool
     deletion_reason: str | None
     updated_at: str
+
+
+class IndexRunUsageRow(TypedDict):
+    """Aggregated index-run activity for one object type and usage window.
+
+    Usage read models need counts and recency, not row payloads, so the
+    aggregation lives at the port where each adapter can push it into SQL.
+    """
+
+    status_counts: dict[str, int]
+    total_runs: int
+    last_run_at: str | None
+    last_succeeded_at: str | None
 
 
 class IndexRunRow(TypedDict):
@@ -162,133 +168,6 @@ class OntologyObjectReindexResult(TypedDict):
     changedFields: list[str]
 
 
-@dataclass(frozen=True)
-class IndexRunRecord:
-    run_id: str
-    tenant_id: str
-    object_type_id: str
-    object_type_api_name: str
-    trigger_type: str
-    source_ref: IndexRunSourceRef
-    status: str
-    cursor: IndexRunCursor
-    rows_read: int
-    objects_upserted: int
-    objects_deleted: int
-    links_upserted: int
-    error: IndexRunError | None
-    started_at: str
-    completed_at: str | None
-    created_at: str
-
-
-@dataclass(frozen=True)
-class ObjectRecordInsert:
-    record_id: str
-    tenant_id: str
-    object_type_id: str
-    object_type_api_name: str
-    object_id: str
-    properties: ObjectPropertyMap
-    base_properties: ObjectPropertyMap
-    edit_properties: ObjectPropertyMap
-    property_versions: ObjectPropertyVersions
-    source_dataset_version_id: str
-    source_hash: str
-    object_version: int
-    deleted: bool
-    deletion_reason: str | None
-    created_at: str
-    updated_at: str
-    index_version: str = "active"
-    is_active: bool = True
-
-
-@dataclass(frozen=True)
-class ObjectRecordSourceUpdate:
-    record_id: str
-    tenant_id: str
-    properties: ObjectPropertyMap
-    base_properties: ObjectPropertyMap
-    source_dataset_version_id: str
-    source_hash: str
-    object_version: int
-    updated_at: str
-
-
-@dataclass(frozen=True)
-class ObjectRecordSourceDeletion:
-    record_id: str
-    tenant_id: str
-    source_dataset_version_id: str
-    object_version: int
-    deletion_reason: str
-    updated_at: str
-
-
-@dataclass(frozen=True)
-class ObjectRecordCdcUpdate:
-    record_id: str
-    tenant_id: str
-    expected_object_version: int
-    properties: ObjectPropertyMap
-    base_properties: ObjectPropertyMap
-    property_versions: ObjectPropertyVersions
-    source_dataset_version_id: str
-    source_hash: str
-    object_version: int
-    deleted: bool
-    deletion_reason: str | None
-    updated_at: str
-
-
-@dataclass(frozen=True)
-class ObjectConflictRecord:
-    conflict_id: str
-    tenant_id: str
-    object_type_id: str
-    object_id: str
-    property_api_name: str
-    source_value: object
-    edit_value: object
-    source_dataset_version_id: str
-    edit_id: str | None
-    status: str
-    created_at: str
-
-
-@dataclass(frozen=True)
-class ObjectLinkInsert:
-    link_id: str
-    tenant_id: str
-    link_type_id: str
-    link_type_api_name: str
-    from_object_type_id: str
-    from_api_name: str
-    from_object_id: str
-    to_object_type_id: str
-    to_api_name: str
-    to_object_id: str
-    properties: ObjectPropertyMap
-    source_dataset_version_id: str
-    link_version: int
-    deleted: bool
-    deletion_reason: str | None
-    updated_at: str
-    index_version: str = "active"
-    is_active: bool = True
-
-
-@dataclass(frozen=True)
-class ObjectLinkSourceDeletion:
-    link_id: str
-    tenant_id: str
-    source_dataset_version_id: str
-    link_version: int
-    deletion_reason: str
-    updated_at: str
-
-
 class ObjectIndexRepository(Protocol):
     """DB write boundary for object indexing runs, records, conflicts, and links."""
 
@@ -304,6 +183,21 @@ class ObjectIndexRepository(Protocol):
 
     def create_index_run(self, *, transaction: TransactionContext, record: IndexRunRecord) -> None:
         """Persist a running index run row."""
+        ...
+
+    def index_run_usage(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_api_name: str,
+        since: str,
+    ) -> IndexRunUsageRow:
+        """Aggregate index runs created at or after ``since`` for one object type.
+
+        Feeds the ontology object-type usage read model: run counts by status
+        plus last-run/last-success recency without loading run payloads.
+        """
         ...
 
     def active_index_version(
@@ -328,8 +222,14 @@ class ObjectIndexRepository(Protocol):
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
+        source_ref_updates: IndexRunSourceRef | None = None,
     ) -> bool:
-        """CAS a running index run into succeeded."""
+        """CAS a running index run into succeeded.
+
+        ``source_ref_updates`` merges additive keys (e.g. changelog refresh mode
+        and changed/deleted/skipped counts) into the stored ``source_ref`` inside
+        the same CAS, so operator-facing evidence lands only on the transition.
+        """
         ...
 
     def mark_index_run_failed(

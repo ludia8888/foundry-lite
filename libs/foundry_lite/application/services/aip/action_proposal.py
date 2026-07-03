@@ -15,11 +15,11 @@ from dataclasses import dataclass
 
 from foundry_lite.application.ports import ActionTypeRow, ObjectRecordRow, TransactionContext
 from foundry_lite.application.ports.ai_run_repository import AiLedgerRow
+from foundry_lite.application.services.action_protocols import ActionOntologyLookup
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.insight_review_payloads import InsightReviewProposalFields
 from foundry_lite.application.services.insight_review_service import InsightReviewService
 from foundry_lite.application.services.object_store.records import ObjectRecordsService
-from foundry_lite.application.services.ontology_service import OntologyService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import NotFound, PermissionDenied
 
@@ -76,7 +76,10 @@ class ActionProposalService(CoreService):
     required_collaborators = ("insight_review_service", "ontology_service", "object_records_service")
     insight_review_service: InsightReviewService
     object_records_service: ObjectRecordsService
-    ontology_service: OntologyService
+    # Narrow ontology boundary (not the concrete OntologyService) so aip
+    # modules never import the ontology service graph — that edge would close
+    # an import cycle through the activation service's logic validation.
+    ontology_service: ActionOntologyLookup
 
     def propose(self, ctx: RequestContext, request: ActionProposalRequest) -> ActionProposalResult:
         _validate_request(request)

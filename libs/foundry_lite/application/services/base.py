@@ -21,6 +21,7 @@ from foundry_lite.application.ports import (
     DatasetVersionRepository,
     MaterializationRepository,
     ObjectIndexRepository,
+    ObjectIndexRowHashRepository,
     ObjectReadRepository,
     ObjectSetRepository,
     OntologyRepository,
@@ -49,6 +50,7 @@ from foundry_lite.application.ports.media_repository import MediaRepository
 from foundry_lite.application.ports.media_storage import MediaStorageAdapter
 from foundry_lite.application.ports.model_registry_repository import ModelRegistryRepository
 from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
+from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
 from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
@@ -65,6 +67,7 @@ CollaboratorMap = Mapping[str, object]
 
 SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_apply_service": "ActionApplyService",
+    "action_batch_apply_service": "ActionBatchApplyService",
     "action_service": "ActionService",
     "action_validation_service": "ActionValidationService",
     "action_writeback_service": "ActionWritebackService",
@@ -96,6 +99,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "dataset_transaction_service": "DatasetTransactionService",
     "dataset_version_service": "DatasetVersionService",
     "demo_service": "DemoService",
+    "function_execution_service": "FunctionExecutionService",
     "iceberg_maintenance_service": "IcebergMaintenanceService",
     "insight_review_service": "InsightReviewService",
     "logic_runtime_service": "LogicRuntimeService",
@@ -119,8 +123,11 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "osdk_application_idempotency_service": "OsdkApplicationIdempotencyService",
     "osdk_application_scope_service": "OsdkApplicationScopeService",
     "ontology_activation_service": "OntologyActivationService",
+    "ontology_branch_service": "OntologyBranchService",
     "ontology_catalog_service": "OntologyCatalogService",
+    "ontology_insights_service": "OntologyInsightsService",
     "ontology_lookup_service": "OntologyLookupService",
+    "ontology_proposal_service": "OntologyProposalService",
     "ontology_reindex_contract_service": "OntologyReindexContractService",
     "ontology_service": "OntologyService",
     "osdk_application_service": "OsdkApplicationService",
@@ -168,6 +175,7 @@ class CoreService:
     dataset_version_repository: DatasetVersionRepository
     insight_review_repository: InsightReviewRepository
     object_index_repository: ObjectIndexRepository
+    object_index_row_hash_repository: ObjectIndexRowHashRepository
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository
     osdk_application_repository: OsdkApplicationRepository
@@ -207,6 +215,7 @@ class CoreService:
     ai_eval_repository: AiEvalRepository
     ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository
+    ontology_branch_repository: OntologyBranchRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository

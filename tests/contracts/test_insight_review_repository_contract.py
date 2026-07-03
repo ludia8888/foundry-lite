@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from foundry_lite.application.ports.insight_review_repository import (
@@ -206,6 +206,198 @@ def test_insight_review_execution_status_links_action_once() -> None:
     assert succeeded["execution_status"] == "executed"
     assert succeeded["approved_action_run_id"] == "action_run_1"
     assert late_failure is None
+
+
+def test_insight_review_execution_success_can_merge_result_metadata() -> None:
+    harness = _sqlalchemy_harness()
+    with harness.transaction() as transaction:
+        harness.repository.insert_review_or_get_existing(
+            transaction=transaction,
+            record=_record("review_1", create_key="create-1", execution_status="pending_review"),
+        )
+        harness.repository.decide_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            status="approved",
+            decision={"decision": "approved"},
+            decision_idempotency_key="decision-1",
+            updated_at="2026-06-19T00:00:01Z",
+        )
+        harness.repository.mark_execution_started(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            execution_idempotency_key="execute-1",
+            execution_request_fingerprint="sha256:execution-request",
+            proposal_fingerprint="sha256:proposal",
+            updated_at="2026-06-19T00:00:02Z",
+        )
+        succeeded = harness.repository.mark_execution_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            action_run_id="ont_1",
+            updated_at="2026-06-19T00:00:03Z",
+            metadata={"appliedOntologyVersion": {"ontologyVersionId": "ont_1", "versionNumber": 7}},
+        )
+
+    assert succeeded is not None
+    assert succeeded["approved_action_run_id"] == "ont_1"
+    assert succeeded["review_metadata"]["requestId"] == "request-1"
+    assert succeeded["review_metadata"]["appliedOntologyVersion"] == {
+        "ontologyVersionId": "ont_1",
+        "versionNumber": 7,
+    }
+
+
+def test_insight_review_withdraw_terminates_pending_and_approved_but_not_executed() -> None:
+    harness = _sqlalchemy_harness()
+    with harness.transaction() as transaction:
+        for review_id, create_key in (("review_1", "create-1"), ("review_2", "create-2"), ("review_3", "create-3")):
+            harness.repository.insert_review_or_get_existing(
+                transaction=transaction,
+                record=_record(review_id, create_key=create_key, execution_status="pending_review"),
+            )
+        for review_id, key in (("review_2", "decision-2"), ("review_3", "decision-3")):
+            harness.repository.decide_review(
+                transaction=transaction,
+                tenant_id="tenant-demo",
+                review_id=review_id,
+                status="approved",
+                decision={"decision": "approved"},
+                decision_idempotency_key=key,
+                updated_at="2026-06-19T00:00:01Z",
+            )
+        harness.repository.mark_execution_started(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_3",
+            execution_idempotency_key="execute-3",
+            execution_request_fingerprint="sha256:execution-request",
+            proposal_fingerprint="sha256:proposal",
+            updated_at="2026-06-19T00:00:02Z",
+        )
+        withdrawal = {"reason": "superseded", "withdrawnByUserId": "creator"}
+        pending_withdrawn = harness.repository.withdraw_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_1",
+            withdrawal=withdrawal,
+            updated_at="2026-06-19T00:00:03Z",
+        )
+        approved_withdrawn = harness.repository.withdraw_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_2",
+            withdrawal=withdrawal,
+            updated_at="2026-06-19T00:00:04Z",
+        )
+        executing_withdrawn = harness.repository.withdraw_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_3",
+            withdrawal=withdrawal,
+            updated_at="2026-06-19T00:00:05Z",
+        )
+
+    assert pending_withdrawn is not None
+    assert pending_withdrawn["status"] == "rejected"
+    assert pending_withdrawn["execution_status"] == "withdrawn"
+    assert pending_withdrawn["review_metadata"]["withdrawal"] == withdrawal
+    assert approved_withdrawn is not None
+    assert approved_withdrawn["execution_status"] == "withdrawn"
+    assert executing_withdrawn is None
+
+
+def test_insight_review_update_proposal_content_only_revises_live_undecided_matching_fingerprint() -> None:
+    harness = _sqlalchemy_harness()
+    with harness.transaction() as transaction:
+        for review_id, create_key in (("review_1", "create-1"), ("review_2", "create-2")):
+            harness.repository.insert_review_or_get_existing(
+                transaction=transaction,
+                record=_record(review_id, create_key=create_key, execution_status="pending_review"),
+            )
+        harness.repository.decide_review(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            review_id="review_2",
+            status="approved",
+            decision={"decision": "approved"},
+            decision_idempotency_key="decision-2",
+            updated_at="2026-06-19T00:00:01Z",
+        )
+        stale_fingerprint = _update_proposal_content(harness, transaction, "review_1", expected="sha256:other")
+        updated = _update_proposal_content(harness, transaction, "review_1", expected="sha256:proposal")
+        decided = _update_proposal_content(harness, transaction, "review_2", expected="sha256:proposal")
+
+    assert stale_fingerprint is None
+    assert decided is None
+    assert updated is not None
+    assert updated["proposal_fingerprint"] == "sha256:revised"
+    assert updated["claim_text"] == "Revised title"
+    assert updated["action_proposal"] == {"yamlText": "objectTypes: []"}
+    assert updated["review_metadata"]["requestId"] == "request-1"
+    assert updated["review_metadata"]["revision"] == {"count": 1, "lastRevisedAt": "2026-06-19T00:00:02Z"}
+
+
+def _update_proposal_content(harness: InsightReviewHarness, transaction: Any, review_id: str, *, expected: str) -> Any:
+    return harness.repository.update_proposal_content(
+        transaction=transaction,
+        tenant_id="tenant-demo",
+        review_id=review_id,
+        expected_fingerprint=expected,
+        proposal_fingerprint="sha256:revised",
+        claim_text="Revised title",
+        action_proposal={"yamlText": "objectTypes: []"},
+        revision={"count": 1, "lastRevisedAt": "2026-06-19T00:00:02Z"},
+        updated_at="2026-06-19T00:00:02Z",
+    )
+
+
+def test_insight_review_proposal_list_filters_and_keyset_pages_by_type() -> None:
+    harness = _sqlalchemy_harness()
+    with harness.transaction() as transaction:
+        harness.repository.insert_review_or_get_existing(
+            transaction=transaction,
+            record=_record("review_plain", create_key="create-plain"),
+        )
+        for index, review_id in enumerate(("review_1", "review_2", "review_3")):
+            harness.repository.insert_review_or_get_existing(
+                transaction=transaction,
+                record=_proposal_record(review_id, create_key=f"create-{index}", created_at_second=index),
+            )
+        page_one = harness.repository.list_proposal_reviews(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            proposal_type="ontology_action",
+            status="pending",
+            execution_statuses=None,
+            is_assigned=False,
+            created_before=None,
+            before_id=None,
+            limit=2,
+        )
+        page_two = harness.repository.list_proposal_reviews(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            proposal_type="ontology_action",
+            status=None,
+            execution_statuses=("pending_review",),
+            is_assigned=None,
+            created_before=page_one[-1]["created_at"],
+            before_id=page_one[-1]["id"],
+            limit=2,
+        )
+
+    assert [row["id"] for row in page_one] == ["review_3", "review_2"]
+    assert [row["id"] for row in page_two] == ["review_1"]
+
+
+def _proposal_record(review_id: str, *, create_key: str, created_at_second: int) -> InsightReviewRecord:
+    base = _record(review_id, create_key=create_key, execution_status="pending_review")
+    timestamp = f"2026-06-19T00:00:0{created_at_second}Z"
+    return replace(base, created_at=timestamp, updated_at=timestamp)
 
 
 def _sqlalchemy_harness() -> SqlAlchemyInsightReviewHarness:

@@ -2064,12 +2064,17 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     valid_ontology = Path("examples/supply-chain-demo/ontology/order-customer.yaml").read_text(encoding="utf-8")
     ontology_validation = client.post("/api/ontology/validate", headers=headers, json={"yaml": valid_ontology})
     assert ontology_validation.status_code == 200
-    assert ontology_validation.json() == {
+    ontology_validation_payload = ontology_validation.json()
+    ontology_migration_plan = ontology_validation_payload.pop("migration_plan")
+    assert ontology_validation_payload == {
         "status": "valid",
         "object_type_count": 2,
         "link_type_count": 1,
         "action_type_count": 1,
     }
+    assert ontology_migration_plan["status"] == "compatible"
+    assert ontology_migration_plan["changes"] == []
+    assert ontology_migration_plan["objectReindexPlan"] == []
     with foundry.engine.begin() as conn:
         ontology_rows = conn.execute(select(db.ontology_versions.c.status)).scalars().all()
     assert ontology_rows == ["active"]
@@ -2078,8 +2083,10 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     ontology_error = client.post("/api/ontology/validate", headers=headers, json={"yaml": invalid_ontology})
     assert ontology_error.status_code == 400
     assert ontology_error.json()["detail"]["code"] == "VALIDATION_FAILED"
-    assert ontology_error.json()["detail"]["message"] == "primary key column missing"
-    assert ontology_error.json()["detail"]["details"] == {"column": "missing_order_id"}
+    # The erp datasource pins primaryKeyColumns, so the renamed orderId column
+    # surfaces as a per-datasource property column mismatch.
+    assert ontology_error.json()["detail"]["message"] == "property column missing"
+    assert ontology_error.json()["detail"]["details"] == {"objectType": "Order", "property": "orderId"}
 
     order = client.get("/api/objects/Order/O-1001", headers=headers, params={"explain": "true"})
     assert order.status_code == 200
@@ -2099,17 +2106,20 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert source_run_detail.json()["runType"] == "index"
     assert source_run_detail.json()["runId"] == source_run["runId"]
 
+    # Order is multi-datasource: its source id is a composite of segment
+    # dataset versions, so lineage is looked up per segment (primary first).
+    primary_segment_version_id = str(order_payload["sourceDatasetVersionId"]).split("+")[0]
     lineage = client.get(
         "/api/operations/lineage",
         headers=headers,
-        params={"resourceId": order_payload["sourceDatasetVersionId"]},
+        params={"resourceId": primary_segment_version_id},
     )
     assert lineage.status_code == 200
-    assert any(row["to_resource_id"] == order_payload["sourceDatasetVersionId"] for row in lineage.json())
+    assert any(row["to_resource_id"] == primary_segment_version_id for row in lineage.json())
     viewer_lineage = client.get(
         "/api/operations/lineage",
         headers={**headers, "X-User-ID": "viewer-user", "X-Roles": "viewer"},
-        params={"resourceId": order_payload["sourceDatasetVersionId"]},
+        params={"resourceId": primary_segment_version_id},
     )
     assert viewer_lineage.status_code == 403
     assert viewer_lineage.json()["detail"]["code"] == "PERMISSION_DENIED"
@@ -2220,7 +2230,10 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert index_replay.status_code == 200
     replay = index_replay.json()
     assert replay["object_type"] == "Order"
-    assert replay["objects_upserted"] >= 1
+    # The replayed dataset version is unchanged, so the changelog-incremental
+    # refresh reads the snapshot but correctly upserts zero rows.
+    assert replay["rows_read"] >= 1
+    assert replay["objects_upserted"] == 0
     index_detail = client.get(f"/api/operations/runs/index/{replay['index_run_id']}", headers=headers)
     assert index_detail.status_code == 200
     replay_detail = index_detail.json()
@@ -3633,11 +3646,13 @@ def _prepare_demo_with_margin_action(foundry: FoundryLite, tmp_path: Path) -> Re
     foundry.datasets.ensure("raw.erp_orders", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("raw.crm_customers", ctx=ctx, primary_key=["customer_id"])
     foundry.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("clean.order_finance", ctx=ctx, primary_key=["order_id"])
     foundry.datasets.ensure("clean.customers", ctx=ctx, primary_key=["customer_id"])
     foundry.demo.register_transforms(ctx)
     foundry.datasets.upload_csv("raw.erp_orders", str(DEMO_ROOT / "data" / "orders.csv"), ctx=ctx)
     foundry.datasets.upload_csv("raw.crm_customers", str(DEMO_ROOT / "data" / "customers.csv"), ctx=ctx)
     foundry.transforms.run("clean_orders", ctx=ctx)
+    foundry.transforms.run("clean_order_finance", ctx=ctx)
     foundry.transforms.run("clean_customers", ctx=ctx)
     foundry.ontology.apply(str(ontology_path), ctx=ctx)
     foundry.objects.reindex("Order", ctx=ctx)

@@ -10,6 +10,10 @@ import pytest
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRecord,
     ActionTypeRow,
+    FunctionTypeRecord,
+    FunctionTypeRow,
+    InterfaceTypeRecord,
+    InterfaceTypeRow,
     LinkTypeRecord,
     LinkTypeRow,
     ObjectTypeRecord,
@@ -42,6 +46,10 @@ class OntologyHarness(Protocol):
 
     def action_type_rows(self) -> list[dict[str, Any]]: ...
 
+    def interface_type_rows(self) -> list[dict[str, Any]]: ...
+
+    def function_type_rows(self) -> list[dict[str, Any]]: ...
+
 
 @dataclass
 class FakeOntologyRepository:
@@ -50,6 +58,8 @@ class FakeOntologyRepository:
     property_types: list[dict[str, Any]] = field(default_factory=list)
     link_types: list[dict[str, Any]] = field(default_factory=list)
     action_types: list[dict[str, Any]] = field(default_factory=list)
+    interface_types: list[dict[str, Any]] = field(default_factory=list)
+    function_types: list[dict[str, Any]] = field(default_factory=list)
 
     def next_ontology_version_number(self, *, transaction: Any, tenant_id: str) -> int:
         del transaction
@@ -107,6 +117,76 @@ class FakeOntologyRepository:
         del transaction
         self.action_types.append(_action_type_row(record))
 
+    def insert_interface_type(self, *, transaction: Any, record: InterfaceTypeRecord) -> None:
+        del transaction
+        if any(
+            row["tenant_id"] == record.tenant_id
+            and row["ontology_version_id"] == record.ontology_version_id
+            and row["api_name"] == record.api_name
+            for row in self.interface_types
+        ):
+            raise ValueError("duplicate interface apiName within an ontology version")
+        self.interface_types.append(_interface_type_row(record))
+
+    def interface_types_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ontology_version_id: str,
+    ) -> list[InterfaceTypeRow]:
+        del transaction
+        rows = [
+            cast(InterfaceTypeRow, dict(row))
+            for row in self.interface_types
+            if row["tenant_id"] == tenant_id and row["ontology_version_id"] == ontology_version_id
+        ]
+        return sorted(rows, key=lambda row: row["api_name"])
+
+    def insert_function_type(self, *, transaction: Any, record: FunctionTypeRecord) -> None:
+        del transaction
+        if any(
+            row["tenant_id"] == record.tenant_id
+            and row["ontology_version_id"] == record.ontology_version_id
+            and row["api_name"] == record.api_name
+            for row in self.function_types
+        ):
+            raise ValueError("duplicate function apiName within an ontology version")
+        self.function_types.append(_function_type_row(record))
+
+    def function_types_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ontology_version_id: str,
+    ) -> list[FunctionTypeRow]:
+        del transaction
+        rows = [
+            cast(FunctionTypeRow, dict(row))
+            for row in self.function_types
+            if row["tenant_id"] == tenant_id and row["ontology_version_id"] == ontology_version_id
+        ]
+        return sorted(rows, key=lambda row: row["api_name"])
+
+    def function_type_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ontology_version_id: str,
+        api_name: str,
+    ) -> FunctionTypeRow | None:
+        del transaction
+        for row in self.function_types:
+            if (
+                row["tenant_id"] == tenant_id
+                and row["ontology_version_id"] == ontology_version_id
+                and row["api_name"] == api_name
+            ):
+                return cast(FunctionTypeRow, dict(row))
+        return None
+
     def object_types_for_version(
         self,
         *,
@@ -157,6 +237,19 @@ class FakeOntologyRepository:
         del transaction
         for row in self.ontology_versions:
             if row["tenant_id"] == tenant_id and row["status"] == "active":
+                return cast(OntologyVersionRow, dict(row))
+        return None
+
+    def ontology_version_by_number(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        version_number: int,
+    ) -> OntologyVersionRow | None:
+        del transaction
+        for row in self.ontology_versions:
+            if row["tenant_id"] == tenant_id and row["version_number"] == version_number:
                 return cast(OntologyVersionRow, dict(row))
         return None
 
@@ -267,6 +360,14 @@ class FakeOntologyHarness:
         assert isinstance(self.repository, FakeOntologyRepository)
         return [dict(row) for row in self.repository.action_types]
 
+    def interface_type_rows(self) -> list[dict[str, Any]]:
+        assert isinstance(self.repository, FakeOntologyRepository)
+        return [dict(row) for row in self.repository.interface_types]
+
+    def function_type_rows(self) -> list[dict[str, Any]]:
+        assert isinstance(self.repository, FakeOntologyRepository)
+        return [dict(row) for row in self.repository.function_types]
+
 
 @dataclass
 class SqlAlchemyOntologyHarness:
@@ -292,6 +393,12 @@ class SqlAlchemyOntologyHarness:
 
     def action_type_rows(self) -> list[dict[str, Any]]:
         return self._rows(db.action_types)
+
+    def interface_type_rows(self) -> list[dict[str, Any]]:
+        return self._rows(db.interface_types)
+
+    def function_type_rows(self) -> list[dict[str, Any]]:
+        return self._rows(db.function_types)
 
     def _rows(self, table: Any) -> list[dict[str, Any]]:
         with self.engine.begin() as conn:
@@ -479,6 +586,77 @@ def _action_type_row(record: ActionTypeRecord) -> dict[str, Any]:
     }
 
 
+def _interface_type_record(
+    interface_type_id: str = "it_asset",
+    *,
+    tenant_id: str = "tenant-demo",
+    ontology_version_id: str = "ont_1",
+    api_name: str = "Asset",
+) -> InterfaceTypeRecord:
+    return InterfaceTypeRecord(
+        interface_type_id=interface_type_id,
+        tenant_id=tenant_id,
+        ontology_version_id=ontology_version_id,
+        api_name=api_name,
+        display_name=api_name,
+        definition={
+            "apiName": api_name,
+            "displayName": api_name,
+            "properties": [{"apiName": "riskScore", "type": "float", "nullable": True, "indexed": True}],
+        },
+    )
+
+
+def _interface_type_row(record: InterfaceTypeRecord) -> dict[str, Any]:
+    return {
+        "id": record.interface_type_id,
+        "tenant_id": record.tenant_id,
+        "ontology_version_id": record.ontology_version_id,
+        "api_name": record.api_name,
+        "display_name": record.display_name,
+        "definition": record.definition,
+    }
+
+
+def _function_type_record(
+    function_type_id: str = "ft_summary",
+    *,
+    tenant_id: str = "tenant-demo",
+    ontology_version_id: str = "ont_1",
+    api_name: str = "orderRiskSummary",
+) -> FunctionTypeRecord:
+    return FunctionTypeRecord(
+        function_type_id=function_type_id,
+        tenant_id=tenant_id,
+        ontology_version_id=ontology_version_id,
+        api_name=api_name,
+        display_name=api_name,
+        definition={
+            "apiName": api_name,
+            "displayName": api_name,
+            "runtime": "logic_dag",
+            "inputs": [{"apiName": "objectId", "type": "string", "required": True}],
+            "output": {"type": "string"},
+            "definition": {
+                "blocks": [{"blockId": "output", "kind": "Output", "inputs": {"answer": "ok"}, "dependsOn": []}],
+                "tools": [],
+            },
+            "permissions": {"allowedRoles": ["ops_manager"]},
+        },
+    )
+
+
+def _function_type_row(record: FunctionTypeRecord) -> dict[str, Any]:
+    return {
+        "id": record.function_type_id,
+        "tenant_id": record.tenant_id,
+        "ontology_version_id": record.ontology_version_id,
+        "api_name": record.api_name,
+        "display_name": record.display_name,
+        "definition": record.definition,
+    }
+
+
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> OntologyHarness:
     if request.param == "fake":
@@ -542,6 +720,40 @@ def test_ontology_repository_contract_activation_requires_draft_state(harness: O
     assert activated is False
     assert rows["ont_archived"]["status"] == "archived"
     assert rows["ont_archived"]["activated_at"] is None
+
+
+def test_ontology_repository_contract_finds_versions_by_tenant_scoped_number(
+    harness: OntologyHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_ontology_version(
+            transaction=transaction,
+            record=_ontology_version_record("ont_archived", version_number=1, status="archived"),
+        )
+        harness.repository.insert_ontology_version(
+            transaction=transaction,
+            record=_ontology_version_record(
+                "ont_other_tenant",
+                tenant_id="tenant-other",
+                version_number=2,
+                status="active",
+            ),
+        )
+        found = harness.repository.ontology_version_by_number(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            version_number=1,
+        )
+        missing = harness.repository.ontology_version_by_number(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            version_number=2,
+        )
+
+    assert found is not None
+    assert found["id"] == "ont_archived"
+    assert found["status"] == "archived"
+    assert missing is None
 
 
 def test_ontology_repository_contract_rejects_two_active_versions_for_one_tenant(
@@ -722,3 +934,126 @@ def test_ontology_repository_contract_scopes_active_lookups(harness: OntologyHar
     assert disabled_action_by_id is not None
     assert disabled_action_by_id["id"] == "at_disabled"
     assert missing_action_by_id is None
+
+
+def test_ontology_repository_contract_persists_and_scopes_interface_types(harness: OntologyHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_interface_type(transaction=transaction, record=_interface_type_record())
+        harness.repository.insert_interface_type(
+            transaction=transaction,
+            record=_interface_type_record("it_resource", api_name="Resource"),
+        )
+        harness.repository.insert_interface_type(
+            transaction=transaction,
+            record=_interface_type_record("it_other_tenant", tenant_id="tenant-other"),
+        )
+        harness.repository.insert_interface_type(
+            transaction=transaction,
+            record=_interface_type_record("it_other_version", ontology_version_id="ont_2"),
+        )
+
+        interfaces = harness.repository.interface_types_for_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            ontology_version_id="ont_1",
+        )
+        other_version = harness.repository.interface_types_for_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            ontology_version_id="ont_2",
+        )
+
+    assert [row["api_name"] for row in interfaces] == ["Asset", "Resource"]
+    assert interfaces[0]["definition"]["properties"] == [
+        {"apiName": "riskScore", "type": "float", "nullable": True, "indexed": True}
+    ]
+    assert [row["api_name"] for row in other_version] == ["Asset"]
+    assert len(harness.interface_type_rows()) == 4
+
+
+def test_ontology_repository_contract_persists_and_scopes_function_types(harness: OntologyHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_function_type(transaction=transaction, record=_function_type_record())
+        harness.repository.insert_function_type(
+            transaction=transaction,
+            record=_function_type_record("ft_flag", api_name="customerRiskFlag"),
+        )
+        harness.repository.insert_function_type(
+            transaction=transaction,
+            record=_function_type_record("ft_other_tenant", tenant_id="tenant-other"),
+        )
+        harness.repository.insert_function_type(
+            transaction=transaction,
+            record=_function_type_record("ft_other_version", ontology_version_id="ont_2"),
+        )
+
+        functions = harness.repository.function_types_for_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            ontology_version_id="ont_1",
+        )
+        found = harness.repository.function_type_for_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            ontology_version_id="ont_1",
+            api_name="orderRiskSummary",
+        )
+        other_tenant = harness.repository.function_type_for_version(
+            transaction=transaction,
+            tenant_id="tenant-other",
+            ontology_version_id="ont_1",
+            api_name="customerRiskFlag",
+        )
+        missing = harness.repository.function_type_for_version(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            ontology_version_id="ont_1",
+            api_name="ghostFunction",
+        )
+
+    assert [row["api_name"] for row in functions] == ["customerRiskFlag", "orderRiskSummary"]
+    assert found is not None
+    assert found["id"] == "ft_summary"
+    assert found["definition"]["inputs"] == [{"apiName": "objectId", "type": "string", "required": True}]
+    assert found["definition"]["permissions"] == {"allowedRoles": ["ops_manager"]}
+    assert other_tenant is None
+    assert missing is None
+    assert len(harness.function_type_rows()) == 4
+
+
+def test_ontology_repository_contract_rejects_duplicate_function_api_names(harness: OntologyHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_function_type(transaction=transaction, record=_function_type_record())
+    if isinstance(harness, FakeOntologyHarness):
+        with harness.transaction() as transaction:
+            with pytest.raises(ValueError, match="duplicate function"):
+                harness.repository.insert_function_type(
+                    transaction=transaction,
+                    record=_function_type_record("ft_summary_2"),
+                )
+    else:
+        with pytest.raises(IntegrityError):
+            with harness.transaction() as transaction:
+                harness.repository.insert_function_type(
+                    transaction=transaction,
+                    record=_function_type_record("ft_summary_2"),
+                )
+
+
+def test_ontology_repository_contract_rejects_duplicate_interface_api_names(harness: OntologyHarness) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.insert_interface_type(transaction=transaction, record=_interface_type_record())
+    if isinstance(harness, FakeOntologyHarness):
+        with harness.transaction() as transaction:
+            with pytest.raises(ValueError, match="duplicate interface"):
+                harness.repository.insert_interface_type(
+                    transaction=transaction,
+                    record=_interface_type_record("it_asset_2"),
+                )
+    else:
+        with pytest.raises(IntegrityError):
+            with harness.transaction() as transaction:
+                harness.repository.insert_interface_type(
+                    transaction=transaction,
+                    record=_interface_type_record("it_asset_2"),
+                )

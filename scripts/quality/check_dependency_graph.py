@@ -245,7 +245,10 @@ def _parser() -> argparse.ArgumentParser:
         # added `LocalCompletionAdapter` (query-side HyDE/distillation completion seam) and AIP
         # P0b adds the `FakeLanguageModel` + `ProviderCompatibleLanguageModel` governed-gateway
         # seams — coupling by design at an explicit aggregation point, not accidental fan-out.
-        default=35,
+        #
+        # 36: the ontology function registry adds `FunctionExecutionService` to the
+        # `core_services` composition root — one new bounded capability wired at the DI root.
+        default=36,
         help="Higher fan-out budget for explicit aggregation roots (ports/repositories __init__).",
     )
     parser.add_argument("--aggregation-root", action="append", default=_default_aggregation_roots())

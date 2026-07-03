@@ -3,23 +3,35 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol, cast
+from typing import Protocol
 
 from foundry_lite.application.ports import (
     LineageEdgeRow,
+    ObjectAggregationGroup,
+    ObjectAggregationResult,
     ObjectOrderBy,
     ObjectPayload,
     ObjectQueryItem,
     ObjectQueryResult,
     ObjectRecordRow,
     ObjectSortDirection,
+    ObjectTypeRow,
     OsdkResourceOperation,
     OsdkResourceType,
+    RuntimeJsonObject,
+    RuntimeRunLink,
     TransactionContext,
 )
 from foundry_lite.application.ports.object_read_repository import ObjectExplain
 from foundry_lite.application.query_filters import validate_filter_ast
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.aggregation import (
+    ObjectAggregationPlan,
+    aggregate_group_rows,
+    build_aggregation_plan,
+    finalize_aggregation_result,
+    property_data_types,
+)
 from foundry_lite.application.services.object_store.evidence import object_property_lineage
 from foundry_lite.application.services.object_store.query_cursor import (
     decode_object_query_cursor,
@@ -31,12 +43,19 @@ from foundry_lite.application.services.object_store.query_protocols import (
     ObjectRecordLookup,
     ObjectSearchQueryPlanner,
 )
+from foundry_lite.application.services.object_store.query_validation import validate_query_properties
+from foundry_lite.application.services.object_store.row_policies import (
+    row_policy_scope,
+    row_visible,
+    scoped_filter_ast,
+)
 from foundry_lite.application.services.object_store.serving_contract import record_scope_object_type_id
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     NotFound,
     ValidationFailed,
 )
+from foundry_lite.domain.ontology.datasources import split_source_dataset_version_id
 
 OBJECT_QUERY_MAX_LIMIT = 500
 
@@ -87,7 +106,9 @@ class ObjectQueryService(CoreService):
                 object_id,
                 object_type_id=record_scope_object_type_id(object_type),
             )
-            if record is None:
+            # Rows hidden by row policies 404 exactly like missing rows so a
+            # restricted caller cannot probe for their existence.
+            if record is None or not row_visible(row_policy_scope(object_type, ctx.roles), record["properties"]):
                 raise NotFound(
                     "object not found",
                     details={"object_type": object_type_api_name, "object_id": object_id},
@@ -125,6 +146,29 @@ class ObjectQueryService(CoreService):
             payload["deletionReason"] = record["deletion_reason"]
         return payload
 
+    def _source_explain_evidence(
+        self,
+        ctx: RequestContext,
+        record: ObjectRecordRow,
+        object_type_api_name: str,
+    ) -> tuple[list[LineageEdgeRow], list[RuntimeRunLink], RuntimeJsonObject | None]:
+        """Lineage/run-chain/badge for the record's source snapshot: a multi-datasource
+        record stores a composite id, so lineage aggregates across every segment while
+        the run chain and badge follow the primary segment."""
+        if not record["source_dataset_version_id"]:
+            return [], [], None
+        segment_version_ids = split_source_dataset_version_id(record["source_dataset_version_id"])
+        lineage_rows: list[LineageEdgeRow] = []
+        for segment_version_id in segment_version_ids:
+            lineage_rows.extend(self.runtime_service.lineage_for_resource(segment_version_id, ctx=ctx))
+        source_run_chain = self.runtime_service.source_run_chain(
+            segment_version_ids[0], object_type_api_name=object_type_api_name, ctx=ctx
+        )
+        late_data_badge = self.runtime_service.late_data_badge_for_source(
+            segment_version_ids[0], object_type_api_name=object_type_api_name, ctx=ctx
+        )
+        return lineage_rows, source_run_chain, late_data_badge
+
     def _object_explain(
         self,
         conn: TransactionContext,
@@ -132,22 +176,10 @@ class ObjectQueryService(CoreService):
         record: ObjectRecordRow,
     ) -> ObjectExplain:
         object_type_api_name = record["object_type_api_name"]
-        lineage_rows: list[LineageEdgeRow] = []
-        source_run_chain = []
-        late_data_badge = None
         properties = self.ontology_service._properties_for_object_type(conn, record["object_type_id"])
-        if record["source_dataset_version_id"]:
-            lineage_rows = self.runtime_service.lineage_for_resource(record["source_dataset_version_id"], ctx=ctx)
-            source_run_chain = self.runtime_service.source_run_chain(
-                record["source_dataset_version_id"],
-                object_type_api_name=object_type_api_name,
-                ctx=ctx,
-            )
-            late_data_badge = self.runtime_service.late_data_badge_for_source(
-                record["source_dataset_version_id"],
-                object_type_api_name=object_type_api_name,
-                ctx=ctx,
-            )
+        lineage_rows, source_run_chain, late_data_badge = self._source_explain_evidence(
+            ctx, record, object_type_api_name
+        )
         # The base/edit layers must honour the same masking as `properties`; a
         # caller who cannot see `properties.margin` must not read it here either.
         explain: ObjectExplain = {
@@ -189,7 +221,7 @@ class ObjectQueryService(CoreService):
         normalized_order_by = _normalized_order_by(order_by)
         if filter_ast:
             validate_filter_ast(filter_ast)
-        records, active_index_version = self._query_active_records(
+        records, active_index_version, effective_filter = self._query_active_records(
             ctx,
             object_type_api_name,
             filter_ast,
@@ -200,8 +232,77 @@ class ObjectQueryService(CoreService):
         page = records[:query_limit]
         return {
             "items": [self._object_query_item(ctx, object_type_api_name, row) for row in page],
-            "nextCursor": _next_cursor(records, page, normalized_order_by, filter_ast, active_index_version, ctx),
+            "nextCursor": _next_cursor(records, page, normalized_order_by, effective_filter, active_index_version, ctx),
         }
+
+    def aggregate_objects(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        group_by: Sequence[str] | None = None,
+        select: Sequence[Mapping[str, object]] | None = None,
+    ) -> ObjectAggregationResult:
+        """Aggregate objects in the database so unmasked rows never leave the server.
+
+        Runs the same gates as query_objects (role, osdk read scope, tenant,
+        active index, masked-property checks) before any SQL executes.
+        """
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "object:read")
+        self._require_object_read_scope(ctx, object_type_api_name)
+        if filter_ast:
+            validate_filter_ast(filter_ast)
+        with self.engine.begin() as conn:
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
+            self.object_index_repository.active_index_version(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_id=object_type["id"],
+            )
+            self._validate_query_shape(conn, ctx, object_type_api_name, object_type["id"], filter_ast, [])
+            plan = self._aggregation_plan(conn, ctx, object_type_api_name, object_type["id"], group_by, select)
+            groups = self._aggregate_visible_groups(conn, ctx, object_type, filter_ast, plan)
+        return finalize_aggregation_result(plan, groups)
+
+    def _aggregate_visible_groups(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type: ObjectTypeRow,
+        filter_ast: Mapping[str, object] | None,
+        plan: ObjectAggregationPlan,
+    ) -> list[ObjectAggregationGroup]:
+        """Row policies inject here so aggregates cannot reconstruct hidden rows."""
+        scope = row_policy_scope(object_type, ctx.roles)
+        if scope.hides_all_rows:
+            return []
+        return aggregate_group_rows(
+            self.object_read_repository,
+            conn,
+            tenant_id=ctx.tenant_id,
+            object_type=object_type,
+            filter_ast=scoped_filter_ast(scope, filter_ast),
+            plan=plan,
+        )
+
+    def _aggregation_plan(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        object_type_id: str,
+        group_by: Sequence[str] | None,
+        select: Sequence[Mapping[str, object]] | None,
+    ) -> ObjectAggregationPlan:
+        return build_aggregation_plan(
+            object_type_api_name,
+            property_data_types(self.ontology_service._properties_for_object_type(conn, object_type_id)),
+            self.policy.masked_property_names(ctx, object_type_api_name),
+            group_by=group_by,
+            select=select,
+        )
 
     def _require_object_read_scope(self, ctx: RequestContext, object_type_api_name: str) -> None:
         self.osdk_application_service.require_resource_scope(
@@ -244,7 +345,7 @@ class ObjectQueryService(CoreService):
         order_by: Sequence[ObjectOrderBy],
         cursor: str | None,
         query_limit: int,
-    ) -> tuple[list[ObjectRecordRow], str]:
+    ) -> tuple[list[ObjectRecordRow], str, Mapping[str, object] | None]:
         with self.engine.begin() as conn:
             object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
             active_index_version = self.object_index_repository.active_index_version(
@@ -253,26 +354,47 @@ class ObjectQueryService(CoreService):
                 object_type_id=object_type["id"],
             )
             self._validate_query_shape(conn, ctx, object_type_api_name, object_type["id"], filter_ast, order_by)
-            cursor_state = decode_object_query_cursor(
-                cursor,
-                order_by,
-                filter_ast,
-                active_index_version,
-                actor_user_id=ctx.actor_user_id,
-                tenant_id=ctx.tenant_id,
+            # Row policies are ANDed in AFTER shape validation: callers cannot
+            # reference masked properties, but server-injected policy filters may.
+            scope = row_policy_scope(object_type, ctx.roles)
+            if scope.hides_all_rows:
+                return [], active_index_version, filter_ast
+            effective_filter = scoped_filter_ast(scope, filter_ast)
+            records = self._page_active_records(
+                conn, ctx, object_type, effective_filter, order_by, cursor, query_limit, active_index_version
             )
-            records = self.object_read_repository.query_active_object_rows(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                object_type_api_name=object_type_api_name,
-                filter_ast=filter_ast,
-                order_by=order_by,
-                cursor=cursor_state,
-                limit=query_limit + 1,
-                object_type_id=record_scope_object_type_id(object_type),
-                property_object_type_id=object_type["id"],
-            )
-        return records, active_index_version
+        return records, active_index_version, effective_filter
+
+    def _page_active_records(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type: ObjectTypeRow,
+        filter_ast: Mapping[str, object] | None,
+        order_by: Sequence[ObjectOrderBy],
+        cursor: str | None,
+        query_limit: int,
+        active_index_version: str,
+    ) -> list[ObjectRecordRow]:
+        cursor_state = decode_object_query_cursor(
+            cursor,
+            order_by,
+            filter_ast,
+            active_index_version,
+            actor_user_id=ctx.actor_user_id,
+            tenant_id=ctx.tenant_id,
+        )
+        return self.object_read_repository.query_active_object_rows(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_api_name=object_type["api_name"],
+            filter_ast=filter_ast,
+            order_by=order_by,
+            cursor=cursor_state,
+            limit=query_limit + 1,
+            object_type_id=record_scope_object_type_id(object_type),
+            property_object_type_id=object_type["id"],
+        )
 
     def _validate_query_shape(
         self,
@@ -285,7 +407,7 @@ class ObjectQueryService(CoreService):
     ) -> None:
         property_names = self._query_property_names(conn, object_type_id)
         masked = self.policy.masked_property_names(ctx, object_type_api_name)
-        _validate_query_properties(filter_ast, order_by, property_names, masked)
+        validate_query_properties(filter_ast, order_by, property_names, masked)
 
     def _object_query_item(
         self,
@@ -349,57 +471,6 @@ def _normalized_direction(direction: str) -> ObjectSortDirection:
     if direction == "desc":
         return "desc"
     raise ValidationFailed("object query orderBy direction must be asc or desc", details={"direction": direction})
-
-
-def _validate_query_properties(
-    filter_ast: Mapping[str, object] | None,
-    order_by: Sequence[ObjectOrderBy],
-    property_names: set[str],
-    masked_property_names: set[str],
-) -> None:
-    for order in order_by:
-        _validate_query_property(order["property"], property_names, masked_property_names, source="orderBy")
-    if filter_ast:
-        _validate_filter_properties(filter_ast, property_names, masked_property_names)
-
-
-def _validate_filter_properties(
-    filter_ast: Mapping[str, object],
-    property_names: set[str],
-    masked_property_names: set[str],
-) -> None:
-    if "and" in filter_ast:
-        for item in cast(Sequence[Mapping[str, object]], filter_ast["and"]):
-            _validate_filter_properties(item, property_names, masked_property_names)
-        return
-    if "or" in filter_ast:
-        for item in cast(Sequence[Mapping[str, object]], filter_ast["or"]):
-            _validate_filter_properties(item, property_names, masked_property_names)
-        return
-    _validate_query_property(str(filter_ast["property"]), property_names, masked_property_names, source="filter")
-
-
-def _validate_query_property(
-    property_name: str,
-    property_names: set[str],
-    masked_property_names: set[str],
-    *,
-    source: str,
-) -> None:
-    _require_known_query_property(property_name, property_names, source=source)
-    if property_name in masked_property_names:
-        raise ValidationFailed(
-            "object query references masked property",
-            details={"property": property_name, "source": source},
-        )
-
-
-def _require_known_query_property(property_name: str, property_names: set[str], *, source: str) -> None:
-    if property_name not in property_names:
-        raise ValidationFailed(
-            "object query references missing property",
-            details={"property": property_name, "source": source},
-        )
 
 
 def _next_cursor(

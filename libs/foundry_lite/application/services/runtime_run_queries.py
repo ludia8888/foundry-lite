@@ -23,6 +23,7 @@ from foundry_lite.application.services.runtime_late_data_impact import (
     object_late_data_badge as _object_late_data_badge,
 )
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.ontology.datasources import split_source_dataset_version_id
 
 downstream_impact_graph = _downstream_impact_graph
 object_late_data_badge = _object_late_data_badge
@@ -343,7 +344,10 @@ def _index_run_links(
         source_ref = row.get("source_ref")
         if row.get("object_type_api_name") != object_type_api_name or not isinstance(source_ref, Mapping):
             continue
-        if source_ref.get("dataset_version_id") == source_dataset_version_id:
+        # Multi-datasource runs record a composite id joining every segment's
+        # dataset version, so a chain anchored at one segment still finds them.
+        recorded = source_ref.get("dataset_version_id")
+        if isinstance(recorded, str) and source_dataset_version_id in split_source_dataset_version_id(recorded):
             links.append(_run_link("index", row, "indexed_from", "dataset_version", source_dataset_version_id))
     return links
 

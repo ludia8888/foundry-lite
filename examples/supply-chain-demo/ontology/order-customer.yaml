@@ -1,11 +1,29 @@
+interfaces:
+  - apiName: Asset
+    displayName: Asset
+    properties:
+      - apiName: riskScore
+        type: float
+        indexed: true
 objectTypes:
   - apiName: Order
     displayName: Order
+    implements: [Asset]
     primaryKey: orderId
+    titleProperty: orderId
     backing:
-      dataset: clean.orders
       mode: snapshot
-      primaryKeyColumns: [order_id]
+      datasources:
+        - name: erp
+          dataset: clean.orders
+          primaryKeyColumns: [order_id]
+        - name: finance
+          dataset: clean.order_finance
+          primaryKeyColumns: [order_id]
+          requiredRole: finance
+    materialization:
+      dataset: ops.order_current
+      mode: object_snapshot
     properties:
       - apiName: orderId
         column: order_id
@@ -30,6 +48,7 @@ objectTypes:
         column: margin
         type: float
         classification: finance
+        datasource: finance
       - apiName: riskScore
         column: risk_score
         type: float
@@ -42,7 +61,9 @@ objectTypes:
         editPolicy: edit_only
   - apiName: Customer
     displayName: Customer
+    implements: [Asset]
     primaryKey: customerId
+    titleProperty: name
     backing:
       dataset: clean.customers
       mode: snapshot
@@ -80,6 +101,55 @@ linkTypes:
       dataset: clean.orders
       fromKey: order_id
       toKey: customer_id
+functionTypes:
+  - apiName: orderRiskSummary
+    displayName: Order risk summary
+    runtime: logic_dag
+    inputs:
+      - apiName: objectId
+        type: string
+        required: true
+    output:
+      type: string
+    permissions:
+      allowedRoles: [ops_manager]
+    definition:
+      tools:
+        - toolId: ontology.get_object
+          version: "2026-06-25"
+          effect: READ
+          confirmationPolicy: NONE
+          requiredPermission: object:read
+          inputSchema:
+            type: object
+            required: [object_type, object_id]
+            properties:
+              object_type: {type: string}
+              object_id: {type: string}
+              property_names: {type: array}
+          outputSchema:
+            type: object
+          objectTypeAllowlist: [Order]
+          propertyAllowlist: [riskScore, status]
+          resultClassification: internal
+      blocks:
+        - blockId: input
+          kind: Input
+        - blockId: read_order
+          kind: CallFunction
+          dependsOn: [input]
+          inputs:
+            toolId: ontology.get_object
+            version: "2026-06-25"
+            arguments:
+              object_type: Order
+              object_id: O-1001
+              property_names: [riskScore, status]
+        - blockId: output
+          kind: Output
+          dependsOn: [read_order]
+          inputs:
+            fromBlock: read_order
 actionTypes:
   - apiName: ApproveOrder
     displayName: Approve order

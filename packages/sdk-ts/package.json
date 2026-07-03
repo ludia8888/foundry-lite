@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/client.ts",
     "./generated": "./src/generated.ts",
+    "./ontology-draft": "./src/ontology-draft.ts",
     "./react": "./src/react.ts",
     "./screen-recipes": "./src/screen-recipes.ts"
   },

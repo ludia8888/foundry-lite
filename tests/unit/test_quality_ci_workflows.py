@@ -320,6 +320,18 @@ def test_ci_gate_exposes_parallel_lanes_without_weakening_default_gate() -> None
     assert "Foundry-lite CI gate passed." in script
 
 
+def test_e2e_seed_prepares_mdo_finance_datasource_before_ontology_apply() -> None:
+    script = (ROOT / "scripts" / "e2e_start_api.sh").read_text(encoding="utf-8")
+    finance_dataset = 'core.datasets.ensure("clean.order_finance"'
+    finance_transform = 'core.transforms.run("clean_order_finance"'
+    ontology_apply = 'core.ontology.apply("examples/supply-chain-demo/ontology/order-customer.yaml"'
+
+    assert finance_dataset in script
+    assert finance_transform in script
+    assert '"cleanOrderFinanceVersion": clean_order_finance.version_id' in script
+    assert script.index(finance_dataset) < script.index(finance_transform) < script.index(ontology_apply)
+
+
 def test_pragma_no_cover_budget_is_release_gate_step() -> None:
     script = _static_lane_text()
     package_json = (ROOT / "package.json").read_text(encoding="utf-8")

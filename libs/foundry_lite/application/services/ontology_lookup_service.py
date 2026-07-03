@@ -6,6 +6,8 @@ from collections.abc import Sequence
 
 from foundry_lite.application.ports import (
     ActionTypeRow,
+    FunctionTypeRow,
+    InterfaceTypeRow,
     LinkTypeRow,
     ObjectTypeRow,
     OntologyVersionRow,
@@ -46,6 +48,42 @@ class OntologyLookupService(CoreService):
             tenant_id=ctx.tenant_id,
             ontology_version_id=ontology_version_id,
         )
+
+    def _interface_types_for_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> Sequence[InterfaceTypeRow]:
+        return self.ontology_repository.interface_types_for_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=ontology_version_id,
+        )
+
+    def _function_types_for_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> Sequence[FunctionTypeRow]:
+        return self.ontology_repository.function_types_for_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=ontology_version_id,
+        )
+
+    def _active_function_type(self, conn: TransactionContext, ctx: RequestContext, api_name: str) -> FunctionTypeRow:
+        active = self._active_ontology_version(conn, ctx)
+        row = self.ontology_repository.function_type_for_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=active["id"],
+            api_name=api_name,
+        )
+        if row is None:
+            raise NotFound("function type not found", details={"api_name": api_name})
+        return row
 
     def _properties_for_object_type(
         self,
