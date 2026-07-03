@@ -193,6 +193,7 @@ from foundry_lite.application.ports.object_index_repository import (
     ObjectRecordSourceUpdate,
     OntologyObjectReindexResult,
 )
+from foundry_lite.application.ports.object_index_row_hash_repository import ObjectIndexRowHashRepository
 from foundry_lite.application.ports.object_read_repository import (
     ObjectAggregationFunction,
     ObjectAggregationGroup,

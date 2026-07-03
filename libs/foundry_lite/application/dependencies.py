@@ -19,6 +19,7 @@ from foundry_lite.application.ports import (
     MaterializationRepository,
     MetadataRepository,
     ObjectIndexRepository,
+    ObjectIndexRowHashRepository,
     ObjectReadRepository,
     ObjectSetRepository,
     OntologyRepository,
@@ -87,6 +88,7 @@ class CoreDependencies:
     dataset_version_repository: DatasetVersionRepository
     insight_review_repository: InsightReviewRepository
     object_index_repository: ObjectIndexRepository
+    object_index_row_hash_repository: ObjectIndexRowHashRepository
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository
     osdk_application_repository: OsdkApplicationRepository

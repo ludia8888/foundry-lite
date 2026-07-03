@@ -29,6 +29,9 @@ from foundry_lite.infrastructure.repositories.metadata_repository import (
 from foundry_lite.infrastructure.repositories.model_registry_repository import SqlAlchemyModelRegistryRepository
 from foundry_lite.infrastructure.repositories.oauth_session_repository import SqlAlchemyOAuthSessionRepository
 from foundry_lite.infrastructure.repositories.object_index_repository import SqlAlchemyObjectIndexRepository
+from foundry_lite.infrastructure.repositories.object_index_row_hash_repository import (
+    SqlAlchemyObjectIndexRowHashRepository,
+)
 from foundry_lite.infrastructure.repositories.object_read_repository import SqlAlchemyObjectReadRepository
 from foundry_lite.infrastructure.repositories.object_set_repository import SqlAlchemyObjectSetRepository
 from foundry_lite.infrastructure.repositories.ontology_repository import SqlAlchemyOntologyRepository
@@ -58,6 +61,7 @@ __all__ = [
     "SqlAlchemyDestructiveDevelopmentAdmin",
     "SqlAlchemyMetadataRepository",
     "SqlAlchemyObjectIndexRepository",
+    "SqlAlchemyObjectIndexRowHashRepository",
     "SqlAlchemyObjectReadRepository",
     "SqlAlchemyObjectSetRepository",
     "SqlAlchemyOntologyRepository",

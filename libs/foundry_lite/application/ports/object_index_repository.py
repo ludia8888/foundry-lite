@@ -222,8 +222,14 @@ class ObjectIndexRepository(Protocol):
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
+        source_ref_updates: IndexRunSourceRef | None = None,
     ) -> bool:
-        """CAS a running index run into succeeded."""
+        """CAS a running index run into succeeded.
+
+        ``source_ref_updates`` merges additive keys (e.g. changelog refresh mode
+        and changed/deleted/skipped counts) into the stored ``source_ref`` inside
+        the same CAS, so operator-facing evidence lands only on the transition.
+        """
         ...
 
     def mark_index_run_failed(

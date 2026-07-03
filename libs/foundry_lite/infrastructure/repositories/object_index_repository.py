@@ -14,6 +14,7 @@ from foundry_lite.application.ports import (
     IndexRunCursor,
     IndexRunError,
     IndexRunRecord,
+    IndexRunSourceRef,
     LinkTypeRow,
     ObjectConflictRecord,
     ObjectIndexLinkRow,
@@ -152,22 +153,42 @@ class SqlAlchemyObjectIndexRepository:
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
+        source_ref_updates: IndexRunSourceRef | None = None,
     ) -> bool:
+        values: dict[str, Any] = {
+            "rows_read": rows_read,
+            "objects_upserted": objects_upserted,
+            "objects_deleted": objects_deleted,
+            "links_upserted": links_upserted,
+            "cursor": cursor,
+            "completed_at": completed_at,
+        }
+        if source_ref_updates:
+            values["source_ref"] = self._merged_source_ref(transaction, tenant_id, run_id, source_ref_updates)
         return cas_status_update(
             transaction,
             db.index_runs,
             tenant_id=tenant_id,
             row_id=run_id,
             transition=INDEX_RUN_SUCCEEDED,
-            values={
-                "rows_read": rows_read,
-                "objects_upserted": objects_upserted,
-                "objects_deleted": objects_deleted,
-                "links_upserted": links_upserted,
-                "cursor": cursor,
-                "completed_at": completed_at,
-            },
+            values=values,
         )
+
+    def _merged_source_ref(
+        self,
+        transaction: Any,
+        tenant_id: str,
+        run_id: str,
+        source_ref_updates: IndexRunSourceRef,
+    ) -> dict[str, Any]:
+        stored = transaction.execute(
+            select(db.index_runs.c.source_ref).where(
+                and_(db.index_runs.c.tenant_id == tenant_id, db.index_runs.c.id == run_id)
+            )
+        ).scalar()
+        merged: dict[str, Any] = dict(stored) if isinstance(stored, dict) else {}
+        merged.update(source_ref_updates)
+        return merged
 
     def mark_index_run_failed(
         self,

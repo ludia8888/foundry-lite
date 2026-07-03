@@ -13,6 +13,7 @@ from foundry_lite.application.ports import (
     IndexRunCursor,
     IndexRunError,
     IndexRunRecord,
+    IndexRunSourceRef,
     LinkTypeRow,
     ObjectConflictRecord,
     ObjectIndexLinkRow,
@@ -119,12 +120,17 @@ class FakeObjectIndexRepository:
         links_upserted: int,
         cursor: IndexRunCursor,
         completed_at: str,
+        source_ref_updates: IndexRunSourceRef | None = None,
     ) -> bool:
         del transaction
         if self.index_runs[run_id]["tenant_id"] != tenant_id:
             return False
         if self.index_runs[run_id]["status"] != "running":
             return False
+        if source_ref_updates:
+            merged = dict(self.index_runs[run_id]["source_ref"])
+            merged.update(source_ref_updates)
+            self.index_runs[run_id]["source_ref"] = merged
         self.index_runs[run_id].update(
             status="succeeded",
             rows_read=rows_read,
@@ -854,6 +860,40 @@ def test_object_index_repository_contract_aggregates_index_run_usage(
         "total_runs": 0,
         "last_run_at": None,
         "last_succeeded_at": None,
+    }
+
+
+def test_object_index_repository_contract_merges_source_ref_updates_on_success(
+    harness: ObjectIndexHarness,
+) -> None:
+    with harness.transaction() as transaction:
+        harness.repository.create_index_run(transaction=transaction, record=_index_run_record("index_run_changelog"))
+        updated = harness.repository.mark_index_run_succeeded(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            run_id="index_run_changelog",
+            rows_read=3,
+            objects_upserted=1,
+            objects_deleted=1,
+            links_upserted=0,
+            cursor={"last_row": 3},
+            completed_at="2026-06-10T00:02:00Z",
+            source_ref_updates={"mode": "changelog_incremental", "changed": 1, "deleted": 1, "skipped": 1},
+        )
+
+    row = harness.index_run("index_run_changelog")
+
+    # The additive keys must merge into the stored source_ref (not replace it):
+    # replay needs dataset_version_id to survive while operators read the
+    # refresh mode and per-run counts from the same evidence surface.
+    assert updated is True
+    assert row is not None
+    assert row["source_ref"] == {
+        "dataset_version_id": "dsv_orders_1",
+        "mode": "changelog_incremental",
+        "changed": 1,
+        "deleted": 1,
+        "skipped": 1,
     }
 
 

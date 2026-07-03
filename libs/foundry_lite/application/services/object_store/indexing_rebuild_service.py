@@ -7,17 +7,24 @@ from collections.abc import Sequence
 from foundry_lite.application.ports import (
     ObjectIndexRebuildResult,
     ObjectIndexRepository,
+    ObjectIndexRowHashRepository,
     ObjectIndexShadowRebuildResult,
     ObjectPropertyMap,
     ObjectRecordRow,
     ObjectRecordSourceDeletion,
-    ObjectTypeRow,
-    PropertyTypeRow,
     TabularRow,
     TransactionContext,
 )
 from foundry_lite.application.primitives import _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.indexing_changelog import (
+    ChangelogRefreshPlan,
+    changelog_source_ref_updates,
+    load_stored_row_hashes,
+    persist_row_hashes,
+    plan_changelog_refresh,
+    source_rows_from_dataset_rows,
+)
 from foundry_lite.application.services.object_store.indexing_link_service import ObjectLinkIndexingService
 from foundry_lite.application.services.object_store.indexing_protocols import (
     IndexDatasetRegistry,
@@ -42,7 +49,6 @@ from foundry_lite.application.services.object_store.indexing_types import (
     object_index_shadow_response,
 )
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.domain.object_store.indexing import (
     SOURCE_MISSING_DELETION_REASON,
     require_unique_source_object_ids,
@@ -54,7 +60,12 @@ from foundry_lite.domain.object_store.indexing import (
 class ObjectIndexRebuildService(CoreService):
     """Runs snapshot/shadow object-index rebuild use cases."""
 
-    required_dependencies = ("engine", "compute_adapter", "object_index_repository")
+    required_dependencies = (
+        "engine",
+        "compute_adapter",
+        "object_index_repository",
+        "object_index_row_hash_repository",
+    )
     required_collaborators = (
         "dataset_registry_service",
         "dataset_transaction_service",
@@ -74,6 +85,7 @@ class ObjectIndexRebuildService(CoreService):
     object_link_indexing_service: ObjectLinkIndexingService
     object_records_service: IndexObjectRecords
     object_index_repository: ObjectIndexRepository
+    object_index_row_hash_repository: ObjectIndexRowHashRepository
     ontology_service: IndexOntologyLookup
     runtime_service: IndexRuntimeBoundary
 
@@ -216,29 +228,27 @@ class ObjectIndexRebuildService(CoreService):
         plan: ObjectIndexRebuildPlan,
         rows: Sequence[TabularRow],
     ) -> ObjectIndexRebuildCounts:
-        objects_upserted = 0
-        source_object_ids: set[str] = set()
-        source_rows = self._source_rows_from_dataset_rows(conn, plan, rows)
+        source_rows = source_rows_from_dataset_rows(conn, self.ontology_service, plan.object_type, rows)
         require_unique_source_object_ids(
             plan.object_type_api_name,
             [source.object_id for source in source_rows],
             source_dataset_version_id=plan.source_dataset_version_id,
         )
-        for source in source_rows:
-            source_object_ids.add(source.object_id)
+        stored_hashes = load_stored_row_hashes(conn, self.object_index_row_hash_repository, ctx.tenant_id, plan)
+        refresh = plan_changelog_refresh(plan, stored_hashes, source_rows)
+        for source in refresh.rows_to_index:
             self._index_object_source_row(conn, ctx, plan, source)
-            objects_upserted += 1
-        objects_deleted = self._delete_missing_source_records(conn, ctx, plan, source_object_ids)
+        objects_deleted = self._delete_missing_records(conn, ctx, plan, refresh, source_rows)
         links_upserted = self.object_link_indexing_service._index_links_for_object_type(conn, ctx, plan, rows)
-        return ObjectIndexRebuildCounts(len(rows), objects_upserted, objects_deleted, links_upserted)
-
-    def _source_rows_from_dataset_rows(
-        self,
-        conn: TransactionContext,
-        plan: ObjectIndexRebuildPlan,
-        rows: Sequence[TabularRow],
-    ) -> list[ObjectIndexSourceRow]:
-        return [self._source_row_from_dataset_row(conn, plan.object_type, row) for row in rows]
+        persist_row_hashes(conn, self.object_index_row_hash_repository, ctx.tenant_id, plan, refresh)
+        return ObjectIndexRebuildCounts(
+            len(rows),
+            len(refresh.rows_to_index),
+            objects_deleted,
+            links_upserted,
+            refresh.refresh_mode,
+            refresh.skipped_count,
+        )
 
     def _index_object_source_row(
         self,
@@ -270,21 +280,17 @@ class ObjectIndexRebuildService(CoreService):
                 plan.source_dataset_version_id,
             )
 
-    def _delete_missing_source_records(
+    def _delete_missing_records(
         self,
         conn: TransactionContext,
         ctx: RequestContext,
         plan: ObjectIndexRebuildPlan,
-        source_object_ids: set[str],
+        refresh: ChangelogRefreshPlan,
+        source_rows: Sequence[ObjectIndexSourceRow],
     ) -> int:
-        records = self.object_index_repository.object_records_for_index_version(
-            transaction=conn,
-            tenant_id=ctx.tenant_id,
-            object_type_id=plan.object_type["id"],
-            index_version=plan.index_version,
-        )
+        source_object_ids = {source.object_id for source in source_rows}
         deleted_count = 0
-        for record in records:
+        for record in self._missing_record_candidates(conn, ctx, plan, refresh):
             if not should_delete_missing_source_item(
                 is_deleted=bool(record["deleted"]),
                 is_present_in_source=str(record["object_id"]) in source_object_ids,
@@ -294,6 +300,36 @@ class ObjectIndexRebuildService(CoreService):
             self._mark_source_missing_record_deleted(conn, ctx, plan, record)
             deleted_count += 1
         return deleted_count
+
+    def _missing_record_candidates(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        plan: ObjectIndexRebuildPlan,
+        refresh: ChangelogRefreshPlan,
+    ) -> list[ObjectRecordRow]:
+        # Incremental refreshes already know the exact removed keys from the
+        # hash diff, so they look up only those records instead of paying the
+        # full-index scan a snapshot prune needs.
+        if not refresh.is_incremental:
+            return self.object_index_repository.object_records_for_index_version(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_id=plan.object_type["id"],
+                index_version=plan.index_version,
+            )
+        records = (
+            self.object_index_repository.object_record_in_index(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_id=plan.object_type["id"],
+                object_type_api_name=plan.object_type["api_name"],
+                object_id=object_id,
+                index_version=plan.index_version,
+            )
+            for object_id in refresh.removed_object_ids
+        )
+        return [record for record in records if record is not None]
 
     def _mark_source_missing_record_deleted(
         self,
@@ -322,23 +358,6 @@ class ObjectIndexRebuildService(CoreService):
             plan.source_dataset_version_id,
         )
 
-    def _source_row_from_dataset_row(
-        self,
-        conn: TransactionContext,
-        object_type: ObjectTypeRow,
-        row: TabularRow,
-    ) -> ObjectIndexSourceRow:
-        properties = self.ontology_service._properties_for_object_type(conn, object_type["id"])
-        pk_prop = next(prop for prop in properties if prop["api_name"] == object_type["primary_key_property"])
-        pk_column = pk_prop["column_name"]
-        if pk_column is None:
-            raise ValidationFailed("object primary key column missing")
-        object_id = row.get(pk_column)
-        if object_id in {None, ""}:
-            raise ValidationFailed("object primary key cannot be null")
-        base_patch = self._base_patch_from_dataset_row(row, properties)
-        return ObjectIndexSourceRow(object_id=str(object_id), base_patch=base_patch)
-
     def _active_object_record(
         self,
         conn: TransactionContext,
@@ -347,21 +366,6 @@ class ObjectIndexRebuildService(CoreService):
         object_id: str,
     ) -> ObjectRecordRow | None:
         return self.object_records_service._object_record(conn, ctx, object_type_api_name, object_id)
-
-    def _base_patch_from_dataset_row(
-        self,
-        row: TabularRow,
-        properties: Sequence[PropertyTypeRow],
-    ) -> ObjectPropertyMap:
-        base_patch: dict[str, object] = {}
-        for prop in properties:
-            if prop["source"] != "dataset":
-                continue
-            column_name = prop["column_name"]
-            if column_name is None:
-                raise ValidationFailed("dataset-backed property column missing", details={"property": prop["api_name"]})
-            base_patch[prop["api_name"]] = row.get(column_name)
-        return base_patch
 
     def _insert_new_object_record(
         self,
@@ -455,7 +459,13 @@ class ObjectIndexRebuildService(CoreService):
         plan: ObjectIndexRebuildPlan,
         counts: ObjectIndexRebuildCounts,
     ) -> None:
-        self.object_index_record_mutation_service.mark_index_run_succeeded(conn, ctx, plan.run_id, counts)
+        self.object_index_record_mutation_service.mark_index_run_succeeded(
+            conn,
+            ctx,
+            plan.run_id,
+            counts,
+            source_ref_updates=changelog_source_ref_updates(counts),
+        )
         self._audit_index_rebuild(conn, ctx, plan, counts)
 
     def _audit_index_rebuild(

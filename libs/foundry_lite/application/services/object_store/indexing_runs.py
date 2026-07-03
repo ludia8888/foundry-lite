@@ -41,8 +41,7 @@ def _start_index_rebuild_plan(
     mode: str = "full",
 ) -> ObjectIndexRebuildPlan:
     object_type = ontology_service._active_object_type(conn, ctx, object_type_api_name)
-    dataset_ref = object_type["backing"]["dataset"]
-    dataset = dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
+    dataset = dataset_registry_service.get_dataset(object_type["backing"]["dataset"], ctx=ctx)
     version = dataset_version_service._latest_version_by_dataset_id(conn, dataset["id"])
     run_id = _new_id("index_run")
     active_index_version = _active_index_version(conn, ctx, object_type, object_index_repository)
@@ -68,6 +67,7 @@ def _start_index_rebuild_plan(
         mode,
         index_version,
         active_index_version,
+        trigger_type=_rebuild_trigger_type(mode),
     )
 
 
@@ -101,6 +101,25 @@ def _start_ontology_reindex_plan(
         trigger_type="ontology_migration_reindex",
         source_ref=_ontology_reindex_source_ref(object_type["config"], operation, reindex_key),
     )
+    return _full_rebuild_plan(
+        run_id,
+        object_type_api_name,
+        object_type,
+        version,
+        active_index_version,
+        trigger_type="ontology_migration_reindex",
+    )
+
+
+def _full_rebuild_plan(
+    run_id: str,
+    object_type_api_name: str,
+    object_type: ObjectTypeRow,
+    version: DatasetVersionRow,
+    active_index_version: str,
+    *,
+    trigger_type: str,
+) -> ObjectIndexRebuildPlan:
     return ObjectIndexRebuildPlan(
         run_id,
         object_type_api_name,
@@ -110,6 +129,7 @@ def _start_ontology_reindex_plan(
         "full",
         active_index_version,
         active_index_version,
+        trigger_type=trigger_type,
     )
 
 
@@ -145,7 +165,14 @@ def _start_failed_index_replay_plan(
         trigger_type="failed_run_replay",
         source_ref={"dataset_version_id": version_id, "replay_of_run_id": index_run_id},
     )
-    return _replay_plan(run_id, object_type_api_name, object_type, version, version_id, active_index_version)
+    return _full_rebuild_plan(
+        run_id,
+        object_type_api_name,
+        object_type,
+        version,
+        active_index_version,
+        trigger_type="failed_run_replay",
+    )
 
 
 def _failed_index_run(
@@ -176,26 +203,6 @@ def _active_index_version(
         transaction=conn,
         tenant_id=ctx.tenant_id,
         object_type_id=object_type["id"],
-    )
-
-
-def _replay_plan(
-    run_id: str,
-    object_type_api_name: str,
-    object_type: ObjectTypeRow,
-    version: DatasetVersionRow,
-    version_id: str,
-    active_index_version: str,
-) -> ObjectIndexRebuildPlan:
-    return ObjectIndexRebuildPlan(
-        run_id,
-        object_type_api_name,
-        object_type,
-        version,
-        version_id,
-        "full",
-        active_index_version,
-        active_index_version,
     )
 
 

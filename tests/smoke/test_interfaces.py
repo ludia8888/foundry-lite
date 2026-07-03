@@ -2225,7 +2225,10 @@ def test_api_dataset_object_action_and_metrics_smoke(foundry, monkeypatch) -> No
     assert index_replay.status_code == 200
     replay = index_replay.json()
     assert replay["object_type"] == "Order"
-    assert replay["objects_upserted"] >= 1
+    # The replayed dataset version is unchanged, so the changelog-incremental
+    # refresh reads the snapshot but correctly upserts zero rows.
+    assert replay["rows_read"] >= 1
+    assert replay["objects_upserted"] == 0
     index_detail = client.get(f"/api/operations/runs/index/{replay['index_run_id']}", headers=headers)
     assert index_detail.status_code == 200
     replay_detail = index_detail.json()

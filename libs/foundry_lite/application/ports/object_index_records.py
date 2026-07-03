@@ -26,6 +26,9 @@ class IndexRunSourceRef(TypedDict, total=False):
     cdc_dataset: str
     event_count: int
     mode: str
+    changed: int
+    deleted: int
+    skipped: int
     index_version: str
     baseline_count: int
     baseline_hash: str

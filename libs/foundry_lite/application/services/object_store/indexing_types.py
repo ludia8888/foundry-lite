@@ -29,6 +29,10 @@ class ObjectIndexRebuildPlan:
     mode: str
     index_version: str
     previous_index_version: str
+    # Changelog-hash diffing is only safe for plain dataset reindexes; the plan
+    # carries its trigger so the rebuild can force full passes for shadow,
+    # ontology-migration, and failed-run-replay flows that change index shape.
+    trigger_type: str = "reindex"
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,10 @@ class ObjectIndexRebuildCounts:
     objects_upserted: int
     objects_deleted: int
     links_upserted: int
+    # Refresh evidence for operators: how the run resolved the source snapshot
+    # ("full" vs "changelog_incremental") and how many rows it could skip.
+    refresh_mode: str = "full"
+    rows_skipped: int = 0
 
 
 @dataclass(frozen=True)
