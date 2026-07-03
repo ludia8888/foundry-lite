@@ -1,6 +1,14 @@
+interfaces:
+  - apiName: Asset
+    displayName: Asset
+    properties:
+      - apiName: riskScore
+        type: float
+        indexed: true
 objectTypes:
   - apiName: Order
     displayName: Order
+    implements: [Asset]
     primaryKey: orderId
     titleProperty: orderId
     backing:
@@ -46,6 +54,7 @@ objectTypes:
         editPolicy: edit_only
   - apiName: Customer
     displayName: Customer
+    implements: [Asset]
     primaryKey: customerId
     titleProperty: name
     backing:

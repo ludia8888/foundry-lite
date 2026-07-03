@@ -102,6 +102,54 @@ def warning_property_reindex(
     )
 
 
+def warning_interface_added(api_name: str) -> OntologyMigrationChange:
+    """Return a warning change for adding a new interface type."""
+    return _warning(
+        "interface_added",
+        f"interfaces.{api_name}",
+        "adding an interface is backward-compatible but changes the polymorphic SDK surface",
+    )
+
+
+def blocked_interface_removed(api_name: str) -> OntologyMigrationChange:
+    """Return a blocking change for removing an interface type."""
+    return _blocked(
+        "interface_removed",
+        f"interfaces.{api_name}",
+        "removing an interface breaks OSDK apps that query or type against it",
+        True,
+    )
+
+
+def blocked_interface_property_removed(interface_api_name: str, api_name: str) -> OntologyMigrationChange:
+    """Return a blocking change for removing a shared property contract."""
+    return _blocked(
+        "interface_property_removed",
+        f"interfaces.{interface_api_name}.properties.{api_name}",
+        "removing an interface property breaks consumers reading it across implementing types",
+        True,
+    )
+
+
+def warning_implements_added(object_api_name: str, interface_api_name: str) -> OntologyMigrationChange:
+    """Return a warning change for an object type newly implementing an interface."""
+    return _warning(
+        "object_implements_added",
+        f"objectTypes.{object_api_name}.implements.{interface_api_name}",
+        "implementing an interface is backward-compatible but widens interface query results",
+    )
+
+
+def blocked_implements_removed(object_api_name: str, interface_api_name: str) -> OntologyMigrationChange:
+    """Return a blocking change for an object type dropping an interface it implements."""
+    return _blocked(
+        "object_implements_removed",
+        f"objectTypes.{object_api_name}.implements.{interface_api_name}",
+        "dropping an implements declaration removes the type from interface queries OSDK apps depend on",
+        True,
+    )
+
+
 def blocked_link_removed(api_name: str) -> OntologyMigrationChange:
     """Return a blocking change for removing a link type."""
     return _blocked("link_removed", f"linkTypes.{api_name}", "removing a link type breaks graph traversal APIs", True)

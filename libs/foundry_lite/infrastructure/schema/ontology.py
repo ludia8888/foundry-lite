@@ -97,3 +97,16 @@ action_types = Table(
     Column("enabled", Boolean, nullable=False),
     UniqueConstraint("tenant_id", "ontology_version_id", "api_name", name="uq_action_type_api"),
 )
+
+
+interface_types = Table(
+    "interface_types",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("tenant_id", String, nullable=False),
+    Column("ontology_version_id", String, nullable=False),
+    Column("api_name", String, nullable=False),
+    Column("display_name", String, nullable=False),
+    Column("definition", JSON, nullable=False),
+    UniqueConstraint("tenant_id", "ontology_version_id", "api_name", name="uq_interface_type_api"),
+)

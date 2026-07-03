@@ -75,6 +75,7 @@ from foundry_lite.infrastructure.schema.objects import (
 )
 from foundry_lite.infrastructure.schema.ontology import (
     action_types,
+    interface_types,
     link_types,
     object_types,
     ontology_versions,
@@ -162,6 +163,7 @@ __all__ = [
     "runtime_run_relations",
     "workflow_runs",
     "action_types",
+    "interface_types",
     "link_types",
     "object_types",
     "ontology_versions",

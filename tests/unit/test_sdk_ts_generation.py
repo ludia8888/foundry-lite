@@ -1067,6 +1067,56 @@ def test_generated_sdk_files_match_active_ontology() -> None:
     )
 
 
+def test_sdk_generator_emits_interface_constants() -> None:
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    generated = sdk.render_typescript(ontology)
+    browser_sdk = sdk.render_web_javascript(ontology)
+
+    assert "export type OsdkInterfaceType = {" in generated
+    assert "export const Asset = {" in generated
+    assert '  apiName: "Asset",' in generated
+    assert '  properties: ["riskScore"],' in generated
+    assert '  implementers: ["Order", "Customer"],' in generated
+    assert "export const $Interfaces = { Asset } as const;" in generated
+    assert "interfaces?: OntologyCatalogInterface[];" in _type_block(generated, "OntologyCatalog")
+    assert "implements?: string[];" in _type_block(generated, "OntologyCatalogObject")
+    assert "export const Asset = Object.freeze({" in browser_sdk
+    assert 'properties: Object.freeze(["riskScore"]),' in browser_sdk
+    assert 'implementers: Object.freeze(["Order", "Customer"]),' in browser_sdk
+    assert "export const $Interfaces = Object.freeze({ Asset });" in browser_sdk
+
+
+def test_interface_changes_the_ontology_contract_fingerprint(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    original_path = tmp_path / "original.yaml"
+    original_path.write_text(ontology_text, encoding="utf-8")
+    renamed_path = tmp_path / "renamed.yaml"
+    renamed_path.write_text(
+        ontology_text.replace("apiName: Asset", "apiName: Resource").replace(
+            "implements: [Asset]", "implements: [Resource]"
+        ),
+        "utf-8",
+    )
+
+    original = contract_fingerprint(sdk.load_ontology(original_path))
+    renamed = contract_fingerprint(sdk.load_ontology(renamed_path))
+
+    assert original != renamed
+
+
+def test_sdk_generator_rejects_dangling_or_non_conforming_implements(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    dangling_path = tmp_path / "dangling.yaml"
+    dangling_path.write_text(ontology_text.replace("implements: [Asset]", "implements: [Ghost]", 1), "utf-8")
+    with pytest.raises(ValueError, match="implements must reference a declared interface"):
+        sdk.load_ontology(dangling_path)
+
+    non_conforming_path = tmp_path / "non-conforming.yaml"
+    non_conforming_path.write_text(ontology_text.replace("apiName: riskScore", "apiName: riskiness", 1), "utf-8")
+    with pytest.raises(ValueError, match="missing riskiness"):
+        sdk.load_ontology(non_conforming_path)
+
+
 def test_title_property_changes_the_ontology_contract_fingerprint(tmp_path: Path) -> None:
     ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
     original_path = tmp_path / "original.yaml"

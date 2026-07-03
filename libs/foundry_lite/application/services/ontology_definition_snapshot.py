@@ -12,11 +12,13 @@ from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRow,
+    InterfaceTypeRow,
     LinkTypeRow,
     ObjectTypeRow,
     PropertyTypeRow,
 )
 from foundry_lite.application.services.object_store.row_policies import persisted_row_policies
+from foundry_lite.application.services.ontology_interface_validation import persisted_implements
 
 JsonObject = dict[str, object]
 
@@ -27,15 +29,21 @@ def ontology_definition_snapshot(
     properties_by_object_id: dict[str, Sequence[PropertyTypeRow]],
     link_rows: Sequence[LinkTypeRow],
     action_rows: Sequence[ActionTypeRow],
+    interface_rows: Sequence[InterfaceTypeRow] = (),
 ) -> JsonObject:
     """Return the YAML-shaped definition equivalent to a persisted ontology version."""
-    return {
+    definition: JsonObject = {
         "objectTypes": [
             _object_type_definition(row, properties_by_object_id.get(row["id"], ())) for row in object_rows
         ],
         "linkTypes": [_link_type_definition(row) for row in link_rows],
         "actionTypes": [dict(row["definition"]) for row in action_rows],
     }
+    # Interfaces must survive rollback: the restored version replays through
+    # the same YAML-shaped import path (parse -> conformance -> persist).
+    if interface_rows:
+        definition["interfaces"] = [dict(row["definition"]) for row in interface_rows]
+    return definition
 
 
 def _object_type_definition(row: ObjectTypeRow, properties: Sequence[PropertyTypeRow]) -> JsonObject:
@@ -62,6 +70,11 @@ def _object_type_definition(row: ObjectTypeRow, properties: Sequence[PropertyTyp
     policies = persisted_row_policies(row["config"])
     if policies:
         definition["rowPolicies"] = [{"role": role, "filter": dict(policy_filter)} for role, policy_filter in policies]
+    # Implements must survive rollback too: dropping one on restore would both
+    # shrink interface query results and later read as a blocked drop.
+    implements = persisted_implements(row["config"])
+    if implements:
+        definition["implements"] = list(implements)
     return definition
 
 

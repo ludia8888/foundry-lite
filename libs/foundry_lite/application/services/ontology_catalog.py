@@ -6,9 +6,11 @@ from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRow,
+    InterfaceTypeRow,
     LinkTypeRow,
     ObjectTypeRow,
     OntologyCatalogAction,
+    OntologyCatalogInterface,
     OntologyCatalogLink,
     OntologyCatalogObject,
     OntologyCatalogProperty,
@@ -16,6 +18,7 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyVersionRow,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.ontology_interface_validation import persisted_implements
 
 
 def build_ontology_catalog(
@@ -25,6 +28,7 @@ def build_ontology_catalog(
     link_rows: Sequence[LinkTypeRow],
     properties_by_object_id: Mapping[str, Sequence[PropertyTypeRow]],
     actions_by_object_id: Mapping[str, Sequence[ActionTypeRow]],
+    interface_rows: Sequence[InterfaceTypeRow] = (),
 ) -> OntologyCatalogResult:
     return {
         "ontologyVersionId": active["id"],
@@ -32,6 +36,7 @@ def build_ontology_catalog(
         "status": active["status"],
         "createdAt": active["created_at"],
         "activatedAt": active["activated_at"],
+        "interfaces": [_catalog_interface(item, object_rows) for item in interface_rows],
         "objectTypes": [
             _catalog_object(
                 item,
@@ -41,6 +46,18 @@ def build_ontology_catalog(
             for item in object_rows
         ],
         "linkTypes": [_catalog_link(item) for item in link_rows],
+    }
+
+
+def _catalog_interface(row: InterfaceTypeRow, object_rows: Sequence[ObjectTypeRow]) -> OntologyCatalogInterface:
+    """Surface one interface plus which object types implement it."""
+    return {
+        "apiName": row["api_name"],
+        "displayName": row["display_name"],
+        "properties": list(row["definition"]["properties"]),
+        "implementedBy": [
+            item["api_name"] for item in object_rows if row["api_name"] in persisted_implements(item["config"])
+        ],
     }
 
 
@@ -58,6 +75,7 @@ def _catalog_object(
         "titleProperty": _title_property(row),
         "materialization": _materialization(row),
         "rowPolicies": _row_policies(row),
+        "implements": list(persisted_implements(row["config"])),
         "backing": row["backing"],
         "properties": [_catalog_property(item) for item in properties],
         "actions": [_catalog_action(item) for item in actions],

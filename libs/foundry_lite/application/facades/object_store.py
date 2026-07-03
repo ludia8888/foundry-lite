@@ -144,6 +144,24 @@ class ObjectStore:
             semantic_text=semantic_text,
         )
 
+    def query_by_interface(
+        self,
+        interface_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        order_by: Sequence[Mapping[str, str]] | None = None,
+        limit: int = 50,
+    ) -> ObjectQueryResult:
+        """Polymorphic query across every object type implementing an interface."""
+        return self._objects.interface_query.query_by_interface(
+            interface_api_name,
+            ctx=ctx,
+            filter_ast=filter_ast,
+            order_by=order_by,
+            limit=limit,
+        )
+
     def aggregate(
         self,
         object_type_api_name: str,

@@ -6,6 +6,7 @@ from collections.abc import Sequence
 
 from foundry_lite.application.ports import (
     ActionTypeRow,
+    InterfaceTypeRow,
     LinkTypeRow,
     ObjectTypeRow,
     OntologyVersionRow,
@@ -42,6 +43,18 @@ class OntologyLookupService(CoreService):
         ontology_version_id: str,
     ) -> Sequence[LinkTypeRow]:
         return self.ontology_repository.link_types_for_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=ontology_version_id,
+        )
+
+    def _interface_types_for_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> Sequence[InterfaceTypeRow]:
+        return self.ontology_repository.interface_types_for_version(
             transaction=conn,
             tenant_id=ctx.tenant_id,
             ontology_version_id=ontology_version_id,

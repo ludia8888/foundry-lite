@@ -109,6 +109,11 @@ class OntologyRollbackService(CoreService):
                 ontology_version_id=ontology_version_id,
             ),
             action_rows=action_rows,
+            interface_rows=self.ontology_repository.interface_types_for_version(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                ontology_version_id=ontology_version_id,
+            ),
         )
 
     def _record_rollback(

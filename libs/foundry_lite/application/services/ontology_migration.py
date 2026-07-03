@@ -35,6 +35,11 @@ def plan_ontology_migration(
         ontology_version_id=active_ontology_version_id,
     )
     current_actions = _active_actions(repository, transaction, current_objects)
+    current_interfaces = repository.interface_types_for_version(
+        transaction=transaction,
+        tenant_id=ctx.tenant_id,
+        ontology_version_id=active_ontology_version_id,
+    )
     return build_ontology_migration_plan(
         source_ontology_version_id=active_ontology_version_id,
         current_objects=current_objects,
@@ -42,6 +47,7 @@ def plan_ontology_migration(
         current_links=current_links,
         current_actions=current_actions,
         definition=definition,
+        current_interfaces=current_interfaces,
     )
 
 

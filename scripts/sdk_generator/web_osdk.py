@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 
-from scripts.sdk_generator.ontology import ActionDef, LinkDef, ObjectDef, OntologyDef
+from scripts.sdk_generator.ontology import ActionDef, InterfaceDef, LinkDef, ObjectDef, OntologyDef
 from scripts.sdk_generator.surface import (
     _action_alias_entries,
     _link_entries_for_object,
@@ -13,30 +14,45 @@ from scripts.sdk_generator.surface import (
 )
 
 
+def _web_api_names_csv(items: Sequence[ActionDef | InterfaceDef | LinkDef | ObjectDef]) -> str:
+    return ", ".join(item.api_name for item in items)
+
+
+def _web_api_name_values_csv(items: Sequence[ActionDef | InterfaceDef | LinkDef | ObjectDef]) -> str:
+    return ", ".join(json.dumps(item.api_name) for item in items)
+
+
 def _web_osdk_registry_lines(ontology: OntologyDef) -> list[str]:
     lines: list[str] = []
     for object_def in ontology.objects:
         lines.extend(_web_osdk_object_constant_lines(object_def))
-    object_names = ", ".join(item.api_name for item in ontology.objects)
-    object_name_values = ", ".join(json.dumps(item.api_name) for item in ontology.objects)
+    object_names = _web_api_names_csv(ontology.objects)
+    object_name_values = _web_api_name_values_csv(ontology.objects)
     lines.append(f"export const $Objects = Object.freeze({{ {object_names} }});")
+    for interface_def in ontology.interfaces:
+        lines.extend(_web_osdk_interface_constant_lines(interface_def))
+    interface_names = _web_api_names_csv(ontology.interfaces)
+    interface_name_values = _web_api_name_values_csv(ontology.interfaces)
     for link_def in ontology.links:
         lines.extend(_web_osdk_link_constant_lines(link_def))
-    link_names = ", ".join(item.api_name for item in ontology.links)
-    link_name_values = ", ".join(json.dumps(item.api_name) for item in ontology.links)
+    link_names = _web_api_names_csv(ontology.links)
+    link_name_values = _web_api_name_values_csv(ontology.links)
     for action_def in ontology.actions:
         lines.extend(_web_osdk_action_constant_lines(action_def))
-    action_names = ", ".join(item.api_name for item in ontology.actions)
-    action_name_values = ", ".join(json.dumps(item.api_name) for item in ontology.actions)
+    action_names = _web_api_names_csv(ontology.actions)
+    action_name_values = _web_api_name_values_csv(ontology.actions)
     lines.extend(
         [
+            f"export const $Interfaces = Object.freeze({{ {interface_names} }});",
             f"export const $Links = Object.freeze({{ {link_names} }});",
             f"export const $Actions = Object.freeze({{ {action_names} }});",
             "export const $Ontology = Object.freeze({",
             "  objects: $Objects,",
+            "  interfaces: $Interfaces,",
             "  links: $Links,",
             "  actions: $Actions,",
             f"  objectApiNames: Object.freeze([{object_name_values}]),",
+            f"  interfaceApiNames: Object.freeze([{interface_name_values}]),",
             f"  linkApiNames: Object.freeze([{link_name_values}]),",
             f"  actionApiNames: Object.freeze([{action_name_values}]),",
             "});",
@@ -447,6 +463,19 @@ def _web_osdk_object_constant_lines(object_def: ObjectDef) -> list[str]:
         f"  primaryKey: {primary_key},",
         f"  titleProperty: {title_property},",
         f"  properties: Object.freeze([{property_names}]),",
+        "});",
+    ]
+
+
+def _web_osdk_interface_constant_lines(interface_def: InterfaceDef) -> list[str]:
+    property_names = ", ".join(json.dumps(prop.api_name) for prop in interface_def.properties)
+    implementer_names = ", ".join(json.dumps(name) for name in interface_def.implementers)
+    return [
+        f"export const {interface_def.api_name} = Object.freeze({{",
+        '  kind: "interface",',
+        f'  apiName: "{interface_def.api_name}",',
+        f"  properties: Object.freeze([{property_names}]),",
+        f"  implementers: Object.freeze([{implementer_names}]),",
         "});",
     ]
 

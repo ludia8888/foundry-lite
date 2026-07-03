@@ -21,6 +21,11 @@ from foundry_lite.application.ports import (
 )
 from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.ontology_interface_validation import (
+    import_interface_types,
+    object_type_implements,
+    validate_ontology_interfaces,
+)
 from foundry_lite.application.services.ontology_migration import (
     OntologyMigrationPlan,
     plan_ontology_migration,
@@ -112,6 +117,7 @@ class OntologyActivationService(CoreService):
         definition = self._load_ontology_text(yaml_text)
         with self.engine.begin() as conn:
             validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
+            validate_ontology_interfaces(definition)
             migration_plan = self._candidate_migration_plan(conn, ctx, definition)
         return ontology_validation_result(definition, migration_plan)
 
@@ -122,9 +128,11 @@ class OntologyActivationService(CoreService):
         definition: YamlObject,
     ) -> OntologyApplyResult:
         validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
+        validate_ontology_interfaces(definition)
         migration_plan = self._candidate_migration_plan(conn, ctx, definition)
         migration_plan.raise_if_blocked()
         ontology_version_id, version_number = self._create_draft_version(conn, ctx)
+        import_interface_types(self.ontology_repository, conn, ctx, ontology_version_id, definition)
         object_map = self._import_object_types(conn, ctx, ontology_version_id, definition, migration_plan)
         self._import_link_types(conn, ctx, ontology_version_id, definition, object_map)
         self._import_action_types(conn, ctx, ontology_version_id, definition, object_map)
@@ -238,9 +246,9 @@ class OntologyActivationService(CoreService):
         migration_plan: OntologyMigrationPlan,
         api_name: str,
     ) -> dict[str, object]:
-        # titleProperty, materialization, and rowPolicies ride in the existing
-        # config JSON so no schema migration is needed; they coexist with the
-        # reindex serving-contract entries.
+        # titleProperty, materialization, rowPolicies, and implements ride in
+        # the existing config JSON so no schema migration is needed; they
+        # coexist with the reindex serving-contract entries.
         config = object_type_serving_config(migration_plan, api_name)
         title_property = optional_str(item, "titleProperty")
         if title_property is not None:
@@ -251,6 +259,9 @@ class OntologyActivationService(CoreService):
         row_policies = object_type_row_policies(item)
         if row_policies:
             config["rowPolicies"] = list(row_policies)
+        implements = object_type_implements(item)
+        if implements:
+            config["implements"] = list(implements)
         return config
 
     def _import_properties_for_object_type(

@@ -25,6 +25,7 @@ from foundry_lite_api.request_context import (
     _websocket_origin_allowed,
 )
 from foundry_lite_api.schemas import (
+    InterfaceQueryRequest,
     JsonObject,
     ObjectAggregateRequest,
     ObjectQueryRequest,
@@ -67,6 +68,25 @@ def query_objects(request: Request, object_type: str, payload: ObjectQueryReques
             limit=payload.limit,
             cursor=payload.cursor,
             search_text=payload.search_text,
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/interfaces/{interface_type}/query")
+def query_interface_objects(
+    request: Request,
+    interface_type: str,
+    payload: InterfaceQueryRequest,
+) -> ObjectQueryResult:
+    """Union query across every object type implementing the interface."""
+    try:
+        return runtime.foundry.objects.query_by_interface(
+            interface_type,
+            ctx=_ctx(request),
+            filter_ast=payload.filter_ast,
+            order_by=payload.order_by,
+            limit=payload.limit,
         )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc

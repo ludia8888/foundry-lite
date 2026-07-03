@@ -11,6 +11,8 @@ from sqlalchemy.engine import Engine
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRecord,
     ActionTypeRow,
+    InterfaceTypeRecord,
+    InterfaceTypeRow,
     LinkTypeRecord,
     LinkTypeRow,
     ObjectTypeRecord,
@@ -151,6 +153,41 @@ class SqlAlchemyOntologyRepository:
                 enabled=record.enabled,
             )
         )
+
+    def insert_interface_type(self, *, transaction: Any, record: InterfaceTypeRecord) -> None:
+        transaction.execute(
+            insert(db.interface_types).values(
+                id=record.interface_type_id,
+                tenant_id=record.tenant_id,
+                ontology_version_id=record.ontology_version_id,
+                api_name=record.api_name,
+                display_name=record.display_name,
+                definition=record.definition,
+            )
+        )
+
+    def interface_types_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ontology_version_id: str,
+    ) -> list[InterfaceTypeRow]:
+        rows = (
+            transaction.execute(
+                select(db.interface_types)
+                .where(
+                    and_(
+                        db.interface_types.c.tenant_id == tenant_id,
+                        db.interface_types.c.ontology_version_id == ontology_version_id,
+                    )
+                )
+                .order_by(db.interface_types.c.api_name)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(InterfaceTypeRow, dict(row)) for row in rows]
 
     def object_types_for_version(
         self,

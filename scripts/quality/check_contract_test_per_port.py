@@ -20,6 +20,7 @@ DEFAULT_CONTRACT_DIR = ROOT / "tests" / "contracts"
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "contract_test_per_port.json"
 PORT_CONTRACT_ALIASES = {
     "dataset_storage": ("dataset_storage_adapter",),
+    "ontology_definitions": ("ontology_repository",),
     "runtime_repository_types": ("runtime_repository",),
 }
 
