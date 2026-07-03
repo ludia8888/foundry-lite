@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict
 from typing import cast
 
 from fastapi import APIRouter, Form, Header, Query, Request, UploadFile
 from foundry_lite.application.ports.content_index import HybridContentQuery
 from foundry_lite.application.ports.media_processor import ProcessorSpec
-from foundry_lite.domain.errors import FoundryLiteError
+from foundry_lite.application.upload_limits import max_media_upload_bytes
+from foundry_lite.domain.errors import FoundryLiteError, ValidationFailed
 
 from foundry_lite_api import runtime
 from foundry_lite_api.errors import _handle_error
@@ -27,6 +29,7 @@ from foundry_lite_api.schemas import (
     MediaVisualSearchRequest,
 )
 from foundry_lite_api.serializers import _json_form_object, _optional_json_form_object
+from foundry_lite_api.webhooks import _request_content_length
 
 router = APIRouter()
 
@@ -94,6 +97,7 @@ def upload_media_file(
     probe_metadata: str | None = Form(default=None, alias="probeMetadata"),
 ) -> JsonObject:
     try:
+        _reject_oversized_media_upload(request, file)
         file.file.seek(0)
         staged = runtime.foundry.media.upload(
             _ctx(request),
@@ -295,6 +299,33 @@ def resolve_media_reference(
         return cast(JsonObject, asdict(resolved)) if resolved is not None else None
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
+
+
+def _reject_oversized_media_upload(request: Request, file: UploadFile) -> None:
+    # Bound the upload before it is staged: reject on the declared Content-Length (mirrors the
+    # webhook guard) and on the actual buffered byte size (in case the header is absent or lies).
+    max_bytes = max_media_upload_bytes()
+    content_length = _request_content_length(request)
+    if content_length is not None and content_length > max_bytes:
+        raise _media_upload_too_large(content_length, max_bytes)
+    size_bytes = _uploaded_file_size(file)
+    if size_bytes > max_bytes:
+        raise _media_upload_too_large(size_bytes, max_bytes)
+
+
+def _uploaded_file_size(file: UploadFile) -> int:
+    handle = file.file
+    handle.seek(0, os.SEEK_END)
+    size_bytes = handle.tell()
+    handle.seek(0)
+    return size_bytes
+
+
+def _media_upload_too_large(size_bytes: int, max_bytes: int) -> ValidationFailed:
+    return ValidationFailed(
+        "media upload exceeds configured size limit",
+        details={"size_bytes": size_bytes, "max_bytes": max_bytes},
+    )
 
 
 def _processor_spec(payload: MediaProcessRequest) -> ProcessorSpec:

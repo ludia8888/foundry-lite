@@ -228,6 +228,12 @@ class MediaRepository(Protocol):
         """Flip a transaction's STAGED versions to COMMITTED atomically with the transaction commit."""
         ...
 
+    def fetch_committed_versions(
+        self, *, transaction: TransactionContext, tenant_id: str, media_transaction_id: str
+    ) -> list[MediaItemVersionRecord]:
+        """Return a transaction's already-COMMITTED versions read-only (for idempotent commit replay)."""
+        ...
+
     def fetch_unreachable_staged_versions(
         self, *, transaction: TransactionContext, tenant_id: str, older_than: str
     ) -> list[MediaItemVersionRecord]:

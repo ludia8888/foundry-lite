@@ -253,6 +253,39 @@ def test_media_retention_skips_reachable_or_legal_hold(env: _Env) -> None:
     assert "media.retention.purged" in env.runtime.audits
 
 
+def test_purging_head_version_does_not_leave_a_dangling_head_pointer(env: _Env) -> None:
+    # A committed version is its logical path's current head. When it is purged (unreferenced,
+    # past grace) the head pointer must be cleared, not left dangling at a deleted version.
+    c = env.commit_version(logical_path="/head.pdf", body=b"%PDF-1.4 head", idem="thead")
+    with env.engine.begin() as conn:  # type: ignore[attr-defined]
+        version = env.repo.media_item_version_by_id(
+            transaction=conn, tenant_id=env.ctx.tenant_id, media_item_version_id=c
+        )
+        assert version is not None
+        item = env.repo.media_item_by_id(
+            transaction=conn, tenant_id=env.ctx.tenant_id, media_item_id=version.media_item_id
+        )
+    assert item is not None and item.head_version_id == c  # precondition: c is the head
+    media_item_id = version.media_item_id
+
+    marked_at = datetime(2026, 6, 1, tzinfo=datetime.now().astimezone().tzinfo)
+    env.retention.mark_media_versions_for_retention(env.ctx, media_item_version_ids=[c], now=marked_at)
+    summary = env.retention.purge_marked_media_versions(
+        env.ctx, now=marked_at + timedelta(days=30), grace=timedelta(days=7)
+    )
+
+    assert c in summary.purged_version_ids
+    assert not env.version_present(c)  # version row is physically gone
+    with env.engine.begin() as conn:  # type: ignore[attr-defined]
+        item_after = env.repo.media_item_by_id(
+            transaction=conn, tenant_id=env.ctx.tenant_id, media_item_id=media_item_id
+        )
+    # The head pointer no longer dangles at the purged version.
+    assert item_after is not None
+    assert item_after.head_version_id != c
+    assert item_after.head_version_id is None
+
+
 def test_retention_does_not_purge_before_grace_elapsed(env: _Env) -> None:
     c = env.commit_version(logical_path="/c.pdf", body=b"%PDF-1.4 c", idem="tc")
     marked_at = datetime(2026, 6, 1, tzinfo=datetime.now().astimezone().tzinfo)

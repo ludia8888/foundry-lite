@@ -34,6 +34,7 @@ from foundry_lite.infrastructure.secrets.local_vault import (
 )
 from foundry_lite_api import main as api_main
 from foundry_lite_api import runtime as api_runtime
+from foundry_lite_api.routers import media as media_router
 from foundry_lite_worker import outbox_publisher
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -400,6 +401,29 @@ def test_api_media_and_aip_routes_delegate_with_serialized_payloads(monkeypatch)
             ),
         )
     assert release_error.value.detail["details"]["reason"] == "eval_run_not_passed"
+
+
+def test_upload_media_file_rejects_oversized_upload_before_staging(monkeypatch) -> None:
+    # An upload larger than the configured cap must be rejected before it is staged: the
+    # media workspace upload is never invoked.
+    fake = _fake_foundry()
+    monkeypatch.setattr(api_runtime, "foundry", fake)
+    monkeypatch.setattr(media_router, "max_media_upload_bytes", lambda: 4)
+    request = _request()
+
+    with pytest.raises(HTTPException) as oversized:
+        api_main.upload_media_file(
+            request,
+            "media-set-1",
+            "media-tx-1",
+            logical_path="doc.txt",
+            schema_type="document",
+            format="txt",
+            file=_upload("doc.txt", b"way past the four byte cap"),
+            security_envelope='{"classification":"internal"}',
+        )
+    assert oversized.value.status_code == 400
+    assert oversized.value.detail["details"]["max_bytes"] == 4
 
 
 def test_api_source_upload_and_webhook_routes_delegate_to_source_workspace(monkeypatch) -> None:

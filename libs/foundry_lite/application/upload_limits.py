@@ -9,6 +9,7 @@ from foundry_lite.domain.errors import ValidationFailed
 
 DEFAULT_MAX_CSV_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_MAX_WEBHOOK_BODY_BYTES = 1 * 1024 * 1024
+MAX_MEDIA_UPLOAD_BYTES = 100 * 1024 * 1024
 CSV_UPLOAD_LIMIT_ENV = "FOUNDRY_LITE_MAX_CSV_UPLOAD_BYTES"
 WEBHOOK_BODY_LIMIT_ENV = "FOUNDRY_LITE_MAX_WEBHOOK_BODY_BYTES"
 
@@ -21,6 +22,10 @@ def require_csv_size_limit(source_path: Path) -> None:
             "csv file exceeds configured size limit",
             details={"path": str(source_path), "size_bytes": size, "max_bytes": max_bytes},
         )
+
+
+def max_media_upload_bytes() -> int:
+    return MAX_MEDIA_UPLOAD_BYTES
 
 
 def max_webhook_body_bytes() -> int:

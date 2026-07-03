@@ -261,6 +261,26 @@ class SqlAlchemyMediaRepository:
         )
         return [_media_version_from_row(row) for row in rows]
 
+    def fetch_committed_versions(
+        self, *, transaction: Any, tenant_id: str, media_transaction_id: str
+    ) -> list[MediaItemVersionRecord]:
+        # Read-only view of a transaction's already-COMMITTED versions, for an idempotent
+        # commit replay: it must not transition any (late-)STAGED version.
+        rows = (
+            transaction.execute(
+                select(db.media_item_versions).where(
+                    and_(
+                        db.media_item_versions.c.tenant_id == tenant_id,
+                        db.media_item_versions.c.media_transaction_id == media_transaction_id,
+                        db.media_item_versions.c.status == "COMMITTED",
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_media_version_from_row(row) for row in rows]
+
     def fetch_unreachable_staged_versions(
         self, *, transaction: Any, tenant_id: str, older_than: str
     ) -> list[MediaItemVersionRecord]:
@@ -356,6 +376,18 @@ class SqlAlchemyMediaRepository:
         # Physical delete of one version's whole derived-data footprint, in the caller's
         # transaction. Bindings are NOT deleted here — the service refuses to purge a
         # reachable version, so a bound version never reaches this method.
+        # First clear any head pointer at this version, or deleting the row would leave
+        # media_items.head_version_id dangling (pointing at a purged version).
+        transaction.execute(
+            update(db.media_items)
+            .where(
+                and_(
+                    db.media_items.c.tenant_id == tenant_id,
+                    db.media_items.c.head_version_id == media_item_version_id,
+                )
+            )
+            .values(head_version_id=None)
+        )
         for table in (db.content_units, db.media_derivatives, db.media_access_caches):
             transaction.execute(
                 delete(table).where(
