@@ -86,7 +86,7 @@ def test_index_write_records_are_immutable() -> None:
     """Records are shared across retry paths; mutation must be impossible."""
     for record in (_index_run_record(), _object_record_insert(), _object_link_insert()):
         with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(record, "tenant_id", "tenant-other")
+            record.tenant_id = "tenant-other"  # type: ignore[misc]
 
 
 def test_object_and_link_inserts_default_to_the_active_index_version() -> None:
