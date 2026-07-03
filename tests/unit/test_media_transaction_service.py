@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 from foundry_lite.application.ports import TransactionContext
+from foundry_lite.application.ports.media_repository import MediaItemRecord, MediaItemVersionRecord
+from foundry_lite.application.primitives import _new_id, _now
 from foundry_lite.application.services.media.catalog import MediaCatalogService, MediaSetSpec
 from foundry_lite.application.services.media.references import MediaReferenceService
 from foundry_lite.application.services.media.transactions import MediaTransactionService
@@ -460,6 +462,98 @@ def test_upload_deletes_new_blob_when_repository_returns_existing_winner(
     assert duplicate.is_duplicate is True
     assert duplicate.media_item_version_id == first.media_item_version_id
     assert media.storage.stat(session.staged_object_key).is_present is False
+
+
+def test_persist_refuses_staged_insert_when_tx_committed_between_check_and_insert(
+    media: _MediaEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # STAGED-under-COMMITTED TOCTOU: the open-check passes, then commit() lands, then the
+    # staged insert runs. A guarded write must re-read the tx status and refuse the insert,
+    # so no version is ever staged under an already-COMMITTED transaction.
+    tx = media.open_tx("idem-toctou")
+    session = media.upload.initiate(
+        media.ctx,
+        media_set_id=media.media_set_id,
+        logical_path="/contracts/a.pdf",
+        supplied_mime_type="application/pdf",
+    )
+    original_complete = media.storage.complete_staged_upload
+
+    def commit_then_complete(request: object) -> object:
+        # Interleave: the transaction commits after the open-check, before the staged insert.
+        media.transaction.commit(media.ctx, media_transaction_id=tx)
+        return original_complete(request)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(media.storage, "complete_staged_upload", commit_then_complete)
+
+    with pytest.raises(ConflictDetected, match="not open"):
+        media.upload.complete(
+            media.ctx,
+            inputs=media._inputs(tx, "/contracts/a.pdf"),
+            upload=session,
+            source=io.BytesIO(b"%PDF-1.4 a"),
+        )
+    # The refused insert rolls back and the orphaned staged blob is cleaned up.
+    assert media.storage.stat(session.staged_object_key).is_present is False
+
+
+def test_commit_replay_does_not_commit_a_late_staged_version(media: _MediaEnv) -> None:
+    # A version STAGED under an already-COMMITTED tx (the TOCTOU residue) must never be
+    # silently flipped to COMMITTED by a commit replay: that would yield a committed version
+    # with no head pointer and no outbox event (Invariant 10). The replay is read-only.
+    tx = media.open_tx("idem-1")
+    media.transaction.commit(media.ctx, media_transaction_id=tx)  # tx COMMITTED, zero versions
+    now = _now()
+    item_id = _new_id("mitem")
+    version_id = _new_id("mver")
+    with media.upload.engine.begin() as conn:
+        media.repo.upsert_media_item(
+            transaction=conn,
+            record=MediaItemRecord(
+                media_item_id=item_id,
+                tenant_id=media.ctx.tenant_id,
+                media_set_id=media.media_set_id,
+                logical_path="/contracts/late.pdf",
+                head_version_id=None,
+                is_deleted=False,
+                created_at=now,
+                updated_at=now,
+            ),
+        )
+        media.repo.insert_version(
+            transaction=conn,
+            record=MediaItemVersionRecord(
+                media_item_version_id=version_id,
+                tenant_id=media.ctx.tenant_id,
+                media_item_id=item_id,
+                media_transaction_id=tx,
+                version_number=1,
+                blob_key="staged/late",
+                content_hash="late-hash",
+                byte_size=1,
+                supplied_mime_type="application/pdf",
+                sniffed_mime_type="application/pdf",
+                schema_type="document",
+                format="pdf",
+                probe_metadata={},
+                security_envelope={},
+                source_ref=None,
+                status="STAGED",
+                created_at=now,
+            ),
+        )
+
+    media.runtime.outboxes.clear()
+    media.transaction.commit(media.ctx, media_transaction_id=tx)  # replay
+
+    with media.upload.engine.begin() as conn:
+        version = media.repo.media_item_version_by_id(
+            transaction=conn, tenant_id=media.ctx.tenant_id, media_item_version_id=version_id
+        )
+        item = media.repo.media_item_by_id(transaction=conn, tenant_id=media.ctx.tenant_id, media_item_id=item_id)
+    assert version is not None and version.status == "STAGED"  # not silently committed
+    assert item is not None and item.head_version_id is None  # no head advanced
+    assert media.runtime.outboxes == []  # no outbox event re-emitted
 
 
 def test_commit_unknown_transaction_raises_not_found(media: _MediaEnv) -> None:

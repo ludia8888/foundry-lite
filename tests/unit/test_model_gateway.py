@@ -169,13 +169,70 @@ def _gateway(engine: Engine, adapter: object) -> ModelGatewayService:
     )
 
 
-def _request(*, classification: str = "public", region: str | None = None) -> ModelRequest:
+def _request(*, classification: str = "public", region: str | None = None, environment: str = "prod") -> ModelRequest:
     return ModelRequest(
         model_alias="default-completion",
         messages=(ModelMessage(role="user", content="hello world"),),
+        environment=environment,
         data_classification=classification,
         region_requirement=region,
     )
+
+
+def _engine_with_two_environment_aliases() -> Engine:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    db.metadata.create_all(engine)
+    repository = SqlAlchemyModelRegistryRepository(engine)
+    with engine.begin() as conn:
+        repository.create_provider(
+            transaction=conn,
+            record=ModelProviderRecord(
+                provider_id="prov-1",
+                tenant_scope=_TENANT,
+                provider_type="acme",
+                profile_name="acme-proxy",
+                region="us-east-1",
+                secret_ref="foundry_aip_token",
+                retention_policy="zero_retention",
+                training_policy="no_train",
+                status="active",
+                created_at="2026-06-25T00:00:00Z",
+            ),
+        )
+        for model_id, revision in (("model-prod", "2026-06-01"), ("model-staging", "2026-09-01")):
+            repository.create_model(
+                transaction=conn,
+                record=ModelRecord(
+                    model_id=model_id,
+                    tenant_scope=_TENANT,
+                    provider_id="prov-1",
+                    provider_model_id=f"acme-{model_id}",
+                    revision=revision,
+                    lifecycle="stable",
+                    capabilities_json={"streaming": True},
+                    context_limit=8192,
+                    output_limit=1024,
+                    pricing_json={"input_per_1k": 0.5},
+                    allowed_classifications=("public", "internal"),
+                    created_at="2026-06-25T00:00:00Z",
+                ),
+            )
+        for environment, model_id in (("prod", "model-prod"), ("staging", "model-staging")):
+            repository.create_alias(
+                transaction=conn,
+                record=ModelAliasRecord(
+                    alias="default-completion",
+                    tenant_scope=_TENANT,
+                    environment=environment,
+                    model_id=model_id,
+                    version=None,
+                    status="enabled",
+                    eval_run_id=None,
+                    effective_at=None,
+                    retired_at=None,
+                ),
+            )
+    return engine
 
 
 def test_gateway_resolves_pinned_revision() -> None:
@@ -247,6 +304,7 @@ def test_gateway_requires_seeded_ai_run_before_network_call() -> None:
                 messages=(ModelMessage(role="user", content="must not escape"),),
                 ai_run_id="ai-run-missing",
                 request_hash="sha256:missing-run",
+                data_classification="internal",
             ),
         )
 
@@ -268,6 +326,7 @@ def test_gateway_records_failed_provider_attempt_without_raw_prompt() -> None:
                 messages=(ModelMessage(role="user", content="secret prompt text"),),
                 ai_run_id="ai-run-provider-failed",
                 request_hash="sha256:provider-failure",
+                data_classification="internal",
             ),
         )
 
@@ -295,6 +354,35 @@ def test_gateway_denies_egress_when_classification_exceeds_allowance() -> None:
     assert spy.calls == 0  # denied BEFORE the adapter is called
     assert excinfo.value.failure.kind == "authorization"
     assert excinfo.value.failure.details["reason"] == "egress_denied"
+
+
+def test_gateway_denies_egress_when_classification_is_unset() -> None:
+    # Fail CLOSED: an empty/unset classification must never bypass the export-control gate, even when
+    # the model has allowances — an unmarked request is denied rather than silently egressed.
+    engine = _engine_with_model(allowed=("public", "internal"))
+    spy = _SpyLanguageModel()
+    gateway = _gateway(engine, spy)
+
+    with pytest.raises(AdapterError) as excinfo:
+        gateway.invoke(_CTX, _request(classification=""))
+
+    assert spy.calls == 0  # denied BEFORE the adapter is called
+    assert excinfo.value.failure.kind == "authorization"
+    assert excinfo.value.failure.details["reason"] == "egress_denied"
+
+
+def test_gateway_resolves_environment_scoped_alias_deterministically() -> None:
+    # The same alias exists in prod and staging pointing at DIFFERENT models; prod must resolve to the
+    # prod model deterministically (never nondeterministically via ``aliases[0]``).
+    engine = _engine_with_two_environment_aliases()
+
+    prod = _gateway(engine, FakeLanguageModel()).invoke(_CTX, _request())
+    staging = _gateway(engine, FakeLanguageModel()).invoke(_CTX, _request(environment="staging"))
+
+    assert prod.resolved_model_id == "model-prod"
+    assert prod.resolved_model_revision == "2026-06-01"
+    assert staging.resolved_model_id == "model-staging"
+    assert staging.resolved_model_revision == "2026-09-01"
 
 
 def test_gateway_denies_egress_when_region_not_permitted() -> None:

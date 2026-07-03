@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import BinaryIO
 
+from foundry_lite.application.ports import TransactionContext
 from foundry_lite.application.ports.media_repository import MediaItemRecord, MediaItemVersionRecord, MediaSetRecord
 from foundry_lite.application.ports.media_storage import (
     CompleteMediaUpload,
@@ -92,6 +93,7 @@ class MediaUploadService(CoreService):
     ) -> StagedUpload:
         now = _now()
         with self.engine.begin() as conn:
+            self._reject_if_transaction_not_open(conn, ctx, inputs)
             item = self.media_repository.upsert_media_item(
                 transaction=conn, record=_item_record(ctx, inputs.media_set_id, inputs.logical_path, now)
             )
@@ -111,6 +113,28 @@ class MediaUploadService(CoreService):
         if existing is not None and existing.blob_key != upload.staged_object_key:
             self.media_storage.delete_uncommitted(upload.staged_object_key)
         return _staged_upload(item.media_item_id, record, existing)
+
+    def _reject_if_transaction_not_open(
+        self, conn: TransactionContext, ctx: RequestContext, inputs: MediaUploadInput
+    ) -> None:
+        # Guarded write: the OPEN check in ``complete`` ran in an earlier, separate transaction.
+        # Re-read the status inside the write transaction so a commit that landed in between
+        # cannot leave a STAGED version under an already-COMMITTED transaction (TOCTOU).
+        transaction = self.media_repository.transaction_by_id(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            media_transaction_id=inputs.media_transaction_id,
+        )
+        if transaction is None:
+            raise NotFound(
+                "media transaction not found",
+                details={"media_transaction_id": inputs.media_transaction_id},
+            )
+        if transaction.status != "OPEN":
+            raise ConflictDetected(
+                "media upload transaction is not open",
+                details={"media_transaction_id": inputs.media_transaction_id, "status": transaction.status},
+            )
 
     def _require_open_transaction(self, ctx: RequestContext, inputs: MediaUploadInput) -> None:
         with self.engine.begin() as conn:

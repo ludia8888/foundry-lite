@@ -11,8 +11,9 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import OAuthAccessTokenClaims, OsdkApplicationBundle
+from foundry_lite.application.services.osdk_oauth_session_service import _access_ttl, _require_redirect_uri
 from foundry_lite.domain.context import RequestContext, demo_admin_context
-from foundry_lite.domain.errors import PermissionDenied, RateLimited
+from foundry_lite.domain.errors import PermissionDenied, RateLimited, ValidationFailed
 from foundry_lite.infrastructure.auth import JwtOidcAuthConfig, JwtOidcAuthProvider, LocalOAuthTokenIssuer
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
@@ -225,7 +226,7 @@ def test_osdk_oauth_fails_closed_for_redirect_pkce_scope_and_inactive_client(tmp
         foundry.auth.osdk_oauth_authorize(
             client_id="orders-web",
             redirect_uri="https://evil.example.test/callback",
-            code_challenge="challenge",
+            code_challenge=_s256_challenge("placeholder"),
             scopes=(_READ_SCOPE,),
             ctx=ctx,
         )
@@ -233,7 +234,7 @@ def test_osdk_oauth_fails_closed_for_redirect_pkce_scope_and_inactive_client(tmp
         foundry.auth.osdk_oauth_authorize(
             client_id="orders-web",
             redirect_uri=_REDIRECT_URI,
-            code_challenge="challenge",
+            code_challenge=_s256_challenge("placeholder"),
             scopes=("osdk:action:ApproveOrder:execute",),
             ctx=ctx,
         )
@@ -267,29 +268,58 @@ def test_osdk_oauth_fails_closed_for_redirect_pkce_scope_and_inactive_client(tmp
         foundry.auth.osdk_oauth_authorize(
             client_id="orders-web",
             redirect_uri=_REDIRECT_URI,
-            code_challenge="challenge",
+            code_challenge=_s256_challenge("placeholder"),
             scopes=(_READ_SCOPE,),
             ctx=ctx,
         )
 
 
-def test_osdk_oauth_plain_pkce_and_default_scope_narrowing(tmp_path: Path) -> None:
+def test_osdk_oauth_plain_pkce_is_rejected(tmp_path: Path) -> None:
+    foundry, _verifier = _oauth_foundry(tmp_path)
+    ctx = demo_admin_context()
+    _create_app_and_client(foundry, ctx)
+
+    with pytest.raises(ValidationFailed, match="S256"):
+        foundry.auth.osdk_oauth_authorize(
+            client_id="orders-web",
+            redirect_uri=_REDIRECT_URI,
+            code_challenge=_s256_challenge("plain-verifier"),
+            code_challenge_method="plain",
+            ctx=ctx,
+        )
+
+
+def test_osdk_oauth_rejects_malformed_code_challenge(tmp_path: Path) -> None:
+    foundry, _verifier = _oauth_foundry(tmp_path)
+    ctx = demo_admin_context()
+    _create_app_and_client(foundry, ctx)
+
+    with pytest.raises(ValidationFailed, match="code_challenge"):
+        foundry.auth.osdk_oauth_authorize(
+            client_id="orders-web",
+            redirect_uri=_REDIRECT_URI,
+            code_challenge="too-short",
+            ctx=ctx,
+        )
+
+
+def test_osdk_oauth_default_scope_narrowing(tmp_path: Path) -> None:
     foundry, verifier = _oauth_foundry(tmp_path)
     ctx = demo_admin_context()
     app = _create_app_and_client(foundry, ctx)
+    verifier_text = "default-scope-verifier"
 
     authorized = foundry.auth.osdk_oauth_authorize(
         client_id="orders-web",
         redirect_uri=_REDIRECT_URI,
-        code_challenge="plain-verifier",
-        code_challenge_method="plain",
+        code_challenge=_s256_challenge(verifier_text),
         ctx=ctx,
     )
     token = foundry.auth.osdk_oauth_token(
         client_id="orders-web",
         code=cast(str, authorized["code"]),
         redirect_uri=_REDIRECT_URI,
-        code_verifier="plain-verifier",
+        code_verifier=verifier_text,
         ctx=ctx,
     )
 
@@ -297,6 +327,46 @@ def test_osdk_oauth_plain_pkce_and_default_scope_narrowing(tmp_path: Path) -> No
 
     assert principal.application_id == app["application"]["id"]
     assert set(principal.token_scopes) == {_READ_SCOPE, _SUBSCRIBE_SCOPE}
+
+
+def test_osdk_oauth_redirect_uri_fails_closed_when_none_registered() -> None:
+    with pytest.raises(PermissionDenied, match="redirect URI"):
+        _require_redirect_uri({"redirect_uris": []}, _REDIRECT_URI)
+    with pytest.raises(PermissionDenied, match="redirect URI"):
+        _require_redirect_uri({"redirect_uris": None}, _REDIRECT_URI)
+
+
+def test_osdk_oauth_refresh_reevaluates_current_roles(tmp_path: Path) -> None:
+    foundry, verifier = _oauth_foundry(tmp_path)
+    ctx = demo_admin_context()
+    _create_app_and_client(foundry, ctx)
+    verifier_text = "roles-refresh-verifier"
+
+    authorized = foundry.auth.osdk_oauth_authorize(
+        client_id="orders-web",
+        redirect_uri=_REDIRECT_URI,
+        code_challenge=_s256_challenge(verifier_text),
+        scopes=(_READ_SCOPE,),
+        ctx=ctx,
+    )
+    token = foundry.auth.osdk_oauth_token(
+        client_id="orders-web",
+        code=cast(str, authorized["code"]),
+        redirect_uri=_REDIRECT_URI,
+        code_verifier=verifier_text,
+        ctx=ctx,
+    )
+    reduced_ctx = RequestContext(actor_user_id=ctx.actor_user_id, roles=("data_engineer",))
+    refreshed = foundry.auth.osdk_oauth_refresh(refresh_token=cast(str, token["refreshToken"]), ctx=reduced_ctx)
+
+    principal = verifier.authenticate({"Authorization": f"Bearer {refreshed['accessToken']}"})
+
+    assert "admin" not in principal.roles
+    assert principal.roles == ("data_engineer",)
+
+
+def test_osdk_oauth_default_access_ttl_is_short() -> None:
+    assert _access_ttl({}) <= 120
 
 
 def _oauth_foundry(tmp_path: Path) -> tuple[FoundryLite, JwtOidcAuthProvider]:

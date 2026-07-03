@@ -4,6 +4,7 @@ import importlib.util
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 from types import ModuleType
 
@@ -15,6 +16,7 @@ def _load_python_module(path: Path, name: str) -> ModuleType:
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -44,6 +46,51 @@ def test_gitleaks_missing_is_release_blocker() -> None:
     assert "FOUNDRY_LITE_STRICT_EXTERNAL_TOOLS" in script
     assert 'os.environ.get("CI") == "true"' in script
     assert "CI/release evidence cannot skip the P9 secret scan" in script
+
+
+def test_parallel_static_checks_get_isolated_foundry_home(monkeypatch) -> None:
+    driver = _load_python_module(ROOT / "scripts" / "quality" / "run_static_checks.py", "run_static_checks_test")
+    captured: dict[str, str] = {}
+
+    def fake_run(command, *, cwd, env, capture_output, text):  # noqa: ANN001
+        del cwd, capture_output, text
+        captured["command"] = " ".join(command)
+        captured["home"] = env["FOUNDRY_LITE_HOME"]
+        Path(captured["home"], "foundry-lite.db").write_text("created during static check", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(driver.subprocess, "run", fake_run)
+
+    result = driver._run_check("infra-tricky-matrix", ["python", "check.py"], {"PYTHONPATH": "."})
+
+    assert result.returncode == 0
+    assert captured["home"]
+    assert Path(captured["home"]).name.startswith("foundry-lite-static-infra-tricky-matrix-")
+    assert not Path(captured["home"]).exists()
+
+
+def test_parallel_static_checks_honor_explicit_foundry_home(monkeypatch, tmp_path: Path) -> None:
+    driver = _load_python_module(ROOT / "scripts" / "quality" / "run_static_checks.py", "run_static_checks_explicit")
+    explicit_home = tmp_path / "explicit-home"
+    explicit_home.mkdir()
+    captured: dict[str, str] = {}
+
+    def fake_run(command, *, cwd, env, capture_output, text):  # noqa: ANN001
+        del cwd, capture_output, text
+        captured["home"] = env["FOUNDRY_LITE_HOME"]
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(driver.subprocess, "run", fake_run)
+
+    result = driver._run_check(
+        "infra-tricky-matrix",
+        ["python", "check.py"],
+        {"PYTHONPATH": ".", "FOUNDRY_LITE_HOME": str(explicit_home)},
+    )
+
+    assert result.returncode == 0
+    assert captured["home"] == str(explicit_home)
+    assert explicit_home.exists()
 
 
 def test_openlineage_dynamic_lineage_runs_after_demo_smoke() -> None:
@@ -170,6 +217,15 @@ def test_github_e2e_lane_keeps_browser_install_from_timing_out_before_tests() ->
     assert "timeout-minutes: 20" in e2e_job
     assert "run: pnpm exec playwright install --with-deps chromium" in e2e_job
     assert "run: pnpm ci:gate:e2e" in e2e_job
+
+
+def test_github_coverage_lane_keeps_serial_layer_coverage_from_timing_out() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    coverage_job = workflow.split("quality_coverage:", maxsplit=1)[1].split("quality_runtime:", maxsplit=1)[0]
+    assert "timeout-minutes: 45" in coverage_job
+    assert "run: pnpm ci:gate:coverage" in coverage_job
+    assert "Coverage runs the full backend suite serially" in coverage_job
 
 
 def test_context_compiler_gate_runs_after_ai_ledger_before_ai_evidence() -> None:

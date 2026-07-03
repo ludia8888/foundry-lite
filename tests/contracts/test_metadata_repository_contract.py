@@ -139,6 +139,41 @@ def test_metadata_repository_contract_idempotent_tenant_and_user_bootstrap(
     assert harness.user_count() == 1
 
 
+def test_metadata_repository_contract_ensure_user_is_idempotent_under_race(
+    harness: MetadataRepositoryHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Two processes bootstrapping the same DB concurrently (parallel test
+    # collection each imports the API module's module-level FoundryLite
+    # singleton) make ensure_user's check-then-insert race: the existence
+    # SELECT sees no row, so the INSERT runs against an already-present id.
+    # Force that stale check by making the existence SELECT always empty; the
+    # savepoint-guarded insert must absorb the UNIQUE violation, not raise.
+    import foundry_lite.infrastructure.repositories.metadata_repository as mr
+
+    def _stale_select(*_args: Any, **_kwargs: Any) -> Any:
+        return select(db.users.c.id).where(db.users.c.id == "__never_present__")
+
+    monkeypatch.setattr(mr, "select", _stale_select)
+
+    harness.repository.ensure_user(
+        user_id="user-race",
+        tenant_id="tenant-demo",
+        email="race@foundry-lite.local",
+        roles=["admin"],
+        created_at="2026-06-11T00:00:00Z",
+    )
+    harness.repository.ensure_user(
+        user_id="user-race",
+        tenant_id="tenant-demo",
+        email="race@foundry-lite.local",
+        roles=["admin"],
+        created_at="2026-06-11T00:00:00Z",
+    )
+
+    assert harness.user_count() == 1
+
+
 def test_metadata_repository_contract_excludes_destructive_reset(
     harness: MetadataRepositoryHarness,
 ) -> None:

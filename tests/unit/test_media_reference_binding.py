@@ -20,13 +20,14 @@ from foundry_lite.application.services.media.catalog import MediaCatalogService,
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadInput, MediaUploadService
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected, NotFound
+from foundry_lite.domain.errors import ConflictDetected, NotFound, PermissionDenied
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_media_storage import LocalMediaStorageAdapter
 from foundry_lite.infrastructure.repositories import (
     SqlAlchemyMediaReferenceBindingRepository,
     SqlAlchemyMediaRepository,
 )
+from foundry_lite.security.policy import PolicyService
 from sqlalchemy import create_engine
 
 
@@ -49,12 +50,12 @@ class _Env:
     transaction: MediaTransactionService
     media_set_id: str
 
-    def commit_version(self, *, logical_path: str, body: bytes, idem: str) -> str:
+    def commit_version(self, *, logical_path: str, body: bytes, idem: str, classification: str = "confidential") -> str:
         tx = self.transaction.open(self.ctx, media_set_id=self.media_set_id, idempotency_key=idem)
         session = self.upload.initiate(
             self.ctx, media_set_id=self.media_set_id, logical_path=logical_path, supplied_mime_type="application/pdf"
         )
-        staged = self._complete(tx, session, logical_path, body)
+        staged = self._complete(tx, session, logical_path, body, classification)
         self.transaction.commit(self.ctx, media_transaction_id=tx)
         return staged.media_item_version_id
 
@@ -63,9 +64,9 @@ class _Env:
         session = self.upload.initiate(
             self.ctx, media_set_id=self.media_set_id, logical_path=logical_path, supplied_mime_type="application/pdf"
         )
-        return self._complete(tx, session, logical_path, body).media_item_version_id
+        return self._complete(tx, session, logical_path, body, "confidential").media_item_version_id
 
-    def _complete(self, tx: str, session: object, logical_path: str, body: bytes):  # type: ignore[no-untyped-def]
+    def _complete(self, tx: str, session: object, logical_path: str, body: bytes, classification: str):  # type: ignore[no-untyped-def]
         return self.upload.complete(
             self.ctx,
             inputs=MediaUploadInput(
@@ -75,7 +76,7 @@ class _Env:
                 supplied_mime_type="application/pdf",
                 schema_type="document",
                 format="pdf",
-                security_envelope={"tenantId": self.ctx.tenant_id, "classification": "confidential"},
+                security_envelope={"tenantId": self.ctx.tenant_id, "classification": classification},
             ),
             upload=session,  # type: ignore[arg-type]
             source=io.BytesIO(body),
@@ -96,10 +97,14 @@ def env(tmp_path: Path) -> _Env:
     transaction = MediaTransactionService(engine=engine, media_repository=repo, media_storage=storage)
     transaction.bind_collaborators({"runtime_service": runtime})
     binding = MediaReferenceBindingService(
-        engine=engine, media_repository=repo, media_reference_binding_repository=binding_repo
+        engine=engine,
+        policy=PolicyService(allow_unwired_classification_provider=True),
+        media_repository=repo,
+        media_reference_binding_repository=binding_repo,
     )
     binding.bind_collaborators({"runtime_service": runtime})
-    ctx = RequestContext()
+    # A writer that holds media:reference:bind and full clearance so legitimate binds succeed.
+    ctx = RequestContext(roles=("admin", "data_engineer"))
     media_set = catalog.create_media_set(
         ctx,
         MediaSetSpec(
@@ -208,6 +213,66 @@ def test_rebind_repoints_but_pins_each_version(env: _Env) -> None:
     )
     resolved = env.binding.resolve(env.ctx, holder_type="Order", holder_id="order-1", property_name="doc")
     assert resolved is not None and resolved.media_item_version_id == v2
+
+
+def test_bind_denied_without_write_permission(env: _Env) -> None:
+    # A caller who lacks media:reference:bind (a viewer) cannot create a binding at all.
+    version = env.commit_version(logical_path="/a.pdf", body=b"%PDF-1.4 a", idem="t1")
+    viewer = RequestContext(tenant_id=env.ctx.tenant_id, roles=("viewer",))
+    with pytest.raises(PermissionDenied):
+        env.binding.bind(
+            viewer,
+            holder_type="Order",
+            holder_id="order-1",
+            property_name="doc",
+            media_item_version_id=version,
+            idempotency_key="k",
+        )
+    with pytest.raises(NotFound):
+        env.binding.resolve(env.ctx, holder_type="Order", holder_id="order-1", property_name="doc")
+
+
+def test_unauthorized_caller_cannot_overwrite_existing_binding(env: _Env) -> None:
+    # Reference poisoning: a legitimate binding must not be overwritable by a caller without the
+    # write permission, even though the unique key is (tenant, holder_type, holder_id, property).
+    v1 = env.commit_version(logical_path="/a.pdf", body=b"%PDF-1.4 a", idem="t1")
+    v2 = env.commit_version(logical_path="/a.pdf", body=b"%PDF-1.4 b", idem="t2")
+    env.binding.bind(
+        env.ctx,
+        holder_type="Order",
+        holder_id="order-1",
+        property_name="doc",
+        media_item_version_id=v1,
+        idempotency_key="k1",
+    )
+    viewer = RequestContext(tenant_id=env.ctx.tenant_id, roles=("viewer",))
+    with pytest.raises(PermissionDenied):
+        env.binding.bind(
+            viewer,
+            holder_type="Order",
+            holder_id="order-1",
+            property_name="doc",
+            media_item_version_id=v2,
+            idempotency_key="k2",
+        )
+    resolved = env.binding.resolve(env.ctx, holder_type="Order", holder_id="order-1", property_name="doc")
+    assert resolved is not None and resolved.media_item_version_id == v1  # original binding untouched
+
+
+def test_bind_denied_when_media_is_above_caller_clearance(env: _Env) -> None:
+    # A writer may not bind media it cannot read: an ops_manager (cleared to confidential) cannot
+    # bind a secret version, so it can never pin a reference above its own clearance.
+    secret_version = env.commit_version(logical_path="/s.pdf", body=b"%PDF-1.4 s", idem="ts", classification="secret")
+    ops = RequestContext(tenant_id=env.ctx.tenant_id, roles=("ops_manager",))
+    with pytest.raises(PermissionDenied):
+        env.binding.bind(
+            ops,
+            holder_type="Order",
+            holder_id="order-1",
+            property_name="doc",
+            media_item_version_id=secret_version,
+            idempotency_key="k",
+        )
 
 
 def test_resolve_masks_reference_outside_clearance(env: _Env) -> None:

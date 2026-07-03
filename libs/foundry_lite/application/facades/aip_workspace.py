@@ -314,6 +314,7 @@ def _agent_runtime_request_from_payload(payload: Mapping[str, object]) -> AgentR
         ai_run_id=_optional_text(payload, "aiRunId"),
         session_id=_optional_text(payload, "sessionId"),
         ontology_version_id=_text_default(payload, "ontologyVersionId", "active-ontology"),
+        environment=_text_default(payload, "environment", "prod"),
         data_classification=_text_default(payload, "dataClassification", "internal"),
         allowed_classifications=_optional_text_items(payload, "modelAllowedClassifications"),
         region_requirement=_optional_text(payload, "regionRequirement"),

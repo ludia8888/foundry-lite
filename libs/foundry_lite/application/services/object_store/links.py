@@ -14,16 +14,17 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.services.base import CoreService
-from foundry_lite.application.services.object_store.query_protocols import (
-    ObjectQueryOntologyLookup,
-    ObjectRecordLookup,
-)
+from foundry_lite.application.services.object_store.query_protocols import ObjectQueryOntologyLookup
 from foundry_lite.application.services.object_store.row_policies import (
     RowPolicyScope,
     row_policy_scope,
     row_visible,
 )
 from foundry_lite.domain.context import RequestContext
+
+# Ceiling on how many links one object may fan out to in a single response.
+# Bounds both the DB read and the batched target resolution below.
+MAX_LINK_FANOUT = 1_000
 
 
 class _OsdkScopeBoundary(Protocol):
@@ -39,8 +40,7 @@ class _OsdkScopeBoundary(Protocol):
 
 class ObjectLinksService(CoreService):
     required_dependencies = ("engine", "policy", "object_read_repository")
-    required_collaborators = ("object_records_service", "ontology_service", "osdk_application_service")
-    object_records_service: ObjectRecordLookup
+    required_collaborators = ("ontology_service", "osdk_application_service")
     ontology_service: ObjectQueryOntologyLookup
     osdk_application_service: _OsdkScopeBoundary
 
@@ -64,25 +64,37 @@ class ObjectLinksService(CoreService):
                 link_type_api_name=link_type_api_name,
                 from_api_name=object_type_api_name,
                 from_object_id=object_id,
+                limit=MAX_LINK_FANOUT,
             )
             if links:
                 return self._link_payloads(conn, ctx, link_type_api_name, object_type_api_name, object_id, links)
-            reverse_links = self.object_read_repository.active_links_to(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                link_type_api_name=link_type_api_name,
-                to_api_name=object_type_api_name,
-                to_object_id=object_id,
-            )
-            return self._link_payloads(
-                conn,
-                ctx,
-                link_type_api_name,
-                object_type_api_name,
-                object_id,
-                reverse_links,
-                direction="reverse",
-            )
+            return self._reverse_link_payloads(conn, ctx, link_type_api_name, object_type_api_name, object_id)
+
+    def _reverse_link_payloads(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        link_type_api_name: str,
+        object_type_api_name: str,
+        object_id: str,
+    ) -> list[ObjectLinkPayload]:
+        reverse_links = self.object_read_repository.active_links_to(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            link_type_api_name=link_type_api_name,
+            to_api_name=object_type_api_name,
+            to_object_id=object_id,
+            limit=MAX_LINK_FANOUT,
+        )
+        return self._link_payloads(
+            conn,
+            ctx,
+            link_type_api_name,
+            object_type_api_name,
+            object_id,
+            reverse_links,
+            direction="reverse",
+        )
 
     def _can_traverse_from(
         self,
@@ -98,10 +110,19 @@ class ObjectLinksService(CoreService):
         The record read only happens for row-policy-protected types, keeping
         the common path free of an extra query.
         """
-        scope = row_policy_scope(self.ontology_service._active_object_type(conn, ctx, object_type_api_name), ctx.roles)
+        scope = row_policy_scope(
+            self.ontology_service._active_object_type(conn, ctx, object_type_api_name),
+            ctx.roles,
+        )
         if scope.is_unrestricted:
             return True
-        record = self.object_records_service._object_record(conn, ctx, object_type_api_name, object_id)
+        rows = self.object_read_repository.object_records(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            object_type_api_name=object_type_api_name,
+            object_ids=[object_id],
+        )
+        record = rows[0] if rows else None
         return record is not None and row_visible(scope, record["properties"])
 
     def _require_link_read_scope(self, ctx: RequestContext, link_type_api_name: str) -> None:
@@ -123,11 +144,12 @@ class ObjectLinksService(CoreService):
         *,
         direction: Literal["forward", "reverse"] = "forward",
     ) -> list[ObjectLinkPayload]:
+        targets_by_ref = self._resolve_targets(conn, ctx, links, direction)
         results: list[ObjectLinkPayload] = []
         target_scopes: dict[str, RowPolicyScope] = {}
         for link in links:
             target_type, target_id = self._target_ref(link, direction)
-            target = self.object_records_service._object_record(conn, ctx, target_type, target_id)
+            target = targets_by_ref.get((target_type, target_id))
             if target is None:
                 results.append(
                     self._missing_target_payload(
@@ -159,6 +181,31 @@ class ObjectLinksService(CoreService):
                 self.ontology_service._active_object_type(conn, ctx, target_type), ctx.roles
             )
         return scopes[target_type]
+
+    def _resolve_targets(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        links: Sequence[ObjectLinkRow],
+        direction: Literal["forward", "reverse"],
+    ) -> dict[tuple[str, str], ObjectRecordRow]:
+        # Batch one read per distinct target type so link fan-out never triggers
+        # a per-target N+1 round-trip.
+        ids_by_type: dict[str, list[str]] = {}
+        for link in links:
+            target_type, target_id = self._target_ref(link, direction)
+            ids_by_type.setdefault(target_type, []).append(target_id)
+        resolved: dict[tuple[str, str], ObjectRecordRow] = {}
+        for target_type, target_ids in ids_by_type.items():
+            rows = self.object_read_repository.object_records(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_api_name=target_type,
+                object_ids=target_ids,
+            )
+            for row in rows:
+                resolved[(row["object_type_api_name"], row["object_id"])] = row
+        return resolved
 
     def _link_payload(
         self,

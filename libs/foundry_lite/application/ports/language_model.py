@@ -69,6 +69,9 @@ class ModelRequest:
 
     model_alias: str
     messages: tuple[ModelMessage, ...]
+    # The deployment environment the alias resolves in (§10.1 unique key is tenant+alias+environment);
+    # defaults to the production environment so a caller never silently resolves a non-prod alias.
+    environment: str = "prod"
     tools: tuple[str, ...] = ()
     response_schema: str | None = None
     temperature: float = 0.0

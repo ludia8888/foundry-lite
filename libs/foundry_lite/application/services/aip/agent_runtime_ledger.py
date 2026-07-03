@@ -237,7 +237,9 @@ def model_call(
     )
 
 
-def usage_record(ctx: RequestContext, ai_run_id: str, response: ModelResponse, now: str) -> AiUsageLedgerRecord:
+def usage_record(
+    ctx: RequestContext, ai_run_id: str, response: ModelResponse, now: str, pricing: Mapping[str, object]
+) -> AiUsageLedgerRecord:
     return AiUsageLedgerRecord(
         id=f"{ai_run_id}-usage-1",
         tenant_id=ctx.tenant_id,
@@ -246,10 +248,34 @@ def usage_record(ctx: RequestContext, ai_run_id: str, response: ModelResponse, n
         model_revision=response.resolved_model_revision,
         input_tokens=response.input_tokens,
         output_tokens=response.output_tokens,
-        estimated_cost=0.0,
-        currency="USD",
+        estimated_cost=estimate_cost(pricing, response.input_tokens, response.output_tokens),
+        currency=_pricing_currency(pricing),
         recorded_at=now,
     )
+
+
+def estimate_cost(pricing: Mapping[str, object], input_tokens: int, output_tokens: int) -> float:
+    """Estimate spend from the model's per-1k token rates (§10.1 ``ai_models.pricing_json``).
+
+    ``pricing_json`` carries ``input_per_1k`` and (optionally) ``output_per_1k``; a missing rate
+    contributes nothing rather than silently reporting the whole call as free.
+    """
+    input_rate = _pricing_rate(pricing, "input_per_1k")
+    output_rate = _pricing_rate(pricing, "output_per_1k")
+    cost = (input_tokens / 1000.0) * input_rate + (output_tokens / 1000.0) * output_rate
+    return round(cost, 8)
+
+
+def _pricing_rate(pricing: Mapping[str, object], key: str) -> float:
+    value = pricing.get(key, 0.0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
+
+
+def _pricing_currency(pricing: Mapping[str, object]) -> str:
+    currency = pricing.get("currency", "USD")
+    return currency if isinstance(currency, str) and currency else "USD"
 
 
 def operations_ref(ai_run_id: str | None) -> dict[str, object] | None:

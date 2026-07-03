@@ -128,3 +128,24 @@ def test_injected_describer_too_large_is_validation() -> None:
     with pytest.raises(AdapterError) as excinfo:
         adapter.process(_request())
     assert excinfo.value.failure.kind == "validation"
+
+
+def test_repeated_timeouts_do_not_accumulate_worker_threads() -> None:
+    # A per-call ThreadPoolExecutor abandoned on timeout leaks a live thread per timeout;
+    # repeated timeouts must NOT grow the thread count unboundedly.
+    release = threading.Event()
+
+    def _blocking(_path: str, _max_pixels: int, _thumb: int) -> ImageDescription:
+        release.wait(timeout=10)
+        raise ImageDocumentError("never")
+
+    adapter = ImageProcessorAdapter(timeout_seconds=0, image_describer=_blocking)
+    baseline = threading.active_count()
+    try:
+        for _ in range(20):
+            with pytest.raises(AdapterError) as excinfo:
+                adapter.process(_request())
+            assert excinfo.value.failure.kind == "timeout"
+        assert threading.active_count() - baseline <= 8
+    finally:
+        release.set()

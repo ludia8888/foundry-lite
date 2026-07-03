@@ -263,7 +263,7 @@ def _demo_model_record(now: str) -> ModelRecord:
         capabilities_json={"streaming": True, "native_tools": False},
         context_limit=8192,
         output_limit=1024,
-        pricing_json={"input_per_1k": 0.0, "currency": "USD"},
+        pricing_json={"input_per_1k": 0.002, "output_per_1k": 0.006, "currency": "USD"},
         allowed_classifications=("public", "internal"),
         created_at=now,
     )
@@ -273,7 +273,7 @@ def _demo_alias_record(alias: str, now: str) -> ModelAliasRecord:
     return ModelAliasRecord(
         alias=alias,
         tenant_scope=DEFAULT_TENANT_ID,
-        environment="dev",
+        environment="prod",
         model_id="local-fake-model",
         version="2026-06-25",
         status="enabled",

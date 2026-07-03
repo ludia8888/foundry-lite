@@ -22,6 +22,7 @@ from foundry_lite.application.ports.transaction_context import TransactionContex
 from foundry_lite.application.services.media.indexing import MediaIndexingService
 from foundry_lite.application.services.media.retrieval import DefaultContentRetrievalService
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import InvariantViolation
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
@@ -150,6 +151,23 @@ def test_rebuild_reembeds_from_committed_truth(env: _Env) -> None:
     env.indexing.rebuild(env.ctx, generation="g2", source_media_item_version_ids=[_SOURCE])
     rebuilt = env.index._generations["g2"]["cu-1"]
     assert rebuilt.embedding_model_version == _MODEL and len(rebuilt.embedding) == _DIM
+
+
+def test_indexing_raises_when_engine_returns_fewer_vectors_than_units(env: _Env) -> None:
+    # Port contract: one vector per text. A short batch must surface as a failure, never silently
+    # drop the trailing units (which would leave them unindexed and unreported).
+    derivative_id = env.seed([("cu-1", "alpha doc", "h1"), ("cu-2", "beta doc", "h2")])
+    short_engine = LocalEmbeddingAdapter(embedding_engine=lambda texts: _fake_engine(texts)[:1], model_version=_MODEL)
+    indexing = MediaIndexingService(
+        engine=env.engine,  # type: ignore[arg-type]
+        media_derivative_repository=SqlAlchemyMediaDerivativeRepository(env.engine),  # type: ignore[arg-type]
+        content_index_adapter=LocalContentIndexAdapter(),
+        embedding_model_adapter=short_engine,
+    )
+    indexing.bind_collaborators({"runtime_service": _FakeRuntime()})
+
+    with pytest.raises(InvariantViolation):
+        indexing.index_derivative(env.ctx, media_derivative_id=derivative_id, generation="g1")
 
 
 def test_dense_retrieval_returns_authoritative_hits(env: _Env) -> None:

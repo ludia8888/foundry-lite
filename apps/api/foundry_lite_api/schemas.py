@@ -20,6 +20,15 @@ SOURCE_BATCH_FILES = File(...)
 MEDIA_REFERENCE_ALLOWED_CLASSIFICATIONS_QUERY = Query(default=None, alias="allowedClassifications")
 
 
+# DoS ceilings for the object query/subscription surface. Bounding these at the
+# request boundary prevents an unbounded stream, a busy-loop poll, or a runaway
+# page size from starving the process.
+MAX_OBJECT_QUERY_LIMIT = 1_000
+MAX_SUBSCRIPTION_EVENTS = 10_000
+MIN_SUBSCRIPTION_POLL_INTERVAL_SECONDS = 0.1
+MAX_SUBSCRIPTION_POLL_INTERVAL_SECONDS = 60.0
+
+
 class ObservabilityDetectRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -159,7 +168,7 @@ class ObjectQueryRequest(BaseModel):
 
     filter_ast: JsonObject | None = Field(default=None, alias="filter")
     order_by: list[dict[str, str]] | None = Field(default=None, alias="orderBy")
-    limit: int = 50
+    limit: int = Field(default=50, ge=1, le=MAX_OBJECT_QUERY_LIMIT)
     cursor: str | None = None
     search_text: str | None = Field(default=None, alias="search")
 
@@ -196,10 +205,17 @@ class ObjectSubscriptionRequest(BaseModel):
     filter_ast: JsonObject | None = Field(default=None, alias="filter")
     order_by: list[dict[str, str]] | None = Field(default=None, alias="orderBy")
     properties: list[str] | None = None
-    page_size: int = Field(default=50, alias="pageSize")
+    page_size: int = Field(default=50, ge=1, le=MAX_OBJECT_QUERY_LIMIT, alias="pageSize")
     last_seen_object_change_sequence: int | None = Field(default=None, alias="lastSeenObjectChangeSequence")
-    max_events: int | None = Field(default=None, alias="maxEvents")
-    poll_interval_seconds: float = Field(default=1.0, alias="pollIntervalSeconds")
+    # A finite ceiling (never None) so a subscription cannot stream forever.
+    max_events: int = Field(default=MAX_SUBSCRIPTION_EVENTS, ge=1, le=MAX_SUBSCRIPTION_EVENTS, alias="maxEvents")
+    # Floor prevents a 0/negative busy loop; ceiling keeps a stalled poll finite.
+    poll_interval_seconds: float = Field(
+        default=1.0,
+        ge=MIN_SUBSCRIPTION_POLL_INTERVAL_SECONDS,
+        le=MAX_SUBSCRIPTION_POLL_INTERVAL_SECONDS,
+        alias="pollIntervalSeconds",
+    )
 
 
 class OsdkApplicationResourceRequest(BaseModel):
@@ -415,10 +431,10 @@ class AipBuilderValidateRequest(BaseModel):
     prompt_version_id: str = Field(alias="promptVersionId")
     context_sources: list[AipBuilderContextSourceRequest] = Field(alias="contextSources")
     tool_manifest: list[AipBuilderToolSpecRequest] = Field(alias="toolManifest")
-    logic_blocks: list[AipBuilderLogicBlockRequest] = Field(alias="logicBlocks")
+    logic_blocks: list[AipBuilderLogicBlockRequest] = Field(alias="logicBlocks", max_length=500)
     eval_axes: list[str] = Field(alias="evalAxes")
     agent_allowed_actions: list[str] = Field(default_factory=list, alias="agentAllowedActions")
-    max_logic_blocks: int = Field(default=25, alias="maxLogicBlocks")
+    max_logic_blocks: int = Field(default=25, ge=1, le=500, alias="maxLogicBlocks")
 
 
 class AipBuilderRunRequest(AipBuilderValidateRequest):
@@ -494,7 +510,7 @@ class AipEvalRunRequest(BaseModel):
     suite_description: str = Field(default="", alias="suiteDescription")
     agent_version_id: str = Field(alias="agentVersionId")
     candidate_release_channel: str = Field(alias="candidateReleaseChannel")
-    cases: list[AipEvalCaseRequest]
+    cases: list[AipEvalCaseRequest] = Field(max_length=500)
     min_score: float = Field(default=1.0, alias="minScore")
     required_axes: list[str] = Field(default_factory=list, alias="requiredAxes")
 

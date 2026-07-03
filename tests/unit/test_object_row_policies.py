@@ -212,6 +212,22 @@ def test_links_filter_hidden_targets_and_hidden_sources(foundry: FoundryLite, tm
     ]
 
 
+def test_link_fanout_limit_applies_before_row_policy_filter(
+    foundry: FoundryLite,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from foundry_lite.application.services.object_store import links as links_module
+
+    eu_policy = [{"role": "ops_manager", "filter": {"property": "region", "op": "eq", "value": "EU"}}]
+    _prepare_row_policy_demo(foundry, tmp_path, row_policies=eu_policy)
+    monkeypatch.setattr(links_module, "MAX_LINK_FANOUT", 1)
+
+    links = foundry.objects.links("Customer", "C-100", "RpOrderCustomer", ctx=_ops_ctx())
+
+    assert links == []
+
+
 def test_action_apply_on_hidden_target_is_not_found(foundry: FoundryLite, tmp_path: Path) -> None:
     admin = _prepare_row_policy_demo(foundry, tmp_path)
     hidden_version = foundry.objects.get("Order", "O-2", ctx=admin)["objectVersion"]

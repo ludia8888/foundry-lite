@@ -113,6 +113,9 @@ class AgentRuntimeToolRequest(Protocol):
     def model_alias(self) -> str: ...
 
     @property
+    def environment(self) -> str: ...
+
+    @property
     def output_schema(self) -> JsonObject | None: ...
 
     @property
@@ -182,6 +185,7 @@ def followup_model_request(
     return ModelRequest(
         model_alias=request.model_alias,
         messages=tool_execution.followup_messages,
+        environment=request.environment,
         tools=model_tool_names(request),
         response_schema=_response_schema(request.output_schema),
         max_output_tokens=request.max_output_tokens,

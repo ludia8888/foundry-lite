@@ -28,6 +28,7 @@ from foundry_lite.application.services.aip.eval_runtime_events import (
     eval_run_completed_payload,
     release_promoted_payload,
 )
+from foundry_lite.application.services.aip.eval_scoring import axis_passed, evaluate_cases, summarize
 from foundry_lite.application.services.aip.eval_types import (
     AiEvalError,
     EvalCaseInput,
@@ -40,6 +41,7 @@ from foundry_lite.application.services.aip.eval_types import (
 )
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected
 
 _SUPPORTED_AXES = frozenset({"retrieval", "answer", "citation", "tool", "action", "security", "operations"})
 _RELEASE_CHANNELS = frozenset({"draft", "dev", "canary", "stable", "sunset"})
@@ -49,16 +51,17 @@ _STABLE_REQUIRED_AXES = frozenset({"security", "action"})
 class EvalService(CoreService):
     """Record deterministic eval evidence and gate release promotion."""
 
-    required_dependencies = ("engine", "ai_eval_repository")
+    required_dependencies = ("engine", "ai_eval_repository", "policy")
     required_collaborators = ("runtime_service",)
     runtime_service: EvalRuntimeBoundary
 
     def run_eval(self, ctx: RequestContext, request: EvalRunRequest) -> EvalRunResult:
+        self.policy.require(ctx, "aip:evals:run")
         _validate_eval_request(request)
         suite_id = ai_eval_suite_id(ctx.tenant_id, request.suite_api_name, request.suite_version)
         started_at = _now()
-        case_results = _evaluate_cases(request.cases)
-        summary = _summary(case_results, request)
+        case_results = evaluate_cases(request.cases)
+        summary = summarize(case_results, request)
         passed = bool(summary["passed"])
         status = "passed" if passed else "failed"
         completed_at = _now()
@@ -68,15 +71,7 @@ class EvalService(CoreService):
                 self._ensure_case(ctx, transaction, suite_id, case, started_at)
             self._create_run(ctx, transaction, request, suite_id, started_at)
             self._record_results(ctx, transaction, request, suite_id, case_results, completed_at)
-            self.ai_eval_repository.complete_run(
-                transaction=transaction,
-                tenant_id=ctx.tenant_id,
-                eval_run_id=request.eval_run_id,
-                transition=AI_EVAL_RUN_PASSED if passed else AI_EVAL_RUN_FAILED,
-                is_passed=passed,
-                summary_json=summary,
-                completed_at=completed_at,
-            )
+            self._complete_run(transaction, ctx, request, is_passed=passed, summary=summary, completed_at=completed_at)
             payload = eval_run_completed_payload(request, suite_id, status, passed, summary)
             self._emit_runtime_event(
                 transaction,
@@ -90,9 +85,34 @@ class EvalService(CoreService):
             )
         return _eval_run_result(request, suite_id, status, passed, summary, case_results)
 
+    def _complete_run(
+        self,
+        transaction: TransactionContext,
+        ctx: RequestContext,
+        request: EvalRunRequest,
+        *,
+        is_passed: bool,
+        summary: EvalJsonObject,
+        completed_at: str,
+    ) -> None:
+        completed = self.ai_eval_repository.complete_run(
+            transaction=transaction,
+            tenant_id=ctx.tenant_id,
+            eval_run_id=request.eval_run_id,
+            transition=AI_EVAL_RUN_PASSED if is_passed else AI_EVAL_RUN_FAILED,
+            is_passed=is_passed,
+            summary_json=summary,
+            completed_at=completed_at,
+        )
+        if completed is None:
+            raise ConflictDetected(
+                "eval run is not in a completable state",
+                details={"evalRunId": request.eval_run_id},
+            )
+
     def promote_release(self, ctx: RequestContext, request: ReleasePromotionRequest) -> ReleasePromotionResult:
+        self.policy.require(ctx, "aip:releases:promote")
         _validate_release_request(request)
-        promoted_at = _now()
         release_id = ai_agent_release_id(ctx.tenant_id, request.agent_version_id, request.target_release_channel)
         with self.engine.begin() as transaction:
             run = self.ai_eval_repository.eval_run_by_id(
@@ -107,28 +127,38 @@ class EvalService(CoreService):
             )
             if existing is not None:
                 return _existing_release(existing, request)
-            self.ai_eval_repository.create_release(
-                transaction=transaction,
-                record=_release_record(ctx, request, release_id, promoted_at),
-            )
-            payload = release_promoted_payload(request, release_id)
-            self._emit_runtime_event(
-                transaction,
-                ctx,
-                event_type="ai.agent_release.promoted",
-                aggregate_type="ai_agent_release",
-                aggregate_id=release_id,
-                action="promote_release",
-                payload=payload,
-                idempotency_key=release_id,
-            )
-        return ReleasePromotionResult(
-            release_id=release_id,
-            agent_version_id=request.agent_version_id,
-            release_channel=request.target_release_channel,
-            eval_run_id=request.eval_run_id,
-            status="active",
+            winner = self._persist_release(transaction, ctx, request, release_id)
+            if winner is not None:
+                return _existing_release(winner, request)
+        return _promotion_result(request, release_id)
+
+    def _persist_release(
+        self,
+        transaction: TransactionContext,
+        ctx: RequestContext,
+        request: ReleasePromotionRequest,
+        release_id: str,
+    ) -> Mapping[str, object] | None:
+        # Two first-time promotions can both pass the existence check and race to
+        # insert the same (tenant, agent_version, channel) release; the loser
+        # resolves to the winning row instead of surfacing a 500.
+        winner = self.ai_eval_repository.create_release_if_absent(
+            transaction=transaction,
+            record=_release_record(ctx, request, release_id, _now()),
         )
+        if winner is not None:
+            return winner
+        self._emit_runtime_event(
+            transaction,
+            ctx,
+            event_type="ai.agent_release.promoted",
+            aggregate_type="ai_agent_release",
+            aggregate_id=release_id,
+            action="promote_release",
+            payload=release_promoted_payload(request, release_id),
+            idempotency_key=release_id,
+        )
+        return None
 
     def _emit_runtime_event(
         self,
@@ -331,91 +361,6 @@ def _validate_release_request(request: ReleasePromotionRequest) -> None:
         raise AiEvalError("unsupported_release_channel", "target release channel is not supported")
 
 
-def _evaluate_cases(cases: Sequence[EvalCaseInput]) -> list[EvalCaseResult]:
-    seen_hashes: dict[str, str] = {}
-    results: list[EvalCaseResult] = []
-    for case in cases:
-        actual_hash = hash_json(case.actual_json)
-        variance_reason = _variance_reason(seen_hashes, case.case_api_name, actual_hash)
-        expected_matched = _contains_subset(case.actual_json, case.expected_json)
-        passed = expected_matched and variance_reason is None
-        reason = None if passed else variance_reason or "expected_output_mismatch"
-        score = 1.0 if passed else 0.0
-        results.append(_case_result(case, score=score, is_passed=passed, reason=reason))
-    return results
-
-
-def _summary(results: Sequence[EvalCaseResult], request: EvalRunRequest) -> EvalJsonObject:
-    weighted_score = _weighted_score(results, request.cases)
-    axis_summary = _axis_summary(results)
-    missing_axes = sorted(set(request.required_axes) - set(axis_summary))
-    variance_failures = sum(1 for result in results if result.reason == "repeated_run_variance")
-    passed = weighted_score >= request.min_score and not missing_axes and variance_failures == 0
-    passed = passed and all(_axis_passed(axis) for axis in axis_summary.values())
-    return {
-        "score": weighted_score,
-        "passed": passed,
-        "caseCount": len(results),
-        "failedCaseCount": sum(1 for result in results if not result.is_passed),
-        "varianceFailures": variance_failures,
-        "missingRequiredAxes": missing_axes,
-        "axes": axis_summary,
-        "minScore": request.min_score,
-    }
-
-
-def _weighted_score(results: Sequence[EvalCaseResult], cases: Sequence[EvalCaseInput]) -> float:
-    total_weight = sum(case.weight for case in cases)
-    if total_weight == 0.0:
-        raise AiEvalError("invalid_weight", "at least one eval case must have positive weight")
-    score = sum(result.score * case.weight for result, case in zip(results, cases, strict=True)) / total_weight
-    return round(score, 6)
-
-
-def _axis_summary(results: Sequence[EvalCaseResult]) -> dict[str, object]:
-    axes: dict[str, list[EvalCaseResult]] = {}
-    for result in results:
-        axes.setdefault(result.axis, []).append(result)
-    return {
-        axis: {
-            "passed": all(result.is_passed for result in axis_results),
-            "score": round(sum(result.score for result in axis_results) / len(axis_results), 6),
-            "caseCount": len(axis_results),
-        }
-        for axis, axis_results in sorted(axes.items())
-    }
-
-
-def _case_result(case: EvalCaseInput, *, score: float, is_passed: bool, reason: str | None) -> EvalCaseResult:
-    result_hash = hash_json({"case": case.case_api_name, "axis": case.axis, "actual": case.actual_json})
-    return EvalCaseResult(
-        case_api_name=case.case_api_name,
-        axis=case.axis,
-        sample_index=case.sample_index,
-        score=score,
-        is_passed=is_passed,
-        result_hash=result_hash,
-        reason=reason,
-    )
-
-
-def _variance_reason(seen_hashes: dict[str, str], case_api_name: str, actual_hash: str) -> str | None:
-    previous = seen_hashes.setdefault(case_api_name, actual_hash)
-    if previous != actual_hash:
-        return "repeated_run_variance"
-    return None
-
-
-def _contains_subset(actual: object, expected: object) -> bool:
-    if isinstance(expected, Mapping):
-        if not isinstance(actual, Mapping):
-            return False
-        return all(key in actual and _contains_subset(actual[key], value) for key, value in expected.items())
-    if isinstance(expected, list):
-        return actual == expected
-    return actual == expected
-
-
 def _require_releasable_run(run: Mapping[str, object] | None, request: ReleasePromotionRequest) -> None:
     if run is None:
         raise AiEvalError("eval_run_not_found", "eval run was not found")
@@ -437,15 +382,11 @@ def _require_stable_release_axes(run: Mapping[str, object], target_release_chann
     axes = summary.get("axes") if isinstance(summary, Mapping) else None
     if not isinstance(axes, Mapping):
         raise AiEvalError("stable_requires_eval_summary", "stable release requires eval axis summary")
-    missing = sorted(axis for axis in _STABLE_REQUIRED_AXES if not _axis_passed(axes.get(axis)))
+    missing = sorted(axis for axis in _STABLE_REQUIRED_AXES if not axis_passed(axes.get(axis)))
     if missing:
         raise AiEvalError("stable_requires_security_action_eval", "stable release requires security and action axes")
     if number_field(summary, "varianceFailures") != 0:
         raise AiEvalError("stable_requires_deterministic_eval", "stable release requires zero repeated-run variance")
-
-
-def _axis_passed(axis_summary: object) -> bool:
-    return isinstance(axis_summary, Mapping) and axis_summary.get("passed") is True
 
 
 def _existing_release(existing: Mapping[str, object], request: ReleasePromotionRequest) -> ReleasePromotionResult:
@@ -457,6 +398,16 @@ def _existing_release(existing: Mapping[str, object], request: ReleasePromotionR
         release_channel=request.target_release_channel,
         eval_run_id=request.eval_run_id,
         status=str(existing["status"]),
+    )
+
+
+def _promotion_result(request: ReleasePromotionRequest, release_id: str) -> ReleasePromotionResult:
+    return ReleasePromotionResult(
+        release_id=release_id,
+        agent_version_id=request.agent_version_id,
+        release_channel=request.target_release_channel,
+        eval_run_id=request.eval_run_id,
+        status="active",
     )
 
 
