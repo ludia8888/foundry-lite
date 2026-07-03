@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRow,
+    FunctionTypeRow,
     InterfaceTypeRow,
     LinkTypeRow,
     ObjectTypeRow,
@@ -30,6 +31,7 @@ def ontology_definition_snapshot(
     link_rows: Sequence[LinkTypeRow],
     action_rows: Sequence[ActionTypeRow],
     interface_rows: Sequence[InterfaceTypeRow] = (),
+    function_rows: Sequence[FunctionTypeRow] = (),
 ) -> JsonObject:
     """Return the YAML-shaped definition equivalent to a persisted ontology version."""
     definition: JsonObject = {
@@ -43,6 +45,11 @@ def ontology_definition_snapshot(
     # the same YAML-shaped import path (parse -> conformance -> persist).
     if interface_rows:
         definition["interfaces"] = [dict(row["definition"]) for row in interface_rows]
+    # Functions must survive rollback for the same reason — the persisted
+    # definition is already the normalized YAML shape, so replay re-validates
+    # and re-persists it byte-identically (no spurious definition-change).
+    if function_rows:
+        definition["functionTypes"] = [dict(row["definition"]) for row in function_rows]
     return definition
 
 

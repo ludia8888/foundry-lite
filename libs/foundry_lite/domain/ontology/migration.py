@@ -8,9 +8,11 @@ from collections.abc import Mapping, Sequence
 from typing import cast
 
 from foundry_lite.domain.errors import ValidationFailed
+from foundry_lite.domain.ontology.function_types import normalized_function_definition
 from foundry_lite.domain.ontology.migration_changes import (
     blocked_action_removed,
     blocked_action_target_changed,
+    blocked_function_removed,
     blocked_implements_removed,
     blocked_interface_property_removed,
     blocked_interface_removed,
@@ -27,6 +29,8 @@ from foundry_lite.domain.ontology.migration_changes import (
     blocked_property_rename,
     blocked_property_type_change,
     blocked_required_parameter_added,
+    warning_function_added,
+    warning_function_definition_changed,
     warning_implements_added,
     warning_interface_added,
     warning_object_reindex,
@@ -56,6 +60,7 @@ def build_ontology_migration_plan(
     current_actions: Sequence[OntologyRow],
     definition: OntologyDefinition,
     current_interfaces: Sequence[OntologyRow] = (),
+    current_functions: Sequence[OntologyRow] = (),
 ) -> OntologyMigrationPlan:
     """Classify a candidate ontology definition without touching persistence."""
     candidate_objects = _object_definitions_by_api(definition)
@@ -70,6 +75,7 @@ def build_ontology_migration_plan(
         *object_changes,
         *_interface_migration_changes(_interface_rows_by_api(current_interfaces), definition),
         *_implements_migration_changes(current_objects, candidate_objects),
+        *_function_migration_changes(_function_rows_by_api(current_functions), definition),
         *_link_migration_changes(_link_rows_by_api(current_links), candidate_links),
         *_action_migration_changes(_action_rows_by_api(current_actions), candidate_actions),
     ]
@@ -238,6 +244,33 @@ def _string_items(value: object) -> tuple[str, ...]:
     return tuple(str(item) for item in cast(Sequence[object], value))
 
 
+def _function_migration_changes(
+    current_functions: Mapping[str, OntologyRow],
+    definition: OntologyDefinition,
+) -> list[OntologyMigrationChange]:
+    """Classify function additions (warning), removals (blocked), and edits (warning).
+
+    Removing a function breaks callers executing it by apiName, so it blocks;
+    a new function or a changed definition only alters behavior going forward
+    and stays visible as a warning.
+    """
+    raw_candidates = _yaml_rows_by_api(
+        mapping_sequence(definition, "functionTypes"), "duplicate function apiName", "functionType"
+    )
+    candidates = {api_name: normalized_function_definition(item) for api_name, item in raw_candidates.items()}
+    changes: list[OntologyMigrationChange] = []
+    for api_name, current in sorted(current_functions.items()):
+        candidate = candidates.get(api_name)
+        if candidate is None:
+            changes.append(blocked_function_removed(api_name))
+        elif _mapping_changed(_mapping(current["definition"]), candidate):
+            changes.append(warning_function_definition_changed(api_name))
+    for api_name in sorted(candidates):
+        if api_name not in current_functions:
+            changes.append(warning_function_added(api_name))
+    return changes
+
+
 def _link_migration_changes(
     current_links: Mapping[str, OntologyRow],
     candidate_links: Mapping[str, OntologyDefinition],
@@ -365,6 +398,10 @@ def _added_parameter_changes(
 
 def _interface_rows_by_api(rows: Sequence[OntologyRow]) -> dict[str, OntologyRow]:
     return _rows_by_api(rows, "duplicate persisted interface apiName")
+
+
+def _function_rows_by_api(rows: Sequence[OntologyRow]) -> dict[str, OntologyRow]:
+    return _rows_by_api(rows, "duplicate persisted function apiName")
 
 
 def _link_rows_by_api(rows: Sequence[OntologyRow]) -> dict[str, OntologyRow]:

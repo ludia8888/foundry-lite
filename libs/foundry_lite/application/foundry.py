@@ -15,6 +15,7 @@ from foundry_lite.application.facades import (
     DatasetWorkspace,
     DeveloperConsole,
     ErasureGateway,
+    FunctionGateway,
     InsightReviewWorkspace,
     MaterializationRunner,
     MediaWorkspace,
@@ -111,6 +112,7 @@ class FoundryLite:
         self.ontology = _ontology_registry(services)
         self.objects = ObjectStore(services.object_store, services.ontology_search)
         self.actions = ActionGateway(services.action.entrypoint)
+        self.functions = FunctionGateway(services.function_execution)
         self.auth = AuthGateway(services.osdk_oauth_sessions)
         self.aip = AipWorkspace(
             services.agent_runtime,

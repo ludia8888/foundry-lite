@@ -98,6 +98,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "dataset_transaction_service": "DatasetTransactionService",
     "dataset_version_service": "DatasetVersionService",
     "demo_service": "DemoService",
+    "function_execution_service": "FunctionExecutionService",
     "iceberg_maintenance_service": "IcebergMaintenanceService",
     "insight_review_service": "InsightReviewService",
     "logic_runtime_service": "LogicRuntimeService",

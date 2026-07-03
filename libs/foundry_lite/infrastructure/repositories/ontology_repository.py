@@ -11,6 +11,8 @@ from sqlalchemy.engine import Engine
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRecord,
     ActionTypeRow,
+    FunctionTypeRecord,
+    FunctionTypeRow,
     InterfaceTypeRecord,
     InterfaceTypeRow,
     LinkTypeRecord,
@@ -188,6 +190,64 @@ class SqlAlchemyOntologyRepository:
             .all()
         )
         return [cast(InterfaceTypeRow, dict(row)) for row in rows]
+
+    def insert_function_type(self, *, transaction: Any, record: FunctionTypeRecord) -> None:
+        transaction.execute(
+            insert(db.function_types).values(
+                id=record.function_type_id,
+                tenant_id=record.tenant_id,
+                ontology_version_id=record.ontology_version_id,
+                api_name=record.api_name,
+                display_name=record.display_name,
+                definition=record.definition,
+            )
+        )
+
+    def function_types_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ontology_version_id: str,
+    ) -> list[FunctionTypeRow]:
+        rows = (
+            transaction.execute(
+                select(db.function_types)
+                .where(
+                    and_(
+                        db.function_types.c.tenant_id == tenant_id,
+                        db.function_types.c.ontology_version_id == ontology_version_id,
+                    )
+                )
+                .order_by(db.function_types.c.api_name)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(FunctionTypeRow, dict(row)) for row in rows]
+
+    def function_type_for_version(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        ontology_version_id: str,
+        api_name: str,
+    ) -> FunctionTypeRow | None:
+        row = (
+            transaction.execute(
+                select(db.function_types).where(
+                    and_(
+                        db.function_types.c.tenant_id == tenant_id,
+                        db.function_types.c.ontology_version_id == ontology_version_id,
+                        db.function_types.c.api_name == api_name,
+                    )
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return cast(FunctionTypeRow, dict(row)) if row else None
 
     def object_types_for_version(
         self,

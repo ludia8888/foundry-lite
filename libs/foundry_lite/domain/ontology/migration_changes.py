@@ -150,6 +150,34 @@ def blocked_implements_removed(object_api_name: str, interface_api_name: str) ->
     )
 
 
+def warning_function_added(api_name: str) -> OntologyMigrationChange:
+    """Return a warning change for adding a new function type."""
+    return _warning(
+        "function_added",
+        f"functionTypes.{api_name}",
+        "adding a function is backward-compatible but changes the callable SDK surface",
+    )
+
+
+def blocked_function_removed(api_name: str) -> OntologyMigrationChange:
+    """Return a blocking change for removing a function type."""
+    return _blocked(
+        "function_removed",
+        f"functionTypes.{api_name}",
+        "removing a function breaks OSDK apps and Logic callers executing it",
+        True,
+    )
+
+
+def warning_function_definition_changed(api_name: str) -> OntologyMigrationChange:
+    """Return a warning change for changing a function's persisted definition."""
+    return _warning(
+        "function_definition_changed",
+        f"functionTypes.{api_name}",
+        "changing a function definition changes execution behavior for existing callers",
+    )
+
+
 def blocked_link_removed(api_name: str) -> OntologyMigrationChange:
     """Return a blocking change for removing a link type."""
     return _blocked("link_removed", f"linkTypes.{api_name}", "removing a link type breaks graph traversal APIs", True)

@@ -70,6 +70,38 @@ class InterfaceTypeDefinition(TypedDict):
     properties: Sequence[InterfacePropertyDefinition]
 
 
+class FunctionInputDefinition(TypedDict):
+    """One typed input declared by an ontology function type."""
+
+    apiName: str
+    type: str
+    required: bool
+
+
+class FunctionOutputDefinition(TypedDict):
+    """Declared output type of an ontology function type."""
+
+    type: str
+
+
+class FunctionTypeDefinition(TypedDict):
+    """Function definition payload persisted with a function type.
+
+    ``definition`` carries the bounded Logic DAG (``blocks``) plus the
+    governed tool manifest (``tools``) so execution never needs a
+    per-request manifest; ``permissions.allowedRoles`` is enforced at
+    execute time (missing permissions fail closed to admin-only).
+    """
+
+    apiName: str
+    displayName: str
+    runtime: str
+    inputs: Sequence[FunctionInputDefinition]
+    output: FunctionOutputDefinition
+    definition: OntologyJsonObject
+    permissions: NotRequired[OntologyJsonObject]
+
+
 class ActionParameterSchema(TypedDict, total=False):
     """JSON-schema subset used by action parameter validation."""
 
@@ -168,6 +200,17 @@ class OntologyCatalogInterface(TypedDict):
     implementedBy: Sequence[str]
 
 
+class OntologyCatalogFunction(TypedDict):
+    """Frontend-safe function type metadata for the active ontology catalog."""
+
+    apiName: str
+    displayName: str
+    runtime: str
+    inputs: Sequence[FunctionInputDefinition]
+    output: FunctionOutputDefinition
+    allowedRoles: Sequence[str] | None
+
+
 class OntologyCatalogLink(TypedDict):
     """Frontend-safe link type metadata for the active ontology catalog."""
 
@@ -188,5 +231,6 @@ class OntologyCatalogResult(TypedDict):
     createdAt: str
     activatedAt: str | None
     interfaces: Sequence[OntologyCatalogInterface]
+    functionTypes: Sequence[OntologyCatalogFunction]
     objectTypes: Sequence[OntologyCatalogObject]
     linkTypes: Sequence[OntologyCatalogLink]

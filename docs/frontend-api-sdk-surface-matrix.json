@@ -2339,6 +2339,11 @@
       "route": "POST /api/interfaces/{interface_type}/query",
       "accessClass": "server-side-read-pending-sdk",
       "reason": "Interface-scoped polymorphic object query currently serves server-side and API callers; wiring a named browser SDK interfaces.query method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
+    },
+    {
+      "route": "POST /api/functions/{function_type}/execute",
+      "accessClass": "server-side-read-pending-sdk",
+      "reason": "Registered ontology function execution (read/compute-only Logic DAG) currently serves server-side and API callers; wiring a named browser SDK functions.execute method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
     }
   ]
 }

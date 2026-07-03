@@ -277,6 +277,10 @@ class WebhookPayloadRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
+class FunctionExecuteRequest(BaseModel):
+    inputs: JsonObject = Field(default_factory=dict)
+
+
 class OntologyValidateRequest(BaseModel):
     yaml_text: str = Field(alias="yaml")
 

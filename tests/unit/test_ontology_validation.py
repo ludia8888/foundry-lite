@@ -246,6 +246,7 @@ def test_ontology_activation_evidence_includes_migration_plan_payload() -> None:
             "dataset_registry_service": object(),
             "dataset_version_service": object(),
             "runtime_service": runtime,
+            "visual_builder_service": object(),
         }
     )
     operation = reindex_operation("Order", ["backing"])

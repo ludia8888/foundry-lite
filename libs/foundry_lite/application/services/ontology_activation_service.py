@@ -20,7 +20,12 @@ from foundry_lite.application.ports import (
     TransactionContext,
 )
 from foundry_lite.application.primitives import _new_id, _now
+from foundry_lite.application.services.aip.visual_builder import VisualBuilderService
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.ontology_function_validation import (
+    import_function_types,
+    validate_ontology_functions,
+)
 from foundry_lite.application.services.ontology_interface_validation import (
     import_interface_types,
     object_type_implements,
@@ -72,23 +77,16 @@ class OntologyActivationService(CoreService):
         "dataset_registry_service",
         "dataset_version_service",
         "runtime_service",
+        "visual_builder_service",
     )
     dataset_registry_service: OntologyDatasetRegistry
     dataset_version_service: OntologyDatasetVersions
     runtime_service: OntologyRuntimeBoundary
+    visual_builder_service: VisualBuilderService
 
-    def apply_ontology(
-        self,
-        yaml_path: str | Path,
-        *,
-        ctx: RequestContext | None = None,
-    ) -> OntologyApplyResult:
-        ctx = ctx or RequestContext()
-        self.runtime_service._require_or_audit(ctx, "ontology:activate", "ontology", "draft")
-        require_ontology_write_open(self.runtime_service, ctx, "apply_ontology", "ontology", "draft")
-        definition = self._load_ontology_definition(yaml_path)
-        with self.engine.begin() as conn:
-            return self._apply_loaded_ontology(conn, ctx, definition)
+    def apply_ontology(self, yaml_path: str | Path, *, ctx: RequestContext | None = None) -> OntologyApplyResult:
+        """Apply ontology YAML from a file through the one text-apply path."""
+        return self.apply_ontology_text(Path(yaml_path).read_text(encoding="utf-8"), ctx=ctx)
 
     def apply_ontology_text(
         self,
@@ -118,6 +116,7 @@ class OntologyActivationService(CoreService):
         with self.engine.begin() as conn:
             validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
             validate_ontology_interfaces(definition)
+            validate_ontology_functions(definition, ctx, self.visual_builder_service)
             migration_plan = self._candidate_migration_plan(conn, ctx, definition)
         return ontology_validation_result(definition, migration_plan)
 
@@ -129,10 +128,12 @@ class OntologyActivationService(CoreService):
     ) -> OntologyApplyResult:
         validate_ontology_definition(conn, ctx, definition, self._dataset_columns_for_ref)
         validate_ontology_interfaces(definition)
+        functions = validate_ontology_functions(definition, ctx, self.visual_builder_service)
         migration_plan = self._candidate_migration_plan(conn, ctx, definition)
         migration_plan.raise_if_blocked()
         ontology_version_id, version_number = self._create_draft_version(conn, ctx)
         import_interface_types(self.ontology_repository, conn, ctx, ontology_version_id, definition)
+        import_function_types(self.ontology_repository, conn, ctx, ontology_version_id, functions)
         object_map = self._import_object_types(conn, ctx, ontology_version_id, definition, migration_plan)
         self._import_link_types(conn, ctx, ontology_version_id, definition, object_map)
         self._import_action_types(conn, ctx, ontology_version_id, definition, object_map)
@@ -144,10 +145,6 @@ class OntologyActivationService(CoreService):
             "version_number": version_number,
             "migration_plan": migration_plan.to_payload(),
         }
-
-    def _load_ontology_definition(self, yaml_path: str | Path) -> YamlObject:
-        definition: object = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8"))
-        return yaml_object(definition, "ontology yaml")
 
     def _load_ontology_text(self, yaml_text: str) -> YamlObject:
         definition: object = yaml.safe_load(yaml_text)

@@ -230,6 +230,7 @@ def _reindex_hash_findings(storage_root: Path, tenant_id: str) -> list[DataCorre
                 )
             ]
         after = _object_source_fingerprint(_database_path(clone_root), tenant_id, "Order")
+        rows_skipped = _index_run_rows_skipped(_database_path(clone_root), tenant_id, str(result["index_run_id"]))
     findings: list[DataCorrectnessFinding] = []
     if before != after:
         findings.append(
@@ -240,16 +241,39 @@ def _reindex_hash_findings(storage_root: Path, tenant_id: str) -> list[DataCorre
                 {"before": before, "after": after},
             )
         )
-    if result["rows_read"] != 3 or result["objects_upserted"] != 3:
+    # A same-source replay must read every row, and every row must be either
+    # upserted (full rebuild) or skipped as hash-unchanged (changelog
+    # incremental) — rows silently dropped in either mode are a correctness bug.
+    if result["rows_read"] != 3 or result["objects_upserted"] + rows_skipped != 3:
         findings.append(
             _finding(
                 "reindex_count_mismatch",
                 "Order",
-                "Order reindex replay did not read/upsert the expected rows",
-                {"rowsRead": result["rows_read"], "objectsUpserted": result["objects_upserted"]},
+                "Order reindex replay did not read/upsert-or-skip the expected rows",
+                {
+                    "rowsRead": result["rows_read"],
+                    "objectsUpserted": result["objects_upserted"],
+                    "rowsSkipped": rows_skipped,
+                },
             )
         )
     return findings
+
+
+def _index_run_rows_skipped(db_path: Path, tenant_id: str, index_run_id: str) -> int:
+    """Read the changelog-incremental skip count recorded on the run's source_ref."""
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = _query_rows(
+            conn,
+            "SELECT source_ref FROM index_runs WHERE tenant_id = ? AND id = ?",
+            (tenant_id, index_run_id),
+        )
+    if not rows:
+        return 0
+    source_ref = json.loads(str(rows[0]["source_ref"]) or "{}")
+    skipped = source_ref.get("skipped", 0)
+    return skipped if isinstance(skipped, int) else 0
 
 
 def _latest_dataset_rows(conn: sqlite3.Connection, tenant_id: str) -> dict[str, sqlite3.Row]:

@@ -36,6 +36,7 @@ from foundry_lite_api.routers import (
     connectors,
     datasets,
     developer_console,
+    functions,
     insights,
     media,
     object_sets,
@@ -262,6 +263,7 @@ for resource_router in (
     connectors.router,
     transforms.router,
     actions.router,
+    functions.router,
 ):
     app.include_router(resource_router)
 

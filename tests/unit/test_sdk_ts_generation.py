@@ -1137,3 +1137,52 @@ def test_sdk_generator_rejects_dangling_title_property(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="titleProperty must reference a declared property"):
         sdk.load_ontology(ontology_path)
+
+
+def test_sdk_generator_emits_function_constants() -> None:
+    ontology = sdk.load_ontology(sdk.DEFAULT_ONTOLOGY)
+    generated = sdk.render_typescript(ontology)
+    browser_sdk = sdk.render_web_javascript(ontology)
+
+    assert "export type OsdkFunctionType = {" in generated
+    assert "export const orderRiskSummary = {" in generated
+    assert '  apiName: "orderRiskSummary",' in generated
+    assert '  inputs: [{"apiName": "objectId", "type": "string", "required": true}],' in generated
+    assert '  output: "string",' in generated
+    assert "export const $Functions = { orderRiskSummary } as const;" in generated
+    assert 'functionApiNames: ["orderRiskSummary"],' in generated
+    assert "functionTypes?: OntologyCatalogFunction[];" in _type_block(generated, "OntologyCatalog")
+    assert "export const orderRiskSummary = Object.freeze({" in browser_sdk
+    assert "export const $Functions = Object.freeze({ orderRiskSummary });" in browser_sdk
+    assert 'functionApiNames: Object.freeze(["orderRiskSummary"]),' in browser_sdk
+
+
+def test_function_signature_changes_the_ontology_contract_fingerprint(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    original_path = tmp_path / "original.yaml"
+    original_path.write_text(ontology_text, encoding="utf-8")
+    renamed_path = tmp_path / "renamed.yaml"
+    renamed_path.write_text(ontology_text.replace("apiName: orderRiskSummary", "apiName: orderRiskDigest"), "utf-8")
+    retyped_input_path = tmp_path / "retyped-input.yaml"
+    retyped_input_path.write_text(
+        ontology_text.replace(
+            "- apiName: objectId\n        type: string", "- apiName: objectId\n        type: integer"
+        ),
+        "utf-8",
+    )
+
+    original = contract_fingerprint(sdk.load_ontology(original_path))
+    renamed = contract_fingerprint(sdk.load_ontology(renamed_path))
+    retyped = contract_fingerprint(sdk.load_ontology(retyped_input_path))
+
+    assert original != renamed
+    assert original != retyped
+
+
+def test_sdk_generator_rejects_invalid_function_signatures(tmp_path: Path) -> None:
+    ontology_text = sdk.DEFAULT_ONTOLOGY.read_text(encoding="utf-8")
+    missing_output_path = tmp_path / "missing-output.yaml"
+    missing_output_path.write_text(ontology_text.replace("    output:\n      type: string\n", ""), "utf-8")
+
+    with pytest.raises(ValueError, match="function output must be an object"):
+        sdk.load_ontology(missing_output_path)

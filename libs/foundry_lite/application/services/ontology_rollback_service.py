@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from foundry_lite.application.ports import (
+    FunctionTypeRow,
     OntologyRollbackResult,
     OntologyVersionRow,
     TransactionContext,
@@ -114,6 +115,19 @@ class OntologyRollbackService(CoreService):
                 tenant_id=ctx.tenant_id,
                 ontology_version_id=ontology_version_id,
             ),
+            function_rows=self._function_rows_for_version(conn, ctx, ontology_version_id),
+        )
+
+    def _function_rows_for_version(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+    ) -> list[FunctionTypeRow]:
+        return self.ontology_repository.function_types_for_version(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            ontology_version_id=ontology_version_id,
         )
 
     def _record_rollback(

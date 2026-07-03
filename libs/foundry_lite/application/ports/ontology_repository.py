@@ -18,6 +18,15 @@ from foundry_lite.application.ports.ontology_definitions import (
     ActionTypeDefinition as ActionTypeDefinition,
 )
 from foundry_lite.application.ports.ontology_definitions import (
+    FunctionInputDefinition as FunctionInputDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    FunctionOutputDefinition as FunctionOutputDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    FunctionTypeDefinition as FunctionTypeDefinition,
+)
+from foundry_lite.application.ports.ontology_definitions import (
     InterfacePropertyDefinition as InterfacePropertyDefinition,
 )
 from foundry_lite.application.ports.ontology_definitions import (
@@ -34,6 +43,9 @@ from foundry_lite.application.ports.ontology_definitions import (
 )
 from foundry_lite.application.ports.ontology_definitions import (
     OntologyCatalogAction as OntologyCatalogAction,
+)
+from foundry_lite.application.ports.ontology_definitions import (
+    OntologyCatalogFunction as OntologyCatalogFunction,
 )
 from foundry_lite.application.ports.ontology_definitions import (
     OntologyCatalogInterface as OntologyCatalogInterface,
@@ -187,6 +199,17 @@ class InterfaceTypeRow(TypedDict):
     definition: InterfaceTypeDefinition
 
 
+class FunctionTypeRow(TypedDict):
+    """Persisted ontology function type row."""
+
+    id: str
+    tenant_id: str
+    ontology_version_id: str
+    api_name: str
+    display_name: str
+    definition: FunctionTypeDefinition
+
+
 @dataclass(frozen=True)
 class OntologyVersionRecord:
     ontology_version_id: str
@@ -269,6 +292,16 @@ class InterfaceTypeRecord:
     definition: InterfaceTypeDefinition
 
 
+@dataclass(frozen=True)
+class FunctionTypeRecord:
+    function_type_id: str
+    tenant_id: str
+    ontology_version_id: str
+    api_name: str
+    display_name: str
+    definition: FunctionTypeDefinition
+
+
 class OntologyRepository(Protocol):
     """DB boundary for ontology version and type metadata persistence."""
 
@@ -323,6 +356,31 @@ class OntologyRepository(Protocol):
         ontology_version_id: str,
     ) -> list[InterfaceTypeRow]:
         """Return interface types for an ontology version."""
+        ...
+
+    def insert_function_type(self, *, transaction: TransactionContext, record: FunctionTypeRecord) -> None:
+        """Persist one function type."""
+        ...
+
+    def function_types_for_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ontology_version_id: str,
+    ) -> list[FunctionTypeRow]:
+        """Return function types for an ontology version ordered by API name."""
+        ...
+
+    def function_type_for_version(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        ontology_version_id: str,
+        api_name: str,
+    ) -> FunctionTypeRow | None:
+        """Return one function type in a version by API name."""
         ...
 
     def object_types_for_version(

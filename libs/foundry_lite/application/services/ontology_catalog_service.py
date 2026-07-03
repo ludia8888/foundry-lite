@@ -37,4 +37,5 @@ class OntologyCatalogService(CoreService):
                     for item in object_rows
                 },
                 interface_rows=self.ontology_lookup_service._interface_types_for_version(conn, ctx, active["id"]),
+                function_rows=self.ontology_lookup_service._function_types_for_version(conn, ctx, active["id"]),
             )

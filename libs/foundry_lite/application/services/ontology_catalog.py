@@ -6,10 +6,14 @@ from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports.ontology_repository import (
     ActionTypeRow,
+    FunctionInputDefinition,
+    FunctionOutputDefinition,
+    FunctionTypeRow,
     InterfaceTypeRow,
     LinkTypeRow,
     ObjectTypeRow,
     OntologyCatalogAction,
+    OntologyCatalogFunction,
     OntologyCatalogInterface,
     OntologyCatalogLink,
     OntologyCatalogObject,
@@ -18,6 +22,7 @@ from foundry_lite.application.ports.ontology_repository import (
     OntologyVersionRow,
     PropertyTypeRow,
 )
+from foundry_lite.application.services.ontology_function_validation import function_allowed_roles
 from foundry_lite.application.services.ontology_interface_validation import persisted_implements
 
 
@@ -29,6 +34,7 @@ def build_ontology_catalog(
     properties_by_object_id: Mapping[str, Sequence[PropertyTypeRow]],
     actions_by_object_id: Mapping[str, Sequence[ActionTypeRow]],
     interface_rows: Sequence[InterfaceTypeRow] = (),
+    function_rows: Sequence[FunctionTypeRow] = (),
 ) -> OntologyCatalogResult:
     return {
         "ontologyVersionId": active["id"],
@@ -37,6 +43,7 @@ def build_ontology_catalog(
         "createdAt": active["created_at"],
         "activatedAt": active["activated_at"],
         "interfaces": [_catalog_interface(item, object_rows) for item in interface_rows],
+        "functionTypes": [_catalog_function(item) for item in function_rows],
         "objectTypes": [
             _catalog_object(
                 item,
@@ -59,6 +66,32 @@ def _catalog_interface(row: InterfaceTypeRow, object_rows: Sequence[ObjectTypeRo
             item["api_name"] for item in object_rows if row["api_name"] in persisted_implements(item["config"])
         ],
     }
+
+
+def _catalog_function(row: FunctionTypeRow) -> OntologyCatalogFunction:
+    """Surface one function's callable signature plus its declared roles.
+
+    The catalog exposes the signature (not the Logic DAG internals) so callers
+    and generated SDKs can discover apiName, inputs, output, and who may run it.
+    """
+    definition = row["definition"]
+    allowed_roles = function_allowed_roles(definition)
+    return {
+        "apiName": row["api_name"],
+        "displayName": row["display_name"],
+        "runtime": definition["runtime"],
+        "inputs": [_catalog_function_input(item) for item in definition["inputs"]],
+        "output": _catalog_function_output(definition["output"]),
+        "allowedRoles": list(allowed_roles) if allowed_roles is not None else None,
+    }
+
+
+def _catalog_function_input(item: FunctionInputDefinition) -> FunctionInputDefinition:
+    return {"apiName": item["apiName"], "type": item["type"], "required": item["required"]}
+
+
+def _catalog_function_output(output: FunctionOutputDefinition) -> FunctionOutputDefinition:
+    return {"type": output["type"]}
 
 
 def _catalog_object(

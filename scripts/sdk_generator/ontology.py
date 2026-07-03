@@ -50,6 +50,26 @@ class InterfaceDef:
 
 
 @dataclass(frozen=True)
+class FunctionInputDef:
+    api_name: str
+    ts_type: str
+    is_required: bool
+
+
+@dataclass(frozen=True)
+class FunctionDef:
+    """Callable signature of one registered ontology function.
+
+    Only the signature (apiName, inputs, output) is part of the generated SDK
+    contract; the Logic DAG body may change without an SDK-visible drift.
+    """
+
+    api_name: str
+    inputs: tuple[FunctionInputDef, ...]
+    output_ts_type: str
+
+
+@dataclass(frozen=True)
 class ParameterDef:
     api_name: str
     ts_type: str
@@ -76,6 +96,7 @@ class OntologyDef:
     links: tuple[LinkDef, ...]
     actions: tuple[ActionDef, ...]
     interfaces: tuple[InterfaceDef, ...] = ()
+    functions: tuple[FunctionDef, ...] = ()
 
 
 def load_ontology(path: Path) -> OntologyDef:
@@ -88,6 +109,7 @@ def load_ontology(path: Path) -> OntologyDef:
         links=tuple(_link_def(row) for row in _sequence(document.get("linkTypes"), "linkTypes")),
         actions=tuple(_action_def(row) for row in _sequence(document.get("actionTypes"), "actionTypes")),
         interfaces=interfaces,
+        functions=tuple(_function_def(row) for row in _sequence(document.get("functionTypes"), "functionTypes")),
     )
 
 
@@ -167,6 +189,25 @@ def _property_def(value: object) -> PropertyDef:
         ts_type=ts_type,
         is_required=row.get("nullable") is False,
         is_sensitive=is_sensitive,
+    )
+
+
+def _function_def(value: object) -> FunctionDef:
+    row = _mapping(value, "functionTypes[]")
+    output = _mapping(row.get("output"), "function output")
+    return FunctionDef(
+        api_name=_string(row.get("apiName"), "function apiName"),
+        inputs=tuple(_function_input_def(item) for item in _sequence(row.get("inputs"), "function inputs")),
+        output_ts_type=_ts_type(_string(output.get("type"), "function output type"), is_sensitive=False),
+    )
+
+
+def _function_input_def(value: object) -> FunctionInputDef:
+    row = _mapping(value, "function inputs[]")
+    return FunctionInputDef(
+        api_name=_string(row.get("apiName"), "function input apiName"),
+        ts_type=_ts_type(_string(row.get("type"), "function input type"), is_sensitive=False),
+        is_required=row.get("required") is True,
     )
 
 
