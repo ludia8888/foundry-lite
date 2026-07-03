@@ -120,8 +120,37 @@ def test_python_osdk_aggregate_count_and_fail_closed_edges(foundry: FoundryLite)
         foundry(Order, ctx=ctx).aggregate(
             {"select": {"count": {"$count": "unordered"}}, "groupBy": {"region": "exact"}}
         )
-    with pytest.raises(ValidationFailed, match="supports only \\$count"):
-        foundry(Order, ctx=ctx).aggregate({"select": {"sumAmount": {"amount": {"$sum": "unordered"}}}})
+    with pytest.raises(ValidationFailed, match="unknown metric property"):
+        foundry(Order, ctx=ctx).aggregate({"select": {"sumMissing": {"missing": {"$sum": "unordered"}}}})
+
+
+def test_python_osdk_aggregate_numeric_metrics_run_server_side(foundry: FoundryLite) -> None:
+    ctx = prepare_indexed_demo(foundry)
+
+    summed = foundry(Order, ctx=ctx).aggregate({"select": {"sumAmount": {"amount": {"$sum": "unordered"}}}})
+
+    assert summed == {
+        "excludedItems": 0,
+        "data": [{"group": {}, "metrics": [{"name": "sumAmount", "value": 2300.0}]}],
+    }
+
+    grouped = foundry(Order, ctx=ctx).aggregate(
+        {
+            "select": {"count": {"$count": "unordered"}, "maxAmount": {"amount": {"$max": "unordered"}}},
+            "groupBy": {"customerId": "exact"},
+        }
+    )
+
+    assert grouped["data"] == [
+        {
+            "group": {"customerId": "C-100"},
+            "metrics": [{"name": "count", "value": 2}, {"name": "maxAmount", "value": 1200.0}],
+        },
+        {
+            "group": {"customerId": "C-101"},
+            "metrics": [{"name": "count", "value": 1}, {"name": "maxAmount", "value": 800.0}],
+        },
+    ]
 
 
 def test_python_osdk_instance_link_and_bound_action_use_existing_boundaries(foundry: FoundryLite) -> None:
@@ -186,10 +215,12 @@ def test_python_osdk_preserves_masking_and_action_permission_boundaries(foundry:
     assert order.properties["margin"] == "***MASKED***"
     with pytest.raises(ValidationFailed, match="masked property"):
         foundry(Order, ctx=viewer).where(margin={"gte": 1}).fetch_page()
-    with pytest.raises(ValidationFailed, match="masked property"):
+    with pytest.raises(PermissionDenied, match="masked property"):
         foundry(Order, ctx=viewer).aggregate(
             {"select": {"count": {"$count": "unordered"}}, "groupBy": {"margin": "exact"}}
         )
+    with pytest.raises(PermissionDenied, match="masked property"):
+        foundry(Order, ctx=viewer).aggregate({"select": {"sumMargin": {"margin": {"$sum": "unordered"}}}})
     with pytest.raises(PermissionDenied):
         order.actions.approve_order.apply_action(
             {"reason": "viewer should not approve"},

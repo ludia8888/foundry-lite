@@ -6,7 +6,12 @@ from collections.abc import Mapping, Sequence
 from typing import Protocol
 
 from foundry_lite.application.action_types import ActionApplyResponse, ActionValidationResponse
-from foundry_lite.application.ports import ObjectLinkPayload, ObjectPayload, ObjectQueryResult
+from foundry_lite.application.ports import (
+    ObjectAggregationResult,
+    ObjectLinkPayload,
+    ObjectPayload,
+    ObjectQueryResult,
+)
 from foundry_lite.domain.context import RequestContext
 
 
@@ -32,6 +37,16 @@ class OsdkObjectFacade(Protocol):
         search_text: str | None = None,
         semantic_text: str | None = None,
     ) -> ObjectQueryResult: ...
+
+    def aggregate(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        group_by: Sequence[str] | None = None,
+        select: Sequence[Mapping[str, object]] | None = None,
+    ) -> ObjectAggregationResult: ...
 
     def links(
         self,

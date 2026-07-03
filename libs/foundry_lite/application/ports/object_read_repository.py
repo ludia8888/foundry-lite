@@ -113,6 +113,29 @@ class ObjectQueryResult(TypedDict):
     nextCursor: str | None
 
 
+ObjectAggregationFunction = Literal["count", "sum", "avg", "min", "max"]
+
+
+class ObjectAggregationMetric(TypedDict):
+    """One requested aggregation output column: ``name`` = function(property)."""
+
+    name: str
+    function: ObjectAggregationFunction
+    property: str | None
+
+
+class ObjectAggregationGroup(TypedDict):
+    """One aggregated group: its groupBy key values and its computed metrics."""
+
+    key: dict[str, object]
+    metrics: dict[str, float | int | None]
+
+
+class ObjectAggregationResult(TypedDict):
+    groups: list[ObjectAggregationGroup]
+    totalGroups: int
+
+
 class ObjectReference(TypedDict):
     objectType: str
     objectId: str
@@ -181,6 +204,27 @@ class ObjectReadRepository(Protocol):
         property_object_type_id: str | None = None,
     ) -> list[ObjectRecordRow]:
         """Return one DB-filtered, DB-sorted object page plus one lookahead row."""
+        ...
+
+    def aggregate_active_object_rows(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        object_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        group_by: Sequence[str],
+        metrics: Sequence[ObjectAggregationMetric],
+        group_limit: int,
+        object_type_id: str | None = None,
+        property_object_type_id: str | None = None,
+    ) -> list[ObjectAggregationGroup]:
+        """Return one aggregated row per group, computed in the database.
+
+        The group math must run where the rows live so that object sets are
+        never paged through the application just to be counted; ``group_limit``
+        bounds the result so a high-cardinality groupBy cannot balloon memory.
+        """
         ...
 
     def latest_object_change_sequence(

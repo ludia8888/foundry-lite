@@ -192,6 +192,10 @@ from foundry_lite.application.ports.object_index_repository import (
     OntologyObjectReindexResult,
 )
 from foundry_lite.application.ports.object_read_repository import (
+    ObjectAggregationFunction,
+    ObjectAggregationGroup,
+    ObjectAggregationMetric,
+    ObjectAggregationResult,
     ObjectLinkPayload,
     ObjectLinkRow,
     ObjectOrderBy,

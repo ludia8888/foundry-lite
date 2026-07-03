@@ -7,6 +7,7 @@ from typing import Protocol, cast
 
 from foundry_lite.application.ports import (
     LineageEdgeRow,
+    ObjectAggregationResult,
     ObjectOrderBy,
     ObjectPayload,
     ObjectQueryItem,
@@ -20,6 +21,13 @@ from foundry_lite.application.ports import (
 from foundry_lite.application.ports.object_read_repository import ObjectExplain
 from foundry_lite.application.query_filters import validate_filter_ast
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.object_store.aggregation import (
+    ObjectAggregationPlan,
+    aggregate_group_rows,
+    build_aggregation_plan,
+    finalize_aggregation_result,
+    property_data_types,
+)
 from foundry_lite.application.services.object_store.evidence import object_property_lineage
 from foundry_lite.application.services.object_store.query_cursor import (
     decode_object_query_cursor,
@@ -202,6 +210,61 @@ class ObjectQueryService(CoreService):
             "items": [self._object_query_item(ctx, object_type_api_name, row) for row in page],
             "nextCursor": _next_cursor(records, page, normalized_order_by, filter_ast, active_index_version, ctx),
         }
+
+    def aggregate_objects(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        group_by: Sequence[str] | None = None,
+        select: Sequence[Mapping[str, object]] | None = None,
+    ) -> ObjectAggregationResult:
+        """Aggregate objects in the database so unmasked rows never leave the server.
+
+        Runs the same gates as query_objects (role, osdk read scope, tenant,
+        active index, masked-property checks) before any SQL executes.
+        """
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "object:read")
+        self._require_object_read_scope(ctx, object_type_api_name)
+        if filter_ast:
+            validate_filter_ast(filter_ast)
+        with self.engine.begin() as conn:
+            object_type = self.ontology_service._active_object_type(conn, ctx, object_type_api_name)
+            self.object_index_repository.active_index_version(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                object_type_id=object_type["id"],
+            )
+            self._validate_query_shape(conn, ctx, object_type_api_name, object_type["id"], filter_ast, [])
+            plan = self._aggregation_plan(conn, ctx, object_type_api_name, object_type["id"], group_by, select)
+            groups = aggregate_group_rows(
+                self.object_read_repository,
+                conn,
+                tenant_id=ctx.tenant_id,
+                object_type=object_type,
+                filter_ast=filter_ast,
+                plan=plan,
+            )
+        return finalize_aggregation_result(plan, groups)
+
+    def _aggregation_plan(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        object_type_api_name: str,
+        object_type_id: str,
+        group_by: Sequence[str] | None,
+        select: Sequence[Mapping[str, object]] | None,
+    ) -> ObjectAggregationPlan:
+        return build_aggregation_plan(
+            object_type_api_name,
+            property_data_types(self.ontology_service._properties_for_object_type(conn, object_type_id)),
+            self.policy.masked_property_names(ctx, object_type_api_name),
+            group_by=group_by,
+            select=select,
+        )
 
     def _require_object_read_scope(self, ctx: RequestContext, object_type_api_name: str) -> None:
         self.osdk_application_service.require_resource_scope(

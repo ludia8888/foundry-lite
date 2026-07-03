@@ -8,6 +8,8 @@ from typing import Any, Protocol, cast
 
 import pytest
 from foundry_lite.application.ports import (
+    ObjectAggregationGroup,
+    ObjectAggregationMetric,
     ObjectLinkRow,
     ObjectOrderBy,
     ObjectQueryCursor,
@@ -108,6 +110,34 @@ class FakeObjectReadRepository:
         rows = _sort_rows(rows, order_by, property_data_types)
         rows = _rows_after_cursor(rows, order_by, cursor, property_data_types)
         return rows[:limit]
+
+    def aggregate_active_object_rows(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        object_type_api_name: str,
+        filter_ast: Mapping[str, object] | None,
+        group_by: Sequence[str],
+        metrics: Sequence[ObjectAggregationMetric],
+        group_limit: int,
+        object_type_id: str | None = None,
+        property_object_type_id: str | None = None,
+    ) -> list[ObjectAggregationGroup]:
+        rows = self.active_object_rows(
+            transaction=transaction,
+            tenant_id=tenant_id,
+            object_type_api_name=object_type_api_name,
+            object_type_id=object_type_id,
+        )
+        property_data_types = self._property_data_types(
+            object_type_api_name,
+            property_object_type_id or object_type_id,
+        )
+        if filter_ast:
+            rows = [row for row in rows if _matches_typed_filter(row["properties"], filter_ast, property_data_types)]
+        groups = _fake_aggregated_groups(rows, group_by, metrics, property_data_types)
+        return groups[:group_limit]
 
     def active_links_from(
         self,
@@ -490,6 +520,68 @@ def _require_property_data_type(property_data_types: Mapping[str, str], property
     return property_data_types.get(property_name, "string")
 
 
+def _fake_aggregated_groups(
+    rows: list[ObjectRecordRow],
+    group_by: Sequence[str],
+    metrics: Sequence[ObjectAggregationMetric],
+    property_data_types: Mapping[str, str],
+) -> list[ObjectAggregationGroup]:
+    states: dict[tuple[object, ...], dict[str, Any]] = {}
+    for row in rows:
+        key = {
+            name: _fake_key_value(row["properties"].get(name), _require_property_data_type(property_data_types, name))
+            for name in group_by
+        }
+        state = states.setdefault(
+            tuple(key.values()),
+            {"key": key, "count": 0, "values": {metric["name"]: [] for metric in metrics}},
+        )
+        state["count"] += 1
+        for metric in metrics:
+            if metric["function"] == "count":
+                continue
+            number = _number_value(row["properties"].get(str(metric["property"])))
+            if number is not _INVALID_VALUE:
+                state["values"][metric["name"]].append(cast(float, number))
+    if not states and not group_by:
+        states[()] = {"key": {}, "count": 0, "values": {metric["name"]: [] for metric in metrics}}
+    return [_fake_group_from_state(state, metrics) for state in states.values()]
+
+
+def _fake_group_from_state(state: dict[str, Any], metrics: Sequence[ObjectAggregationMetric]) -> ObjectAggregationGroup:
+    computed: dict[str, float | int | None] = {}
+    for metric in metrics:
+        if metric["function"] == "count":
+            computed[metric["name"]] = int(state["count"])
+        else:
+            computed[metric["name"]] = _fake_metric_value(metric["function"], state["values"][metric["name"]])
+    return {"key": dict(state["key"]), "metrics": computed}
+
+
+def _fake_metric_value(function: str, values: list[float]) -> float | None:
+    if not values:
+        return None
+    if function == "sum":
+        return float(sum(values))
+    if function == "avg":
+        return float(sum(values) / len(values))
+    if function == "min":
+        return float(min(values))
+    return float(max(values))
+
+
+def _fake_key_value(value: object, data_type: str) -> object:
+    if value is None:
+        return None
+    if data_type == "boolean":
+        return bool(value)
+    if data_type == "integer":
+        return int(float(cast("str | int | float", value)))
+    if data_type in {"float", "number"}:
+        return float(cast("str | int | float", value))
+    return str(value)
+
+
 @pytest.fixture(params=["sqlalchemy", "fake", "postgres"])
 def harness(request: pytest.FixtureRequest, tmp_path: Path) -> ObjectReadHarness:
     if request.param == "fake":
@@ -851,6 +943,103 @@ def test_object_read_repository_contract_reads_latest_object_change_sequence(
 
     assert including_deleted == 12
     assert active_only == 9
+
+
+def test_object_read_repository_contract_aggregates_groups_with_metrics(harness: ObjectReadHarness) -> None:
+    harness.add_property_type(row_id="pt_status", api_name="status", data_type="string")
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_object(row_id="obj_1", object_id="O-1", properties={"status": "PENDING", "amount": 10.0})
+    harness.add_object(row_id="obj_2", object_id="O-2", properties={"status": "PENDING", "amount": 30.0})
+    harness.add_object(row_id="obj_3", object_id="O-3", properties={"status": "REVIEW", "amount": 5.0})
+    harness.add_object(row_id="obj_deleted", object_id="O-4", deleted=True, properties={"status": "PENDING"})
+    harness.add_object(
+        row_id="obj_other_tenant",
+        tenant_id="tenant-other",
+        object_id="O-5",
+        properties={"status": "PENDING", "amount": 999.0},
+    )
+    metrics: list[ObjectAggregationMetric] = [
+        {"name": "count", "function": "count", "property": None},
+        {"name": "sum_amount", "function": "sum", "property": "amount"},
+        {"name": "avg_amount", "function": "avg", "property": "amount"},
+        {"name": "min_amount", "function": "min", "property": "amount"},
+        {"name": "max_amount", "function": "max", "property": "amount"},
+    ]
+
+    with harness.transaction() as transaction:
+        groups = harness.repository.aggregate_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            group_by=["status"],
+            metrics=metrics,
+            group_limit=10,
+        )
+
+    by_status = {group["key"]["status"]: group["metrics"] for group in groups}
+    assert by_status == {
+        "PENDING": {"count": 2, "sum_amount": 40.0, "avg_amount": 20.0, "min_amount": 10.0, "max_amount": 30.0},
+        "REVIEW": {"count": 1, "sum_amount": 5.0, "avg_amount": 5.0, "min_amount": 5.0, "max_amount": 5.0},
+    }
+
+
+def test_object_read_repository_contract_aggregate_applies_filter_and_group_limit(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_status", api_name="status", data_type="string")
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    harness.add_object(row_id="obj_1", object_id="O-1", properties={"status": "PENDING", "amount": 10.0})
+    harness.add_object(row_id="obj_2", object_id="O-2", properties={"status": "REVIEW", "amount": 30.0})
+    harness.add_object(row_id="obj_3", object_id="O-3", properties={"status": "APPROVED", "amount": 5.0})
+    metrics: list[ObjectAggregationMetric] = [{"name": "count", "function": "count", "property": None}]
+
+    with harness.transaction() as transaction:
+        filtered = harness.repository.aggregate_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast={"property": "status", "op": "in", "value": ["PENDING", "REVIEW"]},
+            group_by=["status"],
+            metrics=metrics,
+            group_limit=10,
+        )
+        capped = harness.repository.aggregate_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            group_by=["status"],
+            metrics=metrics,
+            group_limit=2,
+        )
+
+    assert {group["key"]["status"] for group in filtered} == {"PENDING", "REVIEW"}
+    assert all(group["metrics"] == {"count": 1} for group in filtered)
+    assert len(capped) == 2
+
+
+def test_object_read_repository_contract_aggregate_without_group_by_over_empty_set(
+    harness: ObjectReadHarness,
+) -> None:
+    harness.add_property_type(row_id="pt_amount", api_name="amount", data_type="float")
+    metrics: list[ObjectAggregationMetric] = [
+        {"name": "count", "function": "count", "property": None},
+        {"name": "sum_amount", "function": "sum", "property": "amount"},
+    ]
+
+    with harness.transaction() as transaction:
+        groups = harness.repository.aggregate_active_object_rows(
+            transaction=transaction,
+            tenant_id="tenant-demo",
+            object_type_api_name="Order",
+            filter_ast=None,
+            group_by=[],
+            metrics=metrics,
+            group_limit=10,
+        )
+
+    assert groups == [{"key": {}, "metrics": {"count": 0, "sum_amount": None}}]
 
 
 def test_link_traversal_never_crosses_tenant_without_policy(harness: ObjectReadHarness) -> None:

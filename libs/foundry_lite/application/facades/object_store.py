@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 
 from foundry_lite.application.ports import (
+    ObjectAggregationResult,
     ObjectIndexCdcResult,
     ObjectIndexRebuildResult,
     ObjectIndexShadowRebuildResult,
@@ -141,6 +142,24 @@ class ObjectStore:
             cursor=cursor,
             search_text=search_text,
             semantic_text=semantic_text,
+        )
+
+    def aggregate(
+        self,
+        object_type_api_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        filter_ast: Mapping[str, object] | None = None,
+        group_by: Sequence[str] | None = None,
+        select: Sequence[Mapping[str, object]] | None = None,
+    ) -> ObjectAggregationResult:
+        """Server-side aggregation (count/sum/avg/min/max, exact groupBy) under query authorization."""
+        return self._objects.query.aggregate_objects(
+            object_type_api_name,
+            ctx=ctx,
+            filter_ast=filter_ast,
+            group_by=group_by,
+            select=select,
         )
 
     def subscription_events(

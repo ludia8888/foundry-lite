@@ -149,6 +149,22 @@ class ObjectQueryRequest(BaseModel):
     search_text: str | None = Field(default=None, alias="search")
 
 
+class ObjectAggregateMetricRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    function: str
+    property: str | None = None
+    name: str | None = None
+
+
+class ObjectAggregateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    filter_ast: JsonObject | None = Field(default=None, alias="filter")
+    group_by: list[str] | None = Field(default=None, alias="groupBy")
+    select: list[ObjectAggregateMetricRequest]
+
+
 class ObjectSubscriptionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
