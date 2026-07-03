@@ -25,11 +25,45 @@ import {
   getActionType,
   getObjectType,
   groupAdminCapabilities,
+  idempotencyKey as foundryLiteGeneratedIdempotencyKey,
   normalizeFoundryLiteError,
   pollFoundryLiteOperation,
   retryWithBackoff,
   streamFoundryLiteOperationEvents,
 } from "./generated";
+import {
+  emptyOntologyDraft,
+  matchColumnsToProperties,
+  ontologyDatasetColumnsFromSchema,
+  ontologyDraftFromCatalog,
+  ontologyDraftToYamlText,
+  removeOntologyDraftActionType,
+  removeOntologyDraftFunctionType,
+  removeOntologyDraftInterfaceType,
+  removeOntologyDraftLinkType,
+  removeOntologyDraftObjectType,
+  removeOntologyDraftProperty,
+  setOntologyDraftObjectTypeImplements,
+  updateOntologyDraftObjectType,
+  updateOntologyDraftProperty,
+  upsertOntologyDraftActionType,
+  upsertOntologyDraftFunctionType,
+  upsertOntologyDraftInterfaceType,
+  upsertOntologyDraftLinkType,
+  upsertOntologyDraftObjectType,
+  upsertOntologyDraftProperty,
+} from "./ontology-draft";
+import type {
+  OntologyColumnPropertyMatch,
+  OntologyDatasetColumn,
+  OntologyDraft,
+  OntologyDraftActionType,
+  OntologyDraftFunctionType,
+  OntologyDraftInterfaceType,
+  OntologyDraftLinkType,
+  OntologyDraftObjectType,
+  OntologyDraftProperty,
+} from "./ontology-draft";
 import {
   adminCommandCenter,
   adminInternalOperationsWorkbench,
@@ -37,6 +71,7 @@ import {
   adminOperationsLaunchpad,
   createConnectorOnboardingRecipe,
   createFoundryLiteScreenRecipes,
+  createOntologyBuilderRecipe,
   createOperatorWorkspaceRecipe,
   createSourceOnboardingRecipe,
   createSourceWizardRecipe,
@@ -107,11 +142,25 @@ import type {
   MediaSearchRequest,
   MediaStagedUpload,
   MediaUploadRequest,
+  ActionBatchApplyResponse,
+  FunctionExecutionResult,
+  InterfaceQueryRequest,
+  MaterializationSpecList,
+  ObjectAggregateRequest,
+  ObjectAggregationGroup,
+  ObjectAggregationResult,
   OntologyCatalog,
   OntologyCatalogAction,
   OntologyCatalogLink,
   OntologyCatalogObject,
   OntologyCatalogProperty,
+  OntologyProposalListResult,
+  OntologyProposalPayload,
+  OntologyProposalSubmitRequest,
+  OntologyProposalUpdateRequest,
+  OntologyResourceDependentsResult,
+  OntologyResourceUsageResult,
+  OntologyValidationResult,
   ObjectIndexRebuildResult,
   ObjectFilter,
   ObjectQueryRequest,
@@ -158,6 +207,9 @@ import type {
   ConnectorOnboardingRecipeState,
   ConnectorOnboardingRunOptions,
   FoundryLiteScreenRecipes,
+  OntologyBuilderRecipeState,
+  OntologyBuilderRunInput,
+  OntologyBuilderRunOptions,
   OperatorWorkspaceAreaId,
   OperatorWorkspaceHomeOptions,
   OperatorWorkspaceHomeView,
@@ -6950,4 +7002,1521 @@ function isFoundryLiteFailureStatus(status: string): boolean {
     "outcome_unknown",
     "compensation_required",
   ].includes(status);
+}
+
+export type FoundryLiteOntologyDraftOptions = {
+  initialCatalog?: OntologyCatalog | null;
+  initialDraft?: OntologyDraft | null;
+};
+
+export type FoundryLiteOntologyDraftState = {
+  draft: OntologyDraft;
+  isDirty: boolean;
+  objectTypeCount: number;
+  linkTypeCount: number;
+  actionTypeCount: number;
+  interfaceCount: number;
+  functionTypeCount: number;
+  loadFromCatalog(catalog: OntologyCatalog): void;
+  replaceDraft(draft: OntologyDraft): void;
+  reset(): void;
+  toYamlText(): string;
+  upsertObjectType(objectType: OntologyDraftObjectType): void;
+  updateObjectType(apiName: string, patch: Partial<Omit<OntologyDraftObjectType, "apiName">>): void;
+  removeObjectType(apiName: string): void;
+  setObjectTypeImplements(apiName: string, implementsApiNames: string[]): void;
+  upsertProperty(objectApiName: string, property: OntologyDraftProperty): void;
+  updateProperty(
+    objectApiName: string,
+    propertyApiName: string,
+    patch: Partial<Omit<OntologyDraftProperty, "apiName">>,
+  ): void;
+  removeProperty(objectApiName: string, propertyApiName: string): void;
+  upsertLinkType(linkType: OntologyDraftLinkType): void;
+  removeLinkType(apiName: string): void;
+  upsertActionType(actionType: OntologyDraftActionType): void;
+  removeActionType(apiName: string): void;
+  upsertInterfaceType(interfaceType: OntologyDraftInterfaceType): void;
+  removeInterfaceType(apiName: string): void;
+  upsertFunctionType(functionType: OntologyDraftFunctionType): void;
+  removeFunctionType(apiName: string): void;
+};
+
+/**
+ * Client-side editable ontology draft for click-driven Object/Property/Link/
+ * Action/Interface/Function design. `loadFromCatalog` seeds the draft from the
+ * active catalog (unknown config keys ride along verbatim so a round-trip does
+ * not drop features), the mutators update it immutably, and `toYamlText`
+ * serializes it for `client.ontology.validate` / proposals. The serialization
+ * is pretty-printed JSON: YAML 1.2 is a JSON superset and the backend loads
+ * `yamlText` with a YAML loader, so JSON is valid YAML while hand-authored
+ * YAML files remain equally valid input. Dirty tracking compares against the
+ * last loaded baseline; `reset` restores that baseline.
+ */
+export function useFoundryLiteOntologyDraft(
+  options: FoundryLiteOntologyDraftOptions = {},
+): FoundryLiteOntologyDraftState {
+  const initialDraftRef = useRef<OntologyDraft | null>(null);
+  if (initialDraftRef.current === null) {
+    initialDraftRef.current =
+      options.initialDraft ??
+      (options.initialCatalog ? ontologyDraftFromCatalog(options.initialCatalog) : emptyOntologyDraft());
+  }
+  const [draft, setDraft] = useState<OntologyDraft>(initialDraftRef.current);
+  const [baseline, setBaseline] = useState<OntologyDraft>(initialDraftRef.current);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  const loadFromCatalog = useCallback((catalog: OntologyCatalog) => {
+    const nextDraft = ontologyDraftFromCatalog(catalog);
+    setBaseline(nextDraft);
+    setDraft(nextDraft);
+  }, []);
+  const replaceDraft = useCallback((nextDraft: OntologyDraft) => setDraft(nextDraft), []);
+  const reset = useCallback(() => setDraft(baseline), [baseline]);
+  const toYamlText = useCallback(() => ontologyDraftToYamlText(draftRef.current), []);
+  const baselineKey = useMemo(() => JSON.stringify(baseline), [baseline]);
+  const draftKey = useMemo(() => JSON.stringify(draft), [draft]);
+
+  const upsertObjectType = useCallback(
+    (objectType: OntologyDraftObjectType) =>
+      setDraft((current) => upsertOntologyDraftObjectType(current, objectType)),
+    [],
+  );
+  const updateObjectType = useCallback(
+    (apiName: string, patch: Partial<Omit<OntologyDraftObjectType, "apiName">>) =>
+      setDraft((current) => updateOntologyDraftObjectType(current, apiName, patch)),
+    [],
+  );
+  const removeObjectType = useCallback(
+    (apiName: string) => setDraft((current) => removeOntologyDraftObjectType(current, apiName)),
+    [],
+  );
+  const setObjectTypeImplements = useCallback(
+    (apiName: string, implementsApiNames: string[]) =>
+      setDraft((current) => setOntologyDraftObjectTypeImplements(current, apiName, implementsApiNames)),
+    [],
+  );
+  const upsertProperty = useCallback(
+    (objectApiName: string, property: OntologyDraftProperty) =>
+      setDraft((current) => upsertOntologyDraftProperty(current, objectApiName, property)),
+    [],
+  );
+  const updateProperty = useCallback(
+    (
+      objectApiName: string,
+      propertyApiName: string,
+      patch: Partial<Omit<OntologyDraftProperty, "apiName">>,
+    ) =>
+      setDraft((current) =>
+        updateOntologyDraftProperty(current, objectApiName, propertyApiName, patch),
+      ),
+    [],
+  );
+  const removeProperty = useCallback(
+    (objectApiName: string, propertyApiName: string) =>
+      setDraft((current) => removeOntologyDraftProperty(current, objectApiName, propertyApiName)),
+    [],
+  );
+  const upsertLinkType = useCallback(
+    (linkType: OntologyDraftLinkType) =>
+      setDraft((current) => upsertOntologyDraftLinkType(current, linkType)),
+    [],
+  );
+  const removeLinkType = useCallback(
+    (apiName: string) => setDraft((current) => removeOntologyDraftLinkType(current, apiName)),
+    [],
+  );
+  const upsertActionType = useCallback(
+    (actionType: OntologyDraftActionType) =>
+      setDraft((current) => upsertOntologyDraftActionType(current, actionType)),
+    [],
+  );
+  const removeActionType = useCallback(
+    (apiName: string) => setDraft((current) => removeOntologyDraftActionType(current, apiName)),
+    [],
+  );
+  const upsertInterfaceType = useCallback(
+    (interfaceType: OntologyDraftInterfaceType) =>
+      setDraft((current) => upsertOntologyDraftInterfaceType(current, interfaceType)),
+    [],
+  );
+  const removeInterfaceType = useCallback(
+    (apiName: string) => setDraft((current) => removeOntologyDraftInterfaceType(current, apiName)),
+    [],
+  );
+  const upsertFunctionType = useCallback(
+    (functionType: OntologyDraftFunctionType) =>
+      setDraft((current) => upsertOntologyDraftFunctionType(current, functionType)),
+    [],
+  );
+  const removeFunctionType = useCallback(
+    (apiName: string) => setDraft((current) => removeOntologyDraftFunctionType(current, apiName)),
+    [],
+  );
+
+  return {
+    draft,
+    isDirty: draftKey !== baselineKey,
+    objectTypeCount: draft.objectTypes.length,
+    linkTypeCount: draft.linkTypes.length,
+    actionTypeCount: draft.actionTypes.length,
+    interfaceCount: draft.interfaces.length,
+    functionTypeCount: draft.functionTypes.length,
+    loadFromCatalog,
+    replaceDraft,
+    reset,
+    toYamlText,
+    upsertObjectType,
+    updateObjectType,
+    removeObjectType,
+    setObjectTypeImplements,
+    upsertProperty,
+    updateProperty,
+    removeProperty,
+    upsertLinkType,
+    removeLinkType,
+    upsertActionType,
+    removeActionType,
+    upsertInterfaceType,
+    removeInterfaceType,
+    upsertFunctionType,
+    removeFunctionType,
+  };
+}
+
+export type FoundryLiteOntologyMigrationChangeView = {
+  kind: string;
+  path: string;
+  status: string;
+  reason: string;
+  requiresSdkMajorVersion: boolean;
+  requiresObjectReindex: boolean;
+  details: Record<string, unknown> | null;
+};
+
+export type FoundryLiteOntologyReindexOperationView = {
+  objectTypeApiName: string;
+  reason: string;
+  changedFields: string[];
+  reindexKey: string;
+};
+
+export type FoundryLiteOntologySdkImpact = {
+  requiresSdkRegeneration: boolean;
+  requiresSdkMajorVersion: boolean;
+  sdkCompatibility: string | null;
+  impactedPaths: string[];
+};
+
+export type FoundryLiteOntologyDraftValidationCounts = {
+  objectTypes: number;
+  linkTypes: number;
+  actionTypes: number;
+};
+
+export type FoundryLiteOntologyDraftValidationView = {
+  counts: FoundryLiteOntologyDraftValidationCounts | null;
+  migrationPlan: Record<string, unknown> | null;
+  planStatus: string | null;
+  changes: FoundryLiteOntologyMigrationChangeView[];
+  blockedChanges: FoundryLiteOntologyMigrationChangeView[];
+  warnings: FoundryLiteOntologyMigrationChangeView[];
+  reindexOperations: FoundryLiteOntologyReindexOperationView[];
+  isBlocked: boolean;
+  requiresReindex: boolean;
+  sdkImpact: FoundryLiteOntologySdkImpact;
+};
+
+export type FoundryLiteOntologyDraftValidationOptions = {
+  debounceMs?: number;
+  onSuccess?: (validation: OntologyValidationResult) => void;
+  onError?: (error: FoundryLiteApiError) => void;
+};
+
+export type FoundryLiteOntologyDraftValidationState = FoundryLiteOntologyDraftValidationView & {
+  validation: OntologyValidationResult | null;
+  yamlText: string | null;
+  error: FoundryLiteApiError | null;
+  isValidating: boolean;
+  requestId: string | null;
+  retryable: boolean;
+  validate(): Promise<OntologyValidationResult | null>;
+  validateNow(): Promise<OntologyValidationResult | null>;
+};
+
+/**
+ * Screen-ready view over one `client.ontology.validate` result: entity
+ * counts, migration plan changes split into `blockedChanges`/`warnings`,
+ * `reindexOperations` (the object reindex plan), and the derived `sdkImpact`.
+ * `sdkImpact.requiresSdkRegeneration` is true when any change requires an SDK
+ * major version or touches the action/interface/function SDK surface, so
+ * screens can render an "SDK regeneration required" (SDK 재생성 필요) badge.
+ */
+export function foundryLiteOntologyDraftValidationView(
+  validation: OntologyValidationResult | null | undefined,
+): FoundryLiteOntologyDraftValidationView {
+  const migrationPlan = readFoundryLiteOntologyMigrationPlan(validation);
+  const changes = readFoundryLiteOntologyMigrationChanges(migrationPlan?.changes);
+  const blockedChanges = changes.filter((change) => change.status === "blocked");
+  const warnings = changes.filter((change) => change.status === "warning");
+  const reindexOperations = readFoundryLiteOntologyReindexOperations(
+    migrationPlan?.objectReindexPlan,
+  );
+  const planStatus =
+    typeof migrationPlan?.status === "string" ? migrationPlan.status : null;
+  return {
+    counts: validation
+      ? {
+          objectTypes: validation.object_type_count,
+          linkTypes: validation.link_type_count,
+          actionTypes: validation.action_type_count,
+        }
+      : null,
+    migrationPlan,
+    planStatus,
+    changes,
+    blockedChanges,
+    warnings,
+    reindexOperations,
+    isBlocked: planStatus === "blocked" || blockedChanges.length > 0,
+    requiresReindex: reindexOperations.length > 0,
+    sdkImpact: foundryLiteOntologySdkImpact(migrationPlan, changes),
+  };
+}
+
+/**
+ * Derive the SDK regeneration impact of a migration plan. A draft needs a
+ * regenerated OSDK package when the plan flags an SDK major version or when
+ * any change touches the `actionTypes`/`interfaces`/`functionTypes` surface.
+ */
+export function foundryLiteOntologySdkImpact(
+  migrationPlan: Record<string, unknown> | null,
+  changes: FoundryLiteOntologyMigrationChangeView[],
+): FoundryLiteOntologySdkImpact {
+  const sdkCompatibility =
+    typeof migrationPlan?.sdkCompatibility === "string" ? migrationPlan.sdkCompatibility : null;
+  const requiresSdkMajorVersion =
+    sdkCompatibility === "major_version_required" ||
+    changes.some((change) => change.requiresSdkMajorVersion);
+  const impactedChanges = changes.filter(
+    (change) =>
+      change.requiresSdkMajorVersion || isFoundryLiteOntologySdkSurfacePath(change.path),
+  );
+  return {
+    requiresSdkRegeneration: requiresSdkMajorVersion || impactedChanges.length > 0,
+    requiresSdkMajorVersion,
+    sdkCompatibility,
+    impactedPaths: Array.from(new Set(impactedChanges.map((change) => change.path))),
+  };
+}
+
+/**
+ * Debounced on-demand validation of an ontology draft via
+ * `client.ontology.validate`. `validate()` waits `debounceMs` of quiet before
+ * sending (superseded calls resolve `null`); `validateNow()` skips the
+ * debounce. State exposes the raw result plus the migration-plan view
+ * (`counts`, `migrationPlan`, `blockedChanges`, `warnings`,
+ * `reindexOperations`, `isBlocked`, `sdkImpact`).
+ */
+export function useFoundryLiteOntologyDraftValidation(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  draft: OntologyDraft | null,
+  options: FoundryLiteOntologyDraftValidationOptions = {},
+): FoundryLiteOntologyDraftValidationState {
+  const { debounceMs = 400, onSuccess, onError } = options;
+  const [validation, setValidation] = useState<OntologyValidationResult | null>(null);
+  const [error, setError] = useState<FoundryLiteApiError | null>(null);
+  const [isValidating, setIsValidating] = useState(false);
+  const yamlText = useMemo(() => (draft ? ontologyDraftToYamlText(draft) : null), [draft]);
+  const yamlTextRef = useRef(yamlText);
+  const onSuccessRef = useRef(onSuccess);
+  const onErrorRef = useRef(onError);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingResolveRef = useRef<((result: OntologyValidationResult | null) => void) | null>(null);
+  const mountedRef = useRef(true);
+
+  yamlTextRef.current = yamlText;
+  onSuccessRef.current = onSuccess;
+  onErrorRef.current = onError;
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
+      pendingResolveRef.current?.(null);
+      pendingResolveRef.current = null;
+    };
+  }, []);
+
+  const validateNow = useCallback(async () => {
+    const currentYamlText = yamlTextRef.current;
+    if (currentYamlText === null) return null;
+    if (mountedRef.current) setIsValidating(true);
+    try {
+      const result = await client.ontology.validate({ yaml: currentYamlText });
+      if (mountedRef.current) {
+        setValidation(result);
+        setError(null);
+        onSuccessRef.current?.(result);
+      }
+      return result;
+    } catch (caught) {
+      const normalized = normalizeFoundryLiteError(caught);
+      if (mountedRef.current) {
+        setError(normalized);
+        onErrorRef.current?.(normalized);
+      }
+      return null;
+    } finally {
+      if (mountedRef.current) setIsValidating(false);
+    }
+  }, [client]);
+
+  const validate = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    pendingResolveRef.current?.(null);
+    return new Promise<OntologyValidationResult | null>((resolve) => {
+      pendingResolveRef.current = resolve;
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        pendingResolveRef.current = null;
+        void validateNow().then(resolve);
+      }, debounceMs);
+    });
+  }, [debounceMs, validateNow]);
+
+  const view = useMemo(() => foundryLiteOntologyDraftValidationView(validation), [validation]);
+
+  return {
+    ...view,
+    validation,
+    yamlText,
+    error,
+    isValidating,
+    requestId: error?.requestId ?? null,
+    retryable: error?.retryable ?? false,
+    validate,
+    validateNow,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyDraftValidation}. */
+export function useFoundryLiteProvidedOntologyDraftValidation(
+  draft: OntologyDraft | null,
+  options: FoundryLiteOntologyDraftValidationOptions = {},
+): FoundryLiteOntologyDraftValidationState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyDraftValidation(client, draft, options);
+}
+
+export type FoundryLiteOntologyProposalSubmitPayload = OntologyProposalSubmitRequest & {
+  idempotencyKey?: string;
+};
+
+export type FoundryLiteOntologyProposalMutationState<TPayload> =
+  FoundryLiteMutationState<OntologyProposalPayload, TPayload> & {
+    proposal: OntologyProposalPayload | null;
+  };
+
+export type FoundryLiteOntologyProposalSubmitOptions =
+  FoundryLiteMutationOptions<OntologyProposalPayload, FoundryLiteOntologyProposalSubmitPayload> & {
+    idempotencyKey?:
+      | string
+      | ((payload: FoundryLiteOntologyProposalSubmitPayload) => string | undefined);
+  };
+
+export function foundryLiteOntologyProposalSubmitLockKey(
+  payload: FoundryLiteOntologyProposalSubmitPayload,
+): string {
+  return `ontology:proposal:submit:${payload.title}`;
+}
+
+/**
+ * Submit an ontology change proposal (`client.ontology.proposals.submit`).
+ * The endpoint requires an Idempotency-Key: the hook resolves it from
+ * `payload.idempotencyKey`, then `options.idempotencyKey`, and otherwise
+ * generates one at the call site with the exported `idempotencyKey` helper,
+ * mirroring the `useFoundryLiteActionSubmit` convention.
+ */
+export function useFoundryLiteOntologyProposalSubmit(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  options: FoundryLiteOntologyProposalSubmitOptions = {},
+): FoundryLiteOntologyProposalMutationState<FoundryLiteOntologyProposalSubmitPayload> {
+  const { idempotencyKey: suppliedIdempotencyKey, ...mutationOptions } = options;
+  const mutate = useCallback(
+    (payload: FoundryLiteOntologyProposalSubmitPayload) => {
+      const { idempotencyKey: payloadIdempotencyKey, ...request } = payload;
+      const supplied =
+        typeof suppliedIdempotencyKey === "function"
+          ? suppliedIdempotencyKey(payload)
+          : suppliedIdempotencyKey;
+      const resolvedIdempotencyKey =
+        payloadIdempotencyKey ??
+        supplied ??
+        foundryLiteGeneratedIdempotencyKey("ontology.proposals.submit", request.title);
+      return client.ontology.proposals.submit(request, { idempotencyKey: resolvedIdempotencyKey });
+    },
+    [client, suppliedIdempotencyKey],
+  );
+  const mutation = useFoundryLiteMutation(mutate, {
+    ...mutationOptions,
+    lockKey: mutationOptions.lockKey ?? foundryLiteOntologyProposalSubmitLockKey,
+  });
+  return { ...mutation, proposal: mutation.result };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyProposalSubmit}. */
+export function useFoundryLiteProvidedOntologyProposalSubmit(
+  options: FoundryLiteOntologyProposalSubmitOptions = {},
+): FoundryLiteOntologyProposalMutationState<FoundryLiteOntologyProposalSubmitPayload> {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyProposalSubmit(client, options);
+}
+
+export type FoundryLiteOntologyProposalUpdatePayload = OntologyProposalUpdateRequest & {
+  proposalId: string;
+};
+
+export function foundryLiteOntologyProposalUpdateLockKey(
+  payload: FoundryLiteOntologyProposalUpdatePayload,
+): string {
+  return `ontology:proposal:update:${payload.proposalId}:${payload.expectedFingerprint}`;
+}
+
+/**
+ * Revise an open proposal (`client.ontology.proposals.update`). The payload
+ * threads `expectedFingerprint` so a concurrent revision of the same proposal
+ * fails with a typed conflict instead of silently clobbering the reviewer's
+ * copy; read the fingerprint from the latest proposal payload.
+ */
+export function useFoundryLiteOntologyProposalUpdate(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  options: FoundryLiteMutationOptions<
+    OntologyProposalPayload,
+    FoundryLiteOntologyProposalUpdatePayload
+  > = {},
+): FoundryLiteOntologyProposalMutationState<FoundryLiteOntologyProposalUpdatePayload> {
+  const mutate = useCallback(
+    (payload: FoundryLiteOntologyProposalUpdatePayload) => {
+      const { proposalId, ...request } = payload;
+      return client.ontology.proposals.update(proposalId, request);
+    },
+    [client],
+  );
+  const mutation = useFoundryLiteMutation(mutate, {
+    ...options,
+    lockKey: options.lockKey ?? foundryLiteOntologyProposalUpdateLockKey,
+  });
+  return { ...mutation, proposal: mutation.result };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyProposalUpdate}. */
+export function useFoundryLiteProvidedOntologyProposalUpdate(
+  options: FoundryLiteMutationOptions<
+    OntologyProposalPayload,
+    FoundryLiteOntologyProposalUpdatePayload
+  > = {},
+): FoundryLiteOntologyProposalMutationState<FoundryLiteOntologyProposalUpdatePayload> {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyProposalUpdate(client, options);
+}
+
+export type FoundryLiteOntologyProposalQueueOptions = FoundryLiteCursorPaginationOptions<
+  OntologyProposalListResult,
+  OntologyProposalPayload
+> & {
+  key?: readonly unknown[];
+  status?: string;
+  pageSize?: number;
+};
+
+export type FoundryLiteOntologyProposalQueueState = FoundryLiteCursorPaginationState<
+  OntologyProposalListResult,
+  OntologyProposalPayload
+> & {
+  proposals: OntologyProposalPayload[];
+  status: string | null;
+  hasProposals: boolean;
+};
+
+/**
+ * Cursor-paginated proposal review queue over
+ * `client.ontology.proposals.list`, mirroring
+ * `useFoundryLiteCursorPagination`: `items`/`proposals` accumulate loaded
+ * pages, `loadMore` follows `nextCursor`, and changing `status` resets and
+ * reloads the queue.
+ */
+export function useFoundryLiteOntologyProposalQueue(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  options: FoundryLiteOntologyProposalQueueOptions = {},
+): FoundryLiteOntologyProposalQueueState {
+  const { key, status, pageSize, ...paginationOptions } = options;
+  const queryKey = useMemo(
+    () => key ?? ["ontology", "proposals", status ?? null, pageSize ?? null],
+    [key, pageSize, status],
+  );
+  const loadPage = useCallback(
+    (cursor: string | null) =>
+      client.ontology.proposals.list({ status, cursor, limit: pageSize }),
+    [client, pageSize, status],
+  );
+  const pagination = useFoundryLiteCursorPagination<
+    OntologyProposalListResult,
+    OntologyProposalPayload
+  >(queryKey, loadPage, paginationOptions);
+  return {
+    ...pagination,
+    proposals: pagination.items,
+    status: status ?? null,
+    hasProposals: pagination.items.length > 0,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyProposalQueue}. */
+export function useFoundryLiteProvidedOntologyProposalQueue(
+  options: FoundryLiteOntologyProposalQueueOptions = {},
+): FoundryLiteOntologyProposalQueueState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyProposalQueue(client, options);
+}
+
+export type FoundryLiteOntologyProposalOptions = FoundryLiteQueryOptions<OntologyProposalPayload> & {
+  key?: readonly unknown[];
+};
+
+export type FoundryLiteOntologyProposalState = FoundryLiteQueryState<OntologyProposalPayload> & {
+  proposal: OntologyProposalPayload | null;
+  proposalId: string | null;
+  fingerprint: string | null;
+  hasProposal: boolean;
+  canLoadProposal: boolean;
+  disabledReason: string | null;
+  refetch(): Promise<OntologyProposalPayload | null>;
+};
+
+/**
+ * Detail view of one proposal (`client.ontology.proposals.get`) with
+ * `refetch` for pulling decision/execution updates. `fingerprint` is the
+ * value to thread as `expectedFingerprint` into update/decide/execute calls.
+ */
+export function useFoundryLiteOntologyProposal(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  proposalId: string | null | undefined,
+  options: FoundryLiteOntologyProposalOptions = {},
+): FoundryLiteOntologyProposalState {
+  const { key, enabled = true, ...queryOptions } = options;
+  const canLoadProposal = Boolean(proposalId);
+  const queryKey = useMemo(
+    () => key ?? ["ontology", "proposals", "detail", proposalId ?? null],
+    [key, proposalId],
+  );
+  const load = useCallback(() => {
+    if (!proposalId) {
+      throw new FoundryLiteApiError(
+        0,
+        "PROPOSAL_NOT_SELECTED",
+        "Select a proposal before loading its detail.",
+        { missingFields: ["proposalId"] },
+        null,
+        false,
+      );
+    }
+    return client.ontology.proposals.get(proposalId);
+  }, [client, proposalId]);
+  const query = useFoundryLiteQuery(queryKey, load, {
+    ...queryOptions,
+    enabled: enabled && canLoadProposal,
+  });
+  return {
+    ...query,
+    proposal: query.data,
+    proposalId: proposalId ?? null,
+    fingerprint: query.data?.fingerprint ?? null,
+    hasProposal: query.data !== null,
+    canLoadProposal,
+    disabledReason: canLoadProposal ? null : "Select a proposal before loading its detail.",
+    refetch: query.reload,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyProposal}. */
+export function useFoundryLiteProvidedOntologyProposal(
+  proposalId: string | null | undefined,
+  options: FoundryLiteOntologyProposalOptions = {},
+): FoundryLiteOntologyProposalState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyProposal(client, proposalId, options);
+}
+
+export type FoundryLiteOntologyProposalReviewOperation =
+  | "assign"
+  | "decide"
+  | "execute"
+  | "withdraw";
+
+export type FoundryLiteOntologyProposalAssignPayload = {
+  proposalId: string;
+  reviewerUserId: string;
+};
+
+export type FoundryLiteOntologyProposalDecisionPayload = {
+  proposalId: string;
+  decision: string;
+  expectedFingerprint: string;
+  comment?: string | null;
+};
+
+export type FoundryLiteOntologyProposalExecutePayload = {
+  proposalId: string;
+  expectedFingerprint: string;
+};
+
+export type FoundryLiteOntologyProposalWithdrawPayload = {
+  proposalId: string;
+  reason?: string | null;
+};
+
+export type FoundryLiteOntologySeparationOfDutiesState = {
+  isDenied: boolean;
+  deniedOperation: FoundryLiteOntologyProposalReviewOperation | null;
+  error: FoundryLiteApiError | null;
+  requestId: string | null;
+};
+
+export type FoundryLiteOntologyProposalReviewOptions = {
+  actionLock?: InFlightActionLock;
+  onSuccess?: (
+    proposal: OntologyProposalPayload,
+    operation: FoundryLiteOntologyProposalReviewOperation,
+  ) => void;
+  onError?: (
+    error: FoundryLiteApiError,
+    operation: FoundryLiteOntologyProposalReviewOperation,
+  ) => void;
+};
+
+export type FoundryLiteOntologyProposalReviewState = {
+  assign: FoundryLiteMutationState<OntologyProposalPayload, FoundryLiteOntologyProposalAssignPayload>;
+  decide: FoundryLiteMutationState<
+    OntologyProposalPayload,
+    FoundryLiteOntologyProposalDecisionPayload
+  >;
+  execute: FoundryLiteMutationState<
+    OntologyProposalPayload,
+    FoundryLiteOntologyProposalExecutePayload
+  >;
+  withdraw: FoundryLiteMutationState<
+    OntologyProposalPayload,
+    FoundryLiteOntologyProposalWithdrawPayload
+  >;
+  proposal: OntologyProposalPayload | null;
+  lastOperation: FoundryLiteOntologyProposalReviewOperation | null;
+  isRunning: boolean;
+  error: FoundryLiteApiError | null;
+  requestId: string | null;
+  retryable: boolean;
+  separationOfDuties: FoundryLiteOntologySeparationOfDutiesState;
+};
+
+export function foundryLiteOntologyProposalReviewLockKey(
+  operation: FoundryLiteOntologyProposalReviewOperation,
+  proposalId: string,
+): string {
+  return `ontology:proposal:${operation}:${proposalId}`;
+}
+
+/**
+ * Reviewer surface for one or more proposals: `assign`, `decide`, `execute`,
+ * and `withdraw` mutations over `client.ontology.proposals.*`. Decision and
+ * execution payloads thread `expectedFingerprint` (take it from the proposal
+ * detail). Separation-of-duties denials — the backend rejects submitters
+ * deciding or executing their own proposal with `PERMISSION_DENIED` — surface
+ * as the typed `separationOfDuties` state instead of a generic error.
+ */
+export function useFoundryLiteOntologyProposalReview(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  options: FoundryLiteOntologyProposalReviewOptions = {},
+): FoundryLiteOntologyProposalReviewState {
+  const [proposal, setProposal] = useState<OntologyProposalPayload | null>(null);
+  const [lastOperation, setLastOperation] =
+    useState<FoundryLiteOntologyProposalReviewOperation | null>(null);
+  const [lastFailure, setLastFailure] = useState<{
+    operation: FoundryLiteOntologyProposalReviewOperation;
+    error: FoundryLiteApiError;
+  } | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
+  const reviewMutationOptions = useCallback(
+    <TPayload extends { proposalId: string }>(
+      operation: FoundryLiteOntologyProposalReviewOperation,
+    ): FoundryLiteMutationOptions<OntologyProposalPayload, TPayload> => ({
+      actionLock: optionsRef.current.actionLock,
+      lockKey: (payload: TPayload) =>
+        foundryLiteOntologyProposalReviewLockKey(operation, payload.proposalId),
+      onSuccess: (result: OntologyProposalPayload) => {
+        setProposal(result);
+        setLastOperation(operation);
+        setLastFailure(null);
+        optionsRef.current.onSuccess?.(result, operation);
+      },
+      onError: (error: FoundryLiteApiError) => {
+        setLastOperation(operation);
+        setLastFailure({ operation, error });
+        optionsRef.current.onError?.(error, operation);
+      },
+    }),
+    [],
+  );
+
+  const assign = useFoundryLiteMutation(
+    (payload: FoundryLiteOntologyProposalAssignPayload) =>
+      client.ontology.proposals.assign(payload.proposalId, {
+        reviewerUserId: payload.reviewerUserId,
+      }),
+    reviewMutationOptions<FoundryLiteOntologyProposalAssignPayload>("assign"),
+  );
+  const decide = useFoundryLiteMutation(
+    (payload: FoundryLiteOntologyProposalDecisionPayload) =>
+      client.ontology.proposals.decide(payload.proposalId, {
+        decision: payload.decision,
+        expectedFingerprint: payload.expectedFingerprint,
+        comment: payload.comment ?? null,
+      }),
+    reviewMutationOptions<FoundryLiteOntologyProposalDecisionPayload>("decide"),
+  );
+  const execute = useFoundryLiteMutation(
+    (payload: FoundryLiteOntologyProposalExecutePayload) =>
+      client.ontology.proposals.execute(payload.proposalId, {
+        expectedFingerprint: payload.expectedFingerprint,
+      }),
+    reviewMutationOptions<FoundryLiteOntologyProposalExecutePayload>("execute"),
+  );
+  const withdraw = useFoundryLiteMutation(
+    (payload: FoundryLiteOntologyProposalWithdrawPayload) =>
+      client.ontology.proposals.withdraw(payload.proposalId, { reason: payload.reason ?? null }),
+    reviewMutationOptions<FoundryLiteOntologyProposalWithdrawPayload>("withdraw"),
+  );
+
+  const separationOfDuties = useMemo<FoundryLiteOntologySeparationOfDutiesState>(() => {
+    const denied =
+      lastFailure && lastFailure.error.code === "PERMISSION_DENIED" ? lastFailure : null;
+    return {
+      isDenied: denied !== null,
+      deniedOperation: denied?.operation ?? null,
+      error: denied?.error ?? null,
+      requestId: denied?.error.requestId ?? null,
+    };
+  }, [lastFailure]);
+
+  const error = lastFailure?.error ?? null;
+  return {
+    assign,
+    decide,
+    execute,
+    withdraw,
+    proposal,
+    lastOperation,
+    isRunning: assign.isRunning || decide.isRunning || execute.isRunning || withdraw.isRunning,
+    error,
+    requestId: error?.requestId ?? null,
+    retryable: error?.retryable ?? false,
+    separationOfDuties,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyProposalReview}. */
+export function useFoundryLiteProvidedOntologyProposalReview(
+  options: FoundryLiteOntologyProposalReviewOptions = {},
+): FoundryLiteOntologyProposalReviewState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyProposalReview(client, options);
+}
+
+export type FoundryLiteOntologyResourceInsightsOptions = {
+  key?: readonly unknown[];
+  enabled?: boolean;
+  windowDays?: number;
+  retry?: RetryWithBackoffOptions;
+  onError?: (error: FoundryLiteApiError) => void;
+};
+
+export type FoundryLiteOntologyResourceInsightsState = {
+  resourceType: string;
+  apiName: string | null;
+  windowDays: number | null;
+  usage: OntologyResourceUsageResult | null;
+  dependents: OntologyResourceDependentsResult | null;
+  usageQuery: FoundryLiteQueryState<OntologyResourceUsageResult>;
+  dependentsQuery: FoundryLiteQueryState<OntologyResourceDependentsResult>;
+  error: FoundryLiteApiError | null;
+  isLoading: boolean;
+  isRefreshing: boolean;
+  requestId: string | null;
+  retryable: boolean;
+  hasUsage: boolean;
+  hasDependents: boolean;
+  notes: string[];
+  canLoadInsights: boolean;
+  disabledReason: string | null;
+  reload(): Promise<void>;
+};
+
+/**
+ * Combined impact view for one ontology resource: usage evidence
+ * (`client.ontology.resources.usage`, optionally windowed via `windowDays`)
+ * and dependents (`client.ontology.resources.dependents`) loaded together
+ * with a combined loading/error state, for "what breaks if I change this"
+ * screens.
+ */
+export function useFoundryLiteOntologyResourceInsights(
+  client: Pick<FoundryLiteGeneratedClient, "ontology">,
+  resourceType: string,
+  apiName: string | null | undefined,
+  options: FoundryLiteOntologyResourceInsightsOptions = {},
+): FoundryLiteOntologyResourceInsightsState {
+  const { key, enabled = true, windowDays, retry, onError } = options;
+  const canLoadInsights = Boolean(apiName);
+  const usageKey = useMemo(
+    () => key ?? ["ontology", "resources", resourceType, apiName ?? null, "usage", windowDays ?? null],
+    [apiName, key, resourceType, windowDays],
+  );
+  const dependentsKey = useMemo(
+    () => key ?? ["ontology", "resources", resourceType, apiName ?? null, "dependents"],
+    [apiName, key, resourceType],
+  );
+  const loadUsage = useCallback(() => {
+    if (!apiName) throw foundryLiteOntologyResourceNotSelectedError();
+    return client.ontology.resources.usage(
+      resourceType,
+      apiName,
+      windowDays === undefined ? undefined : { windowDays },
+    );
+  }, [apiName, client, resourceType, windowDays]);
+  const loadDependents = useCallback(() => {
+    if (!apiName) throw foundryLiteOntologyResourceNotSelectedError();
+    return client.ontology.resources.dependents(resourceType, apiName);
+  }, [apiName, client, resourceType]);
+  const usageQuery = useFoundryLiteQuery(usageKey, loadUsage, {
+    enabled: enabled && canLoadInsights,
+    retry,
+    onError,
+  });
+  const dependentsQuery = useFoundryLiteQuery(dependentsKey, loadDependents, {
+    enabled: enabled && canLoadInsights,
+    retry,
+    onError,
+  });
+  const reload = useCallback(async () => {
+    await Promise.all([usageQuery.reload(), dependentsQuery.reload()]);
+  }, [dependentsQuery.reload, usageQuery.reload]);
+  const error = usageQuery.error ?? dependentsQuery.error;
+
+  return {
+    resourceType,
+    apiName: apiName ?? null,
+    windowDays: windowDays ?? null,
+    usage: usageQuery.data,
+    dependents: dependentsQuery.data,
+    usageQuery,
+    dependentsQuery,
+    error,
+    isLoading: usageQuery.isLoading || dependentsQuery.isLoading,
+    isRefreshing: usageQuery.isRefreshing || dependentsQuery.isRefreshing,
+    requestId: error?.requestId ?? null,
+    retryable: error?.retryable ?? false,
+    hasUsage: usageQuery.data !== null,
+    hasDependents: dependentsQuery.data !== null,
+    notes: [...(usageQuery.data?.notes ?? []), ...(dependentsQuery.data?.notes ?? [])],
+    canLoadInsights,
+    disabledReason: canLoadInsights
+      ? null
+      : "Select an ontology resource before loading usage and dependents.",
+    reload,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyResourceInsights}. */
+export function useFoundryLiteProvidedOntologyResourceInsights(
+  resourceType: string,
+  apiName: string | null | undefined,
+  options: FoundryLiteOntologyResourceInsightsOptions = {},
+): FoundryLiteOntologyResourceInsightsState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteOntologyResourceInsights(client, resourceType, apiName, options);
+}
+
+export type FoundryLiteDatasetColumnMappingReference = {
+  namespace: string;
+  name: string;
+};
+
+export type FoundryLiteDatasetColumnMappingOptions =
+  FoundryLiteQueryOptions<DatasetInspectionPayload> & {
+    key?: readonly unknown[];
+    version?: string;
+  };
+
+export type FoundryLiteDatasetColumnMappingState =
+  FoundryLiteQueryState<DatasetInspectionPayload> & {
+    datasetRef: string | null;
+    inspection: DatasetInspectionPayload | null;
+    schema: Record<string, unknown> | null;
+    columns: OntologyDatasetColumn[];
+    hasColumns: boolean;
+    canInspectDataset: boolean;
+    disabledReason: string | null;
+    matchColumns(
+      draftObject: OntologyDraftObjectType | null | undefined,
+    ): OntologyColumnPropertyMatch[];
+  };
+
+/**
+ * Dataset column -> property mapping surface for the builder screen. Wraps
+ * `client.datasets.inspect` to expose the schema `columns`, and
+ * `matchColumns(draftObject)` suggests mappings against a draft object type
+ * by declared `column`, name equality, and snake_case/camelCase conversion
+ * (see `matchColumnsToProperties` in `./ontology-draft`).
+ */
+export function useFoundryLiteDatasetColumnMapping(
+  client: Pick<FoundryLiteGeneratedClient, "datasets">,
+  datasetRef: FoundryLiteDatasetColumnMappingReference | null | undefined,
+  options: FoundryLiteDatasetColumnMappingOptions = {},
+): FoundryLiteDatasetColumnMappingState {
+  const { key, version, enabled = true, ...queryOptions } = options;
+  const namespace = datasetRef?.namespace ?? null;
+  const name = datasetRef?.name ?? null;
+  const canInspectDataset = Boolean(namespace && name);
+  const queryKey = useMemo(
+    () => key ?? ["datasets", "column-mapping", namespace, name, version ?? null],
+    [key, name, namespace, version],
+  );
+  const load = useCallback(() => {
+    if (!namespace || !name) {
+      throw new FoundryLiteApiError(
+        0,
+        "DATASET_NOT_SELECTED",
+        "Select a dataset before inspecting its columns.",
+        { missingFields: ["datasetRef"] },
+        null,
+        false,
+      );
+    }
+    return client.datasets.inspect(namespace, name, version ? { version } : undefined);
+  }, [client, name, namespace, version]);
+  const query = useFoundryLiteQuery(queryKey, load, {
+    ...queryOptions,
+    enabled: enabled && canInspectDataset,
+  });
+  const schema = query.data?.schema ?? null;
+  const columns = useMemo(() => ontologyDatasetColumnsFromSchema(schema), [schema]);
+  const matchColumns = useCallback(
+    (draftObject: OntologyDraftObjectType | null | undefined) =>
+      matchColumnsToProperties(columns, draftObject),
+    [columns],
+  );
+
+  return {
+    ...query,
+    datasetRef: query.data?.dataset ?? (namespace && name ? `${namespace}.${name}` : null),
+    inspection: query.data,
+    schema,
+    columns,
+    hasColumns: columns.length > 0,
+    canInspectDataset,
+    disabledReason: canInspectDataset ? null : "Select a dataset before inspecting its columns.",
+    matchColumns,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteDatasetColumnMapping}. */
+export function useFoundryLiteProvidedDatasetColumnMapping(
+  datasetRef: FoundryLiteDatasetColumnMappingReference | null | undefined,
+  options: FoundryLiteDatasetColumnMappingOptions = {},
+): FoundryLiteDatasetColumnMappingState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteDatasetColumnMapping(client, datasetRef, options);
+}
+
+export type FoundryLiteObjectAggregateOptions = FoundryLiteQueryOptions<ObjectAggregationResult> & {
+  key?: readonly unknown[];
+};
+
+export type FoundryLiteObjectAggregateState = FoundryLiteQueryState<ObjectAggregationResult> & {
+  objectApiName: string | null;
+  groups: ObjectAggregationGroup[];
+  totalGroups: number;
+  hasGroups: boolean;
+  canAggregate: boolean;
+  disabledReason: string | null;
+};
+
+/**
+ * Server-side aggregation over one object type
+ * (`client.objects.generic.aggregate`): select count/sum/avg/min/max metrics,
+ * optionally grouped and filtered, without paging raw objects to the browser.
+ */
+export function useFoundryLiteObjectAggregate(
+  client: Pick<FoundryLiteGeneratedClient, "objects">,
+  objectApiName: string | null | undefined,
+  request: ObjectAggregateRequest,
+  options: FoundryLiteObjectAggregateOptions = {},
+): FoundryLiteObjectAggregateState {
+  const { key, enabled = true, ...queryOptions } = options;
+  const canAggregate = Boolean(objectApiName);
+  const requestKey = useMemo(() => JSON.stringify(request), [request]);
+  const stableRequest = useMemo(() => request, [requestKey]);
+  const queryKey = useMemo(
+    () => key ?? ["objects", "aggregate", objectApiName ?? null, stableRequest],
+    [key, objectApiName, stableRequest],
+  );
+  const load = useCallback(() => {
+    if (!objectApiName) {
+      throw new FoundryLiteApiError(
+        0,
+        "OBJECT_TYPE_NOT_SELECTED",
+        "Select an object type before aggregating objects.",
+        { missingFields: ["objectApiName"] },
+        null,
+        false,
+      );
+    }
+    return client.objects.generic.aggregate(objectApiName, stableRequest);
+  }, [client, objectApiName, stableRequest]);
+  const query = useFoundryLiteQuery(queryKey, load, {
+    ...queryOptions,
+    enabled: enabled && canAggregate,
+  });
+
+  return {
+    ...query,
+    objectApiName: objectApiName ?? null,
+    groups: query.data?.groups ?? [],
+    totalGroups: query.data?.totalGroups ?? 0,
+    hasGroups: (query.data?.groups.length ?? 0) > 0,
+    canAggregate,
+    disabledReason: canAggregate ? null : "Select an object type before aggregating objects.",
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteObjectAggregate}. */
+export function useFoundryLiteProvidedObjectAggregate(
+  objectApiName: string | null | undefined,
+  request: ObjectAggregateRequest,
+  options: FoundryLiteObjectAggregateOptions = {},
+): FoundryLiteObjectAggregateState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteObjectAggregate(client, objectApiName, request, options);
+}
+
+export type FoundryLiteInterfaceQueryOptions =
+  FoundryLiteQueryOptions<ObjectQueryResult<GenericObject>> &
+    InterfaceQueryRequest & {
+      key?: readonly unknown[];
+    };
+
+export type FoundryLiteInterfaceQueryState = FoundryLiteQueryState<
+  ObjectQueryResult<GenericObject>
+> & {
+  interfaceApiName: string | null;
+  objects: GenericObject[];
+  items: GenericObject[];
+  nextCursor: string | null;
+  hasNextPage: boolean;
+  canQueryInterface: boolean;
+  disabledReason: string | null;
+};
+
+/**
+ * Query objects through an interface type
+ * (`client.interfaces.generic.query`), returning implementing objects across
+ * object types with the shared filter/orderBy/limit request shape.
+ */
+export function useFoundryLiteInterfaceQuery(
+  client: Pick<FoundryLiteGeneratedClient, "interfaces">,
+  interfaceApiName: string | null | undefined,
+  options: FoundryLiteInterfaceQueryOptions = {},
+): FoundryLiteInterfaceQueryState {
+  const { key, filter, orderBy, limit, enabled = true, ...queryOptions } = options;
+  const canQueryInterface = Boolean(interfaceApiName);
+  const requestKey = useMemo(
+    () => JSON.stringify({ filter: filter ?? null, orderBy: orderBy ?? null, limit: limit ?? null }),
+    [filter, limit, orderBy],
+  );
+  const request = useMemo<InterfaceQueryRequest>(
+    () => ({ filter, orderBy, limit }),
+    [requestKey],
+  );
+  const queryKey = useMemo(
+    () => key ?? ["interfaces", "query", interfaceApiName ?? null, request],
+    [interfaceApiName, key, request],
+  );
+  const load = useCallback(() => {
+    if (!interfaceApiName) {
+      throw new FoundryLiteApiError(
+        0,
+        "INTERFACE_TYPE_NOT_SELECTED",
+        "Select an interface type before querying objects.",
+        { missingFields: ["interfaceApiName"] },
+        null,
+        false,
+      );
+    }
+    return client.interfaces.generic.query(interfaceApiName, request);
+  }, [client, interfaceApiName, request]);
+  const query = useFoundryLiteQuery(queryKey, load, {
+    ...queryOptions,
+    enabled: enabled && canQueryInterface,
+  });
+  const items = query.data?.items ?? [];
+  const nextCursor = query.data?.nextCursor ?? null;
+
+  return {
+    ...query,
+    interfaceApiName: interfaceApiName ?? null,
+    objects: items,
+    items,
+    nextCursor,
+    hasNextPage: nextCursor !== null,
+    canQueryInterface,
+    disabledReason: canQueryInterface ? null : "Select an interface type before querying objects.",
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteInterfaceQuery}. */
+export function useFoundryLiteProvidedInterfaceQuery(
+  interfaceApiName: string | null | undefined,
+  options: FoundryLiteInterfaceQueryOptions = {},
+): FoundryLiteInterfaceQueryState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteInterfaceQuery(client, interfaceApiName, options);
+}
+
+export type FoundryLiteFunctionExecutePayload = {
+  functionApiName: string;
+  inputs?: Record<string, unknown>;
+};
+
+export type FoundryLiteFunctionExecuteState = FoundryLiteMutationState<
+  FunctionExecutionResult,
+  FoundryLiteFunctionExecutePayload
+> & {
+  execution: FunctionExecutionResult | null;
+};
+
+export function foundryLiteFunctionExecuteLockKey(
+  payload: FoundryLiteFunctionExecutePayload,
+): string {
+  return `functions:execute:${payload.functionApiName}`;
+}
+
+/**
+ * Execute a governed ontology function (`client.functions.generic.execute`)
+ * as a mutation, exposing the run evidence (`logicRunId`, `resultHash`,
+ * `output`) as `execution`.
+ */
+export function useFoundryLiteFunctionExecute(
+  client: Pick<FoundryLiteGeneratedClient, "functions">,
+  options: FoundryLiteMutationOptions<
+    FunctionExecutionResult,
+    FoundryLiteFunctionExecutePayload
+  > = {},
+): FoundryLiteFunctionExecuteState {
+  const mutate = useCallback(
+    (payload: FoundryLiteFunctionExecutePayload) =>
+      client.functions.generic.execute(payload.functionApiName, { inputs: payload.inputs }),
+    [client],
+  );
+  const mutation = useFoundryLiteMutation(mutate, {
+    ...options,
+    lockKey: options.lockKey ?? foundryLiteFunctionExecuteLockKey,
+  });
+  return { ...mutation, execution: mutation.result };
+}
+
+/** Context-client variant of {@link useFoundryLiteFunctionExecute}. */
+export function useFoundryLiteProvidedFunctionExecute(
+  options: FoundryLiteMutationOptions<
+    FunctionExecutionResult,
+    FoundryLiteFunctionExecutePayload
+  > = {},
+): FoundryLiteFunctionExecuteState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteFunctionExecute(client, options);
+}
+
+export type FoundryLiteBatchActionInvoker<TRequest> = {
+  applyBatch(payload: TRequest, options: { idempotencyKey: string }): Promise<ActionBatchApplyResponse>;
+};
+
+export type FoundryLiteBatchActionSubmitPayload<TRequest> = {
+  request: TRequest;
+  idempotencyKey?: string;
+};
+
+export type FoundryLiteBatchActionSubmitOptions<TRequest> = FoundryLiteMutationOptions<
+  ActionBatchApplyResponse,
+  FoundryLiteBatchActionSubmitPayload<TRequest>
+> & {
+  idempotencyKey?:
+    | string
+    | ((payload: FoundryLiteBatchActionSubmitPayload<TRequest>) => string | undefined);
+};
+
+export type FoundryLiteBatchActionSubmitState<TRequest> = FoundryLiteMutationState<
+  ActionBatchApplyResponse,
+  FoundryLiteBatchActionSubmitPayload<TRequest>
+> & {
+  actionName: string;
+  results: ActionBatchApplyResponse["results"];
+};
+
+export function foundryLiteBatchActionSubmitLockKey(actionName: string): string {
+  return `actions:batch:${actionName}`;
+}
+
+/**
+ * Submit a batch action (`client.actions.<Name>.applyBatch`) as a mutation,
+ * e.g. `useFoundryLiteBatchActionSubmit(client.actions.ApproveOrder,
+ * "ApproveOrder")`. Batch apply requires an Idempotency-Key: the hook resolves
+ * it from `payload.idempotencyKey`, then `options.idempotencyKey`, and
+ * otherwise generates one at the call site with the exported `idempotencyKey`
+ * helper — the same convention as `useFoundryLiteActionSubmit`.
+ */
+export function useFoundryLiteBatchActionSubmit<TRequest>(
+  action: FoundryLiteBatchActionInvoker<TRequest>,
+  actionName: string,
+  options: FoundryLiteBatchActionSubmitOptions<TRequest> = {},
+): FoundryLiteBatchActionSubmitState<TRequest> {
+  const { idempotencyKey: suppliedIdempotencyKey, ...mutationOptions } = options;
+  const mutate = useCallback(
+    (payload: FoundryLiteBatchActionSubmitPayload<TRequest>) => {
+      const supplied =
+        typeof suppliedIdempotencyKey === "function"
+          ? suppliedIdempotencyKey(payload)
+          : suppliedIdempotencyKey;
+      const resolvedIdempotencyKey =
+        payload.idempotencyKey ??
+        supplied ??
+        foundryLiteGeneratedIdempotencyKey(actionName, "batch");
+      return action.applyBatch(payload.request, { idempotencyKey: resolvedIdempotencyKey });
+    },
+    [action, actionName, suppliedIdempotencyKey],
+  );
+  const defaultLockKey = useCallback(
+    () => foundryLiteBatchActionSubmitLockKey(actionName),
+    [actionName],
+  );
+  const mutation = useFoundryLiteMutation(mutate, {
+    ...mutationOptions,
+    lockKey: mutationOptions.lockKey ?? defaultLockKey,
+  });
+  return {
+    ...mutation,
+    actionName,
+    results: mutation.result?.results ?? [],
+  };
+}
+
+export type FoundryLiteMaterializationSpecsOptions =
+  FoundryLiteQueryOptions<MaterializationSpecList> & {
+    key?: readonly unknown[];
+  };
+
+export type FoundryLiteMaterializationSpecsState =
+  FoundryLiteQueryState<MaterializationSpecList> & {
+    specs: Array<Record<string, unknown>>;
+    specCount: number;
+    hasSpecs: boolean;
+  };
+
+/**
+ * List declared object materialization specs (`client.materializations.list`)
+ * so screens can show which object types write snapshot datasets back out.
+ */
+export function useFoundryLiteMaterializationSpecs(
+  client: Pick<FoundryLiteGeneratedClient, "materializations">,
+  options: FoundryLiteMaterializationSpecsOptions = {},
+): FoundryLiteMaterializationSpecsState {
+  const query = useFoundryLiteQuery(
+    options.key ?? ["materializations", "specs"],
+    () => client.materializations.list(),
+    options,
+  );
+  const specs = query.data?.specs ?? [];
+  return {
+    ...query,
+    specs,
+    specCount: specs.length,
+    hasSpecs: specs.length > 0,
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteMaterializationSpecs}. */
+export function useFoundryLiteProvidedMaterializationSpecs(
+  options: FoundryLiteMaterializationSpecsOptions = {},
+): FoundryLiteMaterializationSpecsState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteMaterializationSpecs(client, options);
+}
+
+export type FoundryLiteOntologyBuilderOptions = Omit<OntologyBuilderRunOptions, "onState"> & {
+  initialState?: OntologyBuilderRecipeState;
+  onState?: (state: OntologyBuilderRecipeState) => void;
+  onSuccess?: (state: OntologyBuilderRecipeState) => void;
+  onError?: (error: FoundryLiteApiError, state: OntologyBuilderRecipeState) => void;
+};
+
+export type FoundryLiteOntologyBuilderState = OntologyBuilderRecipeState & {
+  isRunning: boolean;
+  run(
+    input: OntologyBuilderRunInput,
+    options?: OntologyBuilderRunOptions,
+  ): Promise<OntologyBuilderRecipeState>;
+  reset(): void;
+};
+
+/**
+ * Stateful wrapper around `createOntologyBuilderRecipe(client).run`: drives
+ * the governed Dataset Explorer -> Builder -> Validate -> Impact -> Proposal
+ * -> Review -> Execute -> Reindex -> SDK-drift flow and mirrors each recipe
+ * state snapshot into hook state, following the
+ * `useFoundryLiteSourceOnboarding` pattern.
+ */
+export function useFoundryLiteOntologyBuilder(
+  client: Pick<FoundryLiteGeneratedClient, "datasets" | "ontology" | "operations">,
+  options: FoundryLiteOntologyBuilderOptions = {},
+): FoundryLiteOntologyBuilderState {
+  const recipe = useMemo(() => createOntologyBuilderRecipe(client), [client]);
+  const initialState = options.initialState ?? recipe.initialState();
+  const [state, setState] = useState<OntologyBuilderRecipeState>(initialState);
+  const [isRunning, setIsRunning] = useState(false);
+  const mountedRef = useRef(true);
+  const optionsRef = useRef(options);
+
+  optionsRef.current = options;
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const reset = useCallback(() => {
+    const nextState = recipe.initialState();
+    if (mountedRef.current) setState(nextState);
+  }, [recipe]);
+
+  const run = useCallback(
+    async (
+      input: OntologyBuilderRunInput,
+      runOptions: OntologyBuilderRunOptions = {},
+    ): Promise<OntologyBuilderRecipeState> => {
+      const currentOptions = optionsRef.current;
+      if (mountedRef.current) setIsRunning(true);
+      const onState = (nextState: OntologyBuilderRecipeState) => {
+        if (mountedRef.current) setState(nextState);
+        currentOptions.onState?.(nextState);
+        runOptions.onState?.(nextState);
+      };
+      try {
+        const finalState = await recipe.run(input, { ...currentOptions, ...runOptions, onState });
+        if (finalState.error) currentOptions.onError?.(finalState.error, finalState);
+        else currentOptions.onSuccess?.(finalState);
+        return finalState;
+      } finally {
+        if (mountedRef.current) setIsRunning(false);
+      }
+    },
+    [recipe],
+  );
+
+  return { ...state, isRunning, run, reset };
+}
+
+/** Context-client variant of {@link useFoundryLiteOntologyBuilder}. */
+export function useFoundryLiteProvidedOntologyBuilder(
+  options: FoundryLiteOntologyBuilderOptions = {},
+): FoundryLiteOntologyBuilderState {
+  const session = useFoundryLiteSession();
+  const state = useFoundryLiteOntologyBuilder(session.client, options);
+  return useMemo(
+    () => ({ ...state, requestId: state.requestId ?? session.lastRequestId }),
+    [session.lastRequestId, state],
+  );
+}
+
+function foundryLiteOntologyResourceNotSelectedError(): FoundryLiteApiError {
+  return new FoundryLiteApiError(
+    0,
+    "ONTOLOGY_RESOURCE_NOT_SELECTED",
+    "Select an ontology resource before loading usage and dependents.",
+    { missingFields: ["apiName"] },
+    null,
+    false,
+  );
+}
+
+function readFoundryLiteOntologyMigrationPlan(
+  validation: OntologyValidationResult | null | undefined,
+): Record<string, unknown> | null {
+  const plan = validation?.migration_plan;
+  return isFoundryLiteRecord(plan) ? plan : null;
+}
+
+function readFoundryLiteOntologyMigrationChanges(
+  value: unknown,
+): FoundryLiteOntologyMigrationChangeView[] {
+  if (!Array.isArray(value)) return [];
+  const changes: FoundryLiteOntologyMigrationChangeView[] = [];
+  for (const rawChange of value) {
+    if (!isFoundryLiteRecord(rawChange)) continue;
+    changes.push({
+      kind: readFoundryLiteOntologyPlanString(rawChange.kind),
+      path: readFoundryLiteOntologyPlanString(rawChange.path),
+      status: readFoundryLiteOntologyPlanString(rawChange.status),
+      reason: readFoundryLiteOntologyPlanString(rawChange.reason),
+      requiresSdkMajorVersion: rawChange.requiresSdkMajorVersion === true,
+      requiresObjectReindex: rawChange.requiresObjectReindex === true,
+      details: isFoundryLiteRecord(rawChange.details) ? rawChange.details : null,
+    });
+  }
+  return changes;
+}
+
+function readFoundryLiteOntologyReindexOperations(
+  value: unknown,
+): FoundryLiteOntologyReindexOperationView[] {
+  if (!Array.isArray(value)) return [];
+  const operations: FoundryLiteOntologyReindexOperationView[] = [];
+  for (const rawOperation of value) {
+    if (!isFoundryLiteRecord(rawOperation)) continue;
+    operations.push({
+      objectTypeApiName: readFoundryLiteOntologyPlanString(rawOperation.objectTypeApiName),
+      reason: readFoundryLiteOntologyPlanString(rawOperation.reason),
+      changedFields: Array.isArray(rawOperation.changedFields)
+        ? rawOperation.changedFields.filter(
+            (field): field is string => typeof field === "string",
+          )
+        : [],
+      reindexKey: readFoundryLiteOntologyPlanString(rawOperation.reindexKey),
+    });
+  }
+  return operations;
+}
+
+function readFoundryLiteOntologyPlanString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function isFoundryLiteOntologySdkSurfacePath(path: string): boolean {
+  return (
+    path.startsWith("actionTypes.") ||
+    path.startsWith("interfaces.") ||
+    path.startsWith("functionTypes.")
+  );
 }

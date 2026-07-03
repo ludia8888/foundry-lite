@@ -1,11 +1,13 @@
 import {
   adminOperationsBoard,
+  assertFoundryLiteSdkFresh,
   createFoundryLiteOntologyIndex,
   createFoundryLiteOsdkClient,
   getActionType,
   getObjectType,
   normalizeFoundryLiteError,
   pollFoundryLiteOperation,
+  sdkOntologyDriftReport,
   streamFoundryLiteOperationEvents,
 } from "./generated";
 import type {
@@ -34,10 +36,12 @@ import type {
   ConnectorResourceTestResult,
   ConnectorSyncWorkflowStartRequest,
   Dataset,
+  DatasetInspectionPayload,
   DeadLetterRecordStatus,
   FoundryLiteApiError,
   FoundryLiteGeneratedClient,
   FoundryLiteOperationStreamEvent,
+  FoundryLiteSdkDriftReport,
   InsightActionProposal,
   InsightReviewAssignRequest,
   InsightReviewCreateRequest,
@@ -54,6 +58,17 @@ import type {
   ObjectApiName,
   ObjectTypeRegistry,
   OntologyCatalog,
+  OntologyObjectReindexResult,
+  OntologyProposalAssignRequest,
+  OntologyProposalDecisionRequest,
+  OntologyProposalExecuteRequest,
+  OntologyProposalListFilters,
+  OntologyProposalPayload,
+  OntologyProposalSubmitRequest,
+  OntologyProposalUpdateRequest,
+  OntologyProposalWithdrawRequest,
+  OntologyResourceUsageOptions,
+  OntologyValidationResult,
   ObservabilityDetectRequest,
   OsdkActionPayload,
   OsdkActionResult,
@@ -265,6 +280,90 @@ export type SourceWizardRecipeState = {
 
 export type SourceWizardRunOptions = {
   onState?: (state: SourceWizardRecipeState) => void;
+};
+
+export type OntologyBuilderPhase =
+  | "explore_dataset"
+  | "design_draft"
+  | "validate_draft"
+  | "impact_review"
+  | "submit_proposal"
+  | "await_review"
+  | "execute_proposal"
+  | "reindex"
+  | "check_sdk_drift"
+  | "ready"
+  | "blocked"
+  | "failed";
+
+export type OntologyBuilderStepId =
+  | "dataset_explorer"
+  | "draft_builder"
+  | "validate"
+  | "impact_plan"
+  | "proposal"
+  | "review"
+  | "execute"
+  | "reindex_status"
+  | "sdk_drift";
+
+export type OntologyBuilderStep = {
+  id: OntologyBuilderStepId;
+  title: string;
+  description: string;
+  route: string;
+  reactHook: string;
+  primarySdkSurface: string;
+};
+
+export type OntologyBuilderNavigationItem = OntologyBuilderStep & {
+  stepNumber: number;
+  isSelected: boolean;
+};
+
+export type OntologyBuilderNavigationView = {
+  selectedStepId: OntologyBuilderStepId;
+  steps: OntologyBuilderNavigationItem[];
+  selectedStep: OntologyBuilderNavigationItem;
+  stepCount: number;
+};
+
+export type OntologyBuilderProposalInput = {
+  title: string;
+  description?: string | null;
+  idempotencyKey: string;
+};
+
+export type OntologyBuilderRunInput = {
+  dataset?: DatasetExplorerSelection;
+  yamlText: string;
+  proposal: OntologyBuilderProposalInput;
+  submitWhenBlocked?: boolean;
+  assign?: OntologyProposalAssignRequest;
+  decision?: { decision: string; comment?: string | null };
+  shouldExecute?: boolean;
+  shouldReindex?: boolean;
+  shouldCheckSdkDrift?: boolean;
+};
+
+export type OntologyBuilderRecipeState = {
+  phase: OntologyBuilderPhase;
+  requestId: string | null;
+  datasetRef: string | null;
+  inspection: DatasetInspectionPayload | null;
+  validation: OntologyValidationResult | null;
+  migrationPlan: Record<string, unknown> | null;
+  isBlocked: boolean;
+  proposal: OntologyProposalPayload | null;
+  reindexResults: OntologyObjectReindexResult[];
+  driftReport: FoundryLiteSdkDriftReport | null;
+  operationsPath: string | null;
+  error: FoundryLiteApiError | null;
+  retryable: boolean;
+};
+
+export type OntologyBuilderRunOptions = {
+  onState?: (state: OntologyBuilderRecipeState) => void;
 };
 
 export type InsightReviewQueueSelection = {
@@ -1283,6 +1382,359 @@ async function runDebeziumSourceOnboarding(
     { idempotencyKey: input.startSyncIdempotencyKey },
   );
   return emit(sourceStateFromResult(next, started), options.onState);
+}
+
+/** Initial (pre-run) state for the ontology builder flow. */
+export function ontologyBuilderInitialState(): OntologyBuilderRecipeState {
+  return {
+    phase: "explore_dataset",
+    requestId: null,
+    datasetRef: null,
+    inspection: null,
+    validation: null,
+    migrationPlan: null,
+    isBlocked: false,
+    proposal: null,
+    reindexResults: [],
+    driftReport: null,
+    operationsPath: null,
+    error: null,
+    retryable: false,
+  };
+}
+
+/**
+ * Ordered screen steps for the ontology builder flow:
+ * Dataset Explorer -> Builder(draft) -> Validate -> Impact/Reindex plan ->
+ * Proposal -> Review -> Execute -> Reindex status -> SDK drift check.
+ */
+export function ontologyBuilderSteps(): OntologyBuilderStep[] {
+  return [
+    ontologyBuilderStep(
+      "dataset_explorer",
+      "Dataset Explorer",
+      "Inspect dataset schema and pick backing columns for the draft.",
+      "/ontology/builder/datasets",
+      "useFoundryLiteDatasetColumnMapping",
+      "client.datasets.inspect",
+    ),
+    ontologyBuilderStep(
+      "draft_builder",
+      "Builder",
+      "Click-driven object/property/link/action design over an editable draft.",
+      "/ontology/builder/draft",
+      "useFoundryLiteOntologyDraft",
+      "ontologyDraftToYamlText",
+    ),
+    ontologyBuilderStep(
+      "validate",
+      "Validate",
+      "Validate the serialized draft against the active ontology.",
+      "/ontology/builder/validate",
+      "useFoundryLiteOntologyDraftValidation",
+      "client.ontology.validate",
+    ),
+    ontologyBuilderStep(
+      "impact_plan",
+      "Impact & Reindex plan",
+      "Review blocked changes, warnings, reindex operations, and SDK impact.",
+      "/ontology/builder/impact",
+      "useFoundryLiteOntologyResourceInsights",
+      "client.ontology.resources",
+    ),
+    ontologyBuilderStep(
+      "proposal",
+      "Proposal",
+      "Submit the draft as a change proposal or revise an open one.",
+      "/ontology/builder/proposal",
+      "useFoundryLiteOntologyProposalSubmit",
+      "client.ontology.proposals.submit",
+    ),
+    ontologyBuilderStep(
+      "review",
+      "Review",
+      "Assign a reviewer and record an approve/reject decision.",
+      "/ontology/builder/review",
+      "useFoundryLiteOntologyProposalReview",
+      "client.ontology.proposals.decide",
+    ),
+    ontologyBuilderStep(
+      "execute",
+      "Execute",
+      "Apply the approved proposal as the next active ontology version.",
+      "/ontology/builder/execute",
+      "useFoundryLiteOntologyProposalReview",
+      "client.ontology.proposals.execute",
+    ),
+    ontologyBuilderStep(
+      "reindex_status",
+      "Reindex status",
+      "Replay required object reindex operations and track their evidence.",
+      "/ontology/builder/reindex",
+      "useFoundryLiteOntologyProposal",
+      "client.operations.index.replayOntologyReindex",
+    ),
+    ontologyBuilderStep(
+      "sdk_drift",
+      "SDK drift",
+      "Compare the generated OSDK package against the newly active catalog.",
+      "/ontology/builder/sdk-drift",
+      "useFoundryLiteOntologyCatalog",
+      "sdkOntologyDriftReport",
+    ),
+  ];
+}
+
+/** Navigation view over the builder steps with the selected step marked. */
+export function ontologyBuilderNavigation(
+  selectedStepId: OntologyBuilderStepId = "dataset_explorer",
+): OntologyBuilderNavigationView {
+  const steps = ontologyBuilderSteps().map((step, index) => ({
+    ...step,
+    stepNumber: index + 1,
+    isSelected: step.id === selectedStepId,
+  }));
+  const selectedStep = steps.find((step) => step.isSelected) ?? steps[0];
+  return {
+    selectedStepId: selectedStep.id,
+    steps,
+    selectedStep,
+    stepCount: steps.length,
+  };
+}
+
+function ontologyBuilderStep(
+  id: OntologyBuilderStepId,
+  title: string,
+  description: string,
+  route: string,
+  reactHook: string,
+  primarySdkSurface: string,
+): OntologyBuilderStep {
+  return { id, title, description, route, reactHook, primarySdkSurface };
+}
+
+function ontologyBuilderState(
+  current: OntologyBuilderRecipeState,
+  patch: Partial<OntologyBuilderRecipeState>,
+): OntologyBuilderRecipeState {
+  const nextError = patch.error === undefined ? current.error : patch.error;
+  return {
+    ...current,
+    ...patch,
+    requestId: patch.requestId ?? nextError?.requestId ?? current.requestId,
+    retryable: patch.retryable ?? nextError?.retryable ?? false,
+  };
+}
+
+function ontologyBuilderFailureState(
+  current: OntologyBuilderRecipeState,
+  error: unknown,
+): OntologyBuilderRecipeState {
+  const normalized = normalizeFoundryLiteError(error);
+  return ontologyBuilderState(current, {
+    phase: "failed",
+    requestId: normalized.requestId,
+    error: normalized,
+    retryable: normalized.retryable,
+  });
+}
+
+function ontologyBuilderMigrationPlan(
+  validation: OntologyValidationResult,
+): Record<string, unknown> | null {
+  const plan = validation.migration_plan;
+  return typeof plan === "object" && plan !== null ? plan : null;
+}
+
+function ontologyBuilderPlanIsBlocked(migrationPlan: Record<string, unknown> | null): boolean {
+  return migrationPlan?.status === "blocked";
+}
+
+function ontologyBuilderReindexOperations(
+  proposal: OntologyProposalPayload,
+): Array<{ objectTypeApiName: string; reindexKey: string }> {
+  const plan = proposal.submittedMigrationPlan;
+  const rawOperations = plan?.objectReindexPlan;
+  if (!Array.isArray(rawOperations)) return [];
+  const operations: Array<{ objectTypeApiName: string; reindexKey: string }> = [];
+  for (const rawOperation of rawOperations) {
+    if (typeof rawOperation !== "object" || rawOperation === null) continue;
+    const { objectTypeApiName, reindexKey } = rawOperation as {
+      objectTypeApiName?: unknown;
+      reindexKey?: unknown;
+    };
+    if (typeof objectTypeApiName === "string" && typeof reindexKey === "string") {
+      operations.push({ objectTypeApiName, reindexKey });
+    }
+  }
+  return operations;
+}
+
+/**
+ * SDK surface for the full Ontology Builder flow: Dataset Explorer ->
+ * Builder(draft) -> Validate -> Impact/Reindex plan -> Proposal(submit/update)
+ * -> Review(assign/decide) -> Execute -> Reindex status, plus an SDK drift
+ * check step. `steps`/`navigation` feed screen chrome; the named methods back
+ * each panel; `run` drives the whole governed flow with `onState` snapshots.
+ */
+export function createOntologyBuilderRecipe(
+  client: Pick<FoundryLiteGeneratedClient, "datasets" | "ontology" | "operations">,
+) {
+  const emit = (
+    state: OntologyBuilderRecipeState,
+    onState: OntologyBuilderRunOptions["onState"],
+  ) => {
+    onState?.(state);
+    return state;
+  };
+
+  const loadCatalog = () => client.ontology.catalog();
+  const validateDraft = (yamlText: string) => client.ontology.validate({ yaml: yamlText });
+  const replayObjectReindex = (objectTypeApiName: string, reindexKey: string) =>
+    client.operations.index.replayOntologyReindex(objectTypeApiName, { reindexKey });
+  const loadSdkDriftReport = async (): Promise<FoundryLiteSdkDriftReport> =>
+    sdkOntologyDriftReport(await loadCatalog());
+
+  return {
+    initialState: ontologyBuilderInitialState,
+    steps: ontologyBuilderSteps(),
+    navigation: ontologyBuilderNavigation,
+    inspectDataset: (selection: DatasetExplorerSelection) =>
+      client.datasets.inspect(
+        selection.namespace,
+        selection.name,
+        selection.version ? { version: selection.version } : undefined,
+      ),
+    loadCatalog,
+    validateDraft,
+    loadResourceUsage: (
+      resourceType: string,
+      apiName: string,
+      options?: OntologyResourceUsageOptions,
+    ) => client.ontology.resources.usage(resourceType, apiName, options),
+    loadResourceDependents: (resourceType: string, apiName: string) =>
+      client.ontology.resources.dependents(resourceType, apiName),
+    submitProposal: (payload: OntologyProposalSubmitRequest, options: { idempotencyKey: string }) =>
+      client.ontology.proposals.submit(payload, options),
+    updateProposal: (proposalId: string, payload: OntologyProposalUpdateRequest) =>
+      client.ontology.proposals.update(proposalId, payload),
+    listProposals: (filters?: OntologyProposalListFilters) =>
+      client.ontology.proposals.list(filters),
+    getProposal: (proposalId: string) => client.ontology.proposals.get(proposalId),
+    assignProposal: (proposalId: string, payload: OntologyProposalAssignRequest) =>
+      client.ontology.proposals.assign(proposalId, payload),
+    decideProposal: (proposalId: string, payload: OntologyProposalDecisionRequest) =>
+      client.ontology.proposals.decide(proposalId, payload),
+    executeProposal: (proposalId: string, payload: OntologyProposalExecuteRequest) =>
+      client.ontology.proposals.execute(proposalId, payload),
+    withdrawProposal: (proposalId: string, payload?: OntologyProposalWithdrawRequest) =>
+      client.ontology.proposals.withdraw(proposalId, payload),
+    replayObjectReindex,
+    loadSdkDriftReport,
+    assertSdkFresh: async (): Promise<OntologyCatalog> => {
+      const catalog = await loadCatalog();
+      assertFoundryLiteSdkFresh(catalog);
+      return catalog;
+    },
+    run: async (
+      input: OntologyBuilderRunInput,
+      options: OntologyBuilderRunOptions = {},
+    ): Promise<OntologyBuilderRecipeState> => {
+      let state = emit(ontologyBuilderInitialState(), options.onState);
+      try {
+        if (input.dataset) {
+          const inspection = await client.datasets.inspect(
+            input.dataset.namespace,
+            input.dataset.name,
+            input.dataset.version ? { version: input.dataset.version } : undefined,
+          );
+          state = emit(
+            ontologyBuilderState(state, {
+              phase: "design_draft",
+              datasetRef: inspection.dataset,
+              inspection,
+            }),
+            options.onState,
+          );
+        }
+        state = emit(ontologyBuilderState(state, { phase: "validate_draft" }), options.onState);
+        const validation = await validateDraft(input.yamlText);
+        const migrationPlan = ontologyBuilderMigrationPlan(validation);
+        const isBlocked = ontologyBuilderPlanIsBlocked(migrationPlan);
+        state = emit(
+          ontologyBuilderState(state, {
+            phase: "impact_review",
+            validation,
+            migrationPlan,
+            isBlocked,
+          }),
+          options.onState,
+        );
+        if (isBlocked && !input.submitWhenBlocked) {
+          return emit(ontologyBuilderState(state, { phase: "blocked" }), options.onState);
+        }
+        state = emit(ontologyBuilderState(state, { phase: "submit_proposal" }), options.onState);
+        let proposal = await client.ontology.proposals.submit(
+          {
+            yamlText: input.yamlText,
+            title: input.proposal.title,
+            description: input.proposal.description ?? null,
+          },
+          { idempotencyKey: input.proposal.idempotencyKey },
+        );
+        state = emit(
+          ontologyBuilderState(state, {
+            phase: "await_review",
+            proposal,
+            operationsPath: `ontology/proposals/${encodeURIComponent(proposal.id)}`,
+          }),
+          options.onState,
+        );
+        if (input.assign) {
+          proposal = await client.ontology.proposals.assign(proposal.id, input.assign);
+          state = emit(ontologyBuilderState(state, { proposal }), options.onState);
+        }
+        if (!input.decision) return state;
+        proposal = await client.ontology.proposals.decide(proposal.id, {
+          decision: input.decision.decision,
+          comment: input.decision.comment ?? null,
+          expectedFingerprint: proposal.fingerprint,
+        });
+        state = emit(ontologyBuilderState(state, { proposal }), options.onState);
+        if (!input.shouldExecute) return state;
+        state = emit(ontologyBuilderState(state, { phase: "execute_proposal" }), options.onState);
+        proposal = await client.ontology.proposals.execute(proposal.id, {
+          expectedFingerprint: proposal.fingerprint,
+        });
+        state = emit(ontologyBuilderState(state, { proposal }), options.onState);
+        if (input.shouldReindex ?? true) {
+          state = emit(ontologyBuilderState(state, { phase: "reindex" }), options.onState);
+          const reindexResults: OntologyObjectReindexResult[] = [];
+          for (const operation of ontologyBuilderReindexOperations(proposal)) {
+            reindexResults.push(
+              await replayObjectReindex(operation.objectTypeApiName, operation.reindexKey),
+            );
+            state = emit(
+              ontologyBuilderState(state, { reindexResults: [...reindexResults] }),
+              options.onState,
+            );
+          }
+        }
+        if (input.shouldCheckSdkDrift ?? true) {
+          state = emit(
+            ontologyBuilderState(state, { phase: "check_sdk_drift" }),
+            options.onState,
+          );
+          const driftReport = await loadSdkDriftReport();
+          state = emit(ontologyBuilderState(state, { driftReport }), options.onState);
+        }
+        return emit(ontologyBuilderState(state, { phase: "ready" }), options.onState);
+      } catch (error) {
+        return emit(ontologyBuilderFailureState(state, error), options.onState);
+      }
+    },
+  };
 }
 
 export function createLongRunningOperationRecipe(
@@ -2327,6 +2779,7 @@ export function createFoundryLiteScreenRecipes(
     mediaWorkspace: createMediaWorkspaceRecipe(client),
     aipWorkspace: createAipWorkspaceRecipe(client),
     insightReviewWorkspace: createInsightReviewWorkspaceRecipe(client),
+    ontologyBuilder: createOntologyBuilderRecipe(client),
     connectorOnboarding: createConnectorOnboardingRecipe(client),
     sourceWizard: createSourceWizardRecipe(client),
     sourceOnboarding: createSourceOnboardingRecipe(client),
@@ -2352,6 +2805,7 @@ export type ObjectActionWorkspaceRecipe = ReturnType<typeof createObjectActionWo
 export type MediaWorkspaceRecipe = ReturnType<typeof createMediaWorkspaceRecipe>;
 export type AipWorkspaceRecipe = ReturnType<typeof createAipWorkspaceRecipe>;
 export type InsightReviewWorkspaceRecipe = ReturnType<typeof createInsightReviewWorkspaceRecipe>;
+export type OntologyBuilderRecipe = ReturnType<typeof createOntologyBuilderRecipe>;
 export type ConnectorOnboardingRecipe = ReturnType<typeof createConnectorOnboardingRecipe>;
 export type PipelineBuilderRecipe = ReturnType<typeof createPipelineBuilderRecipe>;
 export type LongRunningOperationRecipe = ReturnType<typeof createLongRunningOperationRecipe>;
