@@ -10,6 +10,7 @@ from foundry_lite.application.services.ontology_activation_service import Ontolo
 from foundry_lite.application.services.ontology_catalog_service import OntologyCatalogService
 from foundry_lite.application.services.ontology_insights_service import OntologyInsightsService
 from foundry_lite.application.services.ontology_lookup_service import OntologyLookupService
+from foundry_lite.application.services.ontology_proposal_service import OntologyProposalService
 from foundry_lite.application.services.ontology_reindex_contract import OntologyReindexContractService
 from foundry_lite.application.services.ontology_rollback_service import OntologyRollbackService
 from foundry_lite.application.services.ontology_service import OntologyService
@@ -24,6 +25,7 @@ class OntologyServices:
     entrypoint: OntologyService
     insights: OntologyInsightsService
     lookup: OntologyLookupService
+    proposals: OntologyProposalService
     reindex_contract: OntologyReindexContractService
     rollback: OntologyRollbackService
 
@@ -33,6 +35,7 @@ class OntologyServices:
         catalog = build_service(OntologyCatalogService, dependencies)
         insights = build_service(OntologyInsightsService, dependencies)
         lookup = build_service(OntologyLookupService, dependencies)
+        proposals = build_service(OntologyProposalService, dependencies)
         reindex_contract = build_service(OntologyReindexContractService, dependencies)
         rollback = build_service(OntologyRollbackService, dependencies)
         entrypoint = OntologyService(
@@ -48,6 +51,7 @@ class OntologyServices:
             entrypoint=entrypoint,
             insights=insights,
             lookup=lookup,
+            proposals=proposals,
             reindex_contract=reindex_contract,
             rollback=rollback,
         )
@@ -58,6 +62,7 @@ class OntologyServices:
             self.catalog,
             self.insights,
             self.lookup,
+            self.proposals,
             self.reindex_contract,
             self.rollback,
         )

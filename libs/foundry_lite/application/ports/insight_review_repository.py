@@ -119,6 +119,26 @@ class InsightReviewRepository(Protocol):
         """Return a bounded review queue page for one tenant."""
         ...
 
+    def list_proposal_reviews(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        proposal_type: str,
+        status: str | None,
+        execution_statuses: Sequence[str] | None,
+        is_assigned: bool | None,
+        created_before: str | None,
+        before_id: str | None,
+        limit: int,
+    ) -> list[InsightReviewRow]:
+        """Return a keyset page of one proposal type, newest first.
+
+        ``created_before``/``before_id`` continue a page strictly after the
+        cursor row in ``(created_at DESC, id DESC)`` order.
+        """
+        ...
+
     def assign_review(
         self,
         *,
@@ -168,8 +188,25 @@ class InsightReviewRepository(Protocol):
         review_id: str,
         action_run_id: str,
         updated_at: str,
+        metadata: InsightReviewJson | None = None,
     ) -> InsightReviewRow | None:
-        """Link an approved review to the action run it produced."""
+        """Link an approved review to the run/version it produced.
+
+        ``metadata`` entries are merged into ``review_metadata`` so callers can
+        persist execution results (for example the applied ontology version).
+        """
+        ...
+
+    def withdraw_review(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        review_id: str,
+        withdrawal: InsightReviewJson,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        """Terminate a not-yet-executed review because its creator withdrew it."""
         ...
 
     def mark_execution_failed(

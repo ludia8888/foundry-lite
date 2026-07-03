@@ -77,6 +77,10 @@ INDEX_RUN_SUCCEEDED = StatusTransition(("running",), "succeeded")
 INDEX_RUN_FAILED = StatusTransition(("running",), "failed")
 ONTOLOGY_VERSION_ARCHIVED = StatusTransition(("active",), "archived")
 ONTOLOGY_VERSION_ACTIVE = StatusTransition(("draft",), "active")
+# Ontology change proposals ride on insight_reviews storage: a withdrawal moves a
+# not-yet-applied proposal (pending or approved) into the terminal rejected state
+# while execution_status records that the submitter withdrew it.
+ONTOLOGY_PROPOSAL_WITHDRAWN = StatusTransition(("pending", "approved"), "rejected")
 ACTION_RUN_SUCCEEDED = StatusTransition(("received",), "succeeded")
 ACTION_RUN_FAILED = StatusTransition(("received",), "failed")
 ACTION_RUN_CONFLICT = StatusTransition(("received",), "conflict")

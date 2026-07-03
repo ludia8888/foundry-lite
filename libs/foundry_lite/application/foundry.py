@@ -108,7 +108,7 @@ class FoundryLite:
     def _attach_facades(self, services: CoreServices) -> None:
         self.datasets = DatasetWorkspace(services.dataset)
         self.transforms = TransformPipeline(services.transform.entrypoint)
-        self.ontology = OntologyRegistry(services.ontology.entrypoint, services.ontology.insights)
+        self.ontology = _ontology_registry(services)
         self.objects = ObjectStore(services.object_store, services.ontology_search)
         self.actions = ActionGateway(services.action.entrypoint)
         self.auth = AuthGateway(services.osdk_oauth_sessions)
@@ -224,6 +224,10 @@ class FoundryLite:
                 transaction=transaction,
                 record=_demo_alias_record(alias, now),
             )
+
+
+def _ontology_registry(services: CoreServices) -> OntologyRegistry:
+    return OntologyRegistry(services.ontology.entrypoint, services.ontology.insights, services.ontology.proposals)
 
 
 def _demo_provider_record(now: str) -> ModelProviderRecord:

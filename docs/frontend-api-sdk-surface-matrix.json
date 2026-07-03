@@ -2296,9 +2296,49 @@
       "reason": "Ontology resource dependents is a read-only operator/governance read model (ontology:read) mirroring Ontology Manager's dependents view; wiring a named browser SDK method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
     },
     {
+      "route": "POST /api/ontology/proposals",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology change proposal submission is an IaC/governance control-plane operation (ontology:validate) driven by pipelines and the CLI, not the browser frontend SDK."
+    },
+    {
+      "route": "GET /api/ontology/proposals",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology change proposal queue is a governance/operator read model (ontology:validate) for the review-then-apply flow, not a browser frontend SDK control."
+    },
+    {
+      "route": "GET /api/ontology/proposals/{proposal_id}",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology change proposal detail (yaml, migration plans, timeline) is a governance/operator read model (ontology:validate), not a browser frontend SDK control."
+    },
+    {
+      "route": "POST /api/ontology/proposals/{proposal_id}/assign",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology proposal reviewer assignment is a governance control-plane action (ontology:activate), not a browser frontend SDK control."
+    },
+    {
+      "route": "POST /api/ontology/proposals/{proposal_id}/decide",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology proposal approve/reject re-validates against the current active ontology and enforces separation of duties (ontology:activate); it is a governance control-plane action, not a browser frontend SDK control."
+    },
+    {
+      "route": "POST /api/ontology/proposals/{proposal_id}/execute",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology proposal execution applies an approved proposal through the same activation path as direct apply (ontology:activate); it is an operator/CI control-plane action, not a browser frontend SDK control."
+    },
+    {
+      "route": "POST /api/ontology/proposals/{proposal_id}/withdraw",
+      "accessClass": "operator-control-plane",
+      "reason": "Ontology proposal withdrawal by its submitter is a governance control-plane action (ontology:validate), not a browser frontend SDK control."
+    },
+    {
       "route": "POST /api/sources/webhook-listeners/{source_name}/events",
       "accessClass": "server-to-server-ingest",
       "reason": "Source webhook listener event ingest is a signed external-system callback, not a browser frontend SDK control."
+    },
+    {
+      "route": "POST /api/interfaces/{interface_type}/query",
+      "accessClass": "server-side-read-pending-sdk",
+      "reason": "Interface-scoped polymorphic object query currently serves server-side and API callers; wiring a named browser SDK interfaces.query method (generator surface + request-contract coverage) is a planned follow-up before frontend use."
     }
   ]
 }

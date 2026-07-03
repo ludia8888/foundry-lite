@@ -164,6 +164,16 @@ class ObjectQueryRequest(BaseModel):
     search_text: str | None = Field(default=None, alias="search")
 
 
+class InterfaceQueryRequest(BaseModel):
+    """Interface-scoped polymorphic query: single merged page, no cursor."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    filter_ast: JsonObject | None = Field(default=None, alias="filter")
+    order_by: list[dict[str, str]] | None = Field(default=None, alias="orderBy")
+    limit: int = 50
+
+
 class ObjectAggregateMetricRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -281,6 +291,38 @@ class OntologyRollbackRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     version_number: int = Field(alias="versionNumber", ge=1)
+
+
+class OntologyProposalSubmitRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    yaml_text: str = Field(alias="yamlText")
+    title: str
+    description: str | None = None
+
+
+class OntologyProposalAssignRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    reviewer_user_id: str = Field(alias="reviewerUserId")
+
+
+class OntologyProposalDecisionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    decision: str
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+    comment: str | None = None
+
+
+class OntologyProposalExecuteRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+
+
+class OntologyProposalWithdrawRequest(BaseModel):
+    reason: str | None = None
 
 
 class AipBuilderContextSourceRequest(BaseModel):

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import and_, desc, insert, select, update
+from sqlalchemy import and_, desc, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
@@ -16,6 +17,7 @@ from foundry_lite.application.ports.insight_review_repository import (
     InsightReviewRow,
 )
 from foundry_lite.application.ports.transaction_context import StatusTransition
+from foundry_lite.application.state_transitions import ONTOLOGY_PROPOSAL_WITHDRAWN
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.status_cas import cas_status_guarded_update, cas_status_update
 
@@ -93,6 +95,44 @@ class SqlAlchemyInsightReviewRepository:
                 select(db.insight_reviews)
                 .where(and_(*conditions))
                 .order_by(desc(db.insight_reviews.c.updated_at), desc(db.insight_reviews.c.id))
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return [cast(InsightReviewRow, dict(row)) for row in rows]
+
+    def list_proposal_reviews(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        proposal_type: str,
+        status: str | None,
+        execution_statuses: Sequence[str] | None,
+        is_assigned: bool | None,
+        created_before: str | None,
+        before_id: str | None,
+        limit: int,
+    ) -> list[InsightReviewRow]:
+        conditions = [
+            db.insight_reviews.c.tenant_id == tenant_id,
+            db.insight_reviews.c.proposal_type == proposal_type,
+        ]
+        if status is not None:
+            conditions.append(db.insight_reviews.c.status == status)
+        if execution_statuses is not None:
+            conditions.append(db.insight_reviews.c.execution_status.in_(tuple(execution_statuses)))
+        if is_assigned is not None:
+            column = db.insight_reviews.c.assignee_user_id
+            conditions.append(column.isnot(None) if is_assigned else column.is_(None))
+        if created_before is not None and before_id is not None:
+            conditions.append(_keyset_before(created_before, before_id))
+        rows = (
+            transaction.execute(
+                select(db.insight_reviews)
+                .where(and_(*conditions))
+                .order_by(desc(db.insight_reviews.c.created_at), desc(db.insight_reviews.c.id))
                 .limit(limit)
             )
             .mappings()
@@ -197,7 +237,18 @@ class SqlAlchemyInsightReviewRepository:
         review_id: str,
         action_run_id: str,
         updated_at: str,
+        metadata: InsightReviewJson | None = None,
     ) -> InsightReviewRow | None:
+        values: dict[str, object] = {
+            "execution_status": "executed",
+            "approved_action_run_id": action_run_id,
+            "updated_at": updated_at,
+        }
+        if metadata is not None:
+            row = self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+            if row is None:
+                return None
+            values["review_metadata"] = {**dict(row["review_metadata"]), **dict(metadata)}
         updated = transaction.execute(
             update(db.insight_reviews)
             .where(
@@ -208,13 +259,38 @@ class SqlAlchemyInsightReviewRepository:
                     db.insight_reviews.c.execution_status == "executing",
                 )
             )
-            .values(
-                execution_status="executed",
-                approved_action_run_id=action_run_id,
-                updated_at=updated_at,
-            )
+            .values(**values)
         )
         if updated.rowcount != 1:
+            return None
+        return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+
+    def withdraw_review(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        review_id: str,
+        withdrawal: InsightReviewJson,
+        updated_at: str,
+    ) -> InsightReviewRow | None:
+        row = self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
+        if row is None:
+            return None
+        updated = cas_status_update(
+            transaction,
+            db.insight_reviews,
+            tenant_id=tenant_id,
+            row_id=review_id,
+            transition=ONTOLOGY_PROPOSAL_WITHDRAWN,
+            values={
+                "execution_status": "withdrawn",
+                "review_metadata": {**dict(row["review_metadata"]), "withdrawal": dict(withdrawal)},
+                "updated_at": updated_at,
+            },
+            conditions=(db.insight_reviews.c.execution_status == "pending_review",),
+        )
+        if not updated:
             return None
         return self.review_by_id(transaction=transaction, tenant_id=tenant_id, review_id=review_id)
 
@@ -296,6 +372,14 @@ def _insight_review_values(record: InsightReviewRecord) -> dict[str, object]:
         "created_at": record.created_at,
         "updated_at": record.updated_at,
     }
+
+
+def _keyset_before(created_before: str, before_id: str) -> Any:
+    """Rows strictly after the cursor position in (created_at DESC, id DESC) order."""
+    return or_(
+        db.insight_reviews.c.created_at < created_before,
+        and_(db.insight_reviews.c.created_at == created_before, db.insight_reviews.c.id < before_id),
+    )
 
 
 def _approval_execution_claim(row: InsightReviewRow) -> dict[str, object]:

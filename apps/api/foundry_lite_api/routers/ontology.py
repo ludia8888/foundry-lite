@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Header, Query, Request
 from foundry_lite.application.ports import OntologyCatalogResult, OntologyValidationResult
 from foundry_lite.application.services.ontology_insights import (
     DEFAULT_USAGE_WINDOW_DAYS,
@@ -19,6 +19,11 @@ from foundry_lite_api.request_context import _ctx
 from foundry_lite_api.schemas import (
     JsonObject,
     OntologyApplyRequest,
+    OntologyProposalAssignRequest,
+    OntologyProposalDecisionRequest,
+    OntologyProposalExecuteRequest,
+    OntologyProposalSubmitRequest,
+    OntologyProposalWithdrawRequest,
     OntologyRollbackRequest,
     OntologyValidateRequest,
 )
@@ -98,3 +103,108 @@ def rollback_ontology(request: Request, payload: OntologyRollbackRequest) -> Jso
         "rolledBackToVersionNumber": result["rolled_back_to_version_number"],
         "migrationPlan": result["migration_plan"],
     }
+
+
+@router.get("/api/ontology/proposals")
+def list_ontology_proposals(
+    request: Request,
+    status: str | None = Query(default=None),
+    cursor: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.list_proposals(status=status, cursor=cursor, limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/ontology/proposals/{proposal_id}")
+def get_ontology_proposal(request: Request, proposal_id: str) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.get_proposal(proposal_id, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/proposals")
+def submit_ontology_proposal(
+    request: Request,
+    payload: OntologyProposalSubmitRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.submit_proposal(
+            yaml_text=payload.yaml_text,
+            title=payload.title,
+            description=payload.description,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/proposals/{proposal_id}/assign")
+def assign_ontology_proposal(
+    request: Request,
+    proposal_id: str,
+    payload: OntologyProposalAssignRequest,
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.assign_proposal(
+            proposal_id,
+            reviewer_user_id=payload.reviewer_user_id,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/proposals/{proposal_id}/decide")
+def decide_ontology_proposal(
+    request: Request,
+    proposal_id: str,
+    payload: OntologyProposalDecisionRequest,
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.decide_proposal(
+            proposal_id,
+            decision=payload.decision,
+            expected_fingerprint=payload.expected_fingerprint,
+            comment=payload.comment,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/proposals/{proposal_id}/execute")
+def execute_ontology_proposal(
+    request: Request,
+    proposal_id: str,
+    payload: OntologyProposalExecuteRequest,
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.execute_proposal(
+            proposal_id,
+            expected_fingerprint=payload.expected_fingerprint,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/ontology/proposals/{proposal_id}/withdraw")
+def withdraw_ontology_proposal(
+    request: Request,
+    proposal_id: str,
+    payload: OntologyProposalWithdrawRequest | None = None,
+) -> JsonObject:
+    try:
+        return runtime.foundry.ontology.withdraw_proposal(
+            proposal_id,
+            reason=payload.reason if payload is not None else None,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
