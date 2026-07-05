@@ -73,6 +73,7 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "action_writeback_service": "ActionWritebackService",
     "agent_runtime_service": "AgentRuntimeService",
     "action_proposal_service": "ActionProposalService",
+    "approval_execution_service": "ApprovalExecutionService",
     "backup_restore_artifact_execution_service": "BackupRestoreArtifactExecutionService",
     "backup_restore_artifact_restore_service": "BackupRestoreArtifactRestoreService",
     "backup_restore_artifact_service": "BackupRestoreArtifactService",

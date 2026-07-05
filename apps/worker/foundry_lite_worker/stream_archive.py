@@ -166,7 +166,8 @@ def build_stream_archive_runtime(
         adapter_profile=config.adapter_profile,
     )
     adapter = stream_adapter or config.stream_adapter()
-    foundry = FoundryLite(dependencies=replace(dependencies, stream_adapter=adapter))
+    runtime_dependencies = replace(dependencies.runtime, stream_adapter=adapter)
+    foundry = FoundryLite(dependencies=replace(dependencies, runtime=runtime_dependencies))
     ctx = config.request_context()
     foundry.datasets.ensure(config.dataset_ref, ctx=ctx, primary_key=["event_id"])
     return StreamArchiveWorkerRuntime(foundry=foundry)

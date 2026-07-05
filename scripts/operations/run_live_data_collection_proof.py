@@ -12,10 +12,12 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+from foundry_lite.application.dependencies import CoreDependencies
 from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports import (
     AdapterFailureContract,
     AdapterFailureMode,
+    ConnectorAdapter,
     ConnectorSnapshot,
     ConnectorSnapshotRequest,
     RestAuthConfig,
@@ -171,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def run_live_data_collection_proof(config: LiveProofConfig) -> dict[str, object]:
     dependencies = create_local_core_dependencies(storage_root=config.storage_root)
-    foundry = FoundryLite(dependencies=replace(dependencies, connector_adapter=RestPullConnectorAdapter()))
+    foundry = FoundryLite(dependencies=_with_connector_adapter(dependencies, RestPullConnectorAdapter()))
     ctx = _context()
     _ensure_datasets(foundry, ctx)
 
@@ -222,6 +224,11 @@ def run_live_data_collection_proof(config: LiveProofConfig) -> dict[str, object]
     }
 
 
+def _with_connector_adapter(dependencies: CoreDependencies, adapter: ConnectorAdapter) -> CoreDependencies:
+    source_dependencies = replace(dependencies.source, connector_adapter=adapter)
+    return replace(dependencies, source=source_dependencies)
+
+
 def _sync_hn_stories(foundry: FoundryLite, ctx: RequestContext, limit: int) -> Any:
     return foundry.datasets.sync_connector_snapshot(
         "raw.live_hn_stories",
@@ -251,13 +258,13 @@ def _sync_hn_stories(foundry: FoundryLite, ctx: RequestContext, limit: int) -> A
 def _sync_wikipedia_recent_changes(
     _foundry: FoundryLite,
     ctx: RequestContext,
-    dependencies: Any,
+    dependencies: CoreDependencies,
     limit: int,
 ) -> Any:
     stream_foundry = FoundryLite(
-        dependencies=replace(
+        dependencies=_with_connector_adapter(
             dependencies,
-            connector_adapter=WikimediaRecentChangeStreamConnectorAdapter(limit=limit),
+            WikimediaRecentChangeStreamConnectorAdapter(limit=limit),
         )
     )
     return stream_foundry.datasets.sync_connector_snapshot(
@@ -271,11 +278,11 @@ def _sync_wikipedia_recent_changes(
 def _sync_wikipedia_extracts(
     _foundry: FoundryLite,
     ctx: RequestContext,
-    dependencies: Any,
+    dependencies: CoreDependencies,
     titles: Sequence[str],
 ) -> Any:
     extract_foundry = FoundryLite(
-        dependencies=replace(dependencies, connector_adapter=WikipediaExtractConnectorAdapter(titles=titles))
+        dependencies=_with_connector_adapter(dependencies, WikipediaExtractConnectorAdapter(titles=titles))
     )
     return extract_foundry.datasets.sync_connector_snapshot(
         "raw.live_wikipedia_extracts",
@@ -285,11 +292,16 @@ def _sync_wikipedia_extracts(
     )
 
 
-def _sync_github_events(_foundry: FoundryLite, ctx: RequestContext, dependencies: Any, limit: int) -> Any:
+def _sync_github_events(
+    _foundry: FoundryLite,
+    ctx: RequestContext,
+    dependencies: CoreDependencies,
+    limit: int,
+) -> Any:
     github_foundry = FoundryLite(
-        dependencies=replace(
+        dependencies=_with_connector_adapter(
             dependencies,
-            connector_adapter=GitHubEventsConnectorAdapter(limit=limit),
+            GitHubEventsConnectorAdapter(limit=limit),
         )
     )
     return github_foundry.datasets.sync_connector_snapshot(

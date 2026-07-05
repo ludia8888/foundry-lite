@@ -31,7 +31,8 @@ def _ctx(
         x_foundry_lite_client_id=x_foundry_lite_client_id,
         x_foundry_lite_scopes=x_foundry_lite_scopes,
     )
-    principal = runtime.auth_provider.authenticate(credentials) if credentials else runtime.auth_provider.anonymous()
+    auth_provider = runtime.get_auth_provider()
+    principal = auth_provider.authenticate(credentials) if credentials else auth_provider.anonymous()
     return RequestContext(
         tenant_id=principal.tenant_id,
         actor_user_id=principal.actor_user_id,
@@ -46,7 +47,8 @@ def _ctx(
 def _websocket_ctx(websocket: WebSocket) -> RequestContext:
     defaults = RequestContext()
     credentials = _collect_websocket_credentials(websocket)
-    principal = runtime.auth_provider.authenticate(credentials) if credentials else runtime.auth_provider.anonymous()
+    auth_provider = runtime.get_auth_provider()
+    principal = auth_provider.authenticate(credentials) if credentials else auth_provider.anonymous()
     return RequestContext(
         tenant_id=principal.tenant_id,
         actor_user_id=principal.actor_user_id,
