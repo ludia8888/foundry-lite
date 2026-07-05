@@ -12,9 +12,12 @@ from foundry_lite.application.services.pipeline_compiler_service import (
     _transform_api_name,
 )
 from foundry_lite.application.services.pipeline_graph_model import (
+    MAX_PIPELINE_EDGES,
+    MAX_PIPELINE_NODES,
     bounded_preview_limit,
     node_by_id,
     node_data,
+    output_contract_columns,
     output_dataset_ref,
     source_dataset_refs,
     topological_node_ids,
@@ -245,6 +248,55 @@ def test_pipeline_graph_validation_reports_join_key_and_node_data_shape_errors()
     assert {"code": "join_key_required", "nodeId": "join"} in _errors(result)
     with pytest.raises(ValidationFailed, match="pipeline graph node data must be an object"):
         node_data({"id": "bad", "type": "dataset", "data": "not-an-object"})
+
+
+def test_pipeline_graph_validation_covers_limit_contract_and_schema_edges() -> None:
+    oversized = _graph(
+        nodes=[
+            *[_node(f"node_{index}", "dataset") for index in range(MAX_PIPELINE_NODES + 1)],
+            _node("out", "output_dataset", outputDatasetRef="analytics.orders"),
+        ],
+        edges=[{"source": "node_0", "target": "out"} for _ in range(MAX_PIPELINE_EDGES + 1)],
+    )
+    nameless_contract = _graph(nodes=[_node("out", "output_dataset", outputDatasetRef="analytics.orders")])
+    nameless_contract["outputContract"] = {"columns": [{"type": "string"}]}
+    union_with_partial_schema = _graph(
+        nodes=[
+            _node("known", "dataset", schema=[_column("id")]),
+            _node("unknown", "dataset"),
+            _node("union", "union"),
+            _node("out", "output_dataset", outputDatasetRef="analytics.orders"),
+        ],
+        edges=[
+            {"source": "known", "target": "union"},
+            {"source": "unknown", "target": "union"},
+            {"source": "union", "target": "out"},
+        ],
+    )
+    configured_join = _graph(
+        nodes=[
+            _node("left", "dataset", schema=[_column("id")]),
+            _node("right", "dataset", schema=[_column("id")]),
+            _node("join", "join", leftKey="id", rightKey="id", leftNodeId="left", rightNodeId="right"),
+            _node("out", "output_dataset", outputDatasetRef="analytics.orders"),
+        ],
+        edges=[
+            {"source": "left", "target": "join"},
+            {"source": "right", "target": "join"},
+            {"source": "join", "target": "out"},
+        ],
+    )
+
+    oversized_codes = {error["code"] for error in _errors(validate_pipeline_graph(oversized))}
+    nameless_codes = {error["code"] for error in _errors(validate_pipeline_graph(nameless_contract))}
+
+    assert "too_many_nodes" in oversized_codes
+    assert "too_many_edges" in oversized_codes
+    assert "output_column_name_required" in nameless_codes
+    assert validate_pipeline_graph(union_with_partial_schema)["valid"] is True
+    assert validate_pipeline_graph(configured_join)["valid"] is True
+    assert output_contract_columns({"outputContract": "not-an-object"}) == []
+    assert node_data({"id": "empty", "type": "dataset", "config": None, "data": None}) == {}
 
 
 def test_pipeline_generated_sql_rejects_unsafe_refs_and_cast_types() -> None:
