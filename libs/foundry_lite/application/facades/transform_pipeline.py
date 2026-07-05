@@ -68,6 +68,29 @@ class TransformPipeline:
             mode=mode,
         )
 
+    def register_python(
+        self,
+        api_name: str,
+        *,
+        source_code: str,
+        function_name: str | None,
+        inputs: Mapping[str, str],
+        output_dataset_ref: str,
+        checks: Sequence[TransformCheck] | None = None,
+        ctx: RequestContext | None = None,
+        mode: str = "snapshot",
+    ) -> TransformRow:
+        return self._transform.register_python_transform(
+            api_name,
+            source_code=source_code,
+            function_name=function_name,
+            inputs=inputs,
+            output_dataset_ref=output_dataset_ref,
+            checks=checks,
+            ctx=ctx,
+            mode=mode,
+        )
+
     def run(self, api_name: str, *, ctx: RequestContext | None = None) -> CommitResult:
         return self._transform.run_transform(api_name, ctx=ctx)
 

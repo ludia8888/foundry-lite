@@ -1,0 +1,281 @@
+"""Pipeline Builder proposal, review, and version governance."""
+
+from __future__ import annotations
+
+from foundry_lite.application.ports import TransactionContext
+from foundry_lite.application.ports.pipeline_repository import (
+    PipelineBranchRow,
+    PipelineProposalRow,
+    PipelineRepository,
+    PipelineVersionRow,
+)
+from foundry_lite.application.primitives import _now
+from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.pipeline_graph_model import validate_pipeline_graph
+from foundry_lite.application.services.pipeline_payloads import (
+    bounded_pipeline_limit,
+    proposal_payload,
+    proposal_record,
+    require_open_branch,
+    require_proposal_status,
+    required_text,
+    version_payload,
+    version_record,
+)
+from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import NotFound, ValidationFailed
+
+_RESOURCE_TYPE = "pipeline_proposal"
+
+
+class PipelineGovernanceService(CoreService):
+    """Review workflow for Pipeline Builder branches."""
+
+    required_dependencies = ("engine", "policy", "pipeline_repository")
+    required_collaborators = ("runtime_service",)
+    pipeline_repository: PipelineRepository
+    runtime_service: RuntimeEvidenceBoundary
+
+    def propose_branch(
+        self,
+        branch_id: str,
+        *,
+        title: str,
+        idempotency_key: str,
+        description: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "pipeline:write", _RESOURCE_TYPE, branch_id)
+        self._require_write_open(ctx, "propose_pipeline_branch", branch_id)
+        required_text(idempotency_key, "Idempotency-Key")
+        clean_title = required_text(title, "title")
+        with self.engine.begin() as conn:
+            branch = self._require_branch(conn, ctx, branch_id)
+            require_open_branch(branch)
+            if branch["proposal_id"] is not None:
+                proposal = self._require_proposal(conn, ctx, str(branch["proposal_id"]))
+                return proposal_payload(proposal)
+            validation = validate_pipeline_graph(branch["graph"])
+            if not validation["valid"]:
+                raise ValidationFailed("pipeline graph is invalid", details={"validation": validation})
+            proposal = self.pipeline_repository.insert_proposal(
+                transaction=conn,
+                record=proposal_record(ctx, branch, title=clean_title, description=description, now=_now()),
+            )
+            self.pipeline_repository.set_branch_proposal(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                branch_id=branch_id,
+                proposal_id=str(proposal["id"]),
+                updated_at=_now(),
+            )
+            self._audit(conn, ctx, "submitted", proposal)
+            return proposal_payload(proposal)
+
+    def list_proposals(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 50,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "pipeline:read")
+        with self.engine.begin() as conn:
+            rows = self.pipeline_repository.list_proposals(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                status=status,
+                limit=bounded_pipeline_limit(limit),
+            )
+        return {"items": [proposal_payload(row) for row in rows], "nextCursor": None}
+
+    def get_proposal(self, proposal_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "pipeline:read")
+        with self.engine.begin() as conn:
+            return proposal_payload(self._require_proposal(conn, ctx, proposal_id))
+
+    def assign_proposal(
+        self,
+        proposal_id: str,
+        *,
+        assignee_user_id: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "pipeline:review", _RESOURCE_TYPE, proposal_id)
+        self._require_write_open(ctx, "assign_pipeline_proposal", proposal_id)
+        assignee = required_text(assignee_user_id, "assigneeUserId")
+        with self.engine.begin() as conn:
+            before = self._require_proposal(conn, ctx, proposal_id)
+            after = self.pipeline_repository.update_proposal_assignment(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                proposal_id=proposal_id,
+                assigned_to=assignee,
+                updated_at=_now(),
+            )
+            if after is None:
+                require_proposal_status(before, ("submitted", "in_review"))
+            assert after is not None
+            self._audit(conn, ctx, "assigned", after, before=before)
+            return proposal_payload(after)
+
+    def decide_proposal(
+        self,
+        proposal_id: str,
+        *,
+        decision: str,
+        comment: str | None = None,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "pipeline:review", _RESOURCE_TYPE, proposal_id)
+        self._require_write_open(ctx, "decide_pipeline_proposal", proposal_id)
+        status = _decision_status(decision)
+        with self.engine.begin() as conn:
+            before = self._require_proposal(conn, ctx, proposal_id)
+            after = self.pipeline_repository.update_proposal_decision(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                proposal_id=proposal_id,
+                status=status,
+                decision=decision,
+                comment=comment,
+                decided_at=_now(),
+                updated_at=_now(),
+            )
+            if after is None:
+                require_proposal_status(before, ("submitted", "in_review"))
+            assert after is not None
+            self._audit(conn, ctx, status, after, before=before)
+            return proposal_payload(after)
+
+    def execute_proposal(self, proposal_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "pipeline:deploy", _RESOURCE_TYPE, proposal_id)
+        self._require_write_open(ctx, "execute_pipeline_proposal", proposal_id)
+        with self.engine.begin() as conn:
+            proposal = self._require_proposal(conn, ctx, proposal_id)
+            require_proposal_status(proposal, ("approved",))
+            latest = self.pipeline_repository.latest_version(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                pipeline_id=str(proposal["pipeline_id"]),
+            )
+            version = self.pipeline_repository.insert_version(
+                transaction=conn,
+                record=version_record(ctx, proposal, version_number=_next_version_number(latest), now=_now()),
+            )
+            self.pipeline_repository.mark_proposal_executed(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                proposal_id=proposal_id,
+                updated_at=_now(),
+            )
+            self.pipeline_repository.close_branch(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                branch_id=str(proposal["branch_id"]),
+                status="merged",
+                merged_version_id=str(version["id"]),
+                updated_at=_now(),
+            )
+            self._audit(conn, ctx, "executed", proposal)
+            return version_payload(version)
+
+    def withdraw_proposal(self, proposal_id: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "pipeline:write", _RESOURCE_TYPE, proposal_id)
+        self._require_write_open(ctx, "withdraw_pipeline_proposal", proposal_id)
+        with self.engine.begin() as conn:
+            before = self._require_proposal(conn, ctx, proposal_id)
+            after = self.pipeline_repository.withdraw_proposal(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                proposal_id=proposal_id,
+                updated_at=_now(),
+            )
+            if after is None:
+                require_proposal_status(before, ("submitted", "in_review"))
+            assert after is not None
+            self._audit(conn, ctx, "withdrawn", after, before=before)
+            return proposal_payload(after)
+
+    def _require_branch(self, conn: TransactionContext, ctx: RequestContext, branch_id: str) -> PipelineBranchRow:
+        row = self.pipeline_repository.branch_by_id(transaction=conn, tenant_id=ctx.tenant_id, branch_id=branch_id)
+        if row is None:
+            raise NotFound("pipeline branch not found", details={"branch_id": branch_id})
+        return row
+
+    def _require_proposal(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        proposal_id: str,
+    ) -> PipelineProposalRow:
+        row = self.pipeline_repository.proposal_by_id(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            proposal_id=proposal_id,
+        )
+        if row is None:
+            raise NotFound("pipeline proposal not found", details={"proposal_id": proposal_id})
+        return row
+
+    def _require_write_open(self, ctx: RequestContext, operation: str, resource_id: str) -> None:
+        self.runtime_service._require_write_traffic_open(
+            ctx,
+            operation=operation,
+            resource_type=_RESOURCE_TYPE,
+            resource_id=resource_id,
+        )
+
+    def _audit(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        event: str,
+        row: PipelineProposalRow,
+        *,
+        before: PipelineProposalRow | None = None,
+    ) -> None:
+        self.runtime_service._audit(
+            conn,
+            ctx,
+            event_type=f"pipeline.proposal.{event}",
+            resource_type=_RESOURCE_TYPE,
+            resource_id=str(row["id"]),
+            action=event,
+            before_ref=_proposal_audit_ref(before),
+            after_ref=_proposal_audit_ref(row),
+        )
+
+
+def _decision_status(decision: str) -> str:
+    normalized = decision.strip().lower()
+    if normalized in {"approve", "approved"}:
+        return "approved"
+    if normalized in {"reject", "rejected"}:
+        return "rejected"
+    raise ValidationFailed("unsupported pipeline proposal decision", details={"decision": decision})
+
+
+def _next_version_number(latest: PipelineVersionRow | None) -> int:
+    if latest is None:
+        return 1
+    return int(latest["version_number"]) + 1
+
+
+def _proposal_audit_ref(row: PipelineProposalRow | None) -> dict[str, object] | None:
+    if row is None:
+        return None
+    return {
+        "pipeline_id": row["pipeline_id"],
+        "branch_id": row["branch_id"],
+        "status": row["status"],
+        "graph_fingerprint": row["graph_fingerprint"],
+    }

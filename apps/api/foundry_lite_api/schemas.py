@@ -605,6 +605,68 @@ class TransformSchedulerTickRequest(BaseModel):
     max_runs: int = Field(default=50, ge=1, le=500, alias="maxRuns")
 
 
+class PipelineBranchCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    pipeline_id: str = Field(alias="pipelineId")
+    name: str
+
+
+class PipelineGraphUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    graph: JsonObject
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+
+
+class PipelineBranchRebaseRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_fingerprint: str = Field(alias="expectedFingerprint")
+
+
+class PipelineBranchProposeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    title: str
+    description: str | None = None
+
+
+class PipelineProposalAssignRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    assignee_user_id: str = Field(alias="assigneeUserId")
+
+
+class PipelineProposalDecisionRequest(BaseModel):
+    decision: str
+    comment: str | None = None
+
+
+class PipelinePreviewNodeRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    limit: int = Field(default=20, ge=1, le=200)
+
+
+class PipelineDeployRequest(BaseModel):
+    options: JsonObject = Field(default_factory=dict)
+
+
+class PipelineRunStartRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    version_id: str | None = Field(default=None, alias="versionId")
+
+
+class PipelineScheduleUpsertRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    version_id: str = Field(alias="versionId")
+    schedule: JsonObject
+    enabled: bool = True
+
+
 class DeadLetterBulkRetryRequest(BaseModel):
     ids: list[str]
 

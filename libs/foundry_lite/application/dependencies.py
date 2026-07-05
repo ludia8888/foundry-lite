@@ -50,6 +50,7 @@ from foundry_lite.application.ports.model_registry_repository import ModelRegist
 from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
 from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
 from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
+from foundry_lite.application.ports.pipeline_repository import PipelineRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
@@ -75,6 +76,7 @@ class CoreDependencies:
     ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
+    pipeline_repository: PipelineRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository

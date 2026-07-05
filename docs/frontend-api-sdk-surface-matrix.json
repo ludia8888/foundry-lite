@@ -937,6 +937,318 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "pipelines.branches.create",
+      "route": "POST /api/pipelines/branches",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.branches.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Pipeline branch creation is tenant scoped, requires an Idempotency-Key, is audit logged, and starts a graph editing workspace.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.branches.list",
+      "route": "GET /api/pipelines/branches",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.branches.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Pipeline branch list gives the canvas branch picker bounded tenant-scoped rows.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.branches.get",
+      "route": "GET /api/pipelines/branches/{branch_id}",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.branches.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Pipeline branch detail returns graph, layout, output contract, and CAS fingerprint.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.branches.updateGraph",
+      "route": "POST /api/pipelines/branches/{branch_id}/graph",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.branches.updateGraph",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Graph updates store nodes, edges, layout, tests, schedule, and output contract through CAS fingerprint.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.branches.diff",
+      "route": "GET /api/pipelines/branches/{branch_id}/diff",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.branches.diff",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Branch diff reports base/current/latest graph fingerprint changes before review.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.branches.rebase",
+      "route": "POST /api/pipelines/branches/{branch_id}/rebase",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.branches.rebase",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Branch rebase refreshes the base graph under CAS so stale edits are visible before proposal.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.branches.propose",
+      "route": "POST /api/pipelines/branches/{branch_id}/propose",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.branches.propose",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Branch proposal validates the graph and submits the design to operator review with required Idempotency-Key evidence.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.branches.abandon",
+      "route": "POST /api/pipelines/branches/{branch_id}/abandon",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.branches.abandon",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Branch abandon closes open draft work without changing deployed versions.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.graph.validate",
+      "route": "GET /api/pipelines/branches/{branch_id}/validate",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.graph.validate",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Graph validation returns cycle, dangling edge, node type, and output contract diagnostics.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.graph.suggestCasts",
+      "route": "GET /api/pipelines/branches/{branch_id}/nodes/{node_id}/casts",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.graph.suggestCasts",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Cast suggestions give the column casting panel bounded schema hints without committing data.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.graph.previewNode",
+      "route": "POST /api/pipelines/branches/{branch_id}/nodes/{node_id}/preview",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.graph.previewNode",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Node preview is bounded, tenant scoped, and no-commit for the canvas preview panel.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.graph.stats",
+      "route": "POST /api/pipelines/branches/{branch_id}/nodes/{node_id}/stats",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.graph.stats",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Node stats returns bounded preview metadata for graph inspection panels.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.graph.runTests",
+      "route": "POST /api/pipelines/branches/{branch_id}/tests/run",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.graph.runTests",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Graph tests persist a tenant-scoped test result for review evidence.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.proposals.list",
+      "route": "GET /api/pipelines/proposals",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.proposals.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Proposal list backs the operator review queue with bounded tenant rows.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.proposals.get",
+      "route": "GET /api/pipelines/proposals/{proposal_id}",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.proposals.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Proposal detail returns review status, graph fingerprint, and graph snapshot.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.proposals.assign",
+      "route": "POST /api/pipelines/proposals/{proposal_id}/assign",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.proposals.assign",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Proposal assignment moves submitted work into review with audit evidence.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.proposals.decide",
+      "route": "POST /api/pipelines/proposals/{proposal_id}/decision",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.proposals.decide",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Proposal decision records approve/reject state before executable versions are minted.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.proposals.execute",
+      "route": "POST /api/pipelines/proposals/{proposal_id}/execute",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.proposals.execute",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Executing an approved proposal creates an immutable pipeline version and marks the branch merged.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.proposals.withdraw",
+      "route": "POST /api/pipelines/proposals/{proposal_id}/withdraw",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.proposals.withdraw",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Withdrawal closes proposed work without creating a deployable version.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.versions.get",
+      "route": "GET /api/pipelines/versions/{version_id}",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.versions.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Version detail returns immutable graph snapshot and deployment evidence.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.runs.get",
+      "route": "GET /api/pipelines/runs/{run_id}",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.runs.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Run detail returns pipeline run status, output dataset identity, and timeline evidence.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.runs.timeline",
+      "route": "GET /api/pipelines/runs/{run_id}/timeline",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.runs.timeline",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Run timeline exposes compile and node execution events for build timeline UI.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.runs.cancel",
+      "route": "POST /api/pipelines/runs/{run_id}/cancel",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.runs.cancel",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Run cancel is permission checked and records terminal cancellation evidence.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.schedules.previewDue",
+      "route": "GET /api/pipelines/scheduler/due",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.schedules.previewDue",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Schedule preview lists bounded due pipeline schedules without starting runs.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.schedules.tick",
+      "route": "POST /api/pipelines/scheduler/tick",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.schedules.tick",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Schedule tick starts bounded deployed-version runs through the pipeline run service.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.versions.list",
+      "route": "GET /api/pipelines/{pipeline_id}/versions",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.versions.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Version list gives deploy screens bounded version history for one pipeline.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.deploy",
+      "route": "POST /api/pipelines/{pipeline_id}/deploy/{version_id}",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.deploy",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Deploy compiles an approved version and marks it runnable for schedules and manual runs.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.runs.start",
+      "route": "POST /api/pipelines/{pipeline_id}/runs",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.runs.start",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Run start only accepts deployed versions and records pipeline run timeline evidence.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.schedules.upsert",
+      "route": "PUT /api/pipelines/{pipeline_id}/schedule",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.schedules.upsert",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Schedule upsert binds one pipeline to a deployed version and schedule payload.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.schedules.get",
+      "route": "GET /api/pipelines/{pipeline_id}/schedule",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.schedules.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Schedule get returns current enabled schedule state for the deploy screen.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "pipelines.schedules.delete",
+      "route": "DELETE /api/pipelines/{pipeline_id}/schedule",
+      "productArea": "pipeline-builder",
+      "sdkSurface": "pipelines.schedules.delete",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Schedule delete removes future automatic starts without deleting versions or runs.",
+      "proofTests": ["test_sdk_request_contract_covers_all_frontend_surface_routes"],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "operations.runs.list",
       "route": "GET /api/operations/runs",
       "productArea": "operations-console",

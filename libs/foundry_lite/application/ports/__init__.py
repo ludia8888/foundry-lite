@@ -288,6 +288,21 @@ from foundry_lite.application.ports.osdk_application_repository import (
     OsdkSdkVersionRecord,
     OsdkSdkVersionRow,
 )
+from foundry_lite.application.ports.pipeline_repository import (
+    PipelineBranchRecord,
+    PipelineBranchRow,
+    PipelineProposalRecord,
+    PipelineProposalRow,
+    PipelineRepository,
+    PipelineRunRecord,
+    PipelineRunRow,
+    PipelineScheduleRecord,
+    PipelineScheduleRow,
+    PipelineTestResultRecord,
+    PipelineTestResultRow,
+    PipelineVersionRecord,
+    PipelineVersionRow,
+)
 from foundry_lite.application.ports.runtime_repository import (
     AuditEventRecord,
     BackupRestoreArtifact,

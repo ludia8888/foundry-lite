@@ -1,0 +1,251 @@
+"""Payload helpers for Pipeline Builder services."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+
+from foundry_lite.application.ports.pipeline_repository import (
+    PipelineBranchRecord,
+    PipelineBranchRow,
+    PipelineProposalRecord,
+    PipelineProposalRow,
+    PipelineRunRecord,
+    PipelineRunRow,
+    PipelineScheduleRecord,
+    PipelineScheduleRow,
+    PipelineTestResultRecord,
+    PipelineVersionRecord,
+    PipelineVersionRow,
+)
+from foundry_lite.application.primitives import _new_id
+from foundry_lite.application.services.pipeline_graph_model import empty_pipeline_graph, pipeline_graph_fingerprint
+from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
+
+JsonObject = dict[str, object]
+
+
+def bounded_pipeline_limit(limit: int, *, cap: int = 100) -> int:
+    if limit < 1:
+        return 1
+    return min(limit, cap)
+
+
+def required_text(value: str | None, field: str) -> str:
+    normalized = (value or "").strip()
+    if not normalized:
+        raise ValidationFailed(f"{field} is required", details={"field": field})
+    return normalized
+
+
+def branch_record(ctx: RequestContext, *, pipeline_id: str, name: str, now: str) -> PipelineBranchRecord:
+    graph = empty_pipeline_graph()
+    return PipelineBranchRecord(
+        branch_id=_new_id("pbr"),
+        tenant_id=ctx.tenant_id,
+        pipeline_id=pipeline_id,
+        name=name,
+        base_version_id=None,
+        base_graph=graph,
+        graph=graph,
+        graph_fingerprint=pipeline_graph_fingerprint(graph),
+        created_by=ctx.actor_user_id,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def proposal_record(
+    ctx: RequestContext,
+    branch: PipelineBranchRow,
+    *,
+    title: str,
+    description: str | None,
+    now: str,
+) -> PipelineProposalRecord:
+    return PipelineProposalRecord(
+        proposal_id=_new_id("ppr"),
+        tenant_id=ctx.tenant_id,
+        pipeline_id=str(branch["pipeline_id"]),
+        branch_id=str(branch["id"]),
+        title=title,
+        description=description,
+        graph=dict(branch["graph"]),
+        graph_fingerprint=str(branch["graph_fingerprint"]),
+        created_by=ctx.actor_user_id,
+        created_at=now,
+    )
+
+
+def version_record(
+    ctx: RequestContext,
+    proposal: PipelineProposalRow,
+    *,
+    version_number: int,
+    now: str,
+) -> PipelineVersionRecord:
+    return PipelineVersionRecord(
+        version_id=_new_id("pver"),
+        tenant_id=ctx.tenant_id,
+        pipeline_id=str(proposal["pipeline_id"]),
+        version_number=version_number,
+        graph=dict(proposal["graph"]),
+        graph_fingerprint=str(proposal["graph_fingerprint"]),
+        proposal_id=str(proposal["id"]),
+        created_by=ctx.actor_user_id,
+        created_at=now,
+    )
+
+
+def run_record(ctx: RequestContext, *, pipeline_id: str, version_id: str, now: str) -> PipelineRunRecord:
+    return PipelineRunRecord(
+        run_id=_new_id("prun"),
+        tenant_id=ctx.tenant_id,
+        pipeline_id=pipeline_id,
+        version_id=version_id,
+        status="running",
+        output_dataset_ref=None,
+        output_version_id=None,
+        timeline=[{"event": "pipeline.run.started", "at": now, "versionId": version_id}],
+        error=None,
+        created_by=ctx.actor_user_id,
+        started_at=now,
+        completed_at=None,
+    )
+
+
+def schedule_record(
+    ctx: RequestContext,
+    *,
+    pipeline_id: str,
+    version_id: str,
+    schedule: Mapping[str, object],
+    enabled: bool,
+    now: str,
+) -> PipelineScheduleRecord:
+    return PipelineScheduleRecord(
+        schedule_id=_new_id("psch"),
+        tenant_id=ctx.tenant_id,
+        pipeline_id=pipeline_id,
+        version_id=version_id,
+        schedule=dict(schedule),
+        enabled=enabled,
+        updated_by=ctx.actor_user_id,
+        updated_at=now,
+    )
+
+
+def test_result_record(
+    ctx: RequestContext,
+    *,
+    pipeline_id: str,
+    branch_id: str,
+    status: str,
+    result: Mapping[str, object],
+    now: str,
+) -> PipelineTestResultRecord:
+    return PipelineTestResultRecord(
+        result_id=_new_id("ptr"),
+        tenant_id=ctx.tenant_id,
+        pipeline_id=pipeline_id,
+        branch_id=branch_id,
+        status=status,
+        result=dict(result),
+        created_by=ctx.actor_user_id,
+        created_at=now,
+    )
+
+
+def branch_payload(row: PipelineBranchRow) -> JsonObject:
+    return {
+        "id": row["id"],
+        "pipelineId": row["pipeline_id"],
+        "name": row["name"],
+        "status": row["status"],
+        "baseVersionId": row["base_version_id"],
+        "graph": row["graph"],
+        "graphFingerprint": row["graph_fingerprint"],
+        "createdBy": row["created_by"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+        "proposalId": row["proposal_id"],
+        "mergedVersionId": row["merged_version_id"],
+    }
+
+
+def proposal_payload(row: PipelineProposalRow) -> JsonObject:
+    return {
+        "id": row["id"],
+        "pipelineId": row["pipeline_id"],
+        "branchId": row["branch_id"],
+        "title": row["title"],
+        "description": row["description"],
+        "status": row["status"],
+        "graph": row["graph"],
+        "graphFingerprint": row["graph_fingerprint"],
+        "assignedTo": row["assigned_to"],
+        "decision": row["decision"],
+        "decisionComment": row["decision_comment"],
+        "decidedAt": row["decided_at"],
+        "createdBy": row["created_by"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def version_payload(row: PipelineVersionRow) -> JsonObject:
+    return {
+        "id": row["id"],
+        "pipelineId": row["pipeline_id"],
+        "versionNumber": row["version_number"],
+        "graph": row["graph"],
+        "graphFingerprint": row["graph_fingerprint"],
+        "proposalId": row["proposal_id"],
+        "createdBy": row["created_by"],
+        "createdAt": row["created_at"],
+        "deployedAt": row["deployed_at"],
+    }
+
+
+def run_payload(row: PipelineRunRow) -> JsonObject:
+    return {
+        "id": row["id"],
+        "pipelineId": row["pipeline_id"],
+        "versionId": row["version_id"],
+        "status": row["status"],
+        "outputDatasetRef": row["output_dataset_ref"],
+        "outputVersionId": row["output_version_id"],
+        "timeline": row["timeline"],
+        "error": row["error"],
+        "createdBy": row["created_by"],
+        "startedAt": row["started_at"],
+        "completedAt": row["completed_at"],
+    }
+
+
+def schedule_payload(row: PipelineScheduleRow | None) -> JsonObject | None:
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "pipelineId": row["pipeline_id"],
+        "versionId": row["version_id"],
+        "schedule": row["schedule"],
+        "enabled": row["enabled"],
+        "updatedBy": row["updated_by"],
+        "updatedAt": row["updated_at"],
+        "lastTickAt": row["last_tick_at"],
+    }
+
+
+def require_open_branch(row: PipelineBranchRow) -> None:
+    if row["status"] != "open":
+        raise ConflictDetected("pipeline branch is not open", details={"branch_id": row["id"], "status": row["status"]})
+
+
+def require_proposal_status(row: PipelineProposalRow, statuses: tuple[str, ...]) -> None:
+    if row["status"] not in statuses:
+        raise ConflictDetected(
+            "pipeline proposal is not in the required state",
+            details={"proposal_id": row["id"], "status": row["status"], "required": list(statuses)},
+        )

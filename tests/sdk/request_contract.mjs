@@ -2015,6 +2015,217 @@ await expectSdkCall("transforms.scheduler.tick", () => client.transforms.tick({ 
   headers: { "Content-Type": "application/json" },
   body: { maxRuns: 10 },
 });
+const pipelineGraph = {
+  nodes: [
+    { id: "raw", type: "dataset", data: { datasetRef: "raw.orders" } },
+    {
+      id: "sql",
+      type: "sql",
+      data: {
+        sql: "select * from {{ input('raw.orders') }}",
+        outputDatasetRef: "clean.orders",
+      },
+    },
+    { id: "out", type: "output_dataset", data: { outputDatasetRef: "clean.orders_final" } },
+  ],
+  edges: [
+    { source: "raw", target: "sql" },
+    { source: "sql", target: "out" },
+  ],
+  layout: {},
+  outputContract: { columns: [{ name: "order_id", type: "string", nullable: false }] },
+  tests: [],
+  schedule: null,
+};
+await expectSdkCall(
+  "pipelines.branches.create",
+  () => client.pipelines.branches.create({ pipelineId: "supply-chain", name: "join-orders" }, { idempotencyKey: "idem-pb" }),
+  {
+    path: "/api/pipelines/branches",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-pb" },
+    body: { pipelineId: "supply-chain", name: "join-orders" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "pipelines.branches.create",
+  () => client.pipelines.branches.create({ pipelineId: "supply-chain", name: "join-orders" }),
+  "pipelines.branches.create",
+);
+await expectSdkCall("pipelines.branches.list", () => client.pipelines.branches.list({ status: "open", limit: 10 }), {
+  path: "/api/pipelines/branches?status=open&limit=10",
+});
+await expectSdkCall("pipelines.branches.get", () => client.pipelines.branches.get("branch/1"), {
+  path: "/api/pipelines/branches/branch%2F1",
+});
+await expectSdkCall(
+  "pipelines.branches.updateGraph",
+  () => client.pipelines.branches.updateGraph("branch/1", { graph: pipelineGraph, expectedFingerprint: "fp-a" }),
+  {
+    path: "/api/pipelines/branches/branch%2F1/graph",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { graph: pipelineGraph, expectedFingerprint: "fp-a" },
+  },
+);
+await expectSdkCall("pipelines.branches.diff", () => client.pipelines.branches.diff("branch/1"), {
+  path: "/api/pipelines/branches/branch%2F1/diff",
+});
+await expectSdkCall(
+  "pipelines.branches.rebase",
+  () => client.pipelines.branches.rebase("branch/1", { expectedFingerprint: "fp-a" }),
+  {
+    path: "/api/pipelines/branches/branch%2F1/rebase",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { expectedFingerprint: "fp-a" },
+  },
+);
+await expectSdkCall(
+  "pipelines.branches.propose",
+  () =>
+    client.pipelines.branches.propose(
+      "branch/1",
+      { title: "Review graph", description: "Dataset output v1" },
+      { idempotencyKey: "idem-propose" },
+    ),
+  {
+    path: "/api/pipelines/branches/branch%2F1/propose",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "idem-propose" },
+    body: { title: "Review graph", description: "Dataset output v1" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "pipelines.branches.propose",
+  () => client.pipelines.branches.propose("branch/1", { title: "Review graph" }),
+  "pipelines.branches.propose",
+);
+await expectSdkCall("pipelines.branches.abandon", () => client.pipelines.branches.abandon("branch/1"), {
+  path: "/api/pipelines/branches/branch%2F1/abandon",
+  method: "POST",
+});
+await expectSdkCall("pipelines.graph.validate", () => client.pipelines.graph.validate("branch/1"), {
+  path: "/api/pipelines/branches/branch%2F1/validate",
+});
+await expectSdkCall("pipelines.graph.suggestCasts", () => client.pipelines.graph.suggestCasts("branch/1", "sql"), {
+  path: "/api/pipelines/branches/branch%2F1/nodes/sql/casts",
+});
+await expectSdkCall(
+  "pipelines.graph.previewNode",
+  () => client.pipelines.graph.previewNode("branch/1", "sql", { limit: 25 }),
+  {
+    path: "/api/pipelines/branches/branch%2F1/nodes/sql/preview",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { limit: 25 },
+  },
+);
+await expectSdkCall("pipelines.graph.stats", () => client.pipelines.graph.stats("branch/1", "sql", { limit: 25 }), {
+  path: "/api/pipelines/branches/branch%2F1/nodes/sql/stats",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: { limit: 25 },
+});
+await expectSdkCall("pipelines.graph.runTests", () => client.pipelines.graph.runTests("branch/1"), {
+  path: "/api/pipelines/branches/branch%2F1/tests/run",
+  method: "POST",
+});
+await expectSdkCall("pipelines.proposals.list", () => client.pipelines.proposals.list({ status: "approved", limit: 5 }), {
+  path: "/api/pipelines/proposals?status=approved&limit=5",
+});
+await expectSdkCall("pipelines.proposals.get", () => client.pipelines.proposals.get("proposal/1"), {
+  path: "/api/pipelines/proposals/proposal%2F1",
+});
+await expectSdkCall(
+  "pipelines.proposals.assign",
+  () => client.pipelines.proposals.assign("proposal/1", { assigneeUserId: "ops-1" }),
+  {
+    path: "/api/pipelines/proposals/proposal%2F1/assign",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { assigneeUserId: "ops-1" },
+  },
+);
+await expectSdkCall(
+  "pipelines.proposals.decide",
+  () => client.pipelines.proposals.decide("proposal/1", { decision: "approve", comment: "ship it" }),
+  {
+    path: "/api/pipelines/proposals/proposal%2F1/decision",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { decision: "approve", comment: "ship it" },
+  },
+);
+await expectSdkCall("pipelines.proposals.execute", () => client.pipelines.proposals.execute("proposal/1"), {
+  path: "/api/pipelines/proposals/proposal%2F1/execute",
+  method: "POST",
+});
+await expectSdkCall("pipelines.proposals.withdraw", () => client.pipelines.proposals.withdraw("proposal/1"), {
+  path: "/api/pipelines/proposals/proposal%2F1/withdraw",
+  method: "POST",
+});
+await expectSdkCall("pipelines.versions.list", () => client.pipelines.versions.list("supply-chain", { limit: 7 }), {
+  path: "/api/pipelines/supply-chain/versions?limit=7",
+});
+await expectSdkCall("pipelines.versions.get", () => client.pipelines.versions.get("version/1"), {
+  path: "/api/pipelines/versions/version%2F1",
+});
+await expectSdkCall(
+  "pipelines.deploy",
+  () => client.pipelines.deploy("supply-chain", "version/1", { options: { mode: "manual" } }),
+  {
+    path: "/api/pipelines/supply-chain/deploy/version%2F1",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: { options: { mode: "manual" } },
+  },
+);
+await expectSdkCall("pipelines.runs.start", () => client.pipelines.runs.start("supply-chain", { versionId: "version/1" }), {
+  path: "/api/pipelines/supply-chain/runs",
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: { versionId: "version/1" },
+});
+await expectSdkCall("pipelines.runs.get", () => client.pipelines.runs.get("run/1"), {
+  path: "/api/pipelines/runs/run%2F1",
+});
+await expectSdkCall("pipelines.runs.timeline", () => client.pipelines.runs.timeline("run/1"), {
+  path: "/api/pipelines/runs/run%2F1/timeline",
+});
+await expectSdkCall("pipelines.runs.cancel", () => client.pipelines.runs.cancel("run/1"), {
+  path: "/api/pipelines/runs/run%2F1/cancel",
+  method: "POST",
+});
+await expectSdkCall(
+  "pipelines.schedules.upsert",
+  () =>
+    client.pipelines.schedules.upsert("supply-chain", {
+      versionId: "version/1",
+      schedule: { cron: "*/5 * * * *" },
+      enabled: true,
+    }),
+  {
+    path: "/api/pipelines/supply-chain/schedule",
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: { versionId: "version/1", schedule: { cron: "*/5 * * * *" }, enabled: true },
+  },
+);
+await expectSdkCall("pipelines.schedules.get", () => client.pipelines.schedules.get("supply-chain"), {
+  path: "/api/pipelines/supply-chain/schedule",
+});
+await expectSdkCall("pipelines.schedules.delete", () => client.pipelines.schedules.delete("supply-chain"), {
+  path: "/api/pipelines/supply-chain/schedule",
+  method: "DELETE",
+});
+await expectSdkCall("pipelines.schedules.previewDue", () => client.pipelines.schedules.previewDue({ maxRuns: 3 }), {
+  path: "/api/pipelines/scheduler/due?maxRuns=3",
+});
+await expectSdkCall("pipelines.schedules.tick", () => client.pipelines.schedules.tick({ maxRuns: 3 }), {
+  path: "/api/pipelines/scheduler/tick?maxRuns=3",
+  method: "POST",
+});
 await expectSdkCall(
   "operations.runs.list",
   () =>

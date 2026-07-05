@@ -130,6 +130,12 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type MediaUploadRequest = {" in generated
     assert "export type TransformSqlRegisterRequest = {" in generated
     assert "export type TransformSchedulerTickResult = {" in generated
+    assert "export type PipelineGraph = {" in generated
+    assert "pipelines: {" in generated
+    assert "updateGraph(branchId: string, payload: PipelineGraphUpdateRequest): Promise<PipelineBranch>;" in generated
+    assert "suggestCasts(branchId: string, nodeId: string): Promise<Record<string, unknown>>;" in generated
+    assert "deploy(pipelineId: string, versionId: string, payload?: PipelineDeployRequest)" in generated
+    assert "client.pipelines.branches.create" not in generated
     assert "aip: {" in generated
     assert "validate(payload: AipBuilderValidateRequest): Promise<AipBuilderValidationResult>;" in generated
     assert "run(payload: AipBuilderRunRequest): Promise<AipBuilderRunResult>;" in generated
@@ -391,6 +397,15 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface["actions"] == {"ApproveOrder": ["apply", "validate", "applyBatch"]}
     assert ts_surface["materializations"] == ["run", "list"]
     assert ts_surface["transforms"] == ["registerSql", "run", "previewDue", "tick"]
+    assert ts_surface["pipelines"] == {
+        "_self": ["deploy"],
+        "branches": ["create", "list", "get", "updateGraph", "diff", "rebase", "propose", "abandon"],
+        "graph": ["validate", "suggestCasts", "previewNode", "stats", "runTests"],
+        "proposals": ["list", "get", "assign", "decide", "execute", "withdraw"],
+        "runs": ["start", "get", "timeline", "cancel"],
+        "schedules": ["upsert", "get", "delete", "previewDue", "tick"],
+        "versions": ["list", "get"],
+    }
     assert ts_surface["operations"] == {
         "admin": ["overview", "taskPlan"],
         "backupRestore": [

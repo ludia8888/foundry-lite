@@ -16,6 +16,7 @@ from foundry_lite.application.facades.media_workspace import MediaWorkspace
 from foundry_lite.application.facades.object_store import ObjectStore
 from foundry_lite.application.facades.ontology_registry import OntologyRegistry
 from foundry_lite.application.facades.operations_console import OperationsConsole
+from foundry_lite.application.facades.pipeline_workspace import PipelineWorkspace
 from foundry_lite.application.facades.source_workspace import SourceWorkspace
 from foundry_lite.application.facades.supply_chain_demo import SupplyChainDemo
 from foundry_lite.application.facades.transform_pipeline import TransformPipeline
@@ -35,6 +36,7 @@ __all__ = [
     "ObjectStore",
     "OntologyRegistry",
     "OperationsConsole",
+    "PipelineWorkspace",
     "SourceWorkspace",
     "SupplyChainDemo",
     "TransformPipeline",
