@@ -8,7 +8,8 @@ handlers, helpers) as re-exports so existing tests and tooling keep working.
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -179,7 +180,15 @@ from foundry_lite_api.webhooks import (  # noqa: F401
     _webhook_request_context,
 )
 
-app = FastAPI(title="Foundry-lite API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    api_runtime = runtime.initialize_api_runtime()
+    instrument_sqlalchemy_engine(api_runtime.foundry.engine)
+    yield
+
+
+app = FastAPI(title="Foundry-lite API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(ALLOWED_BROWSER_ORIGINS),
@@ -187,7 +196,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 instrument_fastapi_app(app)
-instrument_sqlalchemy_engine(runtime.foundry.engine)
 
 
 @app.middleware("http")

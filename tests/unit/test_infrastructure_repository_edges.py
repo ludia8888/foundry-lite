@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from foundry_lite.application.dependencies import RuntimeProfile
 from foundry_lite.application.ports.action_repository import ActionRunRecord
 from foundry_lite.application.services.object_store.query_cursor import (
     CURSOR_SIGNING_KEY_ENV,
@@ -17,14 +18,16 @@ from foundry_lite.application.services.runtime_run_cursors import (
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.local_runtime import (
     _ALLOW_LOCAL_PROMPT_ARTIFACT_KEY_ENV,
+    RuntimeAdapterProfiles,
     _allow_local_prompt_artifact_key_from_env,
     _compute_adapter,
     _connector_adapter,
+    _create_core_dependencies,
     _dataset_storage_adapter,
     _search_adapter,
     _stream_adapter,
     _workflow_adapter,
-    create_local_core_dependencies,
+    create_runtime_core_dependencies,
 )
 from foundry_lite.infrastructure.repositories import SchemaMutationDisabledError
 from foundry_lite.infrastructure.repositories.action_repository import SqlAlchemyActionRepository
@@ -100,6 +103,17 @@ def test_prompt_artifact_local_dev_key_requires_explicit_env_opt_in(monkeypatch:
     assert _allow_local_prompt_artifact_key_from_env()
 
 
+def _set_protected_adapter_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FOUNDRY_LITE_MEDIA_STORAGE_PROFILE", "s3-media")
+    monkeypatch.setenv("FOUNDRY_LITE_CONTENT_INDEX_PROFILE", "elasticsearch")
+    monkeypatch.setenv("FOUNDRY_LITE_COMPUTE_PROFILE", "spark")
+    monkeypatch.setenv("FOUNDRY_LITE_CONNECTOR_PROFILE", "rest")
+    monkeypatch.setenv("FOUNDRY_LITE_SEARCH_PROFILE", "elasticsearch")
+    monkeypatch.setenv("FOUNDRY_LITE_STREAM_PROFILE", "kafka")
+    monkeypatch.setenv("FOUNDRY_LITE_WORKFLOW_PROFILE", "temporal")
+    monkeypatch.setenv("FOUNDRY_LITE_S3_BUCKET", "foundry-lite-test")
+
+
 def test_protected_runtime_profile_disables_create_all_schema_mutation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -109,7 +123,12 @@ def test_protected_runtime_profile_disables_create_all_schema_mutation(
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ID_ENV, "prod-key-2026-06")
     monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ENV, "production-operations-cursor-secret")
     monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV, "prod-operations-key-2026-06")
-    dependencies = create_local_core_dependencies(storage_root=tmp_path / "prod")
+    dependencies = _create_core_dependencies(
+        runtime_profile=RuntimeProfile.from_value("production"),
+        db_url="sqlite:///:memory:",
+        storage_root=tmp_path / "prod",
+        profiles=RuntimeAdapterProfiles.from_env("local", {}),
+    )
 
     with pytest.raises(SchemaMutationDisabledError, match="run Alembic migrations"):
         dependencies.metadata_repository.initialize_schema()
@@ -123,10 +142,11 @@ def test_protected_runtime_profile_requires_object_query_cursor_secret(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
+    _set_protected_adapter_profiles(monkeypatch)
     monkeypatch.delenv(CURSOR_SIGNING_KEY_ENV, raising=False)
 
     with pytest.raises(ValidationFailed, match="cursor signing key"):
-        create_local_core_dependencies(storage_root=tmp_path / "missing-cursor-secret")
+        create_runtime_core_dependencies(adapter_profile="s3-storage", storage_root=tmp_path / "missing-cursor-secret")
 
 
 def test_protected_runtime_profile_requires_object_query_cursor_key_id(
@@ -134,11 +154,12 @@ def test_protected_runtime_profile_requires_object_query_cursor_key_id(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
+    _set_protected_adapter_profiles(monkeypatch)
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "production-cursor-secret")
     monkeypatch.delenv(CURSOR_SIGNING_KEY_ID_ENV, raising=False)
 
     with pytest.raises(ValidationFailed, match="cursor signing key id"):
-        create_local_core_dependencies(storage_root=tmp_path / "missing-cursor-key-id")
+        create_runtime_core_dependencies(adapter_profile="s3-storage", storage_root=tmp_path / "missing-cursor-key-id")
 
 
 def test_protected_runtime_profile_requires_operations_cursor_secret(
@@ -146,13 +167,17 @@ def test_protected_runtime_profile_requires_operations_cursor_secret(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("FOUNDRY_LITE_RUNTIME_PROFILE", "production")
+    _set_protected_adapter_profiles(monkeypatch)
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ENV, "production-cursor-secret")
     monkeypatch.setenv(CURSOR_SIGNING_KEY_ID_ENV, "prod-key-2026-06")
     monkeypatch.setenv(OPERATIONS_CURSOR_SIGNING_KEY_ID_ENV, "prod-operations-key-2026-06")
     monkeypatch.delenv(OPERATIONS_CURSOR_SIGNING_KEY_ENV, raising=False)
 
     with pytest.raises(ValidationFailed, match="operations cursor signing key"):
-        create_local_core_dependencies(storage_root=tmp_path / "missing-operations-cursor-secret")
+        create_runtime_core_dependencies(
+            adapter_profile="s3-storage",
+            storage_root=tmp_path / "missing-operations-cursor-secret",
+        )
 
 
 def test_object_change_sequence_rejects_unknown_dialect() -> None:

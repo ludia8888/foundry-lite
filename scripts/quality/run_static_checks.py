@@ -143,6 +143,7 @@ PYTHON_CHECKS: tuple[tuple[str, list[str]], ...] = (
     ("dependency-graph", ["scripts/quality/check_dependency_graph.py"]),
     ("infra-import-boundary", ["scripts/quality/check_infra_import_boundary.py", "--max-application-imports", "0"]),
     ("service-dependencies", ["scripts/quality/check_service_dependencies.py"]),
+    ("core-service-wiring", ["scripts/quality/check_core_service_wiring.py"]),
     ("service-call-graph", ["scripts/quality/check_service_call_graph.py", "--max-depth", "7", "--max-fan-out", "10"]),
     ("application-module-size", ["scripts/quality/check_application_module_size.py", "--max-lines", "500"]),
     ("function-length", ["scripts/quality/check_function_length.py"]),
@@ -235,8 +236,8 @@ def _env_for_check(name: str, env: dict[str, str]) -> tuple[dict[str, str], Path
         return check_env, None
 
     # Several static gates collect/import tests. Importing the API composition
-    # root bootstraps a local FoundryLite runtime, so parallel static checks must
-    # not share the default .foundry-lite database.
+    # root used to bootstrap a local FoundryLite runtime, so parallel static
+    # checks keep isolated homes for any remaining import-time side effects.
     home = Path(tempfile.mkdtemp(prefix=f"foundry-lite-static-{_safe_check_name(name)}-"))
     check_env["FOUNDRY_LITE_HOME"] = str(home)
     return check_env, home

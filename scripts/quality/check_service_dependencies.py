@@ -13,14 +13,10 @@ DEPENDENCIES_PATH = ROOT / "libs" / "foundry_lite" / "application" / "dependenci
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "service_dependencies.json"
 
 ALLOWED_NON_DEPENDENCY_ATTRS = {
-    # Built-in protocol/dunder access:
     "__class__",
     "__dict__",
     "__doc__",
     "__module__",
-    # Helper methods defined within services themselves. Pattern
-    # `self._helper_method(...)` is allowed because pyright/mypy enforce
-    # method resolution against the service class.
 }
 NON_LEAF_SERVICE_CLASSES = {"CoreService", "CoreServices", "DatasetServices", "ObjectServices"}
 
@@ -49,15 +45,33 @@ class ServiceDependencyAnalysis:
 
 
 def _core_dependency_attributes() -> set[str]:
-    """Parse CoreDependencies dataclass and return the declared attribute names."""
+    """Parse CoreDependencies and return dataclass fields plus read-only property aliases."""
+
     tree = ast.parse(DEPENDENCIES_PATH.read_text(encoding="utf-8"))
     attributes: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == "CoreDependencies":
-            for item in node.body:
-                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
-                    attributes.add(item.target.id)
+        if not isinstance(node, ast.ClassDef) or node.name != "CoreDependencies":
+            continue
+        for item in node.body:
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                attributes.add(item.target.id)
+            if isinstance(item, ast.FunctionDef) and _has_property_decorator(item):
+                attributes.add(item.name)
     return attributes
+
+
+def _has_property_decorator(node: ast.FunctionDef) -> bool:
+    return any(_decorator_name(decorator) == "property" for decorator in node.decorator_list)
+
+
+def _decorator_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    if isinstance(node, ast.Call):
+        return _decorator_name(node.func)
+    return None
 
 
 def _is_self_attribute(node: ast.Attribute) -> bool:
@@ -69,31 +83,12 @@ def _is_leaf_service_class(node: ast.ClassDef) -> bool:
 
 
 def _class_for_node(tree: ast.AST, target: ast.AST) -> str | None:
-    """Return the enclosing class name for a node, or None."""
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             for child in ast.walk(node):
                 if child is target:
                     return node.name
     return None
-
-
-def _collect_service_method_names(tree: ast.AST) -> dict[str, set[str]]:
-    """Collect method names defined directly within each service class.
-
-    ``self.method_name(...)`` should be local to the current service. Calls to
-    another service must go through an explicit collaborator attribute such as
-    ``self.runtime_service._audit(...)``.
-    """
-    method_names: dict[str, set[str]] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            methods: set[str] = set()
-            for item in node.body:
-                if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
-                    methods.add(item.name)
-            method_names[node.name] = methods
-    return method_names
 
 
 def _base_class_name(node: ast.expr) -> str | None:
@@ -114,14 +109,20 @@ def _collect_class_bases(tree: ast.AST) -> dict[str, set[str]]:
     return bases
 
 
+def _collect_service_method_names(tree: ast.AST) -> dict[str, set[str]]:
+    method_names: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        methods: set[str] = set()
+        for item in node.body:
+            if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
+                methods.add(item.name)
+        method_names[node.name] = methods
+    return method_names
+
+
 def _collect_declared_class_attributes(tree: ast.AST) -> dict[str, set[str]]:
-    """Collect typed class attributes declared directly on each service class.
-
-    Constructor-injected service groups declare collaborators as dataclass
-    fields. Accessing those via ``self.<field>`` is an explicit dependency,
-    not hidden dynamic coupling.
-    """
-
     declared: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
@@ -145,17 +146,27 @@ def _required_string_names(node: ast.AST) -> set[str] | None:
     return None
 
 
+def _declaration_value(item: ast.stmt, declaration_name: str) -> ast.AST | None:
+    if isinstance(item, ast.Assign):
+        for target in item.targets:
+            if isinstance(target, ast.Name) and target.id == declaration_name:
+                return item.value
+    if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+        if item.target.id == declaration_name:
+            return item.value
+    return None
+
+
 def _collect_required_names(tree: ast.AST, declaration_name: str) -> dict[str, set[str]]:
     declarations: dict[str, set[str]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef) or not _is_leaf_service_class(node):
             continue
         for item in node.body:
-            if not isinstance(item, ast.Assign):
+            value = _declaration_value(item, declaration_name)
+            if value is None:
                 continue
-            if not any(isinstance(target, ast.Name) and target.id == declaration_name for target in item.targets):
-                continue
-            required_names = _required_string_names(item.value)
+            required_names = _required_string_names(value)
             if required_names is not None:
                 declarations[node.name] = required_names
     return declarations
@@ -180,16 +191,6 @@ def _service_collaborators_value(node: ast.AST) -> ast.expr | None:
 
 
 def _collect_collaborator_attributes(paths: list[Path]) -> set[str]:
-    """Read the SERVICE_COLLABORATORS registry in base.py as the source of truth.
-
-    Collaborator attributes used to be declared as 16 ``Any`` annotations on the
-    ``CoreService`` base class. They were retired so each concrete service only
-    annotates the collaborators it actually receives. The registry constant
-    ``SERVICE_COLLABORATORS`` in ``application/services/base.py`` now owns the
-    canonical name list; ``tests/unit/test_quality_service_wiring.py`` keeps it
-    in sync with this gate.
-    """
-
     collaborators: set[str] = set()
     for path in paths:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -235,9 +236,7 @@ def _check_attribute_accesses(
     dependency_accesses: dict[str, set[str]] = {}
     collaborator_accesses: dict[str, set[str]] = {}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Attribute):
-            continue
-        if not _is_self_attribute(node):
+        if not isinstance(node, ast.Attribute) or not _is_self_attribute(node):
             continue
         attr = node.attr
         class_name = _class_for_node(tree, node) or ""
@@ -403,9 +402,9 @@ def _analyze_service_file(
     *,
     dependency_attrs: set[str],
     collaborator_attrs: set[str],
-    global_dependency_accesses: dict[str, set[str]] | None = None,
-    global_collaborator_accesses: dict[str, set[str]] | None = None,
-    global_class_bases: dict[str, set[str]] | None = None,
+    global_dependency_accesses: dict[str, set[str]],
+    global_collaborator_accesses: dict[str, set[str]],
+    global_class_bases: dict[str, set[str]],
 ) -> ServiceDependencyAnalysis:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     findings, dependency_accesses, collaborator_accesses = _check_attribute_accesses(
@@ -417,36 +416,38 @@ def _analyze_service_file(
         declared_class_attrs=_collect_declared_class_attributes(tree),
     )
     local_bases = _collect_class_bases(tree)
-    if global_class_bases is not None and global_dependency_accesses is not None:
-        dependency_accesses = _merge_inherited_accesses(
-            dependency_accesses,
-            local_bases=local_bases,
-            global_bases=global_class_bases,
-            global_accesses=global_dependency_accesses,
-        )
-    if global_class_bases is not None and global_collaborator_accesses is not None:
-        collaborator_accesses = _merge_inherited_accesses(
-            collaborator_accesses,
-            local_bases=local_bases,
-            global_bases=global_class_bases,
-            global_accesses=global_collaborator_accesses,
-        )
+    dependency_accesses = _merge_inherited_accesses(
+        dependency_accesses,
+        local_bases=local_bases,
+        global_bases=global_class_bases,
+        global_accesses=global_dependency_accesses,
+    )
+    collaborator_accesses = _merge_inherited_accesses(
+        collaborator_accesses,
+        local_bases=local_bases,
+        global_bases=global_class_bases,
+        global_accesses=global_collaborator_accesses,
+    )
     dependency_declarations = _collect_required_dependencies(tree)
     collaborator_declarations = _collect_required_collaborators(tree)
-    declaration_findings = _check_dependency_declarations(
+    declaration_findings = _check_required_declarations(
         path,
         tree,
-        dependency_attrs=dependency_attrs,
+        allowed_attrs=dependency_attrs,
+        declaration_name="required_dependencies",
+        label="dependencies",
         declarations=dependency_declarations,
-        dependency_accesses=dependency_accesses,
+        accesses=dependency_accesses,
     )
     declaration_findings.extend(
-        _check_collaborator_declarations(
+        _check_required_declarations(
             path,
             tree,
-            collaborator_attrs=collaborator_attrs,
+            allowed_attrs=collaborator_attrs,
+            declaration_name="required_collaborators",
+            label="collaborators",
             declarations=collaborator_declarations,
-            collaborator_accesses=collaborator_accesses,
+            accesses=collaborator_accesses,
         )
     )
     return ServiceDependencyAnalysis(
@@ -485,26 +486,11 @@ def _global_access_context(
 
 
 def _finding_rows(findings: list[DependencyAccess]) -> list[dict[str, object]]:
-    return [
-        {
-            "path": finding.path,
-            "line": finding.line,
-            "class": finding.class_name,
-            "attribute": finding.attribute,
-        }
-        for finding in findings
-    ]
+    return [finding.__dict__ for finding in findings]
 
 
 def _declaration_finding_rows(findings: list[DependencyDeclarationFinding]) -> list[dict[str, str]]:
-    return [
-        {
-            "path": finding.path,
-            "class": finding.class_name,
-            "message": finding.message,
-        }
-        for finding in findings
-    ]
+    return [finding.__dict__ for finding in findings]
 
 
 def _write_report(
