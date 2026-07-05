@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 from typing import cast, overload
 
@@ -58,6 +59,7 @@ __all__ = ["CommitResult", "FoundryLite", "StagedFileStats", "_dataset_ref_parts
 __all__ += ["_json_ready", "_normalize_duckdb_type", "_required_row"]
 
 _LOCAL_FAKE_CREDENTIAL_REF = "local-fake-credential-ref"
+_LOGGER = logging.getLogger(__name__)
 
 
 @trace_public_methods
@@ -77,6 +79,7 @@ class FoundryLite:
         self.bootstrap()
 
     def _attach_dependencies(self, dependencies: CoreDependencies) -> None:
+        self.runtime_profile = dependencies.profile
         self.root = dependencies.root
         self.storage_root = dependencies.storage_root
         self.engine = dependencies.engine
@@ -185,7 +188,17 @@ class FoundryLite:
         try:
             self._ensure_demo_model_registry(now)
         except Exception:
-            return
+            if self.runtime_profile.is_protected:
+                raise
+            _LOGGER.warning(
+                "Demo model registry seed failed; continuing because runtime profile is local/demo/test.",
+                extra={
+                    "request_id": "bootstrap",
+                    "runtime_profile": self.runtime_profile.name,
+                    "tenant_id": DEFAULT_TENANT_ID,
+                },
+                exc_info=True,
+            )
 
     @overload
     def __call__(

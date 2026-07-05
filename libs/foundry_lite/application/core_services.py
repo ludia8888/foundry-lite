@@ -360,7 +360,6 @@ def _data_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "pipeline_governance_service": services.pipelines.governance,
         "pipeline_graph_validation_service": services.pipelines.graph_validation,
         "pipeline_run_service": services.pipelines.run,
-        "pipeline_service": services.pipelines.entrypoint,
     }
 
 

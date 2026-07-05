@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
+from foundry_lite.application.dependency_compat import (
+    BundleFactory,
+    apply_flat_dependency_overrides,
+    fill_missing_bundles_from_flat_overrides,
+)
 from foundry_lite.application.ports import (
     ActionRepository,
     AiEvalRepository,
@@ -62,18 +68,63 @@ from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddin
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
 from foundry_lite.security.policy import PolicyService
 
+_LOCAL_RUNTIME_PROFILES = frozenset({"local", "dev", "development", "demo", "test"})
+_PROTECTED_RUNTIME_PROFILES = frozenset({"production", "prod", "staging", "stage"})
+_KNOWN_RUNTIME_PROFILES = _LOCAL_RUNTIME_PROFILES | _PROTECTED_RUNTIME_PROFILES
+
 
 @dataclass(frozen=True)
-class CoreDependencies:
-    """Dependencies that compose the core facade without hard-coding local infrastructure."""
+class RuntimeProfile:
+    name: str = "local"
 
+    @classmethod
+    def from_value(cls, value: str | RuntimeProfile | None) -> RuntimeProfile:
+        if isinstance(value, RuntimeProfile):
+            return value
+        normalized = (value or "local").strip().lower().replace("_", "-")
+        if not normalized:
+            normalized = "local"
+        if normalized not in _KNOWN_RUNTIME_PROFILES:
+            raise ValueError(
+                f"unknown FOUNDRY_LITE_RUNTIME_PROFILE: {normalized}; choose local/demo/test/staging/production"
+            )
+        return cls(normalized)
+
+    @property
+    def is_local_like(self) -> bool:
+        return self.name in _LOCAL_RUNTIME_PROFILES
+
+    @property
+    def is_protected(self) -> bool:
+        return self.name in _PROTECTED_RUNTIME_PROFILES
+
+
+@dataclass(frozen=True)
+class PathDependencies:
     root: Path
     storage_root: Path
+
+
+@dataclass(frozen=True)
+class SecurityDependencies:
     engine: TransactionManager
     policy: PolicyService
+    metadata_repository: MetadataRepository
+    destructive_development_admin: DestructiveDevelopmentAdmin
+    osdk_application_repository: OsdkApplicationRepository
+    oauth_session_repository: OAuthSessionRepository
+    oauth_token_issuer: OAuthTokenIssuer
+    secret_provider: SecretProvider
+    secret_vault: SecretVault
+
+
+@dataclass(frozen=True)
+class ActionDependencies:
     action_repository: ActionRepository
-    ai_eval_repository: AiEvalRepository
-    ai_run_repository: AiRunRepository
+
+
+@dataclass(frozen=True)
+class DataDependencies:
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
     pipeline_repository: PipelineRepository
@@ -81,48 +132,368 @@ class CoreDependencies:
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository
     compute_adapter: ComputeAdapter
-    connector_adapter: ConnectorAdapter
-    connector_registry_repository: ConnectorRegistryRepository
-    source_registry_repository: SourceRegistryRepository
-    source_management_repository: SourceManagementRepository
-    metadata_repository: MetadataRepository
-    destructive_development_admin: DestructiveDevelopmentAdmin
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository
-    insight_review_repository: InsightReviewRepository
+    dataset_storage: DatasetStorageAdapter
+
+
+@dataclass(frozen=True)
+class ObjectDependencies:
     object_index_repository: ObjectIndexRepository
     object_index_row_hash_repository: ObjectIndexRowHashRepository
     object_read_repository: ObjectReadRepository
     object_set_repository: ObjectSetRepository
-    osdk_application_repository: OsdkApplicationRepository
-    oauth_session_repository: OAuthSessionRepository
-    oauth_token_issuer: OAuthTokenIssuer
+    search_adapter: SearchAdapter
+
+
+@dataclass(frozen=True)
+class RuntimeDependencies:
     runtime_repository: RuntimeRepository
     erasure_repository: ErasureRepository
-    media_repository: MediaRepository
-    media_derivative_repository: MediaDerivativeRepository
-    media_reference_binding_repository: MediaReferenceBindingRepository
-    media_access_cache_repository: MediaAccessCacheRepository
-    dataset_storage: DatasetStorageAdapter
-    media_storage: MediaStorageAdapter
-    media_processor: MediaProcessorAdapter
-    media_preview_renderer: MediaPreviewRendererAdapter
-    external_media_reader: ExternalMediaReader
-    content_index_adapter: ContentIndexAdapter
+    insight_review_repository: InsightReviewRepository
+    stream_adapter: StreamAdapter
+    workflow_adapter: WorkflowAdapter
+    backup_artifact_store: BackupArtifactStore
+
+
+@dataclass(frozen=True)
+class AipDependencies:
+    ai_eval_repository: AiEvalRepository
+    ai_run_repository: AiRunRepository
     embedding_model_adapter: EmbeddingModelAdapter
     completion_model_adapter: CompletionModelAdapter
     vision_embedding_model_adapter: VisionEmbeddingModelAdapter
     language_model_adapter: LanguageModelAdapter
     model_registry_repository: ModelRegistryRepository
     context_provider: ContextProvider
-    search_adapter: SearchAdapter
-    secret_provider: SecretProvider
-    secret_vault: SecretVault
-    source_database_adapter: SourceDatabaseAdapter
     prompt_artifact_store: object
     citation_source_verifier: CitationSourceVerifier
-    stream_adapter: StreamAdapter
     tool_executor: ToolExecutor
-    workflow_adapter: WorkflowAdapter
-    backup_artifact_store: BackupArtifactStore
+
+
+@dataclass(frozen=True)
+class MediaDependencies:
+    media_repository: MediaRepository
+    media_derivative_repository: MediaDerivativeRepository
+    media_reference_binding_repository: MediaReferenceBindingRepository
+    media_access_cache_repository: MediaAccessCacheRepository
+    media_storage: MediaStorageAdapter
+    media_processor: MediaProcessorAdapter
+    media_preview_renderer: MediaPreviewRendererAdapter
+    external_media_reader: ExternalMediaReader
+    content_index_adapter: ContentIndexAdapter
+
+
+@dataclass(frozen=True)
+class SourceDependencies:
+    connector_adapter: ConnectorAdapter
+    connector_registry_repository: ConnectorRegistryRepository
+    source_registry_repository: SourceRegistryRepository
+    source_management_repository: SourceManagementRepository
+    source_database_adapter: SourceDatabaseAdapter
+
+
+@dataclass(frozen=True, init=False)
+class CoreDependencies:
+    """Dependencies that compose the core facade without hard-coding local infrastructure."""
+
+    paths: PathDependencies
+    security: SecurityDependencies
+    action: ActionDependencies
+    data: DataDependencies
+    object_store: ObjectDependencies
+    runtime: RuntimeDependencies
+    aip: AipDependencies
+    media: MediaDependencies
+    source: SourceDependencies
+    profile: RuntimeProfile = RuntimeProfile()
+
+    def __init__(
+        self,
+        *,
+        paths: PathDependencies | None = None,
+        security: SecurityDependencies | None = None,
+        action: ActionDependencies | None = None,
+        data: DataDependencies | None = None,
+        object_store: ObjectDependencies | None = None,
+        runtime: RuntimeDependencies | None = None,
+        aip: AipDependencies | None = None,
+        media: MediaDependencies | None = None,
+        source: SourceDependencies | None = None,
+        profile: RuntimeProfile | str | None = None,
+        **flat_overrides: object,
+    ) -> None:
+        bundles: dict[str, object | None] = {
+            "paths": paths,
+            "security": security,
+            "action": action,
+            "data": data,
+            "object_store": object_store,
+            "runtime": runtime,
+            "aip": aip,
+            "media": media,
+            "source": source,
+        }
+        fill_missing_bundles_from_flat_overrides(bundles, flat_overrides, _CORE_DEPENDENCY_BUNDLE_TYPES)
+        apply_flat_dependency_overrides(bundles, flat_overrides, _CORE_DEPENDENCY_BUNDLE_TYPES)
+
+        object.__setattr__(self, "paths", cast(PathDependencies, bundles["paths"]))
+        object.__setattr__(self, "security", cast(SecurityDependencies, bundles["security"]))
+        object.__setattr__(self, "action", cast(ActionDependencies, bundles["action"]))
+        object.__setattr__(self, "data", cast(DataDependencies, bundles["data"]))
+        object.__setattr__(self, "object_store", cast(ObjectDependencies, bundles["object_store"]))
+        object.__setattr__(self, "runtime", cast(RuntimeDependencies, bundles["runtime"]))
+        object.__setattr__(self, "aip", cast(AipDependencies, bundles["aip"]))
+        object.__setattr__(self, "media", cast(MediaDependencies, bundles["media"]))
+        object.__setattr__(self, "source", cast(SourceDependencies, bundles["source"]))
+        object.__setattr__(self, "profile", RuntimeProfile.from_value(profile))
+
+    @property
+    def root(self) -> Path:
+        return self.paths.root
+
+    @property
+    def storage_root(self) -> Path:
+        return self.paths.storage_root
+
+    @property
+    def engine(self) -> TransactionManager:
+        return self.security.engine
+
+    @property
+    def policy(self) -> PolicyService:
+        return self.security.policy
+
+    @property
+    def metadata_repository(self) -> MetadataRepository:
+        return self.security.metadata_repository
+
+    @property
+    def destructive_development_admin(self) -> DestructiveDevelopmentAdmin:
+        return self.security.destructive_development_admin
+
+    @property
+    def osdk_application_repository(self) -> OsdkApplicationRepository:
+        return self.security.osdk_application_repository
+
+    @property
+    def oauth_session_repository(self) -> OAuthSessionRepository:
+        return self.security.oauth_session_repository
+
+    @property
+    def oauth_token_issuer(self) -> OAuthTokenIssuer:
+        return self.security.oauth_token_issuer
+
+    @property
+    def secret_provider(self) -> SecretProvider:
+        return self.security.secret_provider
+
+    @property
+    def secret_vault(self) -> SecretVault:
+        return self.security.secret_vault
+
+    @property
+    def action_repository(self) -> ActionRepository:
+        return self.action.action_repository
+
+    @property
+    def ontology_repository(self) -> OntologyRepository:
+        return self.data.ontology_repository
+
+    @property
+    def ontology_branch_repository(self) -> OntologyBranchRepository:
+        return self.data.ontology_branch_repository
+
+    @property
+    def pipeline_repository(self) -> PipelineRepository:
+        return self.data.pipeline_repository
+
+    @property
+    def transform_repository(self) -> TransformRepository:
+        return self.data.transform_repository
+
+    @property
+    def materialization_repository(self) -> MaterializationRepository:
+        return self.data.materialization_repository
+
+    @property
+    def dataset_quality_repository(self) -> DatasetQualityRepository:
+        return self.data.dataset_quality_repository
+
+    @property
+    def compute_adapter(self) -> ComputeAdapter:
+        return self.data.compute_adapter
+
+    @property
+    def dataset_repository(self) -> DatasetRepository:
+        return self.data.dataset_repository
+
+    @property
+    def dataset_transaction_repository(self) -> DatasetTransactionRepository:
+        return self.data.dataset_transaction_repository
+
+    @property
+    def dataset_version_repository(self) -> DatasetVersionRepository:
+        return self.data.dataset_version_repository
+
+    @property
+    def dataset_storage(self) -> DatasetStorageAdapter:
+        return self.data.dataset_storage
+
+    @property
+    def object_index_repository(self) -> ObjectIndexRepository:
+        return self.object_store.object_index_repository
+
+    @property
+    def object_index_row_hash_repository(self) -> ObjectIndexRowHashRepository:
+        return self.object_store.object_index_row_hash_repository
+
+    @property
+    def object_read_repository(self) -> ObjectReadRepository:
+        return self.object_store.object_read_repository
+
+    @property
+    def object_set_repository(self) -> ObjectSetRepository:
+        return self.object_store.object_set_repository
+
+    @property
+    def search_adapter(self) -> SearchAdapter:
+        return self.object_store.search_adapter
+
+    @property
+    def runtime_repository(self) -> RuntimeRepository:
+        return self.runtime.runtime_repository
+
+    @property
+    def erasure_repository(self) -> ErasureRepository:
+        return self.runtime.erasure_repository
+
+    @property
+    def insight_review_repository(self) -> InsightReviewRepository:
+        return self.runtime.insight_review_repository
+
+    @property
+    def stream_adapter(self) -> StreamAdapter:
+        return self.runtime.stream_adapter
+
+    @property
+    def workflow_adapter(self) -> WorkflowAdapter:
+        return self.runtime.workflow_adapter
+
+    @property
+    def backup_artifact_store(self) -> BackupArtifactStore:
+        return self.runtime.backup_artifact_store
+
+    @property
+    def ai_eval_repository(self) -> AiEvalRepository:
+        return self.aip.ai_eval_repository
+
+    @property
+    def ai_run_repository(self) -> AiRunRepository:
+        return self.aip.ai_run_repository
+
+    @property
+    def embedding_model_adapter(self) -> EmbeddingModelAdapter:
+        return self.aip.embedding_model_adapter
+
+    @property
+    def completion_model_adapter(self) -> CompletionModelAdapter:
+        return self.aip.completion_model_adapter
+
+    @property
+    def vision_embedding_model_adapter(self) -> VisionEmbeddingModelAdapter:
+        return self.aip.vision_embedding_model_adapter
+
+    @property
+    def language_model_adapter(self) -> LanguageModelAdapter:
+        return self.aip.language_model_adapter
+
+    @property
+    def model_registry_repository(self) -> ModelRegistryRepository:
+        return self.aip.model_registry_repository
+
+    @property
+    def context_provider(self) -> ContextProvider:
+        return self.aip.context_provider
+
+    @property
+    def prompt_artifact_store(self) -> object:
+        return self.aip.prompt_artifact_store
+
+    @property
+    def citation_source_verifier(self) -> CitationSourceVerifier:
+        return self.aip.citation_source_verifier
+
+    @property
+    def tool_executor(self) -> ToolExecutor:
+        return self.aip.tool_executor
+
+    @property
+    def media_repository(self) -> MediaRepository:
+        return self.media.media_repository
+
+    @property
+    def media_derivative_repository(self) -> MediaDerivativeRepository:
+        return self.media.media_derivative_repository
+
+    @property
+    def media_reference_binding_repository(self) -> MediaReferenceBindingRepository:
+        return self.media.media_reference_binding_repository
+
+    @property
+    def media_access_cache_repository(self) -> MediaAccessCacheRepository:
+        return self.media.media_access_cache_repository
+
+    @property
+    def media_storage(self) -> MediaStorageAdapter:
+        return self.media.media_storage
+
+    @property
+    def media_processor(self) -> MediaProcessorAdapter:
+        return self.media.media_processor
+
+    @property
+    def media_preview_renderer(self) -> MediaPreviewRendererAdapter:
+        return self.media.media_preview_renderer
+
+    @property
+    def external_media_reader(self) -> ExternalMediaReader:
+        return self.media.external_media_reader
+
+    @property
+    def content_index_adapter(self) -> ContentIndexAdapter:
+        return self.media.content_index_adapter
+
+    @property
+    def connector_adapter(self) -> ConnectorAdapter:
+        return self.source.connector_adapter
+
+    @property
+    def connector_registry_repository(self) -> ConnectorRegistryRepository:
+        return self.source.connector_registry_repository
+
+    @property
+    def source_registry_repository(self) -> SourceRegistryRepository:
+        return self.source.source_registry_repository
+
+    @property
+    def source_management_repository(self) -> SourceManagementRepository:
+        return self.source.source_management_repository
+
+    @property
+    def source_database_adapter(self) -> SourceDatabaseAdapter:
+        return self.source.source_database_adapter
+
+
+_CORE_DEPENDENCY_BUNDLE_TYPES: dict[str, BundleFactory] = {
+    "paths": cast(BundleFactory, PathDependencies),
+    "security": cast(BundleFactory, SecurityDependencies),
+    "action": cast(BundleFactory, ActionDependencies),
+    "data": cast(BundleFactory, DataDependencies),
+    "object_store": cast(BundleFactory, ObjectDependencies),
+    "runtime": cast(BundleFactory, RuntimeDependencies),
+    "aip": cast(BundleFactory, AipDependencies),
+    "media": cast(BundleFactory, MediaDependencies),
+    "source": cast(BundleFactory, SourceDependencies),
+}

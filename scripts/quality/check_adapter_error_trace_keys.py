@@ -112,7 +112,8 @@ def _run_probe(storage_root: Path) -> tuple[Mapping[str, object] | None, dict[st
     if storage_root.exists():
         shutil.rmtree(storage_root)
     dependencies = create_local_core_dependencies(storage_root=storage_root)
-    dependencies = dataclass_replace(dependencies, compute_adapter=ExplodingCsvComputeAdapter())
+    data_dependencies = dataclass_replace(dependencies.data, compute_adapter=ExplodingCsvComputeAdapter())
+    dependencies = dataclass_replace(dependencies, data=data_dependencies)
     foundry = FoundryLite(dependencies=dependencies)
     ctx = RequestContext(
         tenant_id="tenant-adapter-trace",
