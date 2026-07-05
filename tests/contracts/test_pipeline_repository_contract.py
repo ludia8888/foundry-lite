@@ -11,7 +11,7 @@ from foundry_lite.application.ports.pipeline_repository import (
     PipelineTestResultRecord,
     PipelineVersionRecord,
 )
-from foundry_lite.application.state_transitions import PIPELINE_RUN_SUCCEEDED
+from foundry_lite.application.state_transitions import PIPELINE_RUN_FAILED, PIPELINE_RUN_SUCCEEDED
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories.pipeline_repository import SqlAlchemyPipelineRepository
 from sqlalchemy import create_engine
@@ -47,6 +47,47 @@ def test_pipeline_repository_contract_branch_cas_and_tenant_scope(tmp_path: Path
             graph_fingerprint="fp-updated",
             updated_at="2026-07-05T00:00:02Z",
         )
+        rebased = repository.rebase_branch(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            branch_id="branch_a",
+            expected_fingerprint="fp-updated",
+            base_version_id="version-base",
+            base_graph=_graph("version-base"),
+            graph=_graph("rebased"),
+            graph_fingerprint="fp-rebased",
+            rebased_at="2026-07-05T00:00:03Z",
+            updated_at="2026-07-05T00:00:03Z",
+        )
+        stale_rebase = repository.rebase_branch(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            branch_id="branch_a",
+            expected_fingerprint="fp-updated",
+            base_version_id="version-stale",
+            base_graph=_graph("version-stale"),
+            graph=_graph("stale"),
+            graph_fingerprint="fp-stale",
+            rebased_at="2026-07-05T00:00:04Z",
+            updated_at="2026-07-05T00:00:04Z",
+        )
+        closed = repository.close_branch(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            branch_id="branch_a",
+            status="abandoned",
+            merged_version_id=None,
+            updated_at="2026-07-05T00:00:05Z",
+        )
+        stale_close = repository.close_branch(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            branch_id="branch_a",
+            status="merged",
+            merged_version_id="version-stale",
+            updated_at="2026-07-05T00:00:06Z",
+        )
+        open_branches = repository.list_branches(transaction=transaction, tenant_id="tenant-a", status="open", limit=10)
         hidden = repository.branch_by_id(transaction=transaction, tenant_id="tenant-other", branch_id="branch_a")
 
     assert created is not None
@@ -55,6 +96,13 @@ def test_pipeline_repository_contract_branch_cas_and_tenant_scope(tmp_path: Path
     assert stale_update is None
     assert updated is not None
     assert updated["graph_fingerprint"] == "fp-updated"
+    assert rebased is not None
+    assert rebased["base_version_id"] == "version-base"
+    assert stale_rebase is None
+    assert closed is not None
+    assert closed["status"] == "abandoned"
+    assert stale_close is None
+    assert open_branches == []
     assert hidden is None
 
 
@@ -66,6 +114,13 @@ def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path
     with engine.begin() as transaction:
         repository.insert_branch_if_name_free(transaction=transaction, record=_branch_record())
         proposal = repository.insert_proposal(transaction=transaction, record=_proposal_record())
+        branch_with_proposal = repository.set_branch_proposal(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            branch_id="branch_a",
+            proposal_id=proposal["id"],
+            updated_at="2026-07-05T00:00:45Z",
+        )
         assigned = repository.update_proposal_assignment(
             transaction=transaction,
             tenant_id="tenant-a",
@@ -83,7 +138,30 @@ def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path
             decided_at="2026-07-05T00:02:00Z",
             updated_at="2026-07-05T00:02:00Z",
         )
+        stale_withdraw = repository.withdraw_proposal(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            proposal_id=proposal["id"],
+            updated_at="2026-07-05T00:02:30Z",
+        )
+        approved_proposals = repository.list_proposals(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            status="approved",
+            limit=10,
+        )
         version = repository.insert_version(transaction=transaction, record=_version_record())
+        latest_version = repository.latest_version(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            pipeline_id="pipe_orders",
+        )
+        versions = repository.list_versions(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            pipeline_id="pipe_orders",
+            limit=10,
+        )
         executed = repository.mark_proposal_executed(
             transaction=transaction,
             tenant_id="tenant-a",
@@ -108,27 +186,63 @@ def test_pipeline_repository_contract_governance_run_schedule_and_tests(tmp_path
             error=None,
             completed_at="2026-07-05T00:05:00Z",
         )
+        stale_terminal_run = repository.update_run_terminal(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            run_id=run["id"],
+            transition=PIPELINE_RUN_FAILED,
+            output_dataset_ref=None,
+            output_version_id=None,
+            timeline=[],
+            error={"message": "too late"},
+            completed_at="2026-07-05T00:05:30Z",
+        )
         schedule = repository.upsert_schedule(transaction=transaction, record=_schedule_record(enabled=True))
+        fetched_schedule = repository.schedule_by_pipeline(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            pipeline_id="pipe_orders",
+        )
+        due_before_disable = repository.list_due_schedules(transaction=transaction, tenant_id="tenant-a", limit=10)
         disabled_schedule = repository.upsert_schedule(transaction=transaction, record=_schedule_record(enabled=False))
         test_result = repository.insert_test_result(transaction=transaction, record=_test_result_record())
         due_after_disable = repository.list_due_schedules(transaction=transaction, tenant_id="tenant-a", limit=10)
         deleted = repository.delete_schedule(transaction=transaction, tenant_id="tenant-a", pipeline_id="pipe_orders")
+        deleted_again = repository.delete_schedule(
+            transaction=transaction,
+            tenant_id="tenant-a",
+            pipeline_id="pipe_orders",
+        )
+        hidden_run = repository.run_by_id(transaction=transaction, tenant_id="tenant-other", run_id=run["id"])
 
+    assert branch_with_proposal is not None
+    assert branch_with_proposal["proposal_id"] == proposal["id"]
     assert assigned is not None
     assert assigned["assigned_to"] == "reviewer-a"
     assert approved is not None
     assert approved["status"] == "approved"
+    assert stale_withdraw is None
+    assert approved_proposals[0]["id"] == proposal["id"]
+    assert latest_version is not None
+    assert latest_version["id"] == version["id"]
+    assert versions[0]["id"] == version["id"]
     assert executed is not None
     assert executed["status"] == "executed"
     assert deployed is not None
     assert deployed["deployed_at"] == "2026-07-05T00:04:00Z"
     assert terminal_run is not None
     assert terminal_run["status"] == "succeeded"
+    assert stale_terminal_run is None
     assert schedule["enabled"] is True
+    assert fetched_schedule is not None
+    assert fetched_schedule["id"] == schedule["id"]
+    assert due_before_disable[0]["id"] == schedule["id"]
     assert disabled_schedule["enabled"] is False
     assert due_after_disable == []
     assert deleted is True
+    assert deleted_again is False
     assert test_result["result"] == {"valid": True}
+    assert hidden_run is None
 
 
 def _branch_record(branch_id: str = "branch_a", *, tenant_id: str = "tenant-a") -> PipelineBranchRecord:
