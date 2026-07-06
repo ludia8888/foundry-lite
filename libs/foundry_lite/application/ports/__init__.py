@@ -303,6 +303,23 @@ from foundry_lite.application.ports.pipeline_repository import (
     PipelineVersionRecord,
     PipelineVersionRow,
 )
+from foundry_lite.application.ports.resource_catalog_repository import (
+    PrincipalType,
+    ProjectFolderRecord,
+    ProjectFolderRow,
+    ProjectGrantRecord,
+    ProjectGrantRow,
+    ProjectRecord,
+    ProjectRole,
+    ProjectRow,
+    ResourceCandidate,
+    ResourceCatalogRepository,
+    ResourceIdempotencyRow,
+    ResourceJson,
+    ResourceRecord,
+    ResourceRow,
+    ResourceStatus,
+)
 from foundry_lite.application.ports.runtime_repository import (
     AuditEventRecord,
     BackupRestoreArtifact,

@@ -24,6 +24,7 @@ from foundry_lite.application.facades import (
     OntologyRegistry,
     OperationsConsole,
     PipelineWorkspace,
+    ResourceWorkspace,
     SourceWorkspace,
     SupplyChainDemo,
     TransformPipeline,
@@ -87,6 +88,7 @@ class FoundryLite:
         self.action_repository = dependencies.action_repository
         self.ontology_repository = dependencies.ontology_repository
         self.pipeline_repository = dependencies.pipeline_repository
+        self.resource_catalog_repository = dependencies.resource_catalog_repository
         self.transform_repository = dependencies.transform_repository
         self.materialization_repository = dependencies.materialization_repository
         self.dataset_quality_repository = dependencies.dataset_quality_repository
@@ -121,6 +123,7 @@ class FoundryLite:
         self.datasets = DatasetWorkspace(services.dataset)
         self.transforms = TransformPipeline(services.transform.entrypoint)
         self.pipelines = PipelineWorkspace(services.pipelines.entrypoint)
+        self.resources = ResourceWorkspace(services.resources)
         self.ontology = _ontology_registry(services)
         self.objects = ObjectStore(services.object_store, services.ontology_search)
         self.actions = ActionGateway(services.action.entrypoint)
@@ -130,11 +133,7 @@ class FoundryLite:
         self.insights = InsightReviewWorkspace(services.insight_review)
         self.media = MediaWorkspace(services.media)
         self.connectors = ConnectorWorkspace(services.connector_onboarding)
-        self.sources = SourceWorkspace(
-            services.source_onboarding,
-            services.source_management,
-            services.source_scheduler,
-        )
+        self.sources = _source_workspace(services)
         self.erasure = ErasureGateway(services.erasure)
         self.developer_console = DeveloperConsole(services.osdk_applications.entrypoint)
 
@@ -259,6 +258,14 @@ def _ontology_registry(services: CoreServices) -> OntologyRegistry:
         services.ontology.insights,
         services.ontology.proposals,
         services.ontology.branches,
+    )
+
+
+def _source_workspace(services: CoreServices) -> SourceWorkspace:
+    return SourceWorkspace(
+        services.source_onboarding,
+        services.source_management,
+        services.source_scheduler,
     )
 
 

@@ -16,6 +16,7 @@ from foundry_lite.application.ports import (
     OntologyValidationResult,
     OntologyVersionRecord,
     PropertyTypeRecord,
+    ResourceCatalogRepository,
     TransactionContext,
 )
 from foundry_lite.application.primitives import _new_id, _now
@@ -42,6 +43,7 @@ from foundry_lite.application.services.ontology_protocols import (
     OntologyDatasetVersions,
     OntologyRuntimeBoundary,
     require_ontology_write_open,
+    upsert_ontology_resource,
 )
 from foundry_lite.application.services.ontology_validation import (
     ontology_validation_result,
@@ -71,7 +73,7 @@ from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 class OntologyActivationService(CoreService):
     """Validate, import, and activate ontology YAML definitions."""
 
-    required_dependencies = ("engine", "ontology_repository")
+    required_dependencies = ("engine", "ontology_repository", "resource_catalog_repository")
     required_collaborators = (
         "dataset_registry_service",
         "dataset_version_service",
@@ -82,6 +84,7 @@ class OntologyActivationService(CoreService):
     dataset_version_service: OntologyDatasetVersions
     runtime_service: OntologyRuntimeBoundary
     visual_builder_service: VisualBuilderService
+    resource_catalog_repository: ResourceCatalogRepository
 
     def apply_ontology(self, yaml_path: str | Path, *, ctx: RequestContext | None = None) -> OntologyApplyResult:
         """Apply ontology YAML from a file through the one text-apply path."""
@@ -138,6 +141,7 @@ class OntologyActivationService(CoreService):
         self._import_action_types(conn, ctx, ontology_version_id, definition, object_map)
         self._validate_ontology(conn, ctx, ontology_version_id)
         self._activate_ontology_version(conn, ctx, ontology_version_id)
+        self._upsert_ontology_resource(conn, ctx, ontology_version_id, version_number)
         self._record_ontology_activation(conn, ctx, ontology_version_id, version_number, migration_plan)
         return {
             "ontology_version_id": ontology_version_id,
@@ -470,4 +474,21 @@ class OntologyActivationService(CoreService):
             resource_id=ontology_version_id,
             action="activate",
             after_ref=audit_after_ref,
+        )
+
+    def _upsert_ontology_resource(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        ontology_version_id: str,
+        version_number: int,
+    ) -> None:
+        upsert_ontology_resource(
+            conn=conn,
+            ctx=ctx,
+            repository=self.resource_catalog_repository,
+            runtime_service=self.runtime_service,
+            ontology_version_id=ontology_version_id,
+            version_number=version_number,
+            now=_now(),
         )

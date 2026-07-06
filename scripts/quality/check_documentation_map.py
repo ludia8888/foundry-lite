@@ -26,6 +26,7 @@ DEFAULT_AGENTS = ROOT / "AGENTS.md"
 DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "documentation_map.json"
 
 IGNORED_DOC_PARTS = {
+    ".claude",
     ".git",
     ".mypy_cache",
     ".pytest_cache",

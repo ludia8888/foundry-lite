@@ -114,3 +114,16 @@ class SourceRuntimeBoundary(Protocol):
         after_ref: Mapping[str, object] | None = None,
         correlation_id: str | None = None,
     ) -> None: ...
+
+    def _outbox(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        event_type: str,
+        aggregate_type: str,
+        aggregate_id: str,
+        payload: Mapping[str, object],
+        *,
+        idempotency_key: str,
+        correlation_id: str,
+    ) -> str | None: ...

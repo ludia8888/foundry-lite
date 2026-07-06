@@ -15,6 +15,7 @@ from foundry_lite.application.ports import (
     TabularRow,
     TransactionContext,
 )
+from foundry_lite.application.ports.resource_catalog_repository import ResourceCatalogRepository
 from foundry_lite.application.primitives import (
     _dataset_ref_parts,
     _new_id,
@@ -27,6 +28,7 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetVersionLookup,
 )
 from foundry_lite.application.services.dataset.storage_consistency import committed_version_preview_file_paths
+from foundry_lite.application.services.resource_catalog_auto_registration import upsert_work_product_resource
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
     ConflictDetected,
@@ -60,6 +62,7 @@ class DatasetRegistryService(CoreService):
         "dataset_repository",
         "dataset_version_repository",
         "dataset_storage",
+        "resource_catalog_repository",
     )
     required_collaborators = (
         "dataset_transaction_service",
@@ -69,6 +72,7 @@ class DatasetRegistryService(CoreService):
     dataset_transaction_service: DatasetTransactionManager
     dataset_version_service: DatasetVersionLookup
     runtime_service: DatasetRuntimeBoundary
+    resource_catalog_repository: ResourceCatalogRepository
 
     def create_dataset(
         self,
@@ -106,6 +110,7 @@ class DatasetRegistryService(CoreService):
         )
         with self.engine.begin() as conn:
             self._insert_dataset_record(conn, ctx, dataset_ref, fields)
+            self._upsert_dataset_resource(conn, ctx, dataset_ref, fields)
             self._audit_dataset_created(conn, ctx, fields.dataset_id, dataset_ref)
         return self.get_dataset(dataset_ref, ctx=ctx)
 
@@ -189,6 +194,29 @@ class DatasetRegistryService(CoreService):
                 "dataset already exists in this tenant",
                 details={"dataset_ref": dataset_ref},
             ) from exc
+
+    def _upsert_dataset_resource(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        dataset_ref: str,
+        fields: _DatasetCreateFields,
+    ) -> None:
+        upsert_work_product_resource(
+            conn=conn,
+            ctx=ctx,
+            repository=self.resource_catalog_repository,
+            runtime_service=self.runtime_service,
+            resource_type="dataset",
+            display_name=dataset_ref,
+            source_surface="dataset",
+            source_ref=dataset_ref,
+            operations_path=f"/datasets/{fields.namespace}/{fields.name}",
+            metadata={"datasetId": fields.dataset_id, "classification": fields.classification or "public"},
+            now=fields.created_at,
+            idempotency_key=f"dataset-resource:{dataset_ref}",
+            evidence={"datasetRef": dataset_ref},
+        )
 
     def ensure_dataset(
         self,

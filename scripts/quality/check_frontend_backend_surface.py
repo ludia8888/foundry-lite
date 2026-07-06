@@ -31,6 +31,7 @@ DEFAULT_OUTPUT = ROOT / "artifacts" / "quality" / "frontend_backend_surface.json
 DEFAULT_SUMMARY = ROOT / "artifacts" / "quality" / "frontend_backend_surface.md"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 IGNORED_DOC_PARTS = {
+    ".claude",
     ".git",
     ".mypy_cache",
     ".pytest_cache",
@@ -162,6 +163,14 @@ REQUIRED_RECIPE_FRAGMENTS = {
         "useFoundryLiteInsightReviewDecision",
         "useFoundryLiteActionProposalSubmit",
     ),
+    "project-resource-browser-screen": (
+        "## Project And Resource Browser",
+        "createResourceBrowserRecipe",
+        "client.resources.projects.create",
+        "client.resources.folders.create",
+        "client.resources.items.move",
+        "client.resources.favorites.*",
+    ),
     "pipeline-builder-screen": (
         "### SQL pipeline builder",
         "useFoundryLiteSqlTransformSubmit",
@@ -243,6 +252,7 @@ REQUIRED_SCREEN_RECIPE_FRAGMENTS = {
         "loadFoundryLiteScreenRecipes",
         "operatorWorkspace",
         "datasetExplorer",
+        "resourceBrowser",
         "objectActionWorkspace",
         "adminOperations",
     ),
@@ -262,6 +272,13 @@ REQUIRED_SCREEN_RECIPE_FRAGMENTS = {
         "createDatasetExplorerRecipe",
         "client.datasets.inspect",
         "client.operations.lineage.get",
+    ),
+    "resource-browser-recipe": (
+        "createResourceBrowserRecipe",
+        "buildResourceBrowserView",
+        "client.resources.projects.list",
+        "client.resources.folders.list",
+        "client.resources.items.search",
     ),
     "object-action-workspace-recipe": (
         "createObjectActionWorkspaceRecipe",

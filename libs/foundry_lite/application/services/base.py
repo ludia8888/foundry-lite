@@ -25,6 +25,7 @@ from foundry_lite.application.ports import (
     ObjectReadRepository,
     ObjectSetRepository,
     OntologyRepository,
+    ResourceCatalogRepository,
     RuntimeRepository,
     StreamAdapter,
     TransactionManager,
@@ -224,6 +225,7 @@ class CoreService:
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
     pipeline_repository: PipelineRepository
+    resource_catalog_repository: ResourceCatalogRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository

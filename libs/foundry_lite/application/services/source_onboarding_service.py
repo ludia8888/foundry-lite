@@ -13,10 +13,12 @@ from foundry_lite.application.ports import (
     SourceConnectionRow,
     SourceRegistryRepository,
 )
+from foundry_lite.application.ports.resource_catalog_repository import ResourceCatalogRepository
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.ingest import DatasetIngestService
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadService
+from foundry_lite.application.services.resource_catalog_auto_registration import upsert_source_resource
 from foundry_lite.application.services.source_onboarding_config import (
     SourceUpload,
     StagedMediaSourceUpload,
@@ -72,6 +74,7 @@ class SourceOnboardingService(CoreService):
         "source_registry_repository",
         "dataset_transaction_repository",
         "secret_provider",
+        "resource_catalog_repository",
     )
     required_collaborators = (
         "dataset_ingest_service",
@@ -83,6 +86,7 @@ class SourceOnboardingService(CoreService):
     connector_registry_repository: ConnectorRegistryRepository
     source_registry_repository: SourceRegistryRepository
     dataset_transaction_repository: DatasetTransactionRepository
+    resource_catalog_repository: ResourceCatalogRepository
     dataset_ingest_service: DatasetIngestService
     dataset_registry_service: DatasetRegistryBoundary
     media_transaction_service: MediaTransactionService
@@ -416,6 +420,7 @@ class SourceOnboardingService(CoreService):
             except SourceConnectionAlreadyExistsError as exc:
                 raise ConflictDetected("source already exists", details={"source_name": record.source_name}) from exc
             row = source_row_in_tx(self.source_registry_repository, conn, ctx, record.source_name)
+            upsert_source_resource(conn, ctx, self.resource_catalog_repository, self.runtime_service, row)
             self.runtime_service._audit(
                 conn,
                 ctx,
@@ -480,12 +485,7 @@ class SourceOnboardingService(CoreService):
         content_hash: str,
         byte_size: int,
     ) -> tuple[SourceConnectionRow, bool]:
-        summary = {
-            "mediaSetId": media_set_id,
-            "logicalPath": logical_path,
-            "contentHash": content_hash,
-            "byteSize": byte_size,
-        }
+        summary = dict(mediaSetId=media_set_id, logicalPath=logical_path, contentHash=content_hash, byteSize=byte_size)
         record = source_record(
             ctx,
             source_name=source_name,

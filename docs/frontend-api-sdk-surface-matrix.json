@@ -1688,6 +1688,272 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "resources.projects.list",
+      "route": "GET /api/projects",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.projects.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Project list returns only tenant-scoped projects visible through project grants, including discoverer-visible project discovery state.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.projects.create",
+      "route": "POST /api/projects",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.projects.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Project creation requires Idempotency-Key, creates a stable project RID, assigns the creator owner grant, and records audit/outbox evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.projects.get",
+      "route": "GET /api/projects/{project_id}",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.projects.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Project detail is tenant-scoped and grant-gated so a project acts as a permission boundary rather than just a folder.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.projects.listGrants",
+      "route": "GET /api/projects/{project_id}/grants",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.projects.listGrants",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Project grant list exposes the owner/editor/viewer/discoverer permission boundary for the selected project.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.projects.upsertGrant",
+      "route": "PUT /api/projects/{project_id}/grants/{principal_type}/{principal_id}",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.projects.upsertGrant",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Project grant upsert is owner/admin-only, idempotent, and stores user/role/group-compatible grant rows while local v1 evaluates user and role grants. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.folders.list",
+      "route": "GET /api/projects/{project_id}/folders",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.folders.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Folder list reads a project-scoped tree without hidden backfill writes and inherits the selected project's grants.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.folders.create",
+      "route": "POST /api/projects/{project_id}/folders",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.folders.create",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Folder creation requires editor/owner project permission, Idempotency-Key, a stable folder RID, and audit/outbox evidence.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.folders.move",
+      "route": "POST /api/projects/{project_id}/folders/{folder_id}/move",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.folders.move",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Folder move changes only the organizing tree, keeps the folder inside the same project permission boundary, and records mutation evidence. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.folders.trash",
+      "route": "POST /api/projects/{project_id}/folders/{folder_id}/trash",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.folders.trash",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Folder trash is an idempotent project-scoped mutation that hides the folder from normal lists without deleting its RID identity. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.folders.restore",
+      "route": "POST /api/projects/{project_id}/folders/{folder_id}/restore",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.folders.restore",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Folder restore reactivates a trashed folder under inherited project grants while preserving its stable folder RID. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.items.search",
+      "route": "GET /api/resources",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.items.search",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Resource search returns RID-backed datasets, sources, ontology resources, and registered work products visible through inherited project grants without query-time backfill.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.items.get",
+      "route": "GET /api/resources/{rid}",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.items.get",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Resource detail resolves a stable RID and verifies the caller can view the containing project before returning metadata.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.items.register",
+      "route": "POST /api/resources/register",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.items.register",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Resource registration requires project editor permission, stores a stable RID plus sourceSurface/sourceRef link, and records audit/outbox evidence. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.items.move",
+      "route": "POST /api/resources/{rid}/move",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.items.move",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Resource move requires edit rights on both the current and destination project boundaries, then updates project/folder placement for the same RID. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.items.trash",
+      "route": "POST /api/resources/{rid}/trash",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.items.trash",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Resource trash is an idempotent soft-delete state change that preserves RID identity and hides the item from normal resource lists. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.items.restore",
+      "route": "POST /api/resources/{rid}/restore",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.items.restore",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Resource restore reactivates a trashed RID-backed item under the same inherited project permission boundary. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.favorites.set",
+      "route": "PUT /api/resources/{rid}/favorite",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.favorites.set",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Favorite set stores per-user resource favorite state after the project view permission check and returns the same resource item with isFavorite=true. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.favorites.delete",
+      "route": "DELETE /api/resources/{rid}/favorite",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.favorites.delete",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Favorite delete removes only the caller's favorite row and leaves the RID-backed resource unchanged. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.trash.list",
+      "route": "GET /api/resources",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.trash.list",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Trash list is the SDK view of resource search with includeTrashed enabled, preserving grant checks while showing recoverable items.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.trash.restore",
+      "route": "POST /api/resources/{rid}/restore",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.trash.restore",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Trash restore is the trash-screen alias for the same RID restore mutation and requires edit permission on the containing project. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "resources.admin.reconcile",
+      "route": "POST /api/resources/reconcile",
+      "productArea": "resource-browser",
+      "sdkSurface": "resources.admin.reconcile",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Admin reconcile is the explicit backfill/repair path for existing datasets, sources, ontology resources, and registered work products; list/search never performs hidden writes. Requires Idempotency-Key.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "auth.osdkOAuth.authorize",
       "route": "GET /api/auth/osdk/oauth/authorize",
       "productArea": "auth",

@@ -77,6 +77,7 @@ GENERATED_OR_RUNTIME_ROOTS = {
     "node_modules",
 }
 DOC_SCAN_IGNORED_ROOTS = {
+    ".claude",
     ".git",
     ".mypy_cache",
     ".pytest_cache",

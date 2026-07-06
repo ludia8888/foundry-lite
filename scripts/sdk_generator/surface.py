@@ -52,6 +52,7 @@ class SdkClientSurface:
     datasets: tuple[str, ...]
     sources: tuple[OperationClientSurface, ...]
     connectors: tuple[OperationClientSurface, ...]
+    resources: tuple[OperationClientSurface, ...]
     auth: tuple[OperationClientSurface, ...]
     developer_console: tuple[OperationClientSurface, ...]
     ontology: tuple[str, ...]
@@ -98,6 +99,14 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
         connectors=(
             OperationClientSurface("connections", ("create", "list", "get", "update")),
             OperationClientSurface("resources", ("upsert", "test", "startSync")),
+        ),
+        resources=(
+            OperationClientSurface("projects", ("list", "create", "get", "listGrants", "upsertGrant")),
+            OperationClientSurface("folders", ("list", "create", "move", "trash", "restore")),
+            OperationClientSurface("items", ("search", "get", "register", "move", "trash", "restore")),
+            OperationClientSurface("favorites", ("set", "delete")),
+            OperationClientSurface("trash", ("list", "restore")),
+            OperationClientSurface("admin", ("reconcile",)),
         ),
         auth=(OperationClientSurface("osdkOAuth", ("authorize", "token", "refresh", "revoke")),),
         developer_console=(
@@ -279,6 +288,7 @@ def render_client_surface_json(surface: SdkClientSurface) -> str:
         "actions": _methods_payload(surface.actions),
         "auth": _methods_payload(surface.auth),
         "connectors": _methods_payload(surface.connectors),
+        "resources": _methods_payload(surface.resources),
         "sources": _operation_surface_payload(surface.sources),
         "datasets": {
             "_self": list(surface.datasets),

@@ -339,6 +339,14 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
         "connections": ["create", "list", "get", "update"],
         "resources": ["upsert", "test", "startSync"],
     }
+    assert ts_surface["resources"] == {
+        "projects": ["list", "create", "get", "listGrants", "upsertGrant"],
+        "folders": ["list", "create", "move", "trash", "restore"],
+        "items": ["search", "get", "register", "move", "trash", "restore"],
+        "favorites": ["set", "delete"],
+        "trash": ["list", "restore"],
+        "admin": ["reconcile"],
+    }
     assert ts_surface["ontology"] == {
         "_self": ["catalog", "validate", "apply", "rollback"],
         "branches": ["create", "list", "get", "update", "diff", "rebase", "propose", "abandon"],
@@ -493,6 +501,14 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "abandon",
     ]
     assert surface["ontology"]["resources"] == ["usage", "dependents"]
+    assert surface["resources"] == {
+        "projects": ["list", "create", "get", "listGrants", "upsertGrant"],
+        "folders": ["list", "create", "move", "trash", "restore"],
+        "items": ["search", "get", "register", "move", "trash", "restore"],
+        "favorites": ["set", "delete"],
+        "trash": ["list", "restore"],
+        "admin": ["reconcile"],
+    }
     assert surface["objects"]["generic"] == ["get", "query", "links", "subscribe", "aggregate"]
     assert surface["objects"]["Order"] == ["get", "query", "aggregate"]
     assert surface["actions"] == {"ApproveOrder": ["apply", "validate", "applyBatch"]}
@@ -522,6 +538,13 @@ def test_sdk_generator_emits_pending_route_client_methods() -> None:
         "rebase(branchId: string, payload: OntologyBranchRebaseRequest): Promise<OntologyBranchPayload>;",
         "propose(branchId: string, payload: OntologyBranchProposeRequest, options: { idempotencyKey: string })",
         "abandon(branchId: string): Promise<OntologyBranchPayload>;",
+        "export type ResourceProject = {",
+        "export type ResourceItem = {",
+        "list(): Promise<ResourceProject[]>;",
+        "create(payload: ProjectCreateRequest, options: { idempotencyKey: string }): Promise<ResourceProject>;",
+        "search(options?: ResourceListOptions): Promise<ResourceListResult>;",
+        "register(payload: ResourceRegisterRequest, options: { idempotencyKey: string }): Promise<ResourceItem>;",
+        "reconcile(payload: ResourceReconcileRequest | undefined, options: { idempotencyKey: string })",
         "export type OntologyBranchPayload = {",
         "export type OntologyBranchDiffResult = {",
         'requireIdempotencyKey(options?.idempotencyKey, "ontology.branches.create")',
@@ -1086,6 +1109,11 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
     assert "export function adminInternalOperationsWorkbench" in screen_recipes
     assert "loadInternalOperationsWorkbench" in screen_recipes
     assert "operatorWorkspace: createOperatorWorkspaceRecipe(client, catalog ?? null)" in screen_recipes
+    assert "resourceBrowser: createResourceBrowserRecipe(client)" in screen_recipes
+    assert "export function createResourceBrowserRecipe" in screen_recipes
+    assert "export function buildResourceBrowserView" in screen_recipes
+    assert "client.resources.projects.list()" in screen_recipes
+    assert "client.resources.items.search" in screen_recipes
     assert "const loadHome = async (" in screen_recipes
     assert "loadShell: async (" in screen_recipes
     assert "operatorWorkspaceShell(await loadHome(options), options.selectedAreaId)" in screen_recipes

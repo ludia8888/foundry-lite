@@ -64,6 +64,7 @@ SDK helper, 파일을 봐야 하는지 남긴다.
 | Platform Ops | observability detect, backup/restore, reconciliation, workflows, Iceberg maintenance `planReadOnly`/`plan`/`run` |
 | Connectors | `client.connectors.connections.create/list/get/update(...)`, `client.connectors.resources.upsert/test/startSync(...)` |
 | Sources | `client.sources.list/get(...)`, `client.sources.templates.list(...)`, `client.sources.credentials.create/list/get(...)`, `client.sources.agents.register/list/heartbeat(...)`, `client.sources.networkPolicies.create/list(...)`, `client.sources.exploration.run(...)`, `client.sources.managedSyncs.create/list/get/startRun/listRuns/getRun(...)`, `client.sources.scheduler.previewDue/tick(...)`, `client.sources.csv.upload(...)`, `client.sources.batchFiles.upload(...)`, `client.sources.webhookListeners.create/get(...)`, `client.sources.cdc.debezium.create/startSync(...)`, `client.sources.media.uploadAndCommit(...)`, `client.sources.rest.createConnection/upsertResource/test/startSync(...)` |
+| Resources | `client.resources.projects.list/create/get/listGrants/upsertGrant(...)`, `client.resources.folders.list/create/move/trash/restore(...)`, `client.resources.items.search/get/register/move/trash/restore(...)`, `client.resources.favorites.set/delete(...)`, `client.resources.trash.list/restore(...)`, `client.resources.admin.reconcile(...)` |
 | Insights | `client.insights.reviews.list/create/get/assign/decide(...)` |
 | AIP | `client.aip.builder.validate(...)`, `client.aip.builder.run(...)`, `client.aip.agent.run(...)` |
 | Safety Helpers | `createFoundryLiteClient(...)`, `createSessionTokenProvider(...)`, `createRequestId(...)`, `requestContextHeaders(...)`, `normalizeFoundryLiteError(...)`, `isRetryableFoundryLiteError(...)`, `retryWithBackoff(...)`, `pollFoundryLiteOperation(...)`, `streamFoundryLiteOperationEvents(...)`, `collectCursorPages(...)`, `createInFlightActionLock()`, `createFoundryLiteOntologyIndex(...)`, `adminOperationsBoard(...)`, `getObjectType(...)`, `getActionType(...)`, `actionLockKey(...)`, `idempotencyKey(...)`, `expectedObjectVersion(...)`, `classifyFoundryLiteError(...)` |
@@ -97,6 +98,7 @@ import {
   createPipelineBuilderRecipe,
   createRecordDlqOperationsRecipe,
   createRecoveryOperationsRecipe,
+  createResourceBrowserRecipe,
   createSourceOnboardingRecipe,
   createSourceSyncRecipe,
   createSourceUploadRecipe,
@@ -107,6 +109,7 @@ import {
 const datasetExplorer = createDatasetExplorerRecipe(client);
 const objectWorkspace = createObjectActionWorkspaceRecipe(client, await client.ontology.catalog());
 const operatorWorkspace = createOperatorWorkspaceRecipe(client);
+const resourceBrowser = createResourceBrowserRecipe(client);
 const mediaWorkspace = createMediaWorkspaceRecipe(client);
 const aipWorkspace = createAipWorkspaceRecipe(client);
 const connectorOnboarding = createConnectorOnboardingRecipe(client);
@@ -131,6 +134,37 @@ const shell = await operatorWorkspace.loadShell({
 });
 const navItems = operatorWorkspaceNavigation(home).navItems;
 ```
+
+## Project And Resource Browser
+
+The Compass-style resource screen starts from `createResourceBrowserRecipe(client)` and named `client.resources.*`
+methods. Projects are permission boundaries, folders are organization, and resource items carry stable RIDs.
+
+```ts
+const resourceView = await resourceBrowser.loadResources({
+  projectId: selectedProjectId,
+  folderId: selectedFolderId,
+  includeTrashed: false,
+});
+
+const project = await client.resources.projects.create(
+  { displayName: "Supply Chain Ops" },
+  { idempotencyKey: idempotencyKey("project", "supply-chain-ops") },
+);
+const folder = await client.resources.folders.create(
+  project.id,
+  { displayName: "Raw sources" },
+  { idempotencyKey: idempotencyKey("folder", project.id, "raw-sources") },
+);
+await client.resources.items.move(
+  "ri.foundry-lite.dataset.orders",
+  { projectId: project.id, folderId: folder.id },
+  { idempotencyKey: idempotencyKey("resource-move", "orders", folder.id) },
+);
+```
+
+Favorite and trash state comes from `client.resources.favorites.*`, `client.resources.items.trash/restore(...)`,
+and `client.resources.trash.list(...)`; local `favoriteIds` and `trashedIds` inputs are only offline fallback state.
 
 `createOperatorWorkspaceRecipe(client).loadHome(...)` is the current SDK-level "first operations workspace screen"
 recipe. It reads ontology catalog, datasets, recent Operations runs, admin launchpad, and recovery overview through
@@ -1665,7 +1699,7 @@ browser actions.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 216 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 237 frontend route surfaces
 -> browser SDK helper-contract proof for 25 frontend foundation helpers
 -> SDK TypeScript typecheck for package entrypoints, generated types, optional React helpers, and screen recipes
 -> `@foundry-lite/sdk/screen-recipes` importable recipe builders for core product screens

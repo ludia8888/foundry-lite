@@ -24,6 +24,11 @@ paths = [
   # match the repo's `.gitignore` `.foundry-lite*/` rule; OAuth private keys
   # inside them are machine-local artifacts, not committed product secrets.
   '''^\.foundry-lite[^/]*/.*''',
+  # Claude/Codex side worktrees can contain their own ignored Foundry-lite
+  # local runtime homes. Treat those nested generated homes like the root
+  # `.foundry-lite*/` local state instead of forcing deletion of user-owned
+  # side-worktree files.
+  '''^\.claude/worktrees/[^/]+/\.foundry-lite[^/]*/.*''',
   # The gitleaks JSON report is generated under ignored artifacts and can
   # contain redacted findings from a failed scan, which would otherwise make
   # the secret scanner recursively fail on its own report.

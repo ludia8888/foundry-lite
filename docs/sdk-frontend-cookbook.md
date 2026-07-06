@@ -27,9 +27,10 @@
 대부분의 화면은 먼저 session-aware client를 만들고, 그 client로 screen recipe 묶음을 만든다.
 
 ```ts
-import { createFoundryLiteClient, createSessionTokenProvider } from "@foundry-lite/sdk";
+import { createFoundryLiteClient, createSessionTokenProvider, idempotencyKey } from "@foundry-lite/sdk";
 import {
   createOperatorWorkspaceRecipe,
+  createResourceBrowserRecipe,
   loadFoundryLiteScreenRecipes,
   operatorWorkspaceNavigation,
   operatorWorkspaceShell,
@@ -48,7 +49,9 @@ const client = createFoundryLiteClient({
 
 const recipes = await loadFoundryLiteScreenRecipes(client);
 const operatorWorkspace = createOperatorWorkspaceRecipe(client);
+const resourceBrowser = createResourceBrowserRecipe(client);
 const home = await operatorWorkspace.loadHome({ runFilters: { limit: 25 } });
+const resources = await resourceBrowser.loadResources({ includeTrashed: false });
 const navigationItems = operatorWorkspaceNavigation(home).navItems;
 const quickActions = operatorWorkspaceNavigation(home).quickActions;
 const shell = await operatorWorkspace.loadShell({
@@ -62,6 +65,8 @@ renderWorkspaceHome({
   failedRunCount: home.failedRunCount,
   navigationItems,
   quickActions,
+  resourceItems: resources.activeItems,
+  favoriteResourceItems: resources.favoriteItems,
   selectedSurface: shell.selectedSurface,
   areaSurfaces: shell.areaSurfaces,
   primaryQuickAction: shellFromHome.primaryQuickAction,
@@ -196,6 +201,57 @@ return screen-ready counts such as `datasetCount`, `objectTypeCount`, `failedRun
 the React hook's `home.navigation` field derive `navItems`, `attentionItems`, and `quickActions` from the same loaded
 home model, so the app shell can show "where should I go next?" without inventing another backend contract. This keeps
 the app shell from rebuilding a dashboard data loader out of raw REST paths.
+
+## Project And Resource Browser
+
+Palantir Compass에 가까운 화면은 `client.resources`와 `createResourceBrowserRecipe(client)`로 시작한다.
+비개발자식으로 말하면, 프로젝트는 단순 폴더가 아니라 "누가 볼 수 있는가"를 정하는 경계이고, 폴더는 그 안의 정리 구조다.
+데이터셋, 소스, 온톨로지 작업물은 stable RID가 있는 resource item으로 보인다.
+파이프라인 작업물도 같은 resource hook을 쓸 수 있지만, 현재 `main`의 파이프라인 전용 DB surface는 별도 후속 범위다.
+
+```ts
+const browser = createResourceBrowserRecipe(client);
+const view = await browser.loadResources({
+  projectId: selectedProjectId,
+  folderId: selectedFolderId,
+  includeTrashed: false,
+});
+
+renderResourceBrowser({
+  projects: view.projects,
+  folders: view.folders,
+  items: view.activeItems,
+  favorites: view.favoriteItems,
+  selectedProjectId: view.selectedProjectId,
+  selectedFolderId: view.selectedFolderId,
+});
+```
+
+프로젝트/폴더/리소스 변경은 named SDK method로 호출한다. mutation은 모두 사용자 의도마다 하나의
+`idempotencyKey`를 만든다.
+
+```ts
+const project = await client.resources.projects.create(
+  { displayName: "Supply Chain Ops" },
+  { idempotencyKey: idempotencyKey("project", "supply-chain-ops") },
+);
+
+const folder = await client.resources.folders.create(
+  project.id,
+  { displayName: "Raw sources" },
+  { idempotencyKey: idempotencyKey("folder", project.id, "raw-sources") },
+);
+
+await client.resources.items.move(
+  "ri.foundry-lite.dataset.orders",
+  { projectId: project.id, folderId: folder.id },
+  { idempotencyKey: idempotencyKey("resource-move", "orders", folder.id) },
+);
+```
+
+`favoriteIds`와 `trashedIds` 입력은 이제 backend state가 없던 테스트/오프라인 fallback 용도다. 실제 화면은
+`client.resources.favorites.*`, `client.resources.items.trash/restore(...)`, `client.resources.trash.list(...)`에서
+오는 서버 상태를 우선 사용한다. v1 권한은 프로젝트 grant 중심이다. 폴더/리소스 직접 grant override는 future다.
 
 ## First Source Connection
 
@@ -1322,6 +1378,7 @@ worker, or bootstrap work is browser-safe.
 |---|---|
 | Session-aware client | `createSessionTokenProvider(...)`, `FoundryLiteProvider`, `useFoundryLiteClient(...)`, `useFoundryLiteSessionClient(...)`, `useFoundryLiteSessionStatus(...)`, `useFoundryLiteProvidedScreenRecipes(...)`, `needsAuthentication`, `isPermissionDenied`, `canRetryLastRequest` |
 | Operator workspace shell | `createOperatorWorkspaceRecipe(...)`, `operatorWorkspace.loadHome(...)`, `operatorWorkspace.loadShell(...)`, `operatorWorkspaceShell(...)`, `useFoundryLiteProvidedOperatorWorkspaceHome(...)`, `useFoundryLiteProvidedOperatorWorkspaceShell(...)`, `areaSurfaces`, `selectedSurface`, `primaryQuickAction` |
+| Project/resource browser | `client.resources.projects.*`, `client.resources.folders.*`, `client.resources.items.*`, `client.resources.favorites.*`, `client.resources.trash.*`, `client.resources.admin.reconcile(...)`, `createResourceBrowserRecipe(...)`, `resourceBrowser.loadResources(...)`, `buildResourceBrowserView(...)` |
 | Dataset catalog and evidence | `createDatasetExplorerRecipe(...)`, `useFoundryLiteDatasetExplorer(...)`, `useFoundryLiteProvidedDatasetExplorer(...)`, `client.datasets.*`, `client.operations.lineage.get(...)` |
 | Object/action workspace | `createObjectActionWorkspaceRecipe(...)`, `useFoundryLiteObjectQuery(...)`, `useFoundryLiteGenericObjectQuery(...)`, `useFoundryLiteObjectActionWorkspace(...)`, `useFoundryLiteProvidedObjectActionWorkspace(...)`, `useFoundryLiteActionSubmit(...)`, `objectQuery`, `selectedObject`, `recommendedObject`, `actionForm` |
 | Insight action proposal bridge | `foundryLiteActionProposalView(...)`, `useFoundryLiteActionProposalSubmit(...)` |
@@ -1340,6 +1397,8 @@ worker, or bootstrap work is browser-safe.
 ## Current Boundary
 
 What is current: SDK request/error/session helpers, generated named API methods, OSDK-style object/action/media facade,
+Compass-style Projects/Resources DB/API/SDK surface with project grants, folders, RID-backed resources, favorites,
+trash/restore, explicit admin reconcile, and `createResourceBrowserRecipe(...)`,
 TypeScript ObjectSet `where({ status: { $eq: "PENDING" } })` / `orderBy({ amount: "desc" })` /
 `aggregate({ select: { count: { $count: "unordered" } }, groupBy: { region: "exact" } })` / `$pageSize`
 request aliases with fail-fast property/operator/aggregate validation, generated TS instance `$link` traversal such as
@@ -1361,4 +1420,4 @@ richer aggregate functions/server-side aggregate execution, richer multi-hop/bat
 visual UX beyond the current validation/edit/cache hints, external NPM/PyPI publishing, visual Developer Console UI, OAuth
 external IdP introspection/refresh-token revocation, direct browser execution for migration/worker/bootstrap,
 exactly-once subscription delivery, Palantir-grade external package lifecycle/deployment compatibility windows, and complete
-S62-S64 workspace UX.
+S62-S64 workspace UX, including direct folder/resource grant overrides beyond v1 project-level inheritance.
