@@ -33,6 +33,7 @@
     "quality:complexity": "uv run radon cc libs apps scripts -s -a && uv run xenon --max-absolute B --max-modules B --max-average A libs apps scripts",
     "quality:architecture": "uv run python scripts/quality/check_dependency_graph.py && uv run tach check --dependencies",
     "quality:infra-boundaries": "uv run python scripts/quality/check_infra_import_boundary.py --max-application-imports 0 && uv run python scripts/quality/check_service_dependencies.py && uv run python scripts/quality/check_service_call_graph.py --max-depth 7 --max-fan-out 10",
+    "quality:core-service-wiring": "uv run python scripts/quality/check_core_service_wiring.py",
     "quality:module-size": "uv run python scripts/quality/check_application_module_size.py --max-lines 500",
     "quality:function-length": "uv run python scripts/quality/check_function_length.py",
     "quality:boolean-naming": "uv run python scripts/quality/check_boolean_naming.py",
