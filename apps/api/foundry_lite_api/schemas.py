@@ -900,3 +900,57 @@ class ApprovalExecutionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     expected_proposal_fingerprint: str = Field(alias="expectedProposalFingerprint")
+
+
+class ProjectCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    display_name: str = Field(alias="displayName")
+    description: str | None = None
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ProjectGrantUpsertRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    role: str
+
+
+class ProjectFolderCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    display_name: str = Field(alias="displayName")
+    parent_folder_id: str | None = Field(default=None, alias="parentFolderId")
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ProjectFolderMoveRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    parent_folder_id: str | None = Field(default=None, alias="parentFolderId")
+
+
+class ResourceRegisterRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    resource_type: str = Field(alias="resourceType")
+    display_name: str = Field(alias="displayName")
+    project_id: str | None = Field(default=None, alias="projectId")
+    folder_id: str | None = Field(default=None, alias="folderId")
+    source_surface: str = Field(alias="sourceSurface")
+    source_ref: str = Field(alias="sourceRef")
+    operations_path: str | None = Field(default=None, alias="operationsPath")
+    metadata: JsonObject = Field(default_factory=dict)
+
+
+class ResourceMoveRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str = Field(alias="projectId")
+    folder_id: str | None = Field(default=None, alias="folderId")
+
+
+class ResourceReconcileRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    project_id: str | None = Field(default=None, alias="projectId")

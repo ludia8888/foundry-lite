@@ -102,6 +102,7 @@ def _load_runtime_rows(engine: Engine, tenant_id: str) -> dict[str, list[dict[st
         "ontology_versions": _rows_for_table(engine, db.ontology_versions, tenant_id),
         "index_runs": _rows_for_table(engine, db.index_runs, tenant_id),
         "action_runs": _rows_for_table(engine, db.action_runs, tenant_id),
+        "resources": _rows_for_table(engine, db.resources, tenant_id),
     }
 
 
@@ -246,6 +247,21 @@ def _action_expectations(rows: dict[str, list[dict[str, Any]]]) -> list[AuditExp
     return expectations
 
 
+def _resource_expectations(rows: dict[str, list[dict[str, Any]]]) -> list[AuditExpectation]:
+    return [
+        _expectation(
+            category="resource.registered",
+            event_type="resource.registered",
+            resource_type="resource",
+            resource_id=str(row["rid"]),
+            action="register",
+            source_table="resources",
+            source_id=str(row["id"]),
+        )
+        for row in rows["resources"]
+    ]
+
+
 def _aborted_transaction_expectations(rows: dict[str, list[dict[str, Any]]]) -> list[AuditExpectation]:
     expectations: list[AuditExpectation] = []
     for row in rows["dataset_transactions"]:
@@ -272,6 +288,7 @@ def build_expectations(rows: dict[str, list[dict[str, Any]]]) -> list[AuditExpec
     expectations.extend(_ontology_expectations(rows))
     expectations.extend(_index_expectations(rows))
     expectations.extend(_action_expectations(rows))
+    expectations.extend(_resource_expectations(rows))
     expectations.extend(_aborted_transaction_expectations(rows))
     return expectations
 

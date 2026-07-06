@@ -230,7 +230,11 @@ def test_persisted_link_validation_rejects_missing_backing_key() -> None:
 
 
 def test_ontology_activation_cas_conflict_reports_lost_draft_state() -> None:
-    service = OntologyActivationService(engine=object(), ontology_repository=_ActivationConflictRepository())
+    service = OntologyActivationService(
+        engine=object(),
+        ontology_repository=_ActivationConflictRepository(),
+        resource_catalog_repository=object(),
+    )
 
     with pytest.raises(ConflictDetected, match="lost its draft state") as exc_info:
         service._activate_ontology_version(FakeTransaction(), demo_admin_context(), "ont_candidate")
@@ -240,7 +244,11 @@ def test_ontology_activation_cas_conflict_reports_lost_draft_state() -> None:
 
 def test_ontology_activation_evidence_includes_migration_plan_payload() -> None:
     runtime = _RecordingRuntimeService()
-    service = OntologyActivationService(engine=object(), ontology_repository=_RecordingOntologyRepository())
+    service = OntologyActivationService(
+        engine=object(),
+        ontology_repository=_RecordingOntologyRepository(),
+        resource_catalog_repository=object(),
+    )
     service.bind_collaborators(
         {
             "dataset_registry_service": object(),
@@ -265,7 +273,11 @@ def test_ontology_activation_evidence_includes_migration_plan_payload() -> None:
 
 
 def test_ontology_import_rejects_duplicate_property_at_persistence_boundary() -> None:
-    service = OntologyActivationService(engine=object(), ontology_repository=_RecordingOntologyRepository())
+    service = OntologyActivationService(
+        engine=object(),
+        ontology_repository=_RecordingOntologyRepository(),
+        resource_catalog_repository=object(),
+    )
 
     with pytest.raises(ValidationFailed, match="duplicate property apiName") as exc_info:
         service._import_properties_for_object_type(
@@ -284,7 +296,11 @@ def test_ontology_import_rejects_duplicate_property_at_persistence_boundary() ->
 
 
 def test_ontology_import_rejects_null_property_source() -> None:
-    service = OntologyActivationService(engine=object(), ontology_repository=_RecordingOntologyRepository())
+    service = OntologyActivationService(
+        engine=object(),
+        ontology_repository=_RecordingOntologyRepository(),
+        resource_catalog_repository=object(),
+    )
 
     with pytest.raises(ValidationFailed, match="property source must be set") as exc_info:
         service._insert_property_type(
@@ -298,7 +314,11 @@ def test_ontology_import_rejects_null_property_source() -> None:
 
 
 def test_ontology_import_rejects_unknown_link_and_action_targets() -> None:
-    service = OntologyActivationService(engine=object(), ontology_repository=_RecordingOntologyRepository())
+    service = OntologyActivationService(
+        engine=object(),
+        ontology_repository=_RecordingOntologyRepository(),
+        resource_catalog_repository=object(),
+    )
 
     with pytest.raises(ValidationFailed, match="link references unknown object type"):
         service._import_link_types(

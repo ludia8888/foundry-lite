@@ -110,6 +110,14 @@ from foundry_lite.infrastructure.schema.privacy import (
     erasure_redaction_executions,
     erasure_requests,
 )
+from foundry_lite.infrastructure.schema.resources import (
+    project_folders,
+    project_grants,
+    projects,
+    resource_favorites,
+    resource_idempotency_records,
+    resources,
+)
 from foundry_lite.infrastructure.schema.rls import (
     apply_postgres_rls,
     create_database,
@@ -222,6 +230,12 @@ __all__ = [
     "erasure_certificates",
     "erasure_redaction_executions",
     "erasure_requests",
+    "projects",
+    "project_grants",
+    "project_folders",
+    "resources",
+    "resource_favorites",
+    "resource_idempotency_records",
     "content_units",
     "media_access_caches",
     "media_derivatives",

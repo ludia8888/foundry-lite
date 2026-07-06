@@ -3141,6 +3141,317 @@ assertMissingIdempotencyFailFast(
   () => client.connectors.resources.startSync("erp", "orders"),
   "connectors.resources.startSync",
 );
+await expectSdkCall("resources.projects.list", () => client.resources.projects.list(), {
+  path: "/api/projects",
+});
+await expectSdkCall(
+  "resources.projects.create",
+  () =>
+    client.resources.projects.create(
+      {
+        displayName: "Operations",
+        description: "Operator-owned project",
+        metadata: { costCenter: "ops" },
+      },
+      { idempotencyKey: "project-create-key" },
+    ),
+  {
+    path: "/api/projects",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "project-create-key" },
+    body: {
+      displayName: "Operations",
+      description: "Operator-owned project",
+      metadata: { costCenter: "ops" },
+    },
+  },
+);
+await expectSdkCall("resources.projects.get", () => client.resources.projects.get("project_1"), {
+  path: "/api/projects/project_1",
+});
+await expectSdkCall(
+  "resources.projects.listGrants",
+  () => client.resources.projects.listGrants("project_1"),
+  {
+    path: "/api/projects/project_1/grants",
+  },
+);
+await expectSdkCall(
+  "resources.projects.upsertGrant",
+  () =>
+    client.resources.projects.upsertGrant(
+      "project_1",
+      "role",
+      "viewer",
+      { role: "viewer" },
+      { idempotencyKey: "grant-upsert-key" },
+    ),
+  {
+    path: "/api/projects/project_1/grants/role/viewer",
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "grant-upsert-key" },
+    body: { role: "viewer" },
+  },
+);
+await expectSdkCall(
+  "resources.folders.list",
+  () => client.resources.folders.list("project_1", { includeTrashed: true }),
+  {
+    path: "/api/projects/project_1/folders?includeTrashed=true",
+  },
+);
+await expectSdkCall(
+  "resources.folders.create",
+  () =>
+    client.resources.folders.create(
+      "project_1",
+      { displayName: "Raw", parentFolderId: null, metadata: { zone: "landing" } },
+      { idempotencyKey: "folder-create-key" },
+    ),
+  {
+    path: "/api/projects/project_1/folders",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "folder-create-key" },
+    body: { displayName: "Raw", parentFolderId: null, metadata: { zone: "landing" } },
+  },
+);
+await expectSdkCall(
+  "resources.folders.move",
+  () =>
+    client.resources.folders.move(
+      "project_1",
+      "folder_1",
+      { parentFolderId: "folder_parent" },
+      { idempotencyKey: "folder-move-key" },
+    ),
+  {
+    path: "/api/projects/project_1/folders/folder_1/move",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "folder-move-key" },
+    body: { parentFolderId: "folder_parent" },
+  },
+);
+await expectSdkCall(
+  "resources.folders.trash",
+  () => client.resources.folders.trash("project_1", "folder_1", { idempotencyKey: "folder-trash-key" }),
+  {
+    path: "/api/projects/project_1/folders/folder_1/trash",
+    method: "POST",
+    headers: { "Idempotency-Key": "folder-trash-key" },
+  },
+);
+await expectSdkCall(
+  "resources.folders.restore",
+  () => client.resources.folders.restore("project_1", "folder_1", { idempotencyKey: "folder-restore-key" }),
+  {
+    path: "/api/projects/project_1/folders/folder_1/restore",
+    method: "POST",
+    headers: { "Idempotency-Key": "folder-restore-key" },
+  },
+);
+await expectSdkCall(
+  "resources.items.search",
+  () => client.resources.items.search({ projectId: "project_1", folderId: "folder_1", includeTrashed: true }),
+  {
+    path: "/api/resources?projectId=project_1&folderId=folder_1&includeTrashed=true",
+  },
+);
+await expectSdkCall(
+  "resources.items.get",
+  () => client.resources.items.get("ri.foundry-lite.dataset.abc"),
+  {
+    path: "/api/resources/ri.foundry-lite.dataset.abc",
+  },
+);
+await expectSdkCall(
+  "resources.items.register",
+  () =>
+    client.resources.items.register(
+      {
+        resourceType: "dataset",
+        displayName: "orders",
+        projectId: "project_1",
+        folderId: "folder_1",
+        sourceSurface: "dataset",
+        sourceRef: "raw.orders",
+        operationsPath: "/operations/datasets/raw.orders",
+        metadata: { owner: "data" },
+      },
+      { idempotencyKey: "resource-register-key" },
+    ),
+  {
+    path: "/api/resources/register",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "resource-register-key" },
+    body: {
+      resourceType: "dataset",
+      displayName: "orders",
+      projectId: "project_1",
+      folderId: "folder_1",
+      sourceSurface: "dataset",
+      sourceRef: "raw.orders",
+      operationsPath: "/operations/datasets/raw.orders",
+      metadata: { owner: "data" },
+    },
+  },
+);
+await expectSdkCall(
+  "resources.items.move",
+  () =>
+    client.resources.items.move(
+      "ri.foundry-lite.dataset.abc",
+      { projectId: "project_2", folderId: null },
+      { idempotencyKey: "resource-move-key" },
+    ),
+  {
+    path: "/api/resources/ri.foundry-lite.dataset.abc/move",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "resource-move-key" },
+    body: { projectId: "project_2", folderId: null },
+  },
+);
+await expectSdkCall(
+  "resources.items.trash",
+  () => client.resources.items.trash("ri.foundry-lite.dataset.abc", { idempotencyKey: "resource-trash-key" }),
+  {
+    path: "/api/resources/ri.foundry-lite.dataset.abc/trash",
+    method: "POST",
+    headers: { "Idempotency-Key": "resource-trash-key" },
+  },
+);
+await expectSdkCall(
+  "resources.items.restore",
+  () => client.resources.items.restore("ri.foundry-lite.dataset.abc", { idempotencyKey: "resource-restore-key" }),
+  {
+    path: "/api/resources/ri.foundry-lite.dataset.abc/restore",
+    method: "POST",
+    headers: { "Idempotency-Key": "resource-restore-key" },
+  },
+);
+await expectSdkCall(
+  "resources.favorites.set",
+  () => client.resources.favorites.set("ri.foundry-lite.dataset.abc", { idempotencyKey: "favorite-set-key" }),
+  {
+    path: "/api/resources/ri.foundry-lite.dataset.abc/favorite",
+    method: "PUT",
+    headers: { "Idempotency-Key": "favorite-set-key" },
+  },
+);
+await expectSdkCall(
+  "resources.favorites.delete",
+  () => client.resources.favorites.delete("ri.foundry-lite.dataset.abc", { idempotencyKey: "favorite-delete-key" }),
+  {
+    path: "/api/resources/ri.foundry-lite.dataset.abc/favorite",
+    method: "DELETE",
+    headers: { "Idempotency-Key": "favorite-delete-key" },
+  },
+);
+await expectSdkCall(
+  "resources.trash.list",
+  () => client.resources.trash.list({ projectId: "project_1" }),
+  {
+    path: "/api/resources?projectId=project_1&includeTrashed=true",
+  },
+);
+await expectSdkCall(
+  "resources.trash.restore",
+  () => client.resources.trash.restore("ri.foundry-lite.dataset.abc", { idempotencyKey: "trash-restore-key" }),
+  {
+    path: "/api/resources/ri.foundry-lite.dataset.abc/restore",
+    method: "POST",
+    headers: { "Idempotency-Key": "trash-restore-key" },
+  },
+);
+await expectSdkCall(
+  "resources.admin.reconcile",
+  () =>
+    client.resources.admin.reconcile(
+      { projectId: "project_1" },
+      { idempotencyKey: "resources-reconcile-key" },
+    ),
+  {
+    path: "/api/resources/reconcile",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "resources-reconcile-key" },
+    body: { projectId: "project_1" },
+  },
+);
+assertMissingIdempotencyFailFast(
+  "resources.projects.create",
+  () => client.resources.projects.create({ displayName: "Operations" }),
+  "resources.projects.create",
+);
+assertMissingIdempotencyFailFast(
+  "resources.projects.upsertGrant",
+  () => client.resources.projects.upsertGrant("project_1", "role", "viewer", { role: "viewer" }),
+  "resources.projects.upsertGrant",
+);
+assertMissingIdempotencyFailFast(
+  "resources.folders.create",
+  () => client.resources.folders.create("project_1", { displayName: "Raw" }),
+  "resources.folders.create",
+);
+assertMissingIdempotencyFailFast(
+  "resources.folders.move",
+  () => client.resources.folders.move("project_1", "folder_1", { parentFolderId: null }),
+  "resources.folders.move",
+);
+assertMissingIdempotencyFailFast(
+  "resources.folders.trash",
+  () => client.resources.folders.trash("project_1", "folder_1"),
+  "resources.folders.trash",
+);
+assertMissingIdempotencyFailFast(
+  "resources.folders.restore",
+  () => client.resources.folders.restore("project_1", "folder_1"),
+  "resources.folders.restore",
+);
+assertMissingIdempotencyFailFast(
+  "resources.items.register",
+  () =>
+    client.resources.items.register({
+      resourceType: "dataset",
+      displayName: "orders",
+      sourceSurface: "dataset",
+      sourceRef: "raw.orders",
+    }),
+  "resources.items.register",
+);
+assertMissingIdempotencyFailFast(
+  "resources.items.move",
+  () => client.resources.items.move("ri.foundry-lite.dataset.abc", { projectId: "project_2" }),
+  "resources.items.move",
+);
+assertMissingIdempotencyFailFast(
+  "resources.items.trash",
+  () => client.resources.items.trash("ri.foundry-lite.dataset.abc"),
+  "resources.items.trash",
+);
+assertMissingIdempotencyFailFast(
+  "resources.items.restore",
+  () => client.resources.items.restore("ri.foundry-lite.dataset.abc"),
+  "resources.items.restore",
+);
+assertMissingIdempotencyFailFast(
+  "resources.favorites.set",
+  () => client.resources.favorites.set("ri.foundry-lite.dataset.abc"),
+  "resources.favorites.set",
+);
+assertMissingIdempotencyFailFast(
+  "resources.favorites.delete",
+  () => client.resources.favorites.delete("ri.foundry-lite.dataset.abc"),
+  "resources.favorites.delete",
+);
+assertMissingIdempotencyFailFast(
+  "resources.trash.restore",
+  () => client.resources.trash.restore("ri.foundry-lite.dataset.abc"),
+  "resources.trash.restore",
+);
+assertMissingIdempotencyFailFast(
+  "resources.admin.reconcile",
+  () => client.resources.admin.reconcile({ projectId: "project_1" }),
+  "resources.admin.reconcile",
+);
 await expectSdkCall(
   "auth.osdkOAuth.authorize",
   () =>

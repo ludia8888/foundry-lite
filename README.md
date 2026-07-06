@@ -87,13 +87,14 @@ flowchart LR
 | Dataset | CSV upload, versioned commit, preview, inspect, schema evolution warning/blocking, quality check definition and result history | `foundry.datasets`, FastAPI dataset endpoints, `client.datasets` |
 | Source onboarding | CSV, batch file, signed webhook listener, Debezium-shaped CDC start, media upload, Generic REST source wrapper, scheduled managed sync, credential/agent/network policy read models | `foundry.sources`, FastAPI source endpoints, `client.sources` |
 | Connector onboarding | tenant-scoped REST connection/resource registry, resource test without commit, connector sync workflow start | `foundry.connectors`, FastAPI connector endpoints, `client.connectors` |
+| Projects and resources | Compass-style projects as permission boundaries, folders as organization, RID-backed resource rows, favorites, trash/restore, explicit admin reconcile | `foundry.resources`, `/api/projects`, `/api/resources`, `client.resources` |
 | Transform and lineage | SQL transform registration/run, input/output version lineage, failed transform retry, bounded snapshot scheduler preview/tick, `worker:transform-scheduler`, OpenLineage-compatible evidence | `foundry.transforms`, FastAPI transform endpoints, `client.transforms` |
 | Ontology and objects | ontology YAML validation/catalog, object get/query/link traversal, object sets, active index pointer, shadow reindex proof | `foundry.ontology`, `foundry.objects`, FastAPI ontology/object endpoints |
 | Actions | typed action validate/apply, permission/precondition checks, expected object version, edit/cache-refresh hints, idempotency key fingerprint, audit/outbox pair | `foundry.actions`, `/api/actions/{action_type}/validate`, `/api/actions/{action_type}/apply`, `client.actions` |
 | Operations | run list/detail, prompt artifact access, DLQ retry/discard, outbox publish start, reconciliation queue/resolve, observability detect, backup/restore preflight, artifact receipt, historical artifact dataset-head execution, and restore-mode gates | `foundry.operations`, FastAPI operations endpoints, `client.operations` |
 | Media and content | media set transaction/upload/commit, processing runs, OCR, ASR, PDF/image/video processors, derivative indexing, content search, visual search, object media binding, retention/legal hold purge proof | `foundry.media`, FastAPI media endpoints, `client.media` |
 | AIP and AI evidence | model gateway ledger, prompt artifacts, context compiler, tool broker, retrieval orchestration, agent runtime, builder validate/run, eval run, release promote, citation/evidence references | `foundry.aip`, FastAPI AIP endpoints, `client.aip` |
-| Frontend SDK | 216 frontend route surface request contracts, 28 SDK helper contracts, 42 idempotency-required mutation surfaces, screen recipes for source, dataset, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
+| Frontend SDK | 237 frontend route surface request contracts, 28 SDK helper contracts, 56 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
 
 ## 아직 아닌 것
 
@@ -212,7 +213,7 @@ pnpm --silent quality:sdk-request-contract
 pnpm --silent quality:frontend-foundation
 ```
 
-프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 216개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
+프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 237개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
 
 ## Runtime profile
 

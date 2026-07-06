@@ -41,6 +41,7 @@ from foundry_lite.application.services.runtime_bundle import (
     InsightReviewService,
     OutboxPublisherService,
     RecordDlqService,
+    ResourceCatalogService,
     RuntimeService,
     WorkflowOrchestrationService,
 )
@@ -86,6 +87,7 @@ __all__ = [
     "PipelineServices",
     "OutboxPublisherService",
     "RecordDlqService",
+    "ResourceCatalogService",
     "RuntimeEvidenceService",
     "RuntimeService",
     "SourceManagementService",
@@ -151,6 +153,7 @@ class CoreServices:
     pipelines: PipelineServices
     outbox_publisher: OutboxPublisherService
     record_dlq: RecordDlqService
+    resources: ResourceCatalogService
     runtime_evidence: RuntimeEvidenceService
     runtime: RuntimeService
     transform: TransformServices
@@ -196,8 +199,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         source_onboarding=build_service(SourceOnboardingService, dependencies),
         context_compiler=build_service(ContextCompilerService, dependencies),
         dataset=shared["dataset"], demo=build_service(DemoService, dependencies),
-        erasure=build_service(ErasureService, dependencies),
-        evals=build_service(EvalService, dependencies),
+        erasure=build_service(ErasureService, dependencies), evals=build_service(EvalService, dependencies),
         function_execution=build_service(FunctionExecutionService, dependencies),
         iceberg_maintenance=shared["iceberg_maintenance"],
         insight_review=shared["insight_review"],
@@ -217,6 +219,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         pipelines=PipelineServices.create(dependencies),
         outbox_publisher=build_service(OutboxPublisherService, dependencies),
         record_dlq=build_service(RecordDlqService, dependencies),
+        resources=build_service(ResourceCatalogService, dependencies),
         runtime_evidence=build_service(RuntimeEvidenceService, dependencies),
         runtime=build_service(RuntimeService, dependencies),
         transform=TransformServices.create(dependencies),
@@ -269,6 +272,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         *services.pipelines.items(),
         services.outbox_publisher,
         services.record_dlq,
+        services.resources,
         services.runtime_evidence,
         services.runtime,
         *services.transform.items(),

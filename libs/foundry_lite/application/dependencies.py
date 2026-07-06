@@ -29,6 +29,8 @@ from foundry_lite.application.ports import (
     ObjectReadRepository,
     ObjectSetRepository,
     OntologyRepository,
+    PipelineRepository,
+    ResourceCatalogRepository,
     RuntimeRepository,
     TransactionManager,
     TransformRepository,
@@ -56,7 +58,6 @@ from foundry_lite.application.ports.model_registry_repository import ModelRegist
 from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
 from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
 from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
-from foundry_lite.application.ports.pipeline_repository import PipelineRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
@@ -66,37 +67,8 @@ from foundry_lite.application.ports.stream_adapter import StreamAdapter
 from foundry_lite.application.ports.tool_executor import ToolExecutor
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter
+from foundry_lite.application.runtime_profile import RuntimeProfile
 from foundry_lite.security.policy import PolicyService
-
-_LOCAL_RUNTIME_PROFILES = frozenset({"local", "dev", "development", "demo", "test"})
-_PROTECTED_RUNTIME_PROFILES = frozenset({"production", "prod", "staging", "stage"})
-_KNOWN_RUNTIME_PROFILES = _LOCAL_RUNTIME_PROFILES | _PROTECTED_RUNTIME_PROFILES
-
-
-@dataclass(frozen=True)
-class RuntimeProfile:
-    name: str = "local"
-
-    @classmethod
-    def from_value(cls, value: str | RuntimeProfile | None) -> RuntimeProfile:
-        if isinstance(value, RuntimeProfile):
-            return value
-        normalized = (value or "local").strip().lower().replace("_", "-")
-        if not normalized:
-            normalized = "local"
-        if normalized not in _KNOWN_RUNTIME_PROFILES:
-            raise ValueError(
-                f"unknown FOUNDRY_LITE_RUNTIME_PROFILE: {normalized}; choose local/demo/test/staging/production"
-            )
-        return cls(normalized)
-
-    @property
-    def is_local_like(self) -> bool:
-        return self.name in _LOCAL_RUNTIME_PROFILES
-
-    @property
-    def is_protected(self) -> bool:
-        return self.name in _PROTECTED_RUNTIME_PROFILES
 
 
 @dataclass(frozen=True)
@@ -128,6 +100,7 @@ class DataDependencies:
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
     pipeline_repository: PipelineRepository
+    resource_catalog_repository: ResourceCatalogRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository
@@ -312,6 +285,10 @@ class CoreDependencies:
     @property
     def transform_repository(self) -> TransformRepository:
         return self.data.transform_repository
+
+    @property
+    def resource_catalog_repository(self) -> ResourceCatalogRepository:
+        return self.data.resource_catalog_repository
 
     @property
     def materialization_repository(self) -> MaterializationRepository:

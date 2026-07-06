@@ -100,6 +100,10 @@ import type {
   ProductWorkflowRun,
   RestConnectorConnectionCreateRequest,
   RestConnectorResourceUpsertRequest,
+  ProjectFolder,
+  ResourceItem,
+  ResourceListOptions,
+  ResourceProject,
   RuntimeRunDetail,
   RuntimeRunQueryFilters,
   RuntimeRunQueryResult,
@@ -187,6 +191,34 @@ export type ConnectorOnboardingRunOptions =
     shouldPollWorkflow?: boolean;
     onState?: (state: ConnectorOnboardingRecipeState) => void;
   };
+
+export type ResourceBrowserLoadOptions = ResourceListOptions & {
+  favoriteIds?: Iterable<string>;
+  trashedIds?: Iterable<string>;
+};
+
+export type ResourceBrowserView = {
+  projects: ResourceProject[];
+  folders: ProjectFolder[];
+  items: ResourceItem[];
+  activeItems: ResourceItem[];
+  favoriteItems: ResourceItem[];
+  trashedItems: ResourceItem[];
+  selectedProjectId: string | null;
+  selectedFolderId: string | null;
+  isBackendBacked: boolean;
+};
+
+export type ResourceBrowserViewInput = {
+  projects: ResourceProject[];
+  folders?: ProjectFolder[];
+  items: ResourceItem[];
+  selectedProjectId?: string | null;
+  selectedFolderId?: string | null;
+  favoriteIds?: Iterable<string>;
+  trashedIds?: Iterable<string>;
+  isBackendBacked?: boolean;
+};
 
 export type SourceOnboardingPhase =
   | "select_kind"
@@ -721,6 +753,78 @@ export function foundryLiteDatasetResourceId(selection: DatasetExplorerSelection
 
 export function isFoundryLiteProductWorkflowTerminal(run: ProductWorkflowRun): boolean {
   return TERMINAL_WORKFLOW_STATUSES.has(run.status);
+}
+
+function resourceBrowserIdSet(values?: Iterable<string>): Set<string> {
+  return new Set(values ?? []);
+}
+
+function isResourceBrowserFavorite(item: ResourceItem, favoriteIds: Set<string>): boolean {
+  return Boolean(item.isFavorite) || favoriteIds.has(item.id) || favoriteIds.has(item.rid);
+}
+
+function isResourceBrowserTrashed(item: ResourceItem, trashedIds: Set<string>): boolean {
+  return item.status === "trashed" || trashedIds.has(item.id) || trashedIds.has(item.rid);
+}
+
+export function buildResourceBrowserView(input: ResourceBrowserViewInput): ResourceBrowserView {
+  const favoriteIds = resourceBrowserIdSet(input.favoriteIds);
+  const trashedIds = resourceBrowserIdSet(input.trashedIds);
+  const items = input.items.map((item) => {
+    const isTrashed = isResourceBrowserTrashed(item, trashedIds);
+    return {
+      ...item,
+      isFavorite: isResourceBrowserFavorite(item, favoriteIds),
+      status: isTrashed ? "trashed" : item.status,
+    };
+  });
+  return {
+    projects: input.projects,
+    folders: input.folders ?? [],
+    items,
+    activeItems: items.filter((item) => item.status !== "trashed"),
+    favoriteItems: items.filter((item) => item.isFavorite),
+    trashedItems: items.filter((item) => item.status === "trashed"),
+    selectedProjectId: input.selectedProjectId ?? null,
+    selectedFolderId: input.selectedFolderId ?? null,
+    isBackendBacked: input.isBackendBacked ?? false,
+  };
+}
+
+export function createResourceBrowserRecipe(
+  client: Pick<FoundryLiteGeneratedClient, "resources">,
+) {
+  return {
+    buildView: buildResourceBrowserView,
+    loadResources: async (
+      options: ResourceBrowserLoadOptions = {},
+    ): Promise<ResourceBrowserView> => {
+      const projects = await client.resources.projects.list();
+      const selectedProjectId = options.projectId ?? projects[0]?.id ?? null;
+      const [folders, result] = await Promise.all([
+        selectedProjectId
+          ? client.resources.folders.list(selectedProjectId, {
+              includeTrashed: options.includeTrashed,
+            })
+          : Promise.resolve([]),
+        client.resources.items.search({
+          projectId: selectedProjectId ?? undefined,
+          folderId: options.folderId,
+          includeTrashed: options.includeTrashed,
+        }),
+      ]);
+      return buildResourceBrowserView({
+        projects,
+        folders,
+        items: result.items,
+        selectedProjectId,
+        selectedFolderId: options.folderId ?? null,
+        favoriteIds: options.favoriteIds,
+        trashedIds: options.trashedIds,
+        isBackendBacked: true,
+      });
+    },
+  };
 }
 
 export function createDatasetExplorerRecipe(
@@ -2903,6 +3007,7 @@ export function createOperatorWorkspaceRecipe(
   };
   return {
     datasetExplorer: createDatasetExplorerRecipe(client),
+    resourceBrowser: createResourceBrowserRecipe(client),
     objectActionWorkspace: createObjectActionWorkspaceRecipe(client, catalog ?? null),
     operationsEvidence: createOperationsEvidenceRecipe(client),
     adminOperations,
@@ -2921,6 +3026,7 @@ export function createFoundryLiteScreenRecipes(
   return {
     operatorWorkspace: createOperatorWorkspaceRecipe(client, catalog ?? null),
     datasetExplorer: createDatasetExplorerRecipe(client),
+    resourceBrowser: createResourceBrowserRecipe(client),
     objectActionWorkspace: createObjectActionWorkspaceRecipe(client, catalog ?? null),
     mediaWorkspace: createMediaWorkspaceRecipe(client),
     aipWorkspace: createAipWorkspaceRecipe(client),
@@ -2947,6 +3053,7 @@ export async function loadFoundryLiteScreenRecipes(client: FoundryLiteGeneratedC
 }
 
 export type DatasetExplorerRecipe = ReturnType<typeof createDatasetExplorerRecipe>;
+export type ResourceBrowserRecipe = ReturnType<typeof createResourceBrowserRecipe>;
 export type ObjectActionWorkspaceRecipe = ReturnType<typeof createObjectActionWorkspaceRecipe>;
 export type MediaWorkspaceRecipe = ReturnType<typeof createMediaWorkspaceRecipe>;
 export type AipWorkspaceRecipe = ReturnType<typeof createAipWorkspaceRecipe>;

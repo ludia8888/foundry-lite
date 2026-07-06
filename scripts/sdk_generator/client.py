@@ -194,6 +194,65 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
         ),
         "    };",
         "  };",
+        "  resources: {",
+        "    projects: {",
+        "      list(): Promise<ResourceProject[]>;",
+        "      create(payload: ProjectCreateRequest, options: { idempotencyKey: string }): Promise<ResourceProject>;",
+        "      get(projectId: string): Promise<ResourceProject>;",
+        "      listGrants(projectId: string): Promise<ProjectGrant[]>;",
+        (
+            "      upsertGrant(projectId: string, principalType: ProjectPrincipalType, principalId: string, "
+            "payload: ProjectGrantUpsertRequest, options: { idempotencyKey: string }): Promise<ProjectGrant>;"
+        ),
+        "    };",
+        "    folders: {",
+        "      list(projectId: string, options?: { includeTrashed?: boolean }): Promise<ProjectFolder[]>;",
+        (
+            "      create(projectId: string, payload: ProjectFolderCreateRequest, "
+            "options: { idempotencyKey: string }): Promise<ProjectFolder>;"
+        ),
+        (
+            "      move(projectId: string, folderId: string, payload: ProjectFolderMoveRequest, "
+            "options: { idempotencyKey: string }): Promise<ProjectFolder>;"
+        ),
+        (
+            "      trash(projectId: string, folderId: string, "
+            "options: { idempotencyKey: string }): Promise<ProjectFolder>;"
+        ),
+        (
+            "      restore(projectId: string, folderId: string, "
+            "options: { idempotencyKey: string }): Promise<ProjectFolder>;"
+        ),
+        "    };",
+        "    items: {",
+        "      search(options?: ResourceListOptions): Promise<ResourceListResult>;",
+        "      get(rid: string): Promise<ResourceItem>;",
+        (
+            "      register(payload: ResourceRegisterRequest, options: { idempotencyKey: string }): "
+            "Promise<ResourceItem>;"
+        ),
+        (
+            "      move(rid: string, payload: ResourceMoveRequest, options: { idempotencyKey: string }): "
+            "Promise<ResourceItem>;"
+        ),
+        "      trash(rid: string, options: { idempotencyKey: string }): Promise<ResourceItem>;",
+        "      restore(rid: string, options: { idempotencyKey: string }): Promise<ResourceItem>;",
+        "    };",
+        "    favorites: {",
+        "      set(rid: string, options: { idempotencyKey: string }): Promise<ResourceItem>;",
+        "      delete(rid: string, options: { idempotencyKey: string }): Promise<ResourceItem>;",
+        "    };",
+        "    trash: {",
+        "      list(options?: ResourceListOptions): Promise<ResourceListResult>;",
+        "      restore(rid: string, options: { idempotencyKey: string }): Promise<ResourceItem>;",
+        "    };",
+        "    admin: {",
+        (
+            "      reconcile(payload: ResourceReconcileRequest | undefined, "
+            "options: { idempotencyKey: string }): Promise<ResourceReconcileResult>;"
+        ),
+        "    };",
+        "  };",
         "  auth: {",
         "    osdkOAuth: {",
         "      authorize(payload: OsdkOAuthAuthorizeRequest): Promise<Record<string, unknown>>;",
@@ -1644,6 +1703,15 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "  return params.toString();",
         "}",
         "",
+        "function resourceListSuffix(options: ResourceListOptions = {}): string {",
+        "  const params = new URLSearchParams();",
+        "  if (options.projectId) params.set('projectId', options.projectId);",
+        "  if (options.folderId) params.set('folderId', options.folderId);",
+        "  if (options.includeTrashed !== undefined) params.set('includeTrashed', String(options.includeTrashed));",
+        "  const query = params.toString();",
+        "  return query ? `?${query}` : '';",
+        "}",
+        "",
     ]
     lines.extend(_ts_osdk_runtime_lines())
     lines += [
@@ -2161,6 +2229,199 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "              body: JSON.stringify(payload ?? {}),",
         "            },",
         "          ),",
+        "      },",
+        "    },",
+        "    resources: {",
+        "      projects: {",
+        "        list: () => request<{ projects: ResourceProject[] }>(`/api/projects`).then((body) => body.projects),",
+        "        create: (payload: ProjectCreateRequest, options: { idempotencyKey: string }) =>",
+        "          request<{ project: ResourceProject }>(`/api/projects`, {",
+        '            method: "POST",',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        (
+            '              "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "resources.projects.create"),'
+        ),
+        "            },",
+        "            body: JSON.stringify(payload),",
+        "          }).then((body) => body.project),",
+        "        get: (projectId: string) =>",
+        "          request<{ project: ResourceProject }>(`/api/projects/${encodeURIComponent(projectId)}`)",
+        "            .then((body) => body.project),",
+        "        listGrants: (projectId: string) =>",
+        "          request<{ grants: ProjectGrant[] }>(`/api/projects/${encodeURIComponent(projectId)}/grants`)",
+        "            .then((body) => body.grants),",
+        (
+            "        upsertGrant: (projectId: string, principalType: ProjectPrincipalType, "
+            "principalId: string, payload: ProjectGrantUpsertRequest, "
+            "options: { idempotencyKey: string }) =>"
+        ),
+        "          request<{ grant: ProjectGrant }>(",
+        (
+            "            `/api/projects/${encodeURIComponent(projectId)}/grants/"
+            "${encodeURIComponent(principalType)}/${encodeURIComponent(principalId)}`,"
+        ),
+        "            {",
+        '              method: "PUT",',
+        "              headers: {",
+        '                "Content-Type": "application/json",',
+        (
+            '                "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "resources.projects.upsertGrant"),'
+        ),
+        "              },",
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ).then((body) => body.grant),",
+        "      },",
+        "      folders: {",
+        "        list: (projectId: string, options: { includeTrashed?: boolean } = {}) => {",
+        (
+            "          const suffix = options.includeTrashed !== undefined ? "
+            "`?includeTrashed=${String(options.includeTrashed)}` : '';"
+        ),
+        (
+            "          return request<{ folders: ProjectFolder[] }>"
+            "(`/api/projects/${encodeURIComponent(projectId)}/folders${suffix}`)"
+        ),
+        "            .then((body) => body.folders);",
+        "        },",
+        (
+            "        create: (projectId: string, payload: ProjectFolderCreateRequest, "
+            "options: { idempotencyKey: string }) =>"
+        ),
+        "          request<{ folder: ProjectFolder }>(`/api/projects/${encodeURIComponent(projectId)}/folders`, {",
+        '            method: "POST",',
+        (
+            '            headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "resources.folders.create") },'
+        ),
+        "            body: JSON.stringify(payload),",
+        "          }).then((body) => body.folder),",
+        (
+            "        move: (projectId: string, folderId: string, payload: ProjectFolderMoveRequest, "
+            "options: { idempotencyKey: string }) =>"
+        ),
+        "          request<{ folder: ProjectFolder }>(",
+        "            `/api/projects/${encodeURIComponent(projectId)}/folders/${encodeURIComponent(folderId)}/move`,",
+        "            {",
+        '              method: "POST",',
+        (
+            '              headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "resources.folders.move") },'
+        ),
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ).then((body) => body.folder),",
+        "        trash: (projectId: string, folderId: string, options: { idempotencyKey: string }) =>",
+        "          request<{ folder: ProjectFolder }>(",
+        "            `/api/projects/${encodeURIComponent(projectId)}/folders/${encodeURIComponent(folderId)}/trash`,",
+        (
+            '            { method: "POST", headers: { "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "resources.folders.trash") } },'
+        ),
+        "          ).then((body) => body.folder),",
+        "        restore: (projectId: string, folderId: string, options: { idempotencyKey: string }) =>",
+        "          request<{ folder: ProjectFolder }>(",
+        "            `/api/projects/${encodeURIComponent(projectId)}/folders/${encodeURIComponent(folderId)}/restore`,",
+        (
+            '            { method: "POST", headers: { "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "resources.folders.restore") } },'
+        ),
+        "          ).then((body) => body.folder),",
+        "      },",
+        "      items: {",
+        (
+            "        search: (options: ResourceListOptions = {}) => "
+            "request<ResourceListResult>(`/api/resources${resourceListSuffix(options)}`),"
+        ),
+        (
+            "        get: (rid: string) => request<{ resource: ResourceItem }>"
+            "(`/api/resources/${encodeURIComponent(rid)}`)"
+        ),
+        "          .then((body) => body.resource),",
+        "        register: (payload: ResourceRegisterRequest, options: { idempotencyKey: string }) =>",
+        "          request<{ resource: ResourceItem }>(`/api/resources/register`, {",
+        '            method: "POST",',
+        (
+            '            headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "resources.items.register") },'
+        ),
+        "            body: JSON.stringify(payload),",
+        "          }).then((body) => body.resource),",
+        "        move: (rid: string, payload: ResourceMoveRequest, options: { idempotencyKey: string }) =>",
+        "          request<{ resource: ResourceItem }>(`/api/resources/${encodeURIComponent(rid)}/move`, {",
+        '            method: "POST",',
+        (
+            '            headers: { "Content-Type": "application/json", "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "resources.items.move") },'
+        ),
+        "            body: JSON.stringify(payload),",
+        "          }).then((body) => body.resource),",
+        "        trash: (rid: string, options: { idempotencyKey: string }) =>",
+        "          request<{ resource: ResourceItem }>(`/api/resources/${encodeURIComponent(rid)}/trash`, {",
+        '            method: "POST",',
+        (
+            '            headers: { "Idempotency-Key": requireIdempotencyKey('
+            'options?.idempotencyKey, "resources.items.trash") },'
+        ),
+        "          }).then((body) => body.resource),",
+        "        restore: (rid: string, options: { idempotencyKey: string }) =>",
+        "          request<{ resource: ResourceItem }>(`/api/resources/${encodeURIComponent(rid)}/restore`, {",
+        '            method: "POST",',
+        (
+            '            headers: { "Idempotency-Key": requireIdempotencyKey('
+            'options?.idempotencyKey, "resources.items.restore") },'
+        ),
+        "          }).then((body) => body.resource),",
+        "      },",
+        "      favorites: {",
+        "        set: (rid: string, options: { idempotencyKey: string }) =>",
+        "          request<{ resource: ResourceItem }>(`/api/resources/${encodeURIComponent(rid)}/favorite`, {",
+        '            method: "PUT",',
+        (
+            '            headers: { "Idempotency-Key": requireIdempotencyKey('
+            'options?.idempotencyKey, "resources.favorites.set") },'
+        ),
+        "          }).then((body) => body.resource),",
+        "        delete: (rid: string, options: { idempotencyKey: string }) =>",
+        "          request<{ resource: ResourceItem }>(`/api/resources/${encodeURIComponent(rid)}/favorite`, {",
+        '            method: "DELETE",',
+        (
+            '            headers: { "Idempotency-Key": requireIdempotencyKey('
+            'options?.idempotencyKey, "resources.favorites.delete") },'
+        ),
+        "          }).then((body) => body.resource),",
+        "      },",
+        "      trash: {",
+        "        list: (options: ResourceListOptions = {}) =>",
+        (
+            "          request<ResourceListResult>"
+            "(`/api/resources${resourceListSuffix({ ...options, includeTrashed: true })}`),"
+        ),
+        "        restore: (rid: string, options: { idempotencyKey: string }) =>",
+        "          request<{ resource: ResourceItem }>(`/api/resources/${encodeURIComponent(rid)}/restore`, {",
+        '            method: "POST",',
+        (
+            '            headers: { "Idempotency-Key": requireIdempotencyKey('
+            'options?.idempotencyKey, "resources.trash.restore") },'
+        ),
+        "          }).then((body) => body.resource),",
+        "      },",
+        "      admin: {",
+        "        reconcile: (payload: ResourceReconcileRequest = {}, options: { idempotencyKey: string }) =>",
+        "          request<ResourceReconcileResult>(`/api/resources/reconcile`, {",
+        '            method: "POST",',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        (
+            '              "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "resources.admin.reconcile"),'
+        ),
+        "            },",
+        "            body: JSON.stringify(payload),",
+        "          }),",
         "      },",
         "    },",
         "    auth: {",

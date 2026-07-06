@@ -9,7 +9,11 @@ from foundry_lite.application.ports import (
     DatasetRow,
     DatasetSchemaRow,
     DatasetVersionRow,
+    ResourceCatalogRepository,
     TransactionContext,
+)
+from foundry_lite.application.services.resource_catalog_auto_registration import (
+    upsert_ontology_resource as _upsert_ontology_resource,
 )
 from foundry_lite.application.services.runtime_evidence_boundary import RuntimeEvidenceBoundary
 from foundry_lite.domain.context import RequestContext
@@ -89,4 +93,25 @@ def require_ontology_write_open(
         operation=operation,
         resource_type=resource_type,
         resource_id=resource_id,
+    )
+
+
+def upsert_ontology_resource(
+    *,
+    conn: TransactionContext,
+    ctx: RequestContext,
+    repository: ResourceCatalogRepository,
+    runtime_service: OntologyRuntimeBoundary,
+    ontology_version_id: str,
+    version_number: int,
+    now: str,
+) -> None:
+    _upsert_ontology_resource(
+        conn=conn,
+        ctx=ctx,
+        repository=repository,
+        runtime_service=runtime_service,
+        ontology_version_id=ontology_version_id,
+        version_number=version_number,
+        now=now,
     )

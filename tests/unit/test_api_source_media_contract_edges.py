@@ -1558,6 +1558,9 @@ class _RuntimeAudit:
     def _audit(self, *_args, **_kwargs) -> None:
         return None
 
+    def _outbox(self, *_args, **_kwargs) -> str:
+        return "outbox-1"
+
 
 class _DatasetRegistry:
     def ensure_dataset(self, *_args, **_kwargs) -> None:
@@ -1621,6 +1624,64 @@ class _ConcurrentSourceRegistry(_SourceRegistry):
         raise SourceConnectionAlreadyExistsError()
 
 
+class _ResourceCatalogRepository:
+    def __init__(self) -> None:
+        self.projects: list[dict[str, object]] = []
+        self.resources: dict[tuple[str, str], dict[str, object]] = {}
+
+    def list_projects(self, *, transaction, tenant_id):
+        return [row for row in self.projects if row["tenant_id"] == tenant_id]
+
+    def insert_project(self, *, transaction, record):
+        row = {
+            "id": record.project_id,
+            "tenant_id": record.tenant_id,
+            "rid": record.rid,
+            "display_name": record.display_name,
+            "description": record.description,
+            "status": record.status,
+            "created_by_user_id": record.created_by_user_id,
+            "metadata": record.metadata,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+        self.projects.append(row)
+        return row
+
+    def upsert_project_grant(self, *, transaction, record):
+        return {
+            "id": record.grant_id,
+            "tenant_id": record.tenant_id,
+            "project_id": record.project_id,
+            "principal_type": record.principal_type,
+            "principal_id": record.principal_id,
+            "role": record.role,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+
+    def upsert_resource(self, *, transaction, record):
+        key = (record.source_surface, record.source_ref)
+        row = {
+            "id": record.resource_id,
+            "tenant_id": record.tenant_id,
+            "rid": record.rid,
+            "resource_type": record.resource_type,
+            "display_name": record.display_name,
+            "project_id": record.project_id,
+            "folder_id": record.folder_id,
+            "source_surface": record.source_surface,
+            "source_ref": record.source_ref,
+            "operations_path": record.operations_path,
+            "status": record.status,
+            "metadata": record.metadata,
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+        }
+        self.resources[key] = row
+        return row
+
+
 class _ConnectorRegistry:
     def list_connections(self, *, tenant_id):
         return [_connector_connection_row("rest_orders")]
@@ -1656,6 +1717,7 @@ def _source_onboarding_service(tmp_path) -> SourceOnboardingService:
     service.connector_registry_repository = _ConnectorRegistry()
     service.source_registry_repository = _SourceRegistry()
     service.dataset_transaction_repository = _DatasetTransactions()
+    service.resource_catalog_repository = _ResourceCatalogRepository()
     service.secret_provider = _SecretProvider()
     service.dataset_ingest_service = _DatasetIngest()
     service.dataset_registry_service = _DatasetRegistry()
