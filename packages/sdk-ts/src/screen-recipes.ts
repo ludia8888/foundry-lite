@@ -80,6 +80,16 @@ import type {
   OntologyResourceUsageOptions,
   OntologyValidationResult,
   ObservabilityDetectRequest,
+  PipelineBranchCreateRequest,
+  PipelineBranchProposeRequest,
+  PipelineBranchRebaseRequest,
+  PipelineDeployRequest,
+  PipelineGraphUpdateRequest,
+  PipelinePreviewNodeRequest,
+  PipelineProposalAssignRequest,
+  PipelineProposalDecisionRequest,
+  PipelineRunStartRequest,
+  PipelineScheduleUpsertRequest,
   OsdkActionPayload,
   OsdkActionResult,
   OsdkFetchPageOptions,
@@ -897,9 +907,58 @@ export function createInsightReviewWorkspaceRecipe(
 }
 
 export function createPipelineBuilderRecipe(
-  client: Pick<FoundryLiteGeneratedClient, "transforms" | "operations">,
+  client: Pick<FoundryLiteGeneratedClient, "pipelines" | "transforms" | "operations">,
 ) {
   return {
+    createBranch: (payload: PipelineBranchCreateRequest, options: { idempotencyKey: string }) =>
+      client.pipelines.branches.create(payload, options),
+    listBranches: (filters: { status?: string; limit?: number } = {}) =>
+      client.pipelines.branches.list(filters),
+    getBranch: (branchId: string) => client.pipelines.branches.get(branchId),
+    updateGraph: (branchId: string, payload: PipelineGraphUpdateRequest) =>
+      client.pipelines.branches.updateGraph(branchId, payload),
+    diff: (branchId: string) => client.pipelines.branches.diff(branchId),
+    rebase: (branchId: string, payload: PipelineBranchRebaseRequest) =>
+      client.pipelines.branches.rebase(branchId, payload),
+    propose: (
+      branchId: string,
+      payload: PipelineBranchProposeRequest,
+      options: { idempotencyKey: string },
+    ) => client.pipelines.branches.propose(branchId, payload, options),
+    abandon: (branchId: string) => client.pipelines.branches.abandon(branchId),
+    validate: (branchId: string) => client.pipelines.graph.validate(branchId),
+    suggestCasts: (branchId: string, nodeId: string) =>
+      client.pipelines.graph.suggestCasts(branchId, nodeId),
+    previewNode: (branchId: string, nodeId: string, options: PipelinePreviewNodeRequest = {}) =>
+      client.pipelines.graph.previewNode(branchId, nodeId, options),
+    stats: (branchId: string, nodeId: string, options: PipelinePreviewNodeRequest = {}) =>
+      client.pipelines.graph.stats(branchId, nodeId, options),
+    runTests: (branchId: string) => client.pipelines.graph.runTests(branchId),
+    listProposals: (filters: { status?: string; limit?: number } = {}) =>
+      client.pipelines.proposals.list(filters),
+    getProposal: (proposalId: string) => client.pipelines.proposals.get(proposalId),
+    assignProposal: (proposalId: string, payload: PipelineProposalAssignRequest) =>
+      client.pipelines.proposals.assign(proposalId, payload),
+    decideProposal: (proposalId: string, payload: PipelineProposalDecisionRequest) =>
+      client.pipelines.proposals.decide(proposalId, payload),
+    executeProposal: (proposalId: string) => client.pipelines.proposals.execute(proposalId),
+    withdrawProposal: (proposalId: string) => client.pipelines.proposals.withdraw(proposalId),
+    listVersions: (pipelineId: string, filters: { limit?: number } = {}) =>
+      client.pipelines.versions.list(pipelineId, filters),
+    getVersion: (versionId: string) => client.pipelines.versions.get(versionId),
+    deploy: (pipelineId: string, versionId: string, payload: PipelineDeployRequest = {}) =>
+      client.pipelines.deploy(pipelineId, versionId, payload),
+    startRun: (pipelineId: string, payload: PipelineRunStartRequest = {}) =>
+      client.pipelines.runs.start(pipelineId, payload),
+    getRun: (runId: string) => client.pipelines.runs.get(runId),
+    timeline: (runId: string) => client.pipelines.runs.timeline(runId),
+    cancelRun: (runId: string) => client.pipelines.runs.cancel(runId),
+    upsertSchedule: (pipelineId: string, payload: PipelineScheduleUpsertRequest) =>
+      client.pipelines.schedules.upsert(pipelineId, payload),
+    getSchedule: (pipelineId: string) => client.pipelines.schedules.get(pipelineId),
+    deleteSchedule: (pipelineId: string) => client.pipelines.schedules.delete(pipelineId),
+    previewDue: (options: { maxRuns?: number } = {}) => client.pipelines.schedules.previewDue(options),
+    tick: (options: { maxRuns?: number } = {}) => client.pipelines.schedules.tick(options),
     registerSql: (payload: TransformSqlRegisterRequest) => client.transforms.registerSql(payload),
     runTransform: (apiName: string) => client.transforms.run(apiName),
     registerAndRunSql: async (payload: TransformSqlRegisterRequest) => {

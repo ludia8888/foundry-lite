@@ -65,6 +65,7 @@ class SdkClientSurface:
     materializations: tuple[str, ...]
     aip: tuple[OperationClientSurface, ...]
     transforms: tuple[str, ...]
+    pipelines: tuple[OperationClientSurface, ...]
     operations: tuple[OperationClientSurface, ...]
     helpers: tuple[str, ...]
 
@@ -174,6 +175,18 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             OperationClientSurface("releases", ("promote",)),
         ),
         transforms=("registerSql", "run", "previewDue", "tick"),
+        pipelines=(
+            OperationClientSurface(
+                "branches",
+                ("create", "list", "get", "updateGraph", "diff", "rebase", "propose", "abandon"),
+            ),
+            OperationClientSurface("graph", ("validate", "suggestCasts", "previewNode", "stats", "runTests")),
+            OperationClientSurface("proposals", ("list", "get", "assign", "decide", "execute", "withdraw")),
+            OperationClientSurface("versions", ("list", "get")),
+            OperationClientSurface("runs", ("start", "get", "timeline", "cancel")),
+            OperationClientSurface("schedules", ("upsert", "get", "delete", "previewDue", "tick")),
+            OperationClientSurface("_self", ("deploy",)),
+        ),
         operations=(
             OperationClientSurface("admin", ("overview", "taskPlan")),
             OperationClientSurface(
@@ -293,6 +306,7 @@ def render_client_surface_json(surface: SdkClientSurface) -> str:
             "resources": list(ONTOLOGY_RESOURCE_METHODS),
         },
         "operations": _methods_payload(surface.operations),
+        "pipelines": _operation_surface_payload(surface.pipelines),
         "system": list(surface.system),
         "transforms": list(surface.transforms),
     }

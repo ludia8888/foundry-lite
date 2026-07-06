@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 from foundry_lite.application.dependencies import CoreDependencies
-from foundry_lite.application.services.action_service import ActionService
 from foundry_lite.application.services.action_services import ActionServices
 from foundry_lite.application.services.aip.action_proposal import ActionProposalService
 from foundry_lite.application.services.aip.agent_runtime import AgentRuntimeService
@@ -35,6 +34,7 @@ from foundry_lite.application.services.ontology_services import OntologyServices
 from foundry_lite.application.services.osdk_application_service import OsdkApplicationService
 from foundry_lite.application.services.osdk_application_services import OsdkApplicationServices
 from foundry_lite.application.services.osdk_oauth_session_service import OsdkOAuthSessionService
+from foundry_lite.application.services.pipeline_services import PipelineServices
 from foundry_lite.application.services.runtime_bundle import (
     ErasureService,
     IcebergMaintenanceService,
@@ -53,7 +53,6 @@ from foundry_lite.application.services.transform_services import TransformServic
 
 __all__ = [
     "CoreServices",
-    "ActionService",
     "ActionServices",
     "AgentRuntimeService",
     "ActionProposalService",
@@ -84,6 +83,7 @@ __all__ = [
     "OsdkApplicationService",
     "OsdkApplicationServices",
     "OsdkOAuthSessionService",
+    "PipelineServices",
     "OutboxPublisherService",
     "RecordDlqService",
     "RuntimeEvidenceService",
@@ -148,6 +148,7 @@ class CoreServices:
     ontology_search: OntologySearchService
     osdk_applications: OsdkApplicationServices
     osdk_oauth_sessions: OsdkOAuthSessionService
+    pipelines: PipelineServices
     outbox_publisher: OutboxPublisherService
     record_dlq: RecordDlqService
     runtime_evidence: RuntimeEvidenceService
@@ -182,6 +183,7 @@ def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices
 
 
 def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreServices) -> CoreServices:
+    # fmt: off
     return CoreServices(
         action=ActionServices.create(dependencies),
         agent_runtime=build_service(AgentRuntimeService, dependencies),
@@ -190,12 +192,10 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         backup_restore=shared["backup_restore"],
         builder_runtime=build_service(BuilderRuntimeService, dependencies),
         connector_onboarding=build_service(ConnectorOnboardingService, dependencies),
-        source_management=shared["source_management"],
-        source_scheduler=shared["source_scheduler"],
+        source_management=shared["source_management"], source_scheduler=shared["source_scheduler"],
         source_onboarding=build_service(SourceOnboardingService, dependencies),
         context_compiler=build_service(ContextCompilerService, dependencies),
-        dataset=shared["dataset"],
-        demo=build_service(DemoService, dependencies),
+        dataset=shared["dataset"], demo=build_service(DemoService, dependencies),
         erasure=build_service(ErasureService, dependencies),
         evals=build_service(EvalService, dependencies),
         function_execution=build_service(FunctionExecutionService, dependencies),
@@ -214,6 +214,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         ontology_search=build_service(OntologySearchService, dependencies),
         osdk_applications=OsdkApplicationServices.create(dependencies),
         osdk_oauth_sessions=build_service(OsdkOAuthSessionService, dependencies),
+        pipelines=PipelineServices.create(dependencies),
         outbox_publisher=build_service(OutboxPublisherService, dependencies),
         record_dlq=build_service(RecordDlqService, dependencies),
         runtime_evidence=build_service(RuntimeEvidenceService, dependencies),
@@ -221,6 +222,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         transform=TransformServices.create(dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies),
     )
+    # fmt: on
 
 
 def _bind_runtime_evidence_boundary(services: CoreServices) -> None:
@@ -242,9 +244,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         *services.backup_restore.items(),
         services.builder_runtime,
         services.connector_onboarding,
-        services.source_management,
-        services.source_scheduler,
-        services.source_onboarding,
+        *_source_service_items(services),
         services.context_compiler,
         *services.dataset.items(),
         services.demo,
@@ -266,12 +266,21 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
         services.ontology_search,
         *services.osdk_applications.items(),
         services.osdk_oauth_sessions,
+        *services.pipelines.items(),
         services.outbox_publisher,
         services.record_dlq,
         services.runtime_evidence,
         services.runtime,
         *services.transform.items(),
         services.workflow,
+    ]
+
+
+def _source_service_items(services: CoreServices) -> list[CoreService]:
+    return [
+        services.source_management,
+        services.source_scheduler,
+        services.source_onboarding,
     ]
 
 
@@ -346,6 +355,11 @@ def _data_collaborator_map(services: CoreServices) -> dict[str, CoreService]:
         "transform_graph_service": services.transform.graph,
         "transform_run_service": services.transform.run,
         "transform_scheduler_service": services.transform.scheduler,
+        "pipeline_compiler_service": services.pipelines.compiler,
+        "pipeline_definition_service": services.pipelines.definition,
+        "pipeline_governance_service": services.pipelines.governance,
+        "pipeline_graph_validation_service": services.pipelines.graph_validation,
+        "pipeline_run_service": services.pipelines.run,
     }
 
 

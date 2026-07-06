@@ -97,6 +97,14 @@ from foundry_lite.infrastructure.schema.osdk import (
     osdk_sdk_release_channels,
     osdk_sdk_versions,
 )
+from foundry_lite.infrastructure.schema.pipelines import (
+    pipeline_branches,
+    pipeline_proposals,
+    pipeline_runs,
+    pipeline_schedules,
+    pipeline_test_results,
+    pipeline_versions,
+)
 from foundry_lite.infrastructure.schema.privacy import (
     erasure_certificates,
     erasure_redaction_executions,
@@ -184,6 +192,12 @@ __all__ = [
     "osdk_sdk_compatibility_windows",
     "osdk_sdk_release_channels",
     "osdk_sdk_versions",
+    "pipeline_branches",
+    "pipeline_proposals",
+    "pipeline_runs",
+    "pipeline_schedules",
+    "pipeline_test_results",
+    "pipeline_versions",
     "insight_reviews",
     "object_change_counters",
     "object_conflicts",

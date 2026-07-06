@@ -56,6 +56,7 @@ from foundry_lite.application.ports.model_registry_repository import ModelRegist
 from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
 from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
 from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
+from foundry_lite.application.ports.pipeline_repository import PipelineRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
@@ -74,8 +75,6 @@ _KNOWN_RUNTIME_PROFILES = _LOCAL_RUNTIME_PROFILES | _PROTECTED_RUNTIME_PROFILES
 
 @dataclass(frozen=True)
 class RuntimeProfile:
-    """Normalized runtime profile used by application and infrastructure composition roots."""
-
     name: str = "local"
 
     @classmethod
@@ -87,7 +86,7 @@ class RuntimeProfile:
             normalized = "local"
         if normalized not in _KNOWN_RUNTIME_PROFILES:
             raise ValueError(
-                f"unknown FOUNDRY_LITE_RUNTIME_PROFILE: {normalized}; choose local, demo, test, staging, or production"
+                f"unknown FOUNDRY_LITE_RUNTIME_PROFILE: {normalized}; choose local/demo/test/staging/production"
             )
         return cls(normalized)
 
@@ -128,6 +127,7 @@ class ActionDependencies:
 class DataDependencies:
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
+    pipeline_repository: PipelineRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository
@@ -304,6 +304,10 @@ class CoreDependencies:
     @property
     def ontology_branch_repository(self) -> OntologyBranchRepository:
         return self.data.ontology_branch_repository
+
+    @property
+    def pipeline_repository(self) -> PipelineRepository:
+        return self.data.pipeline_repository
 
     @property
     def transform_repository(self) -> TransformRepository:

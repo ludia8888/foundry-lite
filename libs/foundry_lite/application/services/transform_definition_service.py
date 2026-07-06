@@ -89,6 +89,33 @@ class TransformDefinitionService(CoreService):
             language="sql",
         )
 
+    def register_python_transform(
+        self,
+        api_name: str,
+        *,
+        source_code: str,
+        function_name: str | None,
+        inputs: Mapping[str, str],
+        output_dataset_ref: str,
+        checks: Sequence[TransformCheck] | None = None,
+        ctx: RequestContext | None = None,
+        mode: str = "snapshot",
+    ) -> TransformRow:
+        ctx = ctx or RequestContext()
+        self.runtime_service._require_or_audit(ctx, "transform:run", "transform", api_name)
+        require_transform_write_open(self.runtime_service, ctx, "register_python_transform", "transform", api_name)
+        entrypoint = self._write_registered_python(ctx, api_name, source_code, function_name)
+        return self._register_definition(
+            ctx,
+            api_name,
+            entrypoint=entrypoint,
+            inputs=inputs,
+            output_dataset_ref=output_dataset_ref,
+            checks=checks,
+            mode=mode,
+            language="python",
+        )
+
     def _write_registered_sql(self, ctx: RequestContext, api_name: str, sql: str) -> Path:
         if not sql.strip():
             raise ValidationFailed("SQL transform body is required", details={"api_name": api_name})
@@ -97,6 +124,23 @@ class TransformDefinitionService(CoreService):
         entrypoint.parent.mkdir(parents=True, exist_ok=True)
         entrypoint.write_text(sql, encoding="utf-8")
         return entrypoint
+
+    def _write_registered_python(
+        self,
+        ctx: RequestContext,
+        api_name: str,
+        source_code: str,
+        function_name: str | None,
+    ) -> str:
+        if not source_code.strip():
+            raise ValidationFailed("Python transform sourceCode is required", details={"api_name": api_name})
+        normalized_function = _normalized_python_function(function_name)
+        entrypoint = _registered_python_entrypoint(self.root, ctx.tenant_id, api_name)
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text(source_code, encoding="utf-8")
+        if normalized_function is None:
+            return str(entrypoint)
+        return f"{entrypoint}:{normalized_function}"
 
     def _register_definition(
         self,
@@ -299,3 +343,20 @@ def _registered_sql_entrypoint(root: Path, tenant_id: str, api_name: str) -> Pat
     slug = safe_transform_path_token(api_name, "api_name")
     digest = hashlib.sha256(f"{tenant_id}:{api_name}".encode()).hexdigest()[:12]
     return root / "registered-transforms" / tenant_slug / f"{slug}-{digest}.sql"
+
+
+def _registered_python_entrypoint(root: Path, tenant_id: str, api_name: str) -> Path:
+    tenant_slug = safe_transform_path_token(tenant_id, "tenant_id")
+    slug = safe_transform_path_token(api_name, "api_name")
+    digest = hashlib.sha256(f"{tenant_id}:{api_name}".encode()).hexdigest()[:12]
+    return root / "registered-transforms" / tenant_slug / f"{slug}-{digest}.py"
+
+
+def _normalized_python_function(function_name: str | None) -> str | None:
+    if function_name is None:
+        return None
+    normalized = function_name.strip()
+    if not normalized:
+        raise ValidationFailed("Python transform functionName is empty", details={"functionName": function_name})
+    safe_transform_path_token(normalized, "functionName")
+    return normalized

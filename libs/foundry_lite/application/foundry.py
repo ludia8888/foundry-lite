@@ -23,6 +23,7 @@ from foundry_lite.application.facades import (
     ObjectStore,
     OntologyRegistry,
     OperationsConsole,
+    PipelineWorkspace,
     SourceWorkspace,
     SupplyChainDemo,
     TransformPipeline,
@@ -85,6 +86,7 @@ class FoundryLite:
         self.policy = dependencies.policy
         self.action_repository = dependencies.action_repository
         self.ontology_repository = dependencies.ontology_repository
+        self.pipeline_repository = dependencies.pipeline_repository
         self.transform_repository = dependencies.transform_repository
         self.materialization_repository = dependencies.materialization_repository
         self.dataset_quality_repository = dependencies.dataset_quality_repository
@@ -110,22 +112,20 @@ class FoundryLite:
         self.model_registry_repository = dependencies.model_registry_repository
 
     def _attach_facades(self, services: CoreServices) -> None:
+        self._attach_data_facades(services)
+        self._attach_aip_facades(services)
+        self._attach_operations_facades(services)
+        self.demo = SupplyChainDemo(services.demo, reset_fresh=lambda: self.reset(confirm_dev=True))
+
+    def _attach_data_facades(self, services: CoreServices) -> None:
         self.datasets = DatasetWorkspace(services.dataset)
         self.transforms = TransformPipeline(services.transform.entrypoint)
+        self.pipelines = PipelineWorkspace(services.pipelines.entrypoint)
         self.ontology = _ontology_registry(services)
         self.objects = ObjectStore(services.object_store, services.ontology_search)
         self.actions = ActionGateway(services.action.entrypoint)
         self.functions = FunctionGateway(services.function_execution)
         self.auth = AuthGateway(services.osdk_oauth_sessions)
-        self.aip = AipWorkspace(
-            services.agent_runtime,
-            services.action_proposal,
-            services.approval_execution,
-            services.builder_runtime,
-            services.logic_runtime,
-            services.evals,
-            services.visual_builder,
-        )
         self.materialization = MaterializationRunner(services.materialization)
         self.insights = InsightReviewWorkspace(services.insight_review)
         self.media = MediaWorkspace(services.media)
@@ -137,6 +137,19 @@ class FoundryLite:
         )
         self.erasure = ErasureGateway(services.erasure)
         self.developer_console = DeveloperConsole(services.osdk_applications.entrypoint)
+
+    def _attach_aip_facades(self, services: CoreServices) -> None:
+        self.aip = AipWorkspace(
+            services.agent_runtime,
+            services.action_proposal,
+            services.approval_execution,
+            services.builder_runtime,
+            services.logic_runtime,
+            services.evals,
+            services.visual_builder,
+        )
+
+    def _attach_operations_facades(self, services: CoreServices) -> None:
         self.operations = OperationsConsole(
             services.action.entrypoint,
             services.runtime,
@@ -148,7 +161,6 @@ class FoundryLite:
             services.prompt_artifact,
             services.outbox_publisher,
         )
-        self.demo = SupplyChainDemo(services.demo, reset_fresh=lambda: self.reset(confirm_dev=True))
 
     def reset(self, *, confirm_dev: bool = False) -> None:
         if not confirm_dev:

@@ -187,6 +187,10 @@ import type {
   OsdkPage,
   OutboxPublishBatchResult,
   OutboxPublishRequest,
+  PipelineBranch,
+  PipelineListResult,
+  PipelinePreviewNodeRequest,
+  PipelineProposal,
   PollFoundryLiteOperationOptions,
   PromptArtifactReadResult,
   ProductWorkflowRun,
@@ -3717,6 +3721,104 @@ export function foundryLiteInsightReviewDecisionLockKey(
   payload: FoundryLiteInsightReviewDecisionPayload,
 ): string {
   return `insights:review:decision:${payload.reviewId}:${payload.idempotencyKey}`;
+}
+
+export type FoundryLitePipelineBuilderData = {
+  branches: PipelineBranch[];
+  proposals: PipelineProposal[];
+};
+
+export type FoundryLitePipelineBuilderOptions =
+  FoundryLiteQueryOptions<FoundryLitePipelineBuilderData> & {
+    branchStatus?: string;
+    proposalStatus?: string;
+    limit?: number;
+  };
+
+export function useFoundryLitePipelineBuilder(
+  client: Pick<FoundryLiteGeneratedClient, "pipelines">,
+  options: FoundryLitePipelineBuilderOptions = {},
+): FoundryLiteQueryState<FoundryLitePipelineBuilderData> {
+  const { branchStatus, proposalStatus, limit, ...queryOptions } = options;
+  const load = useCallback(async () => {
+    const [branches, proposals] = await Promise.all([
+      client.pipelines.branches.list({ status: branchStatus, limit }),
+      client.pipelines.proposals.list({ status: proposalStatus, limit }),
+    ]);
+    return { branches: branches.items, proposals: proposals.items };
+  }, [branchStatus, client, limit, proposalStatus]);
+  return useFoundryLiteQuery(["pipelines", "builder", branchStatus, proposalStatus, limit], load, queryOptions);
+}
+
+export function useFoundryLitePipelineGraph(
+  client: Pick<FoundryLiteGeneratedClient, "pipelines">,
+  branchId: string | null | undefined,
+  options: FoundryLiteQueryOptions<Record<string, unknown>> = {},
+): FoundryLiteQueryState<Record<string, unknown>> {
+  const load = useCallback(async () => {
+    if (!branchId) return { branch: null, validation: null, diff: null };
+    const [branch, validation, diff] = await Promise.all([
+      client.pipelines.branches.get(branchId),
+      client.pipelines.graph.validate(branchId),
+      client.pipelines.branches.diff(branchId),
+    ]);
+    return { branch, validation, diff };
+  }, [branchId, client]);
+  return useFoundryLiteQuery(["pipelines", "graph", branchId], load, {
+    ...options,
+    enabled: options.enabled ?? Boolean(branchId),
+  });
+}
+
+export function useFoundryLitePipelinePreview(
+  client: Pick<FoundryLiteGeneratedClient, "pipelines">,
+  branchId: string | null | undefined,
+  nodeId: string | null | undefined,
+  previewOptions: PipelinePreviewNodeRequest = {},
+  options: FoundryLiteQueryOptions<Record<string, unknown>> = {},
+): FoundryLiteQueryState<Record<string, unknown>> {
+  const load = useCallback(async () => {
+    if (!branchId || !nodeId) return { preview: null, stats: null, casts: null };
+    const [preview, stats, casts] = await Promise.all([
+      client.pipelines.graph.previewNode(branchId, nodeId, previewOptions),
+      client.pipelines.graph.stats(branchId, nodeId, previewOptions),
+      client.pipelines.graph.suggestCasts(branchId, nodeId),
+    ]);
+    return { preview, stats, casts };
+  }, [branchId, client, nodeId, previewOptions]);
+  return useFoundryLiteQuery(["pipelines", "preview", branchId, nodeId, previewOptions], load, {
+    ...options,
+    enabled: options.enabled ?? Boolean(branchId && nodeId),
+  });
+}
+
+export function useFoundryLitePipelineReview(
+  client: Pick<FoundryLiteGeneratedClient, "pipelines">,
+  options: FoundryLiteQueryOptions<PipelineListResult<PipelineProposal>> & {
+    status?: string;
+    limit?: number;
+  } = {},
+): FoundryLiteQueryState<PipelineListResult<PipelineProposal>> {
+  const { status, limit, ...queryOptions } = options;
+  const load = useCallback(() => client.pipelines.proposals.list({ status, limit }), [client, limit, status]);
+  return useFoundryLiteQuery(["pipelines", "review", status, limit], load, queryOptions);
+}
+
+export function useFoundryLiteProvidedPipelineBuilder(
+  options: FoundryLitePipelineBuilderOptions = {},
+): FoundryLiteQueryState<FoundryLitePipelineBuilderData> {
+  const client = useFoundryLiteClient();
+  return useFoundryLitePipelineBuilder(client, options);
+}
+
+export function useFoundryLiteProvidedPipelineReview(
+  options: FoundryLiteQueryOptions<PipelineListResult<PipelineProposal>> & {
+    status?: string;
+    limit?: number;
+  } = {},
+): FoundryLiteQueryState<PipelineListResult<PipelineProposal>> {
+  const client = useFoundryLiteClient();
+  return useFoundryLitePipelineReview(client, options);
 }
 
 export type FoundryLiteSqlTransformSubmitPhase = "idle" | "registering" | "running" | "succeeded" | "failed";

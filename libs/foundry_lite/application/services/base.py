@@ -52,6 +52,7 @@ from foundry_lite.application.ports.model_registry_repository import ModelRegist
 from foundry_lite.application.ports.oauth_session_repository import OAuthSessionRepository, OAuthTokenIssuer
 from foundry_lite.application.ports.ontology_branch_repository import OntologyBranchRepository
 from foundry_lite.application.ports.osdk_application_repository import OsdkApplicationRepository
+from foundry_lite.application.ports.pipeline_repository import PipelineRepository
 from foundry_lite.application.ports.search_adapter import SearchAdapter
 from foundry_lite.application.ports.secret_provider import SecretProvider, SecretVault
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
@@ -135,6 +136,11 @@ SERVICE_COLLABORATORS: Mapping[str, str] = {
     "osdk_application_sdk_service": "OsdkApplicationSdkService",
     "osdk_oauth_session_service": "OsdkOAuthSessionService",
     "outbox_publisher_service": "OutboxPublisherService",
+    "pipeline_compiler_service": "PipelineCompilerService",
+    "pipeline_definition_service": "PipelineDefinitionService",
+    "pipeline_governance_service": "PipelineGovernanceService",
+    "pipeline_graph_validation_service": "PipelineGraphValidationService",
+    "pipeline_run_service": "PipelineRunService",
     "record_dlq_service": "RecordDlqService",
     "runtime_service": "RuntimeService",
     "tool_broker_service": "ToolBrokerService",
@@ -217,6 +223,7 @@ class CoreService:
     ai_run_repository: AiRunRepository
     ontology_repository: OntologyRepository
     ontology_branch_repository: OntologyBranchRepository
+    pipeline_repository: PipelineRepository
     transform_repository: TransformRepository
     materialization_repository: MaterializationRepository
     dataset_quality_repository: DatasetQualityRepository

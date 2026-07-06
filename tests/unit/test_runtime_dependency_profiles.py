@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,18 @@ def test_kafka_stream_profile_uses_existing_kafka_adapter(
     )
 
     assert isinstance(dependencies.stream_adapter, KafkaStreamAdapter)
+
+
+def test_flat_compute_adapter_override_preserves_pipeline_repository(tmp_path: Path) -> None:
+    dependencies = create_runtime_core_dependencies(
+        profile=RuntimeProfile.from_value("test"),
+        db_url="sqlite:///:memory:",
+        storage_root=tmp_path,
+    )
+
+    replaced = replace(dependencies, compute_adapter=dependencies.compute_adapter)
+
+    assert replaced.pipeline_repository is dependencies.pipeline_repository
 
 
 def test_production_dependencies_reject_local_profiles(tmp_path: Path) -> None:

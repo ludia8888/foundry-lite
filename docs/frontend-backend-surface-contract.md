@@ -59,6 +59,7 @@ SDK helper, 파일을 봐야 하는지 남긴다.
 | Actions | generated `client.actions.ApproveOrder.apply(...)` |
 | Materializations | `client.materializations.run(...)` |
 | Transforms | `client.transforms.registerSql(...)`, `client.transforms.run(...)`, `client.transforms.previewDue(...)`, `client.transforms.tick(...)` |
+| Pipelines | `client.pipelines.branches.create/list/get/updateGraph/diff/rebase/propose/abandon(...)`, `client.pipelines.graph.validate/suggestCasts/previewNode/stats/runTests(...)`, `client.pipelines.proposals.*`, `client.pipelines.versions.*`, `client.pipelines.deploy(...)`, `client.pipelines.runs.*`, `client.pipelines.schedules.*` |
 | Operations | run list/detail, AI prompt artifact access, admin overview, lineage get, transform retry, index replay, bounded outbox publish, outbox DLQ retry, Record DLQ controls |
 | Platform Ops | observability detect, backup/restore, reconciliation, workflows, Iceberg maintenance `planReadOnly`/`plan`/`run` |
 | Connectors | `client.connectors.connections.create/list/get/update(...)`, `client.connectors.resources.upsert/test/startSync(...)` |
@@ -900,6 +901,50 @@ typing when the proposal has a generated action, target object id, and expected 
 creation/assignment/decision idempotency in the SDK layer, while evidence panel UI, model-diff UI, approval policy UI,
 and autonomous approved-action orchestration remain product-specific workspace work.
 
+### Pipeline builder graph workspace
+
+```tsx
+const builder = useFoundryLiteProvidedPipelineBuilder();
+const branch = await builder.createBranch({
+  pipelineId: "orders-readiness",
+  name: "join-orders-customers",
+  idempotencyKey: "pipeline-branch-orders-readiness",
+});
+
+await builder.updateGraph(branch.id, {
+  graph: {
+    nodes: [
+      { id: "orders", type: "dataset", config: { datasetRef: "raw.orders" } },
+      { id: "customers", type: "dataset", config: { datasetRef: "raw.customers" } },
+      { id: "join", type: "join", config: { leftKey: "customer_id", rightKey: "id" } },
+      { id: "py", type: "python", config: { functionName: "score_rows", sourceCode: "def score_rows(rows): return rows" } },
+      { id: "out", type: "output_dataset", config: { outputDatasetRef: "clean.orders_readiness" } },
+    ],
+    edges: [
+      { source: "orders", target: "join", targetHandle: "left" },
+      { source: "customers", target: "join", targetHandle: "right" },
+      { source: "join", target: "py" },
+      { source: "py", target: "out" },
+    ],
+    outputContract: { columns: [{ name: "id", type: "string", nullable: false }] },
+  },
+  expectedFingerprint: branch.graphFingerprint,
+});
+
+const validation = await builder.validate(branch.id);
+const casts = await builder.suggestCasts(branch.id, "join");
+const preview = await builder.previewNode(branch.id, "py", { limit: 50 });
+const proposal = await builder.propose(branch.id, {
+  title: "Deploy orders readiness pipeline",
+  idempotencyKey: "pipeline-proposal-orders-readiness",
+});
+```
+
+The graph workspace SDK now covers branch creation, CAS graph save, validation, cast suggestions, preview/stats,
+test execution, proposal/review, deploy, runs, schedules, and version reads without raw `/api/...` calls. Python nodes
+send `sourceCode` and `functionName`; frontend code does not send or receive server file paths. Ontology activation,
+virtual table output, and time-series output remain future Pipeline Builder scope.
+
 ### SQL pipeline builder
 
 ```tsx
@@ -930,11 +975,10 @@ if (sqlTransform.hasOutputDatasetVersion) {
 }
 ```
 
-This is the current SDK path for a SQL transform builder screen: register the transform definition, optionally run it,
-then use the returned dataset version metadata as the serving evidence. Client-injected screens can still use
+This remains the compatibility SDK path for a focused SQL transform builder screen: register the transform definition,
+optionally run it, then use the returned dataset version metadata as the serving evidence. Client-injected screens can still use
 `useFoundryLiteSqlTransformSubmit(client)`, and shared model code can call `foundryLiteSqlTransformSubmitView(...)` to
-derive the same screen state. Full visual pipeline-builder UX, direct Operations run-detail linking for transform runs,
-and executable Python transform authoring remain separate product work.
+derive the same screen state.
 
 ### Long-running operation
 
@@ -1621,7 +1665,7 @@ browser actions.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 185 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 216 frontend route surfaces
 -> browser SDK helper-contract proof for 25 frontend foundation helpers
 -> SDK TypeScript typecheck for package entrypoints, generated types, optional React helpers, and screen recipes
 -> `@foundry-lite/sdk/screen-recipes` importable recipe builders for core product screens

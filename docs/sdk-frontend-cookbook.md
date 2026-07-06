@@ -899,13 +899,61 @@ and autonomous approved-action execution orchestration.
 
 ## Pipeline Builder
 
-Pipeline Builder screens can register SQL transforms and optionally run them without knowing the backend route shape.
+Pipeline Builder screens can now work graph-first: create a branch, save nodes/edges/layout/output contracts with a
+CAS fingerprint, validate the graph, preview/stats a node, run tests, send the branch to review, deploy an approved
+version, start/cancel runs, and manage schedules through `client.pipelines.*`.
 
 ```ts
 import { createPipelineBuilderRecipe } from "@foundry-lite/sdk/screen-recipes";
 
 const pipeline = createPipelineBuilderRecipe(client);
 
+const branch = await pipeline.createBranch({
+  pipelineId: "orders-readiness",
+  name: "join-orders-customers",
+  idempotencyKey: "pipeline-branch-orders-readiness",
+});
+
+await pipeline.updateGraph(branch.id, {
+  graph: {
+    nodes: [
+      { id: "orders", type: "dataset", config: { datasetRef: "raw.orders" } },
+      { id: "customers", type: "dataset", config: { datasetRef: "raw.customers" } },
+      { id: "join", type: "join", config: { leftKey: "customer_id", rightKey: "id" } },
+      { id: "python-score", type: "python", config: { functionName: "score_rows", sourceCode: "def score_rows(rows): return rows" } },
+      { id: "out", type: "output_dataset", config: { outputDatasetRef: "clean.orders_readiness" } },
+    ],
+    edges: [
+      { source: "orders", target: "join", targetHandle: "left" },
+      { source: "customers", target: "join", targetHandle: "right" },
+      { source: "join", target: "python-score" },
+      { source: "python-score", target: "out" },
+    ],
+    outputContract: { columns: [{ name: "id", type: "string", nullable: false }] },
+    tests: [],
+  },
+  expectedFingerprint: branch.graphFingerprint,
+});
+
+const validation = await pipeline.validate(branch.id);
+const preview = await pipeline.previewNode(branch.id, "python-score", { limit: 50 });
+const proposal = await pipeline.propose(branch.id, {
+  title: "Deploy orders readiness pipeline",
+  idempotencyKey: "pipeline-proposal-orders-readiness",
+});
+
+renderPipelineCanvas({ branch, validation, preview, proposal });
+```
+
+React graph screens can use `useFoundryLitePipelineBuilder(...)`, `useFoundryLitePipelineGraph(...)`,
+`useFoundryLitePipelinePreview(...)`, `useFoundryLitePipelineReview(...)`, or provider-backed pipeline hooks for branch,
+canvas, preview, and review state. Python nodes send `sourceCode`, `functionName`, and `inputs`; the backend stores the
+managed artifact and the frontend never handles raw server file paths.
+
+The older SQL transform builder path is still supported when a screen only needs one SQL definition and an optional
+run:
+
+```ts
 const { transform, run } = await pipeline.registerAndRunSql({
   apiName: "clean_invoice_totals",
   sql: "select * from {{ input('raw.invoices') }}",
@@ -1281,7 +1329,7 @@ worker, or bootstrap work is browser-safe.
 | Media upload/process/search | `createMediaWorkspaceRecipe(...)`, `useFoundryLiteProvidedMediaPipeline(...)`, `useFoundryLiteMediaUpload(...)`, `useFoundryLiteMediaProcessing(...)`, `useFoundryLiteMediaSearch(...)` |
 | AIP run screens | `createAipWorkspaceRecipe(...)`, `useFoundryLiteAipAgentRun(...)`, `useFoundryLiteAipBuilderRun(...)`, `useFoundryLiteProvidedAipAgentRunWithOperationsDetail(...)`, `useFoundryLiteProvidedAipBuilderRunWithOperationsDetail(...)`, `operationsDetail`, `hasOperationsDetail` |
 | Insight review workspace | `createInsightReviewWorkspaceRecipe(...)`, `useFoundryLiteProvidedInsightReviewQueue(...)`, `useFoundryLiteInsightReviewDecision(...)` |
-| SQL pipeline builder | `createPipelineBuilderRecipe(...)`, `useFoundryLiteSqlTransformSubmit(...)`, `useFoundryLiteProvidedSqlTransformSubmit(...)`, `foundryLiteSqlTransformSubmitView(...)`, `outputDatasetVersionId`, `outputDatasetRowCount`, `outputManifestUri` |
+| Pipeline builder graph workspace | `client.pipelines.*`, `createPipelineBuilderRecipe(...)`, `useFoundryLitePipelineBuilder(...)`, `useFoundryLitePipelineGraph(...)`, `useFoundryLitePipelinePreview(...)`, `useFoundryLitePipelineReview(...)`, legacy `useFoundryLiteSqlTransformSubmit(...)`, `useFoundryLiteProvidedSqlTransformSubmit(...)`, `foundryLiteSqlTransformSubmitView(...)`, `outputDatasetVersionId`, `outputDatasetRowCount`, `outputManifestUri` |
 | Long-running jobs | `createLongRunningOperationRecipe(...)`, `pollFoundryLiteOperation(...)`, `useFoundryLiteLongRunningJob(...)`, `useFoundryLiteLiveOperationTimeline(...)`, `useFoundryLiteProvidedLiveOperationTimeline(...)` |
 | Event streams | `streamFoundryLiteOperationEvents(...)`, `useFoundryLiteOperationEventStream(...)`, `useFoundryLiteProvidedOperationEventStream(...)`, `timelineItems` |
 | Operations evidence investigation | `createOperationsEvidenceRecipe(...)`, `useFoundryLiteOperationsInvestigation(...)`, `useFoundryLiteOperationsRunList(...)`, `useFoundryLiteOperationsRunDetail(...)`, `useFoundryLitePromptArtifact(...)` |

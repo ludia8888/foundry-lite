@@ -140,6 +140,7 @@ from foundry_lite.infrastructure.repositories import (
     SqlAlchemyOntologyBranchRepository,
     SqlAlchemyOntologyRepository,
     SqlAlchemyOsdkApplicationRepository,
+    SqlAlchemyPipelineRepository,
     SqlAlchemyRuntimeRepository,
     SqlAlchemySourceManagementRepository,
     SqlAlchemySourceRegistryRepository,
@@ -381,6 +382,7 @@ def _create_core_dependencies(
         data=DataDependencies(
             ontology_repository=ontology_repository,
             ontology_branch_repository=SqlAlchemyOntologyBranchRepository(engine),
+            pipeline_repository=SqlAlchemyPipelineRepository(engine),
             transform_repository=SqlAlchemyTransformRepository(engine),
             materialization_repository=SqlAlchemyMaterializationRepository(engine),
             dataset_quality_repository=SqlAlchemyDatasetQualityRepository(engine),
