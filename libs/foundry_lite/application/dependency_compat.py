@@ -27,6 +27,7 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
     "data": (
         "ontology_repository",
         "ontology_branch_repository",
+        "pipeline_repository",
         "transform_repository",
         "materialization_repository",
         "dataset_quality_repository",
