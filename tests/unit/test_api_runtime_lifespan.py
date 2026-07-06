@@ -2,18 +2,23 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 from foundry_lite_api import main, runtime
 
 
-def test_runtime_import_stays_uninitialized() -> None:
+@pytest.fixture(autouse=True)
+def _reset_runtime_state():
+    runtime.reset_api_runtime_for_tests()
+    yield
     runtime.reset_api_runtime_for_tests()
 
+
+def test_runtime_import_stays_uninitialized() -> None:
     assert not runtime.is_api_runtime_initialized()
 
 
 def test_initialize_api_runtime_builds_once(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    runtime.reset_api_runtime_for_tests()
     calls: list[object] = []
 
     class _Foundry:
@@ -34,7 +39,6 @@ def test_initialize_api_runtime_builds_once(monkeypatch) -> None:  # type: ignor
 
 
 def test_fastapi_lifespan_initializes_and_instruments(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    runtime.reset_api_runtime_for_tests()
     fake_engine = object()
     initialized = SimpleNamespace(foundry=SimpleNamespace(engine=fake_engine), auth_provider=object())
     engines: list[object] = []
