@@ -64,6 +64,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "datasets.aggregate",
+      "route": "POST /api/datasets/{namespace}/{name}/aggregate",
+      "productArea": "analytics",
+      "sdkSurface": "datasets.aggregate",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Dataset aggregate validates committed schema columns, masking, filters, groupBy, and metrics in application services, then executes the grouped Analytics calculation through the ComputeAdapter against pinned committed Parquet files.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "datasets.qualityChecks.list",
       "route": "GET /api/datasets/{namespace}/{name}/quality-contract/checks",
       "productArea": "data-quality-contracts",
@@ -1482,7 +1494,7 @@
       "productArea": "operations-console",
       "sdkSurface": "operations.runs.detail",
       "rawRequestPolicy": "named-sdk-only",
-      "operatorEvidence": "Run detail returns investigation, normalized error, related audit/outbox/object edit, lineage, quality evidence, and for runType=ai a safe AI ledger detail with events, model/tool/context/citation/usage summary and trace metadata.",
+      "operatorEvidence": "Run detail returns investigation, normalized error, related audit/outbox/object edit, lineage, dataset transaction, sourceEvidence for sync runs, quality evidence, and for runType=ai a safe AI ledger detail with events, model/tool/context/citation/usage summary and trace metadata.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],
@@ -2449,6 +2461,18 @@
       "proofClass": "sdk-request-contract"
     },
     {
+      "id": "sources.cdc.debezium.operationPlan",
+      "route": "GET /api/sources/cdc/debezium/{source_name}/operation-plan",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.cdc.debezium.operationPlan",
+      "rawRequestPolicy": "named-sdk-only",
+      "operatorEvidence": "Debezium operationPlan returns source readiness, CDC archive/object-indexer worker commands, ontology CDC backing expectations, and operator checklist evidence without provisioning external Debezium infrastructure from the browser.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
       "id": "sources.cdc.debezium.startSync",
       "route": "POST /api/sources/cdc/debezium/{source_name}/sync/start",
       "productArea": "source-onboarding",
@@ -2456,6 +2480,19 @@
       "rawRequestPolicy": "named-sdk-only",
       "requiresIdempotencyKey": true,
       "operatorEvidence": "Debezium sync start requires Idempotency-Key, can fail closed on expectedConfigFingerprint mismatch, and invokes the stream archive path with operations evidence when events commit.",
+      "proofTests": [
+        "test_sdk_request_contract_covers_all_frontend_surface_routes"
+      ],
+      "proofClass": "sdk-request-contract"
+    },
+    {
+      "id": "sources.cdc.debezium.startObjectIndex",
+      "route": "POST /api/sources/cdc/debezium/{source_name}/object-index/start",
+      "productArea": "source-onboarding",
+      "sdkSurface": "sources.cdc.debezium.startObjectIndex",
+      "rawRequestPolicy": "named-sdk-only",
+      "requiresIdempotencyKey": true,
+      "operatorEvidence": "Debezium object-index start requires Idempotency-Key, shares the CDC object-indexer cursor ledger, applies the next committed CDC dataset version into the object index, and returns index/workflow Operations paths.",
       "proofTests": [
         "test_sdk_request_contract_covers_all_frontend_surface_routes"
       ],

@@ -167,10 +167,28 @@ class _FakeSources:
         return {"source": {"sourceName": _args[0]}, "commit": {"transactionId": "tx-source-webhook"}}
 
     def create_debezium_source(self, **_kwargs):
-        return {"source": {"sourceName": _kwargs["source_name"], "kind": "debezium_cdc"}}
+        return {
+            "source": {"sourceName": _kwargs["source_name"], "kind": "debezium_cdc"},
+            "primaryKey": list(_kwargs.get("primary_key", ())),
+        }
+
+    def debezium_operation_plan(self, *_args, **_kwargs):
+        return {
+            "source": {"sourceName": _args[0], "kind": "debezium_cdc"},
+            "readiness": {"status": "ready_for_cdc_workers"},
+            "objectTypeApiName": _kwargs.get("object_type_api_name"),
+        }
 
     def start_debezium_sync(self, *_args, **_kwargs):
         return {"source": {"sourceName": _args[0]}, "testResult": {"status": "no_events"}}
+
+    def start_debezium_object_index(self, *_args, **_kwargs):
+        return {
+            "source": {"sourceName": _args[0]},
+            "status": "INDEXED",
+            "indexRunId": "index_run_cdc",
+            "operationsPath": "/api/operations/runs/index/index_run_cdc",
+        }
 
     def upload_media(self, **_kwargs):
         return {"source": {"sourceName": _kwargs["source_name"]}, "mediaCommit": {"status": "committed"}}
@@ -466,10 +484,14 @@ def test_api_source_upload_and_webhook_routes_delegate_to_source_workspace(monke
             datasetRef="raw.orders",
             streamName="orders_stream",
             topic="orders",
+            primaryKey=["order_id"],
         ),
         idempotency_key="cdc-1",
     )
     assert debezium["source"]["kind"] == "debezium_cdc"
+    assert debezium["primaryKey"] == ["order_id"]
+    plan = api_main.get_debezium_operation_plan(request, "cdc_orders", object_type_api_name="Order")
+    assert plan["readiness"]["status"] == "ready_for_cdc_workers"
     sync = api_main.start_debezium_source_sync(
         request,
         "cdc_orders",
@@ -477,6 +499,18 @@ def test_api_source_upload_and_webhook_routes_delegate_to_source_workspace(monke
         idempotency_key="cdc-sync-1",
     )
     assert sync["testResult"]["status"] == "no_events"
+    indexed = api_main.start_debezium_source_object_index(
+        request,
+        "cdc_orders",
+        api_main.SourceDebeziumObjectIndexStartRequest(
+            objectTypeApiName="Order",
+            expectedConfigFingerprint="sha256:abc",
+            maxRowsPerVersion=25,
+        ),
+        idempotency_key="cdc-index-1",
+    )
+    assert indexed["status"] == "INDEXED"
+    assert indexed["operationsPath"] == "/api/operations/runs/index/index_run_cdc"
     media = api_main.upload_media_source(
         request,
         source_name="source_media",
@@ -767,8 +801,10 @@ def test_source_onboarding_helpers_validate_source_shapes() -> None:
         topic="orders",
         consumer_group="cg",
         secret_refs={"passwordRef": "secretRef:db"},
+        primary_key=["order_id"],
     )
     assert debezium.kind == "debezium_cdc"
+    assert debezium.config_summary["primaryKey"] == ["order_id"]
     config = onboarding_helpers.stream_config(debezium.config_summary, None)
     assert config.stream_name == "orders_stream"
     assert config.limit == 100
@@ -1178,7 +1214,7 @@ def test_media_and_source_facades_delegate_remaining_edges() -> None:
 
             return call
 
-    source = SourceWorkspace(FacadeDelegate(), FacadeDelegate(), FacadeDelegate())
+    source = SourceWorkspace(FacadeDelegate(), FacadeDelegate(), FacadeDelegate(), FacadeDelegate())
     assert source.list_credentials(ctx=ctx)["called"] == "list_credentials"
     assert source.list_agents(ctx=ctx)["called"] == "list_agents"
     assert source.list_network_policies(ctx=ctx)["called"] == "list_network_policies"
@@ -1186,6 +1222,15 @@ def test_media_and_source_facades_delegate_remaining_edges() -> None:
     assert source.get_managed_sync("sync", ctx=ctx)["called"] == "get_managed_sync"
     assert source.preview_due_managed_syncs(ctx=ctx)["called"] == "preview_due_managed_syncs"
     assert source.run_due_managed_syncs(ctx=ctx, max_runs=2)["called"] == "run_due_managed_syncs"
+    assert (
+        source.start_debezium_object_index(
+            "cdc",
+            object_type_api_name="Order",
+            idempotency_key="cdc-index-1",
+            ctx=ctx,
+        )["called"]
+        == "start_debezium_object_index"
+    )
     assert (
         source.upload_batch_files(
             source_name="batch",
@@ -1398,12 +1443,22 @@ def test_source_onboarding_service_covers_batch_webhook_cdc_and_replay_paths(tmp
         dataset_ref="raw.orders",
         stream_name="orders_stream",
         topic="orders",
+        primary_key=["order_id"],
         idempotency_key="cdc-1",
         ctx=ctx,
     )
     assert debezium["source"]["kind"] == "debezium_cdc"
+    assert debezium["source"]["configSummary"]["primaryKey"] == ["order_id"]
+    cdc_plan = service.debezium_operation_plan("cdc_orders", ctx=ctx, object_type_api_name="Order")
+    assert cdc_plan["readiness"]["status"] == "ready_for_cdc_workers"
+    assert "--cdc-primary-key order_id" in cdc_plan["workerCommands"]["streamArchive"]
+    assert "--source-dataset raw.orders" in cdc_plan["workerCommands"]["objectIndexer"]
     no_events = service.start_debezium_sync("cdc_orders", idempotency_key="cdc-run-1", ctx=ctx, limit=10)
-    assert no_events["testResult"] == {"status": "no_events"}
+    assert no_events["testResult"]["status"] == "no_events"
+    assert no_events["testResult"]["datasetRef"] == "raw.orders"
+    assert str(no_events["testResult"]["runId"]).startswith("sync_run_")
+    assert no_events["source"]["lastRunId"] == no_events["testResult"]["runId"]
+    assert no_events["source"]["operationsPath"] == f"/api/operations/runs/sync/{no_events['testResult']['runId']}"
     assert service.get_source("rest_orders", ctx=ctx)["kind"] == "rest"
 
     with pytest.raises(ConflictDetected):
@@ -1562,14 +1617,29 @@ class _RuntimeAudit:
         return "outbox-1"
 
 
-class _DatasetRegistry:
-    def ensure_dataset(self, *_args, **_kwargs) -> None:
+class _RuntimeRepository:
+    def workflow_run_by_idempotency(self, **_kwargs):
         return None
 
 
+class _DatasetRegistry:
+    def ensure_dataset(self, *_args, **_kwargs):
+        dataset_ref = str(_args[0])
+        return {"id": f"dataset-{dataset_ref.replace('.', '-')}"}
+
+    def list_dataset_versions(self, dataset_ref, **_kwargs):
+        return [{"id": f"version-{str(dataset_ref).replace('.', '-')}", "version_number": 1}]
+
+
 class _DatasetTransactions:
+    def __init__(self) -> None:
+        self.runs: dict[str, object] = {}
+
     def sync_run_by_transaction_id(self, **_kwargs):
         return {"id": f"run-{_kwargs['transaction_id']}"}
+
+    def insert_sync_run(self, *, transaction, record) -> None:
+        self.runs[record.sync_run_id] = record
 
 
 class _DatasetIngest:
@@ -1716,6 +1786,7 @@ def _source_onboarding_service(tmp_path) -> SourceOnboardingService:
     service.root = tmp_path
     service.connector_registry_repository = _ConnectorRegistry()
     service.source_registry_repository = _SourceRegistry()
+    service.runtime_repository = _RuntimeRepository()
     service.dataset_transaction_repository = _DatasetTransactions()
     service.resource_catalog_repository = _ResourceCatalogRepository()
     service.secret_provider = _SecretProvider()
@@ -1793,6 +1864,9 @@ class _SourceDatabaseAdapter:
 class _ConnectorOnboarding:
     def start_resource_sync(self, *_args, **_kwargs):
         return {"workflowRunId": "workflow-1", "status": "running"}
+
+    def get_connection(self, *_args, **_kwargs):
+        return {"resources": [{"resourceName": "orders", "datasetRef": "raw.orders"}]}
 
 
 class _EmptySourceManagementRepository:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+import yaml
+
 from foundry_lite.application.ports.ontology_definitions import ObjectTypeDatasourceBacking
 from foundry_lite.application.ports.ontology_repository import (
     ActionMutationDefinition,
@@ -363,3 +365,21 @@ def action_mutation(mutation: YamlObject) -> ActionMutationDefinition:
     if value_from is not None:
         result["valueFrom"] = value_from
     return result
+
+
+def yaml_parse_error_details(exc: yaml.YAMLError) -> dict[str, object]:
+    """Extract the parse failure location so validate callers can point at the broken line."""
+    details: dict[str, object] = {}
+    problem = getattr(exc, "problem", None)
+    if isinstance(problem, str) and problem:
+        details["problem"] = problem
+    mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
+    if mark is not None:
+        details["line"] = int(mark.line) + 1
+        details["column"] = int(mark.column) + 1
+    context = getattr(exc, "context", None)
+    if isinstance(context, str) and context:
+        details["context"] = context
+    if not details:
+        details["problem"] = str(exc)
+    return details

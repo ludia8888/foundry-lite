@@ -16,6 +16,7 @@ from foundry_lite.application.ports.transform_repository import (
 from foundry_lite.application.primitives import _new_id
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.transform_protocols import (
+    TransformDatasetRegistry,
     TransformRuntimeBoundary,
     require_transform_write_open,
 )
@@ -33,7 +34,8 @@ class TransformDefinitionService(CoreService):
     """Register and replace transform definitions inside the Transform context."""
 
     required_dependencies = ("root", "engine", "transform_repository")
-    required_collaborators = ("runtime_service",)
+    required_collaborators = ("dataset_registry_service", "runtime_service")
+    dataset_registry_service: TransformDatasetRegistry
     runtime_service: TransformRuntimeBoundary
     transform_repository: TransformRepository
 
@@ -157,6 +159,7 @@ class TransformDefinitionService(CoreService):
         normalized_language = normalize_transform_language(language)
         normalized_mode = normalize_transform_output_mode(mode)
         normalized_checks = [dict(check) for check in checks or ()]
+        self.dataset_registry_service.ensure_dataset(output_dataset_ref, ctx=ctx)
         with self.engine.begin() as conn:
             existing = self._transform_by_api_name(conn, ctx, api_name)
             return self._upsert_transform_definition(

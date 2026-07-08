@@ -105,6 +105,7 @@ from foundry_lite_api.routers.sources import (  # noqa: F401
     create_source_network_policy,
     create_webhook_listener_source,
     explore_source,
+    get_debezium_operation_plan,
     get_source,
     get_source_credential,
     get_source_managed_sync,
@@ -119,6 +120,7 @@ from foundry_lite_api.routers.sources import (  # noqa: F401
     list_source_templates,
     list_sources,
     register_source_agent,
+    start_debezium_source_object_index,
     start_debezium_source_sync,
     start_source_managed_sync_run,
     upload_batch_file_source,
@@ -173,6 +175,7 @@ from foundry_lite_api.schemas import (  # noqa: F401
     SourceBatchFileManifest,
     SourceCredentialCreateRequest,
     SourceDebeziumCreateRequest,
+    SourceDebeziumObjectIndexStartRequest,
     SourceDebeziumSyncStartRequest,
     SourceExploreRequest,
     SourceManagedSyncCreateRequest,
@@ -251,6 +254,36 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             }
         },
         headers={"X-Request-ID": request_id},
+    )
+
+
+def _cors_headers_for_request(request: Request) -> dict[str, str]:
+    """CORS headers for responses that bypass CORSMiddleware (unhandled 5xx).
+
+    ServerErrorMiddleware sits OUTSIDE CORSMiddleware, so responses built by the
+    generic exception handler never pass through it; without these headers the
+    browser hides the 500 body and misreports it as a network error.
+    """
+    origin = request.headers.get("origin")
+    if origin in ALLOWED_BROWSER_ORIGINS:
+        return {"Access-Control-Allow-Origin": origin, "Vary": "Origin"}
+    return {}
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    request_id = _request_id(request, f"api-{time.time_ns()}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "code": "INTERNAL",
+                "message": "internal server error",
+                "details": {},
+                "request_id": request_id,
+            }
+        },
+        headers={"X-Request-ID": request_id, **_cors_headers_for_request(request)},
     )
 
 

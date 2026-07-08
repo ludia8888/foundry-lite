@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 from foundry_lite.application.foundry import FoundryLite
+from foundry_lite.application.ports import DatasetAggregationComputeResult, DatasetAggregationPlan, TabularRow
 from foundry_lite.application.services.dataset.transactions import DatasetTransactionService
 from foundry_lite.domain.context import demo_admin_context
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
 from foundry_lite.infrastructure import schema as db
+from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter
+from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 from sqlalchemy import select
 
 
@@ -117,6 +122,85 @@ def test_schema_validation_records_reference_version(foundry: FoundryLite, tmp_p
     assert version_row["schema_version"] == schema_row["version"]
     assert {row["validated_against_schema_version_id"] for row in check_results} == {schema_row["id"]}
     assert {row["validated_against_schema_version"] for row in check_results} == {schema_row["version"]}
+
+
+def test_dataset_aggregate_filters_and_groups_committed_version(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("clean.analytics_orders", ctx=ctx, primary_key=["order_id"])
+    csv_path = tmp_path / "analytics_orders.csv"
+    csv_path.write_text(
+        "order_id,status,region,amount\nO-1,PENDING,APAC,100\nO-2,APPROVED,APAC,50\nO-3,PENDING,EMEA,200\n",
+        encoding="utf-8",
+    )
+    committed = foundry.datasets.upload_csv("clean.analytics_orders", csv_path, ctx=ctx)
+
+    result = foundry.datasets.aggregate(
+        "clean.analytics_orders",
+        ctx=ctx,
+        filters=[{"column": "status", "operator": "eq", "value": "PENDING"}],
+        group_by=["region"],
+        select=[
+            {"function": "count", "name": "count"},
+            {"function": "sum", "property": "amount", "name": "amount"},
+        ],
+    )
+
+    assert result["datasetRef"] == "clean.analytics_orders"
+    assert result["versionId"] == committed.version_id
+    assert result["rowCount"] == 3
+    assert result["filteredRowCount"] == 2
+    assert result["groups"] == [
+        {"key": {"region": "APAC"}, "metrics": {"count": 1, "amount": 100.0}},
+        {"key": {"region": "EMEA"}, "metrics": {"count": 1, "amount": 200.0}},
+    ]
+
+
+def test_dataset_aggregate_delegates_to_compute_adapter(tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    compute = _AggregateSpyComputeAdapter()
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    foundry = FoundryLite(dependencies=replace(dependencies, compute_adapter=compute))
+    foundry.datasets.ensure("clean.analytics_compute", ctx=ctx, primary_key=["order_id"])
+    csv_path = tmp_path / "analytics_compute.csv"
+    csv_path.write_text(
+        "order_id,status,region,amount\nO-1,PENDING,APAC,100\nO-2,APPROVED,APAC,50\n",
+        encoding="utf-8",
+    )
+    foundry.datasets.upload_csv("clean.analytics_compute", csv_path, ctx=ctx)
+
+    compute.block_rows_from_parquet = True
+    result = foundry.datasets.aggregate(
+        "clean.analytics_compute",
+        ctx=ctx,
+        group_by=["region"],
+        select=[{"function": "count", "name": "count"}],
+    )
+
+    assert compute.aggregate_calls == 1
+    assert compute.aggregate_path_counts == [1]
+    assert result["groups"] == [{"key": {"region": "APAC"}, "metrics": {"count": 2}}]
+
+
+def test_dataset_aggregate_rejects_non_numeric_metric(
+    foundry: FoundryLite,
+    tmp_path: Path,
+) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("clean.analytics_validation", ctx=ctx, primary_key=["order_id"])
+    csv_path = tmp_path / "analytics_validation.csv"
+    csv_path.write_text("order_id,status\nO-1,PENDING\n", encoding="utf-8")
+    foundry.datasets.upload_csv("clean.analytics_validation", csv_path, ctx=ctx)
+
+    with pytest.raises(ValidationFailed, match="requires a numeric column"):
+        foundry.datasets.aggregate(
+            "clean.analytics_validation",
+            ctx=ctx,
+            group_by=["status"],
+            select=[{"function": "sum", "property": "status", "name": "bad"}],
+        )
 
 
 def test_contract_version_is_pinned_to_run(foundry: FoundryLite, tmp_path: Path) -> None:
@@ -722,3 +806,24 @@ def _check_results_for_transaction(conn: object, transaction_id: str) -> list[di
         .mappings()
         .all()
     )
+
+
+class _AggregateSpyComputeAdapter(DuckDBComputeAdapter):
+    def __init__(self) -> None:
+        self.aggregate_calls = 0
+        self.aggregate_path_counts: list[int] = []
+        self.block_rows_from_parquet = False
+
+    def aggregate_parquet(
+        self,
+        parquet_paths: Sequence[Path],
+        plan: DatasetAggregationPlan,
+    ) -> DatasetAggregationComputeResult:
+        self.aggregate_calls += 1
+        self.aggregate_path_counts.append(len(parquet_paths))
+        return super().aggregate_parquet(parquet_paths, plan)
+
+    def rows_from_parquet(self, parquet_path: Path) -> list[TabularRow]:
+        if self.block_rows_from_parquet:
+            raise AssertionError("dataset aggregate must delegate to compute_adapter.aggregate_parquet")
+        return super().rows_from_parquet(parquet_path)

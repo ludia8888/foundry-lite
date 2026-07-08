@@ -454,6 +454,27 @@ await expectSdkCall(
     path: "/api/datasets/clean%20space/orders%2Fdaily/inspect?version=version%2F1",
   },
 );
+await expectSdkCall(
+  "datasets.aggregate",
+  () =>
+    client.datasets.aggregate("clean space", "orders/daily", {
+      version: "version/1",
+      filter: [{ column: "status", operator: "eq", value: "PENDING" }],
+      groupBy: ["region"],
+      select: [{ function: "count", name: "value" }],
+    }),
+  {
+    path: "/api/datasets/clean%20space/orders%2Fdaily/aggregate",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: {
+      version: "version/1",
+      filter: [{ column: "status", operator: "eq", value: "PENDING" }],
+      groupBy: ["region"],
+      select: [{ function: "count", name: "value" }],
+    },
+  },
+);
 await expectSdkCall("datasets.qualityChecks.list", () => client.datasets.qualityChecks.list("clean", "orders"), {
   path: "/api/datasets/clean/orders/quality-contract/checks",
 });
@@ -2743,6 +2764,7 @@ await expectSdkCall(
         topic: "db.public.orders",
         consumerGroup: "foundry-orders",
         secretRefs: { databasePasswordSecretRef: "orders-db-password" },
+        primaryKey: ["order_id"],
       },
       { idempotencyKey: "source-cdc-create-key" },
     ),
@@ -2758,7 +2780,15 @@ await expectSdkCall(
       topic: "db.public.orders",
       consumerGroup: "foundry-orders",
       secretRefs: { databasePasswordSecretRef: "orders-db-password" },
+      primaryKey: ["order_id"],
     },
+  },
+);
+await expectSdkCall(
+  "sources.cdc.debezium.operationPlan",
+  () => client.sources.cdc.debezium.operationPlan("orders_cdc", { objectTypeApiName: "Order" }),
+  {
+    path: "/api/sources/cdc/debezium/orders_cdc/operation-plan?objectTypeApiName=Order",
   },
 );
 await expectSdkCall(
@@ -2774,6 +2804,21 @@ await expectSdkCall(
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": "source-cdc-start-key" },
     body: { expectedConfigFingerprint: "sha256:abc", afterOffset: 4, limit: 10 },
+  },
+);
+await expectSdkCall(
+  "sources.cdc.debezium.startObjectIndex",
+  () =>
+    client.sources.cdc.debezium.startObjectIndex(
+      "orders_cdc",
+      { objectTypeApiName: "Order", expectedConfigFingerprint: "sha256:abc", maxRowsPerVersion: 25 },
+      { idempotencyKey: "source-cdc-index-key" },
+    ),
+  {
+    path: "/api/sources/cdc/debezium/orders_cdc/object-index/start",
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "source-cdc-index-key" },
+    body: { objectTypeApiName: "Order", expectedConfigFingerprint: "sha256:abc", maxRowsPerVersion: 25 },
   },
 );
 await expectSdkCall(
@@ -2975,6 +3020,11 @@ assertMissingIdempotencyFailFast(
   "sources.cdc.debezium.startSync",
   () => client.sources.cdc.debezium.startSync("orders_cdc"),
   "sources.cdc.debezium.startSync",
+);
+assertMissingIdempotencyFailFast(
+  "sources.cdc.debezium.startObjectIndex",
+  () => client.sources.cdc.debezium.startObjectIndex("orders_cdc"),
+  "sources.cdc.debezium.startObjectIndex",
 );
 assertMissingIdempotencyFailFast(
   "sources.media.uploadAndCommit",

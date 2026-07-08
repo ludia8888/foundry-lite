@@ -105,6 +105,8 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
         "preview(namespace: string, name: string, options?: DatasetPreviewOptions): Promise<TabularRow[]>;" in generated
     )
     assert "inspect(namespace: string, name: string, options?: DatasetInspectOptions)" in generated
+    assert "export type DatasetAggregateRequest = {" in generated
+    assert "aggregate(namespace: string, name: string, payload: DatasetAggregateRequest)" in generated
     assert "qualityChecks: {" in generated
     assert "list(namespace: string, name: string): Promise<DatasetQualityContractCheckList>;" in generated
     assert "create(namespace: string, name: string, payload: DatasetQualityContractCheckCreateRequest)" in generated
@@ -235,6 +237,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "export type PromptArtifactReadResult = {" in generated
     assert '  | "ai"' in generated
     assert "  aiRuns: RuntimeRow[];" in generated
+    assert "  sourceEvidence?: Record<string, unknown> | null;" in generated
     assert "  ai?: Record<string, unknown> | null;" in generated
     assert "planReadOnly(datasetRef: string, options?: IcebergMaintenancePlanOptions)" in generated
     assert "export type LineageEdge = {" in generated
@@ -265,6 +268,14 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert "upsert(connectorName: string, resourceName: string" in generated
     assert "test(connectorName: string, resourceName: string): Promise<ConnectorResourceTestResult>;" in generated
     assert "startSync(connectorName: string, resourceName: string" in generated
+    assert "export type SourceDebeziumObjectIndexStartRequest = {" in generated
+    assert "export type SourceDebeziumObjectIndexBacklog = {" in generated
+    assert "remainingVersionCount: number;" in generated
+    assert "nextAction: SourceDebeziumObjectIndexNextAction;" in generated
+    assert "export type SourceDebeziumObjectIndexPlanStatus = {" in generated
+    assert "objectIndexingStatus: SourceDebeziumObjectIndexPlanStatus;" in generated
+    assert "startObjectIndex(sourceName: string, payload: SourceDebeziumObjectIndexStartRequest" in generated
+    assert "Promise<SourceDebeziumObjectIndexResult>;" in generated
     assert "reconciliation: {" in generated
     assert "list(filters?: ActionWritebackQueueFilters): Promise<ActionWritebackQueueResult>;" in generated
     assert "resolve(writebackId: string, payload: ActionWritebackReconciliationRequest):" in generated
@@ -309,6 +320,7 @@ def test_sdk_generator_emits_typed_order_and_action_contract() -> None:
     assert 'requireIdempotencyKey(options?.idempotencyKey, "connectors.connections.update")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "connectors.resources.upsert")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "connectors.resources.startSync")' in generated
+    assert 'requireIdempotencyKey(options?.idempotencyKey, "sources.cdc.debezium.startObjectIndex")' in generated
     assert 'requireIdempotencyKey(options?.idempotencyKey, "operations.workflows.startConnectorSync")' in generated
     assert "export const SDK_CLIENT_SURFACE" in generated
     assert "export const SDK_PACKAGE_MANIFEST" in generated
@@ -330,7 +342,7 @@ def test_sdk_package_and_browser_outputs_share_client_surface() -> None:
     assert ts_surface == browser_surface
     assert ts_surface["system"] == ["health"]
     assert ts_surface["datasets"] == {
-        "_self": ["list", "versions", "preview", "inspect"],
+        "_self": ["list", "versions", "preview", "inspect", "aggregate"],
         "qualityContracts": ["list", "create", "get", "activate"],
         "qualityChecks": ["list", "create", "update"],
         "qualityResults": ["list", "summary"],
@@ -761,6 +773,8 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
     assert "export function foundryLiteDatasetExplorerView" in react_helpers
     assert "export function useFoundryLiteDatasetExplorer" in react_helpers
     assert "export function useFoundryLiteProvidedDatasetExplorer" in react_helpers
+    assert "export function useFoundryLiteDatasetAggregate" in react_helpers
+    assert "client.datasets.aggregate(namespace, name, stableRequest)" in react_helpers
     assert "loadFoundryLiteDatasetExplorerData(client, selection)" in react_helpers
     assert "client.datasets.versions(selection.namespace, selection.name)" in react_helpers
     assert "client.datasets.inspect(selection.namespace, selection.name, inspectOptions)" in react_helpers
@@ -982,9 +996,16 @@ def test_browser_sdk_exposes_frontend_foundation_helpers() -> None:
     assert "export function useFoundryLiteOperationsInvestigation" in react_helpers
     assert "client.operations.runs.list(filters)" in react_helpers
     assert "client.operations.runs.detail(runType, runId)" in react_helpers
+    assert "hasSourceEvidence" in react_helpers
     assert "client.operations.runs.promptArtifact(runId, artifactId)" in react_helpers
     assert "failedRuns" in react_helpers
     assert "promptArtifactRefs" in react_helpers
+    assert "const runId = readFoundryLiteOperationsRunId(row)" in react_helpers
+    assert "operationPath: readFoundryLiteOperationsRunPath(runType, row, runId)" in react_helpers
+    assert (
+        "return `/api/operations/runs/${encodeURIComponent(String(runType))}/${encodeURIComponent(runId)}`"
+        in react_helpers
+    )
     assert "export function foundryLiteRecordDlqQueueView" in react_helpers
     assert "export function useFoundryLiteRecordDlqQueue" in react_helpers
     assert "export function useFoundryLiteProvidedRecordDlqQueue" in react_helpers

@@ -74,7 +74,14 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await expect((await generatedSdkAction).headers()["idempotency-key"]).toMatch(/^ApproveOrder-O-1001-/);
   await expect(page.locator("#metricStatus")).toHaveText("APPROVED");
   await expect(page.locator("#metricVersion")).toHaveText("2");
-  await expect(page.locator("#setResult")).toContainText('"objectIds": []');
+  const pendingSetPayload = JSON.parse(await page.locator("#setResult").innerText()) as {
+    items?: Array<{ objectIds?: string[] }>;
+    objectIds?: string[];
+  };
+  const pendingObjectIds =
+    pendingSetPayload.items?.flatMap((item) => item.objectIds ?? []) ?? pendingSetPayload.objectIds ?? [];
+  expect(pendingObjectIds).not.toContain("O-1001");
+  expect(pendingObjectIds).toContain("O-2999");
   await expect(page.locator("#runResult")).toContainText('"actionRuns"');
   await expect(page.locator("#runResult")).toContainText('"deadLetterEvents"');
   await expect(page.locator("#runResult")).toContainText('"target_object_id": "O-1001"');
@@ -93,7 +100,12 @@ test("object explorer loads an order and applies ApproveOrder", async ({ page })
   await page.reload();
   await expect(page.locator("#statusText")).toHaveText("ok");
   await expect(page.locator("#datasetResult")).toContainText('"dataset": "clean.orders"');
-  await expect(page.locator("#queryResult")).toContainText('"items": []');
+  const queryPayloadAfterReload = JSON.parse(await page.locator("#queryResult").innerText()) as {
+    items?: Array<{ objectId?: string }>;
+  };
+  const queryObjectIdsAfterReload = queryPayloadAfterReload.items?.map((item) => item.objectId) ?? [];
+  expect(queryObjectIdsAfterReload).not.toContain("O-1001");
+  expect(queryObjectIdsAfterReload).toContain("O-2999");
   await expect(page.locator("#metricObject")).toHaveText("O-1001");
   await expect(page.locator("#metricStatus")).toHaveText("APPROVED");
   await expect(page.locator("#linkResult")).toContainText('"objectId": "C-100"');

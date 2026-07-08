@@ -38,7 +38,7 @@ cross-check summary, PR exit checklist는 이 문서가 소유하고, 실제 cur
 | S3/MinIO, Iceberg, Spark | `quality:s3-storage`, `quality:iceberg`, `quality:spark`, `quality:infra-composition` prove adapter/composition ratchets. | Treat as implemented ratchet proof, not full production platform packaging. |
 | Temporal | `WorkflowAdapter`, `quality:temporal`, and S52 `ConnectorSyncWorkflow` control-plane plus worker-bound connector snapshot commit proof exist. | Treat start/status/cancel/audit linking, persisted `workflowDefinitionVersion` retry evidence, and the local connector activity commit proof as partial; keep managed workers, continue-as-new, full old-history workflow upgrade replay, and production connector packaging future. |
 | Transform scheduling | `foundry.transforms.preview_due(...)`/`run_due(...)`, API/SDK scheduler tick, and `worker:transform-scheduler` proof exist for snapshot rebuilds. | Treat bounded/continuous local worker evidence as current; keep production lease/fencing/Kubernetes packaging, managed Temporal transform scheduling, and append/incremental merge policy future. |
-| External writeback / saga | S53 simulated `retryable`, `outcome_unknown`, `compensation_required`, reconciliation resolve, masking, replay proofs, L8 real S3/MinIO adapter timeout/landed-write/`remote_lookup` proof, unresolved writeback backend/API/SDK queue, bounded writeback reconciliation worker proof, sensitive/high-risk approval-required skip plus backend approval-release API/SDK/audit proof, and AI direct vendor/API tool denial proof exist. | Treat core safety semantics, retryable-not-changed evidence, backend queue, bounded recovery tick, backend approval-required/release gate, and AIP ToolBroker/Builder vendor-egress denial as covered for the current adapter; keep ERP-specific connector packaging, automatic retry/reissue policy, always-on managed compensation daemon, queue UI, connector-backed vendor tools, and visual approval workflow/UI future. |
+| External writeback / saga | S53 simulated `retryable`, `outcome_unknown`, `compensation_required`, reconciliation resolve, masking, replay proofs, L8 real S3/MinIO adapter timeout/landed-write/`remote_lookup` proof, unresolved writeback backend/API/SDK queue, bounded writeback reconciliation worker proof, sensitive/high-risk approval-required skip plus backend approval-release API/SDK/audit proof, Foundry Operations approval-release UI proof, and AI direct vendor/API tool denial proof exist. | Treat core safety semantics, retryable-not-changed evidence, backend queue, bounded recovery tick, backend approval-required/release gate, bounded Operations approval-release UI, and AIP ToolBroker/Builder vendor-egress denial as covered for the current adapter; keep ERP-specific connector packaging, automatic retry/reissue policy, always-on managed compensation daemon, managed queue UI, connector-backed vendor tools, and full managed approval workflow/queue UI future. |
 | Elasticsearch | Adapter/projection/live Testcontainers proof exists. | Keep search as rebuildable projection; managed cloud packaging and ops remain future. |
 | CDC | Archive, live Debezium proof, CDC object indexing, bounded stream loop, and active-stack composition proof exist. | Treat bounded/archive/indexing slices as active-covered; keep production daemon lease/fencing/rebalance/commit-unknown edges future. |
 | Backup/restore | S57 preflight, restore-mode status, DB/storage mismatch detection, retry lockout, post-restore validation/approval evidence, core platform write-traffic lockout, immutable local backup artifact creation, verified artifact restore entrypoint, and historical artifact dataset-head execution exist. | Treat current lockout, validation, artifact manifest creation, verified artifact restore, and local dataset-head execution as service-boundary proof; keep external DB dump orchestration, full old/new runtime compatibility, publisher daemon control, automatic smoke, and restore executor packaging future. |
@@ -895,7 +895,7 @@ writeback webhook이 object change 전에 실행되고, 외부 요청 실패 시
 > `retryable_external_not_changed` skip evidence로 보이는 것을 검증한다.
 > ERP-specific connector packaging, always-on/managed daemon 운영, reconciliation queue UI,
 > connector-backed vendor tool release policy, automatic retry/reissue policy, full operator
-> visual approval workflow/UI는 아직 future scope다.
+> full managed approval workflow/queue UI는 아직 future scope다.
 
 ## 상태 모델
 
@@ -961,7 +961,7 @@ writeback webhook이 object change 전에 실행되고, 외부 요청 실패 시
   `shell_execute`/`generic_sql` 같은 generic executor tool id를 published manifest와
   agent allowlist에 있어도 모델 tool list/system prompt에서 제외하고 executor 호출 전에 거부한다.
   Agent Runtime 실패 evidence와 Visual Builder draft validation도 같은 중앙 규칙을 사용한다. ERP별 connector-backed tool
-  packaging과 visual approval workflow는 future다.
+  packaging과 full managed approval workflow/queue UI는 future다.
 
 ## API/UI
 
@@ -995,7 +995,7 @@ writeback은 approval-recoverable 대상이 아니도록 차단한다.
 `quality:agent-vendor-egress`는 direct vendor/API tool id가 ToolBroker/Agent Runtime/Visual
 Builder 경계를 통과하지 못하는지 검증한다. 실제 vendor SDK packaging, connector-backed
 vendor tool release policy, automatic retry/reissue worker, always-on/managed compensation daemon,
-queue UI, visual approval workflow/UI는 아직 future scope다.
+queue UI, full managed approval workflow/queue UI는 아직 future scope다.
 
 ## 제안 테스트
 
@@ -1030,14 +1030,14 @@ queue UI, visual approval workflow/UI는 아직 future scope다.
   remote success reconciliation resolve와 bounded worker recovery는 가능하다. 민감 writeback은
   bounded worker가 approval-required로 멈추고, 명시적 approval id/reason이 있으면 backend
   approval-release path로 복구된다. ERP-specific compensation executor, always-on
-  managed daemon, visual approval workflow/UI는 future다.
+  managed daemon, full managed approval workflow/queue UI는 future다.
 - [~] action이 잘못된 aggregate에 적용되지 않는다:
   target object type invariant와 corrupt record type-id guard는 증명됐다. DB-level FK/constraint
   강화와 실제 vendor policy approval은 future다.
 - [~] AI Agent 권한은 Action Type과 approval policy로 제한된다:
   direct vendor/API/generic executor tool은 ToolBroker와 Visual Builder에서 fail-closed로 막힌다.
   Action proposal/human review path는 active proof가 있으나, ERP-specific connector-backed
-  action policy와 visual approval workflow/UI는 future다.
+  action policy와 full managed approval workflow/queue UI는 future다.
 
 ---
 
@@ -1913,7 +1913,7 @@ AI Agent와 온글림 인사이트가 “왜 이런 판단을 했는가”를 pr
 - [x] SDK regeneration CI 유지
 - [~] frontend API compatibility test: `quality:frontend-backend-surface`,
   `quality:sdk-request-contract`, `quality:frontend-foundation`이 route/helper -> named SDK ->
-  proofClass -> proof test -> operator evidence matrix, 237개 browser SDK route surface
+  proofClass -> proof test -> operator evidence matrix, 240개 browser SDK route surface
   method/path/query/header/body, typed error metadata, 28개 SDK helper runtime behavior,
   Web Operations named-SDK-only 계약을 검증한다. Full browser compatibility matrix는 future다.
 
@@ -2251,7 +2251,7 @@ named SDK -> proofClass -> proof test -> operator evidence로 고정한다. `qua
 FastAPI route가 분류되지 않았거나, frontend-consumable route에 generated SDK method나
 request-contract proof가 없거나, SDK helper에 `sdkHelpers` row/export/operator-evidence/helper
 proof가 없거나, Web Operations가 다시 raw `/api/...` path를 직접 조립하면 실패한다.
-`quality:sdk-request-contract`는 실제 browser SDK를 import해 237개 frontend route surface의
+`quality:sdk-request-contract`는 실제 browser SDK를 import해 240개 frontend route surface의
 method/path/query/header/body, request-id/context header, idempotency header, typed error metadata를
 fake fetch로 검증하고, 28개 `SDK_CLIENT_SURFACE.helpers`의 런타임 동작도 함께 증명한다. 즉 S62-S64 화면을
 올리기 전, 현재 사용 가능한 backend surface는 named SDK-only와 request-contract로 잠긴다.
@@ -2267,7 +2267,7 @@ typechecked recipe builder로 제공하며, `quality:frontend-backend-surface`�
 S63의 현재 backend/API/SDK slice는 `client.insights.reviews.list/create/get/assign/decide`와
 `quality:insight-review`로 create idempotency, assignment, terminal decision conflict, and audit
 evidence를 잠근다. 다만 full login/session, screen-specific retry/backoff copy, visual cursor
-pagination components, broader visual server-push timeline components, visual streaming timeline UX, duplicate-click button state UX, stale-version compare/refresh UI,
+pagination components, broader visual server-push timeline components, visual streaming timeline UX, duplicate-click button state UX, broader stale-version compare/merge UX beyond current action-apply conflict refresh,
 permission-denied masking UX, direct migration execution, long-running worker daemon control,
 infra bootstrap browser execution, full catalog-driven S62-S64 workspace UX, S63 evidence panel UI,
 and action execution orchestration은 아직 후속 product slice다.

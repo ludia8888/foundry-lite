@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from foundry_lite.application.ports import (
+    DatasetAggregationResult,
     DatasetAlreadyExistsError,
     DatasetInspectionPayload,
     DatasetManifest,
@@ -22,6 +23,10 @@ from foundry_lite.application.primitives import (
     _now,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.dataset.aggregation import (
+    build_dataset_aggregation_plan,
+    dataset_aggregation_result,
+)
 from foundry_lite.application.services.dataset.protocols import (
     DatasetRuntimeBoundary,
     DatasetTransactionManager,
@@ -297,6 +302,33 @@ class DatasetRegistryService(CoreService):
         # A backing dataset must not leak a value that Object masking hides.
         return self.policy.mask_columns(ctx, rows)
 
+    def aggregate_dataset(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+        version: str = "latest",
+        filters: Sequence[Mapping[str, object]] | None = None,
+        group_by: Sequence[str] | None = None,
+        select: Sequence[Mapping[str, object]] | None = None,
+    ) -> DatasetAggregationResult:
+        ctx = ctx or RequestContext()
+        self.policy.require(ctx, "dataset:read")
+        dataset = self.get_dataset(dataset_ref, ctx=ctx)
+        version_row = self.dataset_version_service._get_version(dataset["id"], version, ctx=ctx)
+        schema_row = self.dataset_version_service._schema_for_version(dataset["id"], version_row["schema_version"])
+        plan = build_dataset_aggregation_plan(
+            dataset_ref,
+            schema_row["schema_json"],
+            self.policy.masked_column_names(ctx),
+            filters=filters,
+            group_by=group_by,
+            select=select,
+        )
+        parquet_paths = committed_version_preview_file_paths(self.dataset_storage, version_row)
+        compute_result = self.compute_adapter.aggregate_parquet(parquet_paths, plan)
+        return dataset_aggregation_result(dataset_ref, str(version_row["id"]), compute_result)
+
     def _preview_manifest_paths(self, parquet_paths: Sequence[Path], *, limit: int) -> list[TabularRow]:
         rows: list[TabularRow] = []
         remaining = max(limit, 0)
@@ -306,6 +338,13 @@ class DatasetRegistryService(CoreService):
             batch = self.compute_adapter.preview_parquet(parquet_path, limit=remaining)
             rows.extend(batch)
             remaining -= len(batch)
+        return rows
+
+    def _committed_manifest_rows(self, version_row: DatasetVersionRow) -> list[TabularRow]:
+        rows: list[TabularRow] = []
+        parquet_paths = committed_version_preview_file_paths(self.dataset_storage, version_row)
+        for parquet_path in parquet_paths:
+            rows.extend(self.compute_adapter.rows_from_parquet(parquet_path))
         return rows
 
     def inspect_dataset(

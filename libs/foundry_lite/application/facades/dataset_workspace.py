@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from foundry_lite.application.ports import (
+    DatasetAggregationResult,
     DatasetInspectionPayload,
     DatasetQualityContractCheck,
     DatasetQualityContractCheckCreateResult,
@@ -113,6 +114,25 @@ class DatasetWorkspace:
             limit=limit,
             version=version,
             partition_filter=partition_filter,
+        )
+
+    def aggregate(
+        self,
+        dataset_ref: str,
+        *,
+        ctx: RequestContext | None = None,
+        version: str = "latest",
+        filters: Sequence[Mapping[str, object]] | None = None,
+        group_by: Sequence[str] | None = None,
+        select: Sequence[Mapping[str, object]] | None = None,
+    ) -> DatasetAggregationResult:
+        return self._datasets.registry.aggregate_dataset(
+            dataset_ref,
+            ctx=ctx,
+            version=version,
+            filters=filters,
+            group_by=group_by,
+            select=select,
         )
 
     def inspect(

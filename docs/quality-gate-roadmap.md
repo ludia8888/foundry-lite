@@ -1505,13 +1505,13 @@ worker JSON evidence로 남아야 한다. 민감 action parameter가 있는 row�
 `action.writeback.recovery_approved` audit evidence를 남기는지 검증한다. Retryable row는
 외부 시스템이 바뀌지 않은 상태이므로 approval-recoverable 대상이 아니며 fail-closed로 남아야 한다.
 ERP-specific connector packaging, always-on managed compensation daemon, reverse/compensation execution,
-persistent reconciliation queue UI, visual approval workflow/operator UI는 future scope다.
+persistent reconciliation queue UI, full managed approval workflow/operator UI는 future scope다.
 
 `quality:agent-vendor-egress`는 AI agent가 raw HTTP/vendor/webhook/generic executor tool을
 published manifest와 agent allowlist에 넣어도 직접 실행하지 못하도록 고정한다. ToolBroker는
 executor 호출 전에 `direct_vendor_tool_denied`로 닫고, Agent Runtime은 실패 run evidence를
 남기며, Visual Builder는 같은 tool id가 release-ready draft가 되지 않게 막아야 한다.
-Connector-backed vendor tool packaging과 visual approval workflow/operator UI는 future scope다.
+Connector-backed vendor tool packaging과 full managed approval workflow/operator UI는 future scope다.
 
 `quality:action-writeback-retryable`은 외부 시스템이 변경되지 않았다는 증거가 있는
 before-commit 실패를 `retryable` action/writeback 상태로 구분한다. 이 gate는
@@ -2168,7 +2168,7 @@ system, datasets, ontology catalog/validation, generic objects, objectSets, mate
 operations, connector onboarding, Insight Review, and AIP Builder 하위 named method를 노출한다.
 `docs/frontend-api-sdk-surface-matrix.json`은 FastAPI route/helper -> SDK method/helper ->
 proof class -> proof test -> operator evidence mapping의 source of truth이며,
-`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 237개 frontend route surface의
+`tests/sdk/request_contract.mjs`는 browser SDK를 실제 import해 240개 frontend route surface의
 method/path/query/header/body와 typed error metadata, 그리고 28개 SDK helper의 OSDK facade, TypeScript ObjectSet property-keyed filter/orderBy/page alias normalization, `$count` exact-groupBy aggregate over Object Query pages, fail-fast invalid property/operator/order/aggregate evidence, generated package manifest/fingerprint exposure, live-catalog SDK regeneration assertions, large ontology registry lookup/live-catalog search/action grouping/dynamic-only drift hint, session token provider, operation polling, operation event streaming, retry/backoff,
 cursor collection, duplicate-action lock, request/context header, typed error normalization,
 stale-version classification, permission-denied classification behavior, and missing idempotency-key
@@ -2199,7 +2199,7 @@ React entrypoint가 실제 TypeScript frontend 프로젝트에서 type import/us
 같은 frontend foundation gate 안에서 확인한다.
 Web Operations는 현재 product controls에서 raw `/api/...` path를 직접 조립하지 않는다.
 Login/session UI, screen-specific retry/backoff copy, visual cursor pagination components, server push route implementation, visual streaming timeline UX, duplicate-click
-button state UX, stale-version compare/refresh UI, permission-denied masking UX, full
+button state UX, broader stale-version compare/merge UX beyond current action-apply conflict refresh, permission-denied masking UX, full
 catalog-driven workspace UX, direct migration execution, long-running worker daemon control, and infra bootstrap
 browser execution은 후속 slice다.
 
@@ -2241,7 +2241,8 @@ required operator next actions를 runtime/audit evidence에서 재구성한다.
 generated `client.operations.backupRestore.recoveryOverview()` /
 `client.operations.backupRestore.postRestoreValidation()`는 이 상태판과 검증을 named SDK-only
 surface로 노출하고, `quality:operations-recovery`는 application method, API smoke, generated
-SDK, browser request contract, and runtime lane wiring을 함께 검증한다. Run console UI,
+SDK, browser request contract, and runtime lane wiring을 함께 검증한다. Foundry Run 조사
+list/detail/investigation summary 화면은 current E2E로 검증하며, richer run console,
 recovery dashboard, alert timeline, workflow cancel/reconcile executor는 후속 S64 slice다.
 
 | 게이트                                  | 명령                          | Root cause                                                                                                                                              |

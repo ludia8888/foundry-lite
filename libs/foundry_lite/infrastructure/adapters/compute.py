@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import inspect
+import json
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
@@ -27,6 +28,13 @@ from foundry_lite.application.ports.compute_adapter import (
     TransformExecutionResult,
     TransformPlan,
 )
+from foundry_lite.application.ports.dataset_aggregation import (
+    DatasetAggregationComputeResult,
+    DatasetAggregationFilter,
+    DatasetAggregationGroup,
+    DatasetAggregationMetric,
+    DatasetAggregationPlan,
+)
 from foundry_lite.application.primitives import (
     INPUT_PATTERN,
     StagedFileStats,
@@ -36,6 +44,7 @@ from foundry_lite.application.primitives import (
     _normalize_duckdb_type,
     _required_row,
     _sql_identifier,
+    _sql_literal,
     _write_rows_to_csv,
 )
 from foundry_lite.domain.errors import ValidationFailed
@@ -134,6 +143,23 @@ class DuckDBComputeAdapter:
             schema_json=schema_json,
             schema_hash=_json_hash(schema_json),
         )
+
+    def aggregate_parquet(
+        self,
+        parquet_paths: Sequence[Path],
+        plan: DatasetAggregationPlan,
+    ) -> DatasetAggregationComputeResult:
+        paths = tuple(parquet_paths)
+        if not paths:
+            return {"rowCount": 0, "filteredRowCount": 0, "groups": [], "totalGroups": 0}
+        con = duckdb.connect()
+        try:
+            scan_sql = _dataset_aggregation_scan_sql(paths)
+            view_sql = f"create temp view foundry_aggregate_source as select * from {scan_sql}"  # nosec B608
+            con.execute(view_sql)
+            return _execute_dataset_aggregation(con, plan)
+        finally:
+            con.close()
 
     def execute_check(self, parquet_path: Path, row_count: int, check: DatasetCheckConfig) -> DatasetCheckResult:
         check_type = str(check["type"])
@@ -394,6 +420,149 @@ def _accepted_values_predicate(column: str, values: list[object]) -> tuple[str, 
     placeholders = ", ".join("?" for _ in values)
     predicate = f"{column_identifier} is not null and {column_identifier} not in ({placeholders})"
     return predicate, values
+
+
+def _dataset_aggregation_scan_sql(paths: Sequence[Path]) -> str:
+    if len(paths) == 1:
+        return f"read_parquet({_sql_literal(paths[0])})"
+    path_literals = ", ".join(_sql_literal(path) for path in paths)
+    return f"read_parquet([{path_literals}])"
+
+
+def _execute_dataset_aggregation(
+    con: duckdb.DuckDBPyConnection,
+    plan: DatasetAggregationPlan,
+) -> DatasetAggregationComputeResult:
+    where_sql, params = _dataset_aggregation_filter_clause(plan.filters)
+    row_count = _dataset_aggregation_count(con, "")
+    filtered_count = _dataset_aggregation_count(con, where_sql, params)
+    if filtered_count == 0:
+        return {"rowCount": row_count, "filteredRowCount": 0, "groups": [], "totalGroups": 0}
+    groups = _dataset_aggregation_groups(con, plan, where_sql, params)
+    if len(groups) > plan.group_limit:
+        raise ValidationFailed(
+            "dataset aggregation exceeds the group limit; add a filter or group by a lower-cardinality column",
+            details={"groupLimit": plan.group_limit},
+        )
+    return {
+        "rowCount": row_count,
+        "filteredRowCount": filtered_count,
+        "groups": groups,
+        "totalGroups": len(groups),
+    }
+
+
+def _dataset_aggregation_count(
+    con: duckdb.DuckDBPyConnection,
+    where_sql: str,
+    params: Sequence[object] = (),
+) -> int:
+    query = f"select count(*) from foundry_aggregate_source {where_sql}"  # nosec B608
+    return _required_int_cell(con.execute(query, list(params)).fetchone(), "dataset aggregation count")
+
+
+def _dataset_aggregation_groups(
+    con: duckdb.DuckDBPyConnection,
+    plan: DatasetAggregationPlan,
+    where_sql: str,
+    params: Sequence[object],
+) -> list[DatasetAggregationGroup]:
+    query = _dataset_aggregation_group_query(plan, where_sql)
+    rows = con.execute(query, list(params)).fetchall()  # nosec B608
+    groups = [_dataset_aggregation_group(row, plan) for row in rows]
+    return sorted(groups, key=lambda group: json.dumps(group["key"], sort_keys=True, default=str))
+
+
+def _dataset_aggregation_group_query(plan: DatasetAggregationPlan, where_sql: str) -> str:
+    group_select = [
+        f"{_sql_identifier(column)} as {_sql_identifier(f'group_{index}')}"
+        for index, column in enumerate(plan.group_by)
+    ]
+    metric_select = [_dataset_aggregation_metric_sql(metric, index) for index, metric in enumerate(plan.metrics)]
+    select_sql = ", ".join([*group_select, *metric_select])
+    group_sql = _dataset_aggregation_group_by_sql(plan.group_by)
+    limit = plan.group_limit + 1
+    return f"select {select_sql} from foundry_aggregate_source {where_sql}{group_sql} limit {limit}"  # nosec B608
+
+
+def _dataset_aggregation_group_by_sql(group_by: Sequence[str]) -> str:
+    if not group_by:
+        return ""
+    columns = ", ".join(_sql_identifier(column) for column in group_by)
+    return f" group by {columns}"
+
+
+def _dataset_aggregation_metric_sql(metric: DatasetAggregationMetric, index: int) -> str:
+    alias = _sql_identifier(f"metric_{index}")
+    if metric["function"] == "count":
+        return f"count(*) as {alias}"
+    column = _sql_identifier(str(metric["property"]))
+    function = metric["function"]
+    return f"{function}(try_cast({column} as double)) as {alias}"
+
+
+def _dataset_aggregation_group(row: tuple[object, ...], plan: DatasetAggregationPlan) -> DatasetAggregationGroup:
+    group_values = row[: len(plan.group_by)]
+    metric_values = row[len(plan.group_by) :]
+    return {
+        "key": {column: _json_ready(group_values[index]) for index, column in enumerate(plan.group_by)},
+        "metrics": {
+            metric["name"]: _dataset_aggregation_metric_value(metric, metric_values[index])
+            for index, metric in enumerate(plan.metrics)
+        },
+    }
+
+
+def _dataset_aggregation_metric_value(metric: DatasetAggregationMetric, value: object) -> float | int | None:
+    ready = _json_ready(value)
+    if ready is None:
+        return None
+    if metric["function"] == "count":
+        if isinstance(ready, int) and not isinstance(ready, bool):
+            return ready
+        raise ValidationFailed("dataset aggregation count returned a non-integer value")
+    if isinstance(ready, int | float) and not isinstance(ready, bool):
+        return float(ready)
+    raise ValidationFailed(
+        "dataset aggregation metric returned a non-numeric value",
+        details={"metric": metric["name"]},
+    )
+
+
+def _dataset_aggregation_filter_clause(filters: Sequence[DatasetAggregationFilter]) -> tuple[str, list[object]]:
+    if not filters:
+        return "", []
+    clauses: list[str] = []
+    params: list[object] = []
+    for filter_item in filters:
+        clause, clause_params = _dataset_aggregation_filter_sql(filter_item)
+        clauses.append(clause)
+        params.extend(clause_params)
+    return " where " + " and ".join(clauses), params
+
+
+def _dataset_aggregation_filter_sql(filter_item: DatasetAggregationFilter) -> tuple[str, list[object]]:
+    column = _sql_identifier(filter_item["column"])
+    operator = filter_item["operator"]
+    value = filter_item["value"]
+    if operator in {"gt", "gte", "lt", "lte"}:
+        return f"try_cast({column} as double) {_numeric_operator_sql(operator)} try_cast(? as double)", [value]
+    text = f"coalesce(cast({column} as varchar), 'null')"
+    if operator == "eq":
+        return f"{text} = ?", [value]
+    if operator == "neq":
+        return f"{text} != ?", [value]
+    return f"contains(lower({text}), lower(?))", [value]
+
+
+def _numeric_operator_sql(operator: str) -> str:
+    if operator == "gt":
+        return ">"
+    if operator == "gte":
+        return ">="
+    if operator == "lt":
+        return "<"
+    return "<="
 
 
 def _write_python_transform_module(plan: PythonTransformPlan) -> Path:

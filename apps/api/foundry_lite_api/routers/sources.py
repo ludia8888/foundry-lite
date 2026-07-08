@@ -19,6 +19,7 @@ from foundry_lite_api.schemas import (
     SourceBatchFileManifest,
     SourceCredentialCreateRequest,
     SourceDebeziumCreateRequest,
+    SourceDebeziumObjectIndexStartRequest,
     SourceDebeziumSyncStartRequest,
     SourceExploreRequest,
     SourceManagedSyncCreateRequest,
@@ -401,7 +402,24 @@ def create_debezium_source(
             topic=payload.topic,
             consumer_group=payload.consumer_group,
             secret_refs=payload.secret_refs,
+            primary_key=payload.primary_key,
             idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.get("/api/sources/cdc/debezium/{source_name}/operation-plan")
+def get_debezium_operation_plan(
+    request: Request,
+    source_name: str,
+    object_type_api_name: str = Query(default="Order", alias="objectTypeApiName"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.sources.debezium_operation_plan(
+            source_name,
+            object_type_api_name=object_type_api_name,
             ctx=_ctx(request),
         )
     except FoundryLiteError as exc:
@@ -421,6 +439,26 @@ def start_debezium_source_sync(
             expected_config_fingerprint=payload.expected_config_fingerprint,
             after_offset=payload.after_offset,
             limit=payload.limit,
+            idempotency_key=idempotency_key,
+            ctx=_ctx(request),
+        )
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/sources/cdc/debezium/{source_name}/object-index/start")
+def start_debezium_source_object_index(
+    request: Request,
+    source_name: str,
+    payload: SourceDebeziumObjectIndexStartRequest,
+    idempotency_key: str = Header(alias="Idempotency-Key"),
+) -> JsonObject:
+    try:
+        return runtime.foundry.sources.start_debezium_object_index(
+            source_name,
+            object_type_api_name=payload.object_type_api_name,
+            expected_config_fingerprint=payload.expected_config_fingerprint,
+            max_rows_per_version=payload.max_rows_per_version,
             idempotency_key=idempotency_key,
             ctx=_ctx(request),
         )

@@ -1,0 +1,155 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Palantir Foundry 비주얼 언어 (Blueprint.js 팔레트, 레퍼런스 스크린샷 분석 기준).
+ * 기본은 라이트 테마 + 좌측 다크 아이콘 레일. sidebar-* 토큰은 항상 다크를 유지한다.
+ */
+:root {
+  --radius: 0.25rem;
+
+  --background: #f5f8fa;
+  --foreground: #111418;
+  --card: #ffffff;
+  --card-foreground: #111418;
+  --popover: #ffffff;
+  --popover-foreground: #111418;
+  --primary: #2d72d2;
+  --primary-foreground: #ffffff;
+  --secondary: #edf0f2;
+  --secondary-foreground: #111418;
+  --muted: #f0f3f5;
+  --muted-foreground: #5f6b7c;
+  --accent: #e5edfb;
+  --accent-foreground: #215db0;
+  --destructive: #cd4246;
+  --destructive-foreground: #ffffff;
+  --border: #d3d8de;
+  --input: #d3d8de;
+  --ring: #2d72d2;
+
+  --success: #238551;
+  --success-foreground: #ffffff;
+  --warning: #c87619;
+  --warning-foreground: #ffffff;
+  --canvas: #ebf1f5;
+
+  /* 다크 아이콘 레일 / 확장 사이드바 (라이트 테마에서도 다크 고정) */
+  --sidebar: #252a31;
+  --sidebar-foreground: #f6f7f9;
+  --sidebar-primary: #4c90f0;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #383e47;
+  --sidebar-accent-foreground: #f6f7f9;
+  --sidebar-border: #404854;
+  --sidebar-ring: #4c90f0;
+  --rail: #1c2127;
+}
+
+.dark {
+  --background: #1c2127;
+  --foreground: #f6f7f9;
+  --card: #252a31;
+  --card-foreground: #f6f7f9;
+  --popover: #2f343c;
+  --popover-foreground: #f6f7f9;
+  --primary: #4c90f0;
+  --primary-foreground: #ffffff;
+  --secondary: #2f343c;
+  --secondary-foreground: #f6f7f9;
+  --muted: #2f343c;
+  --muted-foreground: #abb3bf;
+  --accent: #383e47;
+  --accent-foreground: #f6f7f9;
+  --destructive: #e76a6e;
+  --destructive-foreground: #1c2127;
+  --border: #404854;
+  --input: #383e47;
+  --ring: #4c90f0;
+
+  --success: #32a467;
+  --success-foreground: #1c2127;
+  --warning: #ec9a3c;
+  --warning-foreground: #1c2127;
+  --canvas: #1c2127;
+
+  --sidebar: #252a31;
+  --sidebar-foreground: #f6f7f9;
+  --sidebar-primary: #4c90f0;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #383e47;
+  --sidebar-accent-foreground: #f6f7f9;
+  --sidebar-border: #404854;
+  --sidebar-ring: #4c90f0;
+  --rail: #171b21;
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-canvas: var(--canvas);
+  --color-rail: var(--rail);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-size: 13px;
+  }
+}
+
+@utility section-label {
+  @apply text-[10px] font-semibold tracking-[0.5px] uppercase text-muted-foreground;
+}

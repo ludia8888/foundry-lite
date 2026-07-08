@@ -64,6 +64,19 @@ def runtime_run_detail_payload(
     quality_check_results: list[DatasetCheckResultRow],
     quality_failed_row_samples: list[RuntimeRow],
 ) -> RuntimeRunDetail:
+    payload = _detail_base_payload(parsed_type, run_id, row)
+    payload.update(_detail_related_payload(outbox_events, audit_events, object_edits, action_writebacks))
+    payload.update(_detail_dataset_payload(parsed_type, row, dataset_transaction, downstream_impact))
+    payload["investigation"] = _detail_investigation(
+        parsed_type, row, outbox_events, audit_events, object_edits, action_writebacks, lineage_edges
+    )
+    payload["runRelations"] = run_relations
+    payload["lineageEdges"] = lineage_edges
+    payload["quality"] = _detail_quality_report(dataset_transaction, quality_check_results, quality_failed_row_samples)
+    return cast(RuntimeRunDetail, payload)
+
+
+def _detail_base_payload(parsed_type: RuntimeRunType, run_id: str, row: RuntimeRow) -> dict[str, object]:
     return {
         "runType": parsed_type,
         "runId": run_id,
@@ -73,20 +86,35 @@ def runtime_run_detail_payload(
         "error": row_error(row),
         "correlationId": correlation_id(row),
         "references": row_references(row),
-        "investigation": _detail_investigation(
-            parsed_type, row, outbox_events, audit_events, object_edits, action_writebacks, lineage_edges
-        ),
+    }
+
+
+def _detail_related_payload(
+    outbox_events: list[RuntimeRow],
+    audit_events: list[RuntimeRow],
+    object_edits: list[RuntimeRow],
+    action_writebacks: list[RuntimeRow],
+) -> dict[str, object]:
+    return {
         "relatedOutboxEvents": outbox_events,
         "relatedAuditEvents": audit_events,
         "relatedObjectEdits": object_edits,
         "relatedActionWritebacks": action_writebacks,
-        "runRelations": run_relations,
-        "lineageEdges": lineage_edges,
+    }
+
+
+def _detail_dataset_payload(
+    parsed_type: RuntimeRunType,
+    row: RuntimeRow,
+    dataset_transaction: RuntimeRow | None,
+    downstream_impact: RuntimeJsonObject | None,
+) -> dict[str, object]:
+    return {
         "datasetTransaction": dataset_transaction,
+        "sourceEvidence": _detail_source_evidence(parsed_type, row, dataset_transaction),
         "lateData": late_data_detail(dataset_transaction),
         "materialization": materialization_detail(row, dataset_transaction),
         "downstreamImpact": downstream_impact,
-        "quality": _detail_quality_report(dataset_transaction, quality_check_results, quality_failed_row_samples),
     }
 
 
@@ -174,6 +202,29 @@ def _detail_quality_report(
         check_results,
         failed_row_samples=failed_row_samples,
     )
+
+
+def _detail_source_evidence(
+    parsed_type: RuntimeRunType,
+    row: RuntimeRow,
+    dataset_transaction: RuntimeRow | None,
+) -> RuntimeJsonObject | None:
+    if parsed_type != "sync":
+        return None
+    transaction = dataset_transaction if isinstance(dataset_transaction, Mapping) else {}
+    return {
+        "operationPath": f"/api/operations/runs/sync/{row['id']}",
+        "syncName": row.get("sync_name"),
+        "sourceType": row.get("source_type"),
+        "status": row_status(row, parsed_type),
+        "outputDatasetId": row.get("output_dataset_id"),
+        "transactionId": row.get("transaction_id"),
+        "committedVersionId": row.get("committed_version_id"),
+        "datasetTransactionStatus": transaction.get("status"),
+        "datasetTransactionCommittedVersionId": transaction.get("committed_version_id"),
+        "createdAt": row.get("created_at"),
+        "completedAt": row.get("completed_at"),
+    }
 
 
 def dataset_transaction_for_row(

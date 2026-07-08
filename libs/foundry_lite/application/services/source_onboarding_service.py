@@ -3,22 +3,25 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import BinaryIO
+from typing import BinaryIO, cast
 
 from foundry_lite.application.ports import (
     ConnectorRegistryRepository,
     DatasetTransactionRepository,
+    RuntimeRepository,
     SourceConnectionAlreadyExistsError,
     SourceConnectionRecord,
     SourceConnectionRow,
     SourceRegistryRepository,
 )
 from foundry_lite.application.ports.resource_catalog_repository import ResourceCatalogRepository
+from foundry_lite.application.services import source_onboarding_cdc_service as cdc_service
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.dataset.ingest import DatasetIngestService
 from foundry_lite.application.services.media.transactions import MediaTransactionService
 from foundry_lite.application.services.media.uploads import MediaUploadService
 from foundry_lite.application.services.resource_catalog_auto_registration import upsert_source_resource
+from foundry_lite.application.services.source_onboarding_cdc_backlog import CdcBacklogDatasetBoundary
 from foundry_lite.application.services.source_onboarding_config import (
     SourceUpload,
     StagedMediaSourceUpload,
@@ -37,28 +40,21 @@ from foundry_lite.application.services.source_onboarding_helpers import (
     commit_batch_uploads,
     commit_list,
     commit_staged_media,
-    debezium_record,
     record_batch_commits,
     record_media_commit,
-    record_optional_commit,
     record_single_commit,
     require_kind,
     require_same_config,
-    require_source_fingerprint,
     require_write,
     rest_connection,
     rest_connections,
     rest_source_view_for_connection,
     source_row,
     source_row_in_tx,
-    stream_config,
     summary_text,
     webhook_record,
 )
-from foundry_lite.application.services.source_onboarding_views import (
-    source_result,
-    source_view,
-)
+from foundry_lite.application.services.source_onboarding_views import source_result, source_view
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected
 
@@ -72,6 +68,7 @@ class SourceOnboardingService(CoreService):
         "root",
         "connector_registry_repository",
         "source_registry_repository",
+        "runtime_repository",
         "dataset_transaction_repository",
         "secret_provider",
         "resource_catalog_repository",
@@ -85,6 +82,7 @@ class SourceOnboardingService(CoreService):
     )
     connector_registry_repository: ConnectorRegistryRepository
     source_registry_repository: SourceRegistryRepository
+    runtime_repository: RuntimeRepository
     dataset_transaction_repository: DatasetTransactionRepository
     resource_catalog_repository: ResourceCatalogRepository
     dataset_ingest_service: DatasetIngestService
@@ -279,18 +277,33 @@ class SourceOnboardingService(CoreService):
         ctx: RequestContext | None = None,
         consumer_group: str = "foundry-lite-cdc",
         secret_refs: Mapping[str, object] | None = None,
+        primary_key: Sequence[str] = (),
     ) -> dict[str, object]:
-        ctx = ctx or RequestContext()
-        require_write(self.policy, self.runtime_service, ctx, "create_debezium_source", source_name)
-        require_idempotency_key(idempotency_key)
-        self.dataset_registry_service.ensure_dataset(dataset_ref, ctx=ctx)
-        row, is_replayed = self._create_source(
+        return cdc_service.create_debezium_source(
+            self,
+            source_name,
+            display_name,
+            dataset_ref,
+            stream_name,
+            topic,
+            idempotency_key,
             ctx,
-            debezium_record(
-                ctx, source_name, display_name, dataset_ref, stream_name, topic, consumer_group, secret_refs or {}
-            ),
+            consumer_group,
+            secret_refs,
+            primary_key,
         )
-        return source_result(row, is_replayed=is_replayed)
+
+    def debezium_operation_plan(
+        self,
+        source_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        object_type_api_name: str = "Order",
+    ) -> dict[str, object]:
+        versions = cast(CdcBacklogDatasetBoundary, self.dataset_registry_service)
+        return cdc_service.debezium_operation_plan(
+            self, source_name, ctx, object_type_api_name, self.runtime_repository, versions
+        )
 
     def start_debezium_sync(
         self,
@@ -302,25 +315,14 @@ class SourceOnboardingService(CoreService):
         after_offset: int | None = None,
         limit: int | None = None,
     ) -> dict[str, object]:
-        ctx = ctx or RequestContext()
-        require_write(self.policy, self.runtime_service, ctx, "start_debezium_sync", source_name)
-        require_idempotency_key(idempotency_key)
-        row = source_row(self.engine, self.source_registry_repository, ctx, source_name)
-        require_source_fingerprint(row, expected_config_fingerprint)
-        commit = self.dataset_ingest_service.archive_stream_events(
-            summary_text(row["config_summary"], "datasetRef"),
-            stream=stream_config(row["config_summary"], limit),
-            ctx=ctx,
-            after_offset=after_offset,
-            sync_name=f"cdc:{source_name}",
-        )
-        return record_optional_commit(
-            self.engine,
-            self.source_registry_repository,
-            self.dataset_transaction_repository,
+        return cdc_service.start_debezium_sync(
+            self,
+            source_name,
+            idempotency_key,
             ctx,
-            row["source_name"],
-            commit,
+            expected_config_fingerprint,
+            after_offset,
+            limit,
         )
 
     def upload_media(

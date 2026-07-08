@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from foundry_lite.application.ports import ComputeAdapter
 from foundry_lite.application.ports.compute_adapter import PythonTransformPlan, SqlTransformPlan
+from foundry_lite.application.ports.dataset_aggregation import DatasetAggregationPlan
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.adapters import DuckDBComputeAdapter, FakeComputeAdapter
 from foundry_lite.infrastructure.adapters import compute as compute_module
@@ -117,6 +118,58 @@ def test_compute_adapter_contract_detects_duplicate_composite_tuple(
 
     assert result["status"] == "failed"
     assert result["duplicate_groups"] == 1
+
+
+def test_compute_adapter_contract_aggregates_parquet_with_filters_and_group_limit(
+    adapter: ComputeAdapter,
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "orders-a.parquet"
+    second_path = tmp_path / "orders-b.parquet"
+    adapter.rows_to_parquet(
+        [
+            {"order_id": "O-1", "status": "PENDING", "region": "APAC", "amount": 100},
+            {"order_id": "O-2", "status": "APPROVED", "region": "APAC", "amount": 50},
+        ],
+        first_path,
+        ["order_id", "status", "region", "amount"],
+    )
+    adapter.rows_to_parquet(
+        [{"order_id": "O-3", "status": "PENDING", "region": "EMEA", "amount": 200}],
+        second_path,
+        ["order_id", "status", "region", "amount"],
+    )
+
+    result = adapter.aggregate_parquet(
+        [first_path, second_path],
+        DatasetAggregationPlan(
+            group_by=("region",),
+            filters=({"column": "status", "operator": "eq", "value": "PENDING"},),
+            metrics=(
+                {"function": "count", "name": "count", "property": None},
+                {"function": "sum", "name": "amount", "property": "amount"},
+            ),
+            group_limit=10,
+        ),
+    )
+
+    assert result["rowCount"] == 3
+    assert result["filteredRowCount"] == 2
+    assert result["groups"] == [
+        {"key": {"region": "APAC"}, "metrics": {"count": 1, "amount": 100.0}},
+        {"key": {"region": "EMEA"}, "metrics": {"count": 1, "amount": 200.0}},
+    ]
+
+    with pytest.raises(ValidationFailed, match="exceeds the group limit"):
+        adapter.aggregate_parquet(
+            [first_path, second_path],
+            DatasetAggregationPlan(
+                group_by=("order_id",),
+                filters=(),
+                metrics=({"function": "count", "name": "count", "property": None},),
+                group_limit=2,
+            ),
+        )
 
 
 def test_compute_adapter_contract_sql_transform_and_unresolved_inputs(

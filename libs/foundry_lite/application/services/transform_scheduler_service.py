@@ -23,6 +23,7 @@ from foundry_lite.application.services.transform_scheduler import (
     transform_scheduler_view,
 )
 from foundry_lite.domain.context import RequestContext
+from foundry_lite.domain.errors import NotFound
 from foundry_lite.domain.transform import validate_transform_scheduler_max_runs
 from foundry_lite.security.policy import PolicyService
 
@@ -114,7 +115,11 @@ class TransformSchedulerService(CoreService):
         versions: dict[str, str] = {}
         missing: list[str] = []
         for dataset_ref in sorted(set(transform["inputs"].values())):
-            dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
+            try:
+                dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
+            except NotFound:
+                missing.append(dataset_ref)
+                continue
             version = self.dataset_version_service._latest_version_by_dataset_id(
                 conn,
                 dataset["id"],

@@ -24,6 +24,10 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "    inspect(namespace: string, name: string, options?: DatasetInspectOptions): "
             "Promise<DatasetInspectionPayload>;"
         ),
+        (
+            "    aggregate(namespace: string, name: string, payload: DatasetAggregateRequest): "
+            "Promise<DatasetAggregationResult>;"
+        ),
         "    qualityChecks: {",
         ("      list(namespace: string, name: string): Promise<DatasetQualityContractCheckList>;"),
         (
@@ -140,8 +144,16 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
             "Promise<SourceOperationResult>;"
         ),
         (
+            "        operationPlan(sourceName: string, options?: { objectTypeApiName?: string }): "
+            "Promise<SourceDebeziumOperationPlan>;"
+        ),
+        (
             "        startSync(sourceName: string, payload: SourceDebeziumSyncStartRequest | undefined, "
             "options: { idempotencyKey: string }): Promise<SourceOperationResult>;"
+        ),
+        (
+            "        startObjectIndex(sourceName: string, payload: SourceDebeziumObjectIndexStartRequest | undefined, "
+            "options: { idempotencyKey: string }): Promise<SourceDebeziumObjectIndexResult>;"
         ),
         "      };",
         "    };",
@@ -1779,6 +1791,15 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "          `/api/datasets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/inspect${suffix}`,",
         "        );",
         "      },",
+        "      aggregate: (namespace: string, name: string, payload: DatasetAggregateRequest) =>",
+        "        request<DatasetAggregationResult>(",
+        "          `/api/datasets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/aggregate`,",
+        "          {",
+        '            method: "POST",',
+        '            headers: { "Content-Type": "application/json" },',
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
         "      qualityChecks: {",
         "        list: (namespace: string, name: string) =>",
         "          request<DatasetQualityContractCheckList>(",
@@ -2056,6 +2077,14 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "              },",
         "              body: JSON.stringify(payload),",
         "            }),",
+        "          operationPlan: (sourceName: string, options: { objectTypeApiName?: string } = {}) => {",
+        "            const query = new URLSearchParams();",
+        '            if (options.objectTypeApiName) query.set("objectTypeApiName", options.objectTypeApiName);',
+        '            const suffix = query.toString() ? `?${query.toString()}` : "";',
+        "            return request<SourceDebeziumOperationPlan>(",
+        "              `/api/sources/cdc/debezium/${encodeURIComponent(sourceName)}/operation-plan${suffix}`,",
+        "            );",
+        "          },",
         "          startSync: (",
         "            sourceName: string,",
         "            payload: SourceDebeziumSyncStartRequest = {},",
@@ -2070,6 +2099,25 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         (
             '                  "Idempotency-Key": '
             'requireIdempotencyKey(options?.idempotencyKey, "sources.cdc.debezium.startSync"),'
+        ),
+        "                },",
+        "                body: JSON.stringify(payload),",
+        "              },",
+        "            ),",
+        "          startObjectIndex: (",
+        "            sourceName: string,",
+        "            payload: SourceDebeziumObjectIndexStartRequest = {},",
+        "            options: { idempotencyKey: string },",
+        "          ) =>",
+        "            request<SourceDebeziumObjectIndexResult>(",
+        "              `/api/sources/cdc/debezium/${encodeURIComponent(sourceName)}/object-index/start`,",
+        "              {",
+        '                method: "POST",',
+        "                headers: {",
+        '                  "Content-Type": "application/json",',
+        (
+            '                  "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "sources.cdc.debezium.startObjectIndex"),'
         ),
         "                },",
         "                body: JSON.stringify(payload),",

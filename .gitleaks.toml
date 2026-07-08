@@ -29,6 +29,10 @@ paths = [
   # `.foundry-lite*/` local state instead of forcing deletion of user-owned
   # side-worktree files.
   '''^\.claude/worktrees/[^/]+/\.foundry-lite[^/]*/.*''',
+  # Local API/SDK contract and smoke runs can use an ignored development
+  # runtime home under artifacts. It may contain generated OAuth/private
+  # vault keys used only by the machine-local runtime profile.
+  '''^artifacts/dev-foundry-runtime/.*''',
   # The gitleaks JSON report is generated under ignored artifacts and can
   # contain redacted findings from a failed scan, which would otherwise make
   # the secret scanner recursively fail on its own report.

@@ -46,7 +46,10 @@ from foundry_lite.application.services.runtime_bundle import (
     WorkflowOrchestrationService,
 )
 from foundry_lite.application.services.runtime_evidence_service import RuntimeEvidenceService
-from foundry_lite.application.services.source_management_service import SourceManagementService
+from foundry_lite.application.services.source_management_service import (
+    SourceCdcObjectIndexService,
+    SourceManagementService,
+)
 from foundry_lite.application.services.source_onboarding_service import SourceOnboardingService
 from foundry_lite.application.services.source_scheduler_service import SourceSchedulerService
 from foundry_lite.application.services.transform_service import TransformService
@@ -90,6 +93,7 @@ __all__ = [
     "ResourceCatalogService",
     "RuntimeEvidenceService",
     "RuntimeService",
+    "SourceCdcObjectIndexService",
     "SourceManagementService",
     "SourceOnboardingService",
     "SourceSchedulerService",
@@ -107,6 +111,7 @@ class _SharedCoreServices(TypedDict):
     media: MediaServices
     object_store: ObjectServices
     source_management: SourceManagementService
+    source_cdc_object_index: SourceCdcObjectIndexService
     source_scheduler: SourceSchedulerService
 
 
@@ -127,6 +132,7 @@ class CoreServices:
     builder_runtime: BuilderRuntimeService
     connector_onboarding: ConnectorOnboardingService
     source_management: SourceManagementService
+    source_cdc_object_index: SourceCdcObjectIndexService
     source_scheduler: SourceSchedulerService
     source_onboarding: SourceOnboardingService
     context_compiler: ContextCompilerService
@@ -180,13 +186,14 @@ def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices
         "insight_review": build_service(InsightReviewService, dependencies),
         "media": MediaServices.create(dependencies),
         "object_store": ObjectServices.create(dependencies),
+        "source_cdc_object_index": build_service(SourceCdcObjectIndexService, dependencies),
         "source_management": build_service(SourceManagementService, dependencies),
         "source_scheduler": build_service(SourceSchedulerService, dependencies),
     }
 
 
+# fmt: off
 def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreServices) -> CoreServices:
-    # fmt: off
     return CoreServices(
         action=ActionServices.create(dependencies),
         agent_runtime=build_service(AgentRuntimeService, dependencies),
@@ -195,7 +202,8 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         backup_restore=shared["backup_restore"],
         builder_runtime=build_service(BuilderRuntimeService, dependencies),
         connector_onboarding=build_service(ConnectorOnboardingService, dependencies),
-        source_management=shared["source_management"], source_scheduler=shared["source_scheduler"],
+        source_management=shared["source_management"], source_cdc_object_index=shared["source_cdc_object_index"],
+        source_scheduler=shared["source_scheduler"],
         source_onboarding=build_service(SourceOnboardingService, dependencies),
         context_compiler=build_service(ContextCompilerService, dependencies),
         dataset=shared["dataset"], demo=build_service(DemoService, dependencies),
@@ -225,7 +233,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         transform=TransformServices.create(dependencies),
         workflow=build_service(WorkflowOrchestrationService, dependencies),
     )
-    # fmt: on
+# fmt: on
 
 
 def _bind_runtime_evidence_boundary(services: CoreServices) -> None:
@@ -283,6 +291,7 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
 def _source_service_items(services: CoreServices) -> list[CoreService]:
     return [
         services.source_management,
+        services.source_cdc_object_index,
         services.source_scheduler,
         services.source_onboarding,
     ]

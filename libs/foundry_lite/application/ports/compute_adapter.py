@@ -8,6 +8,10 @@ from pathlib import Path
 from typing import Protocol
 
 from foundry_lite.application.ports.adapter_failure import AdapterFailureContract
+from foundry_lite.application.ports.dataset_aggregation import (
+    DatasetAggregationComputeResult,
+    DatasetAggregationPlan,
+)
 from foundry_lite.application.ports.dataset_quality_repository import DatasetCheckConfig, DatasetCheckResult
 from foundry_lite.application.primitives import StagedFileStats
 
@@ -104,6 +108,14 @@ class ComputeAdapter(Protocol):
 
     def inspect_parquet(self, parquet_path: Path, primary_key: list[str]) -> StagedFileStats:
         """Return row count, schema, hash, and size for a Parquet file."""
+        ...
+
+    def aggregate_parquet(
+        self,
+        parquet_paths: Sequence[Path],
+        plan: DatasetAggregationPlan,
+    ) -> DatasetAggregationComputeResult:
+        """Execute a validated aggregate plan against pinned Parquet files."""
         ...
 
     def execute_check(self, parquet_path: Path, row_count: int, check: DatasetCheckConfig) -> DatasetCheckResult:

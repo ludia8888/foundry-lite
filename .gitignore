@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .coverage
+*.db.broken-backup
 htmlcov/
 .foundry-lite*/
 .venv/
@@ -12,6 +13,9 @@ artifacts/
 node_modules/
 test-results/
 playwright-report/
+.playwright-cli/
+output/
+*.tsbuildinfo
 
 # mutmut working directory
 mutants/

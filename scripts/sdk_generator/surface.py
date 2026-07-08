@@ -79,7 +79,7 @@ ONTOLOGY_RESOURCE_METHODS = ("usage", "dependents")
 def client_surface(ontology: OntologyDef) -> SdkClientSurface:
     return SdkClientSurface(
         system=("health",),
-        datasets=("list", "versions", "preview", "inspect"),
+        datasets=("list", "versions", "preview", "inspect", "aggregate"),
         sources=(
             OperationClientSurface("_self", ("list", "get")),
             OperationClientSurface("templates", ("list",)),
@@ -92,7 +92,7 @@ def client_surface(ontology: OntologyDef) -> SdkClientSurface:
             OperationClientSurface("csv", ("upload",)),
             OperationClientSurface("batchFiles", ("upload",)),
             OperationClientSurface("webhookListeners", ("create", "get")),
-            OperationClientSurface("cdc.debezium", ("create", "startSync")),
+            OperationClientSurface("cdc.debezium", ("create", "operationPlan", "startSync", "startObjectIndex")),
             OperationClientSurface("media", ("uploadAndCommit",)),
             OperationClientSurface("rest", ("createConnection", "upsertResource", "test", "startSync")),
         ),

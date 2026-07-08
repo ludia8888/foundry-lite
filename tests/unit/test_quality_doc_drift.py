@@ -86,6 +86,16 @@ def test_doc_drift_accepts_existing_path_symbol_and_method(tmp_path: Path) -> No
     assert gate.collect_findings(docs=(doc,), code_roots=(tmp_path / "libs", tmp_path / "scripts"), root=tmp_path) == []
 
 
+def test_doc_drift_accepts_repo_root_inside_ignored_parent_name(tmp_path: Path) -> None:
+    root = tmp_path / ".claude" / "worktrees" / "repo"
+    doc = _write_doc(root, "`check_existing_gate.py` is wired.\n", "README.md")
+    _write_python(root, "scripts/quality/check_existing_gate.py", "def main() -> int:\n    return 0\n")
+
+    findings = gate.collect_findings(docs=(doc,), code_roots=(root / "scripts",), root=root)
+
+    assert findings == []
+
+
 def test_doc_drift_skips_python_symbols_in_non_current_docs(tmp_path: Path) -> None:
     doc = _write_doc(tmp_path, "`Order` and `Customer` are ontology examples.\n", "README.md")
     _write_python(tmp_path, "libs/example.py", "class ExistingService:\n    pass\n")

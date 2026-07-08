@@ -5,6 +5,7 @@ import socket
 import threading
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
+from http.client import HTTPMessage
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import ClassVar, Protocol, cast
 from urllib.parse import parse_qs, urlsplit
@@ -202,6 +203,34 @@ def test_rest_connector_secret_ref_requires_provider_without_leaking_value() -> 
     }
 
 
+def test_rest_connector_rejects_mixed_direct_secret_and_secret_ref_without_leaking_value() -> None:
+    with MockRestServer() as server:
+        with pytest.raises(ValidationFailed, match="cannot mix") as exc_info:
+            RestPullConnectorAdapter(secret_provider=EnvSecretProvider(environ={})).snapshot(
+                ConnectorSnapshotRequest(
+                    connector_name="rest",
+                    resource_name="orders",
+                    tenant_id="tenant-demo",
+                    request_id="req-rest-secret-mixed",
+                    rest=RestSourceConfig(
+                        base_url=server.base_url,
+                        resource_path="/orders",
+                        auth=RestAuthConfig(
+                            mode="bearer",
+                            token="direct-token",
+                            token_secret_ref="connector-token",
+                        ),
+                        allow_private_network=True,
+                    ),
+                )
+            )
+
+    assert exc_info.value.details == {
+        "secret_ref": "connector-token",
+        "secret_value": "***REDACTED***",
+    }
+
+
 def test_rest_connector_raises_rate_limit_error() -> None:
     with MockRestServer() as server:
         adapter = RestPullConnectorAdapter()
@@ -333,6 +362,23 @@ def test_rest_connector_rejects_missing_or_incomplete_config() -> None:
                 ),
             )
         )
+    with pytest.raises(ValidationFailed, match="maxResponseBytes") as exc_info:
+        adapter.snapshot(
+            ConnectorSnapshotRequest(
+                connector_name="rest",
+                resource_name="orders",
+                tenant_id="tenant-demo",
+                request_id="req-rest-invalid-response-size",
+                rest=RestSourceConfig(
+                    base_url="http://127.0.0.1",
+                    resource_path="/orders",
+                    max_response_bytes=0,
+                    allow_private_network=True,
+                ),
+            )
+        )
+
+    assert exc_info.value.details == {"maxResponseBytes": 0}
 
 
 def test_rest_connector_rejects_non_http_source_url() -> None:
@@ -676,6 +722,171 @@ def test_rest_pinned_https_connection_preserves_sni_for_original_host(
 
     assert connection_attempts == [(("93.184.216.34", 443), 5, None)]
     assert server_names == ["api.example.test"]
+
+
+def test_rest_redirect_handler_sets_validated_target_for_public_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_getaddrinfo(
+        host: str,
+        port: int,
+        *,
+        type: socket.SocketKind,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, type, 0, "", ("93.184.216.34", port))]
+
+    monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
+
+    handler = rest_connector_module._ValidatingRedirectHandler(allow_private_network=False)
+    redirected = handler.redirect_request(
+        Request("https://api.example.test/orders"),
+        object(),
+        302,
+        "Found",
+        HTTPMessage(),
+        "https://api.example.test/orders?cursor=next",
+    )
+
+    assert redirected is not None
+    target = getattr(redirected, rest_connector_module._TARGET_ATTR)
+    assert target.host == "api.example.test"
+    assert target.resolved_host == "93.184.216.34"
+
+
+def test_rest_https_handler_uses_pinned_connection_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, object]] = []
+
+    def fake_getaddrinfo(
+        host: str,
+        port: int,
+        *,
+        type: socket.SocketKind,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int]]]:
+        return [(socket.AF_INET, type, 0, "", ("93.184.216.34", port))]
+
+    def fake_do_open(connection_factory: object, request: Request, **kwargs: object) -> _FakeHTTPResponse:
+        calls.append((connection_factory.__name__, request.full_url, kwargs["context"]))
+        return _FakeHTTPResponse({"items": [], "nextCursor": None})
+
+    monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
+    handler = rest_connector_module._PinnedHTTPSHandler(allow_private_network=False)
+    monkeypatch.setattr(handler, "do_open", fake_do_open)
+
+    response = handler.https_open(Request("https://api.example.test/orders"))
+
+    assert isinstance(response, _FakeHTTPResponse)
+    assert calls[0][0:2] == ("_PinnedHTTPSConnection", "https://api.example.test/orders")
+    assert calls[0][2] is not None
+
+
+def test_rest_pinned_http_connection_tunnels_after_connecting_validated_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tunnels: list[str] = []
+    connection_attempts: list[tuple[str, int]] = []
+
+    def fake_create_connection(address: tuple[str, int], timeout: object, source_address: object) -> object:
+        connection_attempts.append(address)
+        return object()
+
+    monkeypatch.setattr(rest_connector_module.socket, "create_connection", fake_create_connection)
+
+    target = rest_connector_module._ValidatedHttpTarget(
+        url="http://api.example.test/orders",
+        host="api.example.test",
+        port=80,
+        resolved_host="93.184.216.34",
+    )
+    connection = rest_connector_module._pinned_http_connection(target)("api.example.test", timeout=5)
+    connection._tunnel_host = "proxy.example.test"
+    connection._tunnel = lambda: tunnels.append("tunnel")
+    connection.connect()
+
+    assert connection_attempts == [("93.184.216.34", 80)]
+    assert tunnels == ["tunnel"]
+
+
+def test_rest_pinned_https_connection_tunnel_uses_tunnel_host_for_sni(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tunnels: list[str] = []
+    server_names: list[str | None] = []
+
+    class FakeTLSContext:
+        def wrap_socket(self, sock: object, *, server_hostname: str | None) -> object:
+            server_names.append(server_hostname)
+            return sock
+
+    def fake_create_connection(address: tuple[str, int], timeout: object, source_address: object) -> object:
+        return object()
+
+    monkeypatch.setattr(rest_connector_module.socket, "create_connection", fake_create_connection)
+
+    target = rest_connector_module._ValidatedHttpTarget(
+        url="https://api.example.test/orders",
+        host="api.example.test",
+        port=443,
+        resolved_host="93.184.216.34",
+    )
+    connection = rest_connector_module._pinned_https_connection(target)(
+        "api.example.test",
+        timeout=5,
+        context=FakeTLSContext(),
+    )
+    connection._tunnel_host = "proxy.example.test"
+    connection._tunnel = lambda: tunnels.append("tunnel")
+    connection.connect()
+
+    assert tunnels == ["tunnel"]
+    assert server_names == ["proxy.example.test"]
+
+
+def test_rest_private_network_reason_helpers_cover_hostname_literal_and_resolved_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert rest_connector_module._private_network_reason_for_addresses("localhost", ()) == "local_hostname"
+    assert rest_connector_module._private_network_reason("localhost", 443) == "local_hostname"
+    assert rest_connector_module._private_network_reason("8.8.8.8", 443) is None
+
+    monkeypatch.setattr(
+        rest_connector_module,
+        "_resolved_addresses",
+        lambda host, port: (rest_connector_module.ip_address("10.0.0.7"),),
+    )
+
+    assert rest_connector_module._private_network_reason("api.example.test", 443) == "resolved_private_ip"
+
+
+def test_rest_resolution_helpers_reject_empty_answers_and_skip_empty_sockaddr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(rest_connector_module, "_resolved_addresses", lambda host, port: ())
+
+        with pytest.raises(ValidationFailed, match="could not be resolved") as exc_info:
+            rest_connector_module._resolved_target_addresses("api.example.test", 443)
+
+        assert exc_info.value.details == {"host": "api.example.test"}
+
+    def fake_getaddrinfo(
+        host: str,
+        port: int,
+        *,
+        type: socket.SocketKind,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int] | tuple[()]]]:
+        return [
+            (socket.AF_INET, type, 0, "", ()),
+            (socket.AF_INET, type, 0, "", ("93.184.216.34", port)),
+            (socket.AF_INET, type, 0, "", ("93.184.216.34", port)),
+        ]
+
+    monkeypatch.setattr(rest_connector_module.socket, "getaddrinfo", fake_getaddrinfo)
+
+    assert rest_connector_module._resolved_addresses("api.example.test", 443) == (
+        rest_connector_module.ip_address("93.184.216.34"),
+    )
 
 
 def test_rest_connector_rejects_unresolvable_source_host(monkeypatch: pytest.MonkeyPatch) -> None:

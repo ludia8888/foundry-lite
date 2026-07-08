@@ -84,6 +84,7 @@ def sync_view(row: Mapping[str, object]) -> dict[str, object]:
 
 
 def sync_run_view(row: Mapping[str, object]) -> dict[str, object]:
+    result_summary = dict(_mapping(row["result_summary"]))
     return {
         "runId": row["id"],
         "syncName": row["sync_name"],
@@ -97,9 +98,9 @@ def sync_run_view(row: Mapping[str, object]) -> dict[str, object]:
         "batchLimit": row["batch_limit"],
         "checkpointStart": dict(_mapping(row["checkpoint_start"])),
         "checkpointEnd": dict(_mapping(row["checkpoint_end"])),
-        "resultSummary": dict(_mapping(row["result_summary"])),
+        "resultSummary": result_summary,
         "error": dict(_mapping(row["error"])) if isinstance(row.get("error"), Mapping) else None,
-        "operationsPath": row["operations_path"],
+        "operationsPath": _sync_run_operations_path(row, result_summary),
         "startedAt": row["started_at"],
         "completedAt": row["completed_at"],
         "createdAt": row["created_at"],
@@ -112,3 +113,14 @@ def sync_run_list_view(rows: Sequence[Mapping[str, object]]) -> list[dict[str, o
 
 def _mapping(value: object) -> Mapping[str, object]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _sync_run_operations_path(row: Mapping[str, object], result_summary: Mapping[str, object]) -> str | None:
+    workflow = _mapping(result_summary.get("workflowRun"))
+    workflow_path = workflow.get("operationPath")
+    if isinstance(workflow_path, str) and workflow_path:
+        return workflow_path
+    stored_path = row.get("operations_path")
+    if isinstance(stored_path, str) and stored_path.startswith("/operations/source-sync-runs/"):
+        return None
+    return stored_path if isinstance(stored_path, str) else None

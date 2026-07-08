@@ -231,7 +231,15 @@ def _required_dataset_ref(node: Mapping[str, object]) -> str:
 
 
 def _required_output_ref(data: Mapping[str, object], node: Mapping[str, object]) -> str:
-    return _safe_dataset_ref(_required_text(data, "outputDatasetRef", node))
+    value = data.get("outputDatasetRef")
+    if node.get("type") == "output_dataset" and (not isinstance(value, str) or not value.strip()):
+        value = data.get("datasetRef")
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationFailed(
+            "pipeline node outputDatasetRef is required",
+            details={"nodeId": node.get("id"), "field": "outputDatasetRef"},
+        )
+    return _safe_dataset_ref(value.strip())
 
 
 def _required_text(data: Mapping[str, object], key: str, node: Mapping[str, object]) -> str:

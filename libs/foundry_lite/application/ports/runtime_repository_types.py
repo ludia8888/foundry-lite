@@ -242,6 +242,7 @@ class RuntimeRunDetail(TypedDict):
     runRelations: list[RuntimeRunRelationRow]
     lineageEdges: list[LineageEdgeRow]
     datasetTransaction: NotRequired[RuntimeRow | None]
+    sourceEvidence: NotRequired[RuntimeJsonObject | None]
     lateData: NotRequired[RuntimeJsonObject | None]
     materialization: NotRequired[RuntimeJsonObject | None]
     downstreamImpact: NotRequired[RuntimeJsonObject | None]

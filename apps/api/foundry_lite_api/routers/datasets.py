@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query, Request
 from foundry_lite.application.ports import (
+    DatasetAggregationResult,
     DatasetInspectionPayload,
     DatasetQualityContractCheck,
     DatasetQualityContractCheckCreateResult,
@@ -23,6 +24,7 @@ from foundry_lite_api import runtime
 from foundry_lite_api.errors import _handle_error
 from foundry_lite_api.request_context import _ctx
 from foundry_lite_api.schemas import (
+    DatasetAggregateRequest,
     DatasetQualityContractCheckCreateRequest,
     DatasetQualityContractCheckUpdateRequest,
     DatasetQualityContractVersionCreateRequest,
@@ -43,6 +45,26 @@ def list_datasets(request: Request) -> list[DatasetRow]:
 def preview_dataset(request: Request, namespace: str, name: str, limit: int = 100) -> list[TabularRow]:
     try:
         return runtime.foundry.datasets.preview(f"{namespace}.{name}", limit=limit, ctx=_ctx(request))
+    except FoundryLiteError as exc:
+        raise _handle_error(exc, request) from exc
+
+
+@router.post("/api/datasets/{namespace}/{name}/aggregate")
+def aggregate_dataset(
+    request: Request,
+    namespace: str,
+    name: str,
+    payload: DatasetAggregateRequest,
+) -> DatasetAggregationResult:
+    try:
+        return runtime.foundry.datasets.aggregate(
+            f"{namespace}.{name}",
+            version=payload.version,
+            filters=[item.model_dump() for item in payload.filter_conditions or []],
+            group_by=payload.group_by,
+            select=[item.model_dump() for item in payload.select],
+            ctx=_ctx(request),
+        )
     except FoundryLiteError as exc:
         raise _handle_error(exc, request) from exc
 
