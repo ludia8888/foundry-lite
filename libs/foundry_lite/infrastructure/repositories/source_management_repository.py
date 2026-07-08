@@ -150,20 +150,24 @@ class SqlAlchemySourceManagementRepository:
         result_summary: Mapping[str, object],
         error: Mapping[str, object] | None,
         completed_at: str,
+        workflow_run_id: str | None = None,
     ) -> SourceSyncRunRow | None:
+        result_values: dict[str, object | None] = {
+            "dataset_version_id": dataset_version_id,
+            "checkpoint_end": checkpoint_end,
+            "result_summary": result_summary,
+            "error": error,
+            "completed_at": completed_at,
+        }
+        if workflow_run_id is not None:
+            result_values["workflow_run_id"] = workflow_run_id
         cas_status_update(
             transaction,
             db.source_sync_runs,
             tenant_id=tenant_id,
             row_id=run_id,
             transition=_source_sync_run_transition(status),
-            values={
-                "dataset_version_id": dataset_version_id,
-                "checkpoint_end": checkpoint_end,
-                "result_summary": result_summary,
-                "error": error,
-                "completed_at": completed_at,
-            },
+            values=result_values,
         )
         return self.sync_run_by_id(transaction=transaction, tenant_id=tenant_id, run_id=run_id)
 

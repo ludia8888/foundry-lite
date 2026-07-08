@@ -1474,6 +1474,8 @@ export function createSourceSyncRecipe(client: Pick<FoundryLiteGeneratedClient, 
   return {
     createDebezium: (payload: SourceDebeziumCreateRequest, options: { idempotencyKey: string }) =>
       client.sources.cdc.debezium.create(payload, options),
+    debeziumOperationPlan: (sourceName: string, options?: { objectTypeApiName?: string }) =>
+      client.sources.cdc.debezium.operationPlan(sourceName, options),
     startDebeziumSync: (
       sourceName: string,
       payload: SourceDebeziumSyncStartRequest | undefined,
@@ -2985,10 +2987,19 @@ export function createOperatorWorkspaceRecipe(
 ) {
   const adminOperations = createAdminOperationsRecipe(client);
   const recoveryOperations = createRecoveryOperationsRecipe(client);
+  const loadCatalog = async (): Promise<OntologyCatalog | null> => {
+    if (catalog) return catalog;
+    try {
+      return await client.ontology.catalog();
+    } catch (error) {
+      if (isActiveOntologyMissingError(error)) return null;
+      throw error;
+    }
+  };
   const loadHome = async (
     options: OperatorWorkspaceHomeOptions = {},
   ): Promise<OperatorWorkspaceHomeView> => {
-    const catalogPromise = catalog ? Promise.resolve(catalog) : client.ontology.catalog();
+    const catalogPromise = loadCatalog();
     const adminBoardPromise = adminOperations.loadOperationsBoard();
     const [nextCatalog, datasets, runs, adminBoard, recoveryOverview] = await Promise.all([
       catalogPromise,
@@ -3017,6 +3028,14 @@ export function createOperatorWorkspaceRecipe(
       options: OperatorWorkspaceHomeOptions & { selectedAreaId?: OperatorWorkspaceAreaId } = {},
     ) => operatorWorkspaceShell(await loadHome(options), options.selectedAreaId),
   };
+}
+
+function isActiveOntologyMissingError(error: unknown): boolean {
+  const normalized = normalizeFoundryLiteError(error);
+  return (
+    normalized.code === "NOT_FOUND" &&
+    normalized.message.toLowerCase().includes("active ontology not found")
+  );
 }
 
 export function createFoundryLiteScreenRecipes(

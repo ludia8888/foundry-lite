@@ -230,7 +230,11 @@ def _is_ignored_doc_path(path: Path, *, root: Path) -> bool:
 def _all_source_paths(root: Path) -> list[Path]:
     paths: list[Path] = []
     for path in root.rglob("*"):
-        if any(part in DOC_SCAN_IGNORED_ROOTS for part in path.parts):
+        try:
+            relative_parts = path.relative_to(root).parts
+        except ValueError:
+            relative_parts = path.parts
+        if any(part in DOC_SCAN_IGNORED_ROOTS for part in relative_parts):
             continue
         if path.is_file() or path.is_dir():
             paths.append(path)

@@ -5,14 +5,19 @@ from collections.abc import Mapping, Sequence
 from foundry_lite.application.ports import (
     ConnectorAdapter,
     ConnectorSnapshotRequest,
+    RuntimeRepository,
     SourceDatabaseAdapter,
     SourceManagementRepository,
+    SourceRegistryRepository,
     TransactionContext,
+    TransactionManager,
 )
+from foundry_lite.application.services import source_onboarding_cdc_index as cdc_index
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.connector_onboarding_service import ConnectorOnboardingService
 from foundry_lite.application.services.dataset.ingest import DatasetIngestService
 from foundry_lite.application.services.dataset.registry import DatasetRegistryService
+from foundry_lite.application.services.object_store.indexing_cdc_service import ObjectCdcIndexingService
 from foundry_lite.application.services.source_management_config import (
     SOURCE_TEMPLATES,
     agent_record,
@@ -27,12 +32,10 @@ from foundry_lite.application.services.source_management_helpers import (
     SourceRuntimeBoundary,
     agent_row,
     audit,
-    commit_result_payload,
     create_credential_row,
     create_network_policy_row,
     create_sync_row,
     credential_row,
-    fieldnames,
     int_value,
     mapping,
     now,
@@ -44,8 +47,12 @@ from foundry_lite.application.services.source_management_helpers import (
     run_row,
     secret_version,
     sync_row,
-    target_dataset_ref,
     text,
+)
+from foundry_lite.application.services.source_management_run_helpers import (
+    complete_database_run,
+    complete_rest_run,
+    fail_run,
 )
 from foundry_lite.application.services.source_management_views import (
     agent_view,
@@ -58,6 +65,7 @@ from foundry_lite.application.services.source_management_views import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, NotFound, ValidationFailed
+from foundry_lite.security.policy import PolicyService
 
 
 class SourceManagementService(CoreService):
@@ -406,95 +414,54 @@ class SourceManagementService(CoreService):
     ) -> dict[str, object]:
         try:
             if sync["source_type"] == "rest_api":
-                return self._complete_rest_run(ctx, sync, run)
+                return complete_rest_run(self, self.connector_onboarding_service, ctx, sync, run)
             if sync["source_type"] == "postgres_jdbc":
-                return self._complete_database_run(ctx, sync, run)
+                return complete_database_run(self, self.dataset_ingest_service, ctx, sync, run)
             raise ValidationFailed(
                 "managed sync data-plane is not available", details={"sourceType": sync["source_type"]}
             )
         except FoundryLiteError as exc:
-            return self._fail_run(ctx, run, exc)
+            return fail_run(self, ctx, run, exc)
 
-    def _complete_rest_run(
-        self, ctx: RequestContext, sync: Mapping[str, object], run: Mapping[str, object]
-    ) -> dict[str, object]:
-        summary = mapping(sync["config_summary"])
-        workflow = self.connector_onboarding_service.start_resource_sync(
-            required_text(summary, "connectorName"),
-            required_text(summary, "resourceName"),
-            idempotency_key=str(run["idempotency_key"]),
-            ctx=ctx,
-            sync_name=str(sync["sync_name"]),
-            transaction_type=str(sync["mode"]),
-        )
-        result = {"workflowRun": dict(workflow)}
-        return self._finish_run(ctx, sync, run, "running", workflow["workflowRunId"], None, {}, result, None)
 
-    def _complete_database_run(
-        self, ctx: RequestContext, sync: Mapping[str, object], run: Mapping[str, object]
-    ) -> dict[str, object]:
-        summary = mapping(sync["config_summary"])
-        dataset_ref = target_dataset_ref(sync)
-        database_url = self.secret_vault.get_secret(required_text(summary, "databaseUrlSecretRef")).value
-        batch = self.source_database_adapter.read_table_batch(
-            database_url,
-            table_name=required_text(summary, "tableName"),
-            batch_limit=int_value(run.get("batch_limit") or summary.get("batchLimit"), 100),
-            checkpoint_column=optional_text(summary.get("checkpointColumn")),
-            after_value=mapping(run["checkpoint_start"]).get("lastValue"),
-        )
-        commit = self.dataset_ingest_service.sync_rows_batch(
-            dataset_ref,
-            batch.rows,
-            fieldnames=fieldnames(batch.rows, batch.schema),
-            ctx=ctx,
-            sync_name=str(sync["sync_name"]),
-            tx_type=str(sync["mode"]),
-            source_type=f"source.{sync['source_type']}",
-            transaction_metadata={"sourceManagedSync": {"runId": run["id"], "checkpoint": dict(batch.checkpoint)}},
-        )
-        result = commit_result_payload(commit, batch)
-        return self._finish_run(
-            ctx, sync, run, "succeeded", None, result.get("datasetVersionId"), batch.checkpoint, result, None
-        )
+class SourceCdcObjectIndexService(CoreService):
+    """Runs one bounded CDC dataset-version-to-object-index tick from product surfaces."""
 
-    def _finish_run(
+    required_dependencies = ("engine", "policy", "runtime_repository", "source_registry_repository")
+    required_collaborators = ("dataset_registry_service", "object_cdc_indexing_service", "runtime_service")
+    engine: TransactionManager
+    policy: PolicyService
+    runtime_repository: RuntimeRepository
+    source_registry_repository: SourceRegistryRepository
+    dataset_registry_service: cdc_index.CdcObjectIndexDatasetBoundary
+    object_cdc_indexing_service: ObjectCdcIndexingService
+    runtime_service: SourceRuntimeBoundary
+
+    def start_debezium_object_index(
         self,
-        ctx: RequestContext,
-        sync: Mapping[str, object],
-        run: Mapping[str, object],
-        status: str,
-        workflow_run_id: str | None,
-        dataset_version_id: object,
-        checkpoint: Mapping[str, object],
-        result: Mapping[str, object],
-        error: Mapping[str, object] | None,
+        source_name: str,
+        *,
+        object_type_api_name: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+        expected_config_fingerprint: str | None = None,
+        max_rows_per_version: int = 10_000,
     ) -> dict[str, object]:
-        completed_at = now()
-        with self.engine.begin() as conn:
-            updated = self.source_management_repository.update_sync_run_result(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                run_id=str(run["id"]),
-                status=status,
-                dataset_version_id=dataset_version_id if isinstance(dataset_version_id, str) else None,
-                checkpoint_end=checkpoint,
-                result_summary=result,
-                error=error,
-                completed_at=completed_at,
-            )
-            self.source_management_repository.update_sync_after_run(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                sync_name=str(sync["sync_name"]),
-                run_id=str(run["id"]),
-                workflow_run_id=workflow_run_id,
-                checkpoint=checkpoint,
-                updated_at=completed_at,
-            )
-        return sync_run_view(updated or run)
-
-    def _fail_run(self, ctx: RequestContext, run: Mapping[str, object], exc: FoundryLiteError) -> dict[str, object]:
-        error = {"message": exc.message, "details": dict(exc.details)}
-        sync = {"sync_name": run["sync_name"]}
-        return self._finish_run(ctx, sync, run, "failed", None, None, {}, {}, error)
+        runtime = cdc_index.CdcObjectIndexRuntime(
+            policy=self.policy,
+            runtime_service=self.runtime_service,
+            engine=self.engine,
+            runtime_repository=self.runtime_repository,
+            source_registry_repository=self.source_registry_repository,
+            dataset_registry_service=self.dataset_registry_service,
+            object_cdc_indexing_service=self.object_cdc_indexing_service,
+        )
+        return cdc_index.start_debezium_object_index(
+            runtime,
+            source_name,
+            object_type_api_name,
+            idempotency_key,
+            ctx,
+            expected_config_fingerprint,
+            max_rows_per_version,
+        )

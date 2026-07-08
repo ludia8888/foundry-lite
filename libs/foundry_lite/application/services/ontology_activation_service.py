@@ -65,6 +65,7 @@ from foundry_lite.application.services.ontology_yaml import (
     required_str,
     schema_columns,
     yaml_object,
+    yaml_parse_error_details,
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, ValidationFailed
@@ -150,7 +151,10 @@ class OntologyActivationService(CoreService):
         }
 
     def _load_ontology_text(self, yaml_text: str) -> YamlObject:
-        definition: object = yaml.safe_load(yaml_text)
+        try:
+            definition: object = yaml.safe_load(yaml_text)
+        except yaml.YAMLError as exc:
+            raise ValidationFailed("ontology yaml parse failed", details=yaml_parse_error_details(exc)) from exc
         return yaml_object(definition, "ontology yaml")
 
     def _create_draft_version(self, conn: TransactionContext, ctx: RequestContext) -> tuple[str, int]:

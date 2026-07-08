@@ -942,6 +942,35 @@ def test_transform_scheduler_skips_snapshot_until_input_version_exists(tmp_path:
     assert foundry.datasets.list_versions("clean.scheduler_empty_orders", ctx=ctx) == []
 
 
+def test_transform_scheduler_skips_snapshot_until_input_dataset_exists(tmp_path: Path) -> None:
+    foundry = FoundryLite(
+        dependencies=create_local_core_dependencies(storage_root=tmp_path / "transform-scheduler-missing-dataset")
+    )
+    ctx = RequestContext(roles=("admin", "data_engineer"))
+    foundry.datasets.ensure("clean.scheduler_missing_dataset_orders", ctx=ctx, primary_key=["order_id"])
+    sql_path = tmp_path / "scheduler_missing_dataset_orders.sql"
+    sql_path.write_text(
+        "select order_id, amount from {{ input('raw.scheduler_missing_dataset_orders') }}",
+        encoding="utf-8",
+    )
+    foundry.transforms.register(
+        "scheduler_missing_dataset_orders",
+        entrypoint=sql_path,
+        inputs={"orders": "raw.scheduler_missing_dataset_orders"},
+        output_dataset_ref="clean.scheduler_missing_dataset_orders",
+        ctx=ctx,
+    )
+
+    preview = foundry.transforms.preview_due(ctx=ctx, max_runs=5)
+    skipped = next(row for row in preview["skipped"] if row["apiName"] == "scheduler_missing_dataset_orders")
+    tick = foundry.transforms.run_due(ctx=ctx, max_runs=5)
+
+    assert skipped["reason"] == "input_version_missing"
+    assert skipped["missingInputRefs"] == ["raw.scheduler_missing_dataset_orders"]
+    assert tick["started"] == []
+    assert foundry.datasets.list_versions("clean.scheduler_missing_dataset_orders", ctx=ctx) == []
+
+
 def test_sql_transform_pushes_partition_predicate_to_storage_adapter(tmp_path: Path) -> None:
     compute = _TransformInputPlanSpy()
     dependencies = create_local_core_dependencies(storage_root=tmp_path / "transform-partition-pushdown")

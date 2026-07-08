@@ -267,8 +267,9 @@ Sync는 "그 문을 통해 반복해서 가져오는 일", Upload는 "브라우�
 고객사 회의실에서 "처음 ERP 붙이기"를 보여주는 화면은 `createSourceWizardRecipe(...)`를 쓴다. 이 recipe는 Palantir
 Data Connection처럼 template 선택, credential vault 저장, agent/network 준비, source exploration, managed sync 생성,
 첫 run 시작을 한 화면 상태로 묶는다. v1은 local vault에 secret을 저장하고 응답에는 redacted `secretRef`만 돌려준다.
-managed sync schedule의 due preview/tick은 API/SDK/worker로 가능하지만, cloud/Vault secret manager, OAuth authorization
-flow, SAP/NetSuite 전용 wizard packaging, visual scheduler UI는 아직 future다.
+managed sync schedule의 due preview/tick은 API/SDK/worker와 Data Connection Source scheduler UI로 가능하지만,
+cloud/Vault secret manager, OAuth authorization flow, SAP/NetSuite 전용 wizard packaging, production scheduler
+operations UI는 아직 future다.
 
 ```tsx
 import { idempotencyKey } from "@foundry-lite/sdk";
@@ -421,11 +422,19 @@ function FirstSourceScreen() {
         topic: "erp.public.orders",
         consumerGroup: "foundry-lite-orders",
         secretRefs: { connectorConfig: "debezium-orders-config" },
+        primaryKey: ["order_id"],
       },
       createIdempotencyKey: form.idempotencyKeys.createCdc,
       startSync: { limit: 100 },
       startSyncIdempotencyKey: form.idempotencyKeys.startCdc,
     });
+  }
+
+  async function reviewCdcOperationPlan() {
+    const plan = await sourceOnboarding.syncs.debeziumOperationPlan("orders_cdc", {
+      objectTypeApiName: "Order",
+    });
+    renderCdcReadiness(plan.readiness, plan.workerCommands, plan.operatorChecklist);
   }
 
   async function uploadInvoiceMedia() {
@@ -505,9 +514,10 @@ const workflowRun = await client.sources.rest.startSync(
 
 Source recipe state는 한 화면에서 바로 렌더링할 수 있게 `phase`, `source`, `datasetRef`, `mediaSetId`,
 `workflowRun`, `commitResult`, `commitResults`, `mediaCommitResult`, `testResult`, `operationsPath`, `requestId`,
-`error`, `retryable`을 유지한다. Source managed sync schedule은 API/SDK/worker에서 due preview/tick으로 실행할 수
-있고, v1의 의도적인 future scope는 remote directory crawler, visual scheduler UI, managed Debezium Connect
-operations, cloud secret manager, OAuth authorization flow, vendor-specific SAP/NetSuite packaged source wizards다.
+`error`, `retryable`을 유지한다. Source managed sync schedule은 API/SDK/worker와 Data Connection Source scheduler UI에서
+due preview/tick으로 실행할 수 있고, v1의 의도적인 future scope는 remote directory crawler, production scheduler
+operations UI, managed Debezium Connect operations, cloud secret manager, OAuth authorization flow,
+vendor-specific SAP/NetSuite packaged source wizards다.
 
 ## ERP REST Connector Onboarding
 
@@ -603,9 +613,9 @@ function ConnectorOnboardingScreen() {
 
 `testResource`는 외부 REST source를 읽어서 schema/sample/error evidence만 반환하고 dataset commit을 만들지 않는다. 첫
 commit은 `startFirstSync`가 시작한 `ConnectorSyncWorkflow` data-plane에서만 생긴다. Source managed sync schedule은
-API/SDK/worker에서 current이고, 현재 v1 future scope는 vendor-specific SAP/NetSuite adapter packaging, OAuth
-authorization flow, connector-specific visual scheduler UI, cloud/Vault secret manager, cloud/Vault secret manager
-and secret rotation API, CDC/Debezium onboarding이다.
+API/SDK/worker와 Data Connection Source scheduler UI에서 current이고, 현재 v1 future scope는 vendor-specific
+SAP/NetSuite adapter packaging, OAuth authorization flow, connector-specific production scheduler operations UI,
+cloud/Vault secret manager, cloud/Vault secret manager and secret rotation API, CDC/Debezium onboarding이다.
 
 ## Dataset Explorer
 

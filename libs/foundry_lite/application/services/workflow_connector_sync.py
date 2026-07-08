@@ -49,6 +49,7 @@ def connector_sync_workflow_output(
         "datasetRef": result.dataset_ref,
         "connectorName": payload.get("connectorName"),
         "resourceName": payload.get("resourceName"),
+        "configFingerprint": payload.get("configFingerprint"),
         "syncRunId": sync_run_id,
         "transactionId": result.transaction_id,
         "committedVersionId": result.version_id,

@@ -1863,6 +1863,51 @@ def test_api_transform_sql_register_writes_server_managed_entrypoint(foundry, mo
     assert entrypoint.read_text(encoding="utf-8") == "select * from {{ input('raw.orders') }}"
 
 
+def test_api_transform_sql_register_and_run_creates_output_dataset(foundry, tmp_path, monkeypatch) -> None:
+    ctx = demo_admin_context()
+    raw_ref = "raw.api_transform_autocreate_orders"
+    output_ref = "clean.api_transform_autocreate_orders"
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,17\n", encoding="utf-8")
+    foundry.datasets.ensure(raw_ref, ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.upload_csv(raw_ref, csv_path, ctx=ctx)
+    monkeypatch.setattr(api_runtime, "foundry", foundry)
+    headers = {
+        "X-Tenant-ID": ctx.tenant_id,
+        "X-User-ID": ctx.actor_user_id,
+        "X-Roles": ",".join(ctx.roles),
+    }
+    client = TestClient(app)
+
+    register = client.post(
+        "/api/transforms/sql",
+        headers=headers,
+        json={
+            "apiName": "api_transform_autocreate_output",
+            "sql": f"select order_id, amount from {{{{ input('{raw_ref}') }}}}",
+            "inputs": {"orders": raw_ref},
+            "outputDatasetRef": output_ref,
+            "checks": [],
+            "mode": "snapshot",
+        },
+    )
+    run = client.post("/api/transforms/api_transform_autocreate_output/run", headers=headers)
+    preview = client.get("/api/datasets/clean/api_transform_autocreate_orders/preview?limit=5", headers=headers)
+
+    assert register.status_code == 200
+    assert run.status_code == 200
+    assert run.json()["dataset_ref"] == output_ref
+    assert preview.status_code == 200
+    assert preview.json() == [
+        {
+            "order_id": "O-1",
+            "amount": 17,
+            "branch": "main",
+            "version": run.json()["version_id"],
+        }
+    ]
+
+
 def test_api_transform_scheduler_preview_and_tick(monkeypatch) -> None:
     class _Transforms:
         def __init__(self) -> None:
@@ -2595,7 +2640,6 @@ def test_api_connector_onboarding_create_test_start_and_fetch_workflow(tmp_path,
                 "displayName": "ERP",
                 "baseUrl": server.base_url,
                 "auth": {"mode": "bearer", "tokenSecretRef": "erp-token"},
-                "rateLimitPerMinute": 60,
                 "allowPrivateNetwork": True,
             },
         )
@@ -2626,6 +2670,7 @@ def test_api_connector_onboarding_create_test_start_and_fetch_workflow(tmp_path,
     listed = client.get("/api/connectors/connections", headers=headers)
     fetched = client.get("/api/connectors/connections/erp", headers=headers)
     workflow = client.get(f"/api/operations/workflows/{started.json()['workflowRunId']}", headers=headers)
+    started_payload = started.json()
 
     assert created.status_code == 200
     assert upserted.status_code == 200
@@ -2635,9 +2680,9 @@ def test_api_connector_onboarding_create_test_start_and_fetch_workflow(tmp_path,
     assert fetched.json()["resources"][0]["resourceName"] == "orders"
     assert tested.json()["status"] == "succeeded"
     assert tested.json()["rowCount"] == 1
-    assert started.json()["workflowName"] == "ConnectorSyncWorkflow"
-    assert started.json()["output"]["configFingerprint"].startswith("sha256:")
-    assert workflow.json()["workflowRunId"] == started.json()["workflowRunId"]
+    assert started_payload["workflowName"] == "ConnectorSyncWorkflow"
+    assert str(started_payload["output"].get("configFingerprint", "")).startswith("sha256:"), started_payload
+    assert workflow.json()["workflowRunId"] == started_payload["workflowRunId"]
 
 
 def test_api_operations_reconciliation_resolves_action_writeback(foundry, monkeypatch) -> None:

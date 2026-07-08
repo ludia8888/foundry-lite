@@ -43,6 +43,7 @@ from foundry_lite.application.ports.model_registry_repository import (
     ModelRecord,
 )
 from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.application.ports.workflow_adapter import WorkflowStartRequest
 from foundry_lite.application.primitives import (
     CommitResult,
     StagedFileStats,
@@ -52,7 +53,8 @@ from foundry_lite.application.primitives import (
     _now,
     _required_row,
 )
-from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID, RequestContext
+from foundry_lite.application.services.workflow_orchestration_service import CONNECTOR_SYNC_WORKFLOW_NAME
+from foundry_lite.domain.context import DEFAULT_ACTOR_USER_ID, DEFAULT_TENANT_ID, DEMO_ADMIN_ROLES, RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.observability.tracing import trace_public_methods
 
@@ -76,6 +78,7 @@ class FoundryLite:
         services = CoreServices.create(dependencies)
         self._services = services
         self._attach_facades(services)
+        self._bind_local_workflow_drivers(dependencies, services)
         self.metadata_repository.initialize_schema()
         self.bootstrap()
 
@@ -160,6 +163,36 @@ class FoundryLite:
             services.prompt_artifact,
             services.outbox_publisher,
         )
+
+    def _bind_local_workflow_drivers(self, dependencies: CoreDependencies, services: CoreServices) -> None:
+        register_driver = getattr(dependencies.workflow_adapter, "register_driver", None)
+        if not callable(register_driver):
+            return
+        register_driver(
+            CONNECTOR_SYNC_WORKFLOW_NAME,
+            lambda request: self._run_local_connector_sync_driver(services, request),
+        )
+
+    def _run_local_connector_sync_driver(
+        self,
+        services: CoreServices,
+        request: WorkflowStartRequest,
+    ) -> dict[str, object]:
+        payload = dict(request.input)
+        if not payload.get("configFingerprint"):
+            return {
+                "processed": True,
+                **payload,
+                "workflow_name": request.workflow_name,
+                "request_id": request.request_id,
+            }
+        ctx = RequestContext(
+            tenant_id=request.tenant_id,
+            actor_user_id=DEFAULT_ACTOR_USER_ID,
+            request_id=request.request_id,
+            roles=DEMO_ADMIN_ROLES,
+        )
+        return services.connector_onboarding.run_registered_sync_activity(payload, ctx=ctx)
 
     def reset(self, *, confirm_dev: bool = False) -> None:
         if not confirm_dev:
@@ -266,6 +299,7 @@ def _source_workspace(services: CoreServices) -> SourceWorkspace:
         services.source_onboarding,
         services.source_management,
         services.source_scheduler,
+        services.source_cdc_object_index,
     )
 
 

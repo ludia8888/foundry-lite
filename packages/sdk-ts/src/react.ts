@@ -106,6 +106,9 @@ import type {
   BackupRestoreRecoveryOverview,
   BackupRestoreResumeApprovalRequest,
   Dataset,
+  DatasetAggregateRequest,
+  DatasetAggregationGroup,
+  DatasetAggregationResult,
   DatasetInspectionPayload,
   DatasetQualityResultSummary,
   DatasetVersion,
@@ -275,6 +278,7 @@ export type FoundryLiteSessionClientState = {
   lastErrorCode: string | null;
   isLastResponseRetryable: boolean;
   clearLastResponse(): void;
+  getLastResponse(): FoundryLiteResponseMetadata | null;
 };
 
 export type FoundryLiteSessionStatusKind =
@@ -359,12 +363,14 @@ export function useFoundryLiteSessionClient(
   options: FoundryLiteSessionClientOptions,
 ): FoundryLiteSessionClientState {
   const [lastResponse, setLastResponse] = useState<FoundryLiteResponseMetadata | null>(null);
+  const lastResponseRef = useRef<FoundryLiteResponseMetadata | null>(null);
   const tokenProvider = useMemo(
     () => createSessionTokenProvider(options.sessionProvider),
     [options.sessionProvider],
   );
   const onResponse = useCallback(
     (metadata: FoundryLiteResponseMetadata) => {
+      lastResponseRef.current = metadata;
       setLastResponse(metadata);
       options.onResponse?.(metadata);
     },
@@ -411,7 +417,11 @@ export function useFoundryLiteSessionClient(
       tokenProvider,
     ],
   );
-  const clearLastResponse = useCallback(() => setLastResponse(null), []);
+  const clearLastResponse = useCallback(() => {
+    lastResponseRef.current = null;
+    setLastResponse(null);
+  }, []);
+  const getLastResponse = useCallback(() => lastResponseRef.current, []);
 
   return {
     client,
@@ -421,6 +431,7 @@ export function useFoundryLiteSessionClient(
     lastErrorCode: lastResponse?.errorCode ?? null,
     isLastResponseRetryable: lastResponse?.retryable ?? false,
     clearLastResponse,
+    getLastResponse,
   };
 }
 
@@ -752,46 +763,52 @@ export function useFoundryLiteQuery<TData>(
   load: () => Promise<TData>,
   options: FoundryLiteQueryOptions<TData> = {},
 ): FoundryLiteQueryState<TData> {
-  const { enabled = true, initialData = null, retry, onSuccess, onError } = options;
+  const { enabled = true, initialData = null } = options;
   const [data, setData] = useState<TData | null>(initialData);
   const [error, setError] = useState<FoundryLiteApiError | null>(null);
   const [isLoading, setIsLoading] = useState(enabled && data === null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const requestKey = useMemo(() => JSON.stringify(key), [key]);
-  const mountedRef = useRef(true);
+  const generationRef = useRef(0);
   const dataRef = useRef<TData | null>(initialData);
+  const loadRef = useRef(load);
+  const optionsRef = useRef(options);
+  loadRef.current = load;
+  optionsRef.current = options;
 
   useEffect(() => {
     return () => {
-      mountedRef.current = false;
+      generationRef.current += 1;
     };
   }, []);
 
   const reload = useCallback(async () => {
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
     if (dataRef.current === null) setIsLoading(true);
     else setIsRefreshing(true);
     try {
-      const nextData = await retryWithBackoff(load, retry);
-      if (!mountedRef.current) return nextData;
+      const nextData = await retryWithBackoff(() => loadRef.current(), optionsRef.current.retry);
+      if (generationRef.current !== generation) return nextData;
       dataRef.current = nextData;
       setData(nextData);
       setError(null);
-      onSuccess?.(nextData);
+      optionsRef.current.onSuccess?.(nextData);
       return nextData;
     } catch (caught) {
       const normalized = normalizeFoundryLiteError(caught);
-      if (mountedRef.current) {
+      if (generationRef.current === generation) {
         setError(normalized);
-        onError?.(normalized);
+        optionsRef.current.onError?.(normalized);
       }
       return null;
     } finally {
-      if (mountedRef.current) {
+      if (generationRef.current === generation) {
         setIsLoading(false);
         setIsRefreshing(false);
       }
     }
-  }, [load, onError, onSuccess, retry]);
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -1023,6 +1040,7 @@ export function useFoundryLiteCursorPagination<TPage, TItem = unknown>(
   retryRef.current = retry;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
@@ -1138,25 +1156,31 @@ export function useFoundryLiteMutation<TResult, TPayload>(
   mutate: (payload: TPayload) => Promise<TResult>,
   options: FoundryLiteMutationOptions<TResult, TPayload> = {},
 ): FoundryLiteMutationState<TResult, TPayload> {
+  const session = useContext(FoundryLiteContext);
+  const getLastResponse = session?.getLastResponse;
   const { actionLock: suppliedActionLock, lockKey, onSuccess, onError } = options;
   const actionLock = useMemo(() => suppliedActionLock ?? createInFlightActionLock(), [suppliedActionLock]);
   const [result, setResult] = useState<TResult | null>(null);
   const [error, setError] = useState<FoundryLiteApiError | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [requestId, setRequestId] = useState<string | null>(null);
 
   const execute = useCallback(
     async (payload: TPayload) => {
       const payloadLockKey = lockKey?.(payload);
       const task = async () => {
         setIsRunning(true);
+        setRequestId(null);
         try {
           const nextResult = await mutate(payload);
+          setRequestId(getLastResponse?.()?.requestId ?? null);
           setResult(nextResult);
           setError(null);
           onSuccess?.(nextResult);
           return nextResult;
         } catch (caught) {
           const normalized = normalizeFoundryLiteError(caught);
+          setRequestId(normalized.requestId ?? getLastResponse?.()?.requestId ?? null);
           setError(normalized);
           onError?.(normalized);
           return null;
@@ -1166,14 +1190,14 @@ export function useFoundryLiteMutation<TResult, TPayload>(
       };
       return payloadLockKey ? actionLock.run(payloadLockKey, task) : task();
     },
-    [actionLock, lockKey, mutate, onError, onSuccess],
+    [actionLock, getLastResponse, lockKey, mutate, onError, onSuccess],
   );
 
   return {
     result,
     error,
     isRunning,
-    requestId: error?.requestId ?? null,
+    requestId: error?.requestId ?? requestId,
     retryable: error?.retryable ?? false,
     execute,
   };
@@ -1210,6 +1234,7 @@ export function useFoundryLiteConnectorOnboarding(
   optionsRef.current = options;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
@@ -1293,6 +1318,7 @@ export function useFoundryLiteSourceOnboarding(
   optionsRef.current = options;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
@@ -1369,6 +1395,7 @@ export function useFoundryLiteSourceWizard(
   optionsRef.current = options;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
@@ -3180,6 +3207,61 @@ export function foundryLiteMediaPipelineLockKey(payload: FoundryLiteMediaPipelin
   return `media:pipeline:${payload.mediaSetId}:${payload.logicalPath}:${payload.process.processor}:${payload.idempotencyKey}`;
 }
 
+export type FoundryLiteMediaProcessingFailure = {
+  kind: string;
+  reason: string;
+  message: string;
+  retryable: boolean;
+};
+
+export function isFoundryLiteMediaProcessingSucceeded(outcome: MediaProcessingOutcome): boolean {
+  const status = outcome.status.toUpperCase();
+  return status === "SUCCEEDED" || status === "COMMITTED";
+}
+
+export function foundryLiteMediaProcessingFailure(
+  outcome: MediaProcessingOutcome,
+): FoundryLiteMediaProcessingFailure | null {
+  if (isFoundryLiteMediaProcessingSucceeded(outcome)) return null;
+  const failure = (outcome.error ?? {}) as Record<string, unknown>;
+  const failureDetails =
+    typeof failure.details === "object" && failure.details !== null
+      ? (failure.details as Record<string, unknown>)
+      : {};
+  const operatorMessage =
+    typeof failure.operatorMessage === "string" ? failure.operatorMessage : null;
+  const reason =
+    typeof failureDetails.reason === "string"
+      ? failureDetails.reason
+      : operatorMessage ?? "media_processing_failed";
+  return {
+    kind: typeof failure.kind === "string" ? failure.kind : "unknown",
+    reason,
+    message: operatorMessage ?? `media processing failed: ${reason}`,
+    retryable: failure.retryable === true,
+  };
+}
+
+export function foundryLiteMediaProcessingFailureError(
+  outcome: MediaProcessingOutcome,
+  failure: FoundryLiteMediaProcessingFailure,
+): FoundryLiteApiError {
+  return new FoundryLiteApiError(
+    422,
+    "MEDIA_PROCESSING_FAILED",
+    failure.message,
+    {
+      failure_kind: failure.kind,
+      failure_reason: failure.reason,
+      media_derivative_id: outcome.media_derivative_id,
+      status: outcome.status,
+      adapterFailure: outcome.error ?? null,
+    },
+    null,
+    failure.retryable,
+  );
+}
+
 export function useFoundryLiteMediaPipeline(
   client: Pick<FoundryLiteGeneratedClient, "media">,
   options: FoundryLiteMutationOptions<FoundryLiteMediaPipelineResult, FoundryLiteMediaPipelinePayload> = {},
@@ -3225,6 +3307,11 @@ export function useFoundryLiteMediaPipeline(
         payload.process,
       );
       setProcessing(nextProcessing);
+      const processingFailure = foundryLiteMediaProcessingFailure(nextProcessing);
+      if (processingFailure !== null) {
+        // A FAILED run must surface at the processing step; never advance to indexing.
+        throw foundryLiteMediaProcessingFailureError(nextProcessing, processingFailure);
+      }
       let nextIndexing: MediaIndexingOutcome | null = null;
       if (payload.indexGeneration) {
         setPhase("indexing");
@@ -4054,6 +4141,7 @@ export function useFoundryLiteOperationEventStream<
   optionsRef.current = options;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       abortRef.current?.abort();
@@ -4280,6 +4368,7 @@ export function useFoundryLiteLongRunningJob<TPayload, TStartResult, TSnapshot>(
   optionsRef.current = options;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
@@ -4778,6 +4867,7 @@ export type FoundryLiteOperationsRunDetailView = {
   runRelationCount: number;
   lineageEdgeCount: number;
   hasError: boolean;
+  hasSourceEvidence: boolean;
   hasQualityEvidence: boolean;
   hasAiEvidence: boolean;
 };
@@ -4893,14 +4983,15 @@ export function foundryLiteOperationsRunRow(
 ): FoundryLiteOperationsRunRow {
   const status = readFoundryLiteOperationsRunStatus(row);
   const phase = foundryLiteOperationsRunPhase(status);
+  const runId = readFoundryLiteOperationsRunId(row);
   return {
     row,
     collection,
     runType,
-    runId: readFoundryLiteOperationsRunId(row),
+    runId,
     status,
     phase,
-    operationPath: readFoundryLiteOperationsRunPath(row),
+    operationPath: readFoundryLiteOperationsRunPath(runType, row, runId),
     isPending: phase === "pending",
     isRunning: phase === "running",
     isSucceeded: phase === "succeeded",
@@ -4978,6 +5069,7 @@ export function foundryLiteOperationsRunDetailView(
     runRelationCount: detail?.runRelations.length ?? 0,
     lineageEdgeCount: detail?.lineageEdges.length ?? 0,
     hasError: Boolean(detail?.errorMessage || detail?.error),
+    hasSourceEvidence: Boolean(detail?.sourceEvidence),
     hasQualityEvidence: Boolean(detail?.quality),
     hasAiEvidence: Boolean(detail?.ai),
   };
@@ -6411,6 +6503,14 @@ function stableDatasetExplorerSelectionKey(selection: FoundryLiteDatasetExplorer
   });
 }
 
+function isFoundryLiteDatasetSelectionMissingError(error: unknown): boolean {
+  const normalized = normalizeFoundryLiteError(error);
+  return (
+    normalized.code === "NOT_FOUND" &&
+    normalized.message.toLowerCase().includes("dataset not found")
+  );
+}
+
 async function loadFoundryLiteDatasetExplorerData(
   client: Pick<FoundryLiteGeneratedClient, "datasets" | "operations">,
   selection: FoundryLiteDatasetExplorerSelection,
@@ -6419,17 +6519,47 @@ async function loadFoundryLiteDatasetExplorerData(
   if (!selection.namespace || !selection.name) {
     return { ...EMPTY_DATASET_EXPLORER_DATA, datasets: await datasetsPromise };
   }
-  const inspectOptions = selection.version ? { version: selection.version } : undefined;
+  const datasets = await datasetsPromise;
+  const selectedExists = datasets.some(
+    (dataset) =>
+      dataset.namespace === selection.namespace &&
+      dataset.name === selection.name,
+  );
+  if (!selectedExists) {
+    return { ...EMPTY_DATASET_EXPLORER_DATA, datasets };
+  }
+  const inspectOptions = selection.version
+    ? { version: selection.version }
+    : undefined;
   const lineageResourceId = foundryLiteDatasetExplorerResourceId(selection);
-  const [datasets, versions, inspection, previewRows, qualitySummary, lineage] = await Promise.all([
-    datasetsPromise,
+  const selectedDatasetPromise = Promise.all([
     client.datasets.versions(selection.namespace, selection.name),
     client.datasets.inspect(selection.namespace, selection.name, inspectOptions),
-    client.datasets.preview(selection.namespace, selection.name, { limit: selection.previewLimit ?? 100 }),
+    client.datasets.preview(selection.namespace, selection.name, {
+      limit: selection.previewLimit ?? 100,
+    }),
     client.datasets.qualityResults.summary(selection.namespace, selection.name),
-    lineageResourceId ? client.operations.lineage.get(lineageResourceId) : Promise.resolve([]),
+    lineageResourceId
+      ? client.operations.lineage.get(lineageResourceId)
+      : Promise.resolve([]),
   ]);
-  return { datasets, versions, inspection, previewRows, qualitySummary, lineage };
+  try {
+    const [versions, inspection, previewRows, qualitySummary, lineage] =
+      await selectedDatasetPromise;
+    return {
+      datasets,
+      versions,
+      inspection,
+      previewRows,
+      qualitySummary,
+      lineage,
+    };
+  } catch (caught) {
+    if (isFoundryLiteDatasetSelectionMissingError(caught)) {
+      return { ...EMPTY_DATASET_EXPLORER_DATA, datasets };
+    }
+    throw caught;
+  }
 }
 
 function readFoundryLiteSelectedDatasetVersion(
@@ -6979,14 +7109,21 @@ function readFoundryLiteOperationsRunId(row: RuntimeRow): string | null {
   ]);
 }
 
-function readFoundryLiteOperationsRunPath(row: RuntimeRow): string | null {
-  return readFoundryLiteStringField(row, [
+function readFoundryLiteOperationsRunPath(
+  runType: RuntimeRunType | string,
+  row: RuntimeRow,
+  runId: string | null,
+): string | null {
+  const explicitPath = readFoundryLiteStringField(row, [
     "operationPath",
     "operation_path",
     "detailPath",
     "detail_path",
     "path",
   ]);
+  if (explicitPath) return explicitPath;
+  if (!runId) return null;
+  return `/api/operations/runs/${encodeURIComponent(String(runType))}/${encodeURIComponent(runId)}`;
 }
 
 function readFoundryLitePromptArtifactReferences(
@@ -7004,28 +7141,34 @@ function readFoundryLitePromptArtifactReferences(
 }
 
 function promptArtifactReferencesFromRecord(record: Record<string, unknown>): FoundryLitePromptArtifactReference[] {
-  const direct = promptArtifactReferenceFromRecord(record);
+  const direct = promptArtifactReferenceFromRecord(record, {
+    allowGenericId: false,
+  });
   const nested = ["promptArtifacts", "prompt_artifacts", "artifacts"]
     .flatMap((key) => {
       const value = record[key];
       return Array.isArray(value) ? value : [];
     })
     .filter(isFoundryLiteRecord)
-    .map(promptArtifactReferenceFromRecord)
+    .map((item) =>
+      promptArtifactReferenceFromRecord(item, { allowGenericId: true }),
+    )
     .filter((reference): reference is FoundryLitePromptArtifactReference => reference !== null);
   return direct ? [direct, ...nested] : nested;
 }
 
 function promptArtifactReferenceFromRecord(
   record: Record<string, unknown>,
+  options: { allowGenericId: boolean },
 ): FoundryLitePromptArtifactReference | null {
   const artifactId = readFoundryLiteStringField(record, [
     "artifactId",
     "artifact_id",
     "promptArtifactId",
     "prompt_artifact_id",
-    "id",
-  ]);
+  ]) ?? (
+    options.allowGenericId ? readFoundryLiteStringField(record, ["id"]) : null
+  );
   if (!artifactId) return null;
   return {
     artifactId,
@@ -7452,6 +7595,7 @@ export function useFoundryLiteOntologyDraftValidation(
   onErrorRef.current = onError;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       if (timerRef.current !== null) clearTimeout(timerRef.current);
@@ -8543,6 +8687,85 @@ export function useFoundryLiteProvidedDatasetColumnMapping(
   return useFoundryLiteDatasetColumnMapping(client, datasetRef, options);
 }
 
+export type FoundryLiteDatasetAggregateOptions =
+  FoundryLiteQueryOptions<DatasetAggregationResult> & {
+    key?: readonly unknown[];
+  };
+
+export type FoundryLiteDatasetAggregateState =
+  FoundryLiteQueryState<DatasetAggregationResult> & {
+    datasetRef: string | null;
+    groups: DatasetAggregationGroup[];
+    totalGroups: number;
+    filteredRowCount: number;
+    rowCount: number;
+    hasGroups: boolean;
+    canAggregate: boolean;
+    disabledReason: string | null;
+  };
+
+/**
+ * Server-side aggregation over one committed dataset version. The backend
+ * validates columns, masking, filters, groupBy, and metrics before returning
+ * grouped results to the browser.
+ */
+export function useFoundryLiteDatasetAggregate(
+  client: Pick<FoundryLiteGeneratedClient, "datasets">,
+  datasetRef: FoundryLiteDatasetColumnMappingReference | null | undefined,
+  request: DatasetAggregateRequest | null | undefined,
+  options: FoundryLiteDatasetAggregateOptions = {},
+): FoundryLiteDatasetAggregateState {
+  const { key, enabled = true, ...queryOptions } = options;
+  const namespace = datasetRef?.namespace ?? null;
+  const name = datasetRef?.name ?? null;
+  const canAggregate = Boolean(namespace && name && request);
+  const requestKey = useMemo(() => JSON.stringify(request ?? null), [request]);
+  const stableRequest = useMemo(() => request, [requestKey]);
+  const queryKey = useMemo(
+    () => key ?? ["datasets", "aggregate", namespace, name, stableRequest],
+    [key, name, namespace, stableRequest],
+  );
+  const load = useCallback(() => {
+    if (!namespace || !name || !stableRequest) {
+      throw new FoundryLiteApiError(
+        0,
+        "DATASET_AGGREGATE_NOT_READY",
+        "Select a dataset and aggregate request before aggregating.",
+        { missingFields: ["datasetRef", "request"] },
+        null,
+        false,
+      );
+    }
+    return client.datasets.aggregate(namespace, name, stableRequest);
+  }, [client, name, namespace, stableRequest]);
+  const query = useFoundryLiteQuery(queryKey, load, {
+    ...queryOptions,
+    enabled: enabled && canAggregate,
+  });
+
+  return {
+    ...query,
+    datasetRef: namespace && name ? `${namespace}.${name}` : null,
+    groups: query.data?.groups ?? [],
+    totalGroups: query.data?.totalGroups ?? 0,
+    filteredRowCount: query.data?.filteredRowCount ?? 0,
+    rowCount: query.data?.rowCount ?? 0,
+    hasGroups: (query.data?.groups.length ?? 0) > 0,
+    canAggregate,
+    disabledReason: canAggregate ? null : "Select a dataset and aggregate request before aggregating.",
+  };
+}
+
+/** Context-client variant of {@link useFoundryLiteDatasetAggregate}. */
+export function useFoundryLiteProvidedDatasetAggregate(
+  datasetRef: FoundryLiteDatasetColumnMappingReference | null | undefined,
+  request: DatasetAggregateRequest | null | undefined,
+  options: FoundryLiteDatasetAggregateOptions = {},
+): FoundryLiteDatasetAggregateState {
+  const client = useFoundryLiteClient();
+  return useFoundryLiteDatasetAggregate(client, datasetRef, request, options);
+}
+
 export type FoundryLiteObjectAggregateOptions = FoundryLiteQueryOptions<ObjectAggregationResult> & {
   key?: readonly unknown[];
 };
@@ -8902,6 +9125,7 @@ export function useFoundryLiteOntologyBuilder(
   optionsRef.current = options;
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };

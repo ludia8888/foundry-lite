@@ -324,7 +324,7 @@ def test_e2e_seed_prepares_mdo_finance_datasource_before_ontology_apply() -> Non
     script = (ROOT / "scripts" / "e2e_start_api.sh").read_text(encoding="utf-8")
     finance_dataset = 'core.datasets.ensure("clean.order_finance"'
     finance_transform = 'core.transforms.run("clean_order_finance"'
-    ontology_apply = 'core.ontology.apply("examples/supply-chain-demo/ontology/order-customer.yaml"'
+    ontology_apply = "ontology = core.ontology.apply(str(margin_action_ontology_path()), ctx=ctx)"
 
     assert finance_dataset in script
     assert finance_transform in script
@@ -903,6 +903,31 @@ def test_e2e_gate_sets_prompt_artifact_test_secret_without_local_fallback() -> N
     assert "FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY" in e2e_gate
     assert "ci-prompt-artifact-key" in e2e_gate
     assert "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY" not in e2e_gate
+
+
+def test_local_dev_api_sets_aip_secrets_without_local_fallback() -> None:
+    package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+
+    dev_script = package["scripts"]["dev"]
+    assert "FOUNDRY_LITE_CONNECTOR_PROFILE" in dev_script
+    assert ":-rest" in dev_script
+    assert "FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY" in dev_script
+    assert "local-dev-prompt-artifact-key" in dev_script
+    assert "FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER" in dev_script
+    assert "local-dev-citation-navigation-signer" in dev_script
+    assert "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY" not in dev_script
+
+
+def test_e2e_start_api_sets_aip_secrets_without_local_fallback() -> None:
+    script = (ROOT / "scripts" / "e2e_start_api.sh").read_text(encoding="utf-8")
+
+    assert "FOUNDRY_LITE_CONNECTOR_PROFILE" in script
+    assert ":-rest" in script
+    assert "FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY" in script
+    assert "e2e-prompt-artifact-key" in script
+    assert "FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER" in script
+    assert "e2e-citation-navigation-signer" in script
+    assert "FOUNDRY_LITE_ALLOW_LOCAL_PROMPT_ARTIFACT_KEY" not in script
 
 
 def test_doc_drift_is_release_gate_step() -> None:

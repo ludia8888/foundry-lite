@@ -199,6 +199,29 @@ class ObjectAggregateRequest(BaseModel):
     select: list[ObjectAggregateMetricRequest]
 
 
+class DatasetAggregateMetricRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    function: str
+    property: str | None = None
+    name: str | None = None
+
+
+class DatasetAggregateFilterRequest(BaseModel):
+    column: str
+    operator: str
+    value: str
+
+
+class DatasetAggregateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    version: str = "latest"
+    filter_conditions: list[DatasetAggregateFilterRequest] | None = Field(default=None, alias="filter")
+    group_by: list[str] | None = Field(default=None, alias="groupBy")
+    select: list[DatasetAggregateMetricRequest]
+
+
 class ObjectSubscriptionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -764,6 +787,7 @@ class SourceDebeziumCreateRequest(BaseModel):
     topic: str
     consumer_group: str = Field(default="foundry-lite-cdc", alias="consumerGroup")
     secret_refs: JsonObject = Field(default_factory=dict, alias="secretRefs")
+    primary_key: list[str] = Field(default_factory=list, alias="primaryKey")
 
 
 class SourceDebeziumSyncStartRequest(BaseModel):
@@ -772,6 +796,14 @@ class SourceDebeziumSyncStartRequest(BaseModel):
     expected_config_fingerprint: str | None = Field(default=None, alias="expectedConfigFingerprint")
     after_offset: int | None = Field(default=None, alias="afterOffset")
     limit: int | None = None
+
+
+class SourceDebeziumObjectIndexStartRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    object_type_api_name: str = Field(default="Order", alias="objectTypeApiName")
+    expected_config_fingerprint: str | None = Field(default=None, alias="expectedConfigFingerprint")
+    max_rows_per_version: int = Field(default=10_000, alias="maxRowsPerVersion")
 
 
 class SourceCredentialCreateRequest(BaseModel):

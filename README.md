@@ -94,7 +94,7 @@ flowchart LR
 | Operations | run list/detail, prompt artifact access, DLQ retry/discard, outbox publish start, reconciliation queue/resolve, observability detect, backup/restore preflight, artifact receipt, historical artifact dataset-head execution, and restore-mode gates | `foundry.operations`, FastAPI operations endpoints, `client.operations` |
 | Media and content | media set transaction/upload/commit, processing runs, OCR, ASR, PDF/image/video processors, derivative indexing, content search, visual search, object media binding, retention/legal hold purge proof | `foundry.media`, FastAPI media endpoints, `client.media` |
 | AIP and AI evidence | model gateway ledger, prompt artifacts, context compiler, tool broker, retrieval orchestration, agent runtime, builder validate/run, eval run, release promote, citation/evidence references | `foundry.aip`, FastAPI AIP endpoints, `client.aip` |
-| Frontend SDK | 237 frontend route surface request contracts, 28 SDK helper contracts, 56 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
+| Frontend SDK | 240 frontend route surface request contracts, 28 SDK helper contracts, 59 idempotency-required mutation surfaces, screen recipes for resources, source, dataset, pipeline, object/action, media, AIP, insight, operations | `@foundry-lite/sdk`, `@foundry-lite/sdk/react`, `@foundry-lite/sdk/screen-recipes` |
 
 ## 아직 아닌 것
 
@@ -103,14 +103,14 @@ flowchart LR
 | 아직 future 또는 partial인 것 | 현재 의미 |
 | --- | --- |
 | Kubernetes/Helm, one-click production deploy, managed cloud operations | 로컬/CI proof와 adapter profile은 있지만 운영 패키징은 별도 작업입니다. |
-| full visual product UI | static web shell과 SDK screen recipe는 있지만 완성된 운영자용 SPA 전체는 아닙니다. |
-| S62 visual dataset browser/preview grid/version pin/lineage graph UX | Dataset Explorer backend/API/SDK proof는 있지만 이 시각 UX는 future입니다. |
-| S63 evidence panel UI, S63 action execution orchestration | Insight Review queue backend/API/SDK proof는 있지만 완전한 evidence panel과 action orchestration UI는 future입니다. |
+| full visual product UI | Foundry SPA는 핵심 route와 여러 실제 업무 흐름을 E2E로 검증하지만, production-grade 운영자용 SPA 전체가 완성됐다는 뜻은 아닙니다. |
+| S62 visual dataset browser/preview grid/version pin/lineage graph UX | Datasets 화면의 catalog 선택, preview grid, manifest/schema evidence, version tab, quality tab, lineage handoff는 `tests/e2e-foundry/datasets-explorer-flow.spec.ts`로 current입니다. 대용량/다중 데이터셋 비교, Dataset 화면 안의 완전한 interactive lineage graph, production-scale browser UX는 future입니다. |
+| S63 evidence panel UI, S63 action execution orchestration | Approvals 화면의 Insight action queue, evidence panel, assign/approve/reject, AIP-approved `executeApprovedAction` 실행 흐름은 `tests/e2e-foundry/aip-approval-flow.spec.ts`로 current입니다. model diff UI, approval-policy builder, autonomous orchestration, full managed review workspace는 future입니다. |
 | vendor-specific SAP/NetSuite/OAuth connectors | Generic REST, webhook, CDC proof는 있지만 production vendor-specific packaged connector 범위는 future입니다. |
-| visual scheduler UI and production scheduler operations | Source managed sync schedule API/SDK와 `worker:source-scheduler`, transform scheduler API/SDK와 `worker:transform-scheduler` proof는 있지만 브라우저에서 데몬을 직접 운영하는 UI와 Kubernetes lease/fencing 운영 패키징은 future입니다. |
+| production scheduler operations beyond bounded UI | Data Connection의 Source scheduler preview/tick UI, Code의 Transform scheduler tick UI, Source managed sync schedule API/SDK/`worker:source-scheduler`, transform scheduler API/SDK/`worker:transform-scheduler` proof는 있지만 브라우저에서 데몬을 직접 운영하는 UI와 Kubernetes lease/fencing 운영 패키징은 future입니다. |
 | cloud Vault, full secret rotation, live OIDC discovery lifecycle | local JWT/OIDC and SecretProvider proof는 있지만 cloud-grade lifecycle은 future입니다. |
-| automatic restore smoke, full production restore rehearsal, recovery dashboard | preflight, immutable local backup artifact receipt, verified artifact restore entrypoint, local historical artifact dataset-head execution, restore-mode, validation, approval evidence는 있지만 automatic smoke와 production restore rehearsal은 future입니다. |
-| managed compensation daemon and approval UI | external writeback retryable/outcome-unknown/compensation-required, reconciliation proof와 bounded writeback reconciliation worker proof, sensitive/high-risk writeback의 `operator_approval_required` skip 및 backend approval-release API/SDK/audit proof, AI direct vendor/API tool denial proof는 있지만 automatic retry/reissue worker, 상시 managed daemon, ERP-specific reverse/compensation executor, connector-backed vendor tool release policy, visual approval workflow/UI는 future입니다. |
+| automatic restore smoke, full production restore rehearsal, rich recovery dashboard | Operations Recovery 화면의 recovery overview와 backup/restore preflight 실행은 `tests/e2e-foundry/operations-maintenance-recovery-flow.spec.ts`로 current입니다. automatic smoke, production restore rehearsal, alert timeline과 full recovery dashboard는 future입니다. |
+| managed compensation daemon and full approval workflow | external writeback retryable/outcome-unknown/compensation-required, reconciliation proof와 bounded writeback reconciliation worker proof, sensitive/high-risk writeback의 `operator_approval_required` skip 및 backend approval-release API/SDK/audit proof와 Foundry Operations approval-release UI proof, AI direct vendor/API tool denial proof는 있지만 automatic retry/reissue worker, 상시 managed daemon, ERP-specific reverse/compensation executor, connector-backed vendor tool release policy, full managed approval workflow/queue UI는 future입니다. |
 | object detection counts and bounding boxes in video | media visual search and CLIP scene-frame proof는 있지만 custom CV/VLM object detection 제품 범위는 future입니다. |
 
 ## Data pattern 상태
@@ -126,7 +126,7 @@ flowchart LR
 | Iceberg maintenance | Partial: maintenance planning, `POST /api/operations/maintenance/iceberg/{dataset}/run`, current snapshot compaction, row-hash preservation, deletable orphan snapshot expiration/cleanup, protected DB committed snapshot proof가 있습니다. Transform/materialization/backup pin까지 포함한 full retention policy, concurrent maintenance fencing, ambiguous retry idempotency는 future입니다. |
 | Continuously running CDC/search workers | Partial: bounded stream archive worker loop, CDC object-indexer bounded/continuous loop, workflow-run lease/cursor proof, stream pre-commit assignment revoke guard는 있지만 full broker callback/commit-unknown reconciliation, OS SIGTERM proof, production worker packaging은 future입니다. |
 | Managed Temporal worker operations | Partial: Temporal product workflow control-plane, worker-bound connector data-plane evidence, deterministic sync-run retry idempotency, cancel cleanup evidence, and start-response-loss reconciliation proof는 있지만 continue-as-new, upgrade replay, managed worker operations 범위는 future입니다. |
-| Real S3/MinIO external writeback | Partial: simulated retryable-not-changed evidence plus real S3/MinIO external writeback outcome-unknown/reconciliation proof, bounded writeback reconciliation worker proof, sensitive/high-risk writeback approval-required skip 및 backend approval-release API/SDK/audit proof, AI direct vendor/API tool denial proof가 있지만 automatic retry/reissue policy, ERP-specific packaging, connector-backed vendor tool release policy, managed daemon, visual approval workflow/UI는 future입니다. |
+| Real S3/MinIO external writeback | Partial: simulated retryable-not-changed evidence plus real S3/MinIO external writeback outcome-unknown/reconciliation proof, bounded writeback reconciliation worker proof, sensitive/high-risk writeback approval-required skip 및 backend approval-release API/SDK/audit proof와 Foundry Operations approval-release UI proof, AI direct vendor/API tool denial proof가 있지만 automatic retry/reissue policy, ERP-specific packaging, connector-backed vendor tool release policy, managed daemon, full managed approval workflow/queue UI는 future입니다. |
 | Data quality contracts | Partial: check-definition API/SDK/runtime enforcement, default versioned DataContract create/list/get/activate, accepted-values policy proof는 있지만 remaining policy surface, owner workflow, trend UI는 future입니다. |
 | Broader Operations UI | Partial: SDK and backend recovery/readiness surfaces는 있지만 Broader Operations UI 전체 제품 화면은 future입니다. |
 
@@ -213,7 +213,7 @@ pnpm --silent quality:sdk-request-contract
 pnpm --silent quality:frontend-foundation
 ```
 
-프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 237개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
+프론트엔드는 raw `/api/...` 문자열을 직접 조립하기보다 named SDK method와 helper를 사용해야 합니다. 현재 matrix 기준으로 240개 frontend route surface는 모두 `named-sdk-only` 정책이며, 4개 non-frontend route는 Prometheus scrape, signed webhook ingest, legacy alias, external callback처럼 브라우저 product SDK가 직접 호출하면 안 되는 표면으로 분리됩니다.
 
 ## Runtime profile
 

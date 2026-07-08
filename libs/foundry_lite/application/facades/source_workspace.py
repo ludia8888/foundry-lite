@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import BinaryIO
 
-from foundry_lite.application.services.source_management_service import SourceManagementService
+from foundry_lite.application.services.source_management_service import (
+    SourceCdcObjectIndexService,
+    SourceManagementService,
+)
 from foundry_lite.application.services.source_onboarding_config import SourceUpload
 from foundry_lite.application.services.source_onboarding_service import SourceOnboardingService
 from foundry_lite.application.services.source_scheduler_service import SourceSchedulerService
@@ -22,10 +25,12 @@ class SourceWorkspace:
         onboarding: SourceOnboardingService,
         management: SourceManagementService,
         scheduler: SourceSchedulerService,
+        cdc_object_index: SourceCdcObjectIndexService,
     ) -> None:
         self._onboarding = onboarding
         self._management = management
         self._scheduler = scheduler
+        self._cdc_object_index = cdc_object_index
 
     def list_templates(self, *, ctx: RequestContext | None = None) -> list[dict[str, object]]:
         return self._management.list_templates(ctx=ctx)
@@ -308,6 +313,7 @@ class SourceWorkspace:
         ctx: RequestContext | None = None,
         consumer_group: str = "foundry-lite-cdc",
         secret_refs: Mapping[str, object] | None = None,
+        primary_key: Sequence[str] = (),
     ) -> dict[str, object]:
         return self._onboarding.create_debezium_source(
             source_name=source_name,
@@ -319,6 +325,20 @@ class SourceWorkspace:
             ctx=ctx,
             consumer_group=consumer_group,
             secret_refs=secret_refs,
+            primary_key=primary_key,
+        )
+
+    def debezium_operation_plan(
+        self,
+        source_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        object_type_api_name: str = "Order",
+    ) -> dict[str, object]:
+        return self._onboarding.debezium_operation_plan(
+            source_name,
+            ctx=ctx,
+            object_type_api_name=object_type_api_name,
         )
 
     def start_debezium_sync(
@@ -338,6 +358,25 @@ class SourceWorkspace:
             expected_config_fingerprint=expected_config_fingerprint,
             after_offset=after_offset,
             limit=limit,
+        )
+
+    def start_debezium_object_index(
+        self,
+        source_name: str,
+        *,
+        object_type_api_name: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+        expected_config_fingerprint: str | None = None,
+        max_rows_per_version: int = 10_000,
+    ) -> dict[str, object]:
+        return self._cdc_object_index.start_debezium_object_index(
+            source_name,
+            object_type_api_name=object_type_api_name,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+            expected_config_fingerprint=expected_config_fingerprint,
+            max_rows_per_version=max_rows_per_version,
         )
 
     def upload_media(

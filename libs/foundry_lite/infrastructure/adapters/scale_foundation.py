@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from foundry_lite.application.ports.adapter_failure import (
     AdapterError,
@@ -43,6 +43,7 @@ class LocalWorkflowAdapter:
         self._runs_by_id: dict[str, WorkflowRun] = {}
         self._runs_by_idempotency: dict[str, WorkflowRun] = {}
         self._run_tenants: dict[str, str] = {}
+        self._drivers: dict[str, Callable[[WorkflowStartRequest], Mapping[str, object]]] = {}
 
     def failure_contract(self) -> AdapterFailureContract:
         return AdapterFailureContract(
@@ -66,21 +67,30 @@ class LocalWorkflowAdapter:
         existing = self._runs_by_idempotency.get(run_id)
         if existing is not None:
             return existing
+        output = self._run_driver(request)
         run = WorkflowRun(
             run_id=run_id,
             workflow_name=request.workflow_name,
             status="succeeded",
-            output={
-                "processed": True,
-                **dict(request.input),
-                "workflow_name": request.workflow_name,
-                "request_id": request.request_id,
-            },
+            output=output,
         )
         self._runs_by_id[run.run_id] = run
         self._runs_by_idempotency[run_id] = run
         self._run_tenants[run.run_id] = request.tenant_id
         return run
+
+    def register_driver(
+        self,
+        workflow_name: str,
+        driver: Callable[[WorkflowStartRequest], Mapping[str, object]],
+    ) -> None:
+        self._drivers[workflow_name] = driver
+
+    def _run_driver(self, request: WorkflowStartRequest) -> Mapping[str, object]:
+        driver = self._drivers.get(request.workflow_name)
+        if driver is None:
+            return _local_workflow_echo_output(request)
+        return driver(request)
 
     def workflow_run(self, tenant_id: str, run_id: str) -> WorkflowRun | None:
         if not workflow_run_id_matches_tenant(tenant_id, run_id):
@@ -120,6 +130,15 @@ class FakeWorkflowAdapter(LocalWorkflowAdapter):
     """Fake workflow profile that preserves the local contract surface."""
 
     profile_name = "fake-workflow"
+
+
+def _local_workflow_echo_output(request: WorkflowStartRequest) -> Mapping[str, object]:
+    return {
+        "processed": True,
+        **dict(request.input),
+        "workflow_name": request.workflow_name,
+        "request_id": request.request_id,
+    }
 
 
 class LocalStreamAdapter:

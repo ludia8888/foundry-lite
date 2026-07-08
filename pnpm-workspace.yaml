@@ -3,5 +3,7 @@ packages:
   - "packages/*"
 allowBuilds:
   "@ast-grep/cli": true
+  esbuild: true
 onlyBuiltDependencies:
   - "@ast-grep/cli"
+  - esbuild

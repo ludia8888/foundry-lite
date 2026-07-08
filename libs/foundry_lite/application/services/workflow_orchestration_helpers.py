@@ -23,10 +23,10 @@ from foundry_lite.application.ports.transaction_context import (
     StatusTransition,
 )
 from foundry_lite.application.primitives import _now
-from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping
+from foundry_lite.application.services.runtime_error_payloads import scrub_error_mapping, scrub_error_text
 from foundry_lite.application.services.workflow_connector_sync import connector_sync_run_id
 from foundry_lite.domain.context import RequestContext
-from foundry_lite.domain.errors import ConflictDetected
+from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError
 
 CONNECTOR_SYNC_WORKFLOW_NAME = "ConnectorSyncWorkflow"
 MEDIA_PROCESSING_WORKFLOW_NAME = "MediaProcessingWorkflow"
@@ -242,6 +242,15 @@ def _connector_sync_input(
 def _workflow_start_error_payload(adapter_profile: str, exc: Exception) -> Mapping[str, object]:
     if isinstance(exc, AdapterError):
         return scrub_error_mapping(exc.failure.to_payload())
+    if isinstance(exc, FoundryLiteError):
+        return {
+            "adapterProfile": adapter_profile,
+            "operation": "start_workflow",
+            "kind": "validation",
+            "retryable": False,
+            "operatorMessage": scrub_error_text(exc.message),
+            "details": scrub_error_mapping({"errorType": exc.__class__.__name__, "code": exc.code, **exc.details}),
+        }
     return {
         "adapterProfile": adapter_profile,
         "operation": "start_workflow",

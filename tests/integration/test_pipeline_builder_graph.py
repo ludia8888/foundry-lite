@@ -112,6 +112,45 @@ def test_pipeline_builder_graph_preview_review_deploy_and_run(tmp_path: Path) ->
         foundry.pipelines.cancel(str(run["id"]), ctx=ctx)
 
 
+def test_pipeline_builder_output_node_dataset_ref_alias_deploys(tmp_path: Path) -> None:
+    foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+    ctx = demo_admin_context()
+    csv_path = tmp_path / "orders.csv"
+    csv_path.write_text("order_id,amount\nO-1,10\n", encoding="utf-8")
+    foundry.datasets.ensure("raw.pipeline_orders", ctx=ctx)
+    foundry.datasets.upload_csv("raw.pipeline_orders", csv_path, ctx=ctx)
+
+    branch = foundry.pipelines.create_branch(
+        pipeline_id="orders_dataset_ref_alias",
+        name="dataset-ref-output",
+        idempotency_key="pipeline-branch-output-dataset-ref-alias",
+        ctx=ctx,
+    )
+    graph = _orders_pipeline_graph(output_ref="clean.orders_dataset_ref_alias")
+    output_node = graph["nodes"][2]["config"]
+    output_node["datasetRef"] = output_node.pop("outputDatasetRef")
+    foundry.pipelines.update_graph(
+        str(branch["id"]),
+        graph=graph,
+        expected_fingerprint=str(branch["graphFingerprint"]),
+        ctx=ctx,
+    )
+    proposal = foundry.pipelines.propose(
+        str(branch["id"]),
+        title="Deploy datasetRef output alias",
+        idempotency_key="pipeline-proposal-output-dataset-ref-alias",
+        ctx=ctx,
+    )
+    foundry.pipelines.approve(str(proposal["id"]), ctx=ctx)
+    version = foundry.pipelines.execute(str(proposal["id"]), ctx=ctx)
+    deployed = foundry.pipelines.deploy("orders_dataset_ref_alias", str(version["id"]), ctx=ctx)
+    run = foundry.pipelines.run("orders_dataset_ref_alias", ctx=ctx)
+
+    assert deployed["version"]["deployedAt"] is not None
+    assert run["status"] == "succeeded"
+    assert run["outputDatasetRef"] == "clean.orders_dataset_ref_alias"
+
+
 def test_pipeline_builder_branch_rebase_abandon_reject_and_withdraw(tmp_path: Path) -> None:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
     ctx = demo_admin_context()

@@ -22,7 +22,11 @@ DatasetCommitMetadataHook = Callable[[TransactionContext, CommitResult], None]
 
 
 class TransformDatasetRegistry(Protocol):
-    """Dataset lookup surface required by transform runs."""
+    """Dataset lookup/creation surface required by transform registration and runs."""
+
+    def ensure_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> DatasetRow:
+        """Return the active dataset row, creating an empty output dataset when absent."""
+        ...
 
     def get_dataset(self, dataset_ref: str, *, ctx: RequestContext | None = None) -> DatasetRow:
         """Return the active dataset row for a transform input or output ref."""

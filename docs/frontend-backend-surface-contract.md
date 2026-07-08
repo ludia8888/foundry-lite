@@ -63,7 +63,7 @@ SDK helper, 파일을 봐야 하는지 남긴다.
 | Operations | run list/detail, AI prompt artifact access, admin overview, lineage get, transform retry, index replay, bounded outbox publish, outbox DLQ retry, Record DLQ controls |
 | Platform Ops | observability detect, backup/restore, reconciliation, workflows, Iceberg maintenance `planReadOnly`/`plan`/`run` |
 | Connectors | `client.connectors.connections.create/list/get/update(...)`, `client.connectors.resources.upsert/test/startSync(...)` |
-| Sources | `client.sources.list/get(...)`, `client.sources.templates.list(...)`, `client.sources.credentials.create/list/get(...)`, `client.sources.agents.register/list/heartbeat(...)`, `client.sources.networkPolicies.create/list(...)`, `client.sources.exploration.run(...)`, `client.sources.managedSyncs.create/list/get/startRun/listRuns/getRun(...)`, `client.sources.scheduler.previewDue/tick(...)`, `client.sources.csv.upload(...)`, `client.sources.batchFiles.upload(...)`, `client.sources.webhookListeners.create/get(...)`, `client.sources.cdc.debezium.create/startSync(...)`, `client.sources.media.uploadAndCommit(...)`, `client.sources.rest.createConnection/upsertResource/test/startSync(...)` |
+| Sources | `client.sources.list/get(...)`, `client.sources.templates.list(...)`, `client.sources.credentials.create/list/get(...)`, `client.sources.agents.register/list/heartbeat(...)`, `client.sources.networkPolicies.create/list(...)`, `client.sources.exploration.run(...)`, `client.sources.managedSyncs.create/list/get/startRun/listRuns/getRun(...)`, `client.sources.scheduler.previewDue/tick(...)`, `client.sources.csv.upload(...)`, `client.sources.batchFiles.upload(...)`, `client.sources.webhookListeners.create/get(...)`, `client.sources.cdc.debezium.create/operationPlan/startSync/startObjectIndex(...)`, `client.sources.media.uploadAndCommit(...)`, `client.sources.rest.createConnection/upsertResource/test/startSync(...)` |
 | Resources | `client.resources.projects.list/create/get/listGrants/upsertGrant(...)`, `client.resources.folders.list/create/move/trash/restore(...)`, `client.resources.items.search/get/register/move/trash/restore(...)`, `client.resources.favorites.set/delete(...)`, `client.resources.trash.list/restore(...)`, `client.resources.admin.reconcile(...)` |
 | Insights | `client.insights.reviews.list/create/get/assign/decide(...)` |
 | AIP | `client.aip.builder.validate(...)`, `client.aip.builder.run(...)`, `client.aip.agent.run(...)` |
@@ -305,7 +305,7 @@ The recipe phases are `select_kind`, `configure_source`, `test_source`, `upload_
 uploads commit dataset versions through the dataset transaction path; media upload commits immutable media versions and
 returns the serving-truth `mediaItemVersionId`; Debezium starts a bounded CDC sync with fingerprint fail-closed
 behavior; REST source wrappers call the Generic REST connector onboarding surface without forcing screen code to use
-connector language first. Source schedule evaluation/tick is available through API/SDK and `worker:source-scheduler`; Transform schedule evaluation/tick is available through API/SDK and `worker:transform-scheduler`; remote directory crawling, visual scheduler UI, managed Debezium Connect operations, cloud secret
+connector language first. Source schedule evaluation/tick is available through API/SDK, `worker:source-scheduler`, and the Data Connection Source scheduler UI; Transform schedule evaluation/tick is available through API/SDK, `worker:transform-scheduler`, and the Code Transform scheduler UI; remote directory crawling, production scheduler operations UI, managed Debezium Connect operations, cloud secret
 manager, OAuth authorization flow, and SAP/NetSuite packaged source wizards remain future scope.
 
 ### Connector onboarding
@@ -369,8 +369,9 @@ raw `headerValue` are rejected before registry persistence. `testResource` reads
 schema/sample/error evidence without dataset commit. `startSync` starts the existing `ConnectorSyncWorkflow`, records
 `datasetRef`, `connectorName`, `resourceName`, `syncName`, and `configFingerprint`, and the activity fails closed if
 the saved registry fingerprint changed after workflow start. Source managed syncs can now be evaluated and ticked by
-the Source scheduler API/SDK/worker; SAP/NetSuite adapter packaging, OAuth authorization flow, connector-specific visual
-scheduler UI, cloud/Vault secret manager and secret rotation, and CDC/Debezium onboarding remain future scope.
+the Source scheduler API/SDK/worker and the Data Connection Source scheduler UI; SAP/NetSuite adapter packaging,
+OAuth authorization flow, connector-specific production scheduler operations UI, cloud/Vault secret manager and
+secret rotation, and CDC/Debezium onboarding remain future scope.
 
 ### Session-aware client
 
@@ -931,9 +932,10 @@ await recipe.decideReview(
 The queue helper turns generated `client.insights.reviews.list/create/get/assign/decide(...)` calls into screen-ready
 lanes: pending, assigned, unassigned, assigned-to-current-user, decided, high priority, selected review, and selected
 action proposal. `useFoundryLiteActionProposalSubmit(...)` then maps the selected proposal to generated OSDK action
-typing when the proposal has a generated action, target object id, and expected object version. It keeps review
-creation/assignment/decision idempotency in the SDK layer, while evidence panel UI, model-diff UI, approval policy UI,
-and autonomous approved-action orchestration remain product-specific workspace work.
+typing when the proposal has a generated action, target object id, and expected object version. The Foundry Approvals
+screen uses the same generated Insight API path to render claim/evidence/action-proposal details, assign and decide
+reviews, and execute an approved AIP action proposal through `client.insights.reviews.executeApprovedAction(...)`.
+Model-diff UI, approval-policy builder, and autonomous approved-action orchestration remain product-specific workspace work.
 
 ### Pipeline builder graph workspace
 
@@ -1686,10 +1688,10 @@ browser actions.
 | Cursor pagination UX | SDK `collectCursorPages(...)` and React `useFoundryLiteCursorPagination(...)` are current state helpers; visual pagination/infinite-scroll components and product copy remain product work. |
 | Push streaming UX | SDK `streamFoundryLiteOperationEvents(...)` and React `useFoundryLiteOperationEventStream(...)` are current fetch-based SSE consumers; server push route implementation and visual streaming timeline components remain future. |
 | Duplicate-click action UX | SDK `createInFlightActionLock()` and `actionLockKey(...)` are current; button disabled state and screen copy remain product work. |
-| Stale-version conflict UI | SDK `classifyFoundryLiteError(...)` can identify `stale_object_version`; the human-facing compare/refresh flow remains product work. |
+| Stale-version conflict UI | SDK `classifyFoundryLiteError(...)` can identify `stale_object_version`; the current Foundry Actions and Object Explorer action forms render the shared stale-version notice with expected/current object versions and a refresh control after action-apply conflicts. Broader compare/merge flows outside action apply remain product work. |
 | Permission-denied masking UX | SDK `classifyFoundryLiteError(...)` can identify `permission_denied`; dedicated masked-field/role guidance UX remains product work. |
-| Full catalog-driven workspace UX | `ontology.catalog()` and dataset list/inspect give the frontend active metadata entrypoints, but S62-S64 screens still need richer drill-down flows. |
-| Insight review workspace UI | `insight_reviews` persistence, `/api/insights/reviews`, generated `client.insights.reviews.*`, idempotent create/assign/decision, terminal decision conflict, and audit evidence are current. Evidence viewer UI, action execution orchestration, approval policy UI, and rich review workspace screens remain product work. |
+| Full catalog-driven workspace UX | `ontology.catalog()` and dataset list/inspect give the frontend active metadata entrypoints, and current S62-S64 Foundry screens cover Dataset preview/version/quality/lineage handoff, Insight action review/execute, and Operations recovery/preflight basics. Richer drill-down flows remain product work. |
+| Insight review workspace UI | `insight_reviews` persistence, `/api/insights/reviews`, generated `client.insights.reviews.*`, idempotent create/assign/decision, terminal decision conflict, audit evidence, Foundry Approvals claim/evidence/action proposal panel, and approved AIP `executeApprovedAction` flow are current. Model diff UI, approval-policy builder, autonomous orchestration, and a full managed review workspace remain product work. |
 | Browser admin for migration/worker/bootstrap | `client.operations.admin.overview()` now names which admin capabilities are API-backed, worker-backed, CLI-only, runbook-only, or future and includes execution surface, approval, checklist, browser-start, and blocking reason fields. `client.operations.admin.taskPlan()` turns those capabilities into screen-ready admin tasks with `requiredBackendSurface` and operator evidence fields. `useFoundryLiteAdminConsole(...)` and `useFoundryLiteAdminTaskPlan(...)` split that backend truth into browser actions, operator command/runbook rows, and future rows. Bounded `client.operations.outbox.publishPending(...)`, backup/restore, workflow, maintenance, and recovery surfaces can power an admin console start point; direct migration execution, long-running worker daemon control, and infra bootstrap from the browser still need separate privileged backend surfaces and are not claimed current. |
 
 ## Completion Meaning
@@ -1699,7 +1701,7 @@ browser actions.
 ```text
 현재 존재하는 frontend-consumable backend API
 -> generated SDK named method
--> browser SDK request-contract method/path/header/body proof for 237 frontend route surfaces
+-> browser SDK request-contract method/path/header/body proof for 240 frontend route surfaces
 -> browser SDK helper-contract proof for 25 frontend foundation helpers
 -> SDK TypeScript typecheck for package entrypoints, generated types, optional React helpers, and screen recipes
 -> `@foundry-lite/sdk/screen-recipes` importable recipe builders for core product screens

@@ -57,6 +57,44 @@ def test_ontology_definition_validation_rejects_missing_primary_key_column() -> 
     assert exc_info.value.details == {"column": "missing_order_id"}
 
 
+def test_ontology_definition_validation_rejects_primary_key_property_not_declared() -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    _first_object_type(definition)["primaryKey"] = "doesNotExist"
+
+    with pytest.raises(ValidationFailed, match="primary key property missing") as exc_info:
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+    assert exc_info.value.details == {"objectType": "Order"}
+
+
+def test_ontology_definition_validation_rejects_title_property_not_declared() -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    _first_object_type(definition)["titleProperty"] = "ghostTitle"
+
+    with pytest.raises(ValidationFailed, match="titleProperty must reference a declared property") as exc_info:
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+    assert exc_info.value.details == {"objectType": "Order", "titleProperty": "ghostTitle"}
+
+
+def test_ontology_definition_validation_rejects_link_to_unknown_object_type() -> None:
+    definition = _yaml_definition(primary_key_column="order_id")
+    definition["linkTypes"] = [
+        {
+            "apiName": "OrderGhost",
+            "from": "Order",
+            "to": "Ghost",
+            "backing": {"dataset": "clean.orders", "fromKey": "order_id", "toKey": "customer_id"},
+        }
+    ]
+
+    with pytest.raises(ValidationFailed, match="link references unknown object type") as exc_info:
+        validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
+
+    assert exc_info.value.details["apiName"] == "OrderGhost"
+    assert exc_info.value.details["to"] == "Ghost"
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -78,7 +116,9 @@ def test_ontology_definition_validation_rejects_unknown_property_enums(
         validate_ontology_definition(FakeTransaction(), RequestContext(), definition, _dataset_columns)
 
     assert exc_info.value.details["property"] == "status"
-    assert value not in exc_info.value.details["allowed"]
+    allowed = exc_info.value.details["allowed"]
+    assert isinstance(allowed, (list, tuple))
+    assert value not in allowed
 
 
 def test_ontology_definition_validation_rejects_unknown_link_cardinality() -> None:
@@ -268,8 +308,12 @@ def test_ontology_activation_evidence_includes_migration_plan_payload() -> None:
         OntologyMigrationPlan("ont_active", (), (operation,)),
     )
 
-    assert runtime.outbox_payloads[0]["ontologyMigration"]["sourceOntologyVersionId"] == "ont_active"
-    assert runtime.audit_after_refs[0]["ontologyMigration"]["objectReindexPlan"]
+    outbox_migration = runtime.outbox_payloads[0]["ontologyMigration"]
+    assert isinstance(outbox_migration, dict)
+    assert outbox_migration["sourceOntologyVersionId"] == "ont_active"
+    audit_migration = runtime.audit_after_refs[0]["ontologyMigration"]
+    assert isinstance(audit_migration, dict)
+    assert audit_migration["objectReindexPlan"]
 
 
 def test_ontology_import_rejects_duplicate_property_at_persistence_boundary() -> None:

@@ -436,6 +436,7 @@ def debezium_record(
     topic: str,
     consumer_group: str,
     secret_refs: Mapping[str, object],
+    primary_key: Sequence[str] = (),
 ) -> SourceConnectionRecord:
     reject_raw_secret_payload(secret_refs)
     summary = {
@@ -443,6 +444,7 @@ def debezium_record(
         "streamName": stream_name,
         "topic": topic,
         "consumerGroup": consumer_group,
+        "primaryKey": list(primary_key),
         "schemaStrategy": "cdc_envelope_json",
         "secretRefs": dict(secret_refs),
     }

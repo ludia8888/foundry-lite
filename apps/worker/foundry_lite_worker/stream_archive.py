@@ -337,6 +337,7 @@ def _config_from_args(args: argparse.Namespace) -> StreamArchiveWorkerConfig:
         topic=args.topic,
         bootstrap_servers=args.bootstrap_servers,
         storage_root=Path(args.storage_root),
+        consumer_group=args.consumer_group,
         limit=args.limit,
         poll_timeout_seconds=args.poll_timeout_seconds,
         max_empty_polls=args.max_empty_polls,
@@ -359,6 +360,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--topic", default=defaults.topic)
     parser.add_argument("--bootstrap-servers", default=defaults.bootstrap_servers)
     parser.add_argument("--storage-root", default=str(defaults.storage_root))
+    parser.add_argument("--consumer-group", default=defaults.consumer_group)
     parser.add_argument("--limit", type=int, default=defaults.limit)
     parser.add_argument("--poll-timeout-seconds", type=float, default=defaults.poll_timeout_seconds)
     parser.add_argument("--max-empty-polls", type=int, default=defaults.max_empty_polls)

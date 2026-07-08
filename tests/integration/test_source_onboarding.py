@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -203,6 +205,14 @@ def test_source_csv_upload_commits_dataset_and_registers_source(tmp_path: Path) 
     assert source_view["targetDatasetRef"] == "raw.orders_csv"
     assert commit_result["rowCount"] == 1
     assert operations_path.startswith("/api/operations/runs/sync/")
+    run_id = cast(str, commit_result["runId"])
+    detail = foundry.operations.run_detail("sync", run_id, ctx=ctx)
+    source_evidence = cast(dict[str, object], detail["sourceEvidence"])
+    assert source_evidence["syncName"] == "orders-csv-first-sync"
+    assert source_evidence["sourceType"] == "file.csv"
+    assert source_evidence["transactionId"] == commit_result["transactionId"]
+    assert source_evidence["committedVersionId"] == commit_result["versionId"]
+    assert source_evidence["operationPath"] == operations_path
     assert foundry.datasets.preview("raw.orders_csv", ctx=ctx)[0]["order_id"] == "O-1"
     saved_source = foundry.sources.get_source("orders_csv", ctx=ctx)
     assert cast(str, saved_source["configFingerprint"]).startswith("sha256:")
@@ -231,6 +241,91 @@ def test_source_debezium_start_fails_closed_on_fingerprint_mismatch(tmp_path: Pa
             idempotency_key="source-cdc-start",
             ctx=ctx,
         )
+
+
+def test_source_debezium_object_index_tick_tracks_cdc_cursor(tmp_path: Path) -> None:
+    foundry = _foundry(tmp_path)
+    ctx = demo_admin_context()
+    _seed_order_cdc_source(foundry, tmp_path)
+    foundry.sources.create_debezium_source(
+        source_name="orders_cdc",
+        display_name="Orders CDC",
+        dataset_ref="raw_cdc.erp_orders",
+        stream_name="debezium.orders",
+        topic="db.public.orders",
+        primary_key=["order_id"],
+        idempotency_key="source-cdc-create",
+        ctx=ctx,
+    )
+    _commit_cdc_version(foundry, tmp_path, "topic:0:1", 1, "APPROVED")
+    _commit_cdc_version(foundry, tmp_path, "topic:0:2", 2, "SHIPPED")
+
+    initial_plan = foundry.sources.debezium_operation_plan("orders_cdc", object_type_api_name="Order", ctx=ctx)
+    initial_status = cast(dict[str, object], initial_plan["objectIndexingStatus"])
+    initial_backlog = cast(dict[str, object], initial_status["backlog"])
+
+    first = foundry.sources.start_debezium_object_index(
+        "orders_cdc",
+        object_type_api_name="Order",
+        idempotency_key="source-cdc-index-1",
+        max_rows_per_version=10,
+        ctx=ctx,
+    )
+    second = foundry.sources.start_debezium_object_index(
+        "orders_cdc",
+        object_type_api_name="Order",
+        idempotency_key="source-cdc-index-2",
+        max_rows_per_version=10,
+        ctx=ctx,
+    )
+    third = foundry.sources.start_debezium_object_index(
+        "orders_cdc",
+        object_type_api_name="Order",
+        idempotency_key="source-cdc-index-3",
+        max_rows_per_version=10,
+        ctx=ctx,
+    )
+
+    order = foundry.objects.get("Order", "O-1001", ctx=ctx)
+    first_cursor = cast(dict[str, object], first["cursor"])
+    first_backlog = cast(dict[str, object], first["backlog"])
+    second_backlog = cast(dict[str, object], second["backlog"])
+    third_backlog = cast(dict[str, object], third["backlog"])
+    third_cursor = cast(dict[str, object], third["cursor"])
+    caught_up_plan = foundry.sources.debezium_operation_plan("orders_cdc", object_type_api_name="Order", ctx=ctx)
+    caught_up_status = cast(dict[str, object], caught_up_plan["objectIndexingStatus"])
+    caught_up_backlog = cast(dict[str, object], caught_up_status["backlog"])
+
+    assert initial_status["workflowRunId"] is None
+    assert initial_status["lastIndexedVersionNumber"] is None
+    assert initial_backlog["remainingVersionCount"] == 2
+    assert initial_backlog["nextSourceDatasetVersionNumber"] == 1
+    assert initial_status["nextAction"] == "run_object_index_again"
+    assert first["status"] == "INDEXED"
+    assert first["eventCount"] == 1
+    assert str(first["indexRunId"]).startswith("index_run_")
+    assert str(first["operationsPath"]).startswith("/api/operations/runs/index/index_run_")
+    assert str(first["workflowOperationPath"]).startswith("/api/operations/runs/workflow/")
+    assert first_cursor["lastIndexedVersionNumber"] == 1
+    assert first_backlog["remainingVersionCount"] == 1
+    assert first_backlog["hasMoreVersions"] is True
+    assert first_backlog["nextSourceDatasetVersionNumber"] == 2
+    assert first["nextAction"] == "run_object_index_again"
+    assert second["status"] == "INDEXED"
+    assert second_backlog["remainingVersionCount"] == 0
+    assert second["nextAction"] == "monitor_operations"
+    assert third["status"] == "NO_VERSIONS"
+    assert third["operationsPath"] is None
+    assert third_backlog["remainingVersionCount"] == 0
+    assert third["nextAction"] == "wait_for_next_cdc_version"
+    assert third_cursor["lastIndexedVersionNumber"] == 2
+    assert caught_up_status["workflowRunId"] == third["workflowRunId"]
+    assert caught_up_status["workflowOperationPath"] == third["workflowOperationPath"]
+    assert caught_up_status["lastIndexedVersionNumber"] == 2
+    assert caught_up_status["lastIndexRunId"] == second["indexRunId"]
+    assert caught_up_backlog["remainingVersionCount"] == 0
+    assert caught_up_status["nextAction"] == "monitor_operations"
+    assert order["properties"]["status"] == "SHIPPED"
 
 
 def test_source_rejects_raw_secret_values(tmp_path: Path) -> None:
@@ -293,6 +388,75 @@ def test_source_media_upload_wraps_media_transaction_commit(tmp_path: Path) -> N
 
 def _foundry(tmp_path: Path) -> FoundryLite:
     return FoundryLite(dependencies=create_local_core_dependencies(storage_root=tmp_path / "flite"))
+
+
+def _seed_order_cdc_source(foundry: FoundryLite, tmp_path: Path) -> None:
+    ctx = demo_admin_context()
+    foundry.datasets.ensure("clean.orders", ctx=ctx, primary_key=["order_id"])
+    foundry.datasets.ensure("raw_cdc.erp_orders", ctx=ctx, primary_key=["event_id"])
+    snapshot = tmp_path / "orders.csv"
+    snapshot.write_text("order_id,status,amount\nO-1001,PENDING,700\n", encoding="utf-8")
+    foundry.datasets.upload_csv("clean.orders", snapshot, ctx=ctx)
+    foundry.ontology.apply(str(_order_cdc_ontology(tmp_path)), ctx=ctx)
+
+
+def _commit_cdc_version(foundry: FoundryLite, tmp_path: Path, event_id: str, lsn: int, status: str) -> None:
+    path = tmp_path / f"{event_id.replace(':', '_')}.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["event_id", "op", "pk_json", "after_json", "ordering_json"])
+        writer.writeheader()
+        writer.writerow(
+            {
+                "event_id": event_id,
+                "op": "u",
+                "pk_json": json.dumps({"order_id": "O-1001"}, sort_keys=True),
+                "after_json": json.dumps(
+                    {"order_id": "O-1001", "status": status, "amount": 700 + lsn},
+                    sort_keys=True,
+                ),
+                "ordering_json": json.dumps(
+                    {"lsn": lsn, "offset": lsn, "source_ts_ms": 1700000000000 + lsn, "table": "orders"},
+                    sort_keys=True,
+                ),
+            }
+        )
+    foundry.datasets.upload_csv("raw_cdc.erp_orders", path, ctx=demo_admin_context())
+
+
+def _order_cdc_ontology(tmp_path: Path) -> Path:
+    path = tmp_path / "order-cdc-source.yaml"
+    path.write_text(
+        """
+objectTypes:
+  - apiName: Order
+    displayName: Order
+    primaryKey: orderId
+    backing:
+      dataset: clean.orders
+      mode: snapshot
+      primaryKeyColumns: [order_id]
+      cdc:
+        dataset: raw_cdc.erp_orders
+        primaryKeyColumns: [order_id]
+        deletePolicy: tombstone
+    properties:
+      - apiName: orderId
+        column: order_id
+        type: string
+        indexed: true
+        nullable: false
+      - apiName: status
+        column: status
+        type: string
+        indexed: true
+      - apiName: amount
+        column: amount
+        type: float
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def _create_source_database_secret(foundry: FoundryLite, source_db: Path, ctx) -> dict[str, object]:

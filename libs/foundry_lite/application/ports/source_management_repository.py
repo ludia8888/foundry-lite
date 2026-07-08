@@ -298,6 +298,7 @@ class SourceManagementRepository(Protocol):
         result_summary: Mapping[str, object],
         error: Mapping[str, object] | None,
         completed_at: str,
+        workflow_run_id: str | None = None,
     ) -> SourceSyncRunRow | None: ...
 
     def sync_run_by_id(

@@ -14,7 +14,7 @@
     "ci:gate:runtime-full": "bash scripts/ci_gate.sh runtime-full",
     "ci:gate:e2e": "bash scripts/ci_gate.sh e2e",
     "ci:gate:release": "bash scripts/ci_gate.sh release",
-    "dev": "PYTHONPATH=.:libs:apps/api:apps/cli uv run python -m foundry_lite_api.main",
+    "dev": "FOUNDRY_LITE_CONNECTOR_PROFILE=\"${FOUNDRY_LITE_CONNECTOR_PROFILE:-rest}\" FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY=\"${FOUNDRY_LITE_SECRET_AIP_PROMPT_ARTIFACT_ENCRYPTION_KEY:-local-dev-prompt-artifact-key}\" FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER=\"${FOUNDRY_LITE_SECRET_AIP_CITATION_NAVIGATION_SIGNER:-local-dev-citation-navigation-signer}\" PYTHONPATH=.:libs:apps/api:apps/cli uv run python -m foundry_lite_api.main",
     "demo:media-multimodal": "PYTHONPATH=.:libs uv run python examples/media-multimodal-demo/run.py",
     "demo:supply-chain": "PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m foundry_lite_cli.main demo run-supply-chain",
     "demo:supply-chain:fake-storage": "rm -rf .foundry-lite-fake-smoke && FOUNDRY_LITE_HOME=.foundry-lite-fake-smoke PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m foundry_lite_cli.main --adapter-profile fake-storage demo run-supply-chain",
@@ -200,6 +200,7 @@
     "test": "PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m pytest",
     "test:coverage": "PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m pytest tests --cov=libs/foundry_lite --cov=apps/api --cov=apps/cli --cov=apps/worker --cov-branch --cov-fail-under=95",
     "test:e2e": "pnpm exec playwright test",
+    "test:e2e:foundry": "pnpm exec playwright test -c playwright.foundry.config.ts",
     "web:static": "uv run python -m http.server 4173 --directory apps/web",
     "lint": "PYTHONPATH=.:libs:apps/cli:apps/api uv run python -m compileall libs apps tests"
   },

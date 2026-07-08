@@ -75,6 +75,16 @@ from foundry_lite.application.ports.connector_registry_repository import (
     ConnectorResourceRow,
 )
 from foundry_lite.application.ports.context_provider import ContextProvider
+from foundry_lite.application.ports.dataset_aggregation import (
+    DatasetAggregationComputeResult,
+    DatasetAggregationFilter,
+    DatasetAggregationFunction,
+    DatasetAggregationGroup,
+    DatasetAggregationMetric,
+    DatasetAggregationOperator,
+    DatasetAggregationPlan,
+    DatasetAggregationResult,
+)
 from foundry_lite.application.ports.dataset_quality_repository import (
     DatasetCheckConfig,
     DatasetCheckRecord,

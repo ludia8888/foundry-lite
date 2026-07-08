@@ -34,7 +34,7 @@ def test_connector_onboarding_tests_resource_without_dataset_commit(tmp_path) ->
     assert server.requests[0]["authorization"] == "Bearer token-v1"
 
 
-def test_connector_onboarding_start_sync_replays_and_activity_commits_registered_rest_source(tmp_path) -> None:
+def test_connector_onboarding_start_sync_replays_and_commits_registered_rest_source(tmp_path) -> None:
     with MockRestServer() as server:
         foundry = _foundry_with_rest_connector(tmp_path, {"FOUNDRY_LITE_SECRET_ERP_TOKEN": "token-v1"})
         ctx = demo_admin_context()
@@ -55,16 +55,85 @@ def test_connector_onboarding_start_sync_replays_and_activity_commits_registered
             sync_name="erp-orders-first-sync",
             ctx=ctx,
         )
-        activity = foundry.connectors.run_registered_sync_activity(first["output"], ctx=ctx)
 
     assert replay["workflowRunId"] == first["workflowRunId"]
+    assert first["status"] == "succeeded"
     assert first["output"]["datasetRef"] == "raw.erp_orders"
     assert first["output"]["connectorName"] == "erp"
     assert str(first["output"]["configFingerprint"]).startswith("sha256:")
-    assert activity["workflowKind"] == "connector_sync"
-    assert activity["datasetRef"] == "raw.erp_orders"
-    assert activity["rowCount"] == 1
+    assert first["output"]["workflowKind"] == "connector_sync"
+    assert first["output"]["rowCount"] == 1
     assert foundry.datasets.preview("raw.erp_orders", ctx=ctx)[0]["order_id"] == "O-1001"
+    assert len(server.requests) == 1
+
+
+def test_managed_rest_sync_run_closes_after_connector_workflow_commit(tmp_path) -> None:
+    with MockRestServer() as server:
+        foundry = _foundry_with_rest_connector(tmp_path, {"FOUNDRY_LITE_SECRET_ERP_TOKEN": "token-v1"})
+        ctx = demo_admin_context()
+        _create_connection(foundry, server.base_url, ctx=ctx)
+        _upsert_orders_resource(foundry, ctx=ctx)
+        foundry.sources.create_managed_sync(
+            sync_name="erp_orders_managed",
+            source_name="erp",
+            display_name="ERP Orders Managed",
+            source_type="rest_api",
+            capability="batch",
+            mode="APPEND",
+            config_summary={"connectorName": "erp", "resourceName": "orders"},
+            target_dataset_ref="raw.erp_orders",
+            schedule={"mode": "manual"},
+            idempotency_key="create-managed-erp-orders",
+            ctx=ctx,
+        )
+
+        run = foundry.sources.start_managed_sync_run(
+            "erp_orders_managed",
+            idempotency_key="run-managed-erp-orders",
+            ctx=ctx,
+        )
+
+    assert run["status"] == "succeeded"
+    assert str(run["workflowRunId"]).startswith("flite:")
+    assert str(run["datasetVersionId"]).startswith("dsv_")
+    assert run["resultSummary"]["workflowRun"]["output"]["rowCount"] == 1
+    assert foundry.datasets.preview("raw.erp_orders", ctx=ctx)[0]["order_id"] == "O-1001"
+
+
+def test_managed_rest_sync_run_fails_when_target_differs_from_connector_resource(tmp_path) -> None:
+    with MockRestServer() as server:
+        foundry = _foundry_with_rest_connector(tmp_path, {"FOUNDRY_LITE_SECRET_ERP_TOKEN": "token-v1"})
+        ctx = demo_admin_context()
+        _create_connection(foundry, server.base_url, ctx=ctx)
+        _upsert_orders_resource(foundry, ctx=ctx)
+        foundry.sources.create_managed_sync(
+            sync_name="erp_orders_wrong_target",
+            source_name="erp",
+            display_name="ERP Orders Wrong Target",
+            source_type="rest_api",
+            capability="batch",
+            mode="APPEND",
+            config_summary={"connectorName": "erp", "resourceName": "orders"},
+            target_dataset_ref="raw.erp_orders_ui_target",
+            schedule={"mode": "manual"},
+            idempotency_key="create-managed-erp-orders-wrong-target",
+            ctx=ctx,
+        )
+
+        run = foundry.sources.start_managed_sync_run(
+            "erp_orders_wrong_target",
+            idempotency_key="run-managed-erp-orders-wrong-target",
+            ctx=ctx,
+        )
+
+    assert run["status"] == "failed"
+    assert run["datasetVersionId"] is None
+    assert run["error"]["message"] == "managed sync target dataset does not match connector resource dataset"
+    assert run["error"]["details"]["targetDatasetRef"] == "raw.erp_orders_ui_target"
+    assert run["error"]["details"]["connectorDatasetRef"] == "raw.erp_orders"
+    assert _dataset_version_count(foundry, "raw.erp_orders", ctx.tenant_id) == 0
+    assert _dataset_version_count(foundry, "raw.erp_orders_ui_target", ctx.tenant_id) == 0
+    assert server.requests == []
 
 
 def test_connector_registered_activity_fails_closed_after_config_fingerprint_change(tmp_path) -> None:

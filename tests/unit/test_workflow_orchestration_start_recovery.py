@@ -7,6 +7,7 @@ from foundry_lite.application.foundry import FoundryLite
 from foundry_lite.application.ports.adapter_failure import AdapterError, AdapterFailure, AdapterFailureContract
 from foundry_lite.application.ports.workflow_adapter import WorkflowAdapter, WorkflowRun, WorkflowStartRequest
 from foundry_lite.domain.context import demo_admin_context
+from foundry_lite.domain.errors import ValidationFailed
 from foundry_lite.infrastructure.local_runtime import create_local_core_dependencies
 
 
@@ -41,6 +42,17 @@ class _PermanentRaisingWorkflowAdapter(_RetryableRaisingWorkflowAdapter):
     def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
         self.starts += 1
         raise RuntimeError("Authorization: Bearer raw-workflow-token")
+
+
+class _ValidationRaisingWorkflowAdapter(_RetryableRaisingWorkflowAdapter):
+    profile_name = "validation-raising"
+
+    def start_workflow(self, request: WorkflowStartRequest) -> WorkflowRun:
+        self.starts += 1
+        raise ValidationFailed(
+            "connector resource is missing required cursor",
+            details={"connectorName": "orders_api", "resourceName": "orders"},
+        )
 
 
 class _SensitiveAdapterFailureWorkflowAdapter(_RetryableRaisingWorkflowAdapter):
@@ -128,6 +140,28 @@ def test_permanent_workflow_start_exception_records_failed_not_starting(tmp_path
     assert run["error"]["details"] == {"errorType": "RuntimeError"}
     assert replay["status"] == "failed"
     assert adapter.starts == 1
+
+
+def test_workflow_start_exception_preserves_domain_error_evidence(tmp_path: Path) -> None:
+    foundry = _foundry(tmp_path, _ValidationRaisingWorkflowAdapter())
+
+    run = foundry.operations.start_media_processing_workflow(
+        media_item_version_id="miv-domain-error",
+        processor_spec={"processor": "ocr_v1"},
+        idempotency_key="wf-start-domain-error",
+        ctx=demo_admin_context(),
+    )
+
+    assert run["status"] == "failed"
+    assert run["error"] is not None
+    assert run["error"]["kind"] == "validation"
+    assert run["error"]["operatorMessage"] == "connector resource is missing required cursor"
+    assert run["error"]["details"] == {
+        "errorType": "ValidationFailed",
+        "code": "VALIDATION_FAILED",
+        "connectorName": "orders_api",
+        "resourceName": "orders",
+    }
 
 
 def _foundry(tmp_path: Path, adapter: WorkflowAdapter) -> FoundryLite:

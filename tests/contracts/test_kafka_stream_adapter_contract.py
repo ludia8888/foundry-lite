@@ -557,6 +557,28 @@ def test_stream_archive_worker_config_from_env(tmp_path: Path) -> None:
     assert config.lease_ttl_seconds == 45
 
 
+def test_stream_archive_worker_config_from_args_preserves_consumer_group(tmp_path: Path) -> None:
+    args = worker_module._parser().parse_args(
+        [
+            "--storage-root",
+            str(tmp_path),
+            "--dataset-ref",
+            "raw.orders_cdc",
+            "--stream-name",
+            "erp-orders",
+            "--topic",
+            "erp.public.orders",
+            "--consumer-group",
+            "foundry-lite-orders",
+        ]
+    )
+
+    config = worker_module._config_from_args(args)
+
+    assert config.consumer_group == "foundry-lite-orders"
+    assert config.sync_name is None
+
+
 def test_worker_requires_tenant_context_for_background_jobs(tmp_path: Path) -> None:
     config = worker_module.config_from_env(
         {
