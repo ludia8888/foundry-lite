@@ -34,9 +34,22 @@ def debezium_operation_plan(
             primary_key,
             object_type_api_name,
         ),
+        "captureSemantics": _capture_semantics(primary_key),
         "objectIndexing": _object_indexing(dataset_ref, object_type_api_name, primary_key),
         "objectIndexingStatus": object_indexing_status or {},
         "operatorChecklist": _operator_checklist(primary_key),
+    }
+
+
+def _capture_semantics(primary_key: list[str]) -> dict[str, object]:
+    return {
+        "snapshotMode": "initial_then_logical_changes",
+        "snapshotResponsibility": "external_debezium_connector",
+        "operationCodes": ["r", "c", "u", "d"],
+        "primaryKey": primary_key,
+        "ordering": "topic_partition_offset",
+        "deletePolicy": "tombstone",
+        "archiveShape": "append_only_cdc_envelope",
     }
 
 

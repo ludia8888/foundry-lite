@@ -10,9 +10,13 @@ import pytest
 from foundry_lite.application.ports.source_registry_repository import (
     SourceConnectionRecord,
     SourceConnectionRow,
+    SourceConnectionTestAlreadyExistsError,
+    SourceConnectionTestRecord,
+    SourceConnectionTestRow,
     SourceConnectionUpdate,
     SourceRegistryRepository,
 )
+from foundry_lite.application.state_transitions import SOURCE_CONNECTION_DISABLED, SOURCE_CONNECTION_ENABLED
 from foundry_lite.infrastructure import schema as db
 from foundry_lite.infrastructure.repositories import SqlAlchemySourceRegistryRepository
 from sqlalchemy import create_engine, select
@@ -31,6 +35,7 @@ class SourceRegistryHarness(Protocol):
 @dataclass
 class FakeSourceRegistryRepository:
     sources: list[SourceConnectionRow] = field(default_factory=list)
+    connection_tests: list[SourceConnectionTestRow] = field(default_factory=list)
 
     def create_source(self, *, transaction: Any, record: SourceConnectionRecord) -> None:
         del transaction
@@ -51,6 +56,26 @@ class FakeSourceRegistryRepository:
                 return cast(SourceConnectionRow, dict(row))
         return None
 
+    def update_source_status(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        source_name: str,
+        transition: Any,
+        expected_config_fingerprint: str,
+        updated_at: str,
+    ) -> SourceConnectionRow | None:
+        del transaction
+        for row in self.sources:
+            matches_source = row["tenant_id"] == tenant_id and row["source_name"] == source_name
+            matches_version = row["config_fingerprint"] == expected_config_fingerprint
+            if matches_source and matches_version and row["status"] in transition.from_statuses:
+                row["status"] = transition.to_status
+                row["updated_at"] = updated_at
+                return cast(SourceConnectionRow, dict(row))
+        return None
+
     def source_by_name(self, *, transaction: Any, tenant_id: str, source_name: str) -> SourceConnectionRow | None:
         del transaction
         for row in self.sources:
@@ -61,6 +86,67 @@ class FakeSourceRegistryRepository:
     def list_sources(self, *, tenant_id: str) -> list[SourceConnectionRow]:
         rows = [cast(SourceConnectionRow, dict(row)) for row in self.sources if row["tenant_id"] == tenant_id]
         return sorted(rows, key=lambda row: row["source_name"])
+
+    def create_connection_test(self, *, transaction: Any, record: SourceConnectionTestRecord) -> None:
+        del transaction
+        duplicate = any(
+            row["tenant_id"] == record.tenant_id
+            and row["source_name"] == record.source_name
+            and row["idempotency_key"] == record.idempotency_key
+            for row in self.connection_tests
+        )
+        if duplicate:
+            raise SourceConnectionTestAlreadyExistsError
+        self.connection_tests.append(_connection_test_row(record))
+
+    def connection_test_by_idempotency_key(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        source_name: str,
+        idempotency_key: str,
+    ) -> SourceConnectionTestRow | None:
+        del transaction
+        return next(
+            (
+                cast(SourceConnectionTestRow, dict(row))
+                for row in self.connection_tests
+                if row["tenant_id"] == tenant_id
+                and row["source_name"] == source_name
+                and row["idempotency_key"] == idempotency_key
+            ),
+            None,
+        )
+
+    def complete_connection_test(
+        self,
+        *,
+        transaction: Any,
+        tenant_id: str,
+        test_id: str,
+        status: str,
+        checks: Any,
+        error: Any,
+        completed_at: str,
+    ) -> SourceConnectionTestRow | None:
+        del transaction
+        for row in self.connection_tests:
+            if row["tenant_id"] == tenant_id and row["id"] == test_id and row["status"] == "running":
+                row["status"] = status
+                row["checks"] = checks
+                row["error"] = error
+                row["completed_at"] = completed_at
+                return cast(SourceConnectionTestRow, dict(row))
+        return None
+
+    def list_connection_tests(self, *, tenant_id: str, source_name: str, limit: int) -> list[SourceConnectionTestRow]:
+        rows = [
+            cast(SourceConnectionTestRow, dict(row))
+            for row in self.connection_tests
+            if row["tenant_id"] == tenant_id and row["source_name"] == source_name
+        ]
+        return sorted(rows, key=lambda row: row["created_at"], reverse=True)[:limit]
 
 
 @dataclass
@@ -136,6 +222,88 @@ def test_source_registry_create_list_get_update_are_tenant_scoped(harness: Sourc
     assert len(harness.source_rows()) == 2
 
 
+def test_source_registry_status_transition_is_fingerprint_guarded(harness: SourceRegistryHarness) -> None:
+    with harness.transaction() as txn:
+        harness.repository.create_source(transaction=txn, record=_source_record("tenant-a", "orders_csv"))
+        disabled = harness.repository.update_source_status(
+            transaction=txn,
+            tenant_id="tenant-a",
+            source_name="orders_csv",
+            transition=SOURCE_CONNECTION_DISABLED,
+            expected_config_fingerprint="sha256:tenant-a",
+            updated_at="2026-06-28T00:00:01Z",
+        )
+        stale_enable = harness.repository.update_source_status(
+            transaction=txn,
+            tenant_id="tenant-a",
+            source_name="orders_csv",
+            transition=SOURCE_CONNECTION_ENABLED,
+            expected_config_fingerprint="sha256:stale",
+            updated_at="2026-06-28T00:00:02Z",
+        )
+        enabled = harness.repository.update_source_status(
+            transaction=txn,
+            tenant_id="tenant-a",
+            source_name="orders_csv",
+            transition=SOURCE_CONNECTION_ENABLED,
+            expected_config_fingerprint="sha256:tenant-a",
+            updated_at="2026-06-28T00:00:03Z",
+        )
+
+    assert disabled is not None and disabled["status"] == "disabled"
+    assert stale_enable is None
+    assert enabled is not None and enabled["status"] == "active"
+
+
+def test_source_registry_connection_test_history_is_tenant_scoped_and_idempotent(
+    harness: SourceRegistryHarness,
+) -> None:
+    with harness.transaction() as txn:
+        harness.repository.create_connection_test(
+            transaction=txn, record=_connection_test_record("tenant-a", "orders", "test-a")
+        )
+        harness.repository.create_connection_test(
+            transaction=txn, record=_connection_test_record("tenant-b", "orders", "test-b")
+        )
+        completed = harness.repository.complete_connection_test(
+            transaction=txn,
+            tenant_id="tenant-a",
+            test_id="test-a",
+            status="succeeded",
+            checks={"requestId": "request-a", "items": []},
+            error=None,
+            completed_at="2026-07-13T00:00:01Z",
+        )
+        stale_completion = harness.repository.complete_connection_test(
+            transaction=txn,
+            tenant_id="tenant-a",
+            test_id="test-a",
+            status="failed",
+            checks={"requestId": "request-stale", "items": []},
+            error={"code": "stale"},
+            completed_at="2026-07-13T00:00:02Z",
+        )
+        replay = harness.repository.connection_test_by_idempotency_key(
+            transaction=txn,
+            tenant_id="tenant-a",
+            source_name="orders",
+            idempotency_key="connection-test-key",
+        )
+        with pytest.raises(SourceConnectionTestAlreadyExistsError):
+            harness.repository.create_connection_test(
+                transaction=txn, record=_connection_test_record("tenant-a", "orders", "test-c")
+            )
+
+    assert completed is not None and completed["status"] == "succeeded"
+    assert stale_completion is None
+    assert replay is not None and replay["id"] == "test-a"
+    assert replay["status"] == "succeeded"
+    assert [
+        row["id"]
+        for row in harness.repository.list_connection_tests(tenant_id="tenant-a", source_name="orders", limit=20)
+    ] == ["test-a"]
+
+
 def _source_record(tenant_id: str, source_name: str) -> SourceConnectionRecord:
     return SourceConnectionRecord(
         source_id=f"source-{tenant_id}",
@@ -173,6 +341,42 @@ def _source_row(record: SourceConnectionRecord) -> SourceConnectionRow:
         "last_commit_ref": record.last_commit_ref,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
+    }
+
+
+def _connection_test_record(tenant_id: str, source_name: str, test_id: str) -> SourceConnectionTestRecord:
+    return SourceConnectionTestRecord(
+        test_id=test_id,
+        tenant_id=tenant_id,
+        source_name=source_name,
+        source_type="postgres_jdbc",
+        status="running",
+        config_fingerprint=f"sha256:{tenant_id}",
+        idempotency_key="connection-test-key",
+        checks={"requestId": f"request-{tenant_id}"},
+        error=None,
+        operations_path=f"/api/sources/{source_name}/connection-tests",
+        started_at="2026-07-13T00:00:00Z",
+        completed_at=None,
+        created_at="2026-07-13T00:00:00Z",
+    )
+
+
+def _connection_test_row(record: SourceConnectionTestRecord) -> SourceConnectionTestRow:
+    return {
+        "id": record.test_id,
+        "tenant_id": record.tenant_id,
+        "source_name": record.source_name,
+        "source_type": record.source_type,
+        "status": record.status,
+        "config_fingerprint": record.config_fingerprint,
+        "idempotency_key": record.idempotency_key,
+        "checks": dict(record.checks),
+        "error": record.error,
+        "operations_path": record.operations_path,
+        "started_at": record.started_at,
+        "completed_at": record.completed_at,
+        "created_at": record.created_at,
     }
 
 

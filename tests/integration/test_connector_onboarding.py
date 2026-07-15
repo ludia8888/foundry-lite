@@ -100,6 +100,121 @@ def test_managed_rest_sync_run_closes_after_connector_workflow_commit(tmp_path) 
     assert foundry.datasets.preview("raw.erp_orders", ctx=ctx)[0]["order_id"] == "O-1001"
 
 
+def test_managed_sap_odata_connection_test_and_sync_commit_real_entity_page(tmp_path) -> None:
+    environ = {"FOUNDRY_LITE_SECRET_SAP_BASIC": "sap-user:sap-password"}
+    with MockRestServer() as server:
+        foundry = _foundry_with_rest_connector(tmp_path, environ)
+        ctx = demo_admin_context()
+        foundry.connectors.create_connection(
+            connector_name="sap_s4",
+            display_name="SAP S/4HANA",
+            base_url=f"{server.base_url}/odata",
+            auth={"mode": "basic", "basicCredentialsSecretRef": "sap-basic"},
+            idempotency_key="create-sap-s4",
+            allow_private_network=True,
+            ctx=ctx,
+        )
+        foundry.connectors.upsert_resource(
+            "sap_s4",
+            "sales_orders",
+            dataset_ref="raw.sap_sales_orders",
+            resource_path="/SalesOrderSet?$format=json",
+            pagination={
+                "strategy": "next_link",
+                "itemsPath": "value",
+                "nextCursorPath": "@odata.nextLink",
+                "cursorKey": "nextLink",
+                "maxPagesPerSnapshot": 100,
+            },
+            schema_columns=["SalesOrder", "Status"],
+            primary_key=["SalesOrder"],
+            idempotency_key="upsert-sap-sales-orders",
+            ctx=ctx,
+        )
+        foundry.sources.create_managed_sync(
+            sync_name="sap_sales_orders_managed",
+            source_name="sap_s4_source",
+            display_name="SAP Sales Orders",
+            source_type="sap_odata",
+            capability="batch",
+            mode="SNAPSHOT",
+            config_summary={"connectorName": "sap_s4", "resourceName": "sales_orders"},
+            target_dataset_ref="raw.sap_sales_orders",
+            schedule={"mode": "manual"},
+            idempotency_key="create-managed-sap-sales-orders",
+            ctx=ctx,
+        )
+        source = foundry.sources.get_source("sap_s4_source", ctx=ctx)
+        exploration = foundry.sources.explore_source(
+            source_name="sap_s4_source",
+            source_type="sap_odata",
+            request={"connectorName": "sap_s4", "resourceName": "sales_orders"},
+            ctx=ctx,
+        )
+        probe = foundry.sources.test_connection(
+            "sap_s4_source",
+            expected_config_fingerprint=cast(str, source["configFingerprint"]),
+            idempotency_key="test-managed-sap-sales-orders",
+            ctx=ctx,
+        )
+        run = foundry.sources.start_managed_sync_run(
+            "sap_sales_orders_managed",
+            idempotency_key="run-managed-sap-sales-orders",
+            ctx=ctx,
+        )
+
+    workflow = cast(Mapping[str, object], cast(Mapping[str, object], run["resultSummary"])["workflowRun"])
+    output = cast(Mapping[str, object], workflow["output"])
+    exploration_summary = cast(Mapping[str, object], exploration["resultSummary"])
+    exploration_network = cast(Mapping[str, object], exploration_summary["networkEvidence"])
+    assert exploration["status"] == "succeeded"
+    assert exploration_summary["rowCount"] == 2
+    assert exploration_summary["datasetCommitCreated"] is False
+    assert exploration_network["pageCount"] == 2
+    assert probe["status"] == "succeeded"
+    assert cast(Mapping[str, object], cast(Mapping[str, object], probe["checks"])["probe"])["rowCount"] == 2
+    assert run["status"] == "succeeded"
+    assert output["rowCount"] == 2
+    assert str(foundry.datasets.preview("raw.sap_sales_orders", ctx=ctx)[0]["SalesOrder"]) == "500001"
+    assert str(foundry.datasets.preview("raw.sap_sales_orders", ctx=ctx)[1]["SalesOrder"]) == "500002"
+    assert all(str(request["authorization"]).startswith("Basic ") for request in server.requests)
+
+
+def test_managed_rest_source_connection_test_previews_without_dataset_commit(tmp_path) -> None:
+    with MockRestServer() as server:
+        foundry = _foundry_with_rest_connector(tmp_path, {"FOUNDRY_LITE_SECRET_ERP_TOKEN": "token-v1"})
+        ctx = demo_admin_context()
+        _create_connection(foundry, server.base_url, ctx=ctx)
+        _upsert_orders_resource(foundry, ctx=ctx)
+        foundry.sources.create_managed_sync(
+            sync_name="erp_orders_connection_test",
+            source_name="erp",
+            display_name="ERP Orders connection test",
+            source_type="rest_api",
+            capability="batch",
+            mode="APPEND",
+            config_summary={"connectorName": "erp", "resourceName": "orders"},
+            target_dataset_ref="raw.erp_orders",
+            schedule={"mode": "manual"},
+            idempotency_key="create-managed-erp-orders-connection-test",
+            ctx=ctx,
+        )
+        source = foundry.sources.get_source("erp", ctx=ctx)
+        result = foundry.sources.test_connection(
+            "erp",
+            expected_config_fingerprint=cast(str, source["configFingerprint"]),
+            idempotency_key="test-managed-erp-orders-connection",
+            ctx=ctx,
+        )
+
+    probe = cast(Mapping[str, object], cast(Mapping[str, object], result["checks"])["probe"])
+    assert result["status"] == "succeeded"
+    assert probe["rowCount"] == 1
+    assert probe["datasetCommitCreated"] is False
+    assert _dataset_version_count(foundry, "raw.erp_orders", ctx.tenant_id) == 0
+    assert foundry.sources.list_connection_tests("erp", ctx=ctx)[0]["connectionTestId"] == result["connectionTestId"]
+
+
 def test_managed_rest_sync_run_fails_when_target_differs_from_connector_resource(tmp_path) -> None:
     with MockRestServer() as server:
         foundry = _foundry_with_rest_connector(tmp_path, {"FOUNDRY_LITE_SECRET_ERP_TOKEN": "token-v1"})
@@ -184,6 +299,26 @@ def test_connector_resource_test_reports_missing_secret_ref_without_raw_secret(t
         _create_connection(foundry, server.base_url, ctx=ctx)
         _upsert_orders_resource(foundry, ctx=ctx)
         result = foundry.connectors.test_resource("erp", "orders", ctx=ctx)
+        foundry.sources.create_managed_sync(
+            sync_name="erp_orders_missing_secret",
+            source_name="erp",
+            display_name="ERP Orders missing secret",
+            source_type="rest_api",
+            capability="batch",
+            mode="APPEND",
+            config_summary={"connectorName": "erp", "resourceName": "orders"},
+            target_dataset_ref="raw.erp_orders",
+            schedule={"mode": "manual"},
+            idempotency_key="create-managed-erp-orders-missing-secret",
+            ctx=ctx,
+        )
+        source = foundry.sources.get_source("erp", ctx=ctx)
+        source_result = foundry.sources.test_connection(
+            "erp",
+            expected_config_fingerprint=cast(str, source["configFingerprint"]),
+            idempotency_key="test-managed-erp-orders-missing-secret",
+            ctx=ctx,
+        )
 
     assert result["status"] == "failed"
     error = cast(Mapping[str, object], result["error"])
@@ -191,6 +326,9 @@ def test_connector_resource_test_reports_missing_secret_ref_without_raw_secret(t
     assert error["type"] == "VALIDATION_FAILED"
     assert error_details["secret_value"] == "***REDACTED***"
     assert "token-v1" not in str(result)
+    assert source_result["status"] == "failed"
+    assert source_result["requestId"] == ctx.request_id
+    assert "token-v1" not in str(source_result)
 
 
 def test_connector_resource_upsert_conflicts_on_primary_key_mismatch(tmp_path) -> None:

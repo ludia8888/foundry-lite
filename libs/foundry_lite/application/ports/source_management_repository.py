@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, TypedDict
 
-from foundry_lite.application.ports.transaction_context import TransactionContext
+from foundry_lite.application.ports.transaction_context import StatusTransition, TransactionContext
 
 
 class SourceManagementAlreadyExistsError(Exception):
@@ -268,6 +268,30 @@ class SourceManagementRepository(Protocol):
 
     def list_syncs(self, *, tenant_id: str) -> list[SourceSyncRow]: ...
 
+    def update_sync_schedule(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        sync_name: str,
+        schedule: Mapping[str, object],
+        config_fingerprint: str,
+        updated_at: str,
+    ) -> SourceSyncRow | None: ...
+
+    def update_sync_schedule_state(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        sync_name: str,
+        transition: StatusTransition,
+        expected_config_fingerprint: str,
+        schedule: Mapping[str, object],
+        config_fingerprint: str,
+        updated_at: str,
+    ) -> SourceSyncRow | None: ...
+
     def update_sync_after_run(
         self,
         *,
@@ -277,6 +301,16 @@ class SourceManagementRepository(Protocol):
         run_id: str,
         workflow_run_id: str | None,
         checkpoint: Mapping[str, object],
+        updated_at: str,
+    ) -> SourceSyncRow | None: ...
+
+    def update_sync_streaming_workflow(
+        self,
+        *,
+        transaction: TransactionContext,
+        tenant_id: str,
+        sync_name: str,
+        workflow_run_id: str,
         updated_at: str,
     ) -> SourceSyncRow | None: ...
 

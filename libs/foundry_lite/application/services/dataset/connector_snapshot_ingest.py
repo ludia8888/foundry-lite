@@ -8,6 +8,7 @@ from typing import NoReturn, Protocol
 
 from foundry_lite.application.ports import (
     ConnectorAdapter,
+    ConnectorNetworkRoute,
     ConnectorSnapshot,
     ConnectorSnapshotRequest,
     DatasetRow,
@@ -85,6 +86,7 @@ def sync_connector_snapshot(
     sync_name: str | None = None,
     cursor: Mapping[str, object] | None = None,
     rest: RestSourceConfig | None = None,
+    network_route: ConnectorNetworkRoute | None = None,
     tx_type: str = "SNAPSHOT",
     run_id: str | None = None,
 ) -> CommitResult:
@@ -95,7 +97,16 @@ def sync_connector_snapshot(
     sync = _prepare_connector_snapshot_sync(
         runtime, ctx, dataset, connector_name, resource_name, sync_name, cursor, tx_type, run_id
     )
-    return _commit_connector_snapshot(runtime, connector_adapter, ctx, sync, connector_name, resource_name, rest)
+    return _commit_connector_snapshot(
+        runtime,
+        connector_adapter,
+        ctx,
+        sync,
+        connector_name,
+        resource_name,
+        rest,
+        network_route,
+    )
 
 
 def start_connector_sync_run(
@@ -254,9 +265,10 @@ def _commit_connector_snapshot(
     connector_name: str,
     resource_name: str,
     rest: RestSourceConfig | None,
+    network_route: ConnectorNetworkRoute | None,
 ) -> CommitResult:
     try:
-        request = _connector_snapshot_request(ctx, sync, connector_name, resource_name, rest)
+        request = _connector_snapshot_request(ctx, sync, connector_name, resource_name, rest, network_route)
         snapshot = connector_adapter.snapshot(request)
         rows = list(snapshot.rows)
         runtime._rows_to_parquet(rows, sync.staged, _connector_fieldnames(snapshot.schema, rows))
@@ -290,6 +302,7 @@ def _finalize_connector_snapshot(
                     resource_name,
                     sync.resume_cursor,
                     snapshot.cursor,
+                    snapshot.network_evidence,
                 ),
                 after_persist=lambda commit_conn, result: runtime._mark_sync_run_committed(
                     commit_conn, ctx, sync.plan.run_id, result
@@ -339,6 +352,7 @@ def _connector_snapshot_request(
     connector_name: str,
     resource_name: str,
     rest: RestSourceConfig | None,
+    network_route: ConnectorNetworkRoute | None,
 ) -> ConnectorSnapshotRequest:
     return ConnectorSnapshotRequest(
         connector_name,
@@ -347,6 +361,7 @@ def _connector_snapshot_request(
         ctx.request_id,
         sync.resume_cursor,
         rest,
+        network_route,
     )
 
 
@@ -355,6 +370,7 @@ def _connector_transaction_metadata(
     resource_name: str,
     request_cursor: Mapping[str, object] | None,
     next_cursor: Mapping[str, object] | None,
+    network_evidence: Mapping[str, object],
 ) -> Mapping[str, object]:
     return {
         "connectorCursor": {
@@ -362,7 +378,8 @@ def _connector_transaction_metadata(
             "resourceName": resource_name,
             "requestCursor": dict(request_cursor) if request_cursor is not None else None,
             "nextCursor": dict(next_cursor) if next_cursor is not None else None,
-        }
+        },
+        "connectorNetworkEvidence": dict(network_evidence),
     }
 
 

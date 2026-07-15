@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Protocol
+from typing import Protocol, cast
 
 from foundry_lite.application.ports import (
     RestAuthConfig,
@@ -17,6 +17,7 @@ from foundry_lite.application.ports import (
     TransactionContext,
     TransactionManager,
 )
+from foundry_lite.application.ports.connector_adapter import RestPaginationStrategy
 from foundry_lite.application.ports.secret_provider import SecretVault
 from foundry_lite.application.ports.source_management_repository import SourceManagementRepository
 from foundry_lite.application.services.source_management_views import (
@@ -45,6 +46,9 @@ class CommitResultLike(Protocol):
 class SourceBatchLike(Protocol):
     @property
     def checkpoint(self) -> Mapping[str, object]: ...
+
+    @property
+    def network_evidence(self) -> Mapping[str, object]: ...
 
 
 class SourcePolicyBoundary(Protocol):
@@ -77,10 +81,26 @@ class SourceRuntimeBoundary(Protocol):
         correlation_id: str | None = None,
     ) -> None: ...
 
+    def _outbox(
+        self,
+        conn: TransactionContext,
+        ctx: RequestContext,
+        event_type: str,
+        aggregate_type: str,
+        aggregate_id: str,
+        payload: Mapping[str, object],
+        *,
+        idempotency_key: str,
+        correlation_id: str,
+    ) -> str | None: ...
 
-class SourceManagementStore(Protocol):
+
+class SourceSyncStore(Protocol):
     engine: TransactionManager
     source_management_repository: SourceManagementRepository
+
+
+class SourceManagementStore(SourceSyncStore, Protocol):
     secret_vault: SecretVault
 
 
@@ -198,7 +218,7 @@ def network_policy_row(
 
 
 def sync_row(
-    service: SourceManagementStore, conn: TransactionContext, ctx: RequestContext, sync_name: str
+    service: SourceSyncStore, conn: TransactionContext, ctx: RequestContext, sync_name: str
 ) -> Mapping[str, object]:
     row = service.source_management_repository.sync_by_name(
         transaction=conn, tenant_id=ctx.tenant_id, sync_name=sync_name
@@ -278,7 +298,8 @@ def rest_source_config(request: Mapping[str, object]) -> RestSourceConfig:
             next_cursor_path=str(pagination.get("nextCursorPath", "nextCursor")),
             cursor_query_param=str(pagination.get("cursorQueryParam", "cursor")),
             cursor_key=str(pagination.get("cursorKey", "cursor")),
-            strategy="cursor",
+            strategy=cast(RestPaginationStrategy, pagination.get("strategy", "cursor")),
+            max_pages_per_snapshot=int_value(pagination.get("maxPagesPerSnapshot"), 1),
         ),
         allow_private_network=bool(request.get("allowPrivateNetwork", False)),
     )
@@ -288,6 +309,11 @@ def rest_auth(auth: Mapping[str, object]) -> RestAuthConfig:
     mode = str(auth.get("mode", "none"))
     if mode == "bearer":
         return RestAuthConfig(mode="bearer", token_secret_ref=required_text(auth, "tokenSecretRef"))
+    if mode == "basic":
+        return RestAuthConfig(
+            mode="basic",
+            basic_credentials_secret_ref=required_text(auth, "basicCredentialsSecretRef"),
+        )
     if mode == "header":
         return RestAuthConfig(
             mode="header",
@@ -298,14 +324,20 @@ def rest_auth(auth: Mapping[str, object]) -> RestAuthConfig:
 
 
 def commit_result_payload(commit: CommitResultLike | None, batch: SourceBatchLike) -> dict[str, object]:
+    network_evidence = dict(getattr(batch, "network_evidence", {}))
     if commit is None:
-        return {"rowCount": 0, "checkpoint": dict(getattr(batch, "checkpoint", {}))}
+        return {
+            "rowCount": 0,
+            "checkpoint": dict(getattr(batch, "checkpoint", {})),
+            "networkEvidence": network_evidence,
+        }
     return {
         "datasetVersionId": commit.version_id,
         "rowCount": commit.row_count,
         "schemaHash": commit.schema_hash,
         "manifestUri": commit.manifest_uri,
         "checkpoint": dict(getattr(batch, "checkpoint", {})),
+        "networkEvidence": network_evidence,
     }
 
 

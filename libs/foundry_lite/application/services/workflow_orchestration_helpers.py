@@ -41,6 +41,7 @@ def connector_sync_request(
     resource_name: str,
     idempotency_key: str,
     sync_name: str | None,
+    source_name: str | None,
     config_fingerprint: str | None,
     transaction_type: str,
 ) -> WorkflowStartRequest:
@@ -56,6 +57,7 @@ def connector_sync_request(
             resource_name,
             idempotency_key,
             sync_name,
+            source_name,
             config_fingerprint,
             transaction_type,
         ),
@@ -212,6 +214,7 @@ def _connector_sync_input(
     resource_name: str,
     idempotency_key: str,
     sync_name: str | None,
+    source_name: str | None,
     config_fingerprint: str | None,
     transaction_type: str,
 ) -> Mapping[str, object]:
@@ -230,10 +233,13 @@ def _connector_sync_input(
             connector_name=connector_name,
             resource_name=resource_name,
             sync_name=sync_name,
+            source_name=source_name,
             config_fingerprint=config_fingerprint,
             transaction_type=transaction_type,
         ),
     }
+    if source_name is not None:
+        payload["sourceName"] = source_name
     if transaction_type != "SNAPSHOT":
         payload["transactionType"] = transaction_type
     return payload

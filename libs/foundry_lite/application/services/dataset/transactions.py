@@ -26,6 +26,12 @@ from foundry_lite.application.primitives import (
     _now,
 )
 from foundry_lite.application.services.base import CoreService
+from foundry_lite.application.services.dataset.current_view import (
+    current_view_file_paths,
+    current_view_manifest,
+    current_view_version,
+    current_view_versions,
+)
 from foundry_lite.application.services.dataset.protocols import (
     DatasetQualityBoundary,
     DatasetRuntimeBoundary,
@@ -33,11 +39,10 @@ from foundry_lite.application.services.dataset.protocols import (
 )
 from foundry_lite.application.services.dataset.schema_evolution import DatasetSchemaEvolutionResult
 from foundry_lite.application.services.dataset.storage_consistency import (
-    cleanup_staging_transaction,
     committed_manifest,
     committed_version_file_path,
-    committed_version_file_paths,
 )
+from foundry_lite.application.services.dataset.transaction_abort import abort_transaction_after_error
 from foundry_lite.application.services.dataset.transaction_models import (
     DatasetCommitArtifacts,
     DatasetFinalizationCheck,
@@ -126,7 +131,35 @@ class DatasetTransactionService(CoreService):
     def _version_file_paths(
         self, version: DatasetVersionRow, *, partition_filter: Mapping[str, object] | None = None
     ) -> list[Path]:
-        return committed_version_file_paths(self.dataset_storage, version, partition_filter=partition_filter)
+        return current_view_file_paths(
+            self.dataset_storage,
+            self._current_view_versions(version),
+            partition_filter=partition_filter,
+        )
+
+    def _version_preview_file_paths(
+        self, version: DatasetVersionRow, *, partition_filter: Mapping[str, object] | None = None
+    ) -> list[Path]:
+        return current_view_file_paths(
+            self.dataset_storage,
+            self._current_view_versions(version),
+            partition_filter=partition_filter,
+            is_preview=True,
+        )
+
+    def _current_view_versions(self, version: DatasetVersionRow) -> list[DatasetVersionRow]:
+        return current_view_versions(
+            self.engine,
+            self.dataset_transaction_repository,
+            self.dataset_version_service,
+            version,
+        )
+
+    def _current_view_manifest(self, version: DatasetVersionRow) -> DatasetManifest:
+        return current_view_manifest(self.dataset_storage, self._current_view_versions(version))
+
+    def _current_view_version(self, version: DatasetVersionRow) -> DatasetVersionRow:
+        return current_view_version(self._current_view_versions(version))
 
     def _load_manifest(self, manifest_uri: str) -> DatasetManifest:
         return committed_manifest(self.dataset_storage, manifest_uri)
@@ -459,42 +492,4 @@ class DatasetTransactionService(CoreService):
         run_kind: DatasetRunKind,
         adapter: str | None = None,
     ) -> None:
-        error_payload = self.runtime_service._error_payload(
-            exc,
-            ctx,
-            run_id=run_id,
-            correlation_id=run_id,
-            adapter=adapter,
-        )
-        with self.engine.begin() as conn:
-            tx = self.dataset_transaction_repository.transaction_by_id(transaction=conn, transaction_id=transaction_id)
-            staging_cleanup = cleanup_staging_transaction(self.dataset_storage, ctx, tx, transaction_id)
-            aborted = self.dataset_transaction_repository.abort_open_transaction_and_fail_run(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                transaction_id=transaction_id,
-                run_id=run_id,
-                run_kind=run_kind,
-                error=error_payload,
-                completed_at=_now(),
-            )
-            _require_abort_won(is_aborted=aborted, transaction_id=transaction_id, run_id=run_id)
-            self.runtime_service._audit(
-                conn,
-                ctx,
-                event_type="dataset.transaction.aborted",
-                resource_type="dataset_transaction",
-                resource_id=transaction_id,
-                action="abort",
-                after_ref={"error": error_payload, "staging_cleanup": staging_cleanup},
-                correlation_id=run_id,
-            )
-
-
-def _require_abort_won(is_aborted: bool, transaction_id: str, run_id: str) -> None:
-    if is_aborted:
-        return
-    raise ConflictDetected(
-        "dataset transaction abort lost its current state",
-        details={"transaction_id": transaction_id, "run_id": run_id},
-    )
+        abort_transaction_after_error(self, ctx, transaction_id, run_id, exc, run_kind, adapter)

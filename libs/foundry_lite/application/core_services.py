@@ -46,12 +46,14 @@ from foundry_lite.application.services.runtime_bundle import (
     WorkflowOrchestrationService,
 )
 from foundry_lite.application.services.runtime_evidence_service import RuntimeEvidenceService
-from foundry_lite.application.services.source_management_service import (
+from foundry_lite.application.services.source_services import (
     SourceCdcObjectIndexService,
+    SourceConnectionTestService,
+    SourceLifecycleService,
     SourceManagementService,
+    SourceOnboardingService,
+    SourceSchedulerService,
 )
-from foundry_lite.application.services.source_onboarding_service import SourceOnboardingService
-from foundry_lite.application.services.source_scheduler_service import SourceSchedulerService
 from foundry_lite.application.services.transform_service import TransformService
 from foundry_lite.application.services.transform_services import TransformServices
 
@@ -94,7 +96,9 @@ __all__ = [
     "RuntimeEvidenceService",
     "RuntimeService",
     "SourceCdcObjectIndexService",
+    "SourceConnectionTestService",
     "SourceManagementService",
+    "SourceLifecycleService",
     "SourceOnboardingService",
     "SourceSchedulerService",
     "TransformService",
@@ -111,6 +115,8 @@ class _SharedCoreServices(TypedDict):
     media: MediaServices
     object_store: ObjectServices
     source_management: SourceManagementService
+    source_connection_test: SourceConnectionTestService
+    source_lifecycle: SourceLifecycleService
     source_cdc_object_index: SourceCdcObjectIndexService
     source_scheduler: SourceSchedulerService
 
@@ -132,6 +138,8 @@ class CoreServices:
     builder_runtime: BuilderRuntimeService
     connector_onboarding: ConnectorOnboardingService
     source_management: SourceManagementService
+    source_connection_test: SourceConnectionTestService
+    source_lifecycle: SourceLifecycleService
     source_cdc_object_index: SourceCdcObjectIndexService
     source_scheduler: SourceSchedulerService
     source_onboarding: SourceOnboardingService
@@ -188,6 +196,8 @@ def _shared_core_services(dependencies: CoreDependencies) -> _SharedCoreServices
         "object_store": ObjectServices.create(dependencies),
         "source_cdc_object_index": build_service(SourceCdcObjectIndexService, dependencies),
         "source_management": build_service(SourceManagementService, dependencies),
+        "source_connection_test": build_service(SourceConnectionTestService, dependencies),
+        "source_lifecycle": build_service(SourceLifecycleService, dependencies),
         "source_scheduler": build_service(SourceSchedulerService, dependencies),
     }
 
@@ -202,7 +212,9 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         backup_restore=shared["backup_restore"],
         builder_runtime=build_service(BuilderRuntimeService, dependencies),
         connector_onboarding=build_service(ConnectorOnboardingService, dependencies),
-        source_management=shared["source_management"], source_cdc_object_index=shared["source_cdc_object_index"],
+        source_management=shared["source_management"], source_lifecycle=shared["source_lifecycle"],
+        source_connection_test=shared["source_connection_test"],
+        source_cdc_object_index=shared["source_cdc_object_index"],
         source_scheduler=shared["source_scheduler"],
         source_onboarding=build_service(SourceOnboardingService, dependencies),
         context_compiler=build_service(ContextCompilerService, dependencies),
@@ -212,8 +224,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         iceberg_maintenance=shared["iceberg_maintenance"],
         insight_review=shared["insight_review"],
         materialization=build_service(MaterializationService, dependencies),
-        media=shared["media"],
-        citation=build_service(CitationService, dependencies),
+        media=shared["media"], citation=build_service(CitationService, dependencies),
         logic_runtime=build_service(LogicRuntimeService, dependencies),
         model_gateway=build_service(ModelGatewayService, dependencies),
         prompt_artifact=build_service(PromptArtifactService, dependencies),
@@ -231,8 +242,7 @@ def _compose_core_services(dependencies: CoreDependencies, shared: _SharedCoreSe
         runtime_evidence=build_service(RuntimeEvidenceService, dependencies),
         runtime=build_service(RuntimeService, dependencies),
         transform=TransformServices.create(dependencies),
-        workflow=build_service(WorkflowOrchestrationService, dependencies),
-    )
+        workflow=build_service(WorkflowOrchestrationService, dependencies), )
 # fmt: on
 
 
@@ -291,6 +301,8 @@ def _core_service_items(services: CoreServices) -> list[CoreService]:
 def _source_service_items(services: CoreServices) -> list[CoreService]:
     return [
         services.source_management,
+        services.source_connection_test,
+        services.source_lifecycle,
         services.source_cdc_object_index,
         services.source_scheduler,
         services.source_onboarding,

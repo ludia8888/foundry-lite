@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import sqlite3
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -114,6 +115,208 @@ def test_source_wizard_explores_customer_erp_and_runs_managed_append_sync(tmp_pa
     assert foundry.sources.get_managed_sync_run(cast(str, first_run["runId"]), ctx=ctx)["status"] == "succeeded"
 
 
+def test_managed_source_lifecycle_blocks_runs_without_erasing_sync_history(tmp_path: Path) -> None:
+    source_db = _sqlite_customer_erp(tmp_path)
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = demo_admin_context()
+    secret_ref = _create_source_database_secret(foundry, source_db, ctx)
+    foundry.sources.create_managed_sync(
+        sync_name="orders_source_lifecycle",
+        source_name="customer_erp_lifecycle",
+        display_name="Customer ERP lifecycle",
+        source_type="postgres_jdbc",
+        capability="batch",
+        mode="APPEND",
+        target_dataset_ref="raw.lifecycle_orders",
+        schedule={"mode": "interval", "everySeconds": 60, "startAt": "2020-01-01T00:00:00Z"},
+        config_summary={
+            "databaseUrlSecretRef": secret_ref["name"],
+            "tableName": "orders",
+            "checkpointColumn": "id",
+        },
+        idempotency_key="source-sync-lifecycle",
+        ctx=ctx,
+    )
+    first_run = foundry.sources.start_managed_sync_run(
+        "orders_source_lifecycle", idempotency_key="source-sync-lifecycle-run-1", ctx=ctx
+    )
+    active_source = foundry.sources.get_source("customer_erp_lifecycle", ctx=ctx)
+
+    disabled = foundry.sources.update_source_status(
+        "customer_erp_lifecycle",
+        status="disabled",
+        expected_config_fingerprint=cast(str, active_source["configFingerprint"]),
+        idempotency_key="source-lifecycle-disable",
+        ctx=ctx,
+    )
+    disable_replay = foundry.sources.update_source_status(
+        "customer_erp_lifecycle",
+        status="disabled",
+        expected_config_fingerprint=cast(str, active_source["configFingerprint"]),
+        idempotency_key="source-lifecycle-disable",
+        ctx=ctx,
+    )
+
+    assert active_source["kind"] == "postgres_jdbc"
+    assert "tableName" not in cast(dict[str, object], active_source["configSummary"])
+    assert active_source["lastRunId"] == first_run["runId"]
+    assert cast(dict[str, object], active_source["lastCommitRef"])["rowCount"] == 3
+    assert disabled["status"] == "disabled"
+    assert disable_replay == disabled
+    assert foundry.sources.get_managed_sync("orders_source_lifecycle", ctx=ctx)["status"] == "active"
+    assert (
+        _decision_for(foundry.sources.preview_due_managed_syncs(ctx=ctx), "orders_source_lifecycle")["reason"]
+        == "sync_inactive"
+    )
+    with pytest.raises(ValidationFailed, match="source is disabled"):
+        foundry.sources.start_managed_sync_run(
+            "orders_source_lifecycle", idempotency_key="source-sync-lifecycle-blocked", ctx=ctx
+        )
+
+    enabled = foundry.sources.update_source_status(
+        "customer_erp_lifecycle",
+        status="active",
+        expected_config_fingerprint=cast(str, disabled["configFingerprint"]),
+        idempotency_key="source-lifecycle-enable",
+        ctx=ctx,
+    )
+    second_run = foundry.sources.start_managed_sync_run(
+        "orders_source_lifecycle", idempotency_key="source-sync-lifecycle-run-2", ctx=ctx
+    )
+    assert enabled["status"] == "active"
+    assert second_run["status"] == "succeeded"
+
+    with dependencies.engine.begin() as conn:
+        sql_conn = cast(Any, conn)
+        audit_types = list(
+            sql_conn.execute(
+                select(db.audit_events.c.event_type)
+                .where(db.audit_events.c.resource_id == "customer_erp_lifecycle")
+                .order_by(db.audit_events.c.created_at, db.audit_events.c.id)
+            ).scalars()
+        )
+        outbox_types = list(
+            sql_conn.execute(
+                select(db.outbox_events.c.event_type)
+                .where(db.outbox_events.c.aggregate_id == "customer_erp_lifecycle")
+                .order_by(db.outbox_events.c.created_at, db.outbox_events.c.id)
+            ).scalars()
+        )
+    assert [event for event in audit_types if event in {"source.disabled", "source.enabled"}] == [
+        "source.disabled",
+        "source.enabled",
+    ]
+    assert [event for event in outbox_types if event in {"source.disabled", "source.enabled"}] == [
+        "source.disabled",
+        "source.enabled",
+    ]
+
+
+def test_source_connection_test_is_live_idempotent_and_durable_without_dataset_commit(tmp_path: Path) -> None:
+    source_db = _sqlite_customer_erp(tmp_path)
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = demo_admin_context()
+    secret_ref = _create_source_database_secret(foundry, source_db, ctx)
+    foundry.sources.create_managed_sync(
+        sync_name="orders_connection_test",
+        source_name="customer_erp_connection_test",
+        display_name="Customer ERP connection test",
+        source_type="postgres_jdbc",
+        capability="batch",
+        mode="APPEND",
+        target_dataset_ref="raw.connection_test_orders",
+        schedule={"mode": "manual"},
+        config_summary={"databaseUrlSecretRef": secret_ref["name"], "tableName": "orders"},
+        idempotency_key="source-sync-connection-test",
+        ctx=ctx,
+    )
+    source = foundry.sources.get_source("customer_erp_connection_test", ctx=ctx)
+
+    result = foundry.sources.test_connection(
+        "customer_erp_connection_test",
+        expected_config_fingerprint=cast(str, source["configFingerprint"]),
+        idempotency_key="source-connection-test-live",
+        ctx=ctx,
+    )
+    replay = foundry.sources.test_connection(
+        "customer_erp_connection_test",
+        expected_config_fingerprint=cast(str, source["configFingerprint"]),
+        idempotency_key="source-connection-test-live",
+        ctx=ctx,
+    )
+    restarted = FoundryLite(dependencies=dependencies)
+    history = restarted.sources.list_connection_tests("customer_erp_connection_test", ctx=ctx)
+
+    assert result["status"] == "succeeded"
+    assert cast(dict[str, object], result["checks"])["summary"] == {"passed": 5, "total": 5}
+    assert cast(dict[str, object], cast(dict[str, object], result["checks"])["probe"])["visibleResourceCount"] == 1
+    assert result["requestId"] == ctx.request_id
+    assert replay["connectionTestId"] == result["connectionTestId"]
+    assert replay["isIdempotentReplay"] is True
+    assert [row["connectionTestId"] for row in history] == [result["connectionTestId"]]
+    assert _dataset_version_count_or_zero(foundry, "raw.connection_test_orders", ctx.tenant_id) == 0
+    with dependencies.engine.begin() as conn:
+        event_types = conn.execute(
+            select(db.audit_events.c.event_type)
+            .where(db.audit_events.c.resource_id == "customer_erp_connection_test")
+            .order_by(db.audit_events.c.created_at, db.audit_events.c.id)
+        ).scalars()
+        assert [event for event in event_types if event.startswith("source.connection_test.")] == [
+            "source.connection_test.started",
+            "source.connection_test.succeeded",
+        ]
+
+
+def test_source_connection_test_persists_redacted_failure_and_rejects_stale_config(tmp_path: Path) -> None:
+    foundry = _foundry(tmp_path)
+    ctx = demo_admin_context()
+    credential = foundry.sources.create_credential(
+        credential_name="broken_erp_db",
+        display_name="Broken ERP DB",
+        kind="postgres_jdbc",
+        auth_scheme="database_url",
+        secret_value="not-a-database-url-with-super-secret-value",
+        idempotency_key="source-credential-broken-erp-db",
+        ctx=ctx,
+    )
+    secret_ref = cast(dict[str, object], credential["secretRef"])
+    foundry.sources.create_managed_sync(
+        sync_name="broken_orders_connection_test",
+        source_name="broken_customer_erp",
+        display_name="Broken customer ERP",
+        source_type="postgres_jdbc",
+        capability="batch",
+        mode="APPEND",
+        target_dataset_ref="raw.broken_connection_test_orders",
+        schedule={"mode": "manual"},
+        config_summary={"databaseUrlSecretRef": secret_ref["name"], "tableName": "orders"},
+        idempotency_key="source-sync-broken-connection-test",
+        ctx=ctx,
+    )
+    source = foundry.sources.get_source("broken_customer_erp", ctx=ctx)
+
+    failed = foundry.sources.test_connection(
+        "broken_customer_erp",
+        expected_config_fingerprint=cast(str, source["configFingerprint"]),
+        idempotency_key="source-connection-test-broken",
+        ctx=ctx,
+    )
+
+    assert failed["status"] == "failed"
+    assert failed["requestId"] == ctx.request_id
+    assert "super-secret-value" not in str(failed)
+    assert foundry.sources.list_connection_tests("broken_customer_erp", ctx=ctx)[0]["status"] == "failed"
+    with pytest.raises(ConflictDetected, match="source config changed"):
+        foundry.sources.test_connection(
+            "broken_customer_erp",
+            expected_config_fingerprint="sha256:stale",
+            idempotency_key="source-connection-test-stale",
+            ctx=ctx,
+        )
+
+
 def test_source_scheduler_interval_starts_due_managed_sync_once_per_slot(tmp_path: Path) -> None:
     source_db = _sqlite_customer_erp(tmp_path)
     foundry = _foundry(tmp_path)
@@ -147,6 +350,222 @@ def test_source_scheduler_interval_starts_due_managed_sync_once_per_slot(tmp_pat
     assert cast(dict[str, object], second_tick["skipped"][0])["reason"] == "slot_already_started"
     assert foundry.datasets.preview("raw.scheduled_orders", ctx=ctx)[0]["id"] == 1
     assert foundry.sources.list_managed_sync_runs("orders_hourly", ctx=ctx)[0]["triggerType"] == "scheduled"
+
+
+def test_source_schedule_update_is_validated_audited_and_stale_write_safe(tmp_path: Path) -> None:
+    source_db = _sqlite_customer_erp(tmp_path)
+    foundry = _foundry(tmp_path)
+    ctx = demo_admin_context()
+    secret_ref = _create_source_database_secret(foundry, source_db, ctx)
+    created = foundry.sources.create_managed_sync(
+        sync_name="orders_editable_schedule",
+        source_name="customer_erp",
+        display_name="Orders editable schedule",
+        source_type="postgres_jdbc",
+        capability="batch",
+        mode="APPEND",
+        target_dataset_ref="raw.editable_schedule_orders",
+        schedule={"mode": "manual"},
+        config_summary={"databaseUrlSecretRef": secret_ref["name"], "tableName": "orders"},
+        idempotency_key="source-sync-editable-schedule",
+        ctx=ctx,
+    )
+
+    updated = foundry.sources.update_managed_sync_schedule(
+        "orders_editable_schedule",
+        schedule={"mode": "interval", "intervalSeconds": "3600", "batchLimit": 2},
+        expected_config_fingerprint=cast(str, created["configFingerprint"]),
+        idempotency_key="source-sync-editable-schedule-update",
+        ctx=ctx,
+    )
+    replay = foundry.sources.update_managed_sync_schedule(
+        "orders_editable_schedule",
+        schedule={"mode": "interval", "everySeconds": 3600, "batchLimit": 2},
+        expected_config_fingerprint=cast(str, created["configFingerprint"]),
+        idempotency_key="source-sync-editable-schedule-update",
+        ctx=ctx,
+    )
+
+    assert updated["schedule"] == {"mode": "interval", "everySeconds": 3600, "batchLimit": 2}
+    assert replay == updated
+    decisions = cast(list[dict[str, object]], foundry.sources.preview_due_managed_syncs(ctx=ctx)["decisions"])
+    decision = next(item for item in decisions if item["syncName"] == "orders_editable_schedule")
+    assert decision["enabled"] is True
+    assert decision["nextDueAt"] is not None
+    with pytest.raises(ConflictDetected):
+        foundry.sources.update_managed_sync_schedule(
+            "orders_editable_schedule",
+            schedule={"mode": "disabled"},
+            expected_config_fingerprint=cast(str, created["configFingerprint"]),
+            idempotency_key="source-sync-editable-schedule-stale",
+            ctx=ctx,
+        )
+    with pytest.raises(ValidationFailed, match="five fields"):
+        foundry.sources.update_managed_sync_schedule(
+            "orders_editable_schedule",
+            schedule={"mode": "cron", "cron": "bad cron"},
+            expected_config_fingerprint=cast(str, updated["configFingerprint"]),
+            idempotency_key="source-sync-editable-schedule-invalid",
+            ctx=ctx,
+        )
+
+
+def test_source_schedule_pause_resume_preserves_config_resets_trigger_and_audits(tmp_path: Path) -> None:
+    source_db = _sqlite_customer_erp(tmp_path)
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = demo_admin_context()
+    secret_ref = _create_source_database_secret(foundry, source_db, ctx)
+    created = foundry.sources.create_managed_sync(
+        sync_name="orders_pause_resume",
+        source_name="customer_erp",
+        display_name="Orders pause resume",
+        source_type="postgres_jdbc",
+        capability="batch",
+        mode="APPEND",
+        target_dataset_ref="raw.pause_resume_orders",
+        schedule={"mode": "interval", "everySeconds": 3600, "startAt": "2020-01-01T00:00:00Z"},
+        config_summary={"databaseUrlSecretRef": secret_ref["name"], "tableName": "orders"},
+        idempotency_key="source-sync-pause-resume",
+        ctx=ctx,
+    )
+
+    paused = foundry.sources.pause_managed_sync_schedule(
+        "orders_pause_resume",
+        expected_config_fingerprint=cast(str, created["configFingerprint"]),
+        idempotency_key="source-sync-pause",
+        ctx=ctx,
+    )
+    pause_replay = foundry.sources.pause_managed_sync_schedule(
+        "orders_pause_resume",
+        expected_config_fingerprint=cast(str, created["configFingerprint"]),
+        idempotency_key="source-sync-pause",
+        ctx=ctx,
+    )
+    paused_tick = foundry.sources.run_due_managed_syncs(ctx=ctx)
+    paused_decision = _decision_for(paused_tick, "orders_pause_resume")
+    resumed = foundry.sources.resume_managed_sync_schedule(
+        "orders_pause_resume",
+        expected_config_fingerprint=cast(str, paused["configFingerprint"]),
+        idempotency_key="source-sync-resume",
+        ctx=ctx,
+    )
+    resumed_decision = _decision_for(foundry.sources.preview_due_managed_syncs(ctx=ctx), "orders_pause_resume")
+
+    assert paused["status"] == "paused"
+    assert pause_replay == paused
+    assert paused["schedule"] == created["schedule"]
+    assert paused_tick["started"] == []
+    assert paused_decision["reason"] == "schedule_paused"
+    assert resumed["status"] == "active"
+    assert cast(dict[str, object], resumed["schedule"])["everySeconds"] == 3600
+    assert resumed_decision["due"] is False
+    assert resumed_decision["reason"] == "not_due"
+    assert resumed_decision["nextDueAt"] == cast(dict[str, object], resumed["schedule"])["startAt"]
+    with pytest.raises(ConflictDetected):
+        foundry.sources.pause_managed_sync_schedule(
+            "orders_pause_resume",
+            expected_config_fingerprint=cast(str, created["configFingerprint"]),
+            idempotency_key="source-sync-stale-pause",
+            ctx=ctx,
+        )
+    with dependencies.engine.begin() as conn:
+        audit_types = conn.execute(
+            select(db.audit_events.c.event_type)
+            .where(db.audit_events.c.resource_id == "orders_pause_resume")
+            .order_by(db.audit_events.c.created_at, db.audit_events.c.id)
+        ).scalars()
+        assert [event for event in audit_types if ".schedule." in event] == [
+            "source.sync.schedule.paused",
+            "source.sync.schedule.resumed",
+        ]
+
+
+def test_source_schedule_auto_pauses_after_failures_and_recovery_run_resumes(tmp_path: Path) -> None:
+    source_db = _sqlite_customer_erp(tmp_path)
+    dependencies = create_local_core_dependencies(storage_root=tmp_path / "flite")
+    foundry = FoundryLite(dependencies=dependencies)
+    ctx = demo_admin_context()
+    secret_ref = _create_source_database_secret(foundry, source_db, ctx)
+    foundry.sources.create_managed_sync(
+        sync_name="orders_auto_pause",
+        source_name="customer_erp",
+        display_name="Orders automatic failure protection",
+        source_type="postgres_jdbc",
+        capability="batch",
+        mode="APPEND",
+        target_dataset_ref="raw.auto_pause_orders",
+        schedule={
+            "mode": "interval",
+            "everySeconds": 60,
+            "startAt": "2026-01-01T00:00:00Z",
+            "autoPauseAfterFailures": 3,
+        },
+        config_summary={"databaseUrlSecretRef": secret_ref["name"], "tableName": "recovery_orders"},
+        idempotency_key="source-sync-auto-pause",
+        ctx=ctx,
+    )
+
+    scheduler = foundry._services.source_scheduler  # noqa: SLF001 - deterministic scheduler clock boundary.
+    ticks = [
+        scheduler.run_due_managed_syncs(ctx=ctx, now=datetime(2026, 1, 1, 0, minute, tzinfo=UTC)) for minute in range(3)
+    ]
+    paused = foundry.sources.get_managed_sync("orders_auto_pause", ctx=ctx)
+    decision = _decision_for(foundry.sources.preview_due_managed_syncs(ctx=ctx), "orders_auto_pause")
+
+    assert [cast(dict[str, object], tick["started"][0])["run"]["status"] for tick in ticks] == [
+        "failed",
+        "failed",
+        "failed",
+    ]
+    assert paused["status"] == "paused"
+    assert decision["autoPaused"] is True
+    assert decision["consecutiveFailureCount"] == 3
+    assert cast(dict[str, object], decision["lastFailureError"])["requestId"]
+    with pytest.raises(ValidationFailed, match="recovery run is required"):
+        foundry.sources.resume_managed_sync_schedule(
+            "orders_auto_pause",
+            expected_config_fingerprint=cast(str, paused["configFingerprint"]),
+            idempotency_key="unsafe-auto-pause-resume",
+            ctx=ctx,
+        )
+
+    with sqlite3.connect(source_db) as conn:
+        conn.execute("create table recovery_orders (id integer primary key, order_id text)")
+        conn.execute("insert into recovery_orders (id, order_id) values (1, 'RECOVERED-1')")
+    recovery = foundry.sources.start_managed_sync_run(
+        "orders_auto_pause",
+        trigger_type="recovery",
+        idempotency_key="source-sync-auto-pause-recovery",
+        ctx=ctx,
+    )
+    replay = foundry.sources.start_managed_sync_run(
+        "orders_auto_pause",
+        trigger_type="recovery",
+        idempotency_key="source-sync-auto-pause-recovery",
+        ctx=ctx,
+    )
+    resumed = foundry.sources.get_managed_sync("orders_auto_pause", ctx=ctx)
+    resumed_decision = _decision_for(foundry.sources.preview_due_managed_syncs(ctx=ctx), "orders_auto_pause")
+
+    assert recovery["status"] == "succeeded"
+    assert recovery["triggerType"] == "recovery"
+    assert replay["runId"] == recovery["runId"]
+    assert resumed["status"] == "active"
+    assert resumed_decision["autoPaused"] is False
+    assert resumed_decision["consecutiveFailureCount"] == 0
+    assert resumed_decision["reason"] == "not_due"
+    assert foundry.datasets.preview("raw.auto_pause_orders", ctx=ctx)[0]["order_id"] == "RECOVERED-1"
+    with dependencies.engine.begin() as conn:
+        audit_types = conn.execute(
+            select(db.audit_events.c.event_type)
+            .where(db.audit_events.c.resource_id == "orders_auto_pause")
+            .order_by(db.audit_events.c.created_at, db.audit_events.c.id)
+        ).scalars()
+        assert [event for event in audit_types if ".schedule.auto_" in event] == [
+            "source.sync.schedule.auto_paused",
+            "source.sync.schedule.auto_resumed",
+        ]
 
 
 def test_source_scheduler_cron_schedule_decision_uses_minute_slot(tmp_path: Path) -> None:
@@ -261,6 +680,7 @@ def test_source_debezium_object_index_tick_tracks_cdc_cursor(tmp_path: Path) -> 
     _commit_cdc_version(foundry, tmp_path, "topic:0:2", 2, "SHIPPED")
 
     initial_plan = foundry.sources.debezium_operation_plan("orders_cdc", object_type_api_name="Order", ctx=ctx)
+    capture_semantics = cast(dict[str, object], initial_plan["captureSemantics"])
     initial_status = cast(dict[str, object], initial_plan["objectIndexingStatus"])
     initial_backlog = cast(dict[str, object], initial_status["backlog"])
 
@@ -297,6 +717,15 @@ def test_source_debezium_object_index_tick_tracks_cdc_cursor(tmp_path: Path) -> 
     caught_up_backlog = cast(dict[str, object], caught_up_status["backlog"])
 
     assert initial_status["workflowRunId"] is None
+    assert capture_semantics == {
+        "snapshotMode": "initial_then_logical_changes",
+        "snapshotResponsibility": "external_debezium_connector",
+        "operationCodes": ["r", "c", "u", "d"],
+        "primaryKey": ["order_id"],
+        "ordering": "topic_partition_offset",
+        "deletePolicy": "tombstone",
+        "archiveShape": "append_only_cdc_envelope",
+    }
     assert initial_status["lastIndexedVersionNumber"] is None
     assert initial_backlog["remainingVersionCount"] == 2
     assert initial_backlog["nextSourceDatasetVersionNumber"] == 1
@@ -474,6 +903,11 @@ def _create_source_database_secret(foundry: FoundryLite, source_db: Path, ctx) -
 
 def _minute_slot() -> str:
     return datetime.now(UTC).replace(second=0, microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _decision_for(result: Mapping[str, object], sync_name: str) -> dict[str, object]:
+    decisions = cast(list[dict[str, object]], result["decisions"])
+    return next(item for item in decisions if item["syncName"] == sync_name)
 
 
 def _sqlite_customer_erp(tmp_path: Path) -> Path:

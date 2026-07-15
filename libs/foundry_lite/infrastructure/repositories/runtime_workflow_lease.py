@@ -17,6 +17,8 @@ def _workflow_lease_claimable(row: WorkflowRunRow, lease_owner_id: str, now: str
     if row["status"] in {"succeeded", "failed", "cancelled", "start_unknown"}:
         return True
     lease = _workflow_lease(row)
+    if row["status"] in {"requested", "starting"} and lease is None:
+        return True
     if lease is None:
         return False
     if lease.get("ownerId") == lease_owner_id:

@@ -10,6 +10,7 @@ from foundry_lite.application.ports import (
     ConnectorConnectionRecord,
     ConnectorConnectionRow,
     ConnectorConnectionUpdate,
+    ConnectorNetworkRoute,
     ConnectorResourceRecord,
     ConnectorResourceRow,
     ConnectorSnapshotRequest,
@@ -17,6 +18,7 @@ from foundry_lite.application.ports import (
     RestPaginationConfig,
     RestSourceConfig,
 )
+from foundry_lite.application.ports.connector_adapter import RestPaginationStrategy
 from foundry_lite.application.ports.connector_registry_repository import ConnectorConnectionStatus
 from foundry_lite.application.primitives import (
     SQL_IDENTIFIER_PATTERN,
@@ -198,6 +200,11 @@ def _auth_payload(auth: Mapping[str, object]) -> dict[str, object]:
         return {"mode": "none"}
     if mode == "bearer":
         return {"mode": "bearer", "tokenSecretRef": _required_auth_text(auth, "tokenSecretRef")}
+    if mode == "basic":
+        return {
+            "mode": "basic",
+            "basicCredentialsSecretRef": _required_auth_text(auth, "basicCredentialsSecretRef"),
+        }
     return {
         "mode": "header",
         "headerName": _required_auth_text(auth, "headerName"),
@@ -207,14 +214,18 @@ def _auth_payload(auth: Mapping[str, object]) -> dict[str, object]:
 
 def _pagination_payload(pagination: Mapping[str, object]) -> dict[str, object]:
     strategy = str(pagination.get("strategy", "cursor"))
-    if strategy != "cursor":
-        raise ValidationFailed("connector pagination strategy must be cursor", details={"strategy": strategy})
+    if strategy not in {"cursor", "next_link"}:
+        raise ValidationFailed(
+            "connector pagination strategy must be cursor or next_link",
+            details={"strategy": strategy},
+        )
     return {
         "itemsPath": str(pagination.get("itemsPath", "items")),
         "nextCursorPath": str(pagination.get("nextCursorPath", "nextCursor")),
         "cursorQueryParam": str(pagination.get("cursorQueryParam", "cursor")),
         "cursorKey": str(pagination.get("cursorKey", "cursor")),
-        "strategy": "cursor",
+        "strategy": strategy,
+        "maxPagesPerSnapshot": _max_pages_per_snapshot(pagination.get("maxPagesPerSnapshot", 1)),
     }
 
 
@@ -229,7 +240,8 @@ def _rest_source(connection: ConnectorConnectionRow, resource: ConnectorResource
             next_cursor_path=str(pagination.get("nextCursorPath", "nextCursor")),
             cursor_query_param=str(pagination.get("cursorQueryParam", "cursor")),
             cursor_key=str(pagination.get("cursorKey", "cursor")),
-            strategy="cursor",
+            strategy=cast(RestPaginationStrategy, pagination.get("strategy", "cursor")),
+            max_pages_per_snapshot=_max_pages_per_snapshot(pagination.get("maxPagesPerSnapshot", 1)),
         ),
         rate_limit_per_minute=connection["rate_limit_per_minute"],
         schema_columns=tuple(str(item) for item in resource["schema_columns"]),
@@ -241,6 +253,11 @@ def _rest_auth_config(auth: Mapping[str, object]) -> RestAuthConfig:
     mode = _auth_mode(auth.get("mode", "none"))
     if mode == "bearer":
         return RestAuthConfig(mode="bearer", token_secret_ref=str(auth["tokenSecretRef"]))
+    if mode == "basic":
+        return RestAuthConfig(
+            mode="basic",
+            basic_credentials_secret_ref=str(auth["basicCredentialsSecretRef"]),
+        )
     if mode == "header":
         return RestAuthConfig(
             mode="header",
@@ -283,7 +300,11 @@ def _resource_row_config(resource: ConnectorResourceRow) -> dict[str, object]:
     }
 
 
-def _snapshot_request(ctx: RequestContext, bundle: ConnectorBundle) -> ConnectorSnapshotRequest:
+def _snapshot_request(
+    ctx: RequestContext,
+    bundle: ConnectorBundle,
+    network_route: ConnectorNetworkRoute | None = None,
+) -> ConnectorSnapshotRequest:
     return ConnectorSnapshotRequest(
         bundle.connection["connector_name"],
         bundle.resource["resource_name"],
@@ -291,6 +312,7 @@ def _snapshot_request(ctx: RequestContext, bundle: ConnectorBundle) -> Connector
         ctx.request_id,
         None,
         bundle.rest,
+        network_route,
     )
 
 
@@ -342,7 +364,7 @@ def _required_payload_text(payload: Mapping[str, object], field: str) -> str:
 
 
 def _auth_mode(value: object) -> str:
-    if value in {"none", "bearer", "header"}:
+    if value in {"none", "bearer", "basic", "header"}:
         return str(value)
     raise ValidationFailed("unsupported connector auth mode", details={"mode": str(value)})
 
@@ -362,6 +384,15 @@ def _require_positive_rate_limit(value: int | None) -> None:
     if value is None or value > 0:
         return
     raise ValidationFailed("rateLimitPerMinute must be positive", details={"rateLimitPerMinute": value})
+
+
+def _max_pages_per_snapshot(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
+        raise ValidationFailed(
+            "maxPagesPerSnapshot must be between 1 and 100",
+            details={"maxPagesPerSnapshot": value},
+        )
+    return value
 
 
 def _string_list(values: Sequence[str], field: str) -> list[str]:

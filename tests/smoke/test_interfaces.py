@@ -451,6 +451,14 @@ def test_api_source_wizard_explore_and_managed_sync_run(monkeypatch, tmp_path) -
             },
         },
     )
+    source = client.get("/api/sources/api_customer_erp", headers=base_headers)
+    connection_test = client.post(
+        "/api/sources/api_customer_erp/connection-tests",
+        headers={**base_headers, "Idempotency-Key": "api-source-connection-test"},
+        json={"expectedConfigFingerprint": source.json()["configFingerprint"]},
+    )
+    connection_test_history = client.get("/api/sources/api_customer_erp/connection-tests?limit=5", headers=base_headers)
+    egress_history = client.get("/api/sources/api_customer_erp/egress-attempts?limit=5", headers=base_headers)
     started = client.post(
         "/api/sources/managed-syncs/api_orders_incremental/runs/start",
         headers={**base_headers, "Idempotency-Key": "api-source-managed-run-1"},
@@ -489,10 +497,34 @@ def test_api_source_wizard_explore_and_managed_sync_run(monkeypatch, tmp_path) -
     due = client.get("/api/sources/scheduler/due?maxRuns=5", headers=base_headers)
     scheduled_tick = client.post("/api/sources/scheduler/tick", headers=base_headers, json={"maxRuns": 5})
     repeated_tick = client.post("/api/sources/scheduler/tick", headers=base_headers, json={"maxRuns": 5})
+    schedule_update = client.patch(
+        "/api/sources/managed-syncs/api_orders_incremental/schedule",
+        headers={**base_headers, "Idempotency-Key": "api-source-managed-schedule-update"},
+        json={
+            "schedule": {"mode": "disabled"},
+            "expectedConfigFingerprint": managed_sync.json()["configFingerprint"],
+        },
+    )
+    schedule_pause = client.post(
+        "/api/sources/managed-syncs/api_orders_scheduler/schedule/pause",
+        headers={**base_headers, "Idempotency-Key": "api-source-schedule-pause"},
+        json={"expectedConfigFingerprint": scheduled_sync.json()["configFingerprint"]},
+    )
+    paused_schedule_status = client.get("/api/sources/scheduler/due?maxRuns=5", headers=base_headers)
+    schedule_resume = client.post(
+        "/api/sources/managed-syncs/api_orders_scheduler/schedule/resume",
+        headers={**base_headers, "Idempotency-Key": "api-source-schedule-resume"},
+        json={"expectedConfigFingerprint": schedule_pause.json()["configFingerprint"]},
+    )
+    schedule_status = client.get("/api/sources/scheduler/due?maxRuns=5", headers=base_headers)
     preview = client.get("/api/datasets/raw/api_managed_orders/preview", headers=base_headers)
     scheduled_preview = client.get("/api/datasets/raw/api_scheduled_orders/preview", headers=base_headers)
 
     assert templates.status_code == 200
+    rest_template = next(item for item in templates.json() if item["sourceType"] == "rest_api")
+    assert rest_template["category"] == "protocol"
+    assert rest_template["description"]
+    assert rest_template["isRecommended"] is False
     assert credential.status_code == 200
     assert credential.json()["secretRef"]["value"] == "***REDACTED***"
     assert "sqlite:///" not in credential.text
@@ -503,6 +535,14 @@ def test_api_source_wizard_explore_and_managed_sync_run(monkeypatch, tmp_path) -
     assert len(exploration.json()["resultSummary"]["sample"]) == 2
     assert managed_sync.status_code == 200
     assert managed_sync.json()["mode"] == "APPEND"
+    assert connection_test.status_code == 200
+    assert connection_test.json()["status"] == "succeeded"
+    assert connection_test.json()["checks"]["summary"] == {"passed": 5, "total": 5}
+    assert connection_test.json()["requestId"]
+    assert connection_test_history.json()[0]["connectionTestId"] == connection_test.json()["connectionTestId"]
+    assert egress_history.status_code == 200
+    assert egress_history.json()[0]["connectionTestId"] == connection_test.json()["connectionTestId"]
+    assert egress_history.json()[0]["origin"] == "connectivity-sidecar"
     assert started.status_code == 200
     assert started.json()["checkpointEnd"] == {"checkpointColumn": "id", "lastValue": 2}
     assert replay.json()["runId"] == started.json()["runId"]
@@ -512,6 +552,22 @@ def test_api_source_wizard_explore_and_managed_sync_run(monkeypatch, tmp_path) -
     assert scheduled_tick.json()["started"][0]["run"]["triggerType"] == "scheduled"
     assert repeated_tick.json()["started"] == []
     assert any(row["reason"] == "slot_already_started" for row in repeated_tick.json()["skipped"])
+    assert schedule_update.status_code == 200
+    assert schedule_update.json()["schedule"] == {"mode": "disabled"}
+    assert schedule_pause.status_code == 200
+    assert schedule_pause.json()["status"] == "paused"
+    paused_decision = next(
+        row for row in paused_schedule_status.json()["decisions"] if row["syncName"] == "api_orders_scheduler"
+    )
+    assert paused_decision["reason"] == "schedule_paused"
+    assert schedule_resume.status_code == 200
+    assert schedule_resume.json()["status"] == "active"
+    assert schedule_resume.json()["schedule"]["everySeconds"] == 60
+    assert schedule_resume.json()["schedule"]["startAt"] != "2026-01-01T00:00:00Z"
+    disabled_decision = next(
+        row for row in schedule_status.json()["decisions"] if row["syncName"] == "api_orders_incremental"
+    )
+    assert disabled_decision["enabled"] is False
     assert len(preview.json()) == 2
     assert len(scheduled_preview.json()) == 1
 
@@ -2539,7 +2595,10 @@ def test_api_operations_record_dead_letter_records_retry_bulk_and_discard(foundr
     }
     assert discard.json()["status"] == "DISCARDED"
     assert first_preview[0]["event_id"] == "shipment_cdc_events:0:1"
-    assert preview[0]["event_id"] == "shipment_cdc_events:0:2"
+    assert [row["event_id"] for row in preview] == [
+        "shipment_cdc_events:0:1",
+        "shipment_cdc_events:0:2",
+    ]
     assert any(row["event_type"] == "dead_letter_record.replay_requested" for row in audits)
     assert any(row["event_type"] == "dead_letter_record.replayed" for row in audits)
     assert any(row["event_type"] == "dead_letter_record.bulk_replay_item_failed" for row in audits)

@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 
 from foundry_lite.application.ports import (
     ConnectorAdapter,
-    ConnectorSnapshotRequest,
+    ResourceCatalogRepository,
     RuntimeRepository,
     SourceDatabaseAdapter,
     SourceManagementRepository,
@@ -18,6 +18,10 @@ from foundry_lite.application.services.connector_onboarding_service import Conne
 from foundry_lite.application.services.dataset.ingest import DatasetIngestService
 from foundry_lite.application.services.dataset.registry import DatasetRegistryService
 from foundry_lite.application.services.object_store.indexing_cdc_service import ObjectCdcIndexingService
+from foundry_lite.application.services.source_managed_registry import (
+    ManagedSyncPreparationDependencies,
+    prepare_managed_sync_record,
+)
 from foundry_lite.application.services.source_management_config import (
     SOURCE_TEMPLATES,
     agent_record,
@@ -25,7 +29,6 @@ from foundry_lite.application.services.source_management_config import (
     exploration_run_record,
     network_policy_record,
     require_idempotency_key,
-    source_sync_record,
     source_sync_run_record,
 )
 from foundry_lite.application.services.source_management_helpers import (
@@ -36,23 +39,22 @@ from foundry_lite.application.services.source_management_helpers import (
     create_network_policy_row,
     create_sync_row,
     credential_row,
-    int_value,
     mapping,
     now,
-    optional_text,
     require_same_fingerprint,
     require_write,
-    required_text,
-    rest_source_config,
     run_row,
     secret_version,
     sync_row,
-    text,
 )
 from foundry_lite.application.services.source_management_run_helpers import (
+    SourceExplorationDependencies,
     complete_database_run,
     complete_rest_run,
+    complete_stream_run,
+    explore_source_payload,
     fail_run,
+    finish_run,
 )
 from foundry_lite.application.services.source_management_views import (
     agent_view,
@@ -65,7 +67,6 @@ from foundry_lite.application.services.source_management_views import (
 )
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import FoundryLiteError, NotFound, ValidationFailed
-from foundry_lite.security.policy import PolicyService
 
 
 class SourceManagementService(CoreService):
@@ -77,6 +78,9 @@ class SourceManagementService(CoreService):
         "connector_adapter",
         "source_database_adapter",
         "source_management_repository",
+        "source_stream_adapter",
+        "source_registry_repository",
+        "resource_catalog_repository",
         "secret_vault",
     )
     required_collaborators = (
@@ -88,6 +92,8 @@ class SourceManagementService(CoreService):
     connector_adapter: ConnectorAdapter
     source_database_adapter: SourceDatabaseAdapter
     source_management_repository: SourceManagementRepository
+    source_registry_repository: SourceRegistryRepository
+    resource_catalog_repository: ResourceCatalogRepository
     connector_onboarding_service: ConnectorOnboardingService
     dataset_ingest_service: DatasetIngestService
     dataset_registry_service: DatasetRegistryService
@@ -244,7 +250,13 @@ class SourceManagementService(CoreService):
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         require_write(self.policy, self.runtime_service, ctx, "explore_source", source_name)
-        result = self._explore_source_payload(ctx, source_name, source_type, request)
+        result = explore_source_payload(
+            self._exploration_dependencies(),
+            ctx,
+            source_name,
+            source_type,
+            request,
+        )
         with self.engine.begin() as conn:
             record = exploration_run_record(
                 ctx,
@@ -266,6 +278,18 @@ class SourceManagementService(CoreService):
             )
         return exploration_view(record.__dict__)
 
+    def _exploration_dependencies(self) -> SourceExplorationDependencies:
+        return SourceExplorationDependencies(
+            engine=self.engine,
+            connector_adapter=self.connector_adapter,
+            connector_onboarding_service=self.connector_onboarding_service,
+            source_database_adapter=self.source_database_adapter,
+            source_management_repository=self.source_management_repository,
+            source_registry_repository=self.source_registry_repository,
+            source_stream_adapter=self.source_stream_adapter,
+            secret_vault=self.secret_vault,
+        )
+
     def create_managed_sync(
         self,
         *,
@@ -285,9 +309,9 @@ class SourceManagementService(CoreService):
         ctx = ctx or RequestContext()
         require_write(self.policy, self.runtime_service, ctx, "create_managed_sync", sync_name)
         require_idempotency_key(idempotency_key)
-        if target_dataset_ref is not None:
-            self.dataset_registry_service.ensure_dataset(target_dataset_ref, ctx=ctx)
-        record = source_sync_record(
+        record = prepare_managed_sync_record(
+            self._managed_sync_dependencies(),
+            self.runtime_service,
             ctx,
             sync_name=sync_name,
             source_name=source_name,
@@ -297,11 +321,19 @@ class SourceManagementService(CoreService):
             target_dataset_ref=target_dataset_ref,
             target_media_set_id=target_media_set_id,
             mode=mode,
-            schedule=schedule or {},
+            schedule=schedule,
             config_summary=config_summary,
         )
         row = create_sync_row(self, self.runtime_service, ctx, sync_name, record)
         return sync_view(row)
+
+    def _managed_sync_dependencies(self) -> ManagedSyncPreparationDependencies:
+        return ManagedSyncPreparationDependencies(
+            engine=self.engine,
+            source_registry_repository=self.source_registry_repository,
+            resource_catalog_repository=self.resource_catalog_repository,
+            dataset_registry_service=self.dataset_registry_service,
+        )
 
     def list_managed_syncs(self, *, ctx: RequestContext | None = None) -> list[dict[str, object]]:
         ctx = ctx or RequestContext()
@@ -333,8 +365,21 @@ class SourceManagementService(CoreService):
             )
             if replay is not None:
                 return sync_run_view(replay)
+            self._require_source_active(conn, ctx, sync)
             run = self._create_run_row(conn, ctx, sync, trigger_type, idempotency_key, batch_limit)
         return self._execute_run(ctx, sync, run)
+
+    def _require_source_active(self, conn: TransactionContext, ctx: RequestContext, sync: Mapping[str, object]) -> None:
+        source = self.source_registry_repository.source_by_name(
+            transaction=conn,
+            tenant_id=ctx.tenant_id,
+            source_name=str(sync["source_name"]),
+        )
+        if source is not None and source["status"] == "disabled":
+            raise ValidationFailed(
+                "source is disabled",
+                details={"sourceName": source["source_name"], "syncName": sync["sync_name"]},
+            )
 
     def list_managed_sync_runs(self, sync_name: str, *, ctx: RequestContext | None = None) -> list[dict[str, object]]:
         ctx = ctx or RequestContext()
@@ -352,42 +397,6 @@ class SourceManagementService(CoreService):
         if row is None:
             raise NotFound("source sync run not found", details={"run_id": run_id})
         return sync_run_view(row)
-
-    def _explore_source_payload(
-        self, ctx: RequestContext, source_name: str, source_type: str, request: Mapping[str, object]
-    ) -> dict[str, object]:
-        if source_type == "rest_api":
-            return self._explore_rest(ctx, source_name, request)
-        if source_type == "postgres_jdbc":
-            return self._explore_database(request)
-        raise ValidationFailed("source type does not support exploration", details={"sourceType": source_type})
-
-    def _explore_rest(self, ctx: RequestContext, source_name: str, request: Mapping[str, object]) -> dict[str, object]:
-        snapshot = self.connector_adapter.snapshot(
-            ConnectorSnapshotRequest(
-                connector_name=source_name,
-                resource_name=text(request, "resourceName", "preview"),
-                tenant_id=ctx.tenant_id,
-                request_id=ctx.request_id,
-                rest=rest_source_config(request),
-            )
-        )
-        return {"sample": list(snapshot.rows), "schema": dict(snapshot.schema), "cursor": dict(snapshot.cursor or {})}
-
-    def _explore_database(self, request: Mapping[str, object]) -> dict[str, object]:
-        database_url = self.secret_vault.get_secret(required_text(request, "databaseUrlSecretRef")).value
-        table_name = optional_text(request.get("tableName"))
-        sample_limit = int_value(request.get("sampleLimit"), 20)
-        if table_name is None:
-            tables = self.source_database_adapter.list_tables(database_url, sample_limit=sample_limit)
-            return {"tables": [dict(table) for table in tables]}
-        batch = self.source_database_adapter.read_table_batch(
-            database_url,
-            table_name=table_name,
-            batch_limit=sample_limit,
-            checkpoint_column=optional_text(request.get("checkpointColumn")),
-        )
-        return {"sample": list(batch.rows), "schema": dict(batch.schema), "checkpoint": dict(batch.checkpoint)}
 
     def _create_run_row(
         self,
@@ -413,10 +422,24 @@ class SourceManagementService(CoreService):
         self, ctx: RequestContext, sync: Mapping[str, object], run: Mapping[str, object]
     ) -> dict[str, object]:
         try:
-            if sync["source_type"] == "rest_api":
+            if sync["source_type"] in {"rest_api", "sap_odata"}:
                 return complete_rest_run(self, self.connector_onboarding_service, ctx, sync, run)
             if sync["source_type"] == "postgres_jdbc":
                 return complete_database_run(self, self.dataset_ingest_service, ctx, sync, run)
+            if sync["source_type"] == "kafka":
+                completion = complete_stream_run(self, self.dataset_ingest_service, ctx, sync, run)
+                return finish_run(
+                    self,
+                    ctx,
+                    sync,
+                    run,
+                    "succeeded",
+                    None,
+                    completion.dataset_version_id,
+                    completion.checkpoint,
+                    completion.result,
+                    None,
+                )
             raise ValidationFailed(
                 "managed sync data-plane is not available", details={"sourceType": sync["source_type"]}
             )
@@ -430,7 +453,6 @@ class SourceCdcObjectIndexService(CoreService):
     required_dependencies = ("engine", "policy", "runtime_repository", "source_registry_repository")
     required_collaborators = ("dataset_registry_service", "object_cdc_indexing_service", "runtime_service")
     engine: TransactionManager
-    policy: PolicyService
     runtime_repository: RuntimeRepository
     source_registry_repository: SourceRegistryRepository
     dataset_registry_service: cdc_index.CdcObjectIndexDatasetBoundary

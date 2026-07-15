@@ -1651,6 +1651,8 @@ def test_worker_composition_root_is_import_linter_allowlisted() -> None:
     import_linter_config = (ROOT / ".importlinter").read_text(encoding="utf-8")
 
     assert "foundry_lite_worker.stream_archive -> foundry_lite.infrastructure.local_runtime" in import_linter_config
+    assert "foundry_lite_worker.source_streaming -> foundry_lite.infrastructure.local_runtime" in import_linter_config
+    assert "foundry_lite_worker -> foundry_lite.infrastructure" not in import_linter_config
 
 
 def test_ast_grep_facade_magic_rule_has_a_failing_fixture(tmp_path: Path) -> None:

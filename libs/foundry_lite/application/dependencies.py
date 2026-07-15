@@ -63,6 +63,7 @@ from foundry_lite.application.ports.secret_provider import SecretProvider, Secre
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
 from foundry_lite.application.ports.source_management_repository import SourceManagementRepository
 from foundry_lite.application.ports.source_registry_repository import SourceRegistryRepository
+from foundry_lite.application.ports.source_stream_adapter import SourceStreamAdapter
 from foundry_lite.application.ports.stream_adapter import StreamAdapter
 from foundry_lite.application.ports.tool_executor import ToolExecutor
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
@@ -165,6 +166,7 @@ class SourceDependencies:
     source_registry_repository: SourceRegistryRepository
     source_management_repository: SourceManagementRepository
     source_database_adapter: SourceDatabaseAdapter
+    source_stream_adapter: SourceStreamAdapter
 
 
 @dataclass(frozen=True, init=False)
@@ -353,6 +355,10 @@ class CoreDependencies:
     @property
     def stream_adapter(self) -> StreamAdapter:
         return self.runtime.stream_adapter
+
+    @property
+    def source_stream_adapter(self) -> SourceStreamAdapter:
+        return self.source.source_stream_adapter
 
     @property
     def workflow_adapter(self) -> WorkflowAdapter:

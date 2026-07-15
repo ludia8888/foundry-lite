@@ -8,8 +8,8 @@ from typing import NoReturn
 
 from foundry_lite.application.ports import (
     ConnectorAdapter,
+    ConnectorNetworkRoute,
     DatasetRow,
-    DatasetTransactionRow,
     DeadLetterRecordRow,
     RestSourceConfig,
     StreamAdapter,
@@ -32,6 +32,7 @@ from foundry_lite.application.services.dataset.protocols import (
 )
 from foundry_lite.application.services.dataset.stream_archive_commit import (
     commit_stream_archive,
+    latest_committed_stream_transaction,
     read_stream_archive_events,
     record_stream_pre_commit_failure,
     record_stream_read_failure,
@@ -170,6 +171,7 @@ class DatasetIngestService(CoreService):
         sync_name: str | None = None,
         cursor: Mapping[str, object] | None = None,
         rest: RestSourceConfig | None = None,
+        network_route: ConnectorNetworkRoute | None = None,
         tx_type: str = "SNAPSHOT",
         run_id: str | None = None,
     ) -> CommitResult:
@@ -183,6 +185,7 @@ class DatasetIngestService(CoreService):
             sync_name=sync_name,
             cursor=cursor,
             rest=rest,
+            network_route=network_route,
             tx_type=tx_type,
             run_id=run_id,
         )
@@ -270,15 +273,20 @@ class DatasetIngestService(CoreService):
         after_offset: int | None = None,
         sync_name: str | None = None,
         pre_commit_check: Callable[[Sequence[StreamEvent]], None] | None = None,
+        stream_adapter: StreamAdapter | None = None,
     ) -> CommitResult | None:
         ctx = ctx or RequestContext()
         self.runtime_service._require_or_audit(ctx, "dataset:write", "dataset", dataset_ref)
         require_dataset_write_open(self.runtime_service, ctx, "archive_stream_events", "dataset", dataset_ref)
         dataset = self.dataset_registry_service.get_dataset(dataset_ref, ctx=ctx)
-        committed_transaction = self._committed_stream_transaction(ctx, dataset)
+        committed_transaction = latest_committed_stream_transaction(
+            self.engine, self.dataset_transaction_repository, ctx, dataset
+        )
         committed_metadata = committed_transaction["metadata"] if committed_transaction is not None else {}
         resume_offset = after_offset if after_offset is not None else stream_cursor_offset(committed_metadata, stream)
-        events = self._read_stream_archive_events(ctx, dataset, stream, sync_name, resume_offset)
+        events = self._read_stream_archive_events(
+            ctx, dataset, stream, sync_name, resume_offset, stream_adapter or self.stream_adapter
+        )
         if not events:
             return None
         self._run_stream_pre_commit_check(ctx, dataset, stream, sync_name, events, pre_commit_check)
@@ -291,9 +299,10 @@ class DatasetIngestService(CoreService):
         stream: StreamArchiveConfig,
         sync_name: str | None,
         resume_offset: int | None,
+        stream_adapter: StreamAdapter,
     ) -> Sequence[StreamEvent]:
         try:
-            return read_stream_archive_events(self.stream_adapter, stream, resume_offset)
+            return read_stream_archive_events(stream_adapter, stream, resume_offset)
         except Exception as exc:
             repository = self.dataset_transaction_repository
             record_stream_read_failure(
@@ -390,18 +399,6 @@ class DatasetIngestService(CoreService):
             source_type=source_type,
             run_id=run_id,
         )
-
-    def _committed_stream_transaction(
-        self,
-        ctx: RequestContext,
-        dataset: DatasetRow,
-    ) -> DatasetTransactionRow | None:
-        with self.engine.begin() as conn:
-            return self.dataset_transaction_repository.latest_committed_transaction(
-                transaction=conn,
-                tenant_id=ctx.tenant_id,
-                dataset_id=dataset["id"],
-            )
 
     def _csv_to_parquet(self, source_path: Path, target_path: Path) -> None:
         self.compute_adapter.csv_to_parquet(source_path, target_path)

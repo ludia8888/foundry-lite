@@ -38,9 +38,15 @@ class _SourceRepo:
 
     def list_syncs(self, **_kwargs: object) -> list[dict[str, object]]:
         return [
-            {"sync_name": "ignored", "status": "paused", "schedule": {"mode": "interval", "everySeconds": 60}},
+            {
+                "sync_name": "ignored",
+                "source_name": "ignored_source",
+                "status": "paused",
+                "schedule": {"mode": "interval", "everySeconds": 60},
+            },
             {
                 "sync_name": "orders_hourly",
+                "source_name": "orders_source",
                 "status": "active",
                 "created_at": "2026-01-01T00:00:00Z",
                 "schedule": {"mode": "interval", "everySeconds": 3600, "batchLimit": 5},
@@ -67,6 +73,11 @@ class _RuntimeRepo:
         return self.workflow
 
 
+class _SourceRegistry:
+    def source_by_name(self, **_kwargs: object) -> None:
+        return None
+
+
 class _Management:
     def __init__(self) -> None:
         self.started: list[dict[str, object]] = []
@@ -74,6 +85,10 @@ class _Management:
     def start_managed_sync_run(self, sync_name: str, **kwargs: object) -> dict[str, object]:
         self.started.append({"sync_name": sync_name, **kwargs})
         return {"runId": "scheduled-run-1", "triggerType": kwargs["trigger_type"]}
+
+
+class _RuntimeService:
+    pass
 
 
 def _service(
@@ -86,9 +101,15 @@ def _service(
         engine=_Engine(),
         policy=policy,
         source_management_repository=repo,
+        source_registry_repository=_SourceRegistry(),
         runtime_repository=runtime_repo,
     )
-    service.bind_collaborators({"source_management_service": management})
+    service.bind_collaborators(
+        {
+            "source_management_service": management,
+            "runtime_service": _RuntimeService(),
+        }
+    )
     return service
 
 
@@ -115,6 +136,8 @@ def test_source_scheduler_service_reconciles_terminal_workflow_before_starting_d
     assert result["started"] == [
         {"decision": result["due"][0], "run": {"runId": "scheduled-run-1", "triggerType": "scheduled"}}
     ]
+    assert [decision["syncName"] for decision in result["decisions"]] == ["ignored", "orders_hourly"]
+    assert result["decisions"][0]["reason"] == "schedule_paused"
 
 
 def test_source_scheduler_service_keeps_non_terminal_workflow_as_active_run() -> None:
@@ -130,7 +153,9 @@ def test_source_scheduler_service_keeps_non_terminal_workflow_as_active_run() ->
 
     assert repo.updated == []
     assert management.started == []
-    assert result["skipped"][0]["reason"] == "active_run_in_progress"
+    assert next(item for item in result["skipped"] if item["syncName"] == "orders_hourly")["reason"] == (
+        "active_run_in_progress"
+    )
 
 
 def test_source_scheduler_service_records_failed_workflow_error_and_validates_max_runs() -> None:

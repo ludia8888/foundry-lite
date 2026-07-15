@@ -142,6 +142,9 @@ export default function DataConnectionPage() {
             {selectedSource ? (
               <SourceDetailPanel
                 source={selectedSource}
+                onSourceUpdated={async () => {
+                  await sourcesQuery.reload();
+                }}
                 onSyncCreated={(syncName) => {
                   setFocusedSyncName(syncName);
                   setActiveTab("syncs");

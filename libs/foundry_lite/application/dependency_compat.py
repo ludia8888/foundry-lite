@@ -83,6 +83,7 @@ CORE_DEPENDENCY_BUNDLE_FIELDS: Mapping[str, tuple[str, ...]] = {
         "source_registry_repository",
         "source_management_repository",
         "source_database_adapter",
+        "source_stream_adapter",
     ),
 }
 

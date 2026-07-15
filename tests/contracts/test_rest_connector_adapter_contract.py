@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import socket
 import threading
@@ -150,6 +151,138 @@ def test_rest_connector_supports_custom_header_auth() -> None:
         )
 
     assert server.requests[0]["api_key"] == "key-1"
+
+
+def test_rest_connector_supports_redacted_basic_credentials_secret() -> None:
+    environ = {"FOUNDRY_LITE_SECRET_SAP_BASIC": "sap-user:sap-password"}
+    with MockRestServer() as server:
+        RestPullConnectorAdapter(secret_provider=EnvSecretProvider(environ=environ)).snapshot(
+            ConnectorSnapshotRequest(
+                connector_name="sap",
+                resource_name="sales_orders",
+                tenant_id="tenant-demo",
+                request_id="req-sap-basic",
+                rest=RestSourceConfig(
+                    base_url=server.base_url,
+                    resource_path="/orders",
+                    auth=RestAuthConfig(mode="basic", basic_credentials_secret_ref="sap-basic"),
+                    allow_private_network=True,
+                ),
+            )
+        )
+
+    encoded = base64.b64encode(b"sap-user:sap-password").decode("ascii")
+    assert server.requests[0]["authorization"] == f"Basic {encoded}"
+
+
+def test_rest_connector_rejects_invalid_basic_credentials_without_leaking_value() -> None:
+    with MockRestServer() as server:
+        with pytest.raises(ValidationFailed, match="username:password") as exc_info:
+            RestPullConnectorAdapter().snapshot(
+                ConnectorSnapshotRequest(
+                    connector_name="sap",
+                    resource_name="sales_orders",
+                    tenant_id="tenant-demo",
+                    request_id="req-sap-basic-invalid",
+                    rest=RestSourceConfig(
+                        base_url=server.base_url,
+                        resource_path="/orders",
+                        auth=RestAuthConfig(mode="basic", basic_credentials="sap-password"),
+                        allow_private_network=True,
+                    ),
+                )
+            )
+
+    assert exc_info.value.details["secret_value"] == "***REDACTED***"
+
+
+def test_rest_connector_follows_same_origin_odata_next_link() -> None:
+    pagination = RestPaginationConfig(
+        strategy="next_link",
+        items_path="value",
+        next_cursor_path="@odata.nextLink",
+        cursor_key="nextLink",
+    )
+    with MockRestServer() as server:
+        adapter = RestPullConnectorAdapter()
+        config = RestSourceConfig(
+            base_url=f"{server.base_url}/odata",
+            resource_path="/SalesOrderSet?$format=json",
+            pagination=pagination,
+            allow_private_network=True,
+        )
+        first = adapter.snapshot(
+            ConnectorSnapshotRequest("sap", "sales_orders", "tenant-demo", "req-sap-page-1", rest=config)
+        )
+        second = adapter.snapshot(
+            ConnectorSnapshotRequest(
+                "sap",
+                "sales_orders",
+                "tenant-demo",
+                "req-sap-page-2",
+                cursor=first.cursor,
+                rest=config,
+            )
+        )
+
+    assert first.rows == ({"SalesOrder": "500001", "Status": "Open"},)
+    assert first.cursor is not None
+    assert second.rows == ({"SalesOrder": "500002", "Status": "Released"},)
+    assert second.cursor is None
+    assert server.requests[1]["skiptoken"] == "page-2"
+
+
+def test_rest_connector_collects_bounded_odata_pages_in_one_snapshot() -> None:
+    with MockRestServer() as server:
+        snapshot = RestPullConnectorAdapter().snapshot(
+            ConnectorSnapshotRequest(
+                "sap",
+                "sales_orders",
+                "tenant-demo",
+                "req-sap-full-snapshot",
+                rest=RestSourceConfig(
+                    base_url=f"{server.base_url}/odata",
+                    resource_path="/SalesOrderSet?$format=json",
+                    pagination=RestPaginationConfig(
+                        strategy="next_link",
+                        items_path="value",
+                        next_cursor_path="@odata.nextLink",
+                        cursor_key="nextLink",
+                        max_pages_per_snapshot=100,
+                    ),
+                    allow_private_network=True,
+                ),
+            )
+        )
+
+    assert snapshot.rows == (
+        {"SalesOrder": "500001", "Status": "Open"},
+        {"SalesOrder": "500002", "Status": "Released"},
+    )
+    assert snapshot.cursor is None
+    assert snapshot.network_evidence["pageCount"] == 2
+    assert snapshot.network_evidence["connectionCount"] == 2
+    assert len(cast(list[object], snapshot.network_evidence["pageConnections"])) == 2
+
+
+def test_rest_connector_rejects_cross_origin_next_link() -> None:
+    with pytest.raises(ValidationFailed, match="configured origin") as exc_info:
+        RestPullConnectorAdapter().snapshot(
+            ConnectorSnapshotRequest(
+                "sap",
+                "sales_orders",
+                "tenant-demo",
+                "req-sap-cross-origin",
+                cursor={"nextLink": "https://attacker.example/collect"},
+                rest=RestSourceConfig(
+                    base_url="https://sap.example.com/odata",
+                    resource_path="/SalesOrderSet",
+                    pagination=RestPaginationConfig(strategy="next_link", cursor_key="nextLink"),
+                ),
+            )
+        )
+
+    assert exc_info.value.details == {"nextLinkOrigin": "https://attacker.example:443"}
 
 
 def test_connector_refreshes_rotated_secret() -> None:
@@ -1034,11 +1167,13 @@ def _handler_class() -> type[BaseHTTPRequestHandler]:
             split = urlsplit(self.path)
             params = parse_qs(split.query)
             cursor = params.get("cursor", [None])[0]
+            skiptoken = params.get("$skiptoken", [None])[0]
             self.requests.append(
                 {
                     "authorization": self.headers.get("Authorization"),
                     "api_key": self.headers.get("X-Api-Key"),
                     "cursor": cursor,
+                    "skiptoken": skiptoken,
                     "path": split.path,
                 }
             )
@@ -1059,6 +1194,18 @@ def _handler_class() -> type[BaseHTTPRequestHandler]:
                 return
             if split.path == "/array-payload":
                 self._write_json([])
+                return
+            if split.path == "/odata/SalesOrderSet":
+                if skiptoken == "page-2":
+                    self._write_json({"value": [{"SalesOrder": "500002", "Status": "Released"}]})
+                    return
+                host = self.headers.get("Host")
+                self._write_json(
+                    {
+                        "value": [{"SalesOrder": "500001", "Status": "Open"}],
+                        "@odata.nextLink": (f"http://{host}/odata/SalesOrderSet?$skiptoken=page-2&$format=json"),
+                    }
+                )
                 return
             self._write_json(_page_payload(split.path, cursor))
 

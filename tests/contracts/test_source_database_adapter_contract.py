@@ -31,6 +31,17 @@ def test_source_database_adapter_lists_tables_with_schema(adapter: SourceDatabas
     assert {column["name"] for column in tables[0]["columns"]} == {"id", "amount", "status"}
 
 
+def test_source_database_adapter_tests_live_connection_without_exposing_url(
+    adapter: SourceDatabaseAdapter, database_url: str
+) -> None:
+    probe = adapter.test_connection(database_url)
+
+    assert probe.adapter_profile == adapter.profile_name
+    assert probe.database_kind == "sqlite"
+    assert probe.driver == "pysqlite"
+    assert probe.visible_resource_count == 1
+
+
 def test_source_database_adapter_reads_checkpointed_batches(adapter: SourceDatabaseAdapter, database_url: str) -> None:
     batch = adapter.read_table_batch(
         database_url,
@@ -60,4 +71,4 @@ def test_source_database_adapter_failure_contract_names_operations(adapter: Sour
     contract = adapter.failure_contract()
 
     assert contract.adapter_profile == adapter.profile_name
-    assert {mode.operation for mode in contract.modes} == {"list_tables", "read_table_batch"}
+    assert {mode.operation for mode in contract.modes} == {"test_connection", "list_tables", "read_table_batch"}

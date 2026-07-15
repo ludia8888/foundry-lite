@@ -5,32 +5,24 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import BinaryIO
 
-from foundry_lite.application.services.source_management_service import (
-    SourceCdcObjectIndexService,
-    SourceManagementService,
-)
+from foundry_lite.application.facades.source_workspace_diagnostics import SourceWorkspaceDiagnostics
+from foundry_lite.application.facades.source_workspace_services import SourceWorkspaceServices
 from foundry_lite.application.services.source_onboarding_config import SourceUpload
-from foundry_lite.application.services.source_onboarding_service import SourceOnboardingService
-from foundry_lite.application.services.source_scheduler_service import SourceSchedulerService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.observability.tracing import trace_public_methods
 
 
 @trace_public_methods
-class SourceWorkspace:
+class SourceWorkspace(SourceWorkspaceDiagnostics):
     """Product-facing Source onboarding facade for browser and SDK flows."""
 
-    def __init__(
-        self,
-        onboarding: SourceOnboardingService,
-        management: SourceManagementService,
-        scheduler: SourceSchedulerService,
-        cdc_object_index: SourceCdcObjectIndexService,
-    ) -> None:
-        self._onboarding = onboarding
-        self._management = management
-        self._scheduler = scheduler
-        self._cdc_object_index = cdc_object_index
+    def __init__(self, services: SourceWorkspaceServices) -> None:
+        super().__init__(services.source_connection_test, services.source_lifecycle)
+        self._onboarding = services.source_onboarding
+        self._management = services.source_management
+        self._lifecycle = services.source_lifecycle
+        self._scheduler = services.source_scheduler
+        self._cdc_object_index = services.source_cdc_object_index
 
     def list_templates(self, *, ctx: RequestContext | None = None) -> list[dict[str, object]]:
         return self._management.list_templates(ctx=ctx)
@@ -69,6 +61,23 @@ class SourceWorkspace:
 
     def get_source(self, source_name: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self._onboarding.get_source(source_name, ctx=ctx)
+
+    def update_source_status(
+        self,
+        source_name: str,
+        *,
+        status: str,
+        expected_config_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._lifecycle.update_source_status(
+            source_name,
+            status=status,
+            expected_config_fingerprint=expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
 
     def register_agent(
         self,
@@ -170,6 +179,83 @@ class SourceWorkspace:
     def get_managed_sync(self, sync_name: str, *, ctx: RequestContext | None = None) -> dict[str, object]:
         return self._management.get_managed_sync(sync_name, ctx=ctx)
 
+    def start_managed_streaming_sync(
+        self,
+        sync_name: str,
+        *,
+        expected_config_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._lifecycle.start_managed_streaming_sync(
+            sync_name,
+            expected_config_fingerprint=expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def stop_managed_streaming_sync(
+        self,
+        sync_name: str,
+        *,
+        expected_config_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._lifecycle.stop_managed_streaming_sync(
+            sync_name,
+            expected_config_fingerprint=expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def update_managed_sync_schedule(
+        self,
+        sync_name: str,
+        *,
+        schedule: Mapping[str, object],
+        expected_config_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._scheduler.update_managed_sync_schedule(
+            sync_name,
+            schedule=schedule,
+            expected_config_fingerprint=expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def pause_managed_sync_schedule(
+        self,
+        sync_name: str,
+        *,
+        expected_config_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._scheduler.pause_managed_sync_schedule(
+            sync_name,
+            expected_config_fingerprint=expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
+    def resume_managed_sync_schedule(
+        self,
+        sync_name: str,
+        *,
+        expected_config_fingerprint: str,
+        idempotency_key: str,
+        ctx: RequestContext | None = None,
+    ) -> dict[str, object]:
+        return self._scheduler.resume_managed_sync_schedule(
+            sync_name,
+            expected_config_fingerprint=expected_config_fingerprint,
+            idempotency_key=idempotency_key,
+            ctx=ctx,
+        )
+
     def start_managed_sync_run(
         self,
         sync_name: str,
@@ -179,7 +265,7 @@ class SourceWorkspace:
         trigger_type: str = "manual",
         batch_limit: int | None = None,
     ) -> dict[str, object]:
-        return self._management.start_managed_sync_run(
+        return self._scheduler.start_managed_sync_run(
             sync_name,
             idempotency_key=idempotency_key,
             ctx=ctx,

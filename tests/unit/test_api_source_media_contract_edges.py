@@ -35,6 +35,7 @@ from foundry_lite.infrastructure.secrets.local_vault import (
 from foundry_lite_api import main as api_main
 from foundry_lite_api import runtime as api_runtime
 from foundry_lite_api.routers import media as media_router
+from foundry_lite_api.routers import sources as sources_router
 from foundry_lite_worker import outbox_publisher
 from starlette.datastructures import Headers
 from starlette.requests import Request
@@ -880,6 +881,7 @@ def test_source_management_helpers_parse_and_validate_contract_payloads() -> Non
     assert management_helpers.commit_result_payload(None, SimpleNamespace(checkpoint={"cursor": "c1"})) == {
         "rowCount": 0,
         "checkpoint": {"cursor": "c1"},
+        "networkEvidence": {},
     }
 
     commit = SimpleNamespace(version_id="v1", row_count=2, schema_hash="schema", manifest_uri="manifest.json")
@@ -1070,12 +1072,45 @@ def test_api_remaining_error_edges_and_approval_execution(monkeypatch) -> None:
         ),
         lambda: api_main.list_source_managed_syncs(request),
         lambda: api_main.get_source_managed_sync(request, "sync"),
+        lambda: api_main.update_source_managed_sync_schedule(
+            request,
+            "sync",
+            api_main.SourceManagedSyncScheduleUpdateRequest(
+                schedule={"mode": "manual"}, expectedConfigFingerprint="sha256:sync"
+            ),
+            idempotency_key="sync-schedule-1",
+        ),
         lambda: api_main.start_source_managed_sync_run(
             request,
             "sync",
             api_main.SourceManagedSyncRunStartRequest(),
             idempotency_key="run-1",
         ),
+        lambda: api_main.pause_source_managed_sync_schedule(
+            request,
+            "sync",
+            sources_router.SourceManagedSyncScheduleStateRequest(expectedConfigFingerprint="sha256:sync"),
+            idempotency_key="pause-1",
+        ),
+        lambda: api_main.resume_source_managed_sync_schedule(
+            request,
+            "sync",
+            sources_router.SourceManagedSyncScheduleStateRequest(expectedConfigFingerprint="sha256:sync"),
+            idempotency_key="resume-1",
+        ),
+        lambda: sources_router.start_source_managed_streaming_sync(
+            request,
+            "sync",
+            sources_router.SourceManagedStreamingSyncStateRequest(expectedConfigFingerprint="sha256:sync"),
+            idempotency_key="stream-start-1",
+        ),
+        lambda: sources_router.stop_source_managed_streaming_sync(
+            request,
+            "sync",
+            sources_router.SourceManagedStreamingSyncStateRequest(expectedConfigFingerprint="sha256:sync"),
+            idempotency_key="stream-stop-1",
+        ),
+        lambda: sources_router.get_source_managed_streaming_sync_status(request, "sync"),
         lambda: api_main.list_source_managed_sync_runs(request, "sync"),
         lambda: api_main.get_source_managed_sync_run(request, "run-1"),
         lambda: api_main.get_source(request, "source-1"),
@@ -1214,12 +1249,40 @@ def test_media_and_source_facades_delegate_remaining_edges() -> None:
 
             return call
 
-    source = SourceWorkspace(FacadeDelegate(), FacadeDelegate(), FacadeDelegate(), FacadeDelegate())
+    class SourceServiceBundle:
+        source_onboarding = FacadeDelegate()
+        source_management = FacadeDelegate()
+        source_lifecycle = FacadeDelegate()
+        source_connection_test = FacadeDelegate()
+        source_scheduler = FacadeDelegate()
+        source_cdc_object_index = FacadeDelegate()
+
+    source = SourceWorkspace(SourceServiceBundle())
     assert source.list_credentials(ctx=ctx)["called"] == "list_credentials"
     assert source.list_agents(ctx=ctx)["called"] == "list_agents"
     assert source.list_network_policies(ctx=ctx)["called"] == "list_network_policies"
     assert source.list_managed_syncs(ctx=ctx)["called"] == "list_managed_syncs"
     assert source.get_managed_sync("sync", ctx=ctx)["called"] == "get_managed_sync"
+    assert (
+        source.update_source_status(
+            "source",
+            status="disabled",
+            expected_config_fingerprint="sha256:source",
+            idempotency_key="source-disable-1",
+            ctx=ctx,
+        )["called"]
+        == "update_source_status"
+    )
+    assert (
+        source.update_managed_sync_schedule(
+            "sync",
+            schedule={"mode": "manual"},
+            expected_config_fingerprint="sha256:sync",
+            idempotency_key="sync-schedule-1",
+            ctx=ctx,
+        )["called"]
+        == "update_managed_sync_schedule"
+    )
     assert source.preview_due_managed_syncs(ctx=ctx)["called"] == "preview_due_managed_syncs"
     assert source.run_due_managed_syncs(ctx=ctx, max_runs=2)["called"] == "run_due_managed_syncs"
     assert (
@@ -1540,29 +1603,29 @@ def test_source_management_service_covers_query_explore_and_run_branches() -> No
     with pytest.raises(NotFound):
         service.get_managed_sync_run("missing", ctx=ctx)
 
-    rest_preview = service._explore_source_payload(
-        ctx,
-        "erp",
-        "rest_api",
-        {"baseUrl": "https://api.example.test", "resourcePath": "/orders", "resourceName": "orders"},
+    rest_preview = service.explore_source(
+        source_name="erp",
+        source_type="rest_api",
+        request={"baseUrl": "https://api.example.test", "resourcePath": "/orders", "resourceName": "orders"},
+        ctx=ctx,
     )
-    assert rest_preview["sample"] == [{"id": "O-1"}]
-    tables = service._explore_source_payload(
-        ctx,
-        "warehouse",
-        "postgres_jdbc",
-        {"databaseUrlSecretRef": "db", "sampleLimit": "2"},
+    assert rest_preview["resultSummary"]["sample"] == [{"id": "O-1"}]
+    tables = service.explore_source(
+        source_name="warehouse",
+        source_type="postgres_jdbc",
+        request={"databaseUrlSecretRef": "db", "sampleLimit": "2"},
+        ctx=ctx,
     )
-    rows = service._explore_source_payload(
-        ctx,
-        "warehouse",
-        "postgres_jdbc",
-        {"databaseUrlSecretRef": "db", "tableName": "orders", "sampleLimit": "2"},
+    rows = service.explore_source(
+        source_name="warehouse",
+        source_type="postgres_jdbc",
+        request={"databaseUrlSecretRef": "db", "tableName": "orders", "sampleLimit": "2"},
+        ctx=ctx,
     )
-    assert tables["tables"][0]["name"] == "orders"
-    assert rows["sample"][0]["order_id"] == "O-1"
+    assert tables["resultSummary"]["tables"][0]["name"] == "orders"
+    assert rows["resultSummary"]["sample"][0]["order_id"] == "O-1"
     with pytest.raises(ValidationFailed):
-        service._explore_source_payload(ctx, "unknown", "unsupported", {})
+        service.explore_source(source_name="unknown", source_type="unsupported", request={}, ctx=ctx)
 
     run = _sync_run_row(
         "run-rest",
@@ -1579,6 +1642,10 @@ def test_source_management_service_covers_query_explore_and_run_branches() -> No
         target_dataset_ref="raw.orders",
         config_summary={"databaseUrlSecretRef": "db", "tableName": "orders", "batchLimit": "2"},
     )
+    service.source_registry_repository.rows["source"] = {
+        "source_name": "source",
+        "config_summary": {"connectionMode": "direct"},
+    }
     service.source_management_repository.syncs["db_sync"] = db_sync
     db_run = _sync_run_row("run-db", "db_sync", "postgres_jdbc", batch_limit=1)
     completed = service._execute_run(ctx, db_sync, db_run)
@@ -1850,6 +1917,14 @@ class _ConnectorAdapter:
 
 
 class _SourceDatabaseAdapter:
+    def test_connection(self, *_args, **_kwargs):
+        return SimpleNamespace(
+            adapter_profile="test-source-database",
+            database_kind="sqlite",
+            driver="pysqlite",
+            visible_resource_count=1,
+        )
+
     def list_tables(self, *_args, **_kwargs):
         return [{"name": "orders"}]
 
@@ -1858,6 +1933,7 @@ class _SourceDatabaseAdapter:
             rows=[{"order_id": "O-1"}],
             schema={"columns": [{"name": "order_id"}]},
             checkpoint={"lastValue": "O-1"},
+            network_evidence={},
         )
 
 
@@ -1980,6 +2056,9 @@ class _SourceManagementRepository:
             sync["checkpoint"] = checkpoint
             sync["updated_at"] = updated_at
 
+    def create_exploration_run(self, *, transaction, record):
+        return None
+
 
 def _source_management_service() -> SourceManagementService:
     service = object.__new__(SourceManagementService)
@@ -1987,7 +2066,10 @@ def _source_management_service() -> SourceManagementService:
     service.policy = _AllowPolicy()
     service.connector_adapter = _ConnectorAdapter()
     service.source_database_adapter = _SourceDatabaseAdapter()
+    service.source_stream_adapter = SimpleNamespace()
     service.source_management_repository = _SourceManagementRepository()
+    service.source_registry_repository = _SourceRegistry()
+    service.resource_catalog_repository = _ResourceCatalogRepository()
     service.secret_vault = _SecretVault()
     service.connector_onboarding_service = _ConnectorOnboarding()
     service.dataset_ingest_service = _DatasetIngest()

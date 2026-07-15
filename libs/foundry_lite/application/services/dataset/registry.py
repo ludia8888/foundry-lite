@@ -32,7 +32,6 @@ from foundry_lite.application.services.dataset.protocols import (
     DatasetTransactionManager,
     DatasetVersionLookup,
 )
-from foundry_lite.application.services.dataset.storage_consistency import committed_version_preview_file_paths
 from foundry_lite.application.services.resource_catalog_auto_registration import upsert_work_product_resource
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import (
@@ -293,8 +292,7 @@ class DatasetRegistryService(CoreService):
         self.policy.require(ctx, "dataset:read")
         dataset = self.get_dataset(dataset_ref, ctx=ctx)
         version_row = self.dataset_version_service._get_version(dataset["id"], version, ctx=ctx)
-        parquet_paths = committed_version_preview_file_paths(
-            self.dataset_storage,
+        parquet_paths = self.dataset_transaction_service._version_preview_file_paths(
             version_row,
             partition_filter=partition_filter,
         )
@@ -325,7 +323,7 @@ class DatasetRegistryService(CoreService):
             group_by=group_by,
             select=select,
         )
-        parquet_paths = committed_version_preview_file_paths(self.dataset_storage, version_row)
+        parquet_paths = self.dataset_transaction_service._version_preview_file_paths(version_row)
         compute_result = self.compute_adapter.aggregate_parquet(parquet_paths, plan)
         return dataset_aggregation_result(dataset_ref, str(version_row["id"]), compute_result)
 
@@ -342,7 +340,7 @@ class DatasetRegistryService(CoreService):
 
     def _committed_manifest_rows(self, version_row: DatasetVersionRow) -> list[TabularRow]:
         rows: list[TabularRow] = []
-        parquet_paths = committed_version_preview_file_paths(self.dataset_storage, version_row)
+        parquet_paths = self.dataset_transaction_service._version_preview_file_paths(version_row)
         for parquet_path in parquet_paths:
             rows.extend(self.compute_adapter.rows_from_parquet(parquet_path))
         return rows
@@ -361,7 +359,7 @@ class DatasetRegistryService(CoreService):
         return {
             "dataset": dataset_ref,
             "dataset_id": dataset["id"],
-            "version": version_row,
+            "version": self.dataset_transaction_service._current_view_version(version_row),
             "schema": schema_row["schema_json"],
             "manifest": self._inspect_manifest(dataset_ref, dataset, version_row),
         }
@@ -373,7 +371,7 @@ class DatasetRegistryService(CoreService):
         version_row: DatasetVersionRow,
     ) -> DatasetManifest:
         try:
-            return self.dataset_transaction_service._load_manifest(version_row["manifest_uri"])
+            return self.dataset_transaction_service._current_view_manifest(version_row)
         except InvariantViolation as exc:
             details = self._storage_error_details(dataset_ref, dataset, version_row, exc.details)
             raise InvariantViolation(exc.message, details=details) from exc

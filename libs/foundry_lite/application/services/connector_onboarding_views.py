@@ -16,6 +16,8 @@ from foundry_lite.application.services.connector_onboarding_config import (
 )
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError
 
+CONNECTOR_PREVIEW_ROW_LIMIT = 20
+
 
 def _connection_view(
     connection: ConnectorConnectionRow,
@@ -60,6 +62,7 @@ def _test_result(
     schema: Mapping[str, object] | None = None,
     cursor: Mapping[str, object] | None = None,
     error: Mapping[str, object] | None = None,
+    network_evidence: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "status": status,
@@ -68,10 +71,11 @@ def _test_result(
         "datasetRef": bundle.resource["dataset_ref"],
         "configFingerprint": bundle.config_fingerprint,
         "rowCount": len(rows),
-        "sampleRows": [dict(row) for row in rows[:5]],
+        "sampleRows": [dict(row) for row in rows[:CONNECTOR_PREVIEW_ROW_LIMIT]],
         "schema": dict(schema or {}),
         "cursor": dict(cursor or {}),
         "error": dict(error or {}),
+        "networkEvidence": dict(network_evidence or {}),
     }
 
 
@@ -80,6 +84,8 @@ def _activity_result(
     connector_name: str,
     resource_name: str,
     config_fingerprint: str,
+    *,
+    network_evidence: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     return {
         "workflowKind": "connector_sync",
@@ -90,6 +96,7 @@ def _activity_result(
         "versionNumber": result.version_number,
         "rowCount": result.row_count,
         "configFingerprint": config_fingerprint,
+        "networkEvidence": dict(network_evidence or {}),
     }
 
 

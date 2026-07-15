@@ -57,7 +57,22 @@ def test_source_schedule_disabled_manual_and_not_due_interval_edges() -> None:
     assert manual.as_dict()["reason"] == "manual_schedule"
     assert manual.as_dict()["enabled"] is False
     assert not_due.as_dict()["reason"] == "not_due"
-    assert not_due.as_dict()["nextDueAt"] == "2026-01-01T00:06:00Z"
+    assert not_due.as_dict()["nextDueAt"] == "2026-01-01T00:10:00Z"
+
+
+def test_source_schedule_future_cron_anchor_reports_first_matching_slot() -> None:
+    decision = source_schedule_decision(
+        {
+            "sync_name": "future_daily_sync",
+            "created_at": "2026-01-01T00:00:00Z",
+            "schedule": {"mode": "cron", "cron": "0 0 * * *", "startAt": "2026-01-02T00:00:00Z"},
+        },
+        [],
+        now=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+    )
+
+    assert decision.as_dict()["reason"] == "not_due"
+    assert decision.as_dict()["nextDueAt"] == "2026-01-02T00:00:00Z"
 
 
 def test_source_schedule_skips_active_run_and_already_started_slot() -> None:

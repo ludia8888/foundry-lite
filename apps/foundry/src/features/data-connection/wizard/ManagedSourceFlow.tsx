@@ -16,7 +16,15 @@ import { Link } from "react-router";
 import { ErrorState } from "@/components/shared/ErrorState";
 import { StatusPill } from "@/components/shared/StatusPill";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 import type { WizardCompletion } from "./CsvUploadFlow";
 import type { WizardTemplate } from "./TemplatePickerStep";
@@ -40,6 +48,7 @@ import {
 } from "./WizardEvidence";
 import { WizardField } from "./WizardFields";
 import { WizardStepLayout } from "./WizardStepLayout";
+import type { WizardStepMeta } from "./WizardStepLayout";
 
 const MANAGED_STEPS = [
   { id: "credential", title: "자격 증명 & 네트워크" },
@@ -48,7 +57,14 @@ const MANAGED_STEPS = [
 ] as const;
 
 /** 관리형 run data-plane이 실제로 실행 가능한 소스 타입. */
-const RUNNABLE_SOURCE_TYPES = new Set(["rest_api", "postgres_jdbc"]);
+const RUNNABLE_SOURCE_TYPES = new Set([
+  "rest_api",
+  "postgres_jdbc",
+  "sap_odata",
+  "kafka",
+]);
+
+const HTTP_CONNECTOR_SOURCE_TYPES = new Set(["rest_api", "sap_odata"]);
 
 const normalizeManagedSyncCapability = (capability: string): string =>
   capability === "batch_file" ? "batch" : capability;
@@ -84,6 +100,14 @@ interface ManagedFormState {
   restPrimaryKeyText: string;
   databaseUrlSecretRef: string;
   tableName: string;
+  kafkaBootstrapServers: string;
+  kafkaTopic: string;
+  kafkaConsumerGroup: string;
+  kafkaPartitionMode: "all" | "single";
+  kafkaPartitionText: string;
+  kafkaStreamName: string;
+  kafkaBatchLimitText: string;
+  isKafkaTlsEnabled: boolean;
   shouldStartRun: boolean;
 }
 
@@ -108,6 +132,7 @@ interface ManagedSourceFlowProps {
   connectionMode: ConnectionMode;
   /** 연결 방식 단계에서 선택/등록된 에이전트 (agent_proxy일 때). */
   agentId: string | null;
+  wizardSteps: readonly WizardStepMeta[];
   onExit: () => void;
   onCancel: () => void;
   onComplete: (completion: WizardCompletion) => void;
@@ -122,6 +147,7 @@ export function ManagedSourceFlow({
   initialDisplayName,
   connectionMode,
   agentId,
+  wizardSteps,
   onExit,
   onCancel,
   onComplete,
@@ -134,31 +160,49 @@ export function ManagedSourceFlow({
     displayName: initialDisplayName,
     sourceNameInput: "",
     isSourceNameTouched: false,
-    hasCredential: true,
-    authScheme: "bearer",
+    hasCredential: template.sourceType !== "kafka",
+    authScheme:
+      template.sourceType === "kafka"
+        ? "sasl_plain"
+        : template.sourceType === "postgres_jdbc"
+        ? "database_url"
+        : template.sourceType === "sap_odata"
+          ? "basic_auth"
+          : "bearer",
     secretValue: "",
-    hasNetworkPolicy: true,
+    hasNetworkPolicy: template.sourceType !== "kafka",
     allowedHostsText: "",
     capability: managedCapabilities.includes("batch")
       ? "batch"
       : (managedCapabilities[0] ?? "batch"),
     datasetRefInput: "",
     isDatasetRefTouched: false,
-    syncMode: "SNAPSHOT",
+    syncMode: template.sourceType === "kafka" ? "APPEND" : "SNAPSHOT",
     scheduleMode: "manual",
     everySecondsText: "3600",
     connectorName: "",
     resourceName: "",
     restBaseUrl: "",
     restResourcePath: "",
-    restItemsPath: "items",
-    restNextCursorPath: "nextCursor",
-    restCursorQueryParam: "cursor",
-    restCursorKey: "cursor",
+    restItemsPath: template.sourceType === "sap_odata" ? "value" : "items",
+    restNextCursorPath:
+      template.sourceType === "sap_odata" ? "@odata.nextLink" : "nextCursor",
+    restCursorQueryParam:
+      template.sourceType === "sap_odata" ? "$skiptoken" : "cursor",
+    restCursorKey:
+      template.sourceType === "sap_odata" ? "nextLink" : "cursor",
     restSchemaColumnsText: "",
     restPrimaryKeyText: "",
     databaseUrlSecretRef: "",
     tableName: "",
+    kafkaBootstrapServers: "localhost:19092",
+    kafkaTopic: "",
+    kafkaConsumerGroup: "foundry-lite-archive",
+    kafkaPartitionMode: "all",
+    kafkaPartitionText: "0",
+    kafkaStreamName: "",
+    kafkaBatchLimitText: "100",
+    isKafkaTlsEnabled: false,
     shouldStartRun: isRunSupported,
   });
   const keysRef = useRef<WizardKeys | null>(null);
@@ -208,13 +252,21 @@ export function ManagedSourceFlow({
     !form.hasCredential || form.secretValue.trim().length > 0;
   const isTypeConfigValid = !form.shouldStartRun
     ? true
-    : template.sourceType === "rest_api"
+    : HTTP_CONNECTOR_SOURCE_TYPES.has(template.sourceType)
       ? form.connectorName.trim().length > 0 &&
         form.resourceName.trim().length > 0 &&
         form.restBaseUrl.trim().length > 0 &&
         form.restResourcePath.trim().length > 0
       : template.sourceType === "postgres_jdbc"
         ? databaseUrlSecretRef.length > 0 && form.tableName.trim().length > 0
+        : template.sourceType === "kafka"
+          ? form.kafkaBootstrapServers.trim().length > 0 &&
+            form.kafkaTopic.trim().length > 0 &&
+            form.kafkaConsumerGroup.trim().length > 0 &&
+            form.kafkaStreamName.trim().length > 0 &&
+            (form.kafkaPartitionMode === "all" ||
+              Number.parseInt(form.kafkaPartitionText, 10) >= 0) &&
+            Number.parseInt(form.kafkaBatchLimitText, 10) > 0
         : true;
   const isScheduleValid =
     form.scheduleMode !== "scheduled" ||
@@ -233,10 +285,34 @@ export function ManagedSourceFlow({
     const configSummary: Record<string, unknown> = {
       ...(form.connectorName ? { connectorName: form.connectorName } : {}),
       ...(form.resourceName ? { resourceName: form.resourceName } : {}),
+      connectionMode,
+      ...(form.hasCredential ? { credentialName } : {}),
+      ...(form.hasNetworkPolicy ? { networkPolicyName: policyName } : {}),
+      ...(agentId ? { agentId } : {}),
       ...(template.sourceType === "postgres_jdbc" && databaseUrlSecretRef
         ? { databaseUrlSecretRef }
         : {}),
       ...(form.tableName ? { tableName: form.tableName } : {}),
+      ...(template.sourceType === "kafka"
+        ? {
+            bootstrapServers: form.kafkaBootstrapServers.trim(),
+            topic: form.kafkaTopic.trim(),
+            consumerGroup: form.kafkaConsumerGroup.trim(),
+            partitionMode: form.kafkaPartitionMode,
+            deliveryGuarantee: "AT_LEAST_ONCE",
+            ...(form.kafkaPartitionMode === "single"
+              ? { partition: Number.parseInt(form.kafkaPartitionText, 10) }
+              : {}),
+            streamName: form.kafkaStreamName.trim(),
+            batchLimit: Number.parseInt(form.kafkaBatchLimitText, 10),
+            isTlsEnabled: form.isKafkaTlsEnabled,
+            monitoring: {
+              checkpointLivenessSeconds: 60,
+              maxCheckpointDurationMs: 30_000,
+              maxBrokerLag: 10_000,
+            },
+          }
+        : {}),
     };
     const schedule =
       form.scheduleMode === "scheduled"
@@ -325,7 +401,7 @@ export function ManagedSourceFlow({
   const ensureRestConnector = async (
     keys: WizardKeys,
   ): Promise<RestConnectorSetupEvidence | null> => {
-    if (template.sourceType !== "rest_api") return null;
+    if (!HTTP_CONNECTOR_SOURCE_TYPES.has(template.sourceType)) return null;
     setIsPreparingRestConnector(true);
     try {
       const connectorName = form.connectorName.trim();
@@ -333,7 +409,7 @@ export function ManagedSourceFlow({
       const connection = await client.connectors.connections.create(
         {
           connectorName,
-          displayName: `${form.displayName.trim()} REST connector`,
+          displayName: `${form.displayName.trim()} ${template.sourceType === "sap_odata" ? "SAP OData" : "REST"} connector`,
           baseUrl: form.restBaseUrl.trim(),
           auth: restConnectorAuth(
             form,
@@ -350,11 +426,14 @@ export function ManagedSourceFlow({
           datasetRef,
           resourcePath: form.restResourcePath.trim(),
           pagination: {
-            strategy: "cursor",
+            strategy:
+              template.sourceType === "sap_odata" ? "next_link" : "cursor",
             itemsPath: form.restItemsPath.trim() || "items",
             nextCursorPath: form.restNextCursorPath.trim() || "nextCursor",
             cursorQueryParam: form.restCursorQueryParam.trim() || "cursor",
             cursorKey: form.restCursorKey.trim() || "cursor",
+            maxPagesPerSnapshot:
+              template.sourceType === "sap_odata" ? 100 : 1,
           },
           schemaColumns: splitCommaText(form.restSchemaColumnsText),
           primaryKey: splitCommaText(form.restPrimaryKeyText),
@@ -403,10 +482,14 @@ export function ManagedSourceFlow({
           },
           {
             id: "connector",
-            label: "REST connector/resource 준비",
+            label:
+              template.sourceType === "sap_odata"
+                ? "SAP OData connector/entity 준비"
+                : "REST connector/resource 준비",
             isDone:
-              template.sourceType !== "rest_api" || restConnectorSetup !== null,
-            isSkipped: template.sourceType !== "rest_api",
+              !HTTP_CONNECTOR_SOURCE_TYPES.has(template.sourceType) ||
+              restConnectorSetup !== null,
+            isSkipped: !HTTP_CONNECTOR_SOURCE_TYPES.has(template.sourceType),
             detail:
               restConnectorSetup === null
                 ? undefined
@@ -468,8 +551,8 @@ export function ManagedSourceFlow({
     <WizardStepLayout
       title={form.displayName.trim() || "이름 없는 소스"}
       subtitle={`${template.displayName} · ${MANAGED_STEPS[stepIndex].title}`}
-      steps={MANAGED_STEPS}
-      activeIndex={stepIndex}
+      steps={wizardSteps}
+      activeIndex={3 + stepIndex}
       onBack={handleBack}
       onCancel={onCancel}
     >
@@ -514,6 +597,8 @@ export function ManagedSourceFlow({
               </div>
             </section>
           }
+          isDatabaseSource={template.sourceType === "postgres_jdbc"}
+          isKafkaSource={template.sourceType === "kafka"}
           connectionMode={connectionMode}
           hasCredential={form.hasCredential}
           onHasCredentialChange={(value) =>
@@ -534,7 +619,11 @@ export function ManagedSourceFlow({
           }
           policyName={policyName}
           agentId={agentId ?? ""}
-          canContinue={isNameValid && isCredentialValid}
+          canContinue={
+            isNameValid &&
+            isCredentialValid &&
+            (!form.hasNetworkPolicy || form.allowedHostsText.trim().length > 0)
+          }
           onBack={handleBack}
           onContinue={() => setStepIndex(1)}
         />
@@ -580,6 +669,7 @@ export function ManagedSourceFlow({
       {stepIndex === 2 ? (
         <RunEvidenceStep
           wizard={wizard}
+          sourceType={template.sourceType}
           keys={keysRef.current}
           agentId={agentId}
           restConnectorSetup={restConnectorSetup}
@@ -605,35 +695,44 @@ function TypeConfigSection({
   databaseUrlSecretRef: string;
   onChange: (patch: Partial<ManagedFormState>) => void;
 }) {
-  if (sourceType === "rest_api") {
+  if (HTTP_CONNECTOR_SOURCE_TYPES.has(sourceType)) {
+    const isSapOData = sourceType === "sap_odata";
     return (
       <section className="space-y-3 rounded border bg-card p-4">
-        <div className="text-xs font-semibold">REST 커넥터 연결</div>
+        <div className="text-xs font-semibold">
+          {isSapOData ? "SAP OData 서비스 연결" : "REST 커넥터 연결"}
+        </div>
         <p className="text-[11px] text-muted-foreground">
-          입력한 연결과 리소스를 먼저 생성한 뒤 managed sync run을 실행합니다.
+          {isSapOData
+            ? "OData entity set을 읽기 전용으로 확인한 뒤 @odata.nextLink를 보존하며 managed sync를 실행합니다."
+            : "입력한 연결과 리소스를 먼저 생성한 뒤 managed sync run을 실행합니다."}
         </p>
         <div className="grid gap-3 md:grid-cols-2">
-          <WizardField label="커넥터 이름">
+          <WizardField label={isSapOData ? "SAP 연결 이름" : "커넥터 이름"}>
             <Input
               value={form.connectorName}
               onChange={(event) =>
                 onChange({ connectorName: event.target.value })
               }
-              placeholder="orders_rest_connector"
+              placeholder={isSapOData ? "sap_s4hana" : "orders_rest_connector"}
               className="h-8 font-mono text-xs"
             />
           </WizardField>
-          <WizardField label="Base URL">
+          <WizardField label={isSapOData ? "OData service root" : "Base URL"}>
             <Input
               value={form.restBaseUrl}
               onChange={(event) =>
                 onChange({ restBaseUrl: event.target.value })
               }
-              placeholder="https://api.github.com"
+              placeholder={
+                isSapOData
+                  ? "https://sap.example.com/sap/opu/odata/sap/ZORDERS_SRV"
+                  : "https://api.github.com"
+              }
               className="h-8 font-mono text-xs"
             />
           </WizardField>
-          <WizardField label="리소스 이름">
+          <WizardField label={isSapOData ? "Entity 별칭" : "리소스 이름"}>
             <Input
               value={form.resourceName}
               onChange={(event) =>
@@ -643,36 +742,46 @@ function TypeConfigSection({
               className="h-8 font-mono text-xs"
             />
           </WizardField>
-          <WizardField label="리소스 경로">
+          <WizardField label={isSapOData ? "Entity set 경로" : "리소스 경로"}>
             <Input
               value={form.restResourcePath}
               onChange={(event) =>
                 onChange({ restResourcePath: event.target.value })
               }
-              placeholder="/search/repositories?q=foundry&per_page=2"
+              placeholder={
+                isSapOData
+                  ? "/SalesOrderSet?$format=json"
+                  : "/search/repositories?q=foundry&per_page=2"
+              }
               className="h-8 font-mono text-xs"
             />
           </WizardField>
           <WizardField
-            label="items path"
-            helper="응답 JSON에서 row 배열이 있는 위치입니다."
+            label={isSapOData ? "OData collection path" : "items path"}
+            helper={
+              isSapOData
+                ? "OData JSON 응답의 value 배열을 사용합니다."
+                : "응답 JSON에서 row 배열이 있는 위치입니다."
+            }
           >
             <Input
               value={form.restItemsPath}
               onChange={(event) =>
                 onChange({ restItemsPath: event.target.value })
               }
-              placeholder="items"
+              placeholder={isSapOData ? "value" : "items"}
               className="h-8 font-mono text-xs"
             />
           </WizardField>
-          <WizardField label="next cursor path">
+          <WizardField
+            label={isSapOData ? "OData next link path" : "next cursor path"}
+          >
             <Input
               value={form.restNextCursorPath}
               onChange={(event) =>
                 onChange({ restNextCursorPath: event.target.value })
               }
-              placeholder="nextCursor"
+              placeholder={isSapOData ? "@odata.nextLink" : "nextCursor"}
               className="h-8 font-mono text-xs"
             />
           </WizardField>
@@ -730,11 +839,121 @@ function TypeConfigSection({
       </section>
     );
   }
+  if (sourceType === "kafka") {
+    return (
+      <section className="space-y-3 rounded border bg-card p-4">
+        <div>
+          <div className="text-xs font-semibold">Kafka Streaming Sync</div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            메시지는 key/value 원본과 topic·partition·offset을 함께 보관하고,
+            데이터셋 커밋이 끝난 뒤에만 체크포인트를 전진시킵니다.
+          </p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <WizardField label="Bootstrap servers" helper="host:port, 쉼표 구분">
+            <Input
+              value={form.kafkaBootstrapServers}
+              onChange={(event) =>
+                onChange({ kafkaBootstrapServers: event.target.value })
+              }
+              placeholder="localhost:19092"
+              className="h-8 font-mono text-xs"
+            />
+          </WizardField>
+          <WizardField label="Topic">
+            <Input
+              value={form.kafkaTopic}
+              onChange={(event) => {
+                const topic = event.target.value;
+                onChange({
+                  kafkaTopic: topic,
+                  kafkaStreamName:
+                    form.kafkaStreamName || topic.replace(/[^a-zA-Z0-9_-]/g, "-"),
+                });
+              }}
+              placeholder="crypto.trades"
+              className="h-8 font-mono text-xs"
+            />
+          </WizardField>
+          <WizardField label="Consumer group">
+            <Input
+              value={form.kafkaConsumerGroup}
+              onChange={(event) =>
+                onChange({ kafkaConsumerGroup: event.target.value })
+              }
+              className="h-8 font-mono text-xs"
+            />
+          </WizardField>
+          <WizardField label="Stream name">
+            <Input
+              value={form.kafkaStreamName}
+              onChange={(event) =>
+                onChange({ kafkaStreamName: event.target.value })
+              }
+              placeholder="crypto-trades"
+              className="h-8 font-mono text-xs"
+            />
+          </WizardField>
+          <WizardField
+            label="Partition strategy"
+            helper="All partitions는 topic 확장 시 새 partition을 자동 발견합니다."
+          >
+            <Select
+              value={form.kafkaPartitionMode}
+              onValueChange={(value) =>
+                onChange({ kafkaPartitionMode: value as "all" | "single" })
+              }
+            >
+              <SelectTrigger size="sm" className="w-full text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All partitions · recommended</SelectItem>
+                <SelectItem value="single">Single partition</SelectItem>
+              </SelectContent>
+            </Select>
+          </WizardField>
+          <WizardField label="Micro-batch records">
+            <Input
+              value={form.kafkaBatchLimitText}
+              onChange={(event) =>
+                onChange({ kafkaBatchLimitText: event.target.value })
+              }
+              inputMode="numeric"
+              className="h-8 font-mono text-xs"
+            />
+          </WizardField>
+          {form.kafkaPartitionMode === "single" ? (
+            <WizardField label="Partition number">
+              <Input
+                value={form.kafkaPartitionText}
+                onChange={(event) =>
+                  onChange({ kafkaPartitionText: event.target.value })
+                }
+                inputMode="numeric"
+                className="h-8 font-mono text-xs"
+              />
+            </WizardField>
+          ) : null}
+        </div>
+        <label className="flex items-center gap-2 text-xs">
+          <Checkbox
+            checked={form.isKafkaTlsEnabled}
+            onCheckedChange={(checked) =>
+              onChange({ isKafkaTlsEnabled: checked === true })
+            }
+          />
+          TLS 사용
+        </label>
+      </section>
+    );
+  }
   return null;
 }
 
 function RunEvidenceStep({
   wizard,
+  sourceType,
   keys,
   agentId,
   restConnectorSetup,
@@ -745,6 +964,7 @@ function RunEvidenceStep({
   onComplete,
 }: {
   wizard: ReturnType<typeof useFoundryLiteProvidedSourceWizard>;
+  sourceType: string;
   keys: WizardKeys | null;
   agentId: string | null;
   restConnectorSetup: RestConnectorSetupEvidence | null;
@@ -793,7 +1013,13 @@ function RunEvidenceStep({
       {restConnectorError ? <ErrorState error={restConnectorError} /> : null}
       {wizard.error ? <ErrorState error={wizard.error} /> : null}
       {restConnectorSetup ? (
-        <EvidenceList title="REST connector 증거">
+        <EvidenceList
+          title={
+            sourceType === "sap_odata"
+              ? "SAP OData connector 증거"
+              : "REST connector 증거"
+          }
+        >
           <EvidenceRow
             label="connector"
             value={restConnectorSetup.connection.connectorName}
@@ -931,12 +1157,19 @@ function RunEvidenceStep({
 function restConnectorAuth(
   form: ManagedFormState,
   secretRef: string,
-): { mode: "none" } | { mode: "bearer"; tokenSecretRef: string } | {
-  mode: "header";
-  headerName: string;
-  headerValueSecretRef: string;
-} {
+):
+  | { mode: "none" }
+  | { mode: "bearer"; tokenSecretRef: string }
+  | { mode: "basic"; basicCredentialsSecretRef: string }
+  | {
+      mode: "header";
+      headerName: string;
+      headerValueSecretRef: string;
+    } {
   if (!form.hasCredential) return { mode: "none" };
+  if (form.authScheme === "basic_auth") {
+    return { mode: "basic", basicCredentialsSecretRef: secretRef };
+  }
   if (form.authScheme === "api_key") {
     return {
       mode: "header",

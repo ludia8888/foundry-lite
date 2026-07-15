@@ -257,17 +257,10 @@ def stream_transaction_metadata(
     previous_metadata: Mapping[str, object] | None = None,
     rows: Sequence[Mapping[str, object]] | None = None,
 ) -> Mapping[str, object]:
-    metadata: dict[str, object] = {
-        "streamCursor": {
-            "streamName": stream.stream_name,
-            "topic": stream.topic,
-            "partition": stream.partition,
-            "consumerGroup": stream.consumer_group,
-            "offset": events[-1].offset,
-            "eventCount": len(events),
-            "schemaStrategy": stream.schema_strategy,
-        }
-    }
+    cursor = _stream_cursor_payload(stream, events)
+    cursors = _previous_stream_cursors(previous_metadata)
+    cursors[_stream_cursor_key(stream)] = cursor
+    metadata: dict[str, object] = {"streamCursor": cursor, "streamCursors": cursors}
     watermark = next_late_data_watermark(previous_metadata, rows or (), stream)
     if watermark is not None:
         metadata["lateDataWatermark"] = late_data_watermark_metadata(stream, watermark, rows or ())
@@ -275,7 +268,10 @@ def stream_transaction_metadata(
 
 
 def stream_cursor_offset(metadata: Mapping[str, object], stream: StreamArchiveConfig) -> int | None:
-    cursor = metadata.get("streamCursor")
+    cursors = metadata.get("streamCursors")
+    cursor = cursors.get(_stream_cursor_key(stream)) if isinstance(cursors, Mapping) else None
+    if not isinstance(cursor, Mapping):
+        cursor = metadata.get("streamCursor")
     if not isinstance(cursor, Mapping) or not stream_cursor_matches(cursor, stream):
         return None
     offset = cursor.get("offset")
@@ -290,6 +286,44 @@ def stream_cursor_matches(cursor: Mapping[str, object], stream: StreamArchiveCon
         and cursor.get("consumerGroup") == stream.consumer_group
         and _cursor_schema_strategy(cursor) == stream.schema_strategy
     )
+
+
+def _stream_cursor_payload(stream: StreamArchiveConfig, events: Sequence[StreamEvent]) -> dict[str, object]:
+    return {
+        "streamName": stream.stream_name,
+        "topic": stream.topic,
+        "partition": stream.partition,
+        "consumerGroup": stream.consumer_group,
+        "offset": events[-1].offset,
+        "eventCount": len(events),
+        "schemaStrategy": stream.schema_strategy,
+    }
+
+
+def _previous_stream_cursors(metadata: Mapping[str, object] | None) -> dict[str, object]:
+    if not isinstance(metadata, Mapping):
+        return {}
+    raw = metadata.get("streamCursors")
+    cursors = dict(raw) if isinstance(raw, Mapping) else {}
+    legacy = metadata.get("streamCursor")
+    if isinstance(legacy, Mapping):
+        key = _cursor_key_from_payload(legacy)
+        if key is not None:
+            cursors.setdefault(key, dict(legacy))
+    return cursors
+
+
+def _stream_cursor_key(stream: StreamArchiveConfig) -> str:
+    return f"{stream.topic}:{stream.consumer_group}:{stream.partition}:{stream.schema_strategy}"
+
+
+def _cursor_key_from_payload(cursor: Mapping[str, object]) -> str | None:
+    topic = cursor.get("topic")
+    group = cursor.get("consumerGroup")
+    partition = cursor.get("partition")
+    if not isinstance(topic, str) or not isinstance(group, str) or not isinstance(partition, int):
+        return None
+    return f"{topic}:{group}:{partition}:{_cursor_schema_strategy(cursor)}"
 
 
 def stream_event_id(event: StreamEvent, stream: StreamArchiveConfig) -> str:

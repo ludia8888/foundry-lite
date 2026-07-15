@@ -23,6 +23,12 @@ from foundry_lite.infrastructure.adapters.kafka_stream import (
     KafkaStreamAdapterConfig,
     KafkaStreamSubscription,
 )
+from foundry_lite.infrastructure.adapters.kraken_websocket import (
+    KrakenSignal,
+    KrakenTrade,
+    KrakenWebSocketV2Adapter,
+    KrakenWebSocketV2Config,
+)
 from foundry_lite.infrastructure.adapters.local_backup_artifact_store import LocalBackupArtifactStore
 from foundry_lite.infrastructure.adapters.local_completion import LocalCompletionAdapter
 from foundry_lite.infrastructure.adapters.local_content_index import LocalContentIndexAdapter
@@ -57,6 +63,7 @@ from foundry_lite.infrastructure.adapters.scale_foundation import (
     LocalWorkflowAdapter,
 )
 from foundry_lite.infrastructure.adapters.source_database import SqlAlchemySourceDatabaseAdapter
+from foundry_lite.infrastructure.adapters.source_stream import KafkaSourceStreamAdapter
 from foundry_lite.infrastructure.adapters.spark_compute import SparkComputeAdapter
 from foundry_lite.infrastructure.adapters.temporal_workflow import (
     TemporalWorkflowAdapter,
@@ -77,12 +84,17 @@ __all__ = [
     "FakeComputeAdapter",
     "SparkComputeAdapter",
     "SqlAlchemySourceDatabaseAdapter",
+    "KafkaSourceStreamAdapter",
     "FakeSearchAdapter",
     "FakeStreamAdapter",
     "FakeWorkflowAdapter",
     "KafkaStreamAdapter",
     "KafkaStreamAdapterConfig",
     "KafkaStreamSubscription",
+    "KrakenSignal",
+    "KrakenTrade",
+    "KrakenWebSocketV2Adapter",
+    "KrakenWebSocketV2Config",
     "LocalCompletionAdapter",
     "LocalBackupArtifactStore",
     "LocalConnectorAdapter",

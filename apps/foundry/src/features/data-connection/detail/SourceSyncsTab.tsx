@@ -19,6 +19,9 @@ interface SourceSyncsTabProps {
   /** 탐색 탭 등에서 "동기화 생성"으로 진입할 때 true. */
   shouldStartCreating?: boolean;
   initialSyncName?: string | null;
+  initialResourceName?: string | null;
+  /** sync 상태가 바뀌면 상위 Source 투영 목록도 다시 읽는다. */
+  onSyncStateChanged?: () => void | Promise<void>;
 }
 
 /**
@@ -29,6 +32,8 @@ export function SourceSyncsTab({
   source,
   shouldStartCreating = false,
   initialSyncName = null,
+  initialResourceName = null,
+  onSyncStateChanged,
 }: SourceSyncsTabProps) {
   const syncsQuery = useManagedSyncs();
   const [selectedSyncName, setSelectedSyncName] = useState<string | null>(
@@ -71,6 +76,7 @@ export function SourceSyncsTab({
     return (
       <NewSyncEditor
         source={source}
+        initialResourceName={initialResourceName ?? undefined}
         onCreated={handleCreated}
         onCancel={() => setIsCreating(false)}
       />
@@ -138,7 +144,15 @@ export function SourceSyncsTab({
         {selectedSync ? (
           <SyncDetailView
             sync={selectedSync}
-            onRunStarted={() => void syncsQuery.reload()}
+            isSourceDisabled={source.status === "disabled"}
+            onRunStarted={() => {
+              void syncsQuery.reload();
+              void onSyncStateChanged?.();
+            }}
+            onSyncUpdated={(updated) => {
+              setSelectedSyncName(updated.syncName);
+              void syncsQuery.reload();
+            }}
           />
         ) : null}
       </div>

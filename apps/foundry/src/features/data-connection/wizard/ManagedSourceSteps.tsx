@@ -19,6 +19,8 @@ import { WizardField, WizardStepFooter } from "./WizardFields";
 /** 자격 증명 + 네트워크 정책 폼 (Palantir add network egress policy 구조). */
 export function CredentialNetworkStep({
   identitySection,
+  isDatabaseSource,
+  isKafkaSource,
   connectionMode,
   hasCredential,
   onHasCredentialChange,
@@ -38,6 +40,8 @@ export function CredentialNetworkStep({
   onContinue,
 }: {
   identitySection?: ReactNode;
+  isDatabaseSource: boolean;
+  isKafkaSource: boolean;
   connectionMode: ConnectionMode;
   hasCredential: boolean;
   onHasCredentialChange: (value: boolean) => void;
@@ -95,22 +99,54 @@ export function CredentialNetworkStep({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="bearer">Bearer 토큰</SelectItem>
-                  <SelectItem value="basic_auth">Basic 인증</SelectItem>
-                  <SelectItem value="api_key">API 키</SelectItem>
+                  {isDatabaseSource ? (
+                    <SelectItem value="database_url">Database URL</SelectItem>
+                  ) : isKafkaSource ? (
+                    <>
+                      <SelectItem value="sasl_plain">SASL/PLAIN</SelectItem>
+                      <SelectItem value="sasl_scram_sha256">
+                        SASL/SCRAM-SHA-256
+                      </SelectItem>
+                      <SelectItem value="sasl_scram_sha512">
+                        SASL/SCRAM-SHA-512
+                      </SelectItem>
+                    </>
+                  ) : (
+                    <>
+                      <SelectItem value="bearer">Bearer 토큰</SelectItem>
+                      <SelectItem value="basic_auth">Basic 인증</SelectItem>
+                      <SelectItem value="api_key">API 키</SelectItem>
+                    </>
+                  )}
                 </SelectContent>
               </Select>
             </WizardField>
             <WizardField
               label="비밀 값"
-              helper="저장 후에는 ***REDACTED*** 참조로만 노출됩니다."
+              helper={
+                isDatabaseSource
+                  ? "전체 database URL은 vault에 저장되고 이후 ***REDACTED*** 참조로만 노출됩니다."
+                  : isKafkaSource
+                    ? "username:password 형식입니다. 비밀 값은 vault에만 저장됩니다."
+                  : authScheme === "basic_auth"
+                    ? "username:password 형식으로 입력합니다. 값 전체가 vault에 저장되고 화면에는 다시 표시되지 않습니다."
+                  : "저장 후에는 ***REDACTED*** 참조로만 노출됩니다."
+              }
               className="md:col-span-2"
             >
               <Input
                 type="password"
                 value={secretValue}
                 onChange={(event) => onSecretValueChange(event.target.value)}
-                placeholder="토큰 또는 비밀번호"
+                placeholder={
+                  isDatabaseSource
+                    ? "postgresql+psycopg://user:password@db.internal:5432/database"
+                    : isKafkaSource
+                      ? "username:password"
+                    : authScheme === "basic_auth"
+                      ? "username:password"
+                    : "토큰 또는 비밀번호"
+                }
                 className="h-8 font-mono text-xs"
               />
             </WizardField>
@@ -150,7 +186,7 @@ export function CredentialNetworkStep({
             {connectionMode === "agent_proxy" ? (
               <WizardField
                 label="에이전트"
-                helper="에이전트 경유 모드에서는 아래 에이전트가 함께 등록됩니다."
+                helper="daemon이 self-register한 Agent와 이 정책을 연결합니다."
                 className="md:col-span-2"
               >
                 <Input

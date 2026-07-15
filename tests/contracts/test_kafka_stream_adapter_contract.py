@@ -257,11 +257,7 @@ def test_stream_archive_worker_continuous_loop_archives_until_empty_poll(tmp_pat
 
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
     ctx = demo_admin_context()
-    archived_rows = [
-        row
-        for version in foundry.datasets.list_versions("raw.shipment_events", ctx=ctx)
-        for row in foundry.datasets.preview("raw.shipment_events", ctx=ctx, version=version["id"])
-    ]
+    archived_rows = foundry.datasets.preview("raw.shipment_events", ctx=ctx)
     assert result.stop_reason == "empty_polls"
     assert result.iterations == 3
     assert result.archived_batches == 2
@@ -750,11 +746,9 @@ def _workflow_row(storage_root: Path, workflow_run_id: str | None) -> dict[str, 
 def _archived_rows(storage_root: Path) -> list[dict[str, object]]:
     foundry = FoundryLite(dependencies=create_local_core_dependencies(storage_root=storage_root))
     ctx = demo_admin_context()
-    return [
-        dict(row)
-        for version in foundry.datasets.list_versions("raw.shipment_events", ctx=ctx)
-        for row in foundry.datasets.preview("raw.shipment_events", ctx=ctx, version=version["id"])
-    ]
+    if not foundry.datasets.list_versions("raw.shipment_events", ctx=ctx):
+        return []
+    return [dict(row) for row in foundry.datasets.preview("raw.shipment_events", ctx=ctx)]
 
 
 def _latest_sync_run(storage_root: Path) -> dict[str, object]:

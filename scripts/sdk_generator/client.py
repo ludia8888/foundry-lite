@@ -71,6 +71,19 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
         "  sources: {",
         "    list(): Promise<SourceConnection[]>;",
         "    get(sourceName: string): Promise<SourceConnection>;",
+        (
+            "    updateStatus(sourceName: string, payload: SourceStatusUpdateRequest, "
+            "options: { idempotencyKey: string }): Promise<SourceConnection>;"
+        ),
+        (
+            "    testConnection(sourceName: string, payload: SourceConnectionTestRequest, "
+            "options: { idempotencyKey: string }): Promise<SourceConnectionTestResult>;"
+        ),
+        (
+            "    listConnectionTests(sourceName: string, options?: { limit?: number }): "
+            "Promise<SourceConnectionTestResult[]>;"
+        ),
+        ("    listEgressAttempts(sourceName: string, options?: { limit?: number }): Promise<SourceEgressAttempt[]>;"),
         "    templates: {",
         "      list(): Promise<SourceTemplate[]>;",
         "    };",
@@ -108,11 +121,32 @@ def _client_type_lines(surface: SdkClientSurface) -> list[str]:
         "      list(): Promise<SourceManagedSync[]>;",
         "      get(syncName: string): Promise<SourceManagedSync>;",
         (
+            "      updateSchedule(syncName: string, payload: SourceManagedSyncScheduleUpdateRequest, "
+            "options: { idempotencyKey: string }): Promise<SourceManagedSync>;"
+        ),
+        (
+            "      pauseSchedule(syncName: string, payload: SourceManagedSyncScheduleStateRequest, "
+            "options: { idempotencyKey: string }): Promise<SourceManagedSync>;"
+        ),
+        (
+            "      resumeSchedule(syncName: string, payload: SourceManagedSyncScheduleStateRequest, "
+            "options: { idempotencyKey: string }): Promise<SourceManagedSync>;"
+        ),
+        (
             "      startRun(syncName: string, payload: SourceManagedSyncRunStartRequest | undefined, "
             "options: { idempotencyKey: string }): Promise<SourceManagedSyncRun>;"
         ),
         "      listRuns(syncName: string): Promise<SourceManagedSyncRun[]>;",
         "      getRun(runId: string): Promise<SourceManagedSyncRun>;",
+        (
+            "      startStream(syncName: string, payload: SourceManagedStreamingSyncStateRequest, "
+            "options: { idempotencyKey: string }): Promise<SourceManagedStreamingSyncStatus>;"
+        ),
+        (
+            "      stopStream(syncName: string, payload: SourceManagedStreamingSyncStateRequest, "
+            "options: { idempotencyKey: string }): Promise<SourceManagedStreamingSyncStatus>;"
+        ),
+        "      streamStatus(syncName: string): Promise<SourceManagedStreamingSyncStatus>;",
         "    };",
         "    scheduler: {",
         "      previewDue(options?: SourceSchedulerTickRequest): Promise<SourceSchedulerTickResult>;",
@@ -1911,6 +1945,51 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "      list: () => request<SourceConnection[]>(`/api/sources`),",
         "      get: (sourceName: string) => "
         "request<SourceConnection>(`/api/sources/${encodeURIComponent(sourceName)}`),",
+        "      updateStatus: (",
+        "        sourceName: string,",
+        "        payload: SourceStatusUpdateRequest,",
+        "        options: { idempotencyKey: string },",
+        "      ) =>",
+        "        request<SourceConnection>(`/api/sources/${encodeURIComponent(sourceName)}/status`, {",
+        '          method: "PATCH",',
+        "          headers: {",
+        '            "Content-Type": "application/json",',
+        ('            "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "sources.updateStatus"),'),
+        "          },",
+        "          body: JSON.stringify(payload),",
+        "        }),",
+        "      testConnection: (",
+        "        sourceName: string,",
+        "        payload: SourceConnectionTestRequest,",
+        "        options: { idempotencyKey: string },",
+        "      ) =>",
+        "        request<SourceConnectionTestResult>(",
+        "          `/api/sources/${encodeURIComponent(sourceName)}/connection-tests`,",
+        "          {",
+        '            method: "POST",',
+        "            headers: {",
+        '              "Content-Type": "application/json",',
+        ('              "Idempotency-Key": requireIdempotencyKey(options?.idempotencyKey, "sources.testConnection"),'),
+        "            },",
+        "            body: JSON.stringify(payload),",
+        "          },",
+        "        ),",
+        "      listConnectionTests: (sourceName: string, options: { limit?: number } = {}) => {",
+        "        const params = new URLSearchParams();",
+        "        if (options.limit !== undefined) params.set('limit', String(options.limit));",
+        "        const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "        return request<SourceConnectionTestResult[]>(",
+        "          `/api/sources/${encodeURIComponent(sourceName)}/connection-tests${suffix}`",
+        "        );",
+        "      },",
+        "      listEgressAttempts: (sourceName: string, options: { limit?: number } = {}) => {",
+        "        const params = new URLSearchParams();",
+        "        if (options.limit !== undefined) params.set('limit', String(options.limit));",
+        "        const suffix = params.toString() ? `?${params.toString()}` : '';",
+        "        return request<SourceEgressAttempt[]>(",
+        "          `/api/sources/${encodeURIComponent(sourceName)}/egress-attempts${suffix}`",
+        "        );",
+        "      },",
         "      templates: {",
         "        list: () => request<SourceTemplate[]>(`/api/sources/templates`),",
         "      },",
@@ -1986,6 +2065,63 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "        list: () => request<SourceManagedSync[]>(`/api/sources/managed-syncs`),",
         "        get: (syncName: string) =>",
         "          request<SourceManagedSync>(`/api/sources/managed-syncs/${encodeURIComponent(syncName)}`),",
+        "        updateSchedule: (",
+        "          syncName: string,",
+        "          payload: SourceManagedSyncScheduleUpdateRequest,",
+        "          options: { idempotencyKey: string },",
+        "        ) =>",
+        "          request<SourceManagedSync>(",
+        "            `/api/sources/managed-syncs/${encodeURIComponent(syncName)}/schedule`,",
+        "            {",
+        '              method: "PATCH",',
+        "              headers: {",
+        '                "Content-Type": "application/json",',
+        (
+            '                "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "sources.managedSyncs.updateSchedule"),'
+        ),
+        "              },",
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "        pauseSchedule: (",
+        "          syncName: string,",
+        "          payload: SourceManagedSyncScheduleStateRequest,",
+        "          options: { idempotencyKey: string },",
+        "        ) =>",
+        "          request<SourceManagedSync>(",
+        "            `/api/sources/managed-syncs/${encodeURIComponent(syncName)}/schedule/pause`,",
+        "            {",
+        '              method: "POST",',
+        "              headers: {",
+        '                "Content-Type": "application/json",',
+        (
+            '                "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "sources.managedSyncs.pauseSchedule"),'
+        ),
+        "              },",
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "        resumeSchedule: (",
+        "          syncName: string,",
+        "          payload: SourceManagedSyncScheduleStateRequest,",
+        "          options: { idempotencyKey: string },",
+        "        ) =>",
+        "          request<SourceManagedSync>(",
+        "            `/api/sources/managed-syncs/${encodeURIComponent(syncName)}/schedule/resume`,",
+        "            {",
+        '              method: "POST",',
+        "              headers: {",
+        '                "Content-Type": "application/json",',
+        (
+            '                "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "sources.managedSyncs.resumeSchedule"),'
+        ),
+        "              },",
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
         "        startRun: (",
         "          syncName: string,",
         "          payload: SourceManagedSyncRunStartRequest = {},",
@@ -2009,6 +2145,48 @@ def _client_runtime_lines(surface: SdkClientSurface) -> list[str]:
         "          request<SourceManagedSyncRun[]>(`/api/sources/managed-syncs/${encodeURIComponent(syncName)}/runs`),",
         "        getRun: (runId: string) =>",
         "          request<SourceManagedSyncRun>(`/api/sources/managed-sync-runs/${encodeURIComponent(runId)}`),",
+        "        startStream: (",
+        "          syncName: string,",
+        "          payload: SourceManagedStreamingSyncStateRequest,",
+        "          options: { idempotencyKey: string },",
+        "        ) =>",
+        "          request<SourceManagedStreamingSyncStatus>(",
+        "            `/api/sources/managed-syncs/${encodeURIComponent(syncName)}/stream/start`,",
+        "            {",
+        '              method: "POST",',
+        "              headers: {",
+        '                "Content-Type": "application/json",',
+        (
+            '                "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "sources.managedSyncs.startStream"),'
+        ),
+        "              },",
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "        stopStream: (",
+        "          syncName: string,",
+        "          payload: SourceManagedStreamingSyncStateRequest,",
+        "          options: { idempotencyKey: string },",
+        "        ) =>",
+        "          request<SourceManagedStreamingSyncStatus>(",
+        "            `/api/sources/managed-syncs/${encodeURIComponent(syncName)}/stream/stop`,",
+        "            {",
+        '              method: "POST",',
+        "              headers: {",
+        '                "Content-Type": "application/json",',
+        (
+            '                "Idempotency-Key": '
+            'requireIdempotencyKey(options?.idempotencyKey, "sources.managedSyncs.stopStream"),'
+        ),
+        "              },",
+        "              body: JSON.stringify(payload),",
+        "            },",
+        "          ),",
+        "        streamStatus: (syncName: string) =>",
+        "          request<SourceManagedStreamingSyncStatus>(",
+        "            `/api/sources/managed-syncs/${encodeURIComponent(syncName)}/stream/status`,",
+        "          ),",
         "      },",
         "      scheduler: {",
         "        previewDue: (options: SourceSchedulerTickRequest = {}) => {",

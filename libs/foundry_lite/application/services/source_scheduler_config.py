@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
+from foundry_lite.application.services.source_schedule_health import (
+    SourceScheduleHealth,
+    auto_pause_failure_threshold,
+    source_schedule_health,
+)
 from foundry_lite.domain.errors import ValidationFailed
 
 _SCHEDULER_PREFIX = "scheduler"
@@ -22,8 +27,10 @@ class SourceScheduleDecision:
     next_due_at: str | None
     idempotency_key: str | None
     batch_limit: int | None
+    health: SourceScheduleHealth | None = None
 
     def as_dict(self) -> dict[str, object]:
+        health = self.health.as_dict() if self.health else source_schedule_health({}, []).as_dict()
         return {
             "syncName": self.sync_name,
             "enabled": self.is_enabled,
@@ -33,7 +40,38 @@ class SourceScheduleDecision:
             "nextDueAt": self.next_due_at,
             "idempotencyKey": self.idempotency_key,
             "batchLimit": self.batch_limit,
+            **health,
         }
+
+
+def normalized_source_schedule(schedule: Mapping[str, object]) -> dict[str, object]:
+    """Validate and reduce a managed-sync schedule to its durable contract."""
+    mode = str(schedule.get("mode") or "manual").strip().lower()
+    if mode not in {"manual", "disabled", "interval", "cron"}:
+        raise ValidationFailed("unsupported managed sync schedule mode", details={"mode": mode})
+    normalized: dict[str, object] = {"mode": mode}
+    if mode == "interval":
+        normalized["everySeconds"] = _positive_int(
+            schedule.get("everySeconds") or schedule.get("intervalSeconds"), "everySeconds"
+        )
+    if mode == "cron":
+        expression = str(schedule.get("cron") or "").strip()
+        _cron_fields(expression)
+        normalized["cron"] = expression
+    _copy_optional_schedule_fields(schedule, normalized)
+    return normalized
+
+
+def resumed_source_schedule(schedule: Mapping[str, object], resumed_at: str) -> dict[str, object]:
+    """Reset the trigger anchor without discarding the recurring schedule."""
+    resumed = dict(schedule)
+    current = _parse_datetime(resumed_at)
+    if resumed.get("mode") == "interval":
+        seconds = _positive_int(resumed.get("everySeconds") or resumed.get("intervalSeconds"), "everySeconds")
+        resumed["startAt"] = _iso(current + timedelta(seconds=seconds))
+    if resumed.get("mode") == "cron":
+        resumed["startAt"] = _iso(_minute_floor(current) + timedelta(minutes=1))
+    return normalized_source_schedule(resumed)
 
 
 def source_schedule_decision(
@@ -42,8 +80,18 @@ def source_schedule_decision(
     *,
     now: datetime,
 ) -> SourceScheduleDecision:
+    decision = _base_source_schedule_decision(sync, runs, now)
+    return replace(decision, health=source_schedule_health(sync, runs))
+
+
+def _base_source_schedule_decision(
+    sync: Mapping[str, object], runs: Sequence[Mapping[str, object]], now: datetime
+) -> SourceScheduleDecision:
     schedule = _mapping(sync.get("schedule"))
     sync_name = str(sync["sync_name"])
+    status = str(sync.get("status") or "active")
+    if status != "active":
+        return _inactive(sync_name, status)
     mode = str(schedule.get("mode") or "manual")
     if mode in {"manual", "disabled"}:
         return _disabled(sync_name, mode)
@@ -67,12 +115,26 @@ def source_schedule_decision(
     )
 
 
+def _copy_optional_schedule_fields(schedule: Mapping[str, object], normalized: dict[str, object]) -> None:
+    if schedule.get("startAt") is not None:
+        normalized["startAt"] = _iso(_parse_datetime(str(schedule["startAt"])))
+    if schedule.get("batchLimit") is not None:
+        normalized["batchLimit"] = _positive_int(schedule["batchLimit"], "batchLimit")
+    if schedule.get("autoPauseAfterFailures") is not None:
+        normalized["autoPauseAfterFailures"] = auto_pause_failure_threshold(schedule)
+
+
 def scheduler_idempotency_key(sync_name: str, slot_start: datetime) -> str:
     return f"{_SCHEDULER_PREFIX}:{sync_name}:{_iso(slot_start)}"
 
 
 def _disabled(sync_name: str, mode: str) -> SourceScheduleDecision:
     return SourceScheduleDecision(sync_name, False, False, f"{mode}_schedule", None, None, None, None)
+
+
+def _inactive(sync_name: str, status: str) -> SourceScheduleDecision:
+    reason = "schedule_paused" if status == "paused" else "sync_inactive"
+    return SourceScheduleDecision(sync_name, False, False, reason, None, None, None, None)
 
 
 def _not_due(
@@ -87,10 +149,19 @@ def _not_due(
         False,
         "not_due",
         None,
-        _next_due(schedule, sync, _minute_floor(now)),
+        _pending_next_due(schedule, sync, now),
         None,
         _optional_int(schedule.get("batchLimit")),
     )
+
+
+def _pending_next_due(schedule: Mapping[str, object], sync: Mapping[str, object], now: datetime) -> str | None:
+    anchor = _anchor(schedule, sync)
+    if now < anchor:
+        if schedule.get("mode") == "interval":
+            return _iso(anchor)
+        return _next_cron_due(schedule, sync, _minute_floor(anchor) - timedelta(minutes=1))
+    return _next_due(schedule, sync, _minute_floor(now))
 
 
 def _already_started(
@@ -175,13 +246,19 @@ def _next_due(schedule: Mapping[str, object], sync: Mapping[str, object], slot_s
 
 def _next_cron_due(schedule: Mapping[str, object], sync: Mapping[str, object], slot_start: datetime) -> str:
     fields = _cron_fields(str(schedule.get("cron") or ""))
-    anchor = max(_anchor(schedule, sync), _minute_floor(slot_start) + timedelta(minutes=1))
+    anchor = _cron_candidate_at_or_after(_anchor(schedule, sync))
+    anchor = max(anchor, _minute_floor(slot_start) + timedelta(minutes=1))
     candidate = anchor
     for _ in range(_MAX_CRON_LOOKBACK_MINUTES):
         if _cron_matches(candidate, fields):
             return _iso(candidate)
         candidate += timedelta(minutes=1)
     raise ValidationFailed("cron schedule has no upcoming matching slot", details={"cron": schedule.get("cron")})
+
+
+def _cron_candidate_at_or_after(value: datetime) -> datetime:
+    candidate = _minute_floor(value)
+    return candidate if candidate >= value else candidate + timedelta(minutes=1)
 
 
 def _anchor(schedule: Mapping[str, object], sync: Mapping[str, object]) -> datetime:

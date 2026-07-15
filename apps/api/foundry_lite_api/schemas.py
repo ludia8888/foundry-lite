@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import File, Query
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -712,6 +714,7 @@ class RestConnectorAuthRequest(BaseModel):
 
     mode: str = "none"
     token_secret_ref: str | None = Field(default=None, alias="tokenSecretRef")
+    basic_credentials_secret_ref: str | None = Field(default=None, alias="basicCredentialsSecretRef")
     header_name: str | None = Field(default=None, alias="headerName")
     header_value_secret_ref: str | None = Field(default=None, alias="headerValueSecretRef")
     token: str | None = None
@@ -726,6 +729,7 @@ class RestConnectorPaginationRequest(BaseModel):
     cursor_query_param: str = Field(default="cursor", alias="cursorQueryParam")
     cursor_key: str = Field(default="cursor", alias="cursorKey")
     strategy: str = "cursor"
+    max_pages_per_snapshot: int = Field(default=1, ge=1, le=100, alias="maxPagesPerSnapshot")
 
 
 class RestConnectorConnectionCreateRequest(BaseModel):
@@ -863,8 +867,40 @@ class SourceManagedSyncCreateRequest(BaseModel):
 class SourceManagedSyncRunStartRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    trigger_type: str = Field(default="manual", alias="triggerType")
+    trigger_type: Literal["manual", "recovery"] = Field(default="manual", alias="triggerType")
     batch_limit: int | None = Field(default=None, alias="batchLimit")
+
+
+class SourceManagedStreamingSyncStateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_config_fingerprint: str = Field(alias="expectedConfigFingerprint")
+
+
+class SourceManagedSyncScheduleUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    schedule: JsonObject
+    expected_config_fingerprint: str = Field(alias="expectedConfigFingerprint")
+
+
+class SourceManagedSyncScheduleStateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_config_fingerprint: str = Field(alias="expectedConfigFingerprint")
+
+
+class SourceStatusUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: Literal["active", "disabled"]
+    expected_config_fingerprint: str = Field(alias="expectedConfigFingerprint")
+
+
+class SourceConnectionTestRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    expected_config_fingerprint: str = Field(alias="expectedConfigFingerprint")
 
 
 class SourceSchedulerTickRequest(BaseModel):

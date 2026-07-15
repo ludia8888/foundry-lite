@@ -9,10 +9,15 @@ from foundry_lite.application.ports import (
     ConnectorConnectionAlreadyExistsError,
     ConnectorConnectionRecord,
     ConnectorConnectionRow,
+    ConnectorNetworkRoute,
     ConnectorRegistryRepository,
     ConnectorResourceRow,
     DatasetRow,
+    DatasetTransactionRepository,
     ProductWorkflowRun,
+    SourceConnectionRow,
+    SourceManagementRepository,
+    SourceRegistryRepository,
 )
 from foundry_lite.application.services.base import CoreService
 from foundry_lite.application.services.connector_onboarding_config import (
@@ -40,6 +45,7 @@ from foundry_lite.application.services.connector_onboarding_views import (
 from foundry_lite.application.services.dataset.ingest import DatasetIngestService
 from foundry_lite.application.services.dataset.registry import DatasetRegistryService
 from foundry_lite.application.services.runtime_service import RuntimeService
+from foundry_lite.application.services.source_network_routing import resolve_source_network_route
 from foundry_lite.application.services.workflow_orchestration_service import WorkflowOrchestrationService
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFound, ValidationFailed
@@ -48,7 +54,15 @@ from foundry_lite.domain.errors import ConflictDetected, FoundryLiteError, NotFo
 class ConnectorOnboardingService(CoreService):
     """Product surface for registering REST connector configs and starting syncs."""
 
-    required_dependencies = ("engine", "policy", "connector_registry_repository", "connector_adapter")
+    required_dependencies = (
+        "engine",
+        "policy",
+        "connector_registry_repository",
+        "connector_adapter",
+        "dataset_transaction_repository",
+        "source_management_repository",
+        "source_registry_repository",
+    )
     required_collaborators = (
         "dataset_ingest_service",
         "dataset_registry_service",
@@ -57,6 +71,9 @@ class ConnectorOnboardingService(CoreService):
     )
     connector_registry_repository: ConnectorRegistryRepository
     connector_adapter: ConnectorAdapter
+    dataset_transaction_repository: DatasetTransactionRepository
+    source_management_repository: SourceManagementRepository
+    source_registry_repository: SourceRegistryRepository
     dataset_ingest_service: DatasetIngestService
     dataset_registry_service: DatasetRegistryService
     runtime_service: RuntimeService
@@ -182,13 +199,18 @@ class ConnectorOnboardingService(CoreService):
         return _resource_view(connection, row)
 
     def test_resource(
-        self, connector_name: str, resource_name: str, *, ctx: RequestContext | None = None
+        self,
+        connector_name: str,
+        resource_name: str,
+        *,
+        ctx: RequestContext | None = None,
+        network_route: ConnectorNetworkRoute | None = None,
     ) -> dict[str, object]:
         ctx = ctx or RequestContext()
         self._require_write(ctx, "test_resource", f"{connector_name}/{resource_name}")
         bundle = self._resource_bundle(ctx, connector_name, resource_name)
         try:
-            snapshot = self.connector_adapter.snapshot(_snapshot_request(ctx, bundle))
+            snapshot = self.connector_adapter.snapshot(_snapshot_request(ctx, bundle, network_route))
         except FoundryLiteError as exc:
             self._audit_resource_test(ctx, bundle, status="failed", error=_error_payload(exc))
             return _test_result(bundle, status="failed", error=_error_payload(exc))
@@ -199,6 +221,7 @@ class ConnectorOnboardingService(CoreService):
             rows=snapshot.rows,
             schema=snapshot.schema,
             cursor=snapshot.cursor,
+            network_evidence=snapshot.network_evidence,
         )
 
     def start_resource_sync(
@@ -209,6 +232,7 @@ class ConnectorOnboardingService(CoreService):
         idempotency_key: str,
         ctx: RequestContext | None = None,
         sync_name: str | None = None,
+        source_name: str | None = None,
         transaction_type: str = "SNAPSHOT",
     ) -> ProductWorkflowRun:
         ctx = ctx or RequestContext()
@@ -223,6 +247,7 @@ class ConnectorOnboardingService(CoreService):
             idempotency_key=idempotency_key,
             ctx=ctx,
             sync_name=sync_name,
+            source_name=source_name,
             config_fingerprint=bundle.config_fingerprint,
             transaction_type=transaction_type,
         )
@@ -238,6 +263,7 @@ class ConnectorOnboardingService(CoreService):
                 "connector config changed after workflow start",
                 details={"connector_name": connector_name},
             )
+        network_route = self._source_network_route(ctx, payload)
         result = self.dataset_ingest_service.sync_connector_snapshot(
             bundle.resource["dataset_ref"],
             connector_name=connector_name,
@@ -246,8 +272,53 @@ class ConnectorOnboardingService(CoreService):
             ctx=ctx,
             tx_type=str(payload.get("transactionType") or "SNAPSHOT"),
             rest=bundle.rest,
+            network_route=network_route,
         )
-        return _activity_result(result, connector_name, resource_name, bundle.config_fingerprint)
+        network_evidence = self._committed_network_evidence(ctx, result.version_id)
+        return _activity_result(
+            result,
+            connector_name,
+            resource_name,
+            bundle.config_fingerprint,
+            network_evidence=network_evidence,
+        )
+
+    def _committed_network_evidence(self, ctx: RequestContext, version_id: str) -> Mapping[str, object]:
+        with self.engine.begin() as conn:
+            row = self.dataset_transaction_repository.committed_transaction_by_version(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                committed_version_id=version_id,
+            )
+        if row is None:
+            return {}
+        metadata = row.get("metadata")
+        value = metadata.get("connectorNetworkEvidence") if isinstance(metadata, Mapping) else None
+        if not isinstance(value, Mapping) or not value:
+            return {}
+        return {"source": "dataset_transaction.metadata", **dict(value)}
+
+    def _source_network_route(
+        self,
+        ctx: RequestContext,
+        payload: Mapping[str, object],
+    ) -> ConnectorNetworkRoute | None:
+        source_name = _optional_text(payload.get("sourceName"))
+        if source_name is None:
+            return None
+        source = self._source_row(ctx, source_name)
+        return resolve_source_network_route(self.engine, self.source_management_repository, ctx, source)
+
+    def _source_row(self, ctx: RequestContext, source_name: str) -> SourceConnectionRow:
+        with self.engine.begin() as conn:
+            source = self.source_registry_repository.source_by_name(
+                transaction=conn,
+                tenant_id=ctx.tenant_id,
+                source_name=source_name,
+            )
+        if source is None:
+            raise NotFound("source not found", details={"source_name": source_name})
+        return source
 
     def _create_or_replay_connection(
         self,

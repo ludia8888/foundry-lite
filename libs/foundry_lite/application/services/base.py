@@ -59,6 +59,7 @@ from foundry_lite.application.ports.secret_provider import SecretProvider, Secre
 from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter
 from foundry_lite.application.ports.source_management_repository import SourceManagementRepository
 from foundry_lite.application.ports.source_registry_repository import SourceRegistryRepository
+from foundry_lite.application.ports.source_stream_adapter import SourceStreamAdapter
 from foundry_lite.application.ports.tool_executor import ToolExecutor
 from foundry_lite.application.ports.vision_embedding_model import VisionEmbeddingModelAdapter
 from foundry_lite.observability.tracing import trace_direct_public_methods
@@ -178,6 +179,7 @@ class CoreService:
     connector_registry_repository: ConnectorRegistryRepository
     source_management_repository: SourceManagementRepository
     source_registry_repository: SourceRegistryRepository
+    source_stream_adapter: SourceStreamAdapter
     dataset_repository: DatasetRepository
     dataset_transaction_repository: DatasetTransactionRepository
     dataset_version_repository: DatasetVersionRepository

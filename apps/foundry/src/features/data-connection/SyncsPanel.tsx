@@ -22,6 +22,9 @@ import { LoadingState } from "@/components/shared/LoadingState";
 import { StatusPill } from "@/components/shared/StatusPill";
 import { Button } from "@/components/ui/button";
 
+import { SyncNetworkEvidenceCard } from "./detail/SyncNetworkEvidenceCard";
+import { StreamingSyncTelemetry } from "./detail/StreamingSyncTelemetry";
+import { readSchedule, scheduleSummary } from "./detail/sync-config";
 import {
   formatTimestamp,
   readSyncRunRowCount,
@@ -31,7 +34,6 @@ import {
   statusLabel,
   toOperationsHref,
 } from "./source-model";
-import { readSchedule, scheduleSummary } from "./detail/sync-config";
 import { useManagedSyncs, useSyncRuns } from "./use-source-queries";
 
 const SYNC_COLUMNS: readonly DataTableColumn<SourceManagedSync>[] = [
@@ -119,7 +121,7 @@ export function SyncsPanel({ initialSyncName = null }: SyncsPanelProps) {
       <div className="p-4">
         <EmptyState
           title="관리형 동기화가 없습니다"
-          description="새 소스 위저드에서 REST API 또는 Postgres 타입 소스를 만들면 반복 sync가 여기에 나타납니다."
+          description="새 소스 위저드에서 REST API, Postgres 또는 Kafka 타입 소스를 만들면 반복 sync가 여기에 나타납니다."
         />
       </div>
     );
@@ -175,10 +177,12 @@ function SourceSchedulerPanel({
     },
   );
 
-  const latest = tick.result ?? dueQuery.data;
-  const dueItems = latest?.due ?? [];
-  const skippedItems = latest?.skipped ?? [];
-  const startedItems = latest?.started ?? [];
+  // previewDue is the current scheduler truth. The tick payload remains useful
+  // as execution evidence, but must not overwrite a newer post-tick preview.
+  const schedulerStatus = dueQuery.data;
+  const dueItems = schedulerStatus?.due ?? [];
+  const skippedItems = tick.result?.skipped ?? [];
+  const startedItems = tick.result?.started ?? [];
 
   return (
     <div className="rounded border bg-card p-3">
@@ -186,7 +190,7 @@ function SourceSchedulerPanel({
         <div>
           <div className="flex items-center gap-2">
             <span className="section-label">Source scheduler</span>
-            {latest ? (
+            {schedulerStatus ? (
               <StatusPill intent={dueItems.length > 0 ? "info" : "neutral"}>
                 due {dueItems.length}건
               </StatusPill>
@@ -198,7 +202,7 @@ function SourceSchedulerPanel({
             ) : null}
           </div>
           <div className="mt-1 font-mono text-[11px] text-muted-foreground">
-            evaluatedAt={latest?.evaluatedAt ?? "—"}
+            evaluatedAt={schedulerStatus?.evaluatedAt ?? "—"}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -237,7 +241,7 @@ function SourceSchedulerPanel({
       <div className="mt-3 grid gap-2 font-mono text-[11px] md:grid-cols-4">
         <SchedulerMetric
           label="evaluated"
-          value={latest ? String(latest.evaluated) : "—"}
+          value={schedulerStatus ? String(schedulerStatus.evaluated) : "—"}
         />
         <SchedulerMetric label="due" value={String(dueItems.length)} />
         <SchedulerMetric label="started" value={String(startedItems.length)} />
@@ -270,7 +274,8 @@ function SourceSchedulerPanel({
               <div key={`${readStartedRunField(item, "runId") ?? index}`}>
                 sync={readStartedSyncName(item) ?? "—"} · run=
                 {readStartedRunField(item, "runId") ?? "—"} · status=
-                {readStartedRunField(item, "status") ?? "—"}
+                {readStartedRunField(item, "status") ?? "—"} · trigger=
+                {readStartedRunField(item, "triggerType") ?? "—"}
               </div>
             ))}
           </div>
@@ -506,6 +511,7 @@ function SyncRunsSection({
           emptyMessage="아직 run이 없습니다. 'run 시작'으로 첫 실행 증거를 만드세요."
         />
       )}
+      <StreamingSyncTelemetry sync={sync} latestRun={runs[0] ?? null} />
       {selectedRun ? <RunDetailCard run={selectedRun} /> : null}
     </div>
   );
@@ -546,6 +552,11 @@ function RunDetailCard({ run }: { run: SourceManagedSyncRun }) {
         <RunDetailRow label="시작" value={formatTimestamp(run.startedAt)} />
         <RunDetailRow label="완료" value={formatTimestamp(run.completedAt)} />
       </dl>
+      {run.networkEvidence ? (
+        <div className="-mx-3 mt-3 -mb-3 overflow-hidden rounded-b">
+          <SyncNetworkEvidenceCard evidence={run.networkEvidence} />
+        </div>
+      ) : null}
       {errorMessage ? (
         <div className="mt-2 rounded border border-destructive/30 bg-destructive/5 p-2">
           <div className="text-[11px] font-semibold text-destructive">

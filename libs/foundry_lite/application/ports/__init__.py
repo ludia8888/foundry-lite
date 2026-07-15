@@ -58,6 +58,7 @@ from foundry_lite.application.ports.compute_adapter import (
 )
 from foundry_lite.application.ports.connector_adapter import (
     ConnectorAdapter,
+    ConnectorNetworkRoute,
     ConnectorRateLimitedError,
     ConnectorSnapshot,
     ConnectorSnapshotRequest,
@@ -381,7 +382,11 @@ from foundry_lite.application.ports.runtime_repository import (
     StoredObservabilityIncident,
     StoredObservabilityIncidentStatus,
 )
-from foundry_lite.application.ports.source_database_adapter import SourceDatabaseAdapter, SourceTableBatch
+from foundry_lite.application.ports.source_database_adapter import (
+    SourceDatabaseAdapter,
+    SourceDatabaseConnectionProbe,
+    SourceTableBatch,
+)
 from foundry_lite.application.ports.source_management_repository import (
     SourceAgentRecord,
     SourceAgentRow,
@@ -402,6 +407,9 @@ from foundry_lite.application.ports.source_registry_repository import (
     SourceConnectionAlreadyExistsError,
     SourceConnectionRecord,
     SourceConnectionRow,
+    SourceConnectionTestAlreadyExistsError,
+    SourceConnectionTestRecord,
+    SourceConnectionTestRow,
     SourceConnectionUpdate,
     SourceRegistryRepository,
 )

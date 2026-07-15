@@ -19,49 +19,89 @@ from foundry_lite.application.services.source_onboarding_config import (
     require_identifier,
     require_text,
 )
+from foundry_lite.application.services.source_scheduler_config import (
+    normalized_source_schedule as normalized_source_schedule,
+)
+from foundry_lite.application.services.source_scheduler_config import (
+    resumed_source_schedule as resumed_source_schedule,
+)
+from foundry_lite.application.services.source_streaming_config import validate_streaming_sync_config
 from foundry_lite.domain.context import RequestContext
 from foundry_lite.domain.errors import ValidationFailed
 
 SOURCE_TEMPLATES: tuple[dict[str, object], ...] = (
     {
+        "sourceType": "kafka",
+        "displayName": "Apache Kafka",
+        "category": "protocol",
+        "description": "Kafka 토픽을 탐색하고 체크포인트 기반 Streaming Sync로 원본 이벤트를 보관합니다.",
+        "isRecommended": True,
+        "executionStatus": "active",
+        "capabilities": ["streaming", "exploration"],
+        "credentialModes": ["none", "credential_ref"],
+        "networkModes": ["direct"],
+        "supportsExploration": True,
+        "managedRunModes": ["manual", "scheduled"],
+    },
+    {
         "sourceType": "rest_api",
         "displayName": "REST API",
+        "category": "protocol",
+        "description": "REST endpoint에 요청을 보내고 응답 데이터를 동기화하거나 코드에서 사용합니다.",
+        "isRecommended": False,
+        "executionStatus": "active",
         "capabilities": ["batch", "exploration", "code_use"],
         "credentialModes": ["credential_ref", "oauth_future"],
         "networkModes": ["direct", "agent_proxy"],
         "supportsExploration": True,
-        "managedRunModes": ["manual", "scheduled_future"],
+        "managedRunModes": ["manual", "scheduled"],
     },
     {
         "sourceType": "postgres_jdbc",
         "displayName": "Postgres Database",
+        "category": "protocol",
+        "description": "PostgreSQL 테이블을 탐색하고 배치 동기화 또는 CDC로 가져옵니다.",
+        "isRecommended": False,
+        "executionStatus": "active",
         "capabilities": ["batch", "exploration", "cdc"],
         "credentialModes": ["credential_ref", "oauth_future"],
         "networkModes": ["direct", "agent_proxy"],
         "supportsExploration": True,
-        "managedRunModes": ["manual", "scheduled_future"],
+        "managedRunModes": ["manual", "scheduled"],
     },
     {
         "sourceType": "sap_odata",
         "displayName": "SAP OData",
+        "category": "protocol",
+        "description": "SAP OData 서비스의 엔터티를 탐색하고 Foundry로 동기화합니다.",
+        "isRecommended": False,
+        "executionStatus": "active",
         "capabilities": ["batch", "exploration"],
         "credentialModes": ["credential_ref", "oauth_future"],
         "networkModes": ["direct", "agent_proxy"],
         "supportsExploration": True,
-        "managedRunModes": ["manual", "scheduled_future"],
+        "managedRunModes": ["manual", "scheduled"],
     },
     {
         "sourceType": "sharepoint_graph",
         "displayName": "SharePoint Graph",
+        "category": "protocol",
+        "description": "SharePoint Online의 파일과 미디어를 탐색해 안전하게 동기화합니다.",
+        "isRecommended": False,
+        "executionStatus": "definition_only",
         "capabilities": ["batch_file", "media", "exploration"],
         "credentialModes": ["credential_ref", "oauth_future"],
         "networkModes": ["direct", "agent_proxy"],
         "supportsExploration": True,
-        "managedRunModes": ["manual", "scheduled_future"],
+        "managedRunModes": ["definition_only"],
     },
     {
         "sourceType": "webhook_listener",
         "displayName": "Inbound Webhook",
+        "category": "protocol",
+        "description": "외부 시스템이 보내는 이벤트를 서명 검증 후 스트림으로 수신합니다.",
+        "isRecommended": False,
+        "executionStatus": "active",
         "capabilities": ["streaming"],
         "credentialModes": ["credential_ref", "oauth_future"],
         "networkModes": ["direct"],
@@ -71,6 +111,10 @@ SOURCE_TEMPLATES: tuple[dict[str, object], ...] = (
     {
         "sourceType": "debezium_cdc",
         "displayName": "Debezium CDC",
+        "category": "protocol",
+        "description": "데이터베이스 변경 로그를 지속 수집해 CDC 스트림과 객체 색인을 갱신합니다.",
+        "isRecommended": False,
+        "executionStatus": "active",
         "capabilities": ["cdc", "streaming"],
         "credentialModes": ["credential_ref", "oauth_future"],
         "networkModes": ["agent_proxy", "direct"],
@@ -80,6 +124,10 @@ SOURCE_TEMPLATES: tuple[dict[str, object], ...] = (
     {
         "sourceType": "media_upload",
         "displayName": "Media Upload",
+        "category": "alternative",
+        "description": "컴퓨터의 이미지, 문서, 영상을 미디어셋으로 업로드합니다.",
+        "isRecommended": False,
+        "executionStatus": "active",
         "capabilities": ["media"],
         "credentialModes": ["credential_ref", "oauth_future"],
         "networkModes": ["direct"],
@@ -89,6 +137,10 @@ SOURCE_TEMPLATES: tuple[dict[str, object], ...] = (
     {
         "sourceType": "batch_file",
         "displayName": "Batch File Upload",
+        "category": "alternative",
+        "description": "여러 파일을 한 배치로 업로드해 데이터셋 버전으로 커밋합니다.",
+        "isRecommended": False,
+        "executionStatus": "active",
         "capabilities": ["batch"],
         "credentialModes": ["credential_ref", "oauth_future"],
         "networkModes": ["direct"],
@@ -245,6 +297,22 @@ def source_sync_record(
     )
 
 
+def source_sync_schedule_fingerprint(
+    sync: Mapping[str, object], schedule: Mapping[str, object], *, status: str | None = None
+) -> str:
+    config = sync_config(
+        str(sync["sync_name"]),
+        str(sync["source_name"]),
+        str(sync["source_type"]),
+        str(sync["capability"]),
+        str(sync["mode"]),
+        schedule,
+        cast(Mapping[str, object], sync["config_summary"]),
+    )
+    config["operationalStatus"] = status or str(sync.get("status") or "active")
+    return fingerprint(config)
+
+
 def source_sync_run_record(
     ctx: RequestContext,
     sync: Mapping[str, object],
@@ -295,6 +363,7 @@ def sync_config(
     _sync_capability(capability)
     _sync_mode(mode)
     reject_raw_secret_payload(config_summary)
+    validate_streaming_sync_config(source_type, capability, config_summary)
     return {
         "syncName": sync_name,
         "sourceName": source_name,
@@ -393,6 +462,7 @@ def _source_type(value: str) -> str:
         "sharepoint_graph",
         "webhook_listener",
         "debezium_cdc",
+        "kafka",
         "media_upload",
         "batch_file",
     }:

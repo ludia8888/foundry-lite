@@ -21,25 +21,14 @@ import {
   TemplatePickerStep,
 } from "./TemplatePickerStep";
 import { WebhookListenerFlow } from "./WebhookListenerFlow";
+import {
+  MANAGED_SOURCE_STEPS,
+  NEW_SOURCE_STEPS,
+} from "./source-wizard-steps";
 import { WizardStepLayout } from "./WizardStepLayout";
+import type { WizardStepMeta } from "./WizardStepLayout";
 
 type WizardPhase = "type" | "connection" | "project" | "configure" | "done";
-
-/** 공식 새 소스 flow의 매크로 단계 (set-up-source 문서 순서). */
-const NEW_SOURCE_STEPS = [
-  { id: "type", title: "소스 유형 선택" },
-  { id: "connection", title: "연결 방식" },
-  { id: "project", title: "프로젝트에 저장" },
-  { id: "configure", title: "구성 & 자격 증명" },
-  { id: "done", title: "완료" },
-] as const;
-
-const PHASE_INDEX: Record<Exclude<WizardPhase, "configure">, number> = {
-  type: 0,
-  connection: 1,
-  project: 2,
-  done: 4,
-};
 
 interface SourceWizardProps {
   initialSourceType?: string | null;
@@ -68,6 +57,8 @@ export function SourceWizard({
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string | null>(null);
   const [completion, setCompletion] = useState<WizardCompletion | null>(null);
+  const wizardSteps =
+    template?.flow === "managed" ? MANAGED_SOURCE_STEPS : NEW_SOURCE_STEPS;
 
   const handleSelectTemplate = useCallback((nextTemplate: WizardTemplate) => {
     setTemplate(nextTemplate);
@@ -159,8 +150,8 @@ export function SourceWizard({
         <WizardStepLayout
           title={displayName.trim() || "제목 없는 소스"}
           subtitle={`${template.displayName} · 연결 방식`}
-          steps={NEW_SOURCE_STEPS}
-          activeIndex={PHASE_INDEX.connection}
+          steps={wizardSteps}
+          activeIndex={1}
           onBack={() => setPhase("type")}
           onCancel={onCancel}
         >
@@ -182,8 +173,8 @@ export function SourceWizard({
         <WizardStepLayout
           title={displayName.trim() || "제목 없는 소스"}
           subtitle={`${template.displayName} · 프로젝트에 저장`}
-          steps={NEW_SOURCE_STEPS}
-          activeIndex={PHASE_INDEX.project}
+          steps={wizardSteps}
+          activeIndex={2}
           onBack={() => setPhase("connection")}
           onCancel={onCancel}
         >
@@ -204,6 +195,7 @@ export function SourceWizard({
           displayName={displayName}
           connectionMode={connectionMode}
           agentId={selectedAgentId}
+          wizardSteps={wizardSteps}
           onExit={() => setPhase("project")}
           onCancel={onCancel}
           onComplete={handleFlowComplete}
@@ -213,8 +205,8 @@ export function SourceWizard({
         <WizardStepLayout
           title={displayName.trim() || "제목 없는 소스"}
           subtitle={`${template.displayName} · 완료`}
-          steps={NEW_SOURCE_STEPS}
-          activeIndex={PHASE_INDEX.done}
+          steps={wizardSteps}
+          activeIndex={wizardSteps.length - 1}
           onCancel={onCancel}
         >
           <CompletionStep
@@ -223,7 +215,7 @@ export function SourceWizard({
             connectionMode={connectionMode}
             agentId={selectedAgentId}
             projectName={projectName}
-            onGoToSyncSetup={() => onComplete(completion)}
+            onGoToSyncDetail={() => onComplete(completion)}
             onGoToSourceExplore={() =>
               onComplete({ sourceName: completion.sourceName, syncName: null })
             }
@@ -240,6 +232,7 @@ function ConfigureFlow({
   displayName,
   connectionMode,
   agentId,
+  wizardSteps,
   onExit,
   onCancel,
   onComplete,
@@ -248,6 +241,7 @@ function ConfigureFlow({
   displayName: string;
   connectionMode: ConnectionMode;
   agentId: string | null;
+  wizardSteps: readonly WizardStepMeta[];
   onExit: () => void;
   onCancel: () => void;
   onComplete: (completion: WizardCompletion) => void;
@@ -271,6 +265,7 @@ function ConfigureFlow({
       template={template}
       connectionMode={connectionMode}
       agentId={agentId}
+      wizardSteps={wizardSteps}
       {...flowProps}
     />
   );
